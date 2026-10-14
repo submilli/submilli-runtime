@@ -1,6 +1,7 @@
 use super::ports::AuditLog;
 use crate::application::sessions::error::SessionError;
 use crate::application::unit_of_work::UnitOfWorkFactory;
+use std::collections::HashSet;
 use std::time::SystemTime;
 
 pub(crate) struct ExpireSessions<'a> {
@@ -15,11 +16,19 @@ impl<'a> ExpireSessions<'a> {
         }
     }
 
-    pub async fn execute(&self, now: SystemTime) -> Result<usize, SessionError> {
+    /// Expire the idle sessions, except those in `busy`, which have work in flight.
+    pub async fn execute(
+        &self,
+        now: SystemTime,
+        busy: &HashSet<String>,
+    ) -> Result<usize, SessionError> {
         let mut unit = self.unit_of_work.begin().await?;
         let mut expired = Vec::new();
         let sessions = unit.sessions_due_for_expiry(now).await?;
         for mut session in sessions {
+            if busy.contains(session.id().as_str()) {
+                continue;
+            }
             if session.expire(now) {
                 expired.push(session.id().as_str().to_owned());
                 unit.save_session(session).await?;

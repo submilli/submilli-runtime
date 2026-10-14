@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "d8b320770ecf0ec2fd941deb3e6c26dc54f020300d7aeec87c84497ee3bbec28"
+  contentHash: "19b37a3665a0b724981ad7400e7067a9723aed359790595a150f6d942be48e6a"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -63,6 +63,7 @@ flat names listed. A dash means the form doesn't exist.
 | `max_llm_tokens` | `--max-llm-tokens` | `SUBMILLI_MAX_LLM_TOKENS` | count, at least 1 | `20M` | Model tokens across all runs. |
 | `max_execution_llm_tokens` | `--max-execution-llm-tokens` | `SUBMILLI_MAX_EXECUTION_LLM_TOKENS` | count, at least 1 | `1M` | Model tokens one run may spend. |
 | `max_llm_concurrency` | `--max-llm-concurrency` | `SUBMILLI_MAX_LLM_CONCURRENCY` | prompts, at least 1 | `4` | Prompts of one `llm.batch` in flight at once. |
+| `max_suspended_runs` | `--max-suspended-runs` | `SUBMILLI_MAX_SUSPENDED_RUNS` | runs | `256` | Runs waiting on the harness at an [application tool](/docs/reference/http-api#application-tools) call at once, across the server. Each holds its program in memory. `0` turns application tool calls off. |
 | `max_embedding_tokens` | `--max-embedding-tokens` | `SUBMILLI_MAX_EMBEDDING_TOKENS` | count, at least 1 | `50M` | Embedding tokens across all runs. Separate from the model-token budgets. |
 | `max_execution_embedding_tokens` | `--max-execution-embedding-tokens` | `SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS` | count, at least 1 | `2M` | Embedding tokens one run may spend. |
 | `max_execution_embedding_requests` | `--max-execution-embedding-requests` | `SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS` | count, at least 1 | `1K` | Provider requests one run's `submilli:embedding` calls may send. |

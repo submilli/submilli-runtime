@@ -394,6 +394,7 @@ mod tests {
                 "TextDecoderConstructor",
                 "TextEncoder",
                 "TextEncoderConstructor",
+                "TimeoutError",
                 "TypeError",
                 "URIError",
                 "Uint8Array",
@@ -417,6 +418,7 @@ mod tests {
                 *name,
                 "Error"
                     | "QuotaExceededError"
+                    | "TimeoutError"
                     | "RangeError"
                     | "ReferenceError"
                     | "TypeError"

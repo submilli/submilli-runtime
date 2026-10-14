@@ -3414,7 +3414,7 @@ mod tests {
             crate::TypedExprKind::Unary { operand, .. } => {
                 collect_expr_types(ta, *operand, out);
             }
-            crate::TypedExprKind::Call { args, .. } | TypedExprKind::McpCall { args, .. } => {
+            crate::TypedExprKind::Call { args, .. } | TypedExprKind::VirtualCall { args, .. } => {
                 for a in args {
                     collect_expr_types(ta, *a, out);
                 }

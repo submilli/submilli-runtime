@@ -38,6 +38,8 @@ pub struct ScriptImports {
     pub stdlib: BTreeSet<String>,
     pub registry_packages: BTreeSet<String>,
     pub mcp_servers: BTreeSet<String>,
+    /// The script imports `@tools`, the session's application tools.
+    pub tools: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -76,6 +78,8 @@ impl ParsedScript {
             }
             if let Some(server) = module.strip_prefix("@mcp/") {
                 imports.mcp_servers.insert(server.to_string());
+            } else if module == runtime::TOOLS_PACKAGE {
+                imports.tools = true;
             } else if stdlib_names.contains(module)
                 || crate::stdlib::OptionalPackage::from_module_name(module).is_some()
             {

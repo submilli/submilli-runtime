@@ -1,36 +1,40 @@
-//! Codegen for `@mcp/<server>.<tool>(...)` calls.
+//! Codegen for virtual-package calls: `@mcp/<server>.<tool>(...)` and
+//! `@tools.<tool>(...)`.
 //!
-//! There is no per-tool Wasm import. Every call lowers to the single
-//! `submilli:mcp.call(server, tool, argsJson) -> unknown` host fn: the server and
-//! tool names (recovered from the mangled name) and the args (serialized via the
-//! object's `toJson` vtable slot) are pushed as three `(ref $string)`s, and the
-//! host returns guest objects directly. The typechecker wraps known-return
-//! MCP calls in a normal `Cast`, so this module never emits cast validation.
+//! There is no per-tool Wasm import. Every call lowers to the package's single
+//! host fn: `submilli:mcp.call(server, tool, argsJson) -> unknown` or
+//! `submilli:tools.call(tool, argsJson) -> unknown`. The names and the args
+//! (serialized via the object's `toJson` vtable slot) are pushed as
+//! `(ref $string)`s, and the host returns guest objects directly. The typechecker
+//! wraps known-return calls in a normal `Cast`, so this module never emits cast
+//! validation.
 
 use wasm_encoder::{BlockType, Instruction};
 
-use crate::ExprId;
 use crate::codegen::CodegenCtx;
 use crate::codegen::function_emitter::FunctionEmitter;
 use crate::codegen::function_emitter::expr::{emit_expr, emit_vtable_dispatch_on_object_stack};
 use crate::codegen::function_emitter::json::emit_inline_const_raw_string;
+use crate::{ExprId, VirtualDispatch};
 
-pub(super) fn emit_mcp_call(
+pub(super) fn emit_virtual_call(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
-    server: &str,
+    target: &VirtualDispatch,
     tool: &str,
     args: &[ExprId],
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     if args.len() > 1 {
         return Err(crate::codegen::internal_failure(
-            "MCP calls require a single arguments object",
+            "virtual-package calls require a single arguments object",
         ));
     }
-    // Push the three `(ref $string)` args: server, tool, argsJson. A zero-arg
-    // tool sends `{}`; otherwise the args object is serialized via its vtable
-    // `toJson` slot.
-    emit_inline_const_string(emitter, ctx, server)?;
+    // Push the `(ref $string)` args: the server (MCP only), tool, argsJson. A
+    // zero-arg tool sends `{}`; otherwise the args object is serialized via its
+    // vtable `toJson` slot.
+    if let VirtualDispatch::Mcp { server } = target {
+        emit_inline_const_string(emitter, ctx, server)?;
+    }
     emit_inline_const_string(emitter, ctx, tool)?;
     if let Some(&arg) = args.first() {
         emit_expr(emitter, ctx, arg)?;
@@ -56,12 +60,9 @@ pub(super) fn emit_mcp_call(
 
     let call_idx = ctx
         .symbols
-        .func_idx(&crate::mangle::host(
-            crate::runtime::MCP_MODULE_NAME,
-            "call",
-        ))
+        .func_idx(&crate::mangle::host(target.host_module(), "call"))
         .ok_or_else(|| {
-            crate::codegen::internal_failure("submilli:mcp.call imported during codegen")
+            crate::codegen::internal_failure("virtual-package call imported during codegen")
         })?;
     emitter.instruction(Instruction::Call(call_idx));
 
@@ -101,7 +102,16 @@ mod tests {
     fn mcp_import_failures_are_compiler_failures() {
         with_context(&TypedAst::new(), &mock_symbols_with_intrinsics(), |ctx| {
             let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
-            assert_internal(emit_mcp_call(&mut emitter, ctx, "server", "tool", &[]).unwrap_err());
+            let server = VirtualDispatch::Mcp {
+                server: "server".to_string(),
+            };
+            assert_internal(
+                emit_virtual_call(&mut emitter, ctx, &server, "tool", &[]).unwrap_err(),
+            );
+            assert_internal(
+                emit_virtual_call(&mut emitter, ctx, &VirtualDispatch::Tools, "tool", &[])
+                    .unwrap_err(),
+            );
             assert_internal(emit_inline_const_string(&mut emitter, ctx, "server").unwrap_err());
         });
         with_context(&TypedAst::new(), &SymbolTable::default(), |ctx| {
@@ -115,10 +125,10 @@ mod tests {
             );
             let invalid = crate::ExprId(u32::MAX);
             assert_internal(
-                emit_mcp_call(
+                emit_virtual_call(
                     &mut FunctionEmitter::new(ctx, &[]).unwrap(),
                     ctx,
-                    "server",
+                    &VirtualDispatch::Tools,
                     "tool",
                     &[invalid; 2],
                 )

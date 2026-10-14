@@ -1328,7 +1328,7 @@ impl Walker<'_, '_> {
                 return self.made_from_foreign_object(*value);
             }
             TypedExprKind::Call { args, .. }
-            | TypedExprKind::McpCall { args, .. }
+            | TypedExprKind::VirtualCall { args, .. }
             | TypedExprKind::IntrinsicCall { args, .. } => {
                 for arg in self.package.authored(expr.span, args) {
                     self.parts_of(*arg, &mut parts)?;
@@ -1427,7 +1427,7 @@ impl<'a> Walker<'a, '_> {
                 let args: Vec<ExprId> = args.iter().map(|arg| arg.expr).collect();
                 self.call(mangled, span, &args)?
             }
-            TypedExprKind::McpCall { tool, args, .. } => {
+            TypedExprKind::VirtualCall { tool, args, .. } => {
                 self.call_with(None, self.package.authored(span, args), tool, span)?
             }
             TypedExprKind::SuperCtorCall { args, .. } => {

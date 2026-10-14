@@ -560,7 +560,7 @@ impl CodegenAnalysis {
             .map_err(|error| error.with_span(expr.span))?;
         let _: () = match &expr.kind {
             TypedExprKind::Call { args, .. }
-            | TypedExprKind::McpCall { args, .. }
+            | TypedExprKind::VirtualCall { args, .. }
             | TypedExprKind::SuperCtorCall { args, .. }
             | TypedExprKind::SuperMethodCall { args, .. }
             | TypedExprKind::IntrinsicCall { args, .. } => {
@@ -986,11 +986,11 @@ impl CodegenAnalysis {
             TypedExprKind::Call { mangled, .. } | TypedExprKind::GenericCall { mangled, .. } => {
                 self.dependency_usage.note_value(mangled.clone());
             }
-            TypedExprKind::McpCall { server, tool, .. } => {
+            TypedExprKind::VirtualCall { target, tool, .. } => {
                 self.dependency_usage
-                    .note_value(crate::mangle::host(&format!("@mcp/{server}"), tool));
+                    .note_value(crate::mangle::host(&target.package_name(), tool));
                 self.dependency_usage
-                    .note_value(crate::mangle::host(crate::runtime::MCP_MODULE_NAME, "call"));
+                    .note_value(crate::mangle::host(target.host_module(), "call"));
                 if !matches!(expr.ty.peel(), Type::String) {
                     self.dependency_usage.collect_json_host_values();
                 }

@@ -2,6 +2,7 @@ use super::ports::{AuditLog, SessionCleanupQueue, SessionWorkspaces};
 use crate::application::sessions::error::SessionError;
 use crate::application::unit_of_work::UnitOfWorkFactory;
 use crate::domain::session::{Session, SessionBinding, SessionId, SessionLifetime};
+use crate::domain::tools::SessionTools;
 use std::sync::Arc;
 use submilli_blueprint::{Blueprint, HarnessSecretBindings, VarBindings};
 
@@ -32,6 +33,7 @@ impl<'a> CreateSession<'a> {
         blueprint: &Blueprint,
         variables: Arc<VarBindings>,
         credentials: Arc<HarnessSecretBindings>,
+        tools: Option<SessionTools>,
     ) -> Result<(), SessionError> {
         let id_value = SessionId::parse(id.to_owned())?;
         let binding = SessionBinding::new(blueprint.name.clone(), (*variables).clone())?;
@@ -47,12 +49,14 @@ impl<'a> CreateSession<'a> {
             if pending_cleanup {
                 return Err(SessionError::CleanupPending);
             }
+            // The tools are fixed when the session is created; a rebind keeps them.
             Session::create(
                 id_value,
                 binding.clone(),
                 root.clone(),
                 SessionLifetime::new(blueprint.idle_timeout, now),
             )?
+            .with_tools(tools)
         };
         session.rebind(binding, root, credentials, now)?;
         unit.save_session(session).await?;
@@ -112,7 +116,7 @@ impl<'a> EnsureSession<'a> {
             self.cleanup_queue,
             self.audit,
         )
-        .execute(id, blueprint, Arc::default(), Arc::default())
+        .execute(id, blueprint, Arc::default(), Arc::default(), None)
         .await
     }
 }

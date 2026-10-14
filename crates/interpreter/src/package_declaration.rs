@@ -11,6 +11,34 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::{Shape, Span, Type, TypedAst};
 use serde::{Deserialize, Serialize};
 
+/// The host fn a virtual package's functions dispatch through, in place of
+/// per-function Wasm imports.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VirtualDispatch {
+    /// `@mcp/<server>`: `submilli:mcp.call(server, tool, argsJson)`.
+    Mcp { server: String },
+    /// `@tools`, the session's application tools: `submilli:tools.call(tool, argsJson)`.
+    Tools,
+}
+
+impl VirtualDispatch {
+    /// The source-level package name.
+    pub fn package_name(&self) -> String {
+        match self {
+            VirtualDispatch::Mcp { server } => format!("@mcp/{server}"),
+            VirtualDispatch::Tools => crate::runtime::TOOLS_PACKAGE.to_string(),
+        }
+    }
+
+    /// The internal host module whose `call` every function dispatches through.
+    pub fn host_module(&self) -> &'static str {
+        match self {
+            VirtualDispatch::Mcp { .. } => crate::runtime::MCP_MODULE_NAME,
+            VirtualDispatch::Tools => crate::runtime::TOOLS_MODULE_NAME,
+        }
+    }
+}
+
 /// Maps are `BTreeMap` for deterministic iteration order; codegen derives stable function-index assignments from it.
 ///
 /// Directly constructed declarations must pass [`Self::check_type_limits`] before
@@ -27,11 +55,13 @@ pub struct PackageDeclaration {
     pub runtime_globals: BTreeMap<crate::MangledName, Type>,
     /// Also used as the Wasm import-module name when codegen imports symbols from this package.
     pub package_name: String,
-    /// `Some(server)` for a `@mcp/<server>` virtual package. Tools resolve to
-    /// `TypedExprKind::McpCall` and dispatch through `submilli:mcp.call`, so codegen
-    /// skips emitting per-tool imports for these. Set by the discovery catalog —
-    /// the structured signal that replaces matching on the `@mcp/` name prefix.
-    pub mcp_server: Option<String>,
+    /// `Some` for a virtual package (`@mcp/<server>` or `@tools`). Its functions
+    /// resolve to `TypedExprKind::VirtualCall` and dispatch through one host fn
+    /// for the whole package, so codegen skips emitting per-function imports for
+    /// these. Set by the catalog mapper: the structured signal that replaces
+    /// matching on the package name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub virtual_dispatch: Option<VirtualDispatch>,
     pub values: BTreeMap<String, ValueSymbol>,
     /// Named declarations only (interfaces, enums, aliases). Anonymous structural shapes live on `shapes`.
     pub types: BTreeMap<String, TypeSymbol>,
@@ -193,7 +223,7 @@ impl PackageDeclaration {
             runtime_functions,
             runtime_globals,
             package_name: _,
-            mcp_server: _,
+            virtual_dispatch: _,
             values,
             types,
             runtime_types,

@@ -170,6 +170,8 @@ pub struct Session {
     lifetime: SessionLifetime,
     status: SessionStatus,
     credentials: CredentialBinding,
+    /// The application tools the harness declared at creation (`@tools`).
+    tools: Option<crate::domain::tools::SessionTools>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -237,8 +239,21 @@ impl Session {
             lifetime,
             status,
             credentials,
+            tools: None,
         })
     }
+
+    /// The session with `tools` as its catalog. Set when the session is created
+    /// and when it is restored; the catalog never changes after that.
+    pub fn with_tools(mut self, tools: Option<crate::domain::tools::SessionTools>) -> Self {
+        self.tools = tools;
+        self
+    }
+
+    pub fn tools(&self) -> Option<&crate::domain::tools::SessionTools> {
+        self.tools.as_ref()
+    }
+
     pub fn id(&self) -> &SessionId {
         &self.id
     }
@@ -362,6 +377,7 @@ impl Session {
         }
         self.status = SessionStatus::Closed(reason);
         self.credentials = CredentialBinding::Absent;
+        self.tools = None;
         true
     }
 }

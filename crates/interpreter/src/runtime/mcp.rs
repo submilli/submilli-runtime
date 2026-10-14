@@ -189,7 +189,7 @@ pub fn request_digest(server: &str, tool: &str, args_json: &str) -> String {
     request_payload(server, tool, args_json).digest()
 }
 
-fn allocate_response(
+pub(crate) fn allocate_response(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     response: &McpResponse,
 ) -> wasmtime::Result<Val> {
@@ -284,7 +284,9 @@ mod tests {
     fn test_mcp_package() -> PackageDeclaration {
         let pkg = "@mcp/test";
         let mut defs = PackageDeclaration::with_package(pkg);
-        defs.mcp_server = Some("test".to_string());
+        defs.virtual_dispatch = Some(crate::VirtualDispatch::Mcp {
+            server: "test".to_string(),
+        });
 
         let mut arg_fields = BTreeMap::new();
         arg_fields.insert("msg".to_string(), ObjectField::required(Type::String));
@@ -600,7 +602,7 @@ mod tests {
     async fn named_import_also_routes_to_mcp_call() {
         // `import { echo } from "@mcp/test"; echo(...)` resolves through the
         // bare-identifier call path, not namespace member access — it must still
-        // become an McpCall (else codegen panics on an unknown top-level fn).
+        // become a VirtualCall (else codegen panics on an unknown top-level fn).
         let (out, calls) = run(
             r#"import { echo } from "@mcp/test";
                function main(): void {

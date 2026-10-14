@@ -28,7 +28,7 @@ impl McpResponse {
         })
     }
 
-    pub(super) fn value(&self) -> &Value {
+    pub fn value(&self) -> &Value {
         &self.value
     }
 

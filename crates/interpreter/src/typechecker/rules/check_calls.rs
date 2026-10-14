@@ -188,7 +188,7 @@ impl Collector<'_> {
                     self.expr(arg.expr)?;
                 }
             }
-            TypedExprKind::McpCall { args, .. }
+            TypedExprKind::VirtualCall { args, .. }
             | TypedExprKind::SuperCtorCall { args, .. }
             | TypedExprKind::SuperMethodCall { args, .. }
             | TypedExprKind::IntrinsicCall { args, .. } => self.exprs(args)?,

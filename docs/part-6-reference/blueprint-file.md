@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "031afdc13ca6a29d327626369fe5549beef3cef9ccf2d1e313684f44883f4dac"
+  contentHash: "f3711833cef3e6e09e3ec73265ba911bd05ae6917a898f05a7626eac908568f1"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -23,6 +23,7 @@ errors that refuse a file when it is linted or registered.
 | [`name`](#name) | string | yes | |
 | [`allow_insecure_http`](#allow_insecure_http) | boolean | no | `false` |
 | [`idle_timeout`](#idle_timeout) | duration | no | `24h` |
+| [`tool_call_timeout`](#tool_call_timeout) | duration | no | `10m` |
 | [`vfs`](#vfs) | mode name or map | no | `ephemeral` |
 | [`secrets`](#secrets) | map | no | empty |
 | [`variables`](#variables) | map | no | empty |
@@ -44,7 +45,7 @@ refused. The same rule applies to MCP and auth-proxy header maps,
 auth-proxy query maps, and paths in `vfs.mounts`.
 
 ```text
-error: case.yaml: blueprint parse error: unknown field `permision`, expected one of `kind`, `name`, `allow_insecure_http`, `idle_timeout`, `vfs`, `secrets`, `variables`, `packages`, `auth_proxy`, `git`, `default`, `permissions`, `mcp`, `llm`, `embedding` at line 3 column 1
+error: case.yaml: blueprint parse error: unknown field `permision`, expected one of `kind`, `name`, `allow_insecure_http`, `idle_timeout`, `tool_call_timeout`, `vfs`, `secrets`, `variables`, `packages`, `auth_proxy`, `git`, `default`, `permissions`, `mcp`, `llm`, `embedding` at line 3 column 1
 ```
 
 ```text
@@ -205,6 +206,19 @@ error: case.yaml: blueprint parse error: idle_timeout: duration '10' needs a uni
 ```text
 error: case.yaml: blueprint parse error: idle_timeout: unknown duration unit 'd' in '1d' (use s, m, or h)
 ```
+
+## tool_call_timeout
+
+| | |
+| --- | --- |
+| Type | duration, a whole number followed by `s`, `m` or `h`, longer than `0s` |
+| Default | `10m` |
+
+How long a run waits for the harness to answer one call to an application
+tool, `@tools`, before the call throws `TimeoutError` in the program. Later
+calls of that run then throw `TimeoutError` without waiting. The time a run
+waits does not count against `max_execution_time`. See
+[Application tools](/docs/reference/http-api#application-tools).
 
 ## vfs
 

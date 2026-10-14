@@ -218,11 +218,11 @@ fn emit_expr_value(
             emitter.instruction(Instruction::Call(func));
             emit_slot_return_cast(emitter, ctx, &expr.ty.clone(), abi.as_ref())?;
         }
-        TypedExprKind::McpCall { server, tool, args } => {
-            // No per-tool import: serialize the args to JSON, dispatch the single
-            // `submilli:mcp.call` host fn, which returns guest objects as `unknown`.
-            // Known-return tools are wrapped in a normal `Cast` by typecheck.
-            super::mcp::emit_mcp_call(emitter, ctx, server, tool, args)?;
+        TypedExprKind::VirtualCall { target, tool, args } => {
+            // No per-tool import: serialize the args to JSON, dispatch the package's
+            // single host fn, which returns guest objects as `unknown`. Known-return
+            // tools are wrapped in a normal `Cast` by typecheck.
+            super::virtual_call::emit_virtual_call(emitter, ctx, target, tool, args)?;
         }
         TypedExprKind::CallClosure { callee, args } => {
             // Indirect dispatch via `call_ref` through a closure

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "f62227221314c069f0cce2cb5d03b9cfe1bc96994996fee26230a874c00f855c"
+  contentHash: "7ee15215c76d1bb4607e40e6f998771570310cc7b8ac5225f665d7ca81d99243"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -96,6 +96,7 @@ These are refused before the rules are read, whatever `default` says:
 | The standard library | `embedding.embed`, `fs.*`, `git.*`, `http.*`, `llm.call`, `secrets.get`, `session.*` | In the tables below |
 | A Package | Chosen by its author, such as `acme.com/credits.apply` | Declared by its `@capability` tags ([Package manifest](/docs/reference/package-manifest)) |
 | An MCP server the Blueprint declares | `mcp.<server>`, such as `mcp.linear` | `tool`, `transport` ([MCP servers](/docs/reference/mcp-servers)) |
+| The application's tools a harness declares for a session | `tools.call` | `tool` ([Application tools](/docs/reference/http-api#application-tools)) |
 
 `submilli blueprint capability list` prints every capability a Blueprint can
 use, with its fields and the rules written for it.
@@ -214,6 +215,12 @@ out, and a condition on a missing field is false.
 | Capability | Fields | Operation | Example filter |
 | --- | --- | --- | --- |
 | `mcp.<server>` | `tool: string`, `transport: string` | Call tools on a declared outbound MCP server (streamable_http) (declare a server with `blueprint add-mcp` to concretize) | `tool == "create_issue"` |
+
+### `@tools`
+
+| Capability | Fields | Operation | Example filter |
+| --- | --- | --- | --- |
+| `tools.call` | `tool: string` | Call an application tool the harness declared for the session (`@tools`). The harness answers each call, and may refuse it | `tool == "query_orders"` |
 
 <!-- /generated:capabilities -->
 

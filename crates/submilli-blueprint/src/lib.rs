@@ -73,6 +73,16 @@ pub struct Blueprint {
         deserialize_with = "deserialize_idle_timeout"
     )]
     pub idle_timeout: Duration,
+    /// How long a run waits for the harness to answer one application tool
+    /// call (`@tools`) before the call throws `TimeoutError`. Time spent waiting
+    /// does not count against the run's execution time.
+    #[serde(
+        default = "default_tool_call_timeout",
+        skip_serializing_if = "is_default_tool_call_timeout",
+        serialize_with = "serialize_idle_timeout",
+        deserialize_with = "deserialize_tool_call_timeout"
+    )]
+    pub tool_call_timeout: Duration,
     #[serde(default, skip_serializing_if = "VfsConfig::is_default")]
     pub vfs: VfsConfig,
     /// Declared secret names → where each value comes from. The allow-list that
@@ -152,6 +162,7 @@ impl Default for Blueprint {
             name: String::new(),
             allow_insecure_http: false,
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
+            tool_call_timeout: DEFAULT_TOOL_CALL_TIMEOUT,
             vfs: VfsConfig::default(),
             secrets: BTreeMap::new(),
             variables: BTreeMap::new(),
@@ -235,6 +246,32 @@ impl Blueprint {
             context,
             vars,
         )
+    }
+}
+
+/// The default for [`Blueprint::tool_call_timeout`].
+pub const DEFAULT_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+fn default_tool_call_timeout() -> Duration {
+    DEFAULT_TOOL_CALL_TIMEOUT
+}
+
+fn is_default_tool_call_timeout(d: &Duration) -> bool {
+    *d == DEFAULT_TOOL_CALL_TIMEOUT
+}
+
+fn deserialize_tool_call_timeout<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    match parse_duration(&raw) {
+        // Every call would time out before the harness could see it.
+        Ok(timeout) if timeout.is_zero() => Err(de::Error::custom(
+            "tool_call_timeout: must be longer than 0s",
+        )),
+        Ok(timeout) => Ok(timeout),
+        Err(message) => Err(de::Error::custom(format!("tool_call_timeout: {message}"))),
     }
 }
 
@@ -2101,6 +2138,24 @@ permissions:
         let b = parse("name: x\nidle_timeout: 1h\nvfs: none\n").unwrap();
         assert_eq!(b.idle_timeout, Duration::from_secs(3600));
         assert_eq!(b.vfs, VfsConfig::None);
+    }
+
+    #[test]
+    fn tool_call_timeout_defaults_to_ten_minutes_and_round_trips() {
+        let defaulted = parse("name: x\n").unwrap();
+        assert_eq!(defaulted.tool_call_timeout, DEFAULT_TOOL_CALL_TIMEOUT);
+        let set = parse("name: x\ntool_call_timeout: 90s\n").unwrap();
+        assert_eq!(set.tool_call_timeout, Duration::from_secs(90));
+        assert_eq!(parse(&to_yaml(&set)).unwrap(), set);
+        for value in ["soon", "0s"] {
+            assert!(
+                parse(&format!("name: x\ntool_call_timeout: {value}\n"))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("tool_call_timeout"),
+                "{value}"
+            );
+        }
     }
 
     #[test]

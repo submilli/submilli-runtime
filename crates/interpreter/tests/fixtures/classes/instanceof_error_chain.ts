@@ -8,26 +8,26 @@ class AppError extends Error {
   }
 }
 
-class TimeoutError extends AppError {
+class RequestTimeout extends AppError {
   constructor() {
     super("timed out");
-    this.name = "TimeoutError";
+    this.name = "RequestTimeout";
   }
 }
 
 function main(): void {
-  const t: Error = new TimeoutError();
-  assert(t instanceof TimeoutError);
+  const t: Error = new RequestTimeout();
+  assert(t instanceof RequestTimeout);
   assert(t instanceof AppError);
   assert(t instanceof Error);
 
   const base: Error = new Error("plain");
   assert(base instanceof Error);
   assert(!(base instanceof AppError));
-  assert(!(base instanceof TimeoutError));
+  assert(!(base instanceof RequestTimeout));
 
   const mid: Error = new AppError("mid");
   assert(mid instanceof AppError);
   assert(mid instanceof Error);
-  assert(!(mid instanceof TimeoutError));
+  assert(!(mid instanceof RequestTimeout));
 }

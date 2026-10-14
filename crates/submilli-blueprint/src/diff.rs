@@ -317,10 +317,14 @@ fn diff_insecure_http(old: &Blueprint, new: &Blueprint, out: &mut Vec<Change>) {
 /// Sections whose changes are not classified: each one that changed is listed
 /// as unknown.
 fn diff_unclassified(old: &Blueprint, new: &Blueprint, out: &mut Vec<Change>) {
-    let sections: [(&str, bool); 9] = [
+    let sections: [(&str, bool); 10] = [
         ("kind", old.kind != new.kind),
         ("name", old.name != new.name),
         ("idle_timeout", old.idle_timeout != new.idle_timeout),
+        (
+            "tool_call_timeout",
+            old.tool_call_timeout != new.tool_call_timeout,
+        ),
         ("vfs", old.vfs != new.vfs),
         ("secrets", old.secrets != new.secrets),
         ("auth_proxy", old.auth_proxy != new.auth_proxy),

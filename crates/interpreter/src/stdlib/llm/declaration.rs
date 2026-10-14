@@ -22,7 +22,7 @@
 //!
 //! The trailing `schema` parameter is likewise not surface a program writes. It
 //! defaults to `undefined`, and the typed lowering fills it with the JSON Schema
-//! emitted from `T` at compile time — the way `McpCall` passes its `server` and
+//! emitted from `T` at compile time — the way `VirtualCall` passes its target and
 //! `tool` as constants. Passing it by hand changes only what the provider is
 //! asked for; the structural check lives in the synthetic `Cast`, not in the
 //! host fn, so a hand-passed schema buys no verification.

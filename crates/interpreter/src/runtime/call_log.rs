@@ -540,6 +540,7 @@ mod tests {
         "llm.call",
         "embedding.embed",
         "mcp.<server>",
+        "tools.call",
         "agent.run",
         "skill.load",
     ];
@@ -587,10 +588,11 @@ mod tests {
     #[test]
     fn every_gating_module_ends_the_calls_it_begins() {
         for group in crate::stdlib::capabilities::all_groups() {
-            // The catalog names `@mcp/<server>` imports; their calls dispatch through the
-            // internal MCP module.
+            // The catalog names `@mcp/<server>` and `@tools` imports; their calls
+            // dispatch through the internal virtual-package modules.
             let module = match group.module {
                 "@mcp" => crate::runtime::mcp::MCP_MODULE_NAME,
+                "@tools" => crate::runtime::tools::TOOLS_MODULE_NAME,
                 module => module,
             };
             assert!(
@@ -669,6 +671,10 @@ mod tests {
             "src/runtime/mcp.rs",
             Some(crate::runtime::mcp::MCP_MODULE_NAME),
         ),
+        (
+            "src/runtime/tools.rs",
+            Some(crate::runtime::tools::TOOLS_MODULE_NAME),
+        ),
         ("src/stdlib/shared.rs", None),
     ];
 
@@ -695,6 +701,7 @@ mod tests {
         let mut files = Vec::new();
         rust_files(&root.join("src/stdlib"), &mut files);
         files.push(root.join("src/runtime/mcp.rs"));
+        files.push(root.join("src/runtime/tools.rs"));
         let needles = [
             "check_security_call(",
             "check_security(",

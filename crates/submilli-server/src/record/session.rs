@@ -36,6 +36,8 @@ pub enum SessionStartError {
     InvalidFilesystem(String),
     /// The harness secrets do not satisfy the blueprint's declarations.
     InvalidSecrets(String),
+    /// The declared application tools are refused (too many, or too large).
+    InvalidTools(String),
     /// The blueprint could not be read.
     Store(StoreError),
     /// The session could not be created.
@@ -49,6 +51,7 @@ impl std::fmt::Display for SessionStartError {
             Self::InvalidVariables(message) => write!(f, "invalid variables: {message}"),
             Self::InvalidFilesystem(message) => f.write_str(message),
             Self::InvalidSecrets(message) => write!(f, "invalid secrets: {message}"),
+            Self::InvalidTools(message) => write!(f, "invalid tools: {message}"),
             Self::Store(_) => f.write_str("blueprint store unavailable"),
             Self::Session(error) => error.fmt(f),
         }
@@ -133,7 +136,16 @@ pub async fn start_session(
     state: &AppState,
     start: SessionStart,
 ) -> Result<String, SessionStartError> {
-    sessions::start(state, &start.blueprint, &start.variables, &start.secrets).await
+    // An embedder's session has no harness to answer `@tools`, so it declares none.
+    sessions::start(
+        state,
+        &start.blueprint,
+        &start.variables,
+        &start.secrets,
+        Vec::new(),
+    )
+    .await
+    .map(|started| started.session_id)
 }
 
 /// Runs `program` in its session under the blueprint, variables, and harness secrets the
@@ -164,7 +176,16 @@ pub async fn run_in_session(
             return Err(unknown_when_gone(error, &session_id));
         }
     };
-    let outcome = sessions::run(state, &session_id, bound, &code, None, Some(audit.clone())).await;
+    let outcome = sessions::run(
+        state,
+        &session_id,
+        bound,
+        &code,
+        None,
+        Some(audit.clone()),
+        None,
+    )
+    .await;
     audit.finish(outcome.response.error.is_none());
     Ok(outcome.response)
 }

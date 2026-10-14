@@ -123,6 +123,9 @@ pub struct ServerConfig {
     /// [`crate::session_manager::DEFAULT_MAX_CONCURRENCY`]. Bounded because
     /// unbounded fan-out manufactures the 429s it then cannot back off from.
     pub max_llm_concurrency: Option<usize>,
+    /// Runs that may wait on the harness at once, server-wide. `None` uses
+    /// [`crate::runs::DEFAULT_MAX_SUSPENDED_RUNS`].
+    pub max_suspended_runs: Option<usize>,
     /// An override for the outbound model dispatch every `submilli:llm` call
     /// rides.
     ///

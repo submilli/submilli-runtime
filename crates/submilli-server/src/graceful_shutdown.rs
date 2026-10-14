@@ -9,12 +9,18 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use tokio_util::{
+    sync::CancellationToken,
+    task::{TaskTracker, task_tracker::TaskTrackerToken},
+};
 use tracing::Instrument;
 
 #[derive(Default)]
 pub(crate) struct GracefulShutdownTracker {
     tasks: TaskTracker,
+    /// Cancelled as admission closes: work that could wait indefinitely, such
+    /// as a run waiting on the harness, stops waiting then.
+    draining: CancellationToken,
     stop: CancellationToken,
 }
 
@@ -50,8 +56,22 @@ impl GracefulShutdownTracker {
             .map_err(WatchError::Task)?
     }
 
+    /// Admit work that outlives the request that started it. The token keeps
+    /// [`Self::wait`] waiting until the work drops it. `None` once admission has
+    /// closed.
+    pub(crate) fn admit(&self) -> Option<TaskTrackerToken> {
+        let token = self.tasks.token();
+        (!self.tasks.is_closed()).then_some(token)
+    }
+
+    /// Cancelled once the server starts shutting down.
+    pub(crate) fn draining(&self) -> CancellationToken {
+        self.draining.clone()
+    }
+
     pub(crate) fn close(&self) {
         self.tasks.close();
+        self.draining.cancel();
     }
 
     pub(crate) async fn wait(&self) {
@@ -127,6 +147,29 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result_rx.await.unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn admitted_work_is_waited_for_and_told_to_drain() {
+        let tracker = GracefulShutdownTracker::default();
+        let admitted = tracker.admit().expect("admission is open");
+        let draining = tracker.draining();
+        assert!(!draining.is_cancelled());
+        tracker.close();
+        assert!(draining.is_cancelled());
+        assert!(tracker.admit().is_none(), "admission closed");
+        let wait = tracker.wait();
+        tokio::pin!(wait);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut wait)
+                .await
+                .is_err(),
+            "admitted work holds the drain open"
+        );
+        drop(admitted);
+        tokio::time::timeout(std::time::Duration::from_secs(1), wait)
+            .await
+            .unwrap();
     }
 
     async fn panicked_handler() -> Response {

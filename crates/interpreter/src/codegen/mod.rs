@@ -996,11 +996,11 @@ fn codegen_inner(
     class_plan.reserve_and_emit_types(&mut types, &mut next_type_idx, &mut symbols, intrinsics)?;
     for value in &dependency_values {
         let defs = value.package;
-        // `@mcp/<server>` tools aren't per-tool Wasm imports: every call lowers to
-        // the single `submilli:mcp.call` host fn (see `emit_mcp_call`), so skip
-        // emitting imports for them. Their structural shapes are still collected
-        // via `defs.shapes`.
-        if defs.mcp_server.is_some() {
+        // Virtual-package functions (`@mcp/<server>`, `@tools`) aren't per-function
+        // Wasm imports: every call lowers to the package's single host fn (see
+        // `emit_virtual_call`), so skip emitting imports for them. Their structural
+        // shapes are still collected via `defs.shapes`.
+        if defs.virtual_dispatch.is_some() {
             continue;
         }
         import_value_symbol(
@@ -6061,7 +6061,7 @@ function main(): void {
                 box_walk_expr(ta, value, names);
             }
             TypedExprKind::Call { args, .. }
-            | TypedExprKind::McpCall { args, .. }
+            | TypedExprKind::VirtualCall { args, .. }
             | TypedExprKind::SuperCtorCall { args, .. }
             | TypedExprKind::SuperMethodCall { args, .. } => {
                 for a in args {

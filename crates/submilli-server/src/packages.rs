@@ -117,6 +117,32 @@ pub(crate) fn lookup_with_blueprint(
     blueprint: &Blueprint,
     store: &PackageStore,
 ) -> DocLookup {
+    lookup_for_session(name, catalog, blueprint, store, None)
+}
+
+/// Like [`lookup_with_blueprint`], for a session whose programs may import its
+/// application tools, `tools`, as `@tools`.
+pub(crate) fn lookup_for_session(
+    name: &str,
+    catalog: &McpCatalog,
+    blueprint: &Blueprint,
+    store: &PackageStore,
+    tools: Option<&interpreter::PackageDeclaration>,
+) -> DocLookup {
+    if name == interpreter::runtime::TOOLS_PACKAGE {
+        return match tools {
+            Some(tools) => DocLookup::Mcp {
+                description: tools_description(tools),
+                declarations: interpreter::packages::render_declarations(tools),
+            },
+            None => DocLookup::Unknown {
+                message: "`@tools` is unavailable: this session declares no application tools \
+                          that its blueprint lets programs call"
+                    .to_owned(),
+                suggestion: None,
+            },
+        };
+    }
     if name.starts_with("@mcp/") {
         return lookup_with_catalog(name, catalog);
     }
@@ -409,6 +435,19 @@ pub(crate) fn search_json_with_blueprint(
     store: &PackageStore,
     fetch_with: Fetch<'_>,
 ) -> Value {
+    search_json_for_session(query, catalog, blueprint, store, fetch_with, None)
+}
+
+/// Like [`search_json_with_blueprint`], for a session whose programs may import
+/// its application tools, `tools`, as `@tools`.
+pub(crate) fn search_json_for_session(
+    query: &str,
+    catalog: &McpCatalog,
+    blueprint: &Blueprint,
+    store: &PackageStore,
+    fetch_with: Fetch<'_>,
+    tools: Option<&interpreter::PackageDeclaration>,
+) -> Value {
     // Load each declared artifact once and derive both views from it: the hit
     // list and, only on a miss, the catalog listing.
     let artifacts: Vec<_> = blueprint
@@ -418,6 +457,13 @@ pub(crate) fn search_json_with_blueprint(
         .collect();
     let mut results =
         search_json_results(query, catalog, LibraryVisibility::for_blueprint(blueprint));
+    if let Some(tools) = tools.filter(|tools| tools_match(tools, query)) {
+        results.push(json!({
+            "name": interpreter::runtime::TOOLS_PACKAGE,
+            "source": "tools",
+            "description": tools_description(tools),
+        }));
+    }
     results.extend(registry_search(query, &artifacts));
     search_body(
         results,
@@ -425,10 +471,36 @@ pub(crate) fn search_json_with_blueprint(
         LibraryVisibility::for_blueprint(blueprint),
         || {
             let mut entries = mcp_entries(catalog);
+            entries.extend(tools.map(|tools| CatalogEntry {
+                name: interpreter::runtime::TOOLS_PACKAGE.to_owned(),
+                source: "tools".to_owned(),
+                description: tools_description(tools),
+            }));
             entries.extend(registry_entries(&artifacts));
             entries
         },
     )
+}
+
+/// One-line summary of a session's `@tools` package: the tool count.
+fn tools_description(tools: &interpreter::PackageDeclaration) -> String {
+    let count = tools.values.len();
+    format!(
+        "The application's own tools, answered by the harness ({count} tool{})",
+        if count == 1 { "" } else { "s" }
+    )
+}
+
+/// Whether `query` matches the `@tools` package name or one of its tools.
+fn tools_match(tools: &interpreter::PackageDeclaration, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    query.is_empty()
+        || interpreter::runtime::TOOLS_PACKAGE.contains(&query)
+        || "tools".contains(&query)
+        || tools
+            .values
+            .keys()
+            .any(|tool| tool.to_lowercase().contains(&query))
 }
 
 /// Wrap a completed result set. A zero-hit search answers with what *is*

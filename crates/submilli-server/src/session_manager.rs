@@ -50,7 +50,9 @@ use crate::adapters::session::repository::{LoadedSession, SessionPersistence};
 use crate::blueprint::StoreError;
 use crate::config::VolumeTable;
 use crate::domain::session::{RootVfs, Session, SessionBinding, SessionId};
+use crate::domain::tools::SessionTools;
 use crate::idempotency_store::IdempotencyStore;
+use crate::runs::RunRegistry;
 use crate::session_store::{ClosedReason, DurableSessionStore, SessionStatus};
 use crate::volumes::VolumeRegistry;
 use submilli_shared::secret_store::SecretCipher;
@@ -126,7 +128,14 @@ pub struct SessionManager {
     session_kv: SessionKvSettings,
     llm: LlmSettings,
     embedding: EmbeddingSettings,
+    /// Runs that may suspend at an application tool call. A session with one
+    /// unfinished is not idle, and ending the session ends them.
+    runs: Arc<RunRegistry>,
 }
+
+/// How long ending a session waits for its cancelled runs to stop before it
+/// removes their files anyway.
+const RUN_DRAIN: Duration = Duration::from_secs(10);
 
 /// How a session's `submilli:session` store is built. Cloned into every session
 /// that allocates one, so the aggregate budget is shared across them all.
@@ -292,7 +301,19 @@ impl SessionManager {
             session_kv,
             llm,
             embedding,
+            runs: Arc::new(RunRegistry::default()),
         }
+    }
+
+    /// Hold at most `max` runs waiting on the harness at once.
+    pub fn with_max_suspended_runs(mut self, max: usize) -> Self {
+        self.runs = Arc::new(RunRegistry::new(max));
+        self
+    }
+
+    /// The runs that may suspend at an application tool call.
+    pub fn runs(&self) -> &Arc<RunRegistry> {
+        &self.runs
     }
 
     pub(crate) fn with_audit(mut self, audit: crate::audit::AuditLog) -> Self {
@@ -430,14 +451,33 @@ impl SessionManager {
         variables: Arc<VarBindings>,
         secrets: Arc<HarnessSecretBindings>,
     ) -> Result<(), SessionError> {
+        self.bind_with_tools(id, blueprint, variables, secrets, None)
+            .await
+    }
+
+    /// [`Self::bind`], declaring `tools` if this creates the session. A rebind
+    /// keeps the catalog the session was created with.
+    pub async fn bind_with_tools(
+        &self,
+        id: &str,
+        blueprint: &Blueprint,
+        variables: Arc<VarBindings>,
+        secrets: Arc<HarnessSecretBindings>,
+        tools: Option<SessionTools>,
+    ) -> Result<(), SessionError> {
         crate::application::sessions::create::CreateSession::new(
             self.unit_of_work.as_ref(),
             &self.workspaces(),
             &StoredSessionCleanupQueue(self.store.as_ref()),
             &SessionAuditLog(self.audit.as_ref()),
         )
-        .execute(id, blueprint, variables, secrets)
+        .execute(id, blueprint, variables, secrets, tools)
         .await
+    }
+
+    /// The application tools `id` was created with.
+    pub async fn tools(&self, id: &str) -> Result<Option<SessionTools>, SessionError> {
+        Ok(self.available(id).await?.session().tools().cloned())
     }
 
     pub async fn variables(&self, id: &str) -> Result<Arc<VarBindings>, SessionError> {
@@ -495,8 +535,20 @@ impl SessionManager {
         variables: Arc<VarBindings>,
         harness_secrets: Arc<HarnessSecretBindings>,
     ) -> Result<String, SessionError> {
+        self.create_with_tools(blueprint, variables, harness_secrets, None)
+            .await
+    }
+
+    /// [`Self::create`] with the application tools the harness declared.
+    pub async fn create_with_tools(
+        &self,
+        blueprint: &Blueprint,
+        variables: Arc<VarBindings>,
+        harness_secrets: Arc<HarnessSecretBindings>,
+        tools: Option<SessionTools>,
+    ) -> Result<String, SessionError> {
         let session_id = Uuid::new_v4().to_string();
-        self.bind(&session_id, blueprint, variables, harness_secrets)
+        self.bind_with_tools(&session_id, blueprint, variables, harness_secrets, tools)
             .await?;
         Ok(session_id)
     }
@@ -667,6 +719,10 @@ impl SessionManager {
         {
             return Ok(());
         }
+        // Its waiting runs stop before their files go and before their
+        // idempotency entries are purged. One still going after the drain
+        // writes no outcome back when it ends (`RunEntry::cancel_unrecorded`).
+        self.runs.end_session(id, RUN_DRAIN).await;
         self.resources.evict(id);
         let Some(task) = self.store.cleanup_task(id).await? else {
             return Ok(());
@@ -696,11 +752,13 @@ impl SessionManager {
         } else {
             now
         };
+        // A session whose run waits on the harness is not idle.
+        let busy = self.runs.sessions_with_unfinished_runs();
         let count = crate::application::sessions::expire::ExpireSessions::new(
             self.unit_of_work.as_ref(),
             &SessionAuditLog(self.audit.as_ref()),
         )
-        .execute(now)
+        .execute(now, &busy)
         .await?;
         self.process_pending_cleanup().await?;
         Ok(count)

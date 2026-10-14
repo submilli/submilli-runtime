@@ -351,6 +351,11 @@ impl AppState {
                 },
             )
             .with_cipher(config.session_cipher.clone())
+            .with_max_suspended_runs(
+                config
+                    .max_suspended_runs
+                    .unwrap_or(crate::runs::DEFAULT_MAX_SUSPENDED_RUNS),
+            )
             .with_audit(audit.clone()),
         );
 
@@ -511,6 +516,12 @@ impl AppState {
     /// `cancelled` outcome once its workers have drained. `false` when no recorded run
     /// with that id is running.
     pub fn cancel_run(&self, execution_id: &str) -> bool {
+        // A run that may suspend is cancelled through its own entry.
+        if let Some(run) = self.session_manager().runs().get(execution_id) {
+            let unfinished = !matches!(run.current(), crate::runs::RunState::Finished(_));
+            run.cancel();
+            return unfinished;
+        }
         let canceller = self
             .inner
             .running
@@ -1177,8 +1188,8 @@ pub fn route_table() -> Vec<(&'static str, Access)> {
 
 fn routes(auth: Arc<AuthConfig>, audit: crate::audit::AuditLog) -> Routes {
     use crate::handlers::{
-        admin, blueprint, capabilities, execute, last_run, mcp_auth, packages, secret, sessions,
-        volumes,
+        admin, blueprint, capabilities, execute, last_run, mcp_auth, packages, runs, secret,
+        sessions, volumes,
     };
 
     Routes::new(auth, audit)
@@ -1207,6 +1218,18 @@ fn routes(auth: Arc<AuthConfig>, audit: crate::audit::AuditLog) -> Routes {
             Access::User,
             delete(sessions::disconnect),
         )
+        .route(
+            "/v1/sessions/{session_id}/packages/search",
+            Access::User,
+            get(packages::session_search),
+        )
+        .route(
+            "/v1/sessions/{session_id}/packages/docs",
+            Access::User,
+            get(packages::session_docs),
+        )
+        .route("/v1/runs/{run_id}", Access::User, get(runs::get))
+        .route("/v1/runs/{run_id}/resume", Access::User, post(runs::resume))
         .route(
             "/v1/blueprints",
             Access::Admin,

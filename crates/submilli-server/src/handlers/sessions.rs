@@ -15,14 +15,17 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::task_tracker::TaskTrackerToken;
 
 use submilli_blueprint::{
     HarnessSecretBindings, required_harness_secrets, resolve_harness_secrets, resolve_variables,
 };
 
 use crate::app::{AppState, BlueprintForRun};
+use crate::domain::tools::{DeclaredTool, SessionTools};
 use crate::handlers::execute::{self, ExecuteInputs, SESSION_HEADER, blueprint_miss_message};
-use crate::idempotency::{Refusal, Reservation};
+use crate::idempotency::{Refusal, Reservation, ReservationGuard};
 use crate::idempotency_store::RecordedOutcome;
 use crate::record::{SessionRunError, SessionStartError};
 
@@ -42,11 +45,18 @@ pub struct CreateRequest {
     /// and encrypted in durable session storage.
     #[serde(default)]
     pub secrets: Option<HarnessSecretBindings>,
+    /// The application tools programs in this session may call as `@tools`,
+    /// fixed for the session's life. The harness answers each call.
+    #[serde(default)]
+    pub tools: Option<Vec<DeclaredTool>>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct CreateResponse {
     pub session_id: String,
+    /// What programs will not see of the declared tools, and why.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Request body for `POST /v1/sessions/{id}/execute`: code only — the blueprint
@@ -72,12 +82,17 @@ pub async fn create(
         &req.blueprint,
         &req.variables.unwrap_or_default(),
         &req.secrets.unwrap_or_default(),
+        req.tools.unwrap_or_default(),
     )
     .await;
     match started {
-        Ok(session_id) => {
+        Ok(Started {
+            session_id,
+            warnings,
+        }) => {
             let body = CreateResponse {
                 session_id: session_id.clone(),
+                warnings,
             };
             (session_header(&session_id), Json(body)).into_response()
         }
@@ -85,15 +100,26 @@ pub async fn create(
     }
 }
 
-/// Creates a session bound to `blueprint_name`, its resolved variables, and its harness
-/// secrets, and returns its id. Everything is validated before the session exists:
-/// defaults fill, and a missing-required or undeclared name refuses the request.
+/// A session [`start`] created.
+pub(crate) struct Started {
+    pub session_id: String,
+    /// What programs will not see of the declared tools, and why.
+    pub warnings: Vec<String>,
+}
+
+/// Creates a session bound to `blueprint_name`, its resolved variables, its harness
+/// secrets, and its application tools, and returns its id. Everything is validated
+/// before the session exists: defaults fill, and a missing-required or undeclared name
+/// refuses the request.
 pub(crate) async fn start(
     state: &AppState,
     blueprint_name: &str,
     supplied: &BTreeMap<String, String>,
     supplied_secrets: &HarnessSecretBindings,
-) -> Result<String, SessionStartError> {
+    tools: Vec<DeclaredTool>,
+) -> Result<Started, SessionStartError> {
+    let tools = SessionTools::new(tools)
+        .map_err(|error| SessionStartError::InvalidTools(error.to_string()))?;
     let Some(blueprint) = state
         .blueprints()
         .get(blueprint_name)
@@ -126,11 +152,27 @@ pub(crate) async fn start(
         .map(Arc::new)
         .map_err(|error| SessionStartError::InvalidSecrets(error.to_string()))?;
 
-    state
+    let warnings = tools.as_ref().map_or_else(Vec::new, |tools| {
+        let mut warnings = crate::app_tools::declaration(tools).1;
+        if !exposes_tools(&blueprint) {
+            warnings.push(format!(
+                "{}: blueprint `{}` grants no `{}`, so programs cannot see these tools",
+                interpreter::runtime::TOOLS_PACKAGE,
+                blueprint.name,
+                interpreter::runtime::TOOLS_CAPABILITY,
+            ));
+        }
+        warnings
+    });
+    let session_id = state
         .session_manager()
-        .create(&blueprint, variables, secrets)
+        .create_with_tools(&blueprint, variables, secrets, tools)
         .await
-        .map_err(SessionStartError::Session)
+        .map_err(SessionStartError::Session)?;
+    Ok(Started {
+        session_id,
+        warnings,
+    })
 }
 
 /// The `POST /v1/sessions` response for a session that was not started.
@@ -147,7 +189,8 @@ fn start_refusal_response(error: SessionStartError) -> axum::response::Response 
             .into_response(),
         SessionStartError::InvalidVariables(_)
         | SessionStartError::InvalidFilesystem(_)
-        | SessionStartError::InvalidSecrets(_) => (
+        | SessionStartError::InvalidSecrets(_)
+        | SessionStartError::InvalidTools(_) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": error.to_string() })),
         )
@@ -190,86 +233,343 @@ pub async fn execute(
         Ok(bound) => bound,
         Err(error) => return run_refusal_response(&session_id, error),
     };
+    // A session with application tools runs its programs detached from the
+    // request, so a run can wait on the harness across requests.
+    let tools = match session_tools(&state, &session_id, &bound).await {
+        Ok(tools) => tools,
+        Err(error) => return session_state_response(error),
+    };
     // Every session-level refusal above happens before any reservation exists,
     // so a bad key against an unknown session reports the unknown session and
     // the ledger stays untouched. This is the last point before the
     // program can run.
     let key = match idempotency_key(&headers) {
-        None => {
-            let outcome = run(
-                &state,
-                &session_id,
-                bound,
-                &req.code,
-                None,
-                crate::audit::execution(),
-            )
-            .await;
-            return execute::with_session_header(&session_id, outcome.response).into_response();
-        }
+        None => None,
         Some(Err(refusal)) => return refusal_response(&session_id, &refusal),
-        Some(Ok(key)) => key,
+        Some(Ok(key)) => Some(key),
     };
-
-    let guard = match state
-        .idempotency()
-        .reserve(&session_id, &key, &req.code)
-        .await
-    {
-        Reservation::Refused(refusal) => return refusal_response(&session_id, &refusal),
-        Reservation::Replay(outcome) => {
-            if let Some(audit) = crate::audit::execution() {
-                audit.replay();
-            }
-            if let Some(recorder) = state.run_recorder() {
-                recorder.retried(crate::record::RetryLink {
-                    session_id: session_id.clone(),
-                    idempotency_key: key.clone(),
-                    original_execution_id: serde_json::from_str::<serde_json::Value>(&outcome.body)
-                        .ok()
-                        .and_then(|body| body.get("execution_id")?.as_str().map(str::to_owned)),
-                });
-            }
-            // A replay is session activity: a client retrying must not have its
-            // session reaped underneath it. `execute_core` normally does this,
-            // and the replay path never reaches it.
-            if let Err(error) = state.session_manager().touch(&session_id).await {
-                return session_state_response(error);
-            }
-            return recorded_response(&session_id, &outcome);
-        }
-        Reservation::Proceed(guard) => guard,
+    let guard = match &key {
+        None => None,
+        Some(key) => match reserve(&state, &session_id, key, &req.code).await {
+            Reserved::Run(guard) => Some(guard),
+            Reserved::Answered(response) => return response,
+        },
     };
+    if let Some(tools) = tools {
+        return run_detached(&state, session_id, bound, req.code, key, guard, tools).await;
+    }
 
     let outcome = run(
         &state,
         &session_id,
         bound,
         &req.code,
-        Some(&key),
+        key.as_deref(),
         crate::audit::execution(),
+        None,
     )
     .await;
-    if !outcome.dispatched {
-        // Nothing reached the runner, so nothing can have happened. Drop
-        // the reservation rather than caching a transient failure against this
-        // key forever.
-        guard.release().await;
-        return execute::with_session_header(&session_id, outcome.response).into_response();
-    }
-
     // Serialize once and hand the same bytes to the ledger and the caller, so a
     // replay cannot drift from what the original client received.
-    let Ok(body) = serde_json::to_string(&outcome.response) else {
-        // Unreachable in practice. The program *did* run, so releasing would let
-        // a retry re-run it; dropping the guard armed leaves the key
-        // indeterminate, which is the honest answer.
-        tracing::error!("failed to serialize execute response for the idempotency ledger");
+    let finished = crate::handlers::runs::finished_body(&outcome.response);
+    if let Some(guard) = guard {
+        let outcome_recordable = true;
+        settle(guard, outcome.dispatched, &finished, outcome_recordable).await;
+    }
+    stored_body_response(&session_id, StatusCode::OK, finished.body)
+}
+
+/// Settle the key a run held: record `finished` when the program ran and its
+/// outcome may be recorded, release the key when nothing reached the runner
+/// (caching a transient failure would pin it to the key forever), and
+/// otherwise leave the key indeterminate by dropping the guard armed, since the
+/// program ran but what it did cannot be told.
+async fn settle(
+    guard: ReservationGuard,
+    dispatched: bool,
+    finished: &crate::handlers::runs::FinishedBody,
+    outcome_recordable: bool,
+) {
+    if !dispatched {
+        guard.release().await;
+    } else if finished.recordable && outcome_recordable {
+        guard
+            .complete(StatusCode::OK.as_u16(), finished.body.clone())
+            .await;
+    } else {
         drop(guard);
-        return execute::with_session_header(&session_id, outcome.response).into_response();
+    }
+}
+
+/// What reserving an idempotency key came to.
+enum Reserved {
+    /// The program runs under this reservation.
+    Run(ReservationGuard),
+    /// The request is answered without running: a replay of the recorded
+    /// outcome, the current state of a run still going, or a refusal.
+    Answered(axum::response::Response),
+}
+
+/// Reserve `key` for a run, or answer the request without one.
+async fn reserve(state: &AppState, session_id: &str, key: &str, code: &str) -> Reserved {
+    // A run that is still going may have finished by the time it is looked up;
+    // its outcome is then recorded, and a second look finds it.
+    for _ in 0..2 {
+        match state.idempotency().reserve(session_id, key, code).await {
+            Reservation::Proceed(guard) => return Reserved::Run(guard),
+            Reservation::Refused(refusal) => {
+                return Reserved::Answered(refusal_response(session_id, &refusal));
+            }
+            Reservation::Replay(outcome) => {
+                return Reserved::Answered(replay_response(state, session_id, key, &outcome).await);
+            }
+            Reservation::Attached(run_id) => {
+                let Some(entry) = state.session_manager().runs().get(&run_id) else {
+                    continue;
+                };
+                if let Some(refused) = note_duplicate(state, session_id).await {
+                    return Reserved::Answered(refused);
+                }
+                let settled = entry.settled().await;
+                return Reserved::Answered(crate::handlers::runs::state_response(&entry, settled));
+            }
+        }
+    }
+    Reserved::Answered(refusal_response(session_id, &Refusal::InProgress))
+}
+
+async fn replay_response(
+    state: &AppState,
+    session_id: &str,
+    key: &str,
+    outcome: &RecordedOutcome,
+) -> axum::response::Response {
+    if let Some(recorder) = state.run_recorder() {
+        recorder.retried(crate::record::RetryLink {
+            session_id: session_id.to_owned(),
+            idempotency_key: key.to_owned(),
+            original_execution_id: serde_json::from_str::<serde_json::Value>(&outcome.body)
+                .ok()
+                .and_then(|body| body.get("execution_id")?.as_str().map(str::to_owned)),
+        });
+    }
+    if let Some(refused) = note_duplicate(state, session_id).await {
+        return refused;
+    }
+    recorded_response(session_id, outcome)
+}
+
+/// Note a duplicate request answered without running: it is a replay in the
+/// audit trail, and session activity, so a client retrying does not have its
+/// session reaped underneath it (`execute_core` normally does this, and a
+/// duplicate never reaches it). Returns the refusal to send when the session
+/// can no longer be used.
+async fn note_duplicate(state: &AppState, session_id: &str) -> Option<axum::response::Response> {
+    if let Some(audit) = crate::audit::execution() {
+        audit.replay();
+    }
+    state
+        .session_manager()
+        .touch(session_id)
+        .await
+        .err()
+        .map(session_state_response)
+}
+
+/// The application tools a program in `session_id` may call: the session's
+/// catalog, when its blueprint lets programs see `@tools`.
+async fn session_tools(
+    state: &AppState,
+    session_id: &str,
+    bound: &BoundSession,
+) -> Result<Option<SessionTools>, crate::session_manager::SessionError> {
+    if !exposes_tools(&bound.found.blueprint) {
+        return Ok(None);
+    }
+    state.session_manager().tools(session_id).await
+}
+
+/// Runs `code` in its own task, so it can outlive this request while it waits on
+/// the harness, and answers with the run's first settled state: suspended at a
+/// tool call, or finished. Everything that follows a run (its audit record, its
+/// last-run, its idempotency outcome) happens in that task, exactly once,
+/// whoever is listening.
+async fn run_detached(
+    state: &AppState,
+    session_id: String,
+    bound: BoundSession,
+    code: String,
+    key: Option<String>,
+    guard: Option<ReservationGuard>,
+    tools: SessionTools,
+) -> axum::response::Response {
+    let shutdown = state.graceful_shutdown();
+    let Some(admitted) = shutdown.admit() else {
+        if let Some(guard) = guard {
+            guard.release().await;
+        }
+        return (StatusCode::SERVICE_UNAVAILABLE, "server is shutting down").into_response();
     };
-    guard.complete(StatusCode::OK.as_u16(), body.clone()).await;
-    stored_body_response(&session_id, StatusCode::OK, body)
+    // The run's id is its execution id, so it needs an audit to name it even
+    // where the request carries none.
+    let audit = crate::audit::execution().unwrap_or_else(|| {
+        crate::audit::ExecutionAudit::new(
+            state.audit().clone(),
+            "unauthenticated",
+            "http",
+            Some(&session_id),
+        )
+    });
+    let registry = Arc::clone(state.session_manager().runs());
+    let (cancel, cancelled) = tokio::sync::oneshot::channel();
+    let entry = registry.insert(&audit.id, &session_id, cancel);
+    if let Some(guard) = &guard {
+        guard.attach_run(&entry.id);
+    }
+    let tools = run_tools(state, &entry, &session_id, &bound, &tools, cancelled);
+    // The record ends with the run, not with this request.
+    audit.hand_off();
+    let supervised = Supervised {
+        state: state.clone(),
+        entry: Arc::clone(&entry),
+        registry,
+        session_id,
+        bound,
+        code,
+        key,
+        guard,
+        audit,
+        tools,
+    };
+    supervised.spawn(admitted, shutdown.draining());
+    // A client going away does not end this handler (`graceful_shutdown::run`
+    // owns it), so this fires only when the server stops the request outright:
+    // the run is then abandoned before anyone learned of a call to answer.
+    let mut abandon = CancelOnDrop(Some(Arc::clone(&entry)));
+    let settled = entry.settled().await;
+    abandon.0 = None;
+    crate::handlers::runs::state_response(&entry, settled)
+}
+
+/// What [`run_detached`]'s task owns: the run, and everything that follows it.
+struct Supervised {
+    state: AppState,
+    entry: Arc<crate::runs::RunEntry>,
+    registry: Arc<crate::runs::RunRegistry>,
+    session_id: String,
+    bound: BoundSession,
+    code: String,
+    key: Option<String>,
+    guard: Option<ReservationGuard>,
+    audit: Arc<crate::audit::ExecutionAudit>,
+    tools: execute::RunTools,
+}
+
+impl Supervised {
+    /// Supervise the run in its own task, which holds `admitted` until the run
+    /// has ended. Once the server drains, a run waiting on the harness stops;
+    /// one that is working finishes within the shutdown grace.
+    fn spawn(self, admitted: TaskTrackerToken, draining: CancellationToken) {
+        let entry = Arc::clone(&self.entry);
+        tokio::spawn(async move {
+            let _admitted = admitted;
+            let supervise = self.supervise();
+            tokio::pin!(supervise);
+            tokio::select! {
+                biased;
+                () = &mut supervise => {}
+                () = draining.cancelled() => {
+                    entry.stop_waiting();
+                    supervise.await;
+                }
+            }
+        });
+    }
+
+    /// Run the program, then end its record, settle its idempotency key, and
+    /// publish its result.
+    async fn supervise(self) {
+        let outcome = run(
+            &self.state,
+            &self.session_id,
+            self.bound,
+            &self.code,
+            self.key.as_deref(),
+            Some(Arc::clone(&self.audit)),
+            Some(self.tools),
+        )
+        .await;
+        // A run that never reached the runner has no one else to end its record.
+        self.audit.finish(outcome.response.error.is_none());
+        let finished = crate::handlers::runs::finished_body(&outcome.response);
+        if let Some(guard) = self.guard {
+            // A deleted session's keys are gone, and writing one back would
+            // revive it. A run the server stopped did not end on its own.
+            let outcome_recordable = self.entry.outcome_recordable();
+            settle(guard, outcome.dispatched, &finished, outcome_recordable).await;
+        }
+        self.entry.finish(Arc::from(finished.body));
+        self.registry.retire(&self.entry);
+    }
+}
+
+/// The `@tools` a detached run calls: the session's catalog as a package, and a
+/// provider that suspends the run at each call.
+fn run_tools(
+    state: &AppState,
+    entry: &Arc<crate::runs::RunEntry>,
+    session_id: &str,
+    bound: &BoundSession,
+    tools: &SessionTools,
+    cancelled: tokio::sync::oneshot::Receiver<()>,
+) -> execute::RunTools {
+    let (declaration, warnings) = crate::app_tools::declaration(tools);
+    execute::RunTools {
+        package: Arc::new(crate::runner::ToolsPackage {
+            declaration,
+            warnings,
+        }),
+        provider: Arc::new(crate::runs::SuspendingToolProvider {
+            entry: Arc::clone(entry),
+            timeout: bound.found.blueprint.tool_call_timeout,
+            touch: session_touch(state, session_id),
+        }),
+        cancel: Some(cancelled),
+    }
+}
+
+/// Marks `session_id` active, for a run that suspends in it.
+fn session_touch(
+    state: &AppState,
+    session_id: &str,
+) -> Arc<dyn Fn() -> crate::runs::Touch + Send + Sync> {
+    let manager = Arc::clone(state.session_manager());
+    let session_id = session_id.to_owned();
+    Arc::new(move || {
+        let manager = Arc::clone(&manager);
+        let session_id = session_id.clone();
+        Box::pin(async move {
+            if let Err(error) = manager.touch(&session_id).await {
+                tracing::warn!(%error, "session activity at a tool call did not commit");
+            }
+        })
+    })
+}
+
+/// Cancels a run whose first answer nobody waited for.
+struct CancelOnDrop(Option<Arc<crate::runs::RunEntry>>);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if let Some(entry) = self.0.take() {
+            entry.cancel_unrecorded();
+        }
+    }
+}
+
+/// Whether programs under `blueprint` may see a session's `@tools`.
+fn exposes_tools(blueprint: &submilli_blueprint::Blueprint) -> bool {
+    submilli_shared::library_visibility::LibraryVisibility::for_blueprint(blueprint).tools()
 }
 
 /// What a session runs under: the blueprint it was bound to, as registered now, and the
@@ -381,6 +681,7 @@ fn run_refusal_response(session_id: &str, error: SessionRunError) -> axum::respo
 }
 
 /// Runs `code` in `session_id` under what it is bound to, recorded as a session run.
+/// `tools` are the session's application tools, for a run that may suspend.
 pub(crate) async fn run(
     state: &AppState,
     session_id: &str,
@@ -388,6 +689,7 @@ pub(crate) async fn run(
     code: &str,
     idempotency_key: Option<&str>,
     audit: Option<Arc<crate::audit::ExecutionAudit>>,
+    tools: Option<execute::RunTools>,
 ) -> execute::ExecuteOutcome {
     let BoundSession {
         blueprint_name,
@@ -411,6 +713,7 @@ pub(crate) async fn run(
             client: None,
             tool_call_id: None,
             idempotency_key,
+            tools,
         },
     )
     .await

@@ -1,0 +1,285 @@
+//! Runs that suspend at an application tool call (`@tools`):
+//!
+//! * `POST /v1/runs/{id}/resume` — answer the run's pending call, then wait for
+//!   it to suspend again or finish
+//! * `GET  /v1/runs/{id}`        — where the run is now
+//!
+//! A run's id is its execution id. A session execute whose session has
+//! application tools answers with the same states: `suspended` with the pending
+//! calls, or `finished` with the execute result.
+
+use std::collections::HashSet;
+
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::{HeaderValue, StatusCode};
+use axum::response::IntoResponse;
+use interpreter::runtime::{McpResponse, ToolCallError};
+use serde::{Deserialize, Serialize};
+
+use crate::app::AppState;
+use crate::handlers::execute::{self, ExecuteResponse, Finished};
+use crate::runs::{PendingCallView, ResumeRefusal, RunEntry, RunState, ToolAnswer};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResumeRequest {
+    pub results: Vec<CallResult>,
+}
+
+/// The harness's answer to one call.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallResult {
+    pub call_id: String,
+    pub ok: bool,
+    /// The tool's return value, when `ok`.
+    #[serde(default)]
+    pub value: Option<serde_json::Value>,
+    /// Why there is no value, when not `ok`.
+    #[serde(default)]
+    pub error: Option<CallError>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallError {
+    pub kind: CallErrorKind,
+    pub message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CallErrorKind {
+    /// The tool ran and failed: `Error(message)` in the program.
+    Failed,
+    /// The harness, or a person, refused the call: `PermissionDeniedError`.
+    Denied,
+}
+
+/// `GET /v1/runs/{id}`: where the run is now.
+pub async fn get(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> axum::response::Response {
+    match state.session_manager().runs().get(&run_id) {
+        Some(entry) => {
+            let current = entry.current();
+            state_response(&entry, current)
+        }
+        None => unknown_run(&run_id),
+    }
+}
+
+/// `POST /v1/runs/{id}/resume`: answer the pending call, then wait for the run to
+/// suspend again or finish. Answering a call already answered changes nothing and
+/// returns the run's state.
+pub async fn resume(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+    request: Result<Json<ResumeRequest>, axum::extract::rejection::JsonRejection>,
+) -> axum::response::Response {
+    let request = match request {
+        Ok(Json(request)) => request,
+        Err(error) => {
+            return refusal(
+                error.status(),
+                "invalid_request",
+                &run_id,
+                error.body_text(),
+            );
+        }
+    };
+    let answers = match answers(request.results) {
+        Ok(answers) => answers,
+        Err(message) => {
+            return refusal(StatusCode::BAD_REQUEST, "invalid_request", &run_id, message);
+        }
+    };
+    let Some(entry) = state.session_manager().runs().get(&run_id) else {
+        return unknown_run(&run_id);
+    };
+    let settled = match entry.resume(answers) {
+        Ok(Some(generation)) => entry.settled_after(generation).await,
+        Ok(None) => entry.settled().await,
+        Err(ResumeRefusal::NotSuspended) => {
+            return refusal(
+                StatusCode::CONFLICT,
+                "run_not_suspended",
+                &run_id,
+                "the run is not waiting on a call: it finished, its call timed out, or it was cancelled".to_owned(),
+            );
+        }
+        Err(ResumeRefusal::UnknownCall(call_id)) => {
+            return refusal(
+                StatusCode::BAD_REQUEST,
+                "unknown_call",
+                &run_id,
+                format!("the run is not waiting on call `{call_id}`"),
+            );
+        }
+    };
+    state_response(&entry, settled)
+}
+
+/// A finished run's body, as the caller, the ledger and `GET` all receive it.
+pub(crate) struct FinishedBody {
+    pub body: String,
+    /// False for a stand-in sent when the result could not be serialized: it
+    /// is never recorded as the run's outcome.
+    pub recordable: bool,
+}
+
+/// `response` as a finished run's body, or a stand-in that is not recordable
+/// when it cannot be serialized.
+pub(crate) fn finished_body(response: &ExecuteResponse) -> FinishedBody {
+    match serde_json::to_string(&Finished::new(response)) {
+        Ok(body) => FinishedBody {
+            body,
+            recordable: true,
+        },
+        Err(error) => {
+            tracing::error!(%error, "failed to serialize a finished run");
+            let stand_in = execute::internal_failure(
+                &response.execution_id,
+                &response.session_id,
+                "internal: the result could not be serialized".to_owned(),
+            );
+            FinishedBody {
+                // Strings only, so this cannot fail.
+                body: serde_json::to_string(&Finished::new(&stand_in)).unwrap_or_default(),
+                recordable: false,
+            }
+        }
+    }
+}
+
+/// `entry` in `state`, as a response.
+pub(crate) fn state_response(entry: &RunEntry, state: RunState) -> axum::response::Response {
+    let ids = RunIds {
+        execution_id: &entry.id,
+        session_id: &entry.session_id,
+    };
+    let body = match state {
+        RunState::Finished(body) => Ok(body.to_string()),
+        RunState::Suspended(calls) => {
+            serde_json::to_string(&Unfinished::Suspended { ids, calls: &calls })
+        }
+        RunState::Running => serde_json::to_string(&Unfinished::Running { ids }),
+    };
+    let body = match body {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::error!(%error, "failed to serialize a run's state");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let mut headers = execute::session_headers(&entry.session_id);
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    (StatusCode::OK, headers, body).into_response()
+}
+
+/// A run that has not finished, as the harness sees it. A finished run is the
+/// execute result, see [`Finished`].
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum Unfinished<'a> {
+    /// Waiting on the harness for `calls`.
+    Suspended {
+        #[serde(flatten)]
+        ids: RunIds<'a>,
+        calls: &'a [PendingCallView],
+    },
+    /// Working: between a resume and the next state.
+    Running {
+        #[serde(flatten)]
+        ids: RunIds<'a>,
+    },
+}
+
+#[derive(Serialize)]
+struct RunIds<'a> {
+    execution_id: &'a str,
+    session_id: &'a str,
+}
+
+fn refusal(
+    status: StatusCode,
+    error: &str,
+    run_id: &str,
+    message: String,
+) -> axum::response::Response {
+    (
+        status,
+        Json(serde_json::json!({ "error": error, "execution_id": run_id, "message": message })),
+    )
+        .into_response()
+}
+
+fn unknown_run(run_id: &str) -> axum::response::Response {
+    refusal(
+        StatusCode::NOT_FOUND,
+        "unknown_run",
+        run_id,
+        "no such run: it never existed, it finished a while ago, or the server restarted"
+            .to_owned(),
+    )
+}
+
+/// The harness's results as answers: at least one, each call named once.
+fn answers(results: Vec<CallResult>) -> Result<Vec<ToolAnswer>, String> {
+    if results.is_empty() {
+        return Err("`results` names no call; answer the run's pending call".to_owned());
+    }
+    let mut seen = HashSet::new();
+    results
+        .into_iter()
+        .map(|result| {
+            if !seen.insert(result.call_id.clone()) {
+                return Err(format!("call `{}` is answered twice", result.call_id));
+            }
+            answer(result)
+        })
+        .collect()
+}
+
+fn answer(result: CallResult) -> Result<ToolAnswer, String> {
+    let answer = match (result.ok, result.value, result.error) {
+        (true, value, None) => {
+            let mut value = value.unwrap_or(serde_json::Value::Null);
+            Ok(McpResponse::take(&mut value).map_err(|_| {
+                format!(
+                    "the value for call `{}` is too large or too deeply nested",
+                    result.call_id
+                )
+            })?)
+        }
+        (false, None, Some(error)) => Err(match error.kind {
+            CallErrorKind::Failed => ToolCallError::Failed {
+                message: error.message,
+            },
+            CallErrorKind::Denied => ToolCallError::Denied {
+                message: error.message,
+            },
+        }),
+        (true, _, Some(_)) => {
+            return Err(format!(
+                "call `{}`: a result with `ok: true` carries a `value`, not an `error`",
+                result.call_id
+            ));
+        }
+        (false, _, _) => {
+            return Err(format!(
+                "call `{}`: a result with `ok: false` carries an `error` and no `value`",
+                result.call_id
+            ));
+        }
+    };
+    Ok(ToolAnswer {
+        call_id: result.call_id,
+        answer,
+    })
+}

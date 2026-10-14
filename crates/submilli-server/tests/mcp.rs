@@ -476,6 +476,8 @@ async fn execute_returns_result() {
     assert_eq!(out["result"], json!("2"), "got: {rpc}");
     assert_eq!(out["console"], json!([]));
     assert!(out["error"].is_null());
+    // `status` belongs to the HTTP API, where a run can suspend.
+    assert!(out.get("status").is_none(), "{rpc}");
 }
 
 /// Reaching the memory cap is reported under its own kind, which the program's

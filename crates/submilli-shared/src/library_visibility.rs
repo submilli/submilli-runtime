@@ -13,6 +13,7 @@ pub struct LibraryVisibility {
     llm: bool,
     embedding: bool,
     session: bool,
+    tools: bool,
 }
 
 impl LibraryVisibility {
@@ -26,6 +27,8 @@ impl LibraryVisibility {
             llm: true,
             embedding: true,
             session: true,
+            // Application tools belong to a session, and an unscoped surface has none.
+            tools: false,
         }
     }
 
@@ -44,7 +47,15 @@ impl LibraryVisibility {
             session: ["session.read", "session.write"]
                 .iter()
                 .all(|capability| has_grant(blueprint, capability)),
+            // Calls are denied by default, so `@tools` is advertised only to a
+            // blueprint that can call some tool. Which tools exist is per session.
+            tools: has_grant(blueprint, interpreter::runtime::TOOLS_CAPABILITY),
         }
+    }
+
+    /// Whether programs under this blueprint may see the session's `@tools`.
+    pub fn tools(self) -> bool {
+        self.tools
     }
 
     pub fn allows(self, name: &str) -> bool {
@@ -56,6 +67,7 @@ impl LibraryVisibility {
             "submilli:llm" => self.llm,
             "submilli:embedding" => self.embedding,
             "submilli:session" => self.session,
+            "@tools" => self.tools,
             _ => true,
         }
     }
@@ -215,6 +227,28 @@ embedding:
             );
         }
         assert!(LibraryVisibility::unscoped().allows("submilli:embedding"));
+    }
+
+    #[test]
+    fn tools_need_a_tools_call_grant_and_are_hidden_unscoped() {
+        assert!(!LibraryVisibility::unscoped().tools());
+        for (policy, visible) in [
+            ("", false),
+            (
+                "permissions:\n  main:\n    - capability: tools.call\n      filter: tool == \"query_orders\"\n      action: allow\n",
+                true,
+            ),
+            (
+                "permissions:\n  main:\n    - capability: tools.call\n      action: deny\n",
+                false,
+            ),
+            ("default: allow\n", true),
+        ] {
+            let blueprint = submilli_blueprint::parse(&format!("name: test\n{policy}")).unwrap();
+            let visibility = LibraryVisibility::for_blueprint(&blueprint);
+            assert_eq!(visibility.tools(), visible, "{policy}");
+            assert_eq!(visibility.allows("@tools"), visible, "{policy}");
+        }
     }
 
     #[test]

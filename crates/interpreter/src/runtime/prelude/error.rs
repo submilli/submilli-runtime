@@ -58,10 +58,11 @@ pub(crate) enum BuiltinErrorClass {
     Uri,
     Reference,
     PermissionDenied,
+    Timeout,
 }
 
 impl BuiltinErrorClass {
-    const SUBCLASSES: [Self; 7] = [
+    const SUBCLASSES: [Self; 8] = [
         Self::Range,
         Self::QuotaExceeded,
         Self::Type,
@@ -69,6 +70,7 @@ impl BuiltinErrorClass {
         Self::Uri,
         Self::Reference,
         Self::PermissionDenied,
+        Self::Timeout,
     ];
 
     pub(crate) fn name_text(self) -> &'static str {
@@ -81,6 +83,7 @@ impl BuiltinErrorClass {
             Self::Uri => "URIError",
             Self::Reference => "ReferenceError",
             Self::PermissionDenied => "PermissionDeniedError",
+            Self::Timeout => "TimeoutError",
         }
     }
 
@@ -96,7 +99,8 @@ impl BuiltinErrorClass {
             | Self::Type
             | Self::Syntax
             | Self::Uri
-            | Self::Reference => &[],
+            | Self::Reference
+            | Self::Timeout => &[],
             Self::PermissionDenied => &["caller", "capability", "reason"],
         }
     }
@@ -111,6 +115,7 @@ impl BuiltinErrorClass {
             Self::Uri => handles.uri_error_vtable,
             Self::Reference => handles.reference_error_vtable,
             Self::PermissionDenied => handles.permission_denied_vtable,
+            Self::Timeout => handles.timeout_vtable,
         }
     }
 
@@ -122,7 +127,8 @@ impl BuiltinErrorClass {
             | Self::Type
             | Self::Syntax
             | Self::Uri
-            | Self::Reference => handles.error_field_names,
+            | Self::Reference
+            | Self::Timeout => handles.error_field_names,
             Self::PermissionDenied => handles.permission_denied_field_names,
         }
     }
@@ -136,7 +142,8 @@ impl BuiltinErrorClass {
             | Self::Syntax
             | Self::Uri
             | Self::Reference
-            | Self::PermissionDenied => handles.error_subclass_type.clone(),
+            | Self::PermissionDenied
+            | Self::Timeout => handles.error_subclass_type.clone(),
         }
     }
 }
@@ -152,6 +159,7 @@ pub(crate) struct ErrorHost {
     pub uri_vtable: Global,
     pub reference_vtable: Global,
     pub permission_denied_vtable: Global,
+    pub timeout_vtable: Global,
     pub field_names: Global,
     pub permission_denied_field_names: Global,
     pub tag: Tag,
@@ -355,6 +363,7 @@ pub(crate) fn install_store_bound(
         uri_vtable,
         reference_vtable,
         permission_denied_vtable,
+        timeout_vtable,
     ] = BuiltinErrorClass::SUBCLASSES.map(|class| {
         install_subclass_vtable(
             linker,
@@ -375,6 +384,7 @@ pub(crate) fn install_store_bound(
         uri_vtable: uri_vtable?,
         reference_vtable: reference_vtable?,
         permission_denied_vtable: permission_denied_vtable?,
+        timeout_vtable: timeout_vtable?,
         field_names,
         permission_denied_field_names,
         tag,
@@ -581,6 +591,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         BuiltinErrorClass::Uri,
         BuiltinErrorClass::Reference,
         BuiltinErrorClass::PermissionDenied,
+        BuiltinErrorClass::Timeout,
     ] {
         let mut init_params = vec![object_ref.clone()];
         init_params.extend(vec![string_ref.clone(); 1 + class.own_fields().len()]);
@@ -961,6 +972,34 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 implements: Vec::new(),
                 doc: doc(
                     "/** A budget refusal (`extends Error`): filesystem space, model tokens, or session state. Free space, reduce the request, or ask the operator for a larger budget. */",
+                ),
+            },
+        },
+    );
+
+    defs.types.insert(
+        "TimeoutError".to_string(),
+        TypeSymbol {
+            name: "TimeoutError".to_string(),
+            mangled_name: crate::mangle::prelude("TimeoutError"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: TypeKind::Class {
+                generics: Vec::new(),
+                // No own fields — `message`/`name` are inherited from `Error`.
+                fields: BTreeMap::new(),
+                narrowing_checks: BTreeMap::new(),
+                methods: BTreeMap::new(),
+                method_visibility: BTreeMap::new(),
+                accessors: Vec::new(),
+                constructor: vec![optional_message_param()],
+                constructor_visibility: crate::Visibility::Public,
+                statics: BTreeMap::new(),
+                static_visibility: BTreeMap::new(),
+                static_fields: BTreeMap::new(),
+                extends: Some(crate::ClassExtends::plain(crate::mangle::prelude("Error"))),
+                implements: Vec::new(),
+                doc: doc(
+                    "/** A wait outside the program ran out of time (`extends Error`): an application tool the harness did not answer within the blueprint's `tool_call_timeout`. The call did not complete; retry it, or report it. */",
                 ),
             },
         },

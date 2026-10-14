@@ -388,6 +388,23 @@ const MCP: &[Capability] = &[Capability {
     example_filter: "tool == \"create_issue\"",
 }];
 
+/// The session's application tools, `@tools`: the harness that opened the
+/// session declares them and answers each call. The tool being called is in the
+/// filter context. Deny by default: the harness decides what it exposes, the
+/// blueprint decides what programs may call.
+const TOOLS: &[Capability] = &[Capability {
+    name: "tools.call",
+    main_denial: None,
+    summary: "Call an application tool the harness declared for the session (`@tools`). \
+              The harness answers each call, and may refuse it",
+    filter_fields: &[field(
+        "tool",
+        "string",
+        "Name of the application tool being called",
+    )],
+    example_filter: "tool == \"query_orders\"",
+}];
+
 const EMBEDDING: &[Capability] = &[Capability {
     name: "embedding.embed",
     // No `main_denial`: main-module access is the point. The program names an
@@ -520,6 +537,10 @@ const CORE_CATALOG: &[CapabilityGroup] = &[
     CapabilityGroup {
         module: "submilli:session",
         capabilities: SESSION,
+    },
+    CapabilityGroup {
+        module: "@tools",
+        capabilities: TOOLS,
     },
 ];
 

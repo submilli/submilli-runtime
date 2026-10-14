@@ -5,6 +5,7 @@ use std::sync::Arc;
 use super::credentials::{CredentialCodec, CredentialError, SessionCredentials};
 use crate::blueprint::StoreError;
 use crate::domain::session::*;
+use crate::domain::tools::SessionTools;
 use crate::session_store::{DurableSessionStore, SessionRecord, SessionStatus as RecordStatus};
 use submilli_blueprint::HarnessSecretBindings;
 
@@ -67,6 +68,7 @@ impl LoadedSession {
         self.stored.sealed_bindings = None;
         self.stored.ephemeral_bindings = None;
         self.stored.mcp_state = None;
+        self.stored.tools_json = None;
         true
     }
 }
@@ -127,6 +129,18 @@ pub(crate) fn restore_domain(
             },
         }
     };
+    // A catalog this server cannot read (written by a newer one) costs the
+    // session its tools, not its life: failing here would also stop the reaper.
+    let tools = record
+        .tools_json
+        .as_deref()
+        .and_then(|json| match SessionTools::from_json(json) {
+            Ok(tools) => tools,
+            Err(error) => {
+                tracing::warn!(session_id = %id.as_str(), %error, "session tools could not be restored");
+                None
+            }
+        });
     Session::restore(
         id,
         binding,
@@ -139,6 +153,7 @@ pub(crate) fn restore_domain(
             CredentialBinding::Absent
         },
     )
+    .map(|session| session.with_tools(tools))
     .map_err(rule_error)
 }
 
@@ -197,6 +212,7 @@ pub(crate) fn persist_session(
         record.sealed_bindings = None;
         record.ephemeral_bindings = None;
         record.mcp_state = None;
+        record.tools_json = None;
         record.cleanup_pending |= was_active;
     }
     Ok(record)
@@ -206,6 +222,7 @@ fn write_domain(record: &mut SessionRecord, session: &Session) {
     record.session_id = session.id().as_str().to_owned();
     record.blueprint_name = session.binding().blueprint().to_owned();
     record.variables = session.binding().variables().clone();
+    record.tools_json = session.tools().map(SessionTools::to_json);
     record.status = match session.status() {
         SessionStatus::Active => RecordStatus::Active,
         SessionStatus::Closed(_) => RecordStatus::Closed,

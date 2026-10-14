@@ -379,7 +379,7 @@ pub(super) fn collect_from_expr(
             collect_from_expr(ast, *value, c)?;
         }
         TypedExprKind::Call { args, .. }
-        | TypedExprKind::McpCall { args, .. }
+        | TypedExprKind::VirtualCall { args, .. }
         | TypedExprKind::SuperCtorCall { args, .. }
         | TypedExprKind::SuperMethodCall { args, .. } => {
             for a in args {

@@ -274,7 +274,7 @@ impl Collector<'_> {
                 self.walk_expr(*value)?;
             }
             TypedExprKind::Call { args, .. }
-            | TypedExprKind::McpCall { args, .. }
+            | TypedExprKind::VirtualCall { args, .. }
             | TypedExprKind::SuperCtorCall { args, .. }
             | TypedExprKind::SuperMethodCall { args, .. } => {
                 for &a in args {

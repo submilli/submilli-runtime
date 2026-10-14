@@ -88,14 +88,13 @@ pub enum TypedExprKind {
         callee: ExprId,
         args: Vec<ExprId>,
     },
-    /// `@mcp/<server>.<tool>(args)` — dispatched through the single
-    /// `submilli:mcp.call` host fn rather than a per-tool import. Carries the
-    /// server and tool names directly, so codegen needs no mangled-name parsing.
-    /// The result type (on the containing `TypedExpr`) drives how the returned JSON
-    /// text is materialized (a `string`, or a typed value via the `JSON.parse`
-    /// validator).
-    McpCall {
-        server: String,
+    /// `@mcp/<server>.<tool>(args)` or `@tools.<tool>(args)`: dispatched through
+    /// the package's single host fn (`submilli:mcp.call`, `submilli:tools.call`)
+    /// rather than a per-tool import. Carries the target and tool names directly,
+    /// so codegen needs no mangled-name parsing. Known-return calls are wrapped in
+    /// a normal `Cast` by typecheck.
+    VirtualCall {
+        target: crate::VirtualDispatch,
         tool: String,
         args: Vec<ExprId>,
     },

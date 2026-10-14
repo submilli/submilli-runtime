@@ -3401,9 +3401,9 @@ impl Inferer<'_> {
         )
     }
 
-    /// Build a statically-dispatched call node. A function from an `@mcp/<server>`
-    /// package (recognized by the package's `mcp_server` flag, looked up via the
-    /// resolved mangled name) becomes a [`TypedExprKind::McpCall`]; everything else
+    /// Build a statically-dispatched call node. A function from a virtual package
+    /// (`@mcp/<server>` or `@tools`, recognized by the package's `virtual_dispatch`)
+    /// becomes a [`TypedExprKind::VirtualCall`]; everything else
     /// is a plain [`TypedExprKind::Call`]. Routing every call/import form
     /// (`ns.tool()`, named-import `tool()`, namespace-symbol calls) through here is
     /// what keeps MCP recognition syntax-independent — and out of codegen.
@@ -3416,27 +3416,28 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(TypedExprKind, Type), crate::compiler_error::CompilerFailure> {
         Ok({
-            if let Some(server) = self
+            if let Some(dispatch) = self
                 .packages_by_name
                 .get(target.package)
-                .and_then(|defs| defs.mcp_server.clone())
+                .and_then(|defs| defs.virtual_dispatch.clone())
             {
-                let mcp_call = TypedExprKind::McpCall {
-                    server,
+                let package = dispatch.package_name();
+                let virtual_call = TypedExprKind::VirtualCall {
+                    target: dispatch,
                     tool: target.symbol.to_string(),
                     args: args.clone(),
                 };
                 if matches!(ret.peel(), Type::Unknown) {
-                    return Ok((mcp_call, Type::Unknown));
+                    return Ok((virtual_call, Type::Unknown));
                 }
 
-                return Ok(match self.checked_cast_around(mcp_call, ret, span)? {
+                return Ok(match self.checked_cast_around(virtual_call, ret, span)? {
                     Ok(checked) => checked,
                     Err(reason) => {
                         self.error_with_help(
                             span,
                             format!(
-                                "@mcp/{} return type `{ret}` is not runtime-verifiable: {reason}",
+                                "{package}.{} return type `{ret}` is not runtime-verifiable: {reason}",
                                 target.symbol
                             ),
                             vec![
@@ -3702,7 +3703,7 @@ impl Inferer<'_> {
 
     /// Replace the trailing `schema` argument — which the declaration's `null`
     /// default just filled — with the compile-time schema string, the way
-    /// `McpCall` carries its `server` and `tool` as constants.
+    /// `VirtualCall` carries its target and `tool` as constants.
     ///
     /// The slot is found by name rather than by index so the declaration can
     /// grow a parameter without silently overwriting the wrong argument; a
@@ -3794,7 +3795,7 @@ impl Inferer<'_> {
 
     /// dispatch a `<ns>.<member>(args)` call where `<ns>` is
     /// a namespace-imported package. Lifts the member's
-    /// package-export mangled name into a static call (or `McpCall` for
+    /// package-export mangled name into a static call (or `VirtualCall` for
     /// `@mcp/<server>` packages). Argument binding — arity, optional/
     /// default fill-in, rest packing, and generic inference — mirrors the
     /// bare-identifier static-call path (generic calls literally route

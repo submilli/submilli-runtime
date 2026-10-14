@@ -5,6 +5,7 @@ pub mod execute;
 pub mod last_run;
 pub mod mcp_auth;
 pub mod packages;
+pub mod runs;
 pub mod secret;
 pub mod sessions;
 pub mod volumes;

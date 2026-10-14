@@ -240,6 +240,7 @@ pub(crate) async fn one_shot_with(
             client: None,
             tool_call_id: None,
             idempotency_key: None,
+            tools: None,
         },
         test,
     )
@@ -289,6 +290,20 @@ pub(crate) struct ExecuteInputs<'a> {
     pub tool_call_id: Option<String>,
     /// The session API's `Idempotency-Key`, for the run's record.
     pub idempotency_key: Option<&'a str>,
+    /// The session's application tools, for a session run that may suspend at a
+    /// tool call. MCP, one-shot and embedder runs have none.
+    pub tools: Option<RunTools>,
+}
+
+/// What a run that may suspend at an application tool call runs with.
+pub(crate) struct RunTools {
+    /// The session's `@tools` package.
+    pub package: Arc<runner::ToolsPackage>,
+    /// Answers each call by suspending the run until the harness resumes it.
+    pub provider: Arc<dyn interpreter::runtime::ToolProvider>,
+    /// Fires when the run's registry entry is cancelled. Taken by the core, which
+    /// cancels through it instead of registering the run with the app.
+    pub cancel: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
 /// Who opens a run's VFS, which also sets how the core audits a program that fails to
@@ -342,9 +357,10 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
 /// [`execute_core`] as a test run when `test` is given.
 async fn execute_core_with(
     state: &AppState,
-    inputs: ExecuteInputs<'_>,
+    mut inputs: ExecuteInputs<'_>,
     test: Option<TestWorld>,
 ) -> ExecuteOutcome {
+    let run_cancel = inputs.tools.as_mut().and_then(|tools| tools.cancel.take());
     let recording = crate::record::Recording::start_tapped(
         state,
         || run_start(&inputs, test.as_ref()),
@@ -370,8 +386,10 @@ async fn execute_core_with(
     // it is registered by is its audit's, the one its recorder and response carry: every
     // entry point builds an audit whether or not the audit log is enabled, so every
     // recorded run registers.
-    let (_registered, cancel_requested) = match (&recording, &inputs.audit) {
-        (Some(_), Some(audit)) => {
+    // A run that may suspend is cancelled through its own registry entry.
+    let (_registered, cancel_requested) = match (run_cancel, &recording, &inputs.audit) {
+        (Some(cancel), _, _) => (None, Some(cancel)),
+        (None, Some(_), Some(audit)) => {
             let (registered, cancel_requested) = state.register_run(&audit.id);
             (Some(registered), Some(cancel_requested))
         }
@@ -458,6 +476,7 @@ async fn prepare_and_run(
         client: _,
         tool_call_id: _,
         idempotency_key: _,
+        tools,
     } = inputs;
     if let Some(audit) = &execution_audit {
         audit.begin();
@@ -567,6 +586,9 @@ async fn prepare_and_run(
         Ok(world) => world,
         Err(message) => return fail(ErrorKind::RuntimeError, message),
     };
+    // The session's tools reach a program that imports them, and only then: one
+    // that does not keeps the cached compile inputs it always had.
+    let run_tools = tools.filter(|_| script_imports.tools);
     let manager = state.session_manager();
     let policy: Arc<dyn interpreter::runtime::SecurityCheck> = Arc::new(
         PolicyCheck::with_variables(Arc::clone(&blueprint), Arc::clone(&variables)),
@@ -598,6 +620,7 @@ async fn prepare_and_run(
         security_check,
         http_client,
         mcp_transport,
+        tool_provider: run_tools.as_ref().map(|tools| Arc::clone(&tools.provider)),
         session_kv,
         llm_provider,
         llm_budget: Some(llm_budget),
@@ -629,6 +652,7 @@ async fn prepare_and_run(
         runner::RunnerImports {
             packages: &packages,
             mcps: &mcp_catalog,
+            tools: run_tools.as_ref().map(|tools| &tools.package),
         },
     )
     .await;
@@ -792,15 +816,39 @@ pub(crate) fn outside_clients(
     )
 }
 
+/// An execute result as the HTTP API returns it: marked `finished`, the state a
+/// run that can suspend at an application tool call also reports. MCP and
+/// in-process callers take the [`ExecuteResponse`] as it is.
+#[derive(Serialize)]
+pub(crate) struct Finished<R> {
+    status: &'static str,
+    #[serde(flatten)]
+    pub response: R,
+}
+
+impl<R> Finished<R> {
+    pub(crate) fn new(response: R) -> Self {
+        Self {
+            status: "finished",
+            response,
+        }
+    }
+}
+
 pub(crate) fn with_session_header(
     session_id: &str,
     body: ExecuteResponse,
-) -> (HeaderMap, Json<ExecuteResponse>) {
+) -> (HeaderMap, Json<Finished<ExecuteResponse>>) {
+    (session_headers(session_id), Json(Finished::new(body)))
+}
+
+/// The headers naming `session_id`, for a body built elsewhere.
+pub(crate) fn session_headers(session_id: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     if let Ok(value) = HeaderValue::from_str(session_id) {
         headers.insert(HeaderName::from_static(SESSION_HEADER), value);
     }
-    (headers, Json(body))
+    headers
 }
 
 fn error_response(session_id: &str, kind: ErrorKind, message: String) -> ExecuteResponse {
@@ -838,6 +886,28 @@ fn response_for_error(
         console: Vec::new(),
         error: Some(ExecuteError {
             kind,
+            message,
+            diagnostics: Vec::new(),
+            denial: None,
+        }),
+        discovery_warnings: Vec::new(),
+    }
+}
+
+/// A runtime failure of the server's own, for a run whose real response
+/// cannot be sent.
+pub(crate) fn internal_failure(
+    execution_id: &str,
+    session_id: &str,
+    message: String,
+) -> ExecuteResponse {
+    ExecuteResponse {
+        execution_id: execution_id.to_owned(),
+        session_id: session_id.to_owned(),
+        result: None,
+        console: Vec::new(),
+        error: Some(ExecuteError {
+            kind: ErrorKind::RuntimeError,
             message,
             diagnostics: Vec::new(),
             denial: None,
