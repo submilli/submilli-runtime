@@ -14,7 +14,8 @@ use wasmtime::{StructRefPre, Val, ValType};
 use crate::runtime::StoreData;
 use crate::runtime::fuel::{host_func, host_func_async};
 use crate::runtime::host::{
-    abi_arg, abi_result, host_closure_vtable, host_object_vtable, write_submilli_string_struct,
+    abi_result, host_closure_vtable, host_object_vtable, throw_host_error, type_error,
+    write_submilli_string_struct,
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, intrinsic_types};
 use crate::runtime::prelude::iterator::{iterator_result_struct, next_closure_type};
@@ -41,15 +42,18 @@ fn build_static_value_object(
 ) -> wasmtime::Result<Val> {
     let intr = intrinsic_types(&mut *caller)?;
     let text = String::from_utf16_lossy(&read_string_units(caller, &tag, "static value tag")?);
+    // Codegen's `static_value_tag` gives constructors their native-function
+    // text and every other binding `[object name]`, so the text says which.
     if text.starts_with("function ") {
         return build_constructor_closure(caller, &intr, tag, text);
     }
     build_namespace_object(caller, &intr, text)
 }
 
-/// A closure that is never called (the binding is typed so no call can reach
-/// it); its function returns the tag only to fill the closure shape. The iterator's
-/// `next` closure has exactly the zero-argument shape this needs.
+/// A closure whose function throws a `TypeError`: the binding's type allows no
+/// call, but a value cast from `unknown` to a function type can still reach
+/// one, and Submilli can't run the constructor's JavaScript conversion there.
+/// The iterator's `next` closure has exactly the zero-argument shape this needs.
 fn build_constructor_closure(
     caller: &mut Caller<'_, StoreData>,
     intr: &IntrinsicTypes,
@@ -57,11 +61,14 @@ fn build_constructor_closure(
     text: String,
 ) -> wasmtime::Result<Val> {
     let closure_vtable = host_closure_vtable(caller)?;
+    let message = format!(
+        "{} used as a value can't be called",
+        constructor_name(&text)
+    );
     let vtable = vtable_printing(caller, intr, &closure_vtable, text)?;
     let (function_ty, closure_ty) = next_closure_type(caller.engine(), intr)?;
-    let function = host_func(&mut *caller, function_ty, |_, params, results| {
-        *abi_result(results, 0)? = *abi_arg(params, 0)?;
-        Ok(())
+    let function = host_func(&mut *caller, function_ty, move |caller, _, _| {
+        Err(throw_host_error(caller, type_error(message.clone())))
     });
     let closure_pre = StructRefPre::new(&mut *caller, closure_ty);
     let closure = StructRef::new(
@@ -70,6 +77,12 @@ fn build_constructor_closure(
         &[vtable, Val::FuncRef(Some(function)), tag, Val::I64(0)],
     )?;
     Ok(Val::AnyRef(Some(closure.to_anyref())))
+}
+
+/// `Number` from `function Number() { [native code] }`.
+fn constructor_name(text: &str) -> &str {
+    let rest = text.strip_prefix("function ").unwrap_or(text);
+    rest.split_once('(').map_or(rest, |(name, _)| name)
 }
 
 /// An object with no own keys, so key enumeration and JSON see `{}` as for

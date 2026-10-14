@@ -37,5 +37,14 @@ function main(): void {
   if (typeof value === "object" && value !== null) {
     assert(!Object.hasOwn(value, "toString"), "console has no own toString");
   }
+  // Node runs `Number`'s conversion here; a binding value can't be called
+  // in Submilli, so the call throws a catchable TypeError instead.
+  let called = "no throw";
+  try {
+    (ctor as (text: string) => number)("3");
+  } catch (e) {
+    called = e instanceof TypeError ? "TypeError" : "other";
+  }
+  assert(called === "TypeError", "calling a constructor value throws");
   alias.log("calls through an alias still work");
 }
