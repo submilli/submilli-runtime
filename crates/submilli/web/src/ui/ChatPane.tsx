@@ -2,7 +2,7 @@
 import { useLayoutEffect, useRef, type FormEvent, type RefObject, type UIEventHandler } from "react";
 
 import type { AskBox, ChatItem } from "../model/chat";
-import { cls, Inline } from "./controls";
+import { cls, Inline, Markdown } from "./controls";
 
 export function ChatPane(props: {
   items: ChatItem[];
@@ -46,7 +46,8 @@ export function ChatPane(props: {
               return (
                 <div className={"pg-message " + m.role} key={i}>
                   <small>{m.who}</small>
-                  {m.text}
+                  {/* The agent writes Markdown; what you typed shows as you typed it. */}
+                  {m.role === "agent" ? <Markdown text={m.text} /> : m.text}
                 </div>
               );
             case "tool":

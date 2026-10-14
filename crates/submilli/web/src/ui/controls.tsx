@@ -1,6 +1,8 @@
 // Small controls the panes share.
 import { useId, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
+import { parseMarkdown, type Span } from "../model/markdown";
+
 /**
  * A row header's handler: it toggles on click, Enter or Space, but not on the click that
  * ends a text selection, so recorded text in a header can still be selected and copied.
@@ -79,6 +81,53 @@ export function Inline({ text }: { text: string }) {
   // An odd backtick out leaves the text as it is.
   if (parts.length % 2 === 0) return <>{text}</>;
   return <>{parts.map((p, i) => (i % 2 ? <code key={i}>{p}</code> : p))}</>;
+}
+
+/** Markdown the agent wrote, drawn as text: see `parseMarkdown`, which never yields HTML. */
+export function Markdown({ text }: { text: string }) {
+  return (
+    <div className="pg-md">
+      {parseMarkdown(text).map((b, i) => {
+        switch (b.kind) {
+          case "paragraph":
+            return <p key={i}>{spans(b.spans)}</p>;
+          case "heading":
+            return (
+              <p className="pg-md-head" key={i}>
+                {spans(b.spans)}
+              </p>
+            );
+          case "pre":
+            return <pre key={i}>{b.text}</pre>;
+          case "list": {
+            const items = b.items.map((item, j) => <li key={j}>{spans(item)}</li>);
+            return b.ordered ? (
+              <ol key={i} start={b.start}>
+                {items}
+              </ol>
+            ) : (
+              <ul key={i}>{items}</ul>
+            );
+          }
+        }
+      })}
+    </div>
+  );
+}
+
+function spans(list: Span[]): ReactNode[] {
+  return list.map((s, i) => {
+    switch (s.kind) {
+      case "text":
+        return s.text;
+      case "code":
+        return <code key={i}>{s.text}</code>;
+      case "strong":
+        return <strong key={i}>{spans(s.children)}</strong>;
+      case "em":
+        return <em key={i}>{spans(s.children)}</em>;
+    }
+  });
 }
 
 /** Cancel for a running run; once pressed it waits for the playground to confirm. */

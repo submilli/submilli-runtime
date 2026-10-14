@@ -231,6 +231,15 @@ body {
 .pg-message small { display: block; font-size: 12px; font-weight: var(--fw-semibold); color: var(--text-secondary); margin-bottom: 4px; }
 .pg-message.user { align-self: flex-end; max-width: 92%; background: var(--surface-card); padding: 10px 12px; border-radius: var(--radius-sm); }
 .pg-message.agent { font-weight: var(--fw-medium); }
+/* The agent's Markdown, drawn as text. A line break inside a paragraph stays one. */
+.pg-md > * { margin: 0 0 8px; }
+.pg-md > :last-child { margin-bottom: 0; }
+.pg-md ul, .pg-md ol { padding-left: 22px; }
+.pg-md li { margin: 2px 0; }
+.pg-md strong { font-weight: var(--fw-bold); }
+.pg-md code { font-family: var(--font-mono); font-size: 13px; }
+.pg-md pre { font-family: var(--font-mono); font-size: 12.5px; white-space: pre; overflow-x: auto; background: var(--surface-card); padding: 8px 10px; border-radius: var(--radius-sm); }
+.pg-md .pg-md-head { font-weight: var(--fw-semibold); }
 .pg-toolline { align-self: flex-start; font-size: 12px; color: var(--text-muted); padding: 2px 2px 2px 10px; border-left: 2px solid var(--border-subtle); }
 .pg-chip {
   align-self: flex-start; border: 1px solid var(--border-subtle); background: transparent; border-radius: var(--radius-pill);
