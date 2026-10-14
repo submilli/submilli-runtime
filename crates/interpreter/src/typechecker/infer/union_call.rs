@@ -93,19 +93,18 @@ impl Inferer<'_> {
             return None;
         }
         let shared = self.shared_signatures(&signatures);
-        let chosen = match shared.first() {
-            Some(first) => (*arg_count
+        let chosen = if let Some(first) = shared.first() {
+            (*arg_count
                 .and_then(|count| shared.iter().find(|sig| sig.accepts(count)))
                 .unwrap_or(first))
-            .clone(),
-            None => {
-                let mut fields_left = MERGE_FIELDS;
-                let mut combined = signatures.first()?.clone();
-                for next in &signatures[1..] {
-                    combined = self.combine(&combined, next, &mut fields_left)?;
-                }
-                combined
+            .clone()
+        } else {
+            let mut fields_left = MERGE_FIELDS;
+            let mut combined = signatures.first()?.clone();
+            for next in &signatures[1..] {
+                combined = self.combine(&combined, next, &mut fields_left)?;
             }
+            combined
         };
         let ret = if returns_void {
             Type::Void
