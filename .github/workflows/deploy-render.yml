@@ -4,8 +4,18 @@ name: Deploy to Render
 # its SHA, and Render is told to run exactly that image. Render no longer builds
 # anything, so the Rust compile runs here, on GitHub's runners.
 #
-# There is no moving tag such as `latest-main`: each deploy names one SHA, and a
-# rollback is Render's own rollback to an earlier deploy.
+# Each deploy names one SHA through the deploy hook. That image applies to the
+# one deploy only: a restart or a settings edit runs the image named in the
+# service's settings on Render. So the workflow also moves a `main` tag to each
+# image it sends to Render, and the service's image setting is
+# `ghcr.io/submilli/submilli-runtime-dev:main`. Switch the setting only after a
+# run has pushed `main`; before that the tag does not exist.
+#
+# `main` is the image last sent to Render, not necessarily the one running: it
+# moves before the hook is called, so a failed deploy leaves it ahead. A
+# rollback on Render does not move it either, and the next restart would undo
+# the rollback. Roll back by moving the tag too, logged in to ghcr with
+# `write:packages`: `crane tag ghcr.io/submilli/submilli-runtime-dev:sha-<old> main`.
 #
 # The images go to a separate package, `submilli-runtime-dev`, so per-commit
 # builds never clutter the package users pull releases from.
@@ -199,7 +209,38 @@ jobs:
     # The deploy hook lives in this environment's secrets, so only this job,
     # and only from main, can read it.
     environment: render
+    permissions:
+      packages: write
     steps:
+      # In this job, after the recheck and inside the deploy group, so a run that
+      # finishes late never moves `main` back to older code. The manifest is read
+      # and written back byte for byte under the new tag, so `main` has the same
+      # digest and is not another package version for the prune job. Plain curl
+      # against the registry API, so no third-party code runs beside the deploy
+      # hook's secret.
+      - name: Move the main tag
+        env:
+          TOKEN_PASSWORD: ${{ github.token }}
+          IMAGE_REPO: ${{ github.repository_owner }}/${{ env.PACKAGE }}
+        run: |
+          SCOPE="repository:$IMAGE_REPO:pull,push"
+          TOKEN=$(curl --fail-with-body -sS --retry 3 \
+            -u "${{ github.actor }}:$TOKEN_PASSWORD" \
+            "https://ghcr.io/token?service=ghcr.io&scope=$SCOPE" | jq -er .token)
+          echo "::add-mask::$TOKEN"
+          MANIFESTS="https://ghcr.io/v2/$IMAGE_REPO/manifests"
+          ACCEPT="application/vnd.oci.image.manifest.v1+json"
+          ACCEPT="$ACCEPT, application/vnd.docker.distribution.manifest.v2+json"
+          curl --fail-with-body -sS --retry 3 -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: $ACCEPT" -D "$RUNNER_TEMP/headers.txt" \
+            -o "$RUNNER_TEMP/manifest.json" "$MANIFESTS/sha-$SHA"
+          # ghcr answers over HTTP/2, so the header name arrives lowercase.
+          TYPE=$(sed -n 's/^content-type: *\([^;[:space:]]*\).*/\1/Ip' \
+            "$RUNNER_TEMP/headers.txt")
+          curl --fail-with-body -sS --retry 3 -X PUT \
+            -H "Authorization: Bearer $TOKEN" -H "Content-Type: $TYPE" \
+            --data-binary "@$RUNNER_TEMP/manifest.json" "$MANIFESTS/main"
+
       # A deploy hook can deploy only its own service, unlike an API key, which
       # reaches the whole Render account. `imgURL` tells an image-backed service
       # which image to run. The hook already carries `?key=`, hence the `&`.
