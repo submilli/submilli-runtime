@@ -221,6 +221,7 @@ pub fn emit_method_bodies(
             intrinsics,
             symbols,
             string_vtable_global_idx,
+            object_vtable_global,
         )?);
 
         let bodies = subtype.guarded_bodies;
@@ -271,11 +272,13 @@ fn emit_subtype_to_string_body(
     intrinsics: IntrinsicTypeIndices,
     symbols: &SymbolTable,
     string_vtable_global_idx: u32,
+    object_vtable_global: u32,
 ) -> Result<Function, CompilerFailure> {
     let fields = subtype.fields()?;
 
     if !fields.contains_key("toString") {
         let mut f = Function::new(std::iter::empty());
+        emit_indexed_object_dispatch(&mut f, intrinsics, object_vtable_global, 0);
         crate::codegen::intrinsics::push_string_literal(
             &mut f,
             intrinsics,
@@ -684,7 +687,8 @@ fn emit_conversion_override_body(
 }
 
 /// The index records whether insertion changed the shape. Such values use the
-/// same dynamic equality/hash hooks as objects created by JSON.parse.
+/// same dynamic `toString`/equality/hash hooks as objects created by
+/// JSON.parse: an inserted `toString` entry is one the shape can't see.
 fn emit_indexed_object_dispatch(
     body: &mut Function,
     intrinsics: IntrinsicTypeIndices,
@@ -732,10 +736,10 @@ fn emit_indexed_object_dispatch(
         struct_type_index: intrinsics.vtable,
         field_index: slot,
     });
-    body.instruction(&Instruction::CallRef(if slot == 2 {
-        intrinsics.equals_fn
-    } else {
-        intrinsics.hash_fn
+    body.instruction(&Instruction::CallRef(match slot {
+        0 => intrinsics.to_string_fn,
+        2 => intrinsics.equals_fn,
+        _ => intrinsics.hash_fn,
     }));
     body.instruction(&Instruction::Return);
     body.instruction(&Instruction::End);
