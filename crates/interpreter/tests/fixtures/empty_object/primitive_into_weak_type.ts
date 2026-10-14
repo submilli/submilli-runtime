@@ -25,6 +25,18 @@ function readA(value: {}): string {
   return String(o.a);
 }
 
+function passThrough(value: {} | undefined): Options | undefined {
+  return value;
+}
+
+function narrowedGeneric<T>(value: T): string {
+  if (value !== null && value !== undefined) {
+    const o: Options = value;
+    return String(o.a);
+  }
+  return "nullish";
+}
+
 class Holder {
   a: number = 3;
 }
@@ -58,6 +70,10 @@ function main(): void {
   assert(same.a === 5 && same === object, "an object stays itself");
   assert(describeMaybe(n) === "undefined/undefined", "a `{}` that may be undefined");
   assert(describeMaybe(undefined) === "none", "and is");
+  assert(passThrough(undefined) === undefined, "undefined stays undefined");
+  assert(passThrough(n)?.a === undefined, "beside a converted number");
+  assert(narrowedGeneric(5) === "undefined", "a type parameter narrowed to non-nullish");
+  assert(narrowedGeneric({ a: 4 }) === "4", "holding an object");
   assert((n as Options).a === undefined, "a cast");
   assert((s as { [k: string]: unknown })["0"] === "s", "a cast to an index signature");
   assert(readA(new Map<string, number>()) === "undefined", "a Map has no own fields");

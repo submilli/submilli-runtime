@@ -883,7 +883,7 @@ impl Inferer<'_> {
     }
 
     /// `id`, a value of type `ty`, as the object an `expected` object type
-    /// reads. `{}` (or `{}` that may be nullish) holds any value, and
+    /// reads. `{}` (or `{}` that may be nullish, or `T & {}`) holds any value, and
     /// TypeScript lets it into an object type whose fields are all optional
     /// or that has an index signature, whose slot holds only an object. A
     /// plain object or class instance passes as it is; another value becomes
@@ -899,7 +899,7 @@ impl Inferer<'_> {
         let Some(want) = expected else {
             return Ok(id);
         };
-        if !super::narrowing::strip_nullish(ty).is_empty_object()
+        if !super::narrowing::strip_nullish(ty).peel().is_empty_object()
             || !reads_object_fields(want)
             || !assignable(ty, want, self.resolver())
         {

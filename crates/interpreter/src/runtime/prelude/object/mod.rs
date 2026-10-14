@@ -373,31 +373,22 @@ fn spread(
 /// plain object or class instance stays itself; any other value becomes a
 /// fresh object of its index entries (a string's or array's) or none.
 fn to_object(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<Val> {
-    if reads_fields_itself(caller, value)? {
+    if is_kept_as_object(caller, value)? {
         return Ok(*value);
     }
     let none = Val::AnyRef(None);
     spread(caller, &none, value, &none, &none)
 }
 
-/// Whether object-type field reads take `value` as it is: null (read through
-/// an optional chain), a plain object, or a class instance.
-fn reads_fields_itself(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<bool> {
-    let Val::AnyRef(Some(any)) = value else {
-        return Ok(true);
-    };
-    let Some(object) = any.as_struct(&mut *caller)? else {
-        return Ok(false);
-    };
-    let intr = intrinsic_types(&mut *caller)?;
-    if object.matches_ty(&*caller, &intr.object_shape)? {
+/// Whether object-type field reads take `value` as it is: `null` or
+/// `undefined` (read through an optional chain), or a plain object, which
+/// class and error instances extend.
+fn is_kept_as_object(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<bool> {
+    if super::undefined::is_nullish(caller, value)? {
         return Ok(true);
     }
-    if object.ty(&*caller)?.fields().next().is_none() {
-        return Ok(false);
-    }
-    let vtable = object.field(&mut *caller, 0)?;
-    is_a(caller, &vtable, &intr.class_vtable)
+    let object_shape = intrinsic_types(&mut *caller)?.object_shape.clone();
+    is_a(caller, value, &object_shape)
 }
 
 fn copy_field_name(
