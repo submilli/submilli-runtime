@@ -6052,6 +6052,21 @@ fn emit_intrinsic_call(
                 })?;
             emitter.instruction(Instruction::Call(function));
         }
+        Intrinsic::ToObject => {
+            let [value] = args else {
+                return Err(crate::codegen::internal_failure(
+                    "object conversion requires one argument",
+                ));
+            };
+            emit_expr(emitter, ctx, *value)?;
+            let function = ctx
+                .symbols
+                .prelude_func_idx("ObjectConstructor##toObject")
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure("object conversion helper collected")
+                })?;
+            emitter.instruction(Instruction::Call(function));
+        }
         // `BigInt.fromString(s)` — the remaining
         // bigint-producing intrinsic after retired
         // `BigIntFromNumber` / `NumberFromBigInt` in favour of the

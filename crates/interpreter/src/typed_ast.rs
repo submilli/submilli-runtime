@@ -555,6 +555,10 @@ pub enum Intrinsic {
     /// A template interpolation whose value may be `null`, `undefined` or of a
     /// type only known at run time — JavaScript's ToString, as `${x}` performs.
     ToString,
+    /// A `{}` value flowing into an object type: a primitive or array becomes
+    /// the object JavaScript reads its properties from, and an object stays
+    /// itself.
+    ToObject,
 }
 
 impl Intrinsic {
@@ -583,7 +587,9 @@ impl Intrinsic {
             Intrinsic::BigIntFromString => vec![Param::new("value", Type::String)],
             Intrinsic::JsonStringify => vec![Param::new("value", Type::Error)],
             Intrinsic::JsonParse => vec![Param::new("text", Type::String)],
-            Intrinsic::ToString => vec![Param::new("value", Type::Unknown)],
+            Intrinsic::ToString | Intrinsic::ToObject => {
+                vec![Param::new("value", Type::Unknown)]
+            }
         }
     }
 
@@ -595,6 +601,7 @@ impl Intrinsic {
             Intrinsic::JsonStringify => crate::Type::String,
             Intrinsic::JsonParse => crate::Type::Unknown,
             Intrinsic::ToString => crate::Type::String,
+            Intrinsic::ToObject => crate::Type::Unknown,
         }
     }
 
@@ -605,6 +612,7 @@ impl Intrinsic {
             Intrinsic::JsonStringify => "JSON.stringify",
             Intrinsic::JsonParse => "JSON.parse",
             Intrinsic::ToString => "String",
+            Intrinsic::ToObject => "Object",
         }
     }
 }

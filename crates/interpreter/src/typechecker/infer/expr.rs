@@ -850,7 +850,41 @@ impl Inferer<'_> {
         if !limit_was_pending {
             self.type_size_checkpoint(Some(span))?;
         }
+        let id = self.as_object_for(id, &ty, expected, span)?;
         Ok((id, ty))
+    }
+
+    /// `id`, a value of type `ty`, as the object an `expected` object type
+    /// reads. `{}` holds primitives and arrays, and TypeScript lets it into
+    /// an object type whose fields are all optional or that has an index
+    /// signature; its fields are then read from the object JavaScript wraps
+    /// the value in. The conversion keeps an object as it is.
+    fn as_object_for(
+        &mut self,
+        id: ExprId,
+        ty: &Type,
+        expected: Option<&Type>,
+        span: Span,
+    ) -> Result<ExprId, CompilerFailure> {
+        let Some(want) = expected else {
+            return Ok(id);
+        };
+        if !ty.is_empty_object()
+            || !reads_object_fields(want)
+            || !assignable(ty, want, self.resolver())
+        {
+            return Ok(id);
+        }
+        self.typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::IntrinsicCall {
+                    kind: Intrinsic::ToObject,
+                    args: vec![id],
+                },
+                span,
+                ty: ty.clone(),
+            })
+            .map_err(crate::typechecker::arena_failure)
     }
 
     /// Whether `expr_id`, a literal argument slot's value, widens the earlier
@@ -13111,6 +13145,23 @@ fn is_definitely_falsy(ty: &Type) -> bool {
 /// Interpolations that convert at run time, as JavaScript's ToString does: a
 /// value that may be `null` or `undefined`, or whose type is known only then.
 /// A `toString` call would throw on the nullish ones.
+/// Whether a value of type `ty` has its fields read as an object's: an
+/// object type other than `{}` or an interface, possibly nullish.
+fn reads_object_fields(ty: &Type) -> bool {
+    let present = super::narrowing::strip_nullish(ty);
+    let reads_fields = |member: &Type| {
+        !member.is_empty_object()
+            && matches!(
+                member.lowered(),
+                Type::Object { .. } | Type::InterfaceRef { .. }
+            )
+    };
+    match present.peel() {
+        Type::Union(members) => members.iter().all(reads_fields),
+        other => reads_fields(other),
+    }
+}
+
 fn interpolates_at_run_time(ty: &Type) -> bool {
     match ty.peel() {
         Type::Null | Type::Unknown | Type::TypeVar(_) | Type::GenericParam { .. } => true,

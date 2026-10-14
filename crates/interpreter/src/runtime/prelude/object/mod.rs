@@ -366,6 +366,30 @@ fn spread(
     Ok(Val::AnyRef(Some(object.to_anyref())))
 }
 
+/// `value` as an object an object type's field reads can take. `{}` holds
+/// primitives and arrays as well as objects, and TypeScript lets it into a
+/// type whose fields are all optional; JavaScript then reads a primitive's
+/// fields through a wrapper object. A string or an array becomes an object of
+/// its indices, a number, boolean or bigint one with no fields, and any other
+/// value is already an object.
+fn to_object(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<Val> {
+    let intr = intrinsic_types(&mut *caller)?;
+    let primitive_or_array = [
+        &intr.string,
+        &intr.array,
+        &intr.boxed_number,
+        &intr.boxed_boolean,
+        &intr.bigint,
+    ];
+    for ty in primitive_or_array {
+        if is_a(caller, value, ty)? {
+            let none = Val::AnyRef(None);
+            return spread(caller, &none, value, &none, &none);
+        }
+    }
+    Ok(*value)
+}
+
 fn copy_field_name(
     caller: &mut Caller<'_, StoreData>,
     name: Val,
@@ -718,6 +742,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Ok(())
         },
     )?;
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        ctor_key("#toObject"),
+        ft(vec![obj.clone()], vec![obj.clone()]),
+        true,
+        |caller, params, results| {
+            *abi_result(results, 0)? = to_object(caller, abi_arg(params, 0)?)?;
+            Ok(())
+        },
+    )?;
     register_host_fn_async(
         linker,
         MODULE_NAME,
@@ -786,6 +821,14 @@ pub fn declare(defs: &mut PackageDeclaration) {
         ctor_key("#toJson"),
         vec![Param::new("object", Type::Unknown)],
         Type::String,
+    );
+    // Compiler-only helper: a `{}` value as the object an object type reads.
+    declare_method(
+        defs,
+        "#toObject",
+        ctor_key("#toObject"),
+        vec![Param::new("value", Type::Unknown)],
+        Type::Unknown,
     );
     // Compiler-only helper: the value a static-dispatch binding reads as.
     declare_method(
