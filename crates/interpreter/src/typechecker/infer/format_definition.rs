@@ -1077,6 +1077,7 @@ mod tests {
             visibility,
             readonly,
             optional: false,
+            method: false,
             doc: None,
         };
         let mut static_fields = BTreeMap::new();

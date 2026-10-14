@@ -138,7 +138,10 @@ interface Reporter {
 An omitted optional tuple element does not extend the array; reading that
 position returns undefined. Required tuple elements must precede optional
 ones. Call an optional method with `reporter.report?.("done")`, or narrow it
-before calling. Optional calls preserve the method's receiver.
+before calling. Optional calls preserve the method's receiver. A subclass
+may override a class's optional method declared without a body, such as
+`report?(message: string): void;`, with a method of a compatible type; reads
+through the base class then see the override.
 
 Bare returns and falling off a function produce undefined when its return
 contract permits it. `void expression` evaluates the expression once and

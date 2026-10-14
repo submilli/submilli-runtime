@@ -3175,6 +3175,7 @@ mod tests {
                     visibility: crate::Visibility::Private,
                     readonly: false,
                     optional: false,
+                    method: false,
                     doc: None,
                 },
             );
@@ -3566,6 +3567,7 @@ mod tests {
             visibility,
             readonly: false,
             optional: false,
+            method: false,
             doc: None,
         };
         let method = |ret| MethodSig {
@@ -3642,6 +3644,7 @@ mod tests {
             visibility: Visibility::Public,
             readonly,
             optional: false,
+            method: false,
             doc: None,
         };
         let mut fields = BTreeMap::new();
@@ -3735,6 +3738,7 @@ mod tests {
                 visibility: Visibility::Public,
                 readonly: true,
                 optional: false,
+                method: false,
                 doc: None,
             },
         );
@@ -3745,6 +3749,7 @@ mod tests {
                 visibility: Visibility::Private,
                 readonly: true,
                 optional: false,
+                method: false,
                 doc: None,
             },
         );
@@ -3755,6 +3760,7 @@ mod tests {
                 visibility: Visibility::Public,
                 readonly: false,
                 optional: false,
+                method: false,
                 doc: None,
             },
         );
@@ -3765,6 +3771,7 @@ mod tests {
                 visibility: Visibility::Private,
                 readonly: false,
                 optional: false,
+                method: false,
                 doc: None,
             },
         );

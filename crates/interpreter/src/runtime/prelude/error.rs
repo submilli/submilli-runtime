@@ -868,6 +868,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             visibility: crate::Visibility::Public,
                             readonly: false,
                             optional: false,
+                            method: false,
                             doc: doc(
                                 "/** The human-readable message passed to `new Error(message)`. */",
                             ),
@@ -880,6 +881,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             visibility: crate::Visibility::Public,
                             readonly: false,
                             optional: false,
+                            method: false,
                             doc: doc(
                                 "/** The error class name. Defaults to `\"Error\"`; subclasses conventionally set `this.name` in their constructor. */",
                             ),
@@ -1052,6 +1054,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             visibility: crate::Visibility::Public,
                             readonly: false,
                             optional: false,
+                            method: false,
                             doc: doc(
                                 "/** The Package the denied call was attributed to (e.g. `\"main\"`). */",
                             ),
@@ -1064,6 +1067,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             visibility: crate::Visibility::Public,
                             readonly: false,
                             optional: false,
+                            method: false,
                             doc: doc(
                                 "/** The denied capability name (e.g. `\"fs.read\"`, `\"http.get\"`). */",
                             ),
@@ -1076,6 +1080,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             visibility: crate::Visibility::Public,
                             readonly: false,
                             optional: false,
+                            method: false,
                             doc: doc("/** The policy-supplied denial reason. */"),
                         },
                     ),
