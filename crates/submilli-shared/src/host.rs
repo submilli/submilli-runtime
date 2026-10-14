@@ -36,6 +36,8 @@ pub enum SecretStoreError {
     Crypto(String),
     /// The key source is missing or unreadable at store construction.
     KeyConfig(String),
+    /// The store refuses this secret name.
+    InvalidName(String),
 }
 
 impl std::fmt::Display for SecretStoreError {
@@ -44,6 +46,7 @@ impl std::fmt::Display for SecretStoreError {
             SecretStoreError::Io(msg) => write!(f, "secret store io: {msg}"),
             SecretStoreError::Crypto(msg) => write!(f, "secret store crypto: {msg}"),
             SecretStoreError::KeyConfig(msg) => write!(f, "secret store key: {msg}"),
+            SecretStoreError::InvalidName(msg) => write!(f, "secret name: {msg}"),
         }
     }
 }

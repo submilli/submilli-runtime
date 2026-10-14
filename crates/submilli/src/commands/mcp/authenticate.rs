@@ -16,7 +16,9 @@ use interpreter::runtime::{HttpClient, NetworkPolicy, ReqwestHttpClient};
 use submilli_blueprint::{Blueprint, McpAuth, interpolate};
 use submilli_shared::BlueprintSecretResolver;
 use submilli_shared::mcp::oauth as mcp_oauth;
-use submilli_shared::mcp_auth::{OAuthCredential, blueprint_auth_state, write_credential};
+use submilli_shared::mcp_auth::{
+    McpGrantStore, OAuthCredential, SecretStoreGrants, blueprint_auth_state,
+};
 use submilli_shared::secret_store::SecretStore;
 
 use crate::commands::local;
@@ -200,11 +202,13 @@ async fn run(args: &Args) -> Result<String> {
             scopes: Vec::new(),
         }
     };
-    write_credential(&blueprint.name, &args.server, &credential, &store)
+    let grants: Arc<dyn McpGrantStore> = Arc::new(SecretStoreGrants::new(store.clone()));
+    grants
+        .deposit(&blueprint.name, &args.server, &credential)
         .await
         .map_err(|e| anyhow!("storing credential: {e}"))?;
 
-    let state = blueprint_auth_state(&blueprint, Some(&store)).await;
+    let state = blueprint_auth_state(&blueprint, Some(&grants)).await;
     Ok(format!(
         "authenticated '{}' on blueprint '{}' — {}",
         args.server,

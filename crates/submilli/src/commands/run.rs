@@ -29,6 +29,7 @@ use submilli_shared::llm::provider::DEFAULT_MAX_CONCURRENCY;
 use submilli_shared::llm::{BlueprintLlmProvider, HttpModelDispatch, ModelDispatch};
 use submilli_shared::mcp::StreamableHttpTransport;
 use submilli_shared::mcp::discovery::{DiscoveryAuth, McpCatalog, discover_all_local};
+use submilli_shared::mcp_auth::SecretStoreGrants;
 use submilli_shared::mcp_token::OAuthTokenManager;
 use submilli_shared::secret_store::SecretStore;
 use submilli_shared::{BlueprintAuthProxy, BlueprintSecretProvider, PolicyCheck};
@@ -413,7 +414,8 @@ fn execute_on_this_thread(
             let http = Arc::new(ReqwestHttpClient::new(Arc::clone(&network_policy)))
                 as Arc<dyn HttpClient>;
             let oauth = Arc::new(OAuthTokenManager::new(
-                store.clone(),
+                Arc::new(SecretStoreGrants::new(store.clone())),
+                Some(store.clone()),
                 http,
                 Arc::new(Vec::new()),
             ));

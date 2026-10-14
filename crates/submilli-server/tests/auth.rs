@@ -119,6 +119,8 @@ fn every_route_declares_the_access_it_requires() {
         ("/v1/blueprints/{name}/builtins/docs", User),
         ("/v1/capabilities", Admin),
         ("/v1/volumes", Admin),
+        ("/v1/mcp-grants", Admin),
+        ("/v1/mcp-grants/{blueprint}/{server}", Admin),
         ("/v1/mcp/{blueprint}/auth-status", Admin),
         ("/v1/mcp/{blueprint}/{server}/auth-config", Admin),
         ("/v1/mcp/{blueprint}/{server}/refresh-token", Admin),

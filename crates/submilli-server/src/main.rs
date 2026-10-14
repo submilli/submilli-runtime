@@ -115,9 +115,11 @@ pub struct Cli {
     #[arg(long)]
     volume_dir: Option<PathBuf>,
 
-    /// Directory backing the encrypted secret store (one sealed file per
-    /// secret). Not the CLI's store at ~/.submilli/secrets, which
-    /// `submilli secret put` and `mcp authenticate` fill and `submilli run`
+    /// Directory of a secret store from before secrets and MCP OAuth grants
+    /// were kept in the database (one sealed file per secret). When it exists,
+    /// startup imports it with the secret-store key and moves it to
+    /// `archive/secrets` beside it. Not the CLI's store at ~/.submilli/secrets,
+    /// which `submilli secret put` and `mcp authenticate` fill and `submilli run`
     /// reads.
     /// [default: ~/.submilli/server/secrets]
     /// Env: `$SUBMILLI_SECRET_STORE_DIR`.

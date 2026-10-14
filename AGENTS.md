@@ -51,7 +51,8 @@ These rules govern `crates/submilli-server/src/domain/` and
   what happens: recording execution timestamps is not acquiring or releasing
   execution ownership.
 - **Application knows domain; all other collaborators come through ports.**
-  Organize use-cases under `application/blueprints/` and `application/sessions/`.
+  Organize use-cases by aggregate under `application/`, such as `blueprints/`,
+  `sessions/`, `secrets/`, and `mcp_grants/`.
   Inject focused ports through use-case constructors. Do not depend directly on
   managers, storage implementations, transport types, caches, or other
   infrastructure, and do not collect unrelated operations in an environment

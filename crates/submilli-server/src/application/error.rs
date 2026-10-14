@@ -6,7 +6,11 @@ pub enum StoreError {
     Io(String),
     Credentials(String),
     Serialization(String),
-    RevisionExhausted { name: String },
+    RevisionExhausted {
+        name: String,
+    },
+    /// The row changed since it was read; nothing was written.
+    Conflict,
 }
 
 impl std::fmt::Display for StoreError {
@@ -20,6 +24,7 @@ impl std::fmt::Display for StoreError {
             Self::RevisionExhausted { name } => {
                 write!(f, "blueprint '{name}' revision counter exhausted")
             }
+            Self::Conflict => f.write_str("the record changed since it was read"),
         }
     }
 }
