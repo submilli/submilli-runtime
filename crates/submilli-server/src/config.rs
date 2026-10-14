@@ -43,11 +43,16 @@ pub struct ServerConfig {
     pub database_path: Option<PathBuf>,
     /// Shared database owner; takes precedence over database_path.
     pub database: Option<Arc<crate::database::ServerDatabase>>,
-    /// The secret store backing the blueprint `store:` secret source and the
-    /// `submilli server secret` CLI. `None` (the default) disables it: `store:`
-    /// secrets fail to resolve, while `env:`/`file:` are unaffected. Built at the
-    /// binary boundary so the encryption-key source lives there, not here.
+    /// A secret store an embedder supplies in place of the database, backing
+    /// the blueprint `store:` secret source, the `submilli server secret` CLI
+    /// and MCP OAuth grants. `None` (the default) keeps secrets and grants in
+    /// the database, sealed with `session_cipher`; without a cipher they are off:
+    /// `store:` secrets fail to resolve, while `env:`/`file:` are unaffected.
     pub secret_store: Option<Arc<dyn SecretStore>>,
+    /// The directory of a secret store from before secrets were kept in the
+    /// database. Boot imports it, sealed with `session_cipher`'s key, and moves
+    /// it to `<parent>/archive/secrets`.
+    pub secret_store_dir: Option<PathBuf>,
     pub session_cipher: Option<Arc<submilli_shared::secret_store::SecretCipher>>,
     /// Root for `ephemeral` scratch directories (one temp dir per execute,
     /// wiped at return). `None` uses the OS temp dir. Mount this on volatile
@@ -574,15 +579,15 @@ impl ServerDirectories {
                     .unwrap_or_else(default_package_store_dir),
             ),
             package_fallback_root: config.package_fallback_root.clone(),
-            secret_store_dir: None,
+            secret_store_dir: config.secret_store_dir.clone(),
             secret_store_key_file: None,
             api_token_files: Vec::new(),
             github_token_file: config.github_token_file.clone(),
             tls_key_file: None,
             tls_cert_file: None,
-            // Neither the secret store's paths, the token files', nor the config
-            // file's survive into `ServerConfig`; an embedder that wants them
-            // guarded fills them in.
+            // Neither the secret-store key's path, the token files', nor the
+            // config file's survive into `ServerConfig`; an embedder that wants
+            // them guarded fills them in.
             config_file: None,
             session_storage_root: Some(
                 config

@@ -30,6 +30,7 @@ use submilli_shared::embedding::{
 use submilli_shared::llm::{
     BlueprintLlmProvider, HttpModelDispatch, HttpModelDispatchError, ModelDispatch,
 };
+use submilli_shared::mcp_auth::{McpGrantStore, SecretStoreGrants};
 use submilli_shared::secret_store::SecretStore;
 use tokio::sync::{Mutex as AsyncMutex, Notify, RwLock as AsyncRwLock};
 use wasmtime::{Engine, Linker, Module};
@@ -90,6 +91,12 @@ type EmbeddingDispatchFactory = Arc<
         + Sync,
 >;
 
+/// A pre-database secret-store directory, and the cipher that sealed it.
+struct LegacySecrets {
+    directory: PathBuf,
+    cipher: Option<Arc<submilli_shared::secret_store::SecretCipher>>,
+}
+
 struct AppStateInner {
     boot_lock: AsyncMutex<()>,
     booted: AtomicBool,
@@ -105,9 +112,11 @@ struct AppStateInner {
     blueprints: Arc<dyn BlueprintStore>,
     unit_of_work: Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory>,
     secret_store: Option<Arc<dyn SecretStore>>,
-    /// Mints/rotates `@mcp/<server>` OAuth access tokens. `Some` only when a
-    /// secret store is configured (OAuth refresh tokens have nowhere to live
-    /// otherwise).
+    /// A pre-database secret-store directory startup imports.
+    legacy_secrets: Option<LegacySecrets>,
+    /// Mints/rotates `@mcp/<server>` OAuth access tokens, and holds the grant
+    /// store. `Some` only when secrets are available (OAuth grants have nowhere
+    /// to live otherwise).
     oauth_tokens: Option<Arc<OAuthTokenManager>>,
     session_manager: Arc<SessionManager>,
     session_store: Arc<dyn DurableSessionStore>,
@@ -235,8 +244,19 @@ impl AppState {
         embedding_dispatch_factory: EmbeddingDispatchFactory,
     ) -> Result<Self> {
         let database = config.resolve_database().await?;
+        // An embedder's own store keeps its secrets; only the database imports.
+        let legacy_secrets_present = match (&config.secret_store_dir, &config.secret_store) {
+            (Some(directory), None) => {
+                crate::adapters::secret_store::legacy::LegacySecretDirectory::holds_sealed_files(
+                    directory,
+                )?
+            }
+            _ => false,
+        };
         if database.is_ephemeral()
-            && (config.blueprint_dir.is_some() || config.session_store_dir.is_some())
+            && (config.blueprint_dir.is_some()
+                || config.session_store_dir.is_some()
+                || legacy_secrets_present)
         {
             anyhow::bail!("directory import requires a persistent SQLite database");
         }
@@ -301,18 +321,7 @@ impl AppState {
         let sessions = config
             .sessions
             .unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
-        let secret_store = config.secret_store;
         let mcp_oauth_providers = Arc::new(config.mcp_oauth_providers);
-        // Dedicated HTTP client (its own pool) for token-endpoint exchanges,
-        // governed by the same SSRF policy as script-issued requests.
-        let oauth_tokens = secret_store.clone().map(|store| {
-            let http = Arc::new(ReqwestHttpClient::new(Arc::clone(&policy))) as Arc<dyn HttpClient>;
-            Arc::new(OAuthTokenManager::new(
-                store,
-                http,
-                Arc::clone(&mcp_oauth_providers),
-            ))
-        });
         // Outbound HTTP for the OAuth handlers (discovery + code exchange), same
         // SSRF policy.
         let oauth_http =
@@ -387,6 +396,46 @@ impl AppState {
             });
         let idempotency = Arc::new(Coordinator::new(unit_of_work.clone(), generation));
 
+        // An embedder's store holds both secrets and grants, as the CLI's does,
+        // and keeps its own; otherwise both live in the database, sealed with
+        // the session cipher, which imports the pre-database directory.
+        let (secret_store, mcp_grants, legacy_directory) = match config.secret_store {
+            Some(store) => (
+                Some(Arc::clone(&store)),
+                Some(Arc::new(SecretStoreGrants::new(store)) as Arc<dyn McpGrantStore>),
+                None,
+            ),
+            None if config.session_cipher.is_some() => (
+                Some(
+                    Arc::new(crate::adapters::secret_store::DatabaseSecretStore::new(
+                        unit_of_work.clone(),
+                    )) as Arc<dyn SecretStore>,
+                ),
+                Some(
+                    Arc::new(crate::adapters::mcp_grant_store::DatabaseGrantStore::new(
+                        unit_of_work.clone(),
+                    )) as Arc<dyn McpGrantStore>,
+                ),
+                config.secret_store_dir,
+            ),
+            None => (None, None, config.secret_store_dir),
+        };
+        // Dedicated HTTP client (its own pool) for token-endpoint exchanges,
+        // governed by the same SSRF policy as script-issued requests.
+        let oauth_tokens = mcp_grants.map(|grants| {
+            let http = Arc::new(ReqwestHttpClient::new(Arc::clone(&policy))) as Arc<dyn HttpClient>;
+            Arc::new(OAuthTokenManager::new(
+                grants,
+                secret_store.clone(),
+                http,
+                Arc::clone(&mcp_oauth_providers),
+            ))
+        });
+        let legacy_secrets = legacy_directory.map(|directory| LegacySecrets {
+            directory,
+            cipher: config.session_cipher.clone(),
+        });
+
         Ok(Self {
             inner: Arc::new(AppStateInner {
                 boot_lock: AsyncMutex::new(()),
@@ -404,6 +453,7 @@ impl AppState {
                 blueprints,
                 unit_of_work,
                 secret_store,
+                legacy_secrets,
                 oauth_tokens,
                 session_manager,
                 session_store,
@@ -455,6 +505,7 @@ impl AppState {
             return Ok(());
         }
         self.inner.session_manager.boot().await?;
+        self.import_legacy_secrets().await?;
         self.inner.idempotency.recover().await.map_err(|error| {
             crate::session_manager::BootError::Idempotency(crate::blueprint::StoreError::Io(
                 error.to_string(),
@@ -463,6 +514,53 @@ impl AppState {
         self.inner.session_manager.volume_registry().prepare();
         self.start_reaper();
         self.inner.booted.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// Bring a pre-database secret-store directory into the database, once,
+    /// and say while its archive still holds the old values.
+    async fn import_legacy_secrets(&self) -> Result<(), crate::session_manager::BootError> {
+        let (Some(legacy), Some(database)) = (&self.inner.legacy_secrets, &self.inner.database)
+        else {
+            return Ok(());
+        };
+        let directory = crate::adapters::secret_store::legacy::LegacySecretDirectory::new(
+            legacy.directory.clone(),
+            legacy.cipher.clone(),
+            database.path().to_path_buf(),
+        );
+        let imported = crate::application::secrets::import::ImportSecrets::new(
+            self.inner.unit_of_work.as_ref(),
+            &directory,
+        )
+        .execute()
+        .await
+        .map_err(crate::session_manager::BootError::Secrets)?;
+        if imported != Default::default() {
+            tracing::info!(
+                secrets = imported.secrets,
+                grants = imported.grants,
+                directory = %legacy.directory.display(),
+                "imported the secret-store directory into the database and archived it"
+            );
+        }
+        for skipped in &imported.skipped {
+            tracing::warn!(
+                entry = %skipped.entry,
+                reason = %skipped.reason,
+                "a secret-store entry was not imported; it remains in the archive"
+            );
+        }
+        for archive in crate::adapters::secret_store::legacy::LegacySecretDirectory::archives(
+            &legacy.directory,
+        ) {
+            tracing::warn!(
+                archive = %archive.display(),
+                "an archived secret store still holds the values it had when imported, so \
+                 secrets deleted and MCP grants revoked since can be recovered from it with \
+                 the secret-store key; remove it once a rollback is no longer needed"
+            );
+        }
         Ok(())
     }
 
@@ -476,6 +574,7 @@ impl AppState {
         }
         if !self.inner.booted.load(Ordering::Acquire) {
             self.inner.session_manager.validate_stores().await?;
+            self.import_legacy_secrets().await?;
             self.start_reaper();
         }
         self.inner.router_ready.store(true, Ordering::Release);
@@ -1307,6 +1406,13 @@ fn routes(auth: Arc<AuthConfig>, audit: crate::audit::AuditLog) -> Routes {
         // Read-only, and names only: the host directory behind a volume name
         // never crosses this boundary.
         .route("/v1/volumes", Access::Admin, get(volumes::list))
+        // Outside `/v1/mcp/{blueprint}/…`, so no blueprint name can shadow them.
+        .route("/v1/mcp-grants", Access::Admin, get(mcp_auth::list_grants))
+        .route(
+            "/v1/mcp-grants/{blueprint}/{server}",
+            Access::Admin,
+            delete(mcp_auth::delete_grant),
+        )
         .route(
             "/v1/mcp/{blueprint}/auth-status",
             Access::Admin,

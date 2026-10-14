@@ -51,6 +51,7 @@ impl<'a> RemoveBlueprint<'a> {
             unit.remove_session_requests(session.id().as_str()).await?;
             unit.save_session(session).await?;
         }
+        unit.remove_blueprint_grants(name).await?;
         if !unit.remove_blueprint(name).await? {
             return Ok(false);
         }

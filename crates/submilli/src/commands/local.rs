@@ -8,6 +8,7 @@ use std::io::{IsTerminal, Read};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
+use submilli_shared::mcp_auth::{McpGrantStore, SecretStoreGrants};
 use submilli_shared::secret_store::{PlaintextFileSecretStore, SecretStore};
 
 /// Read a secret value for `key`, prompting "Value for '<key>'".
@@ -54,6 +55,12 @@ pub fn open_secret_store() -> Result<Arc<dyn SecretStore>> {
     let dir = submilli_build::default_data_root().join("secrets");
     let store = PlaintextFileSecretStore::open(dir).context("opening the local secret store")?;
     Ok(Arc::new(store))
+}
+
+/// The MCP OAuth grants `mcp authenticate` keeps, as JSON in the local secret
+/// store under `mcp_oauth/<blueprint>/<server>/credential`.
+pub fn open_grant_store() -> Result<Arc<dyn McpGrantStore>> {
+    Ok(Arc::new(SecretStoreGrants::new(open_secret_store()?)))
 }
 
 /// Drive a future to completion on a private current-thread runtime. The local

@@ -509,46 +509,12 @@ fn validate_archive_paths(
     Ok(())
 }
 
-// Resolve each existing component so relative paths, parent components, and
-// symlink ancestors cannot hide active storage beneath the import directory.
 fn resolved_path(path: &Path) -> Result<PathBuf, DatabaseError> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir().map_err(import_io)?.join(path)
-    };
-    let mut resolved = PathBuf::new();
-    for component in absolute.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                resolved.pop();
-            }
-            component => {
-                resolved.push(component.as_os_str());
-                match fs::canonicalize(&resolved) {
-                    Ok(canonical) => resolved = canonical,
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(import_io(error)),
-                }
-            }
-        }
-    }
-    Ok(resolved)
+    crate::import_archive::resolved_path(path).map_err(import_io)
 }
 
 fn sync_directory_ancestry(path: &Path) -> Result<(), DatabaseError> {
-    let absolute = fs::canonicalize(path).map_err(import_io)?;
-    let mut current = Some(absolute.as_path());
-    while let Some(directory) = current {
-        File::open(directory)
-            .and_then(|file| file.sync_all())
-            .map_err(import_io)?;
-        current = directory
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty());
-    }
-    Ok(())
+    crate::import_archive::sync_directory_ancestry(path).map_err(import_io)
 }
 
 fn import_io(error: io::Error) -> DatabaseError {

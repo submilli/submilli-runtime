@@ -1,5 +1,7 @@
 //! Transactional queries and writes for application use cases.
 use crate::application::error::StoreError;
+use crate::domain::mcp_grant::{GrantOverview, GrantVersion, McpGrant};
+use crate::domain::secret::{Secret, SecretName};
 use crate::domain::session::Session;
 use std::time::SystemTime;
 
@@ -38,5 +40,31 @@ pub(crate) trait UnitOfWork: Send {
     async fn unfinished_requests(
         &mut self,
     ) -> Result<Vec<crate::domain::idempotent_request::IdempotentRequest>, StoreError>;
+    async fn get_secret(&mut self, name: &SecretName) -> Result<Option<Secret>, StoreError>;
+    async fn save_secret(&mut self, secret: Secret, now: SystemTime) -> Result<(), StoreError>;
+    async fn remove_secret(&mut self, name: &SecretName) -> Result<bool, StoreError>;
+    /// Secret names starting with `prefix`, sorted; no value is opened.
+    async fn secret_names(&mut self, prefix: Option<&str>) -> Result<Vec<String>, StoreError>;
+    async fn get_grant(
+        &mut self,
+        blueprint: &str,
+        server: &str,
+    ) -> Result<Option<McpGrant>, StoreError>;
+    /// Persist `grant` over the version it was changed from, or
+    /// [`StoreError::Conflict`] when the grant on file moved meanwhile.
+    async fn save_grant(&mut self, grant: McpGrant) -> Result<(), StoreError>;
+    async fn remove_grant(&mut self, blueprint: &str, server: &str) -> Result<bool, StoreError>;
+    /// The version on file, without opening the grant's token.
+    async fn grant_version(
+        &mut self,
+        blueprint: &str,
+        server: &str,
+    ) -> Result<Option<GrantVersion>, StoreError>;
+    /// The grants on file, without opening their tokens.
+    async fn list_grants(
+        &mut self,
+        blueprint: Option<&str>,
+    ) -> Result<Vec<GrantOverview>, StoreError>;
+    async fn remove_blueprint_grants(&mut self, blueprint: &str) -> Result<(), StoreError>;
     async fn commit(self: Box<Self>) -> Result<(), StoreError>;
 }

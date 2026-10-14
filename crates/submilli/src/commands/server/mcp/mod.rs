@@ -11,6 +11,7 @@ use serde::Deserialize;
 mod auth_status;
 mod authenticate;
 mod deauthenticate;
+pub(crate) mod grants;
 pub mod oauth;
 
 #[derive(Subcommand)]
@@ -24,6 +25,9 @@ pub enum McpCmd {
     /// Show each declared MCP server's authentication state.
     #[command(name = "auth-status")]
     AuthStatus(auth_status::Args),
+    /// List the MCP OAuth grants the server holds, or delete one.
+    #[command(subcommand)]
+    Grants(grants::GrantsCmd),
 }
 
 pub fn execute(cmd: McpCmd) -> Result<ExitCode> {
@@ -31,6 +35,7 @@ pub fn execute(cmd: McpCmd) -> Result<ExitCode> {
         McpCmd::Authenticate(args) => authenticate::execute(args),
         McpCmd::Deauthenticate(args) => deauthenticate::execute(args),
         McpCmd::AuthStatus(args) => auth_status::execute(args),
+        McpCmd::Grants(cmd) => grants::execute(cmd),
     }
 }
 

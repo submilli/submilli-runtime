@@ -1,10 +1,13 @@
 use crate::application::error::StoreError;
+use crate::application::secrets::import::ImportFailure;
 use crate::domain::session::SessionRuleError;
 
 #[derive(Debug)]
 pub enum BootError {
     Sessions(StoreError),
     Idempotency(StoreError),
+    /// The pre-database secret-store directory could not be imported.
+    Secrets(ImportFailure),
 }
 
 impl std::fmt::Display for BootError {
@@ -12,6 +15,7 @@ impl std::fmt::Display for BootError {
         match self {
             Self::Sessions(_) => f.write_str("cannot enumerate persisted sessions"),
             Self::Idempotency(_) => f.write_str("cannot enumerate idempotency sessions"),
+            Self::Secrets(_) => f.write_str("cannot import the secret-store directory"),
         }
     }
 }
@@ -20,6 +24,7 @@ impl std::error::Error for BootError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Sessions(error) | Self::Idempotency(error) => Some(error),
+            Self::Secrets(error) => Some(error),
         }
     }
 }

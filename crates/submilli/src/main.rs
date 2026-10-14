@@ -151,6 +151,7 @@ fn mcp_label(cmd: &commands::mcp::McpCmd) -> &'static str {
         McpCmd::Authenticate(_) => "mcp.authenticate",
         McpCmd::Deauthenticate(_) => "mcp.deauthenticate",
         McpCmd::AuthStatus(_) => "mcp.auth_status",
+        McpCmd::Grants(_) => "mcp.grants",
         McpCmd::Provider(_) => "mcp.provider",
     }
 }

@@ -79,6 +79,60 @@ impl UnitOfWork for FaultUnit {
     ) -> Result<Vec<crate::domain::idempotent_request::IdempotentRequest>, StoreError> {
         self.inner.unfinished_requests().await
     }
+    async fn get_secret(
+        &mut self,
+        name: &crate::domain::secret::SecretName,
+    ) -> Result<Option<crate::domain::secret::Secret>, StoreError> {
+        self.inner.get_secret(name).await
+    }
+    async fn save_secret(
+        &mut self,
+        secret: crate::domain::secret::Secret,
+        now: SystemTime,
+    ) -> Result<(), StoreError> {
+        self.inner.save_secret(secret, now).await
+    }
+    async fn remove_secret(
+        &mut self,
+        name: &crate::domain::secret::SecretName,
+    ) -> Result<bool, StoreError> {
+        self.inner.remove_secret(name).await
+    }
+    async fn secret_names(&mut self, prefix: Option<&str>) -> Result<Vec<String>, StoreError> {
+        self.inner.secret_names(prefix).await
+    }
+    async fn get_grant(
+        &mut self,
+        blueprint: &str,
+        server: &str,
+    ) -> Result<Option<crate::domain::mcp_grant::McpGrant>, StoreError> {
+        self.inner.get_grant(blueprint, server).await
+    }
+    async fn save_grant(
+        &mut self,
+        grant: crate::domain::mcp_grant::McpGrant,
+    ) -> Result<(), StoreError> {
+        self.inner.save_grant(grant).await
+    }
+    async fn remove_grant(&mut self, blueprint: &str, server: &str) -> Result<bool, StoreError> {
+        self.inner.remove_grant(blueprint, server).await
+    }
+    async fn grant_version(
+        &mut self,
+        blueprint: &str,
+        server: &str,
+    ) -> Result<Option<crate::domain::mcp_grant::GrantVersion>, StoreError> {
+        self.inner.grant_version(blueprint, server).await
+    }
+    async fn list_grants(
+        &mut self,
+        blueprint: Option<&str>,
+    ) -> Result<Vec<crate::domain::mcp_grant::GrantOverview>, StoreError> {
+        self.inner.list_grants(blueprint).await
+    }
+    async fn remove_blueprint_grants(&mut self, blueprint: &str) -> Result<(), StoreError> {
+        self.inner.remove_blueprint_grants(blueprint).await
+    }
     async fn commit(self: Box<Self>) -> Result<(), StoreError> {
         self.inner.commit().await?;
         if self.fault.pause_after_commit.swap(false, Ordering::SeqCst) {

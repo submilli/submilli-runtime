@@ -318,7 +318,7 @@ async fn discover_matching(
 ) -> Result<McpCatalog, DiscoveryError> {
     schema_registry::initialize_builtin_packs();
     let unauthenticated: HashSet<String> =
-        match blueprint_auth_state(blueprint, auth.secret_store).await {
+        match blueprint_auth_state(blueprint, auth.oauth.map(|oauth| oauth.grants())).await {
             AuthState::Pending { unauthenticated } => unauthenticated.into_iter().collect(),
             AuthState::Active => HashSet::new(),
         };

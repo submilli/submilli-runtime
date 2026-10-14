@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Result, anyhow};
-use submilli_shared::mcp_auth::{blueprint_auth_state, credential_key};
+use submilli_shared::mcp_auth::blueprint_auth_state;
 
 use crate::commands::local;
 use crate::commands::mcp::{load_blueprint, summary};
@@ -34,12 +34,12 @@ pub fn execute(args: Args) -> Result<ExitCode> {
 
 async fn run(args: &Args) -> Result<String> {
     let blueprint = load_blueprint(&args.blueprint)?;
-    let store = local::open_secret_store()?;
-    store
-        .delete(&credential_key(&blueprint.name, &args.server))
+    let grants = local::open_grant_store()?;
+    grants
+        .revoke(&blueprint.name, &args.server)
         .await
         .map_err(|e| anyhow!("{e}"))?;
-    let state = blueprint_auth_state(&blueprint, Some(&store)).await;
+    let state = blueprint_auth_state(&blueprint, Some(&grants)).await;
     Ok(format!(
         "removed '{}' credential — {}",
         args.server,

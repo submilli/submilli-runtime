@@ -41,11 +41,10 @@ use submilli_server::config::{
     default_session_store_dir, validate_volumes,
 };
 use submilli_server::{
-    ApiToken, AuthConfig, DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, FileSecretStore,
-    KeySource, LlmLimits, NetworkPolicy, Role, RuntimeConfig, ServerConfig,
+    ApiToken, AuthConfig, DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, KeySource,
+    LlmLimits, NetworkPolicy, Role, RuntimeConfig, ServerConfig,
 };
 use submilli_shared::github::GithubToken;
-use submilli_shared::secret_store::SecretStore;
 use submilli_shared::secret_store::check_key;
 
 use crate::Cli;
@@ -978,8 +977,8 @@ fn combine_telemetry(env_setting: Option<&str>, file_setting: Option<bool>) -> b
 
 /// Merge of the CLI flags, environment, and parsed [`FileConfig`]. Split out
 /// from [`resolve`] so the precedence rules are unit-testable without reading
-/// the process environment — though not entirely without disk I/O, since
-/// [`resolve_secret_store`] opens the store it builds.
+/// the process environment — though not entirely without disk I/O, since the
+/// secret-store key is read to build the cipher.
 fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, ServerConfig)> {
     // Borrow for the address, policy, and store before the `.or()` chains below
     // move fields out.
@@ -990,7 +989,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
     let tls = tls_files(&cli, &file, &env)?
         .map(|(cert, key)| submilli_server::tls::load(&cert, &key))
         .transpose()?;
-    let secret_store = resolve_secret_store(&cli, &file, &env)?;
+    let secret_store_dir = secret_store_dir(&cli, &file, &env);
     let session_cipher = secret_key_source(&cli, &file, &env)
         .map(|source| submilli_shared::secret_store::SecretCipher::new(&source).map(Arc::new))
         .transpose()?;
@@ -1081,7 +1080,8 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         // the point, and production stores are simply empty there.
         package_fallback_root: Some(default_cli_package_store_dir()),
         network_policy,
-        secret_store,
+        secret_store: None,
+        secret_store_dir: Some(secret_store_dir),
         session_cipher,
         mcp_allowed_hosts,
         mcp_oauth_providers,
@@ -1118,26 +1118,8 @@ fn resolve_mcp_allowed_hosts(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> O
     (hosts.len() > MCP_LOOPBACK_HOSTS.len()).then_some(hosts)
 }
 
-/// Build the secret store. The directory and key env var both have defaults, so
-/// the store auto-enables when a key is available: a configured `key_file` (it
-/// wins over `key_env`), or the `key_env` variable actually being set in the
-/// environment. An unset key env var leaves the store disabled (`Ok(None)`)
-/// rather than failing boot; an explicit but unreadable `key_file` is an error.
-/// CLI flags take precedence over the config file.
-fn resolve_secret_store(
-    cli: &Cli,
-    file: &FileConfig,
-    env: &EnvConfig,
-) -> Result<Option<Arc<dyn SecretStore>>> {
-    // No key file and the env var isn't set: leave the store off.
-    let Some(key_source) = secret_key_source(cli, file, env) else {
-        return Ok(None);
-    };
-    let store = FileSecretStore::open(secret_store_dir(cli, file, env), &key_source)
-        .map_err(|e| anyhow::anyhow!("opening secret store: {e}"))?;
-    Ok(Some(Arc::new(store)))
-}
-
+/// The directory of a secret store from before secrets were kept in the
+/// database. The server imports it at boot and archives it.
 fn secret_store_dir(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> PathBuf {
     explicit(
         cli.secret_store_dir.clone(),
@@ -1147,8 +1129,8 @@ fn secret_store_dir(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> PathBuf {
     .unwrap_or_else(default_secret_store_dir)
 }
 
-/// Where the store's key comes from, or `None` when no key is configured and
-/// the store therefore stays off. A configured key file wins over the env var;
+/// Where the secret-store key comes from, or `None` when no key is configured
+/// and secrets therefore stay off. A configured key file wins over the env var;
 /// the env var counts only when it is actually set.
 fn secret_key_source(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Option<KeySource> {
     if let Some(path) = secret_key_file(cli, file, env) {
@@ -2190,6 +2172,7 @@ network:
         );
         assert!(config.ephemeral_storage_root.is_none());
         assert!(config.secret_store.is_none());
+        assert_eq!(config.secret_store_dir.unwrap(), default_secret_store_dir());
     }
 
     #[test]
@@ -2200,11 +2183,7 @@ network:
             secret_store_key_env: Some("SUB_TEST_SECRET_KEY_UNSET".into()),
             ..empty_cli()
         };
-        assert!(
-            resolve_secret_store(&cli, &FileConfig::default(), &EnvConfig::default())
-                .unwrap()
-                .is_none()
-        );
+        assert!(secret_key_source(&cli, &FileConfig::default(), &EnvConfig::default()).is_none());
     }
 
     fn write_key_file(dir: &std::path::Path, fill: u8) -> PathBuf {
@@ -2226,9 +2205,7 @@ network:
             secret_store_key_file: Some(write_key_file(tmp.path(), 3)),
             ..empty_cli()
         };
-        let store =
-            resolve_secret_store(&cli, &FileConfig::default(), &EnvConfig::default()).unwrap();
-        assert!(store.is_some());
+        assert!(secret_key_source(&cli, &FileConfig::default(), &EnvConfig::default()).is_some());
     }
 
     #[test]
@@ -2242,9 +2219,7 @@ network:
             secret_store_key_file: Some(write_key_file(tmp.path(), 4)),
             ..empty_cli()
         };
-        let store =
-            resolve_secret_store(&cli, &FileConfig::default(), &EnvConfig::default()).unwrap();
-        assert!(store.is_some());
+        assert!(secret_key_source(&cli, &FileConfig::default(), &EnvConfig::default()).is_some());
     }
 
     #[test]
@@ -2264,9 +2239,7 @@ network:
             secret_store_key_env: Some(var.into()),
             ..empty_cli()
         };
-        let store =
-            resolve_secret_store(&cli, &FileConfig::default(), &EnvConfig::default()).unwrap();
-        assert!(store.is_some());
+        assert!(secret_key_source(&cli, &FileConfig::default(), &EnvConfig::default()).is_some());
         unsafe { std::env::remove_var(var) };
     }
 
@@ -3233,21 +3206,16 @@ network:
             },
             ..FileConfig::default()
         };
-        // Env over file: the env dir is the one that gets created.
-        resolve_secret_store(&empty_cli(), &file, &env)
-            .unwrap()
-            .expect("store enabled");
-        assert!(env_dir.exists(), "env dir should have won over the file's");
+        // Env over file.
+        assert_eq!(secret_store_dir(&empty_cli(), &file, &env), env_dir);
 
         // CLI over env.
         let cli = Cli {
             secret_store_dir: Some(cli_dir.clone()),
             ..empty_cli()
         };
-        resolve_secret_store(&cli, &file, &env)
-            .unwrap()
-            .expect("store enabled");
-        assert!(cli_dir.exists(), "cli dir should have won over the env's");
+        assert_eq!(secret_store_dir(&cli, &file, &env), cli_dir);
+        assert!(secret_key_source(&cli, &file, &env).is_some());
     }
 
     #[test]
@@ -3265,9 +3233,11 @@ network:
                 write_key_file(tmp.path(), 7).to_str().unwrap(),
             ),
         ]);
-        let store = resolve_secret_store(&empty_cli(), &FileConfig::default(), &env).unwrap();
         assert!(
-            store.is_some(),
+            matches!(
+                secret_key_source(&empty_cli(), &FileConfig::default(), &env),
+                Some(KeySource::File(_))
+            ),
             "the key file should have enabled the store"
         );
     }

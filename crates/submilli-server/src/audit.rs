@@ -197,7 +197,10 @@ pub(crate) fn settings_hash(
         "max_embedding_tokens": config.max_embedding_tokens.unwrap_or(DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS),
         "max_embedding_concurrency": config.max_embedding_concurrency.unwrap_or(DEFAULT_MAX_EMBEDDING_CONCURRENCY),
         "custom_sessions": config.sessions.is_some(), "custom_blueprints": config.blueprints.is_some(),
-        "secret_store_enabled": config.secret_store.is_some(), "custom_llm_dispatch": config.llm_dispatch.is_some(),
+        "secret_store_enabled": config.secret_store.is_some() || config.session_cipher.is_some(),
+        "custom_secret_store": config.secret_store.is_some(),
+        "secret_store_dir": config.secret_store_dir.as_deref().map(path_hash),
+        "custom_llm_dispatch": config.llm_dispatch.is_some(),
         "custom_embedding_dispatch": config.embedding_dispatch.is_some(),
     });
     serde_json::to_vec(&settings).ok().map(|bytes| hash(&bytes))

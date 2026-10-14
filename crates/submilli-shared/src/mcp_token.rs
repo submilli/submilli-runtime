@@ -1,9 +1,11 @@
 //! Steady-state OAuth for outbound `@mcp/<server>` calls: mint and rotate
 //! short-lived **access tokens** from the stored refresh token.
 //!
-//! The refresh token (and the inputs to redeem it) live in the SecretStore as an
+//! The refresh token (and the inputs to redeem it) live in the grant store as an
 //! [`OAuthCredential`]; access tokens never touch the store — they sit in an
-//! in-memory cache keyed on `(blueprint, server)`. Concurrent calls that hit the
+//! in-memory cache keyed on `(blueprint, server)`, each tagged with the grant
+//! revision it was minted from, so a grant replaced or revoked elsewhere retires
+//! it. Concurrent calls that hit the
 //! same expired key coalesce on a per-key lock, so an expiry window costs exactly
 //! one token-endpoint round-trip. The MCP transport (SUB-297) drives this:
 //! [`OAuthTokenManager::access_token`] before a call, [`OAuthTokenManager::force_refresh`]
@@ -19,9 +21,7 @@ use tokio::sync::Mutex;
 use tokio::time::Instant;
 
 use crate::OAuthProvider;
-use crate::mcp_auth::{
-    CredentialError, OAuthCredential, credential_key, read_credential, write_credential,
-};
+use crate::mcp_auth::{GrantStoreError, McpGrantStore, OAuthCredential, Rotation};
 use crate::secret_store::SecretStore;
 
 /// Refresh this long before the cached token's stated expiry, so the next call
@@ -57,8 +57,12 @@ pub enum McpTokenError {
     /// Any other non-success from the token endpoint (network `5xx`, or an OAuth
     /// error that isn't `invalid_grant`), carrying the upstream payload.
     Upstream { status: u16, body: String },
-    /// Reading or writing the credential in the SecretStore failed.
+    /// Reading or writing the grant failed.
     Store(String),
+    /// The grant to keep was refused as invalid.
+    InvalidGrant(String),
+    /// The grant was replaced or revoked again each time it was refreshed.
+    GrantChanged,
     /// The token-endpoint request didn't complete (transport failure).
     Transport(HttpError),
     /// A `2xx` token-endpoint response we couldn't parse / that carried no access token.
@@ -82,6 +86,11 @@ impl std::fmt::Display for McpTokenError {
                 write!(f, "token endpoint returned HTTP {status}: {body}")
             }
             McpTokenError::Store(msg) => write!(f, "credential store error: {msg}"),
+            McpTokenError::InvalidGrant(msg) => write!(f, "invalid OAuth credential: {msg}"),
+            McpTokenError::GrantChanged => write!(
+                f,
+                "the OAuth credential kept changing while it was refreshed; retry"
+            ),
             McpTokenError::Transport(e) => write!(f, "token endpoint request failed: {e}"),
             McpTokenError::Malformed(msg) => write!(f, "{msg}"),
         }
@@ -90,17 +99,26 @@ impl std::fmt::Display for McpTokenError {
 
 impl std::error::Error for McpTokenError {}
 
-impl From<CredentialError> for McpTokenError {
-    fn from(e: CredentialError) -> Self {
-        McpTokenError::Store(e.to_string())
+impl From<GrantStoreError> for McpTokenError {
+    fn from(e: GrantStoreError) -> Self {
+        match e {
+            GrantStoreError::Invalid(message) => McpTokenError::InvalidGrant(message),
+            other => McpTokenError::Store(other.to_string()),
+        }
     }
 }
 
-/// One cached access token and its (skew-adjusted) expiry.
+/// One cached access token, its (skew-adjusted) expiry, and the grant revision
+/// it was minted from.
 struct Cached {
     access_token: String,
     expires_at: Instant,
+    revision: u64,
 }
+
+/// A grant changed while it was being refreshed this many times in a row: give
+/// up rather than chase a grant that keeps moving.
+const MAX_GRANT_CHANGES: usize = 2;
 
 /// Per-`(blueprint, server)` state behind its own lock — the coalescing point.
 #[derive(Default)]
@@ -114,7 +132,9 @@ type SlotMap = HashMap<(String, String), Arc<Mutex<Slot>>>;
 /// Process-wide access-token cache + refresh, shared across sessions (lives on
 /// `AppState`).
 pub struct OAuthTokenManager {
-    store: Arc<dyn SecretStore>,
+    grants: Arc<dyn McpGrantStore>,
+    /// Resolves a provider's `${secrets.KEY}` client secret.
+    secrets: Option<Arc<dyn SecretStore>>,
     http: Arc<dyn HttpClient>,
     /// Configured OAuth apps — the client_secret for a refresh is resolved from
     /// here (matched by the token endpoint's host), never from the credential.
@@ -124,22 +144,29 @@ pub struct OAuthTokenManager {
 
 impl OAuthTokenManager {
     pub fn new(
-        store: Arc<dyn SecretStore>,
+        grants: Arc<dyn McpGrantStore>,
+        secrets: Option<Arc<dyn SecretStore>>,
         http: Arc<dyn HttpClient>,
         providers: Arc<Vec<OAuthProvider>>,
     ) -> Self {
         Self {
-            store,
+            grants,
+            secrets,
             http,
             providers,
             slots: Mutex::new(HashMap::new()),
         }
     }
 
+    /// Where this manager reads and writes grants.
+    pub fn grants(&self) -> &Arc<dyn McpGrantStore> {
+        &self.grants
+    }
+
     /// A valid bearer token for `(blueprint, server)`: the cached one if still
-    /// comfortably unexpired, otherwise freshly refreshed. Concurrent callers for
-    /// the same key serialize on its slot lock; the first refresh wins and the
-    /// rest reuse it.
+    /// comfortably unexpired and minted from the grant still on file, otherwise
+    /// freshly refreshed. Concurrent callers for the same key serialize on its
+    /// slot lock; the first refresh wins and the rest reuse it.
     pub async fn access_token(
         &self,
         blueprint: &str,
@@ -149,10 +176,24 @@ impl OAuthTokenManager {
         let mut slot = slot.lock().await;
         if let Some(cached) = &slot.cached
             && Instant::now() + EXPIRY_SKEW < cached.expires_at
+            && self.still_current(blueprint, server, cached.revision).await
         {
             return Ok(cached.access_token.clone());
         }
         self.refresh(blueprint, server, &mut slot).await
+    }
+
+    /// Whether the grant on file is still `revision`. When the store cannot
+    /// say, it is assumed unchanged: a token in hand is valid at the provider
+    /// until it expires, and a rejected refresh token keeps its bounded retries.
+    async fn still_current(&self, blueprint: &str, server: &str, revision: u64) -> bool {
+        match self.grants.revision(blueprint, server).await {
+            Ok(current) => current == Some(revision),
+            Err(error) => {
+                tracing::warn!(%error, blueprint, server, "could not check the MCP grant; assuming it is unchanged");
+                true
+            }
+        }
     }
 
     /// Refresh after a mid-call `401`. `stale` is the token that just failed; if
@@ -168,35 +209,37 @@ impl OAuthTokenManager {
         let mut slot = slot.lock().await;
         if let Some(cached) = &slot.cached
             && cached.access_token != stale
+            && self.still_current(blueprint, server, cached.revision).await
         {
             return Ok(cached.access_token.clone());
         }
         self.refresh(blueprint, server, &mut slot).await
     }
 
-    /// Replace or remove a credential under the refresh lock, then retire the
-    /// cached access token. An in-flight refresh cannot overwrite the new login.
-    pub async fn set_credential(
+    /// Deposit a new login under the refresh lock, then retire the cached
+    /// access token. A refresh in flight elsewhere finds the grant changed and
+    /// cannot overwrite it.
+    pub async fn deposit(
         &self,
         blueprint: &str,
         server: &str,
-        credential: Option<&OAuthCredential>,
+        credential: &OAuthCredential,
     ) -> Result<(), McpTokenError> {
         let slot = self.slot(blueprint, server).await;
         let mut slot = slot.lock().await;
-        match credential {
-            Some(credential) => {
-                write_credential(blueprint, server, credential, &self.store).await?;
-            }
-            None => {
-                self.store
-                    .delete(&credential_key(blueprint, server))
-                    .await
-                    .map_err(|error| McpTokenError::Store(error.to_string()))?;
-            }
-        }
+        self.grants.deposit(blueprint, server, credential).await?;
         slot.cached = None;
         Ok(())
+    }
+
+    /// Revoke a grant under the refresh lock and retire its cached access token.
+    /// Whether a grant was on file.
+    pub async fn revoke(&self, blueprint: &str, server: &str) -> Result<bool, McpTokenError> {
+        let slot = self.slot(blueprint, server).await;
+        let mut slot = slot.lock().await;
+        let revoked = self.grants.revoke(blueprint, server).await?;
+        slot.cached = None;
+        Ok(revoked)
     }
 
     /// The slot for a key, created empty on first use.
@@ -210,66 +253,119 @@ impl OAuthTokenManager {
     }
 
     /// Redeem the stored refresh token for a fresh access token and cache it.
-    /// Runs under the caller's held slot lock. Persists a rotated refresh token;
-    /// keeps the credential on rejection so a later invocation can recover.
+    /// Runs under the caller's held slot lock. Keeps the credential on
+    /// rejection so a later invocation can recover. An attempt whose grant was
+    /// replaced or revoked meanwhile is discarded and the newer grant, if any,
+    /// is used instead.
     async fn refresh(
         &self,
         blueprint: &str,
         server: &str,
         slot: &mut Slot,
     ) -> Result<String, McpTokenError> {
-        let credential = read_credential(blueprint, server, &self.store)
+        slot.cached = None;
+        for _ in 0..MAX_GRANT_CHANGES {
+            if let Some(cached) = self.refresh_once(blueprint, server).await? {
+                let access_token = cached.access_token.clone();
+                slot.cached = Some(cached);
+                return Ok(access_token);
+            }
+        }
+        Err(McpTokenError::GrantChanged)
+    }
+
+    /// One redemption of the grant on file, or `None` when the grant changed
+    /// before its result could be kept. A rotated refresh token is persisted
+    /// only over the grant it was redeemed from.
+    async fn refresh_once(
+        &self,
+        blueprint: &str,
+        server: &str,
+    ) -> Result<Option<Cached>, McpTokenError> {
+        let stored = self
+            .grants
+            .load(blueprint, server)
             .await?
             .ok_or(McpTokenError::NotAuthenticated)?;
+        let credential = stored.credential;
 
-        // Static-access-token credential (no refresh token): use it as-is, cached
-        // long so the slot doesn't re-read the store on every call. A revoked one
-        // surfaces as a call-time 401 — the user re-authenticates.
-        if let Some(access_token) = &credential.access_token {
-            slot.cached = Some(Cached {
-                access_token: access_token.clone(),
+        // Static-access-token credential (no refresh token): use it as-is,
+        // cached long. A revoked one surfaces as a call-time 401, or as a
+        // changed revision on the next call.
+        if let Some(access_token) = credential.access_token {
+            return Ok(Some(Cached {
+                access_token,
                 expires_at: Instant::now() + STATIC_TOKEN_TTL,
-            });
-            return Ok(access_token.clone());
+                revision: stored.revision,
+            }));
         }
 
-        let grant = self.exchange_with_retry(&credential).await?;
+        let Some(response) = self
+            .exchange_with_retry(blueprint, server, stored.revision, &credential)
+            .await?
+        else {
+            return Ok(None);
+        };
 
-        if let Some(rotated) = &grant.refresh_token
-            && credential.refresh_token.as_deref() != Some(rotated.as_str())
-        {
+        let rotated = response
+            .refresh_token
+            .as_ref()
+            .filter(|rotated| credential.refresh_token.as_deref() != Some(rotated.as_str()));
+        let revision = if let Some(rotated) = rotated {
             let mut next = credential.clone();
             next.refresh_token = Some(rotated.clone());
-            write_credential(blueprint, server, &next, &self.store).await?;
-        }
+            match self
+                .grants
+                .rotate(blueprint, server, stored.revision, &next)
+                .await?
+            {
+                Rotation::Saved(saved) => saved,
+                Rotation::Changed => return Ok(None),
+            }
+        } else {
+            // Nothing to persist, but the grant may still have moved during
+            // the exchange.
+            if !self.still_current(blueprint, server, stored.revision).await {
+                return Ok(None);
+            }
+            stored.revision
+        };
 
-        let ttl = grant.expires_in.map_or(DEFAULT_TTL, Duration::from_secs);
+        let ttl = response.expires_in.map_or(DEFAULT_TTL, Duration::from_secs);
         // Keep a completed refresh-token rotation even if the remote expiry is
         // invalid; retrying with the old token could permanently lose access.
         let expires_at = Instant::now().checked_add(ttl).ok_or_else(|| {
             McpTokenError::Malformed("token expiry is outside the supported range".into())
         })?;
-        slot.cached = Some(Cached {
-            access_token: grant.access_token.clone(),
+        Ok(Some(Cached {
+            access_token: response.access_token,
             expires_at,
-        });
-        Ok(grant.access_token)
+            revision,
+        }))
     }
 
+    /// The exchange's response, or `None` when the refresh token was rejected
+    /// because the grant moved on: another process rotated or replaced it.
     async fn exchange_with_retry(
         &self,
+        blueprint: &str,
+        server: &str,
+        revision: u64,
         credential: &OAuthCredential,
-    ) -> Result<GrantResponse, McpTokenError> {
+    ) -> Result<Option<GrantResponse>, McpTokenError> {
         let mut delays = INVALID_GRANT_RETRY_DELAYS.into_iter();
         loop {
             match self.exchange(credential).await {
                 Err(McpTokenError::AuthExpired) => {
+                    if !self.still_current(blueprint, server, revision).await {
+                        return Ok(None);
+                    }
                     let Some(delay) = delays.next() else {
                         return Err(McpTokenError::AuthExpired);
                     };
                     tokio::time::sleep(delay).await;
                 }
-                result => return result,
+                result => return result.map(Some),
             }
         }
     }
@@ -279,7 +375,7 @@ impl OAuthTokenManager {
     /// [`McpTokenError::AuthExpired`]; any other non-`2xx` to `Upstream`.
     async fn exchange(&self, credential: &OAuthCredential) -> Result<GrantResponse, McpTokenError> {
         // Only reached for refresh-token credentials (the static path returns
-        // earlier in `refresh`), so both fields are present.
+        // earlier in `refresh_once`), so both fields are present.
         let refresh_token = credential
             .refresh_token
             .as_deref()
@@ -363,7 +459,7 @@ impl OAuthTokenManager {
     async fn config_client_secret(&self, token_endpoint: &str) -> Option<String> {
         let provider = crate::mcp::oauth::match_provider(&self.providers, token_endpoint)?;
         let raw = provider.client_secret.as_deref()?;
-        crate::mcp::oauth::resolve_secret_ref(raw, Some(&self.store)).await
+        crate::mcp::oauth::resolve_secret_ref(raw, self.secrets.as_ref()).await
     }
 }
 
@@ -443,8 +539,44 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::mcp_auth::is_authenticated;
+    use crate::mcp_auth::{GRANT_KEY_PREFIX, SecretStoreGrants};
     use crate::secret_store::{FileSecretStore, KeySource};
+
+    fn grants(store: &Arc<dyn SecretStore>) -> Arc<dyn McpGrantStore> {
+        Arc::new(SecretStoreGrants::new(Arc::clone(store)))
+    }
+
+    fn credential_key(blueprint: &str, server: &str) -> String {
+        format!("{GRANT_KEY_PREFIX}{blueprint}/{server}/credential")
+    }
+
+    async fn read_credential(
+        blueprint: &str,
+        server: &str,
+        store: &Arc<dyn SecretStore>,
+    ) -> Result<Option<OAuthCredential>, GrantStoreError> {
+        Ok(grants(store)
+            .load(blueprint, server)
+            .await?
+            .map(|stored| stored.credential))
+    }
+
+    async fn write_credential(
+        blueprint: &str,
+        server: &str,
+        credential: &OAuthCredential,
+        store: &Arc<dyn SecretStore>,
+    ) -> Result<u64, GrantStoreError> {
+        grants(store).deposit(blueprint, server, credential).await
+    }
+
+    async fn is_authenticated(
+        blueprint: &str,
+        server: &str,
+        store: Option<&Arc<dyn SecretStore>>,
+    ) -> bool {
+        crate::mcp_auth::is_authenticated(blueprint, server, store.map(grants).as_ref()).await
+    }
 
     const BP: &str = "bp";
     const SRV: &str = "srv";
@@ -565,7 +697,8 @@ mod tests {
 
     fn manager(store: &Arc<dyn SecretStore>, http: &Arc<MockHttp>) -> OAuthTokenManager {
         OAuthTokenManager::new(
-            Arc::clone(store),
+            grants(store),
+            Some(Arc::clone(store)),
             Arc::clone(http) as Arc<dyn HttpClient>,
             Arc::new(Vec::new()),
         )
@@ -930,5 +1063,93 @@ mod tests {
             !raw.contains("at-secret"),
             "the access token must not be persisted"
         );
+    }
+
+    #[tokio::test]
+    async fn a_rotation_after_a_new_login_keeps_the_new_login() {
+        let (_tmp, store) = temp_store();
+        seed(&store, "r1").await;
+        // The token endpoint is slow; a new login lands while it answers.
+        let http = MockHttp::new(
+            vec![
+                ok_token_rotating("from-r1", 3600, "r1-rotated"),
+                ok_token("from-r2", 3600),
+            ],
+            Some(Duration::from_millis(50)),
+        );
+        let mgr = Arc::new(manager(&store, &http));
+        let refreshing = tokio::spawn({
+            let mgr = Arc::clone(&mgr);
+            async move { mgr.access_token(BP, SRV).await }
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        seed(&store, "r2").await;
+        assert_eq!(refreshing.await.unwrap().unwrap(), "from-r2");
+        assert_eq!(
+            read_credential(BP, SRV, &store)
+                .await
+                .unwrap()
+                .unwrap()
+                .refresh_token
+                .as_deref(),
+            Some("r2"),
+            "the rotated token of the replaced grant must not overwrite the new login"
+        );
+        assert!(http.last_body().contains("refresh_token=r2"));
+    }
+
+    #[tokio::test]
+    async fn a_rotation_after_a_revoke_does_not_bring_the_grant_back() {
+        let (_tmp, store) = temp_store();
+        seed(&store, "r1").await;
+        let http = MockHttp::new(
+            vec![ok_token_rotating("at", 3600, "r1-rotated")],
+            Some(Duration::from_millis(50)),
+        );
+        let mgr = Arc::new(manager(&store, &http));
+        let refreshing = tokio::spawn({
+            let mgr = Arc::clone(&mgr);
+            async move { mgr.access_token(BP, SRV).await }
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(grants(&store).revoke(BP, SRV).await.unwrap());
+        assert!(matches!(
+            refreshing.await.unwrap(),
+            Err(McpTokenError::NotAuthenticated)
+        ));
+        assert!(read_credential(BP, SRV, &store).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_grant_replaced_by_another_manager_retires_the_cached_token() {
+        let (_tmp, store) = temp_store();
+        seed(&store, "r1").await;
+        let http = MockHttp::new(
+            vec![ok_token("from-r1", 3600), ok_token("from-r2", 3600)],
+            None,
+        );
+        let mgr = manager(&store, &http);
+        assert_eq!(mgr.access_token(BP, SRV).await.unwrap(), "from-r1");
+        // Another process logs in again.
+        manager(&store, &http)
+            .deposit(
+                BP,
+                SRV,
+                &OAuthCredential {
+                    refresh_token: Some("r2".into()),
+                    access_token: None,
+                    client_id: Some("cid".into()),
+                    token_endpoint: Some(TOKEN_ENDPOINT.into()),
+                    scopes: vec!["api".into()],
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(mgr.access_token(BP, SRV).await.unwrap(), "from-r2");
+        grants(&store).revoke(BP, SRV).await.unwrap();
+        assert!(matches!(
+            mgr.access_token(BP, SRV).await,
+            Err(McpTokenError::NotAuthenticated)
+        ));
     }
 }
