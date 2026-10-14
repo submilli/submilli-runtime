@@ -1,1 +1,1 @@
-line 21 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (ours keeps the target's optional field on the rejected literal)
+line 21 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (ours keeps the target field's optionality: `{ a?: null }`)

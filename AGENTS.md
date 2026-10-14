@@ -295,7 +295,8 @@ enables it only for the TypeScript conformance suite. The
 [release skill](.agents/skills/release/SKILL.md) requires all these checks on the
 final release candidate before publication. Enable the flag during development
 only for focused verification of changes to these tests or their selection,
-and for the Git standard-library checks below.
+for the Git standard-library checks below, and for the TypeScript conformance
+suite on compiler changes (see the post-rebase gate).
 
 Whenever modifying the Git standard library (`crates/interpreter/src/stdlib/git/`),
 run the Git memory-limit tests in addition to other affected checks:

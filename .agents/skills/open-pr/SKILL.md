@@ -89,7 +89,9 @@ code preparation or PR creation merely because Linear is unavailable.
    is enabled by nightly CI and, separately, the release skill. The exception is
    the TypeScript conformance suite, which PR CI runs: for compiler or suite
    changes, run `SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test
-   --workspace --test typescript`. For package/example checks, pass `--skip-network` to `build test`; that command ignores `SUBMILLI_SKIP_HTTP_TESTS`. Follow
+   --workspace --test typescript`. For package/example checks, pass
+   `--skip-network` to `build test`; that command ignores
+   `SUBMILLI_SKIP_HTTP_TESTS`. Follow
    `AGENTS.md`'s conditional HTTP policy: use `SUBMILLI_SKIP_HTTP_TESTS=0` for
    affected Rust socket tests; for live package tests, omit `--skip-network` and
    explicitly supply credentials. Enable these only when changed HTTP transport, routing,
