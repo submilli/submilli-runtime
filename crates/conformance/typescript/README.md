@@ -8,6 +8,8 @@ and the errors it reports. Run with:
 SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test -p conformance --test typescript
 ```
 
+PR CI runs it on every pull request; the nightly workflow also runs it on main.
+
 This is the second half of the conformance crate. The test262 cases next door check
 runtime behavior against the ECMAScript standard; these check the typechecker against
 TypeScript.
@@ -529,3 +531,4 @@ the next `port-suite.cjs` run leaves it out too.
 | `written/numericSeparators` | Numeric separators in each digit run, and misplaced ones |
 | `written/instanceofUint8Array` | `instanceof Uint8Array` |
 | `written/gettersAndSetters` | Setters |
+| `written/typeofBigint` | `typeof x === "bigint"` |
