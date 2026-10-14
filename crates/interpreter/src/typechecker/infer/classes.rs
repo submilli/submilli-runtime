@@ -1495,6 +1495,22 @@ impl<'a> Inferer<'a> {
         else {
             return Ok(());
         };
+        // As in tsc, a bodyless optional method can't redeclare a property:
+        // a subclass method could then override the property through it.
+        if child_field.method && !parent_field.method {
+            self.error_with_help(
+                member.span,
+                format!(
+                    "`{}` redeclares an inherited property as an optional method",
+                    member.name
+                ),
+                vec![format!(
+                    "declare `{0}` as a property (`{0}?: (...) => T`), or rename it",
+                    member.name
+                )],
+            );
+            return Ok(());
+        }
 
         let child_ty =
             substitute_typevars(&field_read_ty(&child_field), &opaque, &self.type_limits)
