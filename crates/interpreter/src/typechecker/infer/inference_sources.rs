@@ -134,7 +134,12 @@ impl<'a> Inferer<'a> {
             this.keeps_literal_types = this.returns_keep_literals || !has_contextual_return_type;
             this.infer_expr(expr, hint)
         })?;
-        let widened = if self.returns_keep_literals || has_contextual_return_type {
+        // As in tsc, a context keeps the literal only when it names a literal
+        // of its kind: `() => a` with `const a = 100` is `() => number` where a
+        // `number` is expected, `() => 100` where `0 | 100` is.
+        let kept_by_context =
+            has_contextual_return_type && hint.is_some_and(|hint| is_literal_of_context(&ty, hint));
+        let widened = if self.returns_keep_literals || kept_by_context {
             ty.clone()
         } else {
             self.widen_returned_literals(typed, &ty)?
@@ -446,6 +451,51 @@ impl FieldTypes {
 /// Whether `param` types a value only through one of `type_params`: it is one,
 /// or a union with one as a member and none inside another member, since tsc
 /// infers from a member's structure before a bare member.
+/// Whether `context` names a literal type of the kind of a literal in `ty`,
+/// tsc's `isLiteralOfContextualType`: `boolean` counts as `true | false`, and
+/// an enum as the union of its members.
+fn is_literal_of_context(ty: &Type, context: &Type) -> bool {
+    let literal_kinds = literal_kinds_named(context);
+    union_members(ty)
+        .into_iter()
+        .filter(|member| member.is_literal_type())
+        .filter_map(literal_kind)
+        .any(|kind| literal_kinds.contains(&kind))
+}
+
+fn literal_kinds_named(context: &Type) -> Vec<Type> {
+    union_members(context)
+        .into_iter()
+        .filter(|member| {
+            member.is_literal_type()
+                || matches!(
+                    member,
+                    Type::Boolean | Type::NumberEnum { .. } | Type::StringEnum { .. }
+                )
+        })
+        .filter_map(literal_kind)
+        .collect()
+}
+
+/// The primitive a literal type, `boolean` or an enum is a kind of.
+fn literal_kind(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::NumberLiteral(_) | Type::NumberEnum { .. } => Some(Type::Number),
+        Type::StringLiteral(_) | Type::StringEnum { .. } => Some(Type::String),
+        Type::BooleanLiteral(_) | Type::Boolean => Some(Type::Boolean),
+        Type::BigIntLiteral(_) => Some(Type::BigInt),
+        _ => None,
+    }
+}
+
+/// `ty`'s members with aliases peeled, or `ty` alone when it is no union.
+fn union_members(ty: &Type) -> Vec<&Type> {
+    match ty.peel() {
+        Type::Union(members) => members.iter().map(Type::peel).collect(),
+        other => vec![other],
+    }
+}
+
 fn is_typed_by_type_param(param: &Type, type_params: &[String]) -> bool {
     let is_bare = |ty: &Type| is_bare(ty, type_params);
     let mentions_one =

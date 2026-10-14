@@ -14900,6 +14900,25 @@ function main(): void { if (result < 10) { } }
     }
 
     #[test]
+    fn closure_literal_return_widens_unless_its_context_names_a_literal() {
+        // tsc keeps a returned literal only where the contextual return type
+        // names a literal of its kind, whatever the context's other members.
+        let ta = run_clean(
+            "const a = 100;\n\
+             const plain: () => number = () => a;\n\
+             const nullable: (() => number) | undefined = () => a;\n\
+             const named: () => 0 | 100 = () => a;\n\
+             const mixed: () => \"q\" | number = () => a;\n\
+             function main(): void {}",
+        );
+        let returned = |n| nth_decl_value_ty(&ta, n).to_string();
+        assert_eq!(returned(1), "() => number");
+        assert_eq!(returned(2), "() => number");
+        assert_eq!(returned(3), "() => 100");
+        assert_eq!(returned(4), "() => number");
+    }
+
+    #[test]
     fn template_literal_no_substitution_collapses_to_string_literal() {
         // No-substitution templates lower to `ExprKind::String` at the
         // parser level — by the time we reach the typechecker, they
