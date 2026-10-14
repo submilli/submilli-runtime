@@ -587,9 +587,17 @@ impl LowerCtx {
                 is_const: false,
                 annotated: param.ty.is_some(),
             };
-            let statements = self.emit_decompose(
-                ast, pattern, fresh, root, /*doc=*/ None, /*tuple_len=*/ None,
-            )?;
+            // An unannotated parameter takes its type from its default, which
+            // an array pattern types as a tuple, as a declaration's initializer.
+            let tuple_len = match (&param.ty, param.default) {
+                (None, Some(default)) => tuple_source_len(ast, &pattern, default)?,
+                _ => None,
+            };
+            if let Some(default) = param.default.filter(|_| tuple_len.is_some()) {
+                ast.tuple_pattern_sources.insert(default);
+            }
+            let statements =
+                self.emit_decompose(ast, pattern, fresh, root, /*doc=*/ None, tuple_len)?;
             if ast
                 .parameter_bindings
                 .insert(param.name.span, statements)
