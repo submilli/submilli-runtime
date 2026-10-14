@@ -7,12 +7,14 @@ on:
       - "docs/**"
       - "docs-site/**"
       - "examples/quickstart/**"
+      - "scripts/docker-compose-e2e.sh"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "docs/**"
       - "docs-site/**"
       - "examples/quickstart/**"
+      - "scripts/docker-compose-e2e.sh"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -20,6 +22,15 @@ permissions:
   contents: read
 
 jobs:
+  compose-e2e:
+    name: Compose documentation journey
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replay the published Compose deployment
+        run: scripts/docker-compose-e2e.sh
+
   build:
     runs-on: ubuntu-latest
     defaults:
@@ -48,6 +59,7 @@ jobs:
             --remap '^https://submilli\.ai/docs([?#].*)?$ file://${{ github.workspace }}/docs-site/dist/docs/$1'
             --remap '^https://submilli\.ai/docs/(.*)$ file://${{ github.workspace }}/docs-site/dist/docs/$1'
             --remap '^https://github\.com/submilli/submilli-runtime/edit/main/(.*)$ file://${{ github.workspace }}/$1'
+            --remap '^https://github\.com/submilli/submilli-runtime/blob/main/(.*)$ file://${{ github.workspace }}/$1'
             ${{ github.workspace }}/docs-site/dist/docs
       - name: Test link-check failure cases
         working-directory: docs-site
