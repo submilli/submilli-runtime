@@ -5446,6 +5446,59 @@ impl Inferer<'_> {
 
     /// An object literal, with a lone spread of a union retyped to `expected`
     /// when each of its alternatives fits (see `spread_as_its_alternatives`).
+    /// The fields of each member of a union an object literal is checked
+    /// against, when no single member was chosen for it; empty unless every
+    /// member other than `null` and `undefined` is an object shape.
+    fn union_shape_fields(
+        &self,
+        union_members: &[Type],
+    ) -> Vec<BTreeMap<String, crate::ObjectField>> {
+        let mut shapes = Vec::new();
+        for member in union_members {
+            match member.peel() {
+                Type::Null | Type::Undefined => {}
+                Type::Object { fields, .. } => shapes.push(fields.clone()),
+                Type::InterfaceRef {
+                    mangled,
+                    name,
+                    args,
+                    ..
+                } => match self.structural_form(mangled, name, args) {
+                    Some(fields) => shapes.push(fields),
+                    None => return Vec::new(),
+                },
+                _ => return Vec::new(),
+            }
+        }
+        shapes
+    }
+
+    /// The contextual type of a function literal in field `name` of an object
+    /// literal checked against a union of object shapes: as in tsc, the union
+    /// of the field's types in the members that declare it, from which the
+    /// function's parameters take their types.
+    fn function_literal_union_hint(
+        &self,
+        value: ExprId,
+        name: &str,
+        shapes: &[BTreeMap<String, crate::ObjectField>],
+    ) -> Option<Type> {
+        let is_function_literal = self.ast.try_expr(value).is_ok_and(|expr| {
+            matches!(
+                expr.kind,
+                ExprKind::Arrow { .. } | ExprKind::FunctionExpression { .. }
+            )
+        });
+        if !is_function_literal {
+            return None;
+        }
+        let types: Vec<Type> = shapes
+            .iter()
+            .filter_map(|fields| fields.get(name).map(|field| field.ty.clone()))
+            .collect();
+        (!types.is_empty()).then(|| Type::union(types))
+    }
+
     fn infer_object_literal_expr(
         &mut self,
         literal: ExprId,
@@ -5565,6 +5618,10 @@ impl Inferer<'_> {
                 }
                 _ => None,
             };
+        let union_shapes = match (peeled, &expected_fields) {
+            (Some(Type::Union(union_members)), None) => self.union_shape_fields(union_members),
+            _ => Vec::new(),
+        };
         let expected_index = expected.and_then(|ty| self.resolver().index_signature(ty));
         if let Some(want) = expected_fields.as_ref()
             && expected_index.is_none()
@@ -5642,12 +5699,20 @@ impl Inferer<'_> {
                     // wins (the override is invariant, the surrounding
                     // hint can only restate it).
                     let override_sig = override_field_signature(&field.name.name);
-                    let hint = self.object_field_hint(
-                        literal,
-                        &field.name.name,
-                        expected_fields.as_ref(),
-                        expected_index.as_ref(),
-                    );
+                    let hint = self
+                        .object_field_hint(
+                            literal,
+                            &field.name.name,
+                            expected_fields.as_ref(),
+                            expected_index.as_ref(),
+                        )
+                        .or_else(|| {
+                            self.function_literal_union_hint(
+                                field.value,
+                                &field.name.name,
+                                &union_shapes,
+                            )
+                        });
                     let expected_field_ty = expected_fields
                         .as_ref()
                         .and_then(|m| m.get(&field.name.name))
