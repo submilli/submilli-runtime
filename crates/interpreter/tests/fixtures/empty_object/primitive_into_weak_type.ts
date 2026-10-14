@@ -16,6 +16,19 @@ function asOptions(value: {}): Options {
   return value;
 }
 
+function describeMaybe(value: {} | undefined): string {
+  return value === undefined ? "none" : maybeDescribe(value);
+}
+
+function readA(value: {}): string {
+  const o: Options = value;
+  return String(o.a);
+}
+
+class Holder {
+  a: number = 3;
+}
+
 function main(): void {
   const n: {} = 1;
   const literal: { a?: number } = n;
@@ -43,6 +56,15 @@ function main(): void {
   const object: {} = { a: 5 };
   const same: Options = object;
   assert(same.a === 5 && same === object, "an object stays itself");
+  assert(describeMaybe(n) === "undefined/undefined", "a `{}` that may be undefined");
+  assert(describeMaybe(undefined) === "none", "and is");
+  assert((n as Options).a === undefined, "a cast");
+  assert((s as { [k: string]: unknown })["0"] === "s", "a cast to an index signature");
+  assert(readA(new Map<string, number>()) === "undefined", "a Map has no own fields");
+  assert(readA(new Set<number>()) === "undefined", "nor a Set");
+  assert(readA(() => 1) === "undefined", "nor a function");
+  assert(readA(new Holder()) === "3", "a class instance keeps its fields");
+
   const empty = {};
   assert(describe(empty) === "undefined/undefined", "an empty object literal");
 }

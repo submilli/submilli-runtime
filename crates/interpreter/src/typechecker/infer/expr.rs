@@ -861,10 +861,12 @@ impl Inferer<'_> {
     }
 
     /// `id`, a value of type `ty`, as the object an `expected` object type
-    /// reads. `{}` holds primitives and arrays, and TypeScript lets it into
-    /// an object type whose fields are all optional or that has an index
-    /// signature; its fields are then read from the object JavaScript wraps
-    /// the value in. The conversion keeps an object as it is.
+    /// reads. `{}` (or `{}` that may be nullish) holds any value, and
+    /// TypeScript lets it into an object type whose fields are all optional
+    /// or that has an index signature, whose slot holds only an object. A
+    /// plain object or class instance passes as it is; another value becomes
+    /// a copy of the fields JavaScript would read from it (a string's or
+    /// array's indices), so later writes to either are not shared.
     fn as_object_for(
         &mut self,
         id: ExprId,
@@ -875,7 +877,7 @@ impl Inferer<'_> {
         let Some(want) = expected else {
             return Ok(id);
         };
-        if !ty.is_empty_object()
+        if !super::narrowing::strip_nullish(ty).is_empty_object()
             || !reads_object_fields(want)
             || !assignable(ty, want, self.resolver())
         {
@@ -11704,6 +11706,7 @@ impl Inferer<'_> {
             );
             return Ok((TypedExprKind::Null, Type::Error));
         }
+        let inner_id = self.as_object_for(inner_id, &inner_ty, Some(&target_ty), span)?;
         // Deep check only when the source isn't a proven subtype of the target.
         // A proven upcast emits no runtime test, so it doesn't need the target
         // to be runtime-verifiable — `m as Map<K, V>` on an `m` that already is
@@ -13164,9 +13167,6 @@ fn is_definitely_falsy(ty: &Type) -> bool {
     }
 }
 
-/// Interpolations that convert at run time, as JavaScript's ToString does: a
-/// value that may be `null` or `undefined`, or whose type is known only then.
-/// A `toString` call would throw on the nullish ones.
 /// Whether a value of type `ty` has its fields read as an object's: an
 /// object type other than `{}` or an interface, possibly nullish.
 fn reads_object_fields(ty: &Type) -> bool {
@@ -13184,6 +13184,9 @@ fn reads_object_fields(ty: &Type) -> bool {
     }
 }
 
+/// Interpolations that convert at run time, as JavaScript's ToString does: a
+/// value that may be `null` or `undefined`, or whose type is known only then.
+/// A `toString` call would throw on the nullish ones.
 fn interpolates_at_run_time(ty: &Type) -> bool {
     match ty.peel() {
         Type::Null | Type::Unknown | Type::TypeVar(_) | Type::GenericParam { .. } => true,

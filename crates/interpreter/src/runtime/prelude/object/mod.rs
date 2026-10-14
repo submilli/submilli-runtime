@@ -367,27 +367,37 @@ fn spread(
 }
 
 /// `value` as an object an object type's field reads can take. `{}` holds
-/// primitives and arrays as well as objects, and TypeScript lets it into a
-/// type whose fields are all optional; JavaScript then reads a primitive's
-/// fields through a wrapper object. A string or an array becomes an object of
-/// its indices, a number, boolean or bigint one with no fields, and any other
-/// value is already an object.
+/// any value, and TypeScript lets it into a type whose fields are all
+/// optional; JavaScript then reads a primitive's fields through a wrapper
+/// object and finds none of an exotic object's (a `Map`, a function) own. A
+/// plain object or class instance stays itself; any other value becomes a
+/// fresh object of its index entries (a string's or array's) or none.
 fn to_object(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<Val> {
-    let intr = intrinsic_types(&mut *caller)?;
-    let primitive_or_array = [
-        &intr.string,
-        &intr.array,
-        &intr.boxed_number,
-        &intr.boxed_boolean,
-        &intr.bigint,
-    ];
-    for ty in primitive_or_array {
-        if is_a(caller, value, ty)? {
-            let none = Val::AnyRef(None);
-            return spread(caller, &none, value, &none, &none);
-        }
+    if reads_fields_itself(caller, value)? {
+        return Ok(*value);
     }
-    Ok(*value)
+    let none = Val::AnyRef(None);
+    spread(caller, &none, value, &none, &none)
+}
+
+/// Whether object-type field reads take `value` as it is: null (read through
+/// an optional chain), a plain object, or a class instance.
+fn reads_fields_itself(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<bool> {
+    let Val::AnyRef(Some(any)) = value else {
+        return Ok(true);
+    };
+    let Some(object) = any.as_struct(&mut *caller)? else {
+        return Ok(false);
+    };
+    let intr = intrinsic_types(&mut *caller)?;
+    if object.matches_ty(&*caller, &intr.object_shape)? {
+        return Ok(true);
+    }
+    if object.ty(&*caller)?.fields().next().is_none() {
+        return Ok(false);
+    }
+    let vtable = object.field(&mut *caller, 0)?;
+    is_a(caller, &vtable, &intr.class_vtable)
 }
 
 fn copy_field_name(
