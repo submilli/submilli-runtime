@@ -175,6 +175,61 @@ impl<'a> Inferer<'a> {
                         .map_err(crate::typechecker::arena_failure)?;
                     self.typed_ast.top_level_statements.push(assign_id);
                 }
+                StmtKind::ObjectRest {
+                    is_const,
+                    name,
+                    source,
+                    exclude,
+                    ty,
+                    doc,
+                } => {
+                    if self.reject_intrinsic_name(&name) {
+                        continue;
+                    }
+                    let (typed_value, bound) =
+                        self.infer_object_rest_value(source, &exclude, ty.as_ref(), span)?;
+                    let (value_kind, global_kind) = if is_const {
+                        let kind = ValueKind::Const {
+                            ty: bound.clone(),
+                            doc: doc.clone(),
+                        };
+                        (kind, crate::GlobalKind::Const)
+                    } else {
+                        let kind = ValueKind::Let {
+                            ty: bound.clone(),
+                            doc: doc.clone(),
+                        };
+                        (kind, crate::GlobalKind::Let)
+                    };
+                    self.bind_top(&name, value_kind)?;
+                    let mangled = self.mangle_top_symbol(&name.name)?;
+                    if !is_const {
+                        self.typed_ast
+                            .rebindable_globals
+                            .insert(mangled.clone(), name.name.clone());
+                    }
+                    self.add_typed_global(crate::TypedGlobal {
+                        name: name.clone(),
+                        mangled_name: mangled.clone(),
+                        ty: bound.clone(),
+                        kind: global_kind,
+                        doc,
+                        span,
+                    })?;
+                    let assign_id = self
+                        .typed_ast
+                        .try_push_stmt(TypedStmt {
+                            kind: TypedStmtKind::AssignGlobal {
+                                ident: name,
+                                mangled,
+                                target_ty: bound,
+                                value: typed_value,
+                            },
+                            span,
+                        })
+                        .map_err(crate::typechecker::arena_failure)?;
+                    self.typed_ast.top_level_statements.push(assign_id);
+                }
                 _ => {
                     if let Some(typed_id) = self.infer_stmt(stmt_id)? {
                         self.typed_ast.top_level_statements.push(typed_id);

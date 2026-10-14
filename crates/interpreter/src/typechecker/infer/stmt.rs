@@ -292,15 +292,8 @@ impl Inferer<'_> {
                 ty,
                 doc,
             } => {
-                let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
-                let (typed_source, source_ty) = self.infer_expr(source, hint.as_ref())?;
-                let rest = self.object_rest(typed_source, &source_ty, &exclude, span)?;
-                let (typed_value, narrowed) = if let Some(rest) = rest {
-                    rest
-                } else {
-                    self.report_unshaped_rest_source(&source_ty, span);
-                    (typed_source, Type::Error)
-                };
+                let (typed_value, narrowed) =
+                    self.infer_object_rest_value(source, &exclude, ty.as_ref(), span)?;
                 self.scopes
                     .insert(name.name.clone(), narrowed.clone(), is_const, name.span);
                 Ok(if is_const {
@@ -334,6 +327,23 @@ impl Inferer<'_> {
                 })
                 .map_err(crate::typechecker::arena_failure)?,
         ))
+    }
+
+    /// The value `{ ...rest }` binds: `source` without the `exclude`d fields.
+    pub(super) fn infer_object_rest_value(
+        &mut self,
+        source: ExprId,
+        exclude: &[Ident],
+        annotation: Option<&crate::TypeAnnotation>,
+        span: Span,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        let hint = annotation.map(|a| self.resolve_type(a)).transpose()?;
+        let (typed_source, source_ty) = self.infer_expr(source, hint.as_ref())?;
+        if let Some(rest) = self.object_rest(typed_source, &source_ty, exclude, span)? {
+            return Ok(rest);
+        }
+        self.report_unshaped_rest_source(&source_ty, span);
+        Ok((typed_source, Type::Error))
     }
 
     fn report_unshaped_rest_source(&mut self, source_ty: &Type, span: Span) {
