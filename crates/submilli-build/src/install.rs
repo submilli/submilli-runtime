@@ -287,7 +287,7 @@ pub fn install_plan(
 }
 
 fn scope_of(name: &str) -> &str {
-    submilli_blueprint::validate_scoped_name(name)
+    submilli_policy::validate_scoped_name(name)
         .map(|(org, _)| org)
         .unwrap_or_default()
 }

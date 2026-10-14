@@ -1,0 +1,32 @@
+[package]
+name = "submilli-policy"
+description = "Submilli's capability policy: the filter language, permission rules, and the check that evaluates them"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["submilli", "policy", "permissions", "sandbox", "agents"]
+categories = ["config", "parser-implementations"]
+publish = true
+# Tests stay in the repository; the package is the library.
+exclude = ["tests/**", "**/snapshots/**"]
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+features = ["engine"]
+
+[features]
+# The `SecurityCheck` over a rule set, for embedders of `submilli-engine`.
+engine = ["dep:interpreter"]
+
+[dependencies]
+interpreter = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+serde_yml = { workspace = true }

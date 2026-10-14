@@ -9,4 +9,9 @@ supplies the host services through traits on the store: the policy
 (`SecurityCheck`), HTTP, secrets, model calls (`LlmProvider`), sub-agents
 (`AgentProvider`) and skills (`SkillProvider`), among others.
 
+For the policy, `submilli-policy` (with its `engine` feature) provides the
+`SecurityCheck` the Submilli CLI and server use: permission rules per caller,
+with filters on each capability's context. `submilli-build` builds packages and
+reads their artifacts back from a package store.
+
 Licensed under Apache-2.0.

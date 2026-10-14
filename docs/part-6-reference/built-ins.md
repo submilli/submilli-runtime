@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "fc9c94834d4d793ece4cd7f4a6547c3dd9608746e9e5890d776c6a705e9bedea"
+  contentHash: "af7c4908fa1873f1f3942ae80c3248724b775e7ec70ec03066ecf2dc241b8b8c"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -593,6 +593,14 @@ Constructor object for `TextEncoder`.
 | Member | Description |
 | --- | --- |
 | `new (): TextEncoder` | Construct a new `TextEncoder` instance. |
+
+## `TimeoutError`
+
+A wait outside the program ran out of time (`extends Error`): an application tool the harness did not answer within the blueprint's `tool_call_timeout`.
+
+| Member | Description |
+| --- | --- |
+| `constructor(message?: string)` |  |
 
 ## `TypeError`
 

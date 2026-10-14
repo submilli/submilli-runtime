@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "aba9073da8ebb052e48943085dcaca09a88857639570ad0dca8d2d26842325ec"
+  contentHash: "7ee0b33ed16815ffefaac70032cee8f28247d8cca9a12d1bcf4328bad3248440"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -48,7 +48,7 @@ submilli --version
 ```
 
 ```text
-submilli 0.4.0
+submilli 0.4.1
 ```
 
 ```
