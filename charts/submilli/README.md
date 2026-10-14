@@ -14,11 +14,11 @@ Install a published chart version from GHCR. The chart and its default runtime
 image can be pulled without a registry login or an image pull secret:
 
 ```bash
-helm install submilli oci://ghcr.io/submilli/charts/submilli --version 0.4.1 --wait
+helm install submilli oci://ghcr.io/submilli/charts/submilli --version 0.4.2 --wait
 helm test submilli
 ```
 
-Chart 0.4.1 deploys runtime 0.4.0. Pin the chart version to control upgrades.
+Chart 0.4.2 deploys runtime 0.4.1. Pin the chart version to control upgrades.
 See [Publishing](PUBLISHING.md) for the workflow and first-publication steps.
 
 If you installed an early development checkout that used a Deployment and one
@@ -419,6 +419,12 @@ files. The revisions and active selections commit in one SQLite transaction,
 then the whole blueprint directory moves to `server/archive/blueprints/` inside the state volume.
 Subsequent blueprint changes live only in SQLite. Back up the state
 volume while the server is stopped.
+
+Chart 0.4.2 selects runtime 0.4.1. Upgrading from chart 0.4.1 adds the
+sessions' application tools and the `Idempotency-Key` ledger to SQLite. Ledger
+entries from runtime 0.4.0 are not imported, so a request retried across the
+upgrade with the same key runs again rather than replaying. A rollback to
+runtime 0.4.0 requires restoring the pre-upgrade state backup.
 
 Chart 0.4.1 selects runtime 0.4.0. Upgrading from chart 0.4.0 imports session
 files into SQLite in one transaction, then moves the session directory to

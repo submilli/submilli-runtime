@@ -20,7 +20,7 @@ use super::capability_names::{
 };
 use super::declared_packages;
 use super::file::{blueprint_path, has_capability_rule, load, write};
-use submilli_build::blueprint_validation::{
+use submilli_shared::blueprint_validation::{
     reported_fields, unreported_field_problem, unreported_fields,
 };
 

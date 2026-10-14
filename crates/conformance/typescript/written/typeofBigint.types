@@ -1,0 +1,275 @@
+=== typeofBigint.ts ===
+// Written for Submilli: no upstream case compares `typeof x` with "bigint".
+
+function describe(x: bigint | number): string {
+>describe : (x: bigint | number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number | bigint
+>  : ^^^^^^^^^^^^^^^
+
+    if (typeof x === "bigint") {
+>typeof x === "bigint" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number | bigint
+>  : ^^^^^^^^^^^^^^^
+>"bigint" : "bigint"
+>         : ^^^^^^^^
+
+        let big = x;
+>big : bigint
+>    : ^^^^^^
+>x : bigint
+>  : ^^^^^^
+
+        return (big * 2n).toString();
+>(big * 2n).toString() : string
+>                      : ^^^^^^
+>(big * 2n).toString : (radix?: number) => string
+>                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(big * 2n) : bigint
+>           : ^^^^^^
+>big * 2n : bigint
+>         : ^^^^^^
+>big : bigint
+>    : ^^^^^^
+>2n : 2n
+>   : ^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    }
+    let rest = x;
+>rest : number
+>     : ^^^^^^
+>x : number
+>  : ^^^^^^
+
+    return rest.toFixed(1);
+>rest.toFixed(1) : string
+>                : ^^^^^^
+>rest.toFixed : (fractionDigits?: number) => string
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>rest : number
+>     : ^^^^^^
+>toFixed : (fractionDigits?: number) => string
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+}
+
+function wider(x: bigint | string | null): number {
+>wider : (x: bigint | string | null) => number
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | bigint | null
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+
+    if (typeof x !== "bigint") {
+>typeof x !== "bigint" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | bigint | null
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+>"bigint" : "bigint"
+>         : ^^^^^^^^
+
+        let notBig = x;
+>notBig : string | null
+>       : ^^^^^^^^^^^^^
+>x : string | null
+>  : ^^^^^^^^^^^^^
+
+        return notBig === null ? -1 : notBig.length;
+>notBig === null ? -1 : notBig.length : number
+>                                     : ^^^^^^
+>notBig === null : boolean
+>                : ^^^^^^^
+>notBig : string | null
+>       : ^^^^^^^^^^^^^
+>-1 : -1
+>   : ^^
+>1 : 1
+>  : ^
+>notBig.length : number
+>              : ^^^^^^
+>notBig : string
+>       : ^^^^^^
+>length : number
+>       : ^^^^^^
+
+    }
+    let big = x;
+>big : bigint
+>    : ^^^^^^
+>x : bigint
+>  : ^^^^^^
+
+    return Number(big + 1n);
+>Number(big + 1n) : number
+>                 : ^^^^^^
+>Number : NumberConstructor
+>       : ^^^^^^^^^^^^^^^^^
+>big + 1n : bigint
+>         : ^^^^^^
+>big : bigint
+>    : ^^^^^^
+>1n : 1n
+>   : ^^
+
+}
+
+function loose(x: bigint | boolean): boolean {
+>loose : (x: bigint | boolean) => boolean
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : bigint | boolean
+>  : ^^^^^^^^^^^^^^^^
+
+    if ("bigint" == typeof x) {
+>"bigint" == typeof x : boolean
+>                     : ^^^^^^^
+>"bigint" : "bigint"
+>         : ^^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : bigint | boolean
+>  : ^^^^^^^^^^^^^^^^
+
+        let big = x;
+>big : bigint
+>    : ^^^^^^
+>x : bigint
+>  : ^^^^^^
+
+        return big > 0n;
+>big > 0n : boolean
+>         : ^^^^^^^
+>big : bigint
+>    : ^^^^^^
+>0n : 0n
+>   : ^^
+
+    }
+    let flag = x;
+>flag : boolean
+>     : ^^^^^^^
+>x : boolean
+>  : ^^^^^^^
+
+    return flag;
+>flag : boolean
+>     : ^^^^^^^
+
+}
+
+function unknownValue(x: unknown): bigint {
+>unknownValue : (x: unknown) => bigint
+>             : ^^^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    if (typeof x === "bigint") {
+>typeof x === "bigint" : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>"bigint" : "bigint"
+>         : ^^^^^^^^
+
+        let big = x;
+>big : bigint
+>    : ^^^^^^
+>x : bigint
+>  : ^^^^^^
+
+        return big;
+>big : bigint
+>    : ^^^^^^
+
+    }
+    return 0n;
+>0n : 0n
+>   : ^^
+
+}
+
+let described = describe(10n) + describe(2);
+>described : string
+>          : ^^^^^^
+>describe(10n) + describe(2) : string
+>                            : ^^^^^^
+>describe(10n) : string
+>              : ^^^^^^
+>describe : (x: bigint | number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>10n : 10n
+>    : ^^^
+>describe(2) : string
+>            : ^^^^^^
+>describe : (x: bigint | number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>2 : 2
+>  : ^
+
+let measured = wider(4n) + wider("abc") + wider(null);
+>measured : number
+>         : ^^^^^^
+>wider(4n) + wider("abc") + wider(null) : number
+>                                       : ^^^^^^
+>wider(4n) + wider("abc") : number
+>                         : ^^^^^^
+>wider(4n) : number
+>          : ^^^^^^
+>wider : (x: bigint | string | null) => number
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>4n : 4n
+>   : ^^
+>wider("abc") : number
+>             : ^^^^^^
+>wider : (x: bigint | string | null) => number
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"abc" : "abc"
+>      : ^^^^^
+>wider(null) : number
+>            : ^^^^^^
+>wider : (x: bigint | string | null) => number
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let positive = loose(3n) && loose(true);
+>positive : boolean
+>         : ^^^^^^^
+>loose(3n) && loose(true) : boolean
+>                         : ^^^^^^^
+>loose(3n) : boolean
+>          : ^^^^^^^
+>loose : (x: bigint | boolean) => boolean
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>3n : 3n
+>   : ^^
+>loose(true) : boolean
+>            : ^^^^^^^
+>loose : (x: bigint | boolean) => boolean
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+
+let recovered = unknownValue(5n);
+>recovered : bigint
+>          : ^^^^^^
+>unknownValue(5n) : bigint
+>                 : ^^^^^^
+>unknownValue : (x: unknown) => bigint
+>             : ^^^^^^^^^^^^^^^^^^^^^^
+>5n : 5n
+>   : ^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -22,7 +22,9 @@ case-insensitive, are also accepted). Filters and baseline-update settings do no
 opt in. Harness unit tests and metadata checks remain available without the flag.
 
 The Nightly tests workflow runs these suites, compiler determinism, and expensive
-CLI fuel-accounting tests nightly at 02:00 UTC. The
+CLI fuel-accounting tests nightly at 02:00 UTC. PR CI also runs the TypeScript
+suite, so a pull request can't land a divergence from `tsc` that no triage line
+explains. The
 [release skill](../../.agents/skills/release/SKILL.md) runs both complete suites
 locally on the operator machine against the final candidate before publication,
 with inherited filters and baseline-update settings cleared. The release workflow

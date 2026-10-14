@@ -3,8 +3,8 @@ title: "Deploy with Compose"
 description: "How to run the server as a container beside your application with the published compose file: a port only the host's loopback and your application's container can reach, state on a volume, the store key as a file, HTTPS, and upgrades by release."
 slug: server/deploy-with-compose
 # The Compose ps output is from the earlier documented run; its image pin
-# was updated for 0.4.0. It could not be recaptured during release preparation
-# because the 0.4.0 image is published only with the release.
+# was updated for 0.4.1. It could not be recaptured during release preparation
+# because the 0.4.1 image is published only with the release.
 # Turn on HTTPS was not run under Docker (no engine was available); the
 # SUBMILLI_TLS_* variables and --health-check over HTTPS were run with the
 # release binaries on main 51ce450b.
@@ -13,7 +13,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "94929ceee26c04631fef72bc9523553172bf7a4db971666048e8cdb2e778f4a0"
+  contentHash: "bfc20fc2243366596e631deca83b638a9043c17d4c4440742736704cf07393bd"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -34,15 +34,15 @@ release, so download the file at the release's tag and pin the image to
 the same version in `.env`, beside the token. Into a new directory:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/v0.4.0/compose.yaml
-printf 'SUBMILLI_IMAGE=ghcr.io/submilli/submilli-runtime:0.4.0\nSUBMILLI_SERVER_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env
+curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/v0.4.1/compose.yaml
+printf 'SUBMILLI_IMAGE=ghcr.io/submilli/submilli-runtime:0.4.1\nSUBMILLI_SERVER_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env
 docker compose up -d
 docker compose ps
 ```
 
 ```text
 NAME                   IMAGE                                     COMMAND                  SERVICE    CREATED          STATUS                    PORTS
-myproject-submilli-1   ghcr.io/submilli/submilli-runtime:0.4.0   "/usr/local/bin/subm…"   submilli   12 seconds ago   Up 12 seconds (healthy)   127.0.0.1:8128->8128/tcp
+myproject-submilli-1   ghcr.io/submilli/submilli-runtime:0.4.1   "/usr/local/bin/subm…"   submilli   12 seconds ago   Up 12 seconds (healthy)   127.0.0.1:8128->8128/tcp
 ```
 
 Compose reads the token from `.env` and refuses to start without it. The

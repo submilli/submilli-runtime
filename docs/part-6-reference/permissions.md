@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "7ee15215c76d1bb4607e40e6f998771570310cc7b8ac5225f665d7ca81d99243"
+  contentHash: "a00994223aa3786dd1b8b6f915f06e5dca2ab6c871dfc664121ca6efb5896591"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -210,17 +210,17 @@ out, and a condition on a missing field is false.
 | `session.remove` | `key: string` | Delete a session key | `key glob "triage/*"` |
 | `session.list` | `prefix: string` | Enumerate session keys under a prefix | `prefix == "triage/"` |
 
-### `@mcp`
-
-| Capability | Fields | Operation | Example filter |
-| --- | --- | --- | --- |
-| `mcp.<server>` | `tool: string`, `transport: string` | Call tools on a declared outbound MCP server (streamable_http) (declare a server with `blueprint add-mcp` to concretize) | `tool == "create_issue"` |
-
 ### `@tools`
 
 | Capability | Fields | Operation | Example filter |
 | --- | --- | --- | --- |
 | `tools.call` | `tool: string` | Call an application tool the harness declared for the session (`@tools`). The harness answers each call, and may refuse it | `tool == "query_orders"` |
+
+### `@mcp`
+
+| Capability | Fields | Operation | Example filter |
+| --- | --- | --- | --- |
+| `mcp.<server>` | `tool: string`, `transport: string` | Call tools on a declared outbound MCP server (streamable_http) (declare a server with `blueprint add-mcp` to concretize) | `tool == "create_issue"` |
 
 <!-- /generated:capabilities -->
 

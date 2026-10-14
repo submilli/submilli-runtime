@@ -6,7 +6,7 @@ import registry from '../src/data/videos.json' with { type: 'json' };
 import { readChapters } from '../src/lib/agent-docs.ts';
 
 test('the independent series has stable embeds and book destinations', async () => {
-  assert.deepEqual(films.map((film) => film.id), ['code-execution-introduction', 'challenges', 'helps', 'using', 'works', 'packages', 'blueprints']);
+  assert.deepEqual(films.map((film) => film.id), ['code-execution-introduction', 'challenges', 'helps', 'packages', 'blueprints', 'using', 'works']);
   assert.deepEqual(films.map((film) => film.id), registry.films.filter((film) => film.status === 'published').map((film) => film.id));
   for (const film of films) {
     assert.equal(film.status, 'published');

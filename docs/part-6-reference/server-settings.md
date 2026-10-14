@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "19b37a3665a0b724981ad7400e7067a9723aed359790595a150f6d942be48e6a"
+  contentHash: "8365bf5f87f4fec384b0b1ab4805f22e40e32cf5182385be8de09c5353173b36"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -469,6 +469,8 @@ Options:
           Tokens a *single* execution's `submilli:llm` calls may spend. Bounds one run where `--max-llm-tokens` bounds the process, so one program cannot consume the whole server's budget. [default: 1000000] Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1M or 10_000
       --max-llm-concurrency <PROMPTS>
           Prompts one `llm.batch` dispatches at once. Bounded deliberately: unbounded fan-out manufactures the rate-limit errors it then cannot honor a `retry-after` against. [default: 4] Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`, which outranks the config file
+      --max-suspended-runs <RUNS>
+          Runs that may wait on the harness at once, server-wide: each suspended at an application tool call (`@tools`), holding its program in memory. [default: 256] Env: `$SUBMILLI_MAX_SUSPENDED_RUNS`, which outranks the config file
       --max-embedding-tokens <TOKENS>
           Tokens every live execution's `submilli:embedding` calls may spend *in total*. Separate from `--max-llm-tokens`: embedding and `llm.call` spend against different provider credentials and neither can starve the other. [default: 50000000] Env: `$SUBMILLI_MAX_EMBEDDING_TOKENS`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 50M or 10_000
       --max-execution-embedding-tokens <TOKENS>
