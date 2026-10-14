@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "006bcaf04f962711d529c418a2482381019bb08cc92e610b0ce3519878bbd2d1"
+  contentHash: "2d2f62b4e9378af6c74c37a2e60b6cf0abb4ab3ecb3be3bdb4669f5e23f582c6"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -160,7 +160,7 @@ lists the secrets to send to
 #### Idempotency
 
 With an `Idempotency-Key`, the server records the outcome of the run under
-the pair of session and key, on disk next to the session store. A later
+the pair of session and key, in the server's SQLite database. A later
 request with the same key and the same `code` replays the recorded status and
 body without running anything. The record lasts as long as the session.
 

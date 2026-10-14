@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "8365bf5f87f4fec384b0b1ab4805f22e40e32cf5182385be8de09c5353173b36"
+  contentHash: "f0332778ab80c7dc4a8a6f6929693e73f85bdd55a2ea9f30253dc54501849621"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -42,8 +42,8 @@ flat names listed. A dash means the form doesn't exist.
 | `mcp_oauth` | — | — | block | no providers | OAuth client registrations for MCP servers. See [`mcp_oauth`](#mcp_oauth). |
 | `github_token_file` | — | — | path | none | GitHub token for Package installs. See [`github_token_file`](#github_token_file). |
 | `database_path` | `--database-path` | `SUBMILLI_DATABASE_PATH` | path | `$SUBMILLI_HOME/server/db/submilli.db` | SQLite database file. |
-| `blueprint_dir` | `--blueprint-dir` | `SUBMILLI_BLUEPRINT_DIR` | path | `$SUBMILLI_HOME/server/blueprints` | Obsolete. |
-| `session_store_dir` | `--session-store-dir` | `SUBMILLI_SESSION_STORE_DIR` | path | `$SUBMILLI_HOME/server/sessions` | Session lifecycle records. |
+| `blueprint_dir` | `--blueprint-dir` | `SUBMILLI_BLUEPRINT_DIR` | path | `$SUBMILLI_HOME/server/blueprints` | Legacy import source. At startup, anything in it is imported into the database and the directory moves to `archive/blueprints/` beside its original location. Keep a custom path set until that has happened. |
+| `session_store_dir` | `--session-store-dir` | `SUBMILLI_SESSION_STORE_DIR` | path | `$SUBMILLI_HOME/server/sessions` | Legacy import source. At startup, anything in it is imported into the database and the directory moves to `archive/sessions/` beside its original location. Keep a custom path set until that has happened. |
 | `vfs_session_dir` | `--vfs-session-dir` | `SUBMILLI_VFS_SESSION_DIR` | path | `$SUBMILLI_HOME/server/vfs/sessions` | Files of `per_session` filesystems. |
 | `vfs_ephemeral_dir` | `--vfs-ephemeral-dir` | `SUBMILLI_VFS_EPHEMERAL_DIR` | path | the OS temp directory | Scratch directories of `ephemeral` filesystems. |
 | `package_store_dir` | `--package-store-dir` | `SUBMILLI_PACKAGE_STORE_DIR` | path | `$SUBMILLI_HOME/server/packages` | Installed Packages. |
@@ -191,8 +191,9 @@ mcp_allowed_hosts:
 
 | Setting | Holds | Default |
 | --- | --- | --- |
-| `blueprint_dir` | Obsolete. | `$SUBMILLI_HOME/server/blueprints` |
-| `session_store_dir` | Open sessions' lifecycle records, so sessions and idle timeouts survive a restart. | `$SUBMILLI_HOME/server/sessions` |
+| `database_path` | The SQLite database file: registered Blueprints, sessions, and `Idempotency-Key` outcomes. | `$SUBMILLI_HOME/server/db/submilli.db` |
+| `blueprint_dir` | Legacy import source. At startup, anything in it is imported into the database and the directory moves to `archive/blueprints/` beside its original location. Keep a custom path set until that has happened. | `$SUBMILLI_HOME/server/blueprints` |
+| `session_store_dir` | Legacy import source. At startup, anything in it is imported into the database and the directory moves to `archive/sessions/` beside its original location. Keep a custom path set until that has happened. | `$SUBMILLI_HOME/server/sessions` |
 | `vfs_session_dir` | The files of each session with a `per_session` filesystem. | `$SUBMILLI_HOME/server/vfs/sessions` |
 | `vfs_ephemeral_dir` | One directory per run of an `ephemeral` filesystem, deleted when the run ends. | The OS temp directory |
 | `package_store_dir` | Packages installed with `submilli server packages install`. | `$SUBMILLI_HOME/server/packages` |
@@ -426,7 +427,7 @@ Options:
       --blueprint-dir <BLUEPRINT_DIR>
           Source directory for the one-time blueprint import into SQLite. The directory moves to archive/blueprints/ beside its original location. [default: ~/.submilli/server/blueprints (override the base with $SUBMILLI_HOME)] Env: `$SUBMILLI_BLUEPRINT_DIR`
       --session-store-dir <SESSION_STORE_DIR>
-          Source directory for session JSON import into SQLite; also holds the file-backed idempotency ledger. Mount on durable storage. [default: ~/.submilli/server/sessions] Env: `$SUBMILLI_SESSION_STORE_DIR`
+          Source directory for the one-time session JSON import into SQLite. The directory moves to archive/sessions/ beside its original location. [default: ~/.submilli/server/sessions] Env: `$SUBMILLI_SESSION_STORE_DIR`
       --database-path <PATH>
           Server SQLite database file. The parent directory is created at boot. [default: ~/.submilli/server/db/submilli.db] Env: `$SUBMILLI_DATABASE_PATH`
       --vfs-session-dir <VFS_SESSION_DIR>

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "e1a7cf98f4a97f20e4f46afd3716000e8620350a7c18e6ba8c8dea3d1051ea2a"
+  contentHash: "ec32f373d69f2021e9414c913781ecbfb3cb5614473f9648bf30bacbfb961521"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -184,22 +184,20 @@ decide what has to be kept, and what losing each piece would cost you.
 
 | What | Setting | Default | If it's lost |
 | --- | --- | --- | --- |
-| Registered Blueprints | `blueprint_dir` | `$SUBMILLI_HOME/server/blueprints` | Every program is refused until you register them again. That's quick if they live in source control and a deploy job applies them ([Manage Blueprints in Git](/docs/tutorials/manage-blueprints-in-git)). |
-| Open sessions | `session_store_dir` | `$SUBMILLI_HOME/server/sessions` | Your users' sessions end, and reconnecting clients get `404 unknown session`. There's nothing to rebuild them from. |
+| Registered Blueprints and open sessions | `database_path` | `$SUBMILLI_HOME/server/db/submilli.db` | Every program is refused until you register the Blueprints again. That's quick if they live in source control and a deploy job applies them ([Manage Blueprints in Git](/docs/tutorials/manage-blueprints-in-git)). Your users' sessions end, and reconnecting clients get `404 unknown session`. There's nothing to rebuild them from. |
 | Sessions' files | `vfs_session_dir` | `$SUBMILLI_HOME/server/vfs/sessions` | Files the agent wrote in a session are gone. |
 | Secrets | `secret_store.dir` | `$SUBMILLI_HOME/server/secrets` | Blueprints that read `store:` secrets fail until every value is put back. Keep the key file safe too, because without it the store can't be read. |
 | Packages | `package_store_dir` | `$SUBMILLI_HOME/server/packages` | Imports fail until you reinstall. The same install commands bring them back. |
 | Managed volumes | `volume_dir` | `$SUBMILLI_HOME/server/volumes` | Whatever programs kept in [named volumes](/docs/server/mount-a-shared-volume), such as agent memory and shared notes. Like sessions' files, nothing can rebuild them. |
 | Per-run scratch space | `vfs_ephemeral_dir` | The OS temp directory, `/tmp` on Linux (not under `$SUBMILLI_HOME`) | Nothing. Each run gets its own directory, deleted when the run ends. |
 
-The first six belong on a persistent disk. The scratch space belongs on
+The first five belong on a persistent disk. The scratch space belongs on
 a volatile one, so it never fills the disk the state is on. The simplest
-setup keeps the six together, either by pointing `SUBMILLI_HOME` at the
-persistent disk or by naming each directory in the file:
+setup keeps the five together, either by pointing `SUBMILLI_HOME` at the
+persistent disk or by naming each path in the file:
 
 ```yaml title="server.yaml"
-blueprint_dir: /var/lib/submilli/blueprints
-session_store_dir: /var/lib/submilli/sessions
+database_path: /var/lib/submilli/db/submilli.db
 vfs_session_dir: /var/lib/submilli/vfs
 package_store_dir: /var/lib/submilli/packages
 volume_dir: /var/lib/submilli/volumes
@@ -216,9 +214,11 @@ submilli-server --config server.yaml
 ts=2026-10-03T17:05:26.518Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128 protocol=http
 ```
 
-Back up the sessions, the managed volumes, and the secrets, and keep the
-store's key somewhere separate from the store. Blueprints and Packages
-can be rebuilt from source.
+Back up the database's directory, the sessions' files, the managed
+volumes, and the secrets while the server is stopped, and keep the
+store's key somewhere separate from the store. The database's directory
+also holds SQLite's `-wal` file, which carries writes not yet copied into
+the database file. Packages can be rebuilt from source.
 
 The server keeps its state under `server/`, apart from the CLI's own
 `packages/`, `secrets/`, and `mcp_oauth.yaml`. It does read the CLI's

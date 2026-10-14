@@ -239,7 +239,7 @@ pub fn default_server_root() -> PathBuf {
     default_data_root().join("server")
 }
 
-/// Default directory the file-backed blueprint store persists to.
+/// Default source directory for the one-time blueprint import into SQLite.
 pub fn default_blueprint_dir() -> PathBuf {
     default_server_root().join("blueprints")
 }
@@ -255,8 +255,8 @@ pub fn default_session_storage_root() -> PathBuf {
     default_server_root().join("vfs/sessions")
 }
 
-/// Default directory the file-backed session store persists lifecycle metadata
-/// to — sibling to the VFS directories under the server root.
+/// Default source directory for the one-time session JSON import into SQLite —
+/// sibling to the VFS directories under the server root.
 pub fn default_session_store_dir() -> PathBuf {
     default_server_root().join("sessions")
 }
@@ -535,8 +535,8 @@ pub struct ServerDirectories {
     pub tls_key_file: Option<PathBuf>,
     pub tls_cert_file: Option<PathBuf>,
     pub session_storage_root: Option<PathBuf>,
-    /// The durable session store — lifecycle records plus the idempotency
-    /// ledger in a subdirectory of it. A different directory from
+    /// The durable session store — the source of the one-time session JSON
+    /// import into SQLite. A different directory from
     /// [`Self::session_storage_root`], with a different default.
     pub session_store_dir: Option<PathBuf>,
     pub database_path: Option<PathBuf>,
@@ -679,10 +679,10 @@ pub struct ManagedRootOverlap {
 }
 
 /// Which way containment is unsafe. The two directions fail for different
-/// reasons, and a directory can be guarded in both: the `per_session` VFS root
-/// leaks outward and loses data inward, while the package store and the durable
-/// session store have nested layouts, so a volume one level down still lands on
-/// server-owned files.
+/// reasons, and a directory can be guarded in both. The `per_session` VFS root
+/// leaks outward and loses data inward. The package stores nest artifacts, so a
+/// volume one level down still lands on server-owned files. The durable session
+/// store moves whole to an archive after an import, taking a nested volume with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     /// The volume is at or above the server-owned directory.
@@ -1125,9 +1125,9 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
             "durable session store",
             dirs.session_store_dir.clone(),
             Direction::VolumeContains,
-            "a guest read would reach every session's stored variables and the recorded response \
-             body of every idempotent execute, and a guest write could repoint a session at \
-             another blueprint — running it under that blueprint's permissions",
+            "a guest read would reach the stored variables of every session awaiting import, and \
+             a guest write could repoint one at another blueprint before startup imports it — \
+             running it under that blueprint's permissions",
         ),
         (
             "server database",
@@ -1139,8 +1139,8 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
             "durable session store",
             dirs.session_store_dir.clone(),
             Direction::VolumeInside,
-            "the idempotency ledger lives in a subdirectory of that root, so a guest write would \
-             forge the recorded outcome of a keyed execute",
+            "a startup that imports session files moves that root to archive/sessions beside its \
+             original location, carrying the volume's files away from its programs",
         ),
         (
             "per-session VFS root",

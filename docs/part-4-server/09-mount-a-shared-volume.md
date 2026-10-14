@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "05086b03dfa77e84521d4390ea813c1046e5016e3d0ea8a9cd0828a153966565"
+  contentHash: "75c38a6cde4f11ac5bfadee35302e05d688d294f2f5a2cf4c3d580c8e60385f7"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -283,6 +283,6 @@ removing a Blueprint leaves them, and removing the declaration from the
 config only stops Blueprints from naming the volume. Declare it again
 and its files are still there. To remove a managed volume for good,
 delete its directory under `volume_dir` while the server is stopped.
-Back up `volume_dir` with the sessions, as [Run the
+Back up `volume_dir` with the database, as [Run the
 server](/docs/server/run-the-server) says. As with a session's files,
 nothing can rebuild what programs kept there.
