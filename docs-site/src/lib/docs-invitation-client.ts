@@ -164,6 +164,9 @@ export function createDocsInvitationController({
 		if (current && current !== next) abortRequest();
 		if (!next) { stopTimer(); abortRequest(); current = undefined; disconnectOverlayObserver(); return; }
 		current = next;
+		// Starlight isolates the main pane below its sidebar. Mount the fixed
+		// invitation at the body so the sidebar cannot intercept its controls.
+		if (next.parentElement !== document.body) document.body?.append(next);
 		dismissed ||= readStoredFlag(localStorage, DISMISSAL_KEY);
 		if (dismissed) { stopTimer(); abortRequest(); disconnectOverlayObserver(); next.remove(); current = undefined; return; }
 		if (next.dataset.initialized === 'true') { if (elapsed >= VISIBLE_DELAY_MS) revealOrWatch(); else schedule(); return; }

@@ -27,7 +27,7 @@ function fixture({ storage = new Map(), session = new Map(), response = { ok: tr
     visibilityState: 'visible',
     baseURI,
     scrollingElement: { scrollTop: 0 },
-    body: {},
+    body: { append(node) { node.parentElement = this; } },
     querySelector(selector) { return selector === '[data-docs-invitation]' ? (invitation ? root : undefined) : (overlay ? {} : undefined); },
     getElementById() { return undefined; },
     addEventListener(name, fn) { listeners[name] = fn; },
@@ -67,6 +67,12 @@ test('shows after ten seconds of engaged visible browsing without taking focus',
   f.advance(10_000); f.timeout.fn();
   assert.equal(f.root.hidden, false);
   assert.equal(f.fields.input.reported, undefined);
+});
+
+test('mounts the fixed invitation outside the isolated docs pane', () => {
+  const f = fixture();
+  f.controller.bind();
+  assert.equal(f.root.parentElement, f.document.body);
 });
 
 test('landing and elapsed time alone never show the invitation', () => {
