@@ -699,6 +699,16 @@ enum IndexedSlot {
     Hash = 3,
 }
 
+impl IndexedSlot {
+    /// How many objects the slot's function takes: `equals` compares two.
+    fn operands(self) -> u32 {
+        match self {
+            IndexedSlot::Equals => 2,
+            IndexedSlot::ToString | IndexedSlot::Hash => 1,
+        }
+    }
+}
+
 /// The index records whether insertion changed the shape. Such values use the
 /// same dynamic `toString`/equality/hash hooks as objects created by
 /// JSON.parse: an inserted `toString` entry is one the shape can't see.
@@ -708,11 +718,7 @@ fn emit_indexed_object_dispatch(
     vtable_global: u32,
     slot: IndexedSlot,
 ) {
-    let operands = if matches!(slot, IndexedSlot::Equals) {
-        2
-    } else {
-        1
-    };
+    let operands = slot.operands();
     for operand in 0..operands {
         body.instruction(&Instruction::LocalGet(operand));
         body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
