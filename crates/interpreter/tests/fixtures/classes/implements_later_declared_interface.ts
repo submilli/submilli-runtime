@@ -1,8 +1,10 @@
 // `implements` conformance is checked once every class signature is bound, so a
-// member the class inherits satisfies the interface regardless of where the
-// parent is declared — this program compiles even though `Base` comes last.
-interface Named {
-  name(): string;
+// member the class inherits satisfies the interface wherever the interface is
+// declared. (A parent class must come first: `extends` reads it at run time.)
+class Base {
+  name(): string {
+    return "base";
+  }
 }
 
 class Sub extends Base implements Named {
@@ -11,10 +13,8 @@ class Sub extends Base implements Named {
   }
 }
 
-class Base {
-  name(): string {
-    return "base";
-  }
+interface Named {
+  name(): string;
 }
 
 function main(): void {

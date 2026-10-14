@@ -927,6 +927,10 @@ pub struct TypedAst {
     /// whatever their value.
     pub spread_omitted_fields:
         std::collections::BTreeMap<ExprId, std::collections::BTreeSet<String>>,
+    /// Static member reads and calls named through a subclass that inherits
+    /// the member, with that subclass: `Sub.hello()` calls `Base`'s method but
+    /// still uses `Sub`, which may not be initialized yet.
+    pub inherited_static_receivers: std::collections::BTreeMap<ExprId, MangledName>,
     /// The discriminants of the `switch`es without a `default` whose cases the
     /// typechecker found match every value the discriminant can hold.
     pub exhaustive_switches: std::collections::BTreeSet<ExprId>,

@@ -16,7 +16,7 @@ impl<'a> Inferer<'a> {
         // Assignments to module `let`s narrow them for later top-level
         // statements. Function bodies are inferred after this frame is gone.
         self.push_narrow_frame(super::narrowing::NarrowEnv::new());
-        for stmt_id in top_level {
+        for &stmt_id in &top_level {
             self.keep_only_global_narrowings();
             let stmt = self
                 .ast
@@ -34,7 +34,13 @@ impl<'a> Inferer<'a> {
                 // Static fields are module globals: their initializers
                 // evaluate here, in source order interleaved with `let`/`const` —
                 // the TS module-initialization order.
-                StmtKind::ClassDecl { name, members, .. } => {
+                StmtKind::ClassDecl {
+                    name,
+                    members,
+                    extends,
+                    ..
+                } => {
+                    self.reject_parent_declared_later(&name.name, extends.as_ref(), &top_level)?;
                     self.record_class_declaration_point(&name.name);
                     self.infer_static_field_globals(&name, &members)?;
                 }
@@ -232,6 +238,65 @@ impl<'a> Inferer<'a> {
             .filter(|(name, _)| self.function_written_globals.contains(*name))
             .map(|(_, entry)| entry.mangled_name.clone())
             .collect()
+    }
+
+    /// `class Sub extends Later` where `Later` is declared further down this
+    /// module: the `extends` clause reads `Later` before its declaration has
+    /// run, which throws in JavaScript, and tsc rejects it (TS2449).
+    fn reject_parent_declared_later(
+        &mut self,
+        class_name: &str,
+        extends: Option<&crate::TypeAnnotation>,
+        top_level: &[crate::StmtId],
+    ) -> Result<(), CompilerFailure> {
+        let Some(annotation) = extends else {
+            return Ok(());
+        };
+        let parent = match self.types.lookup(class_name).map(|sym| &sym.kind) {
+            Some(crate::TypeKind::Class {
+                extends: Some(extends),
+                ..
+            }) => extends.parent.clone(),
+            _ => return Ok(()),
+        };
+        if self
+            .typed_ast
+            .class_declaration_points
+            .contains_key(&parent)
+        {
+            return Ok(());
+        }
+        let Some(parent_name) = self.later_class_declaration(&parent, top_level)? else {
+            return Ok(());
+        };
+        self.error(
+            annotation.span,
+            format!("class `{parent_name}` used before its declaration"),
+        );
+        Ok(())
+    }
+
+    /// The name of the class `mangled` when one of the module's `top_level`
+    /// statements declares it.
+    fn later_class_declaration(
+        &self,
+        mangled: &crate::MangledName,
+        top_level: &[crate::StmtId],
+    ) -> Result<Option<String>, CompilerFailure> {
+        for &stmt_id in top_level {
+            let stmt = self.ast.try_stmt(stmt_id).map_err(super::arena_failure)?;
+            let StmtKind::ClassDecl { name, .. } = &stmt.kind else {
+                continue;
+            };
+            let declares = self
+                .types
+                .lookup(&name.name)
+                .is_some_and(|sym| &sym.mangled_name == mangled);
+            if declares {
+                return Ok(Some(name.name.clone()));
+            }
+        }
+        Ok(None)
     }
 
     fn record_class_declaration_point(&mut self, class_name: &str) {

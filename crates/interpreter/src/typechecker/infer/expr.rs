@@ -782,6 +782,7 @@ impl Inferer<'_> {
                 Ok((TypedExprKind::Null, Type::Error))
             }
         })?;
+        let static_receiver = self.pending_static_receiver.take();
         // an expression's type must be free of bare recursion
         // back-edges — codegen lowers `AliasRef` to the universal
         // `$Object`, but the equivalent inline alias-to-object peels to
@@ -842,6 +843,11 @@ impl Inferer<'_> {
                 ty: ty.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
+        if let Some(receiver) = static_receiver {
+            self.typed_ast
+                .inherited_static_receivers
+                .insert(id, receiver);
+        }
         self.record_narrowed_read_freshness(id)?;
         self.record_runtime_type_test(&ty)
             .map_err(|failure| failure.with_span(span))?;
@@ -2274,15 +2280,17 @@ impl Inferer<'_> {
                 matches!(sym.kind, crate::TypeKind::Class { .. }).then(|| sym.mangled_name.clone())
             });
             if let Some(class_mangled) = class_target {
-                return self.infer_class_static_call(
+                let call = self.infer_class_static_call(
                     recv_ident.name.clone(),
-                    class_mangled,
+                    class_mangled.clone(),
                     name.clone(),
                     type_args,
                     args,
                     expected,
                     span,
                 );
+                self.note_inherited_static_receiver(&class_mangled, &name.name);
+                return call;
             }
         }
 
@@ -4034,6 +4042,17 @@ impl Inferer<'_> {
                 }
             },
         )
+    }
+
+    /// Has the expression being inferred record `class` as the class it names
+    /// when `class` inherits its static `member` rather than declaring it.
+    fn note_inherited_static_receiver(&mut self, class: &crate::MangledName, member: &str) {
+        let inherits = self
+            .class_static_in_chain(class, member)
+            .is_some_and(|(_, owner)| owner != *class);
+        if inherits {
+            self.pending_static_receiver = Some(class.clone());
+        }
     }
 
     /// `ClassName.member` in non-call position: a static field reads the backing
@@ -7695,12 +7714,15 @@ impl Inferer<'_> {
                         // `ClassName.member` read: static field → backing global,
                         // static method → function value. A value binding of the
                         // same name shadows the class (checked above).
-                        return Ok(self.infer_class_static_access(
+                        let member = name.name.clone();
+                        let access = self.infer_class_static_access(
                             recv_name,
-                            enum_mangled,
+                            enum_mangled.clone(),
                             name,
                             span,
-                        ));
+                        );
+                        self.note_inherited_static_receiver(&enum_mangled, &member);
+                        return Ok(access);
                     }
                     _ => {
                         // Identifier resolves to a non-enum type —

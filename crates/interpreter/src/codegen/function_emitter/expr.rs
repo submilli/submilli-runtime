@@ -36,6 +36,10 @@ pub fn emit_expr(
     ctx: &CodegenCtx,
     id: ExprId,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    // `Sub.hello()` reads `Sub` before it reaches `Base`'s static method.
+    if let Some(class) = ctx.ta.inherited_static_receivers.get(&id) {
+        crate::codegen::init_guard::emit_check(emitter, ctx, class);
+    }
     emit_expr_value(emitter, ctx, id)?;
     // Preserve concrete field validators while the expression still carries
     // its class arguments, before a surrounding cast or slot erases them.
