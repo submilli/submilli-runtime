@@ -1,6 +1,6 @@
 // The session summary: what was fetched, what went back to the agent, and the counts.
 import { end, plural, size } from "./format";
-import { endedRuns, type Frame } from "./steps";
+import { byAgent, endedRuns, type Frame } from "./steps";
 
 export interface Summary {
   fetched: string;
@@ -55,9 +55,12 @@ export function summary(f: Frame): Summary {
   }
   const runs = endedRuns(f);
   const words = runs.map((r) => end(r.outcome));
-  const returned = runs.reduce((sum, r) => sum + (end(r.outcome) === "completed" ? f.session.returned[r.run] || 0 : 0), 0);
-  const refused = words.filter((w) => w === "denied").length;
-  const failed = words.filter((w) => w === "failed" || w === "rejected").length;
+  // Only what went back to the agent: your coding assistant's runs answered you.
+  const returned = runs.reduce((sum, r) => sum + (byAgent(f, r.run) && end(r.outcome) === "completed" ? f.session.returned[r.run] || 0 : 0), 0);
+  // Only the agent's runs: the note says what the agent got instead of a result.
+  const agentWords = runs.filter((r) => byAgent(f, r.run)).map((r) => end(r.outcome));
+  const refused = agentWords.filter((w) => w === "denied").length;
+  const failed = agentWords.filter((w) => w === "failed" || w === "rejected").length;
   const checks = runs.flatMap((r) => r.decisions);
   const denied = checks.filter((d) => d.outcome === "deny").length;
   const follows = f.stepping ? [] : runs.flatMap((r) => followUps(f, r.run));
@@ -68,7 +71,7 @@ export function summary(f: Frame): Summary {
   const notCounted = [refused ? plural(refused, "refused run", "refused runs") : "", failed ? plural(failed, "failed run", "failed runs") : ""]
     .filter(Boolean)
     .join(" and ");
-  if (notCounted) dataNote += " Not counted: " + notCounted + ", where the agent got the error message instead.";
+  if (notCounted) dataNote += " Returned to agent leaves out " + notCounted + ": the agent got the error message instead.";
 
   return {
     fetched: size(fetched),

@@ -54,3 +54,11 @@ test("a read that isn't found carries the route's code and message", async () =>
   expect(error).toBeInstanceOf(ReadError);
   expect(error).toMatchObject({ status: 404, code: "unknown_module" });
 });
+
+test("a test that ran and ended denied is a result, though it exits non-zero as the CLI does", async () => {
+  const { server, client } = signedIn();
+  const show = { run: 9, outcome: { kind: "denied" }, reruns: [] };
+  server.handle = (call) => (call.url === "/api/test" ? Response.json({ exit: 1, result: show, text: "run 9 · test …" }) : undefined);
+  const answer = await client.act("/api/test", { run: 2 });
+  expect(answer).toEqual({ ok: true, result: show, text: "run 9 · test …" });
+});

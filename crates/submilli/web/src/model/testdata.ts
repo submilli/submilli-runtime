@@ -89,7 +89,13 @@ export function plainSession(): PageData {
       run_count: 1,
       runs: [10],
       denied: false,
+      cancelled: 0,
+      rejected: 0,
+      failed: 0,
       open: false,
+      follow_ups: 0,
+      asks: 1,
+      untrusted: { task: "What is my total?" },
     },
   ];
   return data;

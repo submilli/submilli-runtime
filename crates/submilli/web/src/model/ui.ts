@@ -42,6 +42,10 @@ export interface UiState {
   /** Whether a run's checks list is open, by run; unset means open when a check was denied. */
   checksOpen: Record<number, boolean>;
   filter: Filter;
+  /** The check a link asked for inside the repeated check `sel` lists it under; it applies while `sel` is that row. */
+  asked: { sel: string; ref: string } | null;
+  /** Runs whose result or error the reader asked to see whole, by run. */
+  whole: Record<number, boolean>;
   /** A run whose program the reader picked to show. */
   program: number | null;
   dlg: Dialog;
@@ -63,6 +67,8 @@ export const INITIAL_UI: UiState = {
   followOpen: {},
   checksOpen: {},
   filter: "all",
+  asked: null,
+  whole: {},
   program: null,
   dlg: null,
   more: false,

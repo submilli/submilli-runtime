@@ -10,7 +10,7 @@ describe("the session summary", () => {
       fetched: "43.1 kB",
       returned: "167 B",
       dataNote:
-        "Fetched data stayed in code; the agent got only each finished run’s result. Not counted: 1 refused run and 1 failed run, where the agent got the error message instead.",
+        "Fetched data stayed in code; the agent got only each finished run’s result. Returned to agent leaves out 1 refused run and 1 failed run: the agent got the error message instead.",
       execHead: "4 runs",
       execSub: "2 completed · 1 denied · 1 rejected",
       checksHead: "4 allowed",
@@ -43,7 +43,7 @@ describe("the session summary", () => {
     const s = summary(frame(data, INITIAL_UI));
     expect(s.fetched).toBe("0 B");
     expect(s.dataNote).toBe(
-      "The call was denied before any data was fetched; the agent got the denial. Not counted: 1 refused run, where the agent got the error message instead.",
+      "The call was denied before any data was fetched; the agent got the denial. Returned to agent leaves out 1 refused run: the agent got the error message instead.",
     );
   });
 

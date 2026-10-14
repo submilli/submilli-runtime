@@ -4,7 +4,7 @@ import type { ReactNode, RefObject, UIEventHandler } from "react";
 
 import type { Action, AgainOption, DecisionRow, FollowRow, LogPane as Pane, RuleSpot, RunRow } from "../model/log";
 import { FILTERS, type Filter } from "../model/ui";
-import { Arrow, cls, Gated, press } from "./controls";
+import { Arrow, CancelButton, cls, Gated, press } from "./controls";
 
 /** What the log asks of the page. */
 export interface LogActions {
@@ -20,6 +20,46 @@ export interface LogActions {
   openTried: (run: number) => void;
   inspect: (spot: RuleSpot) => void;
   cancel: (run: number) => void;
+  /** Reads a cut result or error whole. */
+  showAll: (run: number) => void;
+  /** Cuts a result or error shown whole back to its first part. */
+  showLess: (run: number) => void;
+}
+
+/**
+ * An error's words wrap; the source lines it quotes, and the carets under them, keep
+ * their columns, so a caret stays under its token.
+ */
+function ErrorText({ text }: { text: string }) {
+  return (
+    <pre className="pg-error">
+      {text.split("\n").map((line, i, all) => (
+        <span key={i} className={SOURCE_LINE.test(line) ? "pg-src" : undefined}>
+          {line}
+          {i < all.length - 1 ? "\n" : ""}
+        </span>
+      ))}
+    </pre>
+  );
+}
+const SOURCE_LINE = /^\s*\d*\s*\|/;
+
+/** A meta line, its sizes kept with their units when it wraps: "385 B", "21.5 kB". */
+function keepUnits(text: string): string {
+  return text.replace(/(\d) (k?B)\b/g, "$1\u00a0$2");
+}
+
+// One button that changes its words, so focus stays on it between Show all and Show less.
+function Cut(props: { cut: string; less: boolean; run: number; a: LogActions }) {
+  if (!props.cut && !props.less) return null;
+  return (
+    <p className="pg-muted pg-small">
+      {props.less ? null : keepUnits(props.cut) + " "}
+      <button className="pg-link pg-inline" onClick={() => (props.less ? props.a.showLess(props.run) : props.a.showAll(props.run))}>
+        {props.less ? "Show less" : "Show all"}
+      </button>
+    </p>
+  );
 }
 
 function Again(props: { options: AgainOption[]; a: LogActions }) {
@@ -45,10 +85,10 @@ function Again(props: { options: AgainOption[]; a: LogActions }) {
   );
 }
 
-function Head(props: { open: boolean; onToggle: () => void; children: ReactNode; status: string; tone: string }) {
+function Head(props: { open: boolean; onToggle: () => void; children: ReactNode; status: string; tone: string; label?: string }) {
   const toggle = press(props.onToggle);
   return (
-    <div className="pg-event-head" role="button" tabIndex={0} aria-expanded={props.open} onClick={toggle} onKeyDown={toggle}>
+    <div className="pg-event-head" role="button" tabIndex={0} aria-expanded={props.open} aria-label={props.label} onClick={toggle} onKeyDown={toggle}>
       <span className="pg-event-main">{props.children}</span>
       <span className={"pg-status " + props.tone}>{props.status}</span>
     </div>
@@ -64,7 +104,7 @@ function Check({ d, run, a }: { d: DecisionRow; run: number; a: LogActions }) {
           Check <span className="pg-refnum">{d.ref}</span>
           {d.title}
         </span>
-        {d.open && <span className="pg-event-meta">{d.meta}</span>}
+        {d.open && <span className="pg-event-meta">{keepUnits(d.meta)}</span>}
       </Head>
       {d.open && (
         <div className="pg-event-detail">
@@ -127,13 +167,13 @@ function Check({ d, run, a }: { d: DecisionRow; run: number; a: LogActions }) {
 function FollowUp({ f, a }: { f: FollowRow; a: LogActions }) {
   return (
     <div className={cls("pg-event nested", f.selected && "selected")} id={"pgrow-" + f.id}>
-      <Head open={f.open} onToggle={() => a.toggle(f.id)} status={f.status} tone={f.tone}>
+      <Head open={f.open} onToggle={() => a.toggle(f.id)} status={f.status} tone={f.tone} label={"Run " + f.num + f.title + ": " + f.status}>
         <span className="pg-event-title">
           <Arrow />
           <span className="pg-refnum">{f.num}</span>
           {f.title}
         </span>
-        <span className="pg-event-meta">{f.meta}</span>
+        <span className="pg-event-meta">{keepUnits(f.meta)}</span>
       </Head>
       {f.open && (
         <div className="pg-event-detail">
@@ -183,8 +223,9 @@ function FollowUp({ f, a }: { f: FollowRow; a: LogActions }) {
               <span>Went live</span> <code>{f.wentLive}</code>
             </div>
           )}
-          {f.error && <pre className="pg-error">{f.error}</pre>}
+          {f.error && <ErrorText text={f.error} />}
           {f.result && <pre className="pg-payload">{f.result}</pre>}
+          <Cut cut={f.cut} less={f.less} run={f.n} a={a} />
           {f.again.length > 0 && (
             <div className="pg-again">
               <h3>{f.againHead}</h3>
@@ -217,14 +258,15 @@ function Run({ r, a }: { r: RunRow; a: LogActions }) {
           <Arrow />
           {r.title}
         </span>
-        {r.open && <span className="pg-event-meta">{r.meta}</span>}
+        {r.open && <span className="pg-event-meta">{keepUnits(r.meta)}</span>}
         {!r.open && r.closedSum && <span className="pg-event-meta">{r.closedSum}</span>}
       </Head>
       {r.preview && <div className="pg-error-preview">{r.preview}</div>}
       {r.open && (
         <div className="pg-event-detail">
-          {r.error && <pre className="pg-error">{r.error}</pre>}
+          {r.error && <ErrorText text={r.error} />}
           {r.result && <pre className="pg-payload">{r.result}</pre>}
+          <Cut cut={r.cut} less={r.less} run={r.n} a={a} />
           <div className="pg-actions">
             <button className="pg-link" title={r.refTitle} onClick={() => a.copy(r.copyText, "reference")}>
               Copy for assistant
@@ -232,9 +274,9 @@ function Run({ r, a }: { r: RunRow; a: LogActions }) {
           </div>
           {r.again.length > 0 && (
             <div className="pg-again">
-              <h3>Try this program again</h3>
+              <h3>{r.thing === "call" ? "If this call should be allowed" : "Try this program again"}</h3>
               <Again options={r.again} a={a} />
-              <p className="pg-group-note pg-again-foot">Either shows up under this run, in Reruns by you.</p>
+              {r.thing === "program" && <p className="pg-group-note pg-again-foot">Either shows up under this run, in Reruns by you.</p>}
             </div>
           )}
           {r.againNote && <p className="pg-group-note pg-again-note">{r.againNote}</p>}
@@ -249,7 +291,7 @@ function Run({ r, a }: { r: RunRow; a: LogActions }) {
           </div>
           {r.checksOpen && (
             <>
-              <p className="pg-group-note">What the blueprint decided each time this program asked to do something.</p>
+              <p className="pg-group-note">What the blueprint decided each time this {r.thing} asked to do something.</p>
               {r.decisions.map((d) => (
                 <Check d={d} run={r.n} a={a} key={d.id} />
               ))}
@@ -267,7 +309,7 @@ function Run({ r, a }: { r: RunRow; a: LogActions }) {
           {r.followOpen && (
             <>
               <p className="pg-group-note">
-                Runs of this program that you or your coding assistant started later, each in a throwaway session. The agent never saw them.
+                Runs of this {r.thing} that you or your coding assistant started later, each in a throwaway session. The agent never saw them.
               </p>
               {r.follow.map((f) => (
                 <FollowUp f={f} a={a} key={f.id} />
@@ -287,6 +329,7 @@ export function LogPane(props: {
   gaps: string[];
   /** The run in the running note, when it is still in flight and can be cancelled. */
   cancelRun: number | null;
+  cancelling: boolean;
   scrollRef: RefObject<HTMLDivElement>;
   onScroll: UIEventHandler;
   onFilter: (filter: Filter) => void;
@@ -319,22 +362,21 @@ export function LogPane(props: {
             {g}
           </p>
         ))}
+        {log.rows.map((r) => (
+          <Run r={r} a={a} key={r.id} />
+        ))}
+        {/* After the runs that ended, where a reader following the log is. */}
         {log.runningNote && (
           <div className="pg-empty pg-running">
             {log.runningNote}
             {props.cancelRun !== null && (
               <>
                 {" "}
-                <button className="pg-btn pg-caution" onClick={() => props.cancelRun !== null && a.cancel(props.cancelRun)}>
-                  Cancel run {props.cancelRun}
-                </button>
+                <CancelButton run={props.cancelRun} cancelling={props.cancelling} onCancel={a.cancel} />
               </>
             )}
           </div>
         )}
-        {log.rows.map((r) => (
-          <Run r={r} a={a} key={r.id} />
-        ))}
         {log.empty !== null && <div className="pg-empty">{log.empty}</div>}
       </div>
     </section>

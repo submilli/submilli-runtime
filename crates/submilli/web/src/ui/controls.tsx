@@ -31,6 +31,8 @@ export function Gated(props: {
   className?: string;
   title?: string;
   type?: "button" | "submit";
+  /** For a button that is one of a set of choices. */
+  pressed?: boolean;
   onClick?: () => void;
   children: ReactNode;
 }) {
@@ -43,6 +45,7 @@ export function Gated(props: {
         type={props.type ?? "button"}
         className={props.className}
         title={blocked ?? props.title}
+        aria-pressed={props.pressed}
         aria-disabled={blocked ? true : undefined}
         aria-describedby={blocked ? id : undefined}
         onClick={(ev) => {
@@ -61,6 +64,31 @@ export function Gated(props: {
         </span>
       )}
     </>
+  );
+}
+
+/**
+ * Text that names commands between backticks, as the playground's own messages do:
+ * each command shows as code rather than with its backticks.
+ */
+export function Inline({ text }: { text: string }) {
+  const parts = text.split("`");
+  // An odd backtick out leaves the text as it is.
+  if (parts.length % 2 === 0) return <>{text}</>;
+  return <>{parts.map((p, i) => (i % 2 ? <code key={i}>{p}</code> : p))}</>;
+}
+
+/** Cancel for a running run; once pressed it waits for the playground to confirm. */
+export function CancelButton(props: { run: number; cancelling: boolean; onCancel: (run: number) => void }) {
+  return (
+    <button
+      className="pg-btn pg-caution"
+      title={"Stops run " + props.run + ". It ends as cancelled once its calls drain."}
+      aria-disabled={props.cancelling || undefined}
+      onClick={() => !props.cancelling && props.onCancel(props.run)}
+    >
+      {props.cancelling ? "Cancelling run " + props.run + "…" : "Cancel run " + props.run}
+    </button>
   );
 }
 

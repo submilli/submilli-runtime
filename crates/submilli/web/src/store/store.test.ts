@@ -11,15 +11,17 @@ afterEach(() => {
   store?.dispose();
   store = null;
   localStorage.clear();
+  sessionStorage.clear();
   history.replaceState(null, "", "/");
 });
 
-function start(server: FakeServer, hash: string, frame?: (cb: () => void) => void) {
+function start(server: FakeServer, hash: string, frame?: (cb: () => void) => void, livePollMs = 0) {
   history.replaceState(null, "", "/" + hash);
   store = createStore({
     fetch: server.fetch,
     frame: frame ?? ((cb) => setTimeout(cb, 0)),
     pollMs: 5,
+    livePollMs,
     retryDelay: () => 0,
   });
   const started = store.start();
@@ -124,18 +126,23 @@ test("with no sessions at all, the store says so and opens no feed", async () =>
   expect(server.requests().some((r) => r.includes("/events"))).toBe(false);
 });
 
-test("events are appended once per frame, by session_seq", async () => {
+test("a session's events show with its record, then once per frame, by session_seq", async () => {
   const server = new FakeServer();
   signedIn(server);
   const frames: (() => void)[] = [];
   const { store, started } = start(server, "", (cb) => frames.push(cb));
   await started;
-  await expect.poll(() => frames.length).toBe(1);
-  // The feed has sent everything, but nothing is shown until the frame.
-  await new Promise((r) => setTimeout(r, 20));
-  expect(frames).toHaveLength(1);
-  expect(store.getSnapshot().data.events).toHaveLength(0);
-  frames.shift()?.();
+  // What arrived before the session was ready shows with it, not a frame later.
+  await expect.poll(() => store.getSnapshot().sessionLoading).toBe(false);
+  const shownWithRecord = store.getSnapshot().data.events.length;
+  expect(shownWithRecord).toBeGreaterThan(0);
+  // The rest waits for a frame each time.
+  await expect
+    .poll(() => {
+      for (const run of frames.splice(0)) run();
+      return store.getSnapshot().data.events.length;
+    })
+    .toBe(43);
   const seqs = store.getSnapshot().data.events.map((e) => e.session_seq);
   expect(seqs).toEqual(Array.from({ length: 43 }, (_, i) => i + 1));
 });
@@ -229,7 +236,7 @@ test("a page-started chat is followed before its request returns, with no notice
       model: "anthropic:claude-sonnet-5-5",
       variables: { customerId: "cus_northwind" },
     });
-    expect(store.getSnapshot().pendingChat).toEqual({ message: "Hello", newSession: true });
+    expect(store.getSnapshot().pendingChat).toEqual({ message: "Hello", session: null });
     await expect.poll(() => store.getSnapshot().data.sessionId).toBe(SESSION(8));
     expect(added).toContain("beforeunload");
     const agent = server.calls.find((c) => c.url === "/api/agent");
@@ -243,8 +250,9 @@ test("a page-started chat is followed before its request returns, with no notice
 
     // The answer names the session the page already found.
     answer(new Response(fixture("agent-new.json").replaceAll(SESSION(4), SESSION(8))));
-    const outcome = await sent;
+    const { outcome, session } = await sent;
     expect(outcome.ok).toBe(true);
+    expect(session).toBe(SESSION(8));
     const snap = store.getSnapshot();
     expect(snap.pendingChat).toBeNull();
     expect(removed).toContain("beforeunload");
@@ -263,8 +271,9 @@ test("a reply goes to the shown session", async () => {
   signedIn(server);
   const { store, started } = start(server, "");
   await started;
-  const outcome = await store.chat("And the largest?");
+  const { outcome, session } = await store.chat("And the largest?");
   expect(outcome.ok).toBe(true);
+  expect(session).toBe(SESSION(4));
   expect(server.calls.find((c) => c.url === "/api/agent")?.body).toEqual({
     task: "And the largest?",
     session: SESSION(4),
@@ -377,4 +386,97 @@ test("no request URL ever carries the token", async () => {
   await store.chat("again");
   expect(server.calls.length).toBeGreaterThan(10);
   for (const call of server.calls) expect(call.url).not.toContain(server.token);
+});
+
+// ---- what changed elsewhere, and links
+
+const listed = (server: FakeServer) => server.sessions as SessionList;
+
+test("a test of a shown run made elsewhere is read under it within a poll", async () => {
+  const server = new FakeServer();
+  signedIn(server);
+  const { started } = start(server, "", undefined, 10);
+  await started;
+  const reads = () => server.requests().filter((r) => r === "GET /api/runs/1?program=true").length;
+  const before = reads();
+  const shown = listed(server).sessions.find((s) => s.session === SESSION(4))!;
+  shown.follow_ups += 1;
+  await expect.poll(reads).toBeGreaterThan(before);
+});
+
+test("a session started elsewhere is noticed while a quiet session is shown", async () => {
+  const server = new FakeServer();
+  signedIn(server);
+  const { store, started } = start(server, "", undefined, 10);
+  await started;
+  server.sessions = sessionsWith(chatSession(8));
+  await expect.poll(() => store.getSnapshot().newSession).toBe(SESSION(8));
+  expect(store.getSnapshot().data.sessionId).toBe(SESSION(4));
+});
+
+test("with no sessions yet, the first one made elsewhere opens", async () => {
+  const server = new FakeServer();
+  server.sessions = { sessions: [], more: 0 };
+  signedIn(server);
+  const { store, started } = start(server, "", undefined, 10);
+  await started;
+  expect(store.getSnapshot().noSessions).toBe(true);
+  server.sessions = fixtureJson("sessions.json");
+  await expect.poll(() => store.getSnapshot().data.sessionId).toBe(SESSION(4));
+});
+
+test("a run's link pasted into the open page shows that run's session", async () => {
+  const server = new FakeServer();
+  signedIn(server);
+  server.sessions = sessionsWith(chatSession(8));
+  const { store, started } = start(server, "");
+  await started;
+  expect(store.getSnapshot().data.sessionId).toBe(SESSION(8));
+  location.hash = "#run=2";
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+  await expect.poll(() => store.getSnapshot().data.sessionId).toBe(SESSION(4));
+  expect(store.getSnapshot().requested).toEqual({ run: 2, decision: null });
+});
+
+test("a login link opened again while signed in keeps the page signed in", async () => {
+  const server = new FakeServer();
+  signedIn(server);
+  const { store, started } = start(server, "#login=used-already");
+  await started;
+  expect(store.getSnapshot().auth).toBe("signed-in");
+});
+
+test("a reply waits in the session it was sent to", async () => {
+  const server = new FakeServer();
+  signedIn(server);
+  const { store, started } = start(server, "");
+  await started;
+  const sent = store.chat("And the largest?");
+  expect(store.getSnapshot().pendingChat).toEqual({ message: "And the largest?", session: SESSION(4) });
+  await sent;
+});
+
+test("a feed the server answers 503 is tried again, not ended", async () => {
+  const server = new FakeServer();
+  signedIn(server);
+  let refused = 0;
+  server.handle = (call) => (call.url.endsWith("/events") && refused++ === 0 ? new Response("busy", { status: 503 }) : undefined);
+  const { store, started } = start(server, "");
+  await started;
+  await expect.poll(() => store.getSnapshot().data.events.length).toBe(43);
+  expect(store.getSnapshot().feedError).toBeNull();
+});
+
+test("a reload comes back to the session the tab showed, not the newest", async () => {
+  const server = new FakeServer();
+  localStorage.setItem(SESSION_KEY, server.token);
+  const first = createStore({ fetch: server.fetch, frame: (cb) => setTimeout(cb, 0), pollMs: 5, retryDelay: () => 0 });
+  await first.start();
+  const list = fixtureJson<SessionList>("sessions.json").sessions;
+  const other = list.find((s) => s.session !== first.getSnapshot().data.sessionId)!.session;
+  await first.openSession(other);
+  first.dispose();
+  store = createStore({ fetch: server.fetch, frame: (cb) => setTimeout(cb, 0), pollMs: 5, retryDelay: () => 0 });
+  await store.start();
+  expect(store.getSnapshot().data.sessionId).toBe(other);
 });

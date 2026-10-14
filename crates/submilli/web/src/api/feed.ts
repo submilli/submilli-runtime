@@ -120,6 +120,8 @@ export function openFeed(options: FeedOptions): { stop(): void } {
       headers,
       signal: abort.signal,
     });
+    // A server that is busy or restarting answers 5xx for a moment; that is tried again.
+    if (response.status >= 500) throw new Error(`the feed answered ${response.status}`);
     if (!response.ok || !response.body) {
       // The session can't be followed at all (unknown, or not readable): say why once.
       const body = (await response.json().catch(() => ({}))) as { message?: unknown };

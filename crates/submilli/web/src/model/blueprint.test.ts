@@ -17,10 +17,10 @@ describe("the blueprint dialog", () => {
     const d = blueprintDialog(frame(data, INITIAL_UI));
     expect(d.version).toBe(2);
     expect(d.title).toBe("Blueprint billing · v2");
-    expect(d.summary).toBe("v2 (in force), Oct 13, 13:26 UTC, widening: Widened: main gained an allow rule globex-support for acme.com/charges.list.");
+    expect(d.summary).toBe("v2 (in force), Oct 13, 13:26 UTC, widens access. Widened: main gained an allow rule globex-support for acme.com/charges.list.");
     expect(d.versions).toEqual([
-      { version: 2, name: "v2 · in force", on: true },
       { version: 1, name: "v1", on: false },
+      { version: 2, name: "v2 · in force", on: true },
     ]);
     expect(d.focus).toBeNull();
     expect(d.lines.length).toBe(52);

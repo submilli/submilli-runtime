@@ -6,6 +6,7 @@ import { forAsst } from "../model/refs";
 import type { SetupForm } from "../model/setup";
 import { NO_SESSIONS } from "./wording";
 import { Setup } from "./Setup";
+import { CancelButton } from "./controls";
 
 function LockIcon() {
   return (
@@ -25,6 +26,8 @@ export function SessionBar(props: {
   canGoBack: boolean;
   /** The run in flight Cancel would stop, or `null`. */
   cancelRun: number | null;
+  /** Cancel was pressed for this run and the server hasn't confirmed yet. */
+  cancelling: boolean;
   onForm: (form: SetupForm) => void;
   onStart: () => void;
   onBack: () => void;
@@ -40,10 +43,17 @@ export function SessionBar(props: {
       {!props.setup && !bar && props.noSessions && <span>{NO_SESSIONS}</span>}
       {!props.setup && bar && (
         <>
-          <button className="pg-tag pg-ref" title={bar.copyText ? forAsst(bar.copyText) : undefined} onClick={props.onCopy}>
-            {bar.short} <span className="pg-copyicon" aria-hidden="true">⧉</span>
-            <span className="sr-only">Copy a line for your assistant</span>
-          </button>
+          {bar.copyText ? (
+            <button className="pg-tag pg-ref" title={forAsst(bar.copyText)} onClick={props.onCopy}>
+              {bar.short} <span className="pg-copyicon" aria-hidden="true">⧉</span>
+              <span className="sr-only">Copy a line for your assistant</span>
+            </button>
+          ) : (
+            // Not started on the playground yet, so there is nothing to copy.
+            <span className="pg-tag pg-ref" title="This session starts on the playground when you send its first message.">
+              {bar.short}
+            </span>
+          )}
           {bar.vars.map((v) => (
             <span className="pg-fixed" title={v.full} key={v.name}>
               <LockIcon />
@@ -62,13 +72,16 @@ export function SessionBar(props: {
               Agent {bar.agent}
             </span>
           )}
+          {bar.moreSettings && (
+            <button className="pg-link" onClick={props.onAllVars}>
+              {bar.moreSettings}
+            </button>
+          )}
           <span className="pg-tag">{bar.started}</span>
           <span className={"pg-state" + (bar.live ? " live" : "")}>{bar.state}</span>
           {/* Cancel acts on the live run, even while the reader is stepped back. */}
           {props.cancelRun !== null && (
-            <button className="pg-btn pg-caution" onClick={() => props.cancelRun !== null && props.onCancel(props.cancelRun)}>
-              Cancel run {props.cancelRun}
-            </button>
+            <CancelButton run={props.cancelRun} cancelling={props.cancelling} onCancel={props.onCancel} />
           )}
         </>
       )}

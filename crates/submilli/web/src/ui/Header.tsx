@@ -45,7 +45,7 @@ export function Header(props: {
       </div>
       <div className="pg-header-actions">
         {props.focus && (
-          <button className="pg-btn" onClick={props.onFocus}>
+          <button className="pg-btn pg-exit-focus" onClick={props.onFocus}>
             Exit focus view
           </button>
         )}

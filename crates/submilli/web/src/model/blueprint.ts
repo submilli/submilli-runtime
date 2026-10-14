@@ -52,6 +52,14 @@ export function packageRules(text: string, name: string): { line: number; count:
   return null;
 }
 
+/** How a version changed access, as the CLI words it. */
+const CLASSIFIED: Record<string, string> = {
+  widening: "widens access",
+  narrowing: "narrows access",
+  mixed: "widens and narrows access",
+  unknown: "can’t tell whether this widens or narrows access",
+};
+
 export interface BlueprintLine {
   num: number;
   text: string;
@@ -72,10 +80,11 @@ export interface BlueprintDialog {
 }
 
 export function blueprintDialog(f: Frame): BlueprintDialog {
+  // Oldest first, as the design lists them.
   const known = Object.keys(f.data.versions)
     .map(Number)
-    .sort((a, b) => b - a);
-  const inForce = f.inForce ?? known[0] ?? 0;
+    .sort((a, b) => a - b);
+  const inForce = f.inForce ?? known[known.length - 1] ?? 0;
   const v = f.ui.bpV ?? inForce;
   const ver = f.data.versions[v];
   const focus = f.ui.bpFocus;
@@ -92,7 +101,7 @@ export function blueprintDialog(f: Frame): BlueprintDialog {
   return {
     version: v,
     title: "Blueprint " + f.names.blueprint + " · v" + v,
-    summary: ver ? "v" + v + (v === inForce ? " (in force)" : "") + ", " + when(ver.at) + ", " + ver.classification + ": " + plainBy(ver.summary) : "",
+    summary: ver ? "v" + v + (v === inForce ? " (in force)" : "") + ", " + when(ver.at) + ", " + (CLASSIFIED[ver.classification] ?? ver.classification) + ". " + plainBy(ver.summary) : "",
     versions: known.map((k) => ({ version: k, name: "v" + k + (k === inForce ? " · in force" : ""), on: k === v })),
     focus: focus ? { label: "Highlighted: line " + focus.line + ", " + focus.label, copyText: ruleRef(f.names, v, focus.line, focus.label) } : null,
     lines: lines.map((t, i) => ({ num: i + 1, text: t, active: !!focus && i + 1 >= focus.line && i + 1 <= last })),

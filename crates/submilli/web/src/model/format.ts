@@ -10,11 +10,17 @@ export function end(outcome: Outcome): string {
   return outcome.kind;
 }
 
-/** The status colour for an outcome word. */
-export type Tone = "ok" | "warn" | "bad";
+/** The status colour for an outcome word: a run you cancelled is neither a success nor a failure. */
+export type Tone = "ok" | "warn" | "bad" | "quiet";
 
 export function tone(word: string): Tone {
-  return word === "completed" ? "ok" : word === "stopped" ? "warn" : "bad";
+  return word === "completed" ? "ok" : word === "stopped" ? "warn" : word === "cancelled" ? "quiet" : "bad";
+}
+
+/** How long a run took: milliseconds under a second, then seconds with one decimal. */
+export function duration(ms: number): string {
+  if (ms < 1000) return ms + " ms";
+  return (ms / 1000).toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + " s";
 }
 
 export function capitalize(text: string): string {
@@ -84,13 +90,23 @@ export function agentLabel(named: string | undefined | null): string {
   return providerName(named.slice(0, i)) + " · " + named.slice(i + 1);
 }
 
-/** A session's settings in a few words, as `sessions` prints them. */
+/** Each provider setting of a session, by name, with its value as JSON. */
+export function providerSettings(set: ChatSettings | undefined | null): { name: string; value: string }[] {
+  return Object.entries(set?.provider ?? {}).map(([name, value]) => ({ name, value: JSON.stringify(value) ?? "" }));
+}
+
+/** A session's settings in a few words: the first provider setting with its value, and how many more. */
 export function settingsLabel(set: ChatSettings | undefined | null): string {
   if (!set) return "";
   const parts: string[] = [];
   if (set.effort) parts.push("effort " + set.effort);
   if (set.max_output) parts.push("max output " + set.max_output);
-  if (set.provider && Object.keys(set.provider).length) parts.push("provider settings " + Object.keys(set.provider).join(" "));
+  const names = set.provider ? Object.keys(set.provider) : [];
+  if (set.provider && names.length) {
+    const value = JSON.stringify(set.provider[names[0]]) ?? "";
+    const shown = value.length > 24 ? value.slice(0, 23) + "…" : value;
+    parts.push("provider settings " + names[0] + "=" + shown + (names.length > 1 ? " (+" + (names.length - 1) + " more)" : ""));
+  }
   return parts.join(", ");
 }
 
@@ -98,4 +114,11 @@ export function settingsLabel(set: ChatSettings | undefined | null): string {
 export function copyNotice(text: string, what: "reference" | "command", ok: boolean): { head: string; body: string; auto: boolean } {
   const name = what === "reference" ? "line for your assistant" : what;
   return { head: ok ? "Copied " + name + ":" : "Copy this " + name + ":", body: text, auto: ok };
+}
+
+/** One variable and how many more: the variables a run used, or a rerun would use. */
+export function boundVars(vars: Record<string, string>): string {
+  const names = Object.keys(vars);
+  if (!names.length) return "no variables";
+  return names[0] + "=" + vars[names[0]] + (names.length > 1 ? " (+" + (names.length - 1) + " more)" : "");
 }

@@ -18,7 +18,7 @@ import type {
   StoredEvent,
 } from "../api/types";
 import { sourceKey } from "../api/types";
-import { Client, ReadError, SESSION_KEY, SignedOutError, type ActionOutcome } from "../api/client";
+import { Client, ReadError, SESSION_KEY, SignedOutError, UNREACHABLE, type ActionOutcome } from "../api/client";
 import { openFeed, type FeedState } from "../api/feed";
 import { SIGNED_OUT_LINE, exchangeCode, readLink, runHash, type RequestedRun } from "../api/login";
 
@@ -51,8 +51,14 @@ export interface Snapshot {
   auth: "checking" | "signed-in" | "signed-out";
   /** The run the link asked for; kept across a sign-out so it opens after the next login. */
   requested: RequestedRun | null;
-  /** The first load after sign-in is still on its way. */
+  /** A run the link asked for that the playground hasn't recorded. */
+  requestedMissing: number | null;
+  /** The first load after sign-in is still on its way, up to the first session's record. */
   loading: boolean;
+  /** The session just opened hasn't had its events and runs read yet. */
+  sessionLoading: boolean;
+  /** The playground stopped answering; set again once it does. */
+  unreachable: boolean;
   /** Why the first load failed, if it did. */
   loadError: string | null;
   /** Signed in, and the playground has recorded no session yet. */
@@ -63,8 +69,8 @@ export interface Snapshot {
   feedError: string | null;
   /** A different session that started while this one was followed live. */
   newSession: string | null;
-  /** A chat the page sent and is still waiting on. */
-  pendingChat: { message: string; newSession: boolean } | null;
+  /** A chat the page sent and is still waiting on: a reply to `session`, or a new session's first message. */
+  pendingChat: { message: string; session: string | null } | null;
   action: ActionState | null;
   /** Package sources that couldn't be shown, by `sourceKey`, with the server's reason. */
   sourceErrors: Record<string, { code: string; message: string }>;
@@ -76,6 +82,11 @@ export interface StoreOptions {
   frame?: (callback: () => void) => void;
   /** How often to look for a page-started chat's session, in milliseconds. */
   pollMs?: number;
+  /**
+   * How often to read the status and the sessions again while the page is shown, so
+   * what the CLI, the editor or another tab changed shows; 0 never does.
+   */
+  livePollMs?: number;
   retryDelay?: (attempt: number) => number;
 }
 
@@ -109,12 +120,16 @@ export function createStore(options: StoreOptions = {}) {
         ? requestAnimationFrame(() => callback())
         : setTimeout(callback, 16));
   const pollMs = options.pollMs ?? 500;
+  const livePollMs = options.livePollMs ?? 3000;
 
   let snap: Snapshot = {
     data: emptyData(),
     auth: "checking",
     requested: null,
+    requestedMissing: null,
     loading: false,
+    sessionLoading: false,
+    unreachable: false,
     loadError: null,
     noSessions: false,
     feed: "idle",
@@ -145,6 +160,10 @@ export function createStore(options: StoreOptions = {}) {
   let ownChat: string | null = null;
   // While a new chat is pending: the sessions there were before it was sent.
   let awaitingChat: Set<string> | null = null;
+  // Whether the page still waits on the new chat, so its session opens once it is listed.
+  let followNewChat = false;
+  // Each session's tests and reruns as last listed, so a new one shows under its run.
+  let followUps = new Map<string, number>();
   const runLoads = new Map<number, Promise<void>>();
   const loads = new Map<string, Promise<void>>();
 
@@ -157,7 +176,8 @@ export function createStore(options: StoreOptions = {}) {
     if (link.code) {
       // The code works once; keep it out of history, but keep the run it asked for.
       history.replaceState(null, "", location.pathname + location.search + runHash(requested));
-      if (!(await exchangeCode(link.code, options.fetch))) {
+      // A code used already (a login link opened again) leaves the stored token to try.
+      if (!(await exchangeCode(link.code, options.fetch)) && !localStorage.getItem(SESSION_KEY)) {
         set({ auth: "signed-out" });
         return;
       }
@@ -177,7 +197,10 @@ export function createStore(options: StoreOptions = {}) {
     set({ auth: "signed-out", feed: "idle", loading: false });
   };
 
+  let loadRetry: ReturnType<typeof setTimeout> | null = null;
   const load = async () => {
+    if (loadRetry) clearTimeout(loadRetry);
+    loadRetry = null;
     set({ loading: true, loadError: null });
     let status: Status;
     let list: SessionList;
@@ -188,23 +211,34 @@ export function createStore(options: StoreOptions = {}) {
       ]);
     } catch (error) {
       if (!(error instanceof SignedOutError)) {
-        set({ loading: false, loadError: error instanceof Error ? error.message : String(error) });
+        // Tried again until it answers: the playground may be starting.
+        set({ loading: false, loadError: error instanceof ReadError ? error.message : UNREACHABLE });
+        loadRetry = setTimeout(() => void load(), livePollMs || 3000);
       }
       return;
     }
     known = new Set(list.sessions.map((s) => s.session));
-    set({ auth: "signed-in" });
+    noteFollowUps(list);
+    set({ auth: "signed-in", unreachable: false });
     setData({ status, sessions: list.sessions });
-    const id =
-      (snap.requested && (await sessionOfRun(snap.requested.run))) ??
-      list.sessions.find((s) => !isThrowaway(s))?.session ??
-      null;
+    // A run's link wins; else the session this tab showed before a reload, while it's listed; else the newest.
+    const before = readShown();
+    const id = (snap.requested && (await requestedSession(snap.requested.run))) ?? (before && known.has(before) ? before : newest(list));
     if (id === null) {
       set({ loading: false, noSessions: true });
       return;
     }
-    openSession(id);
+    await openSession(id);
     set({ loading: false });
+  };
+
+  const newest = (list: SessionList) => list.sessions.find((s) => !isThrowaway(s))?.session ?? null;
+
+  /** The session of a run a link asked for; a run that isn't recorded is said so, once. */
+  const requestedSession = async (run: number): Promise<string | null> => {
+    const id = await sessionOfRun(run);
+    set({ requestedMissing: id === null ? run : null });
+    return id;
   };
 
   /** The session a run is shown in: a test or rerun is shown under the run it followed. */
@@ -220,22 +254,45 @@ export function createStore(options: StoreOptions = {}) {
 
   // ---- the session and its feed ----
 
-  const openSession = (id: string) => {
+  /**
+   * Shows session `id` and follows its feed. Resolves once its runs are read and its feed
+   * has answered, so the page doesn't show an empty session before its record arrives.
+   */
+  const openSession = (id: string): Promise<void> => {
     feed?.stop();
     generation += 1;
     const mine = generation;
     queue = [];
-    set({ feedError: null, noSessions: false, newSession: null });
+    set({ feedError: null, noSessions: false, newSession: null, sessionLoading: true });
     setData({ sessionId: id, events: [], feedEnded: false });
+    keepShown(id);
     const summary = snap.data.sessions.find((s) => s.session === id);
-    for (const run of summary?.runs ?? []) void loadRun(run);
+    const runs = Promise.all((summary?.runs ?? []).map((run) => loadRun(run)));
+    let answered: () => void = () => {};
+    const feedAnswered = new Promise<void>((resolve) => (answered = resolve));
     feed = openFeed({
       client,
       session: id,
       retryDelay: options.retryDelay,
       onEvent: (event) => mine === generation && received(event),
-      onSignal: (signal) => mine === generation && signalled(signal),
-      onState: (state) => mine === generation && set({ feed: state }),
+      onSignal: (signal) => {
+        if (mine !== generation) return;
+        answered();
+        signalled(signal);
+      },
+      onState: (state) => {
+        if (mine !== generation) return;
+        if (state !== "connecting") answered();
+        set({ feed: state });
+      },
+    });
+    // A feed that doesn't answer soon doesn't hold the page up; it shows as reconnecting.
+    const patience = new Promise<void>((resolve) => setTimeout(resolve, 5000));
+    return Promise.race([Promise.all([runs, feedAnswered]), patience]).then(() => {
+      if (mine !== generation) return;
+      // What the feed sent first is shown with the record, not a frame later.
+      flush();
+      set({ sessionLoading: false });
     });
   };
 
@@ -297,13 +354,26 @@ export function createStore(options: StoreOptions = {}) {
         statusAgain = false;
         try {
           setData({ status: await client.read<Status>("/api/status") });
-        } catch {
+          if (snap.unreachable) set({ unreachable: false });
+        } catch (error) {
           // The status shown stays as it was; a sign-out is handled by the client.
+          if (!(error instanceof ReadError) && !(error instanceof SignedOutError)) set({ unreachable: true });
         }
       } while (statusAgain);
     } finally {
       statusReading = false;
     }
+  };
+
+  /** Notes each session's count of tests and reruns; returns the sessions whose count changed. */
+  const noteFollowUps = (list: SessionList): string[] => {
+    const changed: string[] = [];
+    for (const s of list.sessions) {
+      const before = followUps.get(s.session);
+      if (before !== undefined && before !== s.follow_ups) changed.push(s.session);
+      followUps.set(s.session, s.follow_ups);
+    }
+    return changed;
   };
 
   const refreshSessions = async () => {
@@ -314,18 +384,32 @@ export function createStore(options: StoreOptions = {}) {
       return;
     }
     setData({ sessions: list.sessions });
+    const shown = snap.data.sessionId;
+    const summary = list.sessions.find((s) => s.session === shown);
+    // A test or rerun of a shown run, started anywhere, lists under that run.
+    const changed = noteFollowUps(list);
+    if (summary && changed.includes(summary.session)) for (const run of summary.runs) void loadRun(run, true);
+    // A run of the shown session that ended before the feed told us is read too.
+    for (const run of summary?.runs ?? []) void loadRun(run);
     if (adoptOwnChat(list)) return;
-    const following = snap.data.sessionId !== null && !snap.data.feedEnded;
+    if (snap.noSessions && !awaitingChat) {
+      const first = newest(list);
+      if (first !== null) {
+        for (const s of list.sessions) known.add(s.session);
+        void openSession(first);
+        return;
+      }
+    }
     for (const s of list.sessions) {
       if (known.has(s.session)) continue;
       known.add(s.session);
-      if (following && !isThrowaway(s) && s.session !== ownChat && s.session !== snap.data.sessionId) {
+      if (shown !== null && !isThrowaway(s) && s.session !== ownChat && s.session !== shown) {
         set({ newSession: s.session });
       }
     }
   };
 
-  /** Opens the session a pending page chat made, once it is listed. */
+  /** Opens the session a pending page chat made, once it is listed, if the page still waits on it. */
   const adoptOwnChat = (list: SessionList): boolean => {
     const before = awaitingChat;
     if (!before) return false;
@@ -337,7 +421,11 @@ export function createStore(options: StoreOptions = {}) {
     ownChat = made.session;
     known.add(made.session);
     setData({ sessions: list.sessions });
-    openSession(made.session);
+    if (followNewChat) {
+      // The message waits for its answer in the session it started.
+      if (snap.pendingChat) set({ pendingChat: { ...snap.pendingChat, session: made.session } });
+      void openSession(made.session);
+    }
     return true;
   };
 
@@ -369,6 +457,13 @@ export function createStore(options: StoreOptions = {}) {
     });
     return loading;
   };
+
+  /** A run's record again, with its result and error whole rather than cut. */
+  const loadPayloads = (run: number) =>
+    once(`payloads:${run}`, async () => {
+      const show = await client.read<Show>(`/api/runs/${run}?program=true&include_payloads=true`);
+      setData({ runs: { ...snap.data.runs, [run]: show } });
+    });
 
   /** Runs a load once; one that failed may be tried again. */
   const once = (key: string, task: () => Promise<void>): Promise<void> => {
@@ -483,10 +578,12 @@ export function createStore(options: StoreOptions = {}) {
     } else if (shown !== null) {
       body.session = shown;
     }
-    set({ pendingChat: { message, newSession: starting } });
+    set({ pendingChat: { message, session: starting ? null : shown } });
     window.addEventListener("beforeunload", warnBeforeLeaving);
     let polling = false;
     if (starting) {
+      ownChat = null;
+      followNewChat = true;
       awaitingChat = new Set([...known, ...snap.data.sessions.map((s) => s.session)]);
       polling = true;
       void (async () => {
@@ -503,15 +600,27 @@ export function createStore(options: StoreOptions = {}) {
     }
     try {
       const outcome = await act<AgentResult>({ name: "chat" }, "/api/agent", body);
-      if (outcome.ok && starting) {
-        ownChat = outcome.result.session;
-        known.add(ownChat);
-        if (snap.data.sessionId !== ownChat) openSession(ownChat);
+      if (starting) {
+        polling = false;
+        // A chat that failed after its session started still made the session; it is
+        // looked for once more so the failure shows where it happened.
+        if (outcome.ok) {
+          ownChat = outcome.result.session;
+          known.add(ownChat);
+        } else if (awaitingChat) {
+          try {
+            adoptOwnChat(await client.read<SessionList>("/api/sessions"));
+          } catch {
+            // Not listed; the page keeps the new session it was setting up.
+          }
+        }
+        if (outcome.ok && followNewChat && ownChat && snap.data.sessionId !== ownChat) await openSession(ownChat);
       }
-      return outcome;
+      return { outcome, session: starting ? (followNewChat ? ownChat : null) : shown };
     } finally {
       polling = false;
       awaitingChat = null;
+      if (starting) followNewChat = false;
       window.removeEventListener("beforeunload", warnBeforeLeaving);
       set({ pendingChat: null });
     }
@@ -520,11 +629,32 @@ export function createStore(options: StoreOptions = {}) {
   // ---- the window ----
 
   const onHashChange = () => {
-    if (readLink(location.hash).code) void signIn(location.hash);
+    const link = readLink(location.hash);
+    if (link.code) {
+      void signIn(location.hash);
+      return;
+    }
+    // A run's link pasted into the page that is open: show that run.
+    if (link.requested && snap.auth === "signed-in" && link.requested.run !== snap.requested?.run) {
+      const requested = link.requested;
+      set({ requested });
+      void requestedSession(requested.run).then((id) => {
+        if (id !== null && id !== snap.data.sessionId) void openSession(id);
+      });
+    }
+  };
+  // While the page is shown, what changed elsewhere shows within a few seconds.
+  let liveTimer: ReturnType<typeof setInterval> | null = null;
+  const livePoll = () => {
+    if (snap.auth !== "signed-in" || document.visibilityState === "hidden") return;
+    void refreshStatus();
+    void refreshSessions();
   };
   // A blueprint saved in the editor shows when the developer comes back to the page.
   const onFocus = () => {
-    if (snap.auth === "signed-in") void refreshStatus();
+    if (snap.auth !== "signed-in") return;
+    void refreshStatus();
+    void refreshSessions();
   };
   const onVisibility = () => {
     if (document.visibilityState === "visible") onFocus();
@@ -542,6 +672,7 @@ export function createStore(options: StoreOptions = {}) {
       window.addEventListener("hashchange", onHashChange);
       window.addEventListener("focus", onFocus);
       document.addEventListener("visibilitychange", onVisibility);
+      if (livePollMs > 0) liveTimer = setInterval(livePoll, livePollMs);
       await signIn(location.hash);
     },
     dispose() {
@@ -549,6 +680,8 @@ export function createStore(options: StoreOptions = {}) {
       feed = null;
       generation += 1;
       awaitingChat = null;
+      if (liveTimer) clearInterval(liveTimer);
+      if (loadRetry) clearTimeout(loadRetry);
       window.removeEventListener("hashchange", onHashChange);
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("beforeunload", warnBeforeLeaving);
@@ -556,8 +689,28 @@ export function createStore(options: StoreOptions = {}) {
     },
 
     /** Shows another session: stops the current feed and follows that one's. */
-    openSession,
-    dismissNotice: () => set({ newSession: null }),
+    openSession: (id: string) => {
+      // The reader chose another session: a page chat still pending no longer pulls them back.
+      followNewChat = false;
+      if (snap.requested) set({ requested: null, requestedMissing: null });
+      return openSession(id);
+    },
+    /** The reader moved on from a new chat still waiting for its first answer. */
+    leaveNewChat: () => {
+      followNewChat = false;
+    },
+    dismissNotice: () => {
+      // A link to a run that isn't recorded is dropped with its notice, so a reload doesn't repeat it.
+      if (snap.requestedMissing !== null) {
+        history.replaceState(null, "", location.pathname + location.search);
+        set({ requested: null });
+      }
+      set({ newSession: null, requestedMissing: null });
+    },
+    refreshSessions,
+    /** Forgets the run a link asked for, once the reader moves elsewhere. */
+    clearRequested: () => set({ requested: null, requestedMissing: null }),
+    loadPayloads,
 
     loadExplain,
     loadVersion,
@@ -574,4 +727,23 @@ export function createStore(options: StoreOptions = {}) {
 
 function dedupe(events: StoredEvent[]): StoredEvent[] {
   return events.filter((e, i) => i === 0 || e.session_seq !== events[i - 1].session_seq);
+}
+
+const SHOWN_KEY = "submilli-playground-shown-session";
+
+/** The session this tab last showed, so a reload comes back to it. */
+function readShown(): string | null {
+  try {
+    return sessionStorage.getItem(SHOWN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function keepShown(id: string) {
+  try {
+    sessionStorage.setItem(SHOWN_KEY, id);
+  } catch {
+    // Storage is off; a reload opens the newest session.
+  }
 }

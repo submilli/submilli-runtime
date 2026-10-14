@@ -65,6 +65,21 @@ describe("the agent and its settings", () => {
   it("refuse a bad model name", () => {
     expect(checkSetup(status, form({ fields: ok, model: "claude sonnet" })).hint).toBe("A model name is letters, digits, “.”, “_”, and “-”.");
     expect(checkSetup(status, form({ fields: ok, model: "models/gemini-3" })).problem).toBe("");
+    expect(checkSetup(status, form({ fields: ok, model: " " })).hint).toBe("Give the model’s name.");
+  });
+
+  it("say what's wrong with each field that stops the start", () => {
+    const check = checkSetup(withDecls, form({ fields: { customerId: "cus_a" }, model: "claude sonnet", max: "lots" }));
+    expect(check.invalid).toEqual({
+      region: "Required.",
+      plan: "Required.",
+      model: "A model name is letters, digits, “.”, “_”, and “-”.",
+      max: "Max output is a whole number of tokens.",
+    });
+    // A form that can't start gives no command.
+    expect(check.cli).toBe("");
+    expect(checkSetup(status, form({ fields: ok })).invalid).toEqual({});
+    expect(checkSetup(status, form({ fields: ok, model: "gpt 6 luna", provider: "openai" })).cli).toBe("");
   });
 
   it("refuse a max output that isn't a whole number", () => {
@@ -110,5 +125,28 @@ describe("the agent and its settings", () => {
     expect(modelHint(status, "anthropic")).toBe(
       "Default for Claude: claude-sonnet-5-5. Any model name the provider knows works; an unknown one gets the provider’s own error.",
     );
+  });
+});
+
+describe("fixes found trying the form", () => {
+  const decls: Status = { ...status, declared_variables: [{ name: "note", required: false }, { name: "customerId", required: true }] };
+
+  it("trims values typed as JSON, as the fields do", () => {
+    expect(parseVars('{"customerId": " cus_northwind "}', declaredVariables(status), "billing v2")).toEqual({ vals: { customerId: "cus_northwind" } });
+  });
+
+  it("puts the required variables first", () => {
+    expect(declaredVariables(decls).map((d) => d.name)).toEqual(["customerId", "note"]);
+  });
+
+  it("refuses a max output past what the playground takes", () => {
+    expect(checkSetup(status, form({ fields: { customerId: "cus_northwind" }, max: "99999999999999999999" })).hint).toBe("Max output is at most 1,000,000 tokens.");
+  });
+
+  it("binds variables that differ from the binding before the CLI's chat, which uses the binding", () => {
+    const same = checkSetup(status, form({ fields: { customerId: status.binding.variables.customerId } }));
+    expect(same.cliBind).toBe("");
+    const other = checkSetup(status, form({ fields: { customerId: "cus globex" } }));
+    expect(other.cliBind).toBe("submilli playground bind customerId='cus globex'");
   });
 });

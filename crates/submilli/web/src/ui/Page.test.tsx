@@ -27,6 +27,7 @@ afterEach(() => {
   store?.dispose();
   store = null;
   localStorage.clear();
+  sessionStorage.clear();
   history.replaceState(null, "", "/");
 });
 
@@ -294,13 +295,15 @@ test("a reader at the latest event stays there; one scrolled up isn't moved and 
   expect(log.scrollTop).toBe(1200);
   expect(screen.queryByRole("button", { name: "Back to latest" })).not.toBeInTheDocument();
 
+  // Scrolling up to read isn't being behind; something new arriving meanwhile is.
   log.scrollTop = 300;
   fireEvent.scroll(log);
-  expect(screen.getByRole("button", { name: "Back to latest" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Back to latest" })).not.toBeInTheDocument();
   height = 1500;
   await feed.send(...all.slice(20, 26));
   await screen.findByText("Run 3 · the agent’s 3rd program");
   expect(log.scrollTop).toBe(300);
+  expect(screen.getByRole("button", { name: "Back to latest" })).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "Back to latest" }));
   expect(log.scrollTop).toBe(1500);
@@ -332,6 +335,8 @@ test("test from a refusal row starts a test run, which shows under its source ru
   expect(await within(row("r2")).findByText("Reruns by you (1)")).toBeInTheDocument();
   expect(within(row("f5")).getByText("· Test of blueprint v2")).toBeInTheDocument();
   expect(within(row("f5")).getByText("Completed")).toBeInTheDocument();
+  // Focus moves from the pressed button on to the new row.
+  await vi.waitFor(() => expect(rowHead("f5")).toHaveFocus());
 });
 
 test("a refused action shows the server's message in the toast", async () => {
@@ -342,7 +347,9 @@ test("a refused action shows the server's message in the toast", async () => {
   await user.click(rowHead("r1"));
   await user.click(within(row("r1")).getByRole("button", { name: "Test against blueprint v2" }));
   const message = fixtureJson<{ result: { error: { message: string } } }>("test-unknown-run.json").result.error.message;
-  expect(within(await screen.findByRole("status")).getByText(message)).toBeInTheDocument();
+  // The server's own words, as a sentence, with its commands shown as code.
+  const shown = (message.charAt(0).toUpperCase() + message.slice(1)).replaceAll("`", "");
+  expect((await screen.findByRole("status")).textContent).toContain(shown);
 });
 
 test("draft a rule shows the drafted rule, where it would go, and its copy lines, with no save", async () => {
@@ -420,7 +427,7 @@ test("New session with variables and a model starts a browser chat, shown in the
   const bar = screen.getByRole("region", { name: "Session" });
   expect(within(bar).getByText("cus_globex")).toBeInTheDocument();
   expect(within(bar).getByText("Agent Claude · claude-haiku-5-5")).toBeInTheDocument();
-  expect(within(bar).getByText("Live")).toBeInTheDocument();
+  expect(within(bar).getByText("Not started")).toBeInTheDocument();
   expect(posts(server)).toEqual([]);
 
   await user.type(screen.getByRole("textbox", { name: "Message the agent" }), "Hello{Enter}");
@@ -505,4 +512,161 @@ test("a failed copy keeps the toast up with the text to copy by hand", async () 
   await user.click(within(row("r1")).getAllByRole("button", { name: "Copy for assistant" })[0]);
   const toast = await screen.findByRole("status");
   expect(within(toast).getByText("Copy this line for your assistant:")).toBeInTheDocument();
+});
+
+// ---- what trying the page live found
+
+test("a run's link selects and opens that run once its session shows", async () => {
+  history.replaceState(null, "", "/#run=2");
+  await openPage();
+  await runsLoaded();
+  await vi.waitFor(() => expect(row("r2").classList.contains("selected")).toBe(true));
+  expect(rowHead("r2").getAttribute("aria-expanded")).toBe("true");
+});
+
+test("a link to a run that isn't recorded says so", async () => {
+  history.replaceState(null, "", "/#run=999");
+  await openPage();
+  expect(await screen.findByText("Run 999 isn’t recorded in this playground.")).toBeInTheDocument();
+});
+
+test("a double click on Test sends one test", async () => {
+  const server = new FakeServer();
+  // A test takes a while; the second click comes while the first is still out.
+  server.handle = (call) =>
+    call.url === "/api/test" ? new Promise<Response>((r) => setTimeout(() => r(new Response(fixture("test.json"))), 100)) : undefined;
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.click(rowHead("r2"));
+  await user.dblClick(within(row("r2")).getByRole("button", { name: "Test against blueprint v2" }));
+  await vi.waitFor(() => expect(posts(server).map((c) => c.url)).toEqual(["/api/test"]));
+});
+
+test("New session from focus view shows the form", async () => {
+  const { user } = await openPage();
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "More" }));
+  await user.click(screen.getByRole("button", { name: "Focus view" }));
+  await user.click(screen.getByRole("button", { name: "New session" }));
+  expect(screen.getByRole("button", { name: "Start session" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Exit focus view" })).not.toBeInTheDocument();
+});
+
+test("Tab stays inside an open dialog", async () => {
+  const { user } = await openPage();
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "Sessions" }));
+  const dialog = screen.getByRole("dialog", { name: "Sessions" });
+  for (let i = 0; i < 12; i++) {
+    await user.tab();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  }
+  await user.tab({ shift: true });
+  expect(dialog.contains(document.activeElement)).toBe(true);
+});
+
+test("a blueprint edit the playground refused is said, with the version that stays", async () => {
+  const server = new FakeServer();
+  const status = fixtureJson<Record<string, unknown> & { blueprint_status: Record<string, unknown> }>("status.json");
+  status.blueprint_status = { ...status.blueprint_status, refused: { code: "parse_error", message: "duplicate field `permissions`", line: 30 } };
+  server.handle = (call) => (call.url === "/api/status" ? json(status) : undefined);
+  await openPage(server);
+  const note = await screen.findByText((_, el) => el?.getAttribute("role") === "note" && /wasn’t taken/.test(el.textContent ?? ""));
+  expect(note.textContent).toContain("duplicate field permissions (line 30). Version 2 stays in force, and runs use it.");
+});
+
+test("a first message the agent couldn't answer shows in the chat, with what to do", async () => {
+  const server = new FakeServer();
+  server.handle = (call) =>
+    call.url === "/api/agent"
+      ? json({ exit: 1, result: { error: { kind: "failure", message: "openai refused the request (HTTP 404): The model `nope` does not exist" } }, text: "" })
+      : undefined;
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "New session" }));
+  await user.click(screen.getByRole("button", { name: "Start session" }));
+  await user.type(screen.getByRole("textbox", { name: "Message the agent" }), "Hello{Enter}");
+  const failed = await screen.findByRole("alert");
+  expect(failed.textContent).toContain("The agent couldn’t answer: openai refused the request (HTTP 404): The model nope does not exist.");
+  expect(failed.textContent).toContain("Nothing was started.");
+  // The message is kept, to send again.
+  expect(screen.getByRole("textbox", { name: "Message the agent" })).toHaveValue("Hello");
+});
+
+test("a message the agent couldn't answer still says so after a reload", async () => {
+  const server = new FakeServer();
+  server.handle = (call) =>
+    call.url === "/api/agent" ? json({ exit: 1, result: { error: { kind: "failure", message: "the provider timed out" } }, text: "" }) : undefined;
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.type(screen.getByRole("textbox", { name: "Message the agent" }), "Again?{Enter}");
+  expect((await screen.findByRole("alert")).textContent).toContain("Send again");
+  cleanup();
+  store?.dispose();
+  await openPage(new FakeServer());
+  await runsLoaded();
+  expect((await screen.findByRole("alert")).textContent).toContain("The agent couldn’t answer: the provider timed out.");
+});
+
+test("a link to a repeated check opens the row it's listed under", async () => {
+  const server = new FakeServer();
+  const show = fixtureJson<Show>("show-1.json");
+  show.decisions[0] = { ...show.decisions[0], refs: ["1.1", "1.3"] };
+  server.handle = (call) => (call.url.startsWith("/api/runs/1?") ? json(show) : undefined);
+  history.replaceState(null, "", "/#run=1&decision=3");
+  await openPage(server);
+  await runsLoaded();
+  await vi.waitFor(() => expect(row("d1.1").classList.contains("selected")).toBe(true));
+});
+
+test("a click outside More closes it", async () => {
+  const { user } = await openPage();
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "More" }));
+  expect(screen.getByRole("dialog", { name: "More" })).toBeInTheDocument();
+  await user.click(screen.getByRole("dialog", { name: "More" }));
+  expect(screen.getByRole("dialog", { name: "More" })).toBeInTheDocument();
+  await user.click(rowHead("r2"));
+  expect(screen.queryByRole("dialog", { name: "More" })).not.toBeInTheDocument();
+});
+
+test("a session started but not yet sent to is still there after a reload", async () => {
+  const { user } = await openPage();
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "New session" }));
+  await user.click(screen.getByRole("button", { name: "Start session" }));
+  expect(screen.getByText("New session · send its first message")).toBeInTheDocument();
+  cleanup();
+  store?.dispose();
+  await openPage();
+  expect(await screen.findByText("New session · send its first message")).toBeInTheDocument();
+  expect(screen.getByRole("textbox", { name: "Message the agent" })).not.toHaveAttribute("readonly");
+});
+
+test("arrow keys step while focus is in the read-only ask box", async () => {
+  const { user } = await openPage();
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "From the start" }));
+  const box = screen.getByRole("textbox", { name: "Message the agent" });
+  expect(box).toHaveAttribute("readonly");
+  await user.click(box);
+  await user.keyboard("{ArrowRight}{ArrowRight}");
+  expect(screen.getByText(/^2 \/ \d+$/)).toBeInTheDocument();
+});
+
+test("dismissing the unknown-run notice puts focus in the ask box", async () => {
+  history.replaceState(null, "", "/#run=999");
+  const { user } = await openPage();
+  await screen.findByText("Run 999 isn’t recorded in this playground.");
+  await user.click(screen.getByRole("button", { name: "Dismiss" }));
+  await vi.waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message the agent" })));
+});
+
+test("a run's link is dropped from the address once another session opens or a new one is set up", async () => {
+  history.replaceState(null, "", "/#run=2");
+  const { user } = await openPage();
+  await runsLoaded();
+  await vi.waitFor(() => expect(row("r2").classList.contains("selected")).toBe(true));
+  await user.click(screen.getByRole("button", { name: "New session" }));
+  expect(location.hash).toBe("");
 });

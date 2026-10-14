@@ -40,7 +40,10 @@ test("a refused session shows how to get a new link", async () => {
   const server = new FakeServer();
   localStorage.setItem(SESSION_KEY, "old");
   await show(server, "");
-  expect(await screen.findByText(SIGNED_OUT_LINE)).toBeInTheDocument();
+  // The command shows as code, not between backticks.
+  const line = await screen.findByText((_, el) => el?.tagName === "P" && el.textContent === SIGNED_OUT_LINE.replaceAll("`", ""));
+  expect(line.querySelector("code")?.textContent).toBe("submilli playground open");
+  expect(screen.getByText(/You’re signed out/)).toBeInTheDocument();
   expect(localStorage.getItem(SESSION_KEY)).toBeNull();
 });
 

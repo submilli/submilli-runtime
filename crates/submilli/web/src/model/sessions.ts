@@ -1,6 +1,6 @@
 // The session bar, the sessions dialog, the footer, and what stepping back turns off.
-import type { SessionSummary } from "../api/types";
-import { agentLabel, capitalize, plural, settingsLabel, short, when } from "./format";
+import type { ChatSettings, SessionSummary } from "../api/types";
+import { agentLabel, capitalize, plural, providerSettings, settingsLabel, short, when } from "./format";
 import { sessionRef } from "./refs";
 import type { Frame } from "./steps";
 
@@ -12,10 +12,15 @@ export function actionBlock(f: Frame): string | null {
   return f.stepping ? STEPPED_BACK : null;
 }
 
-export function footer(f: Frame): string {
+/** The footer's left side; `waiting` while the agent is answering a message the page sent. */
+export function footer(f: Frame, waiting = false): string {
   if (f.stepping) return "Stepping through · read-only";
   if (f.ui.mode === "setup") return "New session · not started yet";
-  if (f.ui.mode === "fresh" || (!f.ended.length && f.info?.open)) return "Live session · waiting for a run";
+  if (f.running.length) return "Live session · run " + f.running[f.running.length - 1] + " is running";
+  if (waiting) return "Live session · waiting for the agent";
+  if (f.ui.mode === "fresh") return f.ui.fresh?.messages.length ? "Live session · waiting for the agent" : "New session · send its first message";
+  if (f.data.sessionId === null) return "No session yet";
+  // As the design has it: an open session at its latest event reads the same as a finished one.
   return "At the latest event";
 }
 
@@ -55,7 +60,8 @@ export interface SessionRow {
   agentSettings: string;
   vars: string[];
   runs: string;
-  denied: boolean;
+  /** How its runs ended, past completing: "denied", "1 rejected", "2 failed", "1 cancelled", as the log words them. */
+  ends: { text: string; tone: "bad" | "quiet" }[];
   /** How many tests and reruns of its runs, as far as they're loaded. */
   follow: string;
 }
@@ -79,22 +85,18 @@ export function sessionRows(f: Frame): SessionRow[] {
       agentSettings: settingsLabel(fresh.settings),
       vars: varsOf(fresh.variables).map((v) => v.full),
       runs: "0 runs",
-      denied: false,
+      ends: [],
       follow: "",
     });
   }
   const listed = f.data.sessions.filter((s) => !throwaway(s)).sort((a, b) => b.started_at_micros - a.started_at_micros);
   for (const s of listed) {
     const current = f.ui.mode === "open" && s.session === f.data.sessionId;
-    // A session's task is its first message; only the shown session's events are loaded.
-    let task = "No chat loaded";
-    let muted = true;
-    if (current) {
-      const asks = f.steps.flatMap((x) => (x.kind === "chat" && x.role === "user" ? [x.text] : []));
-      task = asks.length ? asks[0] + (asks.length > 1 ? " (+" + (asks.length - 1) + " more)" : "") : "No chat";
-      muted = !asks.length;
-    }
-    const follow = s.runs.reduce((sum, n) => sum + (f.data.runs[n]?.reruns.length || 0), 0);
+    // A session's task is its first message.
+    const first = s.untrusted?.task;
+    const task = first ? first + (s.asks > 1 ? " (+" + (s.asks - 1) + " more)" : "") : s.sources.includes("stand-in") ? "No chat captured" : "No chat";
+    const muted = !first;
+    const follow = s.follow_ups ?? 0;
     rows.push({
       id: s.session,
       current,
@@ -109,7 +111,12 @@ export function sessionRows(f: Frame): SessionRow[] {
       agentSettings: settingsLabel(s.settings),
       vars: varsOf(s.variables).map((v) => v.full),
       runs: plural(s.runs.length, "run", "runs"),
-      denied: s.denied,
+      ends: [
+        ...(s.denied ? [{ text: "denied", tone: "bad" as const }] : []),
+        ...(s.rejected ? [{ text: s.rejected + " rejected", tone: "bad" as const }] : []),
+        ...(s.failed ? [{ text: s.failed + " failed", tone: "bad" as const }] : []),
+        ...(s.cancelled ? [{ text: s.cancelled + " cancelled", tone: "quiet" as const }] : []),
+      ],
       follow: follow ? String(follow) : "",
     });
   }
@@ -125,11 +132,24 @@ export interface SessionBar {
   /** "+2 more", opening the full list, or empty. */
   moreVars: string;
   allVars: FixedVar[];
+  /** Every provider setting, for the dialog; the bar names the first. */
+  settings: { name: string; value: string }[];
+  /** "All settings", opening them, when the bar doesn't show them whole; or empty. */
+  moreSettings: string;
   source: string;
   agent: string;
   started: string;
   state: string;
   live: boolean;
+}
+
+/** Every setting of the session's agent, for the dialog: effort, max output, then each provider setting. */
+function agentSettings(set: ChatSettings | undefined | null): { name: string; value: string }[] {
+  return [
+    ...(set?.effort ? [{ name: "effort", value: set.effort }] : []),
+    ...(set?.max_output ? [{ name: "max output", value: String(set.max_output) }] : []),
+    ...providerSettings(set).map((p) => ({ name: "provider: " + p.name, value: p.value })),
+  ];
 }
 
 /** The bar above the panes for the session shown, or `null` while a new one is set up. */
@@ -139,31 +159,38 @@ export function sessionBar(f: Frame): SessionBar | null {
     const vars = all.length > 3 ? all.slice(0, 2) : all;
     return { vars, allVars: all, moreVars: all.length > vars.length ? "+" + (all.length - vars.length) + " more" : "" };
   };
+  // Provider settings the bar can't show whole open the same dialog as the variables.
+  const provider = (settings: { name: string; value: string }[]) => settings.filter((p) => p.name.startsWith("provider: "));
+  const withAll = (bar: Omit<SessionBar, "settings" | "moreSettings">, settings: { name: string; value: string }[]): SessionBar => ({
+    ...bar,
+    settings,
+    moreSettings: provider(settings).length > 1 || provider(settings).some((p) => p.value.length > 24) ? "All settings" : "",
+  });
   const fresh = f.ui.mode === "fresh" ? f.ui.fresh : null;
   if (fresh) {
-    return {
+    return withAll({
       short: "new session",
       copyText: "",
       ...fixed(varsOf(fresh.variables)),
       source: "Browser",
       agent: withSettings(fresh.agent, settingsLabel(fresh.settings)),
-      started: "Started " + when(fresh.started),
-      state: "Live",
-      live: true,
-    };
+      started: "Set up " + when(fresh.started),
+      // Nothing exists on the playground until its first message.
+      state: "Not started",
+      live: false,
+    }, agentSettings(fresh.settings));
   }
   const s = f.info;
   if (f.ui.mode !== "open" || !s) return null;
-  // A chat's session takes more messages until it ends.
-  const open = !!(s.model && s.open);
-  return {
+  return withAll({
     short: short(s.session),
     copyText: sessionRef(f.names, s.session),
     ...fixed(varsOf(s.variables)),
     source: sourceLabel(s),
     agent: s.model ? withSettings(s.model, settingsLabel(s.settings)) : "",
     started: "Started " + when(s.started_at),
-    state: open ? "Open" : s.model ? "Ended" : "Finished",
-    live: open && !f.stepping,
-  };
+    // A session started for the coding assistant is open too, though only it runs in it.
+    state: s.open ? "Open" : s.model ? "Ended" : "Finished",
+    live: !!s.open && !f.stepping,
+  }, agentSettings(s.settings));
 }

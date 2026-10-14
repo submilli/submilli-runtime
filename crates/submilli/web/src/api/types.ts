@@ -57,8 +57,18 @@ export interface SessionSummary {
   run_count: number;
   runs: number[];
   denied: boolean;
+  /** How many of its runs were cancelled, how many didn't compile, and how many failed some other way. */
+  cancelled: number;
+  rejected: number;
+  failed: number;
   /** Whether a chat session takes more messages; `null` for one that isn't a chat. */
   open: boolean | null;
+  /** How many tests and reruns of its runs there are. */
+  follow_ups: number;
+  /** How many messages were said to the agent. */
+  asks: number;
+  /** The first of them, capped: the session's task, as whoever drove it wrote it. */
+  untrusted: { task?: string };
 }
 
 export interface ChatSettings {
@@ -109,6 +119,8 @@ export interface Show {
   decisions: ShowDecision[];
   calls: { count: number; returned: number; failed: number; unfinished: number; with_bodies: number };
   program_recorded: boolean;
+  /** What started it: `program`, `mcp`, `test`, or `mcp:<tool>` for one of the agent's file tools. */
+  entry?: string;
   next: string[];
   untrusted: {
     contexts?: Record<string, Record<string, unknown>>;

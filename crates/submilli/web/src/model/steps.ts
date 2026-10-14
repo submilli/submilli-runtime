@@ -51,6 +51,8 @@ export interface Session {
   returned: Record<number, number>;
   /** How each run ended, as its `run-finished` event says, for runs whose answer isn't loaded. */
   finished: Record<number, { error?: string }>;
+  /** Who started each run, from its `run-started` event, before its record is read. */
+  labels: Record<number, string>;
 }
 
 
@@ -85,6 +87,7 @@ export function readSession(events: StoredEvent[]): Session {
   const calls: Record<number, Call[]> = {};
   const returned: Record<number, number> = {};
   const finished: Record<number, { error?: string }> = {};
+  const labels: Record<number, string> = {};
   const callOf = (run: number, index: number): Call => {
     const list = (calls[run] ||= []);
     let c = list.find((x) => x.index === index);
@@ -113,6 +116,7 @@ export function readSession(events: StoredEvent[]): Session {
       steps.push({ kind: "tool", key, tool: ev.tool.split("__").pop() || ev.tool, bytes: ev.result_bytes || 0 });
     }
     if (run === undefined) continue;
+    if (ev.kind === "run-started" && typeof ev.label === "string") labels[run] = ev.label;
     if (ev.kind === "call-started" && ev.call_index !== undefined) {
       const c = callOf(run, ev.call_index);
       c.caller = ev.caller || "";
@@ -144,7 +148,7 @@ export function readSession(events: StoredEvent[]): Session {
       returned[run] = ev.bytes || 0;
     }
   }
-  return { steps, calls, returned, finished };
+  return { steps, calls, returned, finished, labels };
 }
 
 /** The runs that have started and not finished, oldest first: what Cancel can stop. */
@@ -240,18 +244,23 @@ export interface Frame {
   ended: number[];
   /** The call step at the cursor, while a program is running there. */
   atCall: CallStep | null;
+  /** At the latest event: the runs started and not ended yet, oldest first. */
+  running: number[];
   /** The blueprint version in force. */
   inForce: number | null;
 }
 
 export function frame(data: PageData, ui: UiState): Frame {
   const viewing = ui.mode === "open";
-  const session = viewing ? readSession(data.events) : { steps: [], calls: {}, returned: {}, finished: {} };
+  const session = viewing ? readSession(data.events) : { steps: [], calls: {}, returned: {}, finished: {}, labels: {} };
   const steps = session.steps;
   const vis = steps.slice(0, reached(steps, ui.cursor));
   const bar = stepBar(steps, ui.cursor);
   const allRuns: number[] = [];
   for (const s of steps) if ((s.kind === "call" || s.kind === "package" || s.kind === "run") && !allRuns.includes(s.run)) allRuns.push(s.run);
+  // A run that hasn't made a call yet has no step, but it is running all the same.
+  const running = viewing && !bar.stepping ? runsInFlight(data.events).filter((n) => !session.finished[n] && !data.runs[n]) : [];
+  for (const n of running) if (!allRuns.includes(n)) allRuns.push(n);
   const last = vis[vis.length - 1];
   return {
     data,
@@ -266,13 +275,32 @@ export function frame(data: PageData, ui: UiState): Frame {
     allRuns,
     ended: vis.flatMap((s) => (s.kind === "run" ? [s.run] : [])),
     atCall: last && (last.kind === "call" || last.kind === "package") ? last : null,
+    running,
     inForce: data.status ? data.status.blueprint_status.version : null,
   };
 }
 
-/** A run's place among the session's programs, from 1. */
+/** Runs the coding assistant or the page started in the session, not the agent. */
+const NOT_THE_AGENT = new Set(["assistant", "example"]);
+
+/** Whether the agent ran this program, rather than the developer's coding assistant. */
+export function byAgent(f: Frame, run: number): boolean {
+  // A run still going has no record yet; its start says who began it.
+  const source = f.data.runs[run]?.source ?? f.session.labels[run];
+  return source === undefined || !NOT_THE_AGENT.has(source);
+}
+
+/** The agent's file tool a run was, such as `list_files`, when it wasn't a program. */
+export function fileTool(f: Frame, run: number): string | null {
+  const entry = f.data.runs[run]?.entry;
+  // As people read it: `submilli__files__list` is files.list.
+  return entry && entry.startsWith("mcp:") ? entry.slice(4).replace(/^submilli__/, "").split("__").join(".") : null;
+}
+
+/** A run's place among the agent's programs, from 1; 0 for a run that wasn't one. */
 export function programNumber(f: Frame, run: number): number {
-  return f.allRuns.indexOf(run) + 1;
+  if (!byAgent(f, run) || fileTool(f, run)) return 0;
+  return f.allRuns.filter((n) => byAgent(f, n) && !fileTool(f, n)).indexOf(run) + 1;
 }
 
 /** The runs that have ended by the cursor whose answers are loaded. */

@@ -1,7 +1,7 @@
 // The chat pane: the conversation up to the cursor, with a line for each run.
 import { end, size } from "./format";
 import { actionBlock } from "./sessions";
-import { programNumber, type Frame } from "./steps";
+import { byAgent, fileTool, programNumber, type Frame } from "./steps";
 
 export type ChatItem =
   | { kind: "message"; who: "You" | "Agent"; role: "user" | "agent"; text: string }
@@ -12,10 +12,20 @@ export type ChatItem =
   /** A run's chip, which picks the run in the log. */
   | { kind: "run"; text: string; run: number; selected: boolean }
   /** A new session's first message, sent and not answered yet. */
-  | { kind: "wait"; text: string };
+  | { kind: "wait"; text: string }
+  /** A message the agent couldn't answer, and why. */
+  | { kind: "failed"; text: string; note: string };
 
 /** The agent's tools other than running a program, by the name they're called with. */
-const TOOLS: Record<string, string> = { search: "Searched packages", docs: "Read package docs" };
+const TOOLS: Record<string, string> = {
+  search: "Searched packages",
+  docs: "Read package docs",
+  // The run it made says whether the blueprint let it.
+  list: "Asked to list project files",
+  list_files: "Asked to list project files",
+  read: "Asked to read a project file",
+  read_file: "Asked to read a project file",
+};
 
 /** The run a log selection belongs to: `r2`, `d2.1` and `f5` give 2, 2 and 5. */
 export function selectedRun(sel: string | null): number | null {
@@ -46,12 +56,22 @@ export function chatItems(f: Frame): ChatItem[] {
       items.push({ kind: "message", who: user ? "You" : "Agent", role: user ? "user" : "agent", text: s.text });
     } else if (s.kind === "tool") {
       items.push({ kind: "tool", text: (TOOLS[s.tool] || s.tool) + " · " + size(s.bytes) + " back to the agent" });
+    } else if (!byAgent(f, s.run)) {
+      // Your coding assistant's runs show in the log; the agent never saw them.
+      continue;
     } else if (s.kind === "run") {
-      items.push({ kind: "run", text: "Ran program " + programNumber(f, s.run) + " · " + runWord(f, s.run) + " →", run: s.run, selected: picked === s.run });
+      const tool = fileTool(f, s.run);
+      const what = tool ? "Called " + tool : "Ran program " + programNumber(f, s.run);
+      items.push({ kind: "run", text: what + " · " + runWord(f, s.run) + " →", run: s.run, selected: picked === s.run });
     } else if (!f.ended.includes(s.run) && !running.has(s.run)) {
       running.add(s.run);
       items.push({ kind: "running", text: "Running program " + programNumber(f, s.run) + "…" });
     }
+  }
+  // A program running now that hasn't made a call yet has no step of its own.
+  for (const n of f.running) {
+    if (running.has(n) || !byAgent(f, n)) continue;
+    items.push({ kind: "running", text: "Running program " + programNumber(f, n) + "…" });
   }
   return items;
 }
@@ -59,6 +79,8 @@ export function chatItems(f: Frame): ChatItem[] {
 export function chatEmptyText(f: Frame): string {
   if (f.ui.mode === "setup") return "Set the session’s variables, then start a session to chat.";
   if (f.ui.mode === "fresh") return "Session started. Ask the agent to do a task.";
+  // At the latest event with nothing said, there is no task to step to.
+  if (!f.stepping && f.ui.mode === "open") return f.info?.model ? "No messages in this session yet." : "No chat in this session: its runs came from your coding assistant or the CLI.";
   return "Step forward to see the task.";
 }
 
@@ -79,5 +101,6 @@ export function askBox(f: Frame): AskBox {
   const blocked = actionBlock(f);
   if (open && blocked) return { placeholder: "Reply in this session…", disabled: true, primary: false, reason: blocked };
   if (open) return { placeholder: "Reply in this session…", disabled: false, primary: true };
+  if (f.info?.open) return { placeholder: "No agent chats in this session. Start a new one to chat.", disabled: true, primary: false };
   return { placeholder: "This session has ended. Start a new one to chat.", disabled: true, primary: false };
 }

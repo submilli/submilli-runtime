@@ -68,7 +68,7 @@ describe("formatting", () => {
     expect(agentLabel("acme:m1")).toBe("acme · m1");
     expect(agentLabel(undefined)).toBe("");
     expect(settingsLabel({ effort: "low", max_output: 2000, provider: { temperature: 0.2, top_p: 1 } })).toBe(
-      "effort low, max output 2000, provider settings temperature top_p",
+      "effort low, max output 2000, provider settings temperature=0.2 (+1 more)",
     );
   });
 

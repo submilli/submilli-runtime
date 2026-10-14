@@ -1,10 +1,10 @@
 // The log pane: a row per run, its permission checks, and the tests and reruns of it.
 import type { Explain, RuleRef, Show, ShowDecision } from "../api/types";
 import { bpRuleLine } from "./blueprint";
-import { capitalize, ctx, end, ordinal, plainBy, plural, size, tone, when, type Tone } from "./format";
+import { boundVars, capitalize, ctx, duration, end, ordinal, plainBy, plural, size, tone, when, type Tone } from "./format";
 import { decisionRef, forAsst, runRef } from "./refs";
 import { countWords, followUps } from "./summary";
-import { endedRuns, programNumber, type Frame } from "./steps";
+import { byAgent, endedRuns, fileTool, programNumber, type Frame } from "./steps";
 import type { UiState } from "./ui";
 
 /** What a button runs: the page acts on it, and `cmd` is the same from the CLI. */
@@ -90,6 +90,10 @@ export interface FollowRow {
   wentLive: string;
   error: string;
   result: string;
+  /** How much of a cut result or error shows; "" when it shows whole. */
+  cut: string;
+  /** Whether it shows whole after Show all, so Show less can cut it again. */
+  less: boolean;
   copyText: string;
   refTitle: string;
   compareCmd: string;
@@ -111,6 +115,10 @@ export interface RunRow {
   preview: string;
   error: string;
   result: string;
+  /** How much of a cut result or error shows; "" when it shows whole. */
+  cut: string;
+  /** Whether it shows whole after Show all, so Show less can cut it again. */
+  less: boolean;
   copyText: string;
   refTitle: string;
   again: AgainOption[];
@@ -124,6 +132,8 @@ export interface RunRow {
   followOpen: boolean;
   followLabel: string;
   followSum: string;
+  /** What the run was, as its row says it: the agent's "program", or a file tool "call". */
+  thing: "program" | "call";
 }
 
 export interface LogPane {
@@ -132,10 +142,29 @@ export interface LogPane {
   /** What the pane says when it has no rows, or `null`. */
   empty: string | null;
   runningNote: string;
+  /** The run the running note is about, which Cancel stops. */
+  runningRun: number | null;
   allLabel: string;
   /** The rows Expand all opens and closes. */
   ids: string[];
   allOpen: boolean;
+}
+
+/** How much of a long result or error the server shows unless asked for all of it. */
+const SHOWN_BYTES = 4000;
+
+/**
+ * A result or error as it shows, and how much of it: "Shows 4 kB of 280 kB." when the
+ * server cut it, or when it was read whole and the reader asked for less (`whole` false);
+ * `less` when it shows whole and could be cut again.
+ */
+export function uncut(text: string, whole = false): { text: string; cut: string; less: boolean } {
+  const m = /…\[(\d+) of (\d+) bytes shown; --include-payloads shows all\]$/.exec(text);
+  if (m) return { text: text.slice(0, m.index) + "…", cut: "Shows " + size(Number(m[1])) + " of " + size(Number(m[2])) + ".", less: false };
+  const bytes = new TextEncoder().encode(text).length;
+  if (bytes <= SHOWN_BYTES) return { text, cut: "", less: false };
+  if (whole) return { text, cut: "", less: true };
+  return { text: text.slice(0, SHOWN_BYTES) + "…", cut: "Shows " + size(SHOWN_BYTES) + " of " + size(bytes) + ".", less: false };
 }
 
 function ruleName(rule: RuleRef): string {
@@ -193,6 +222,7 @@ function followKind(r: Show): string {
 }
 
 function againOptions(f: Frame, r: Show, word: string): AgainOption[] {
+  const what = fileTool(f, r.run) ? "call" : "program";
   // A program that never compiled fails the same way every time, so nothing is offered.
   if (word === "rejected") return [];
   const firstDenied = r.decisions.find((d) => d.outcome === "deny");
@@ -210,11 +240,13 @@ function againOptions(f: Frame, r: Show, word: string): AgainOption[] {
       note: "Shows a rule that allows exactly the call refused in check " + ref + ". Nothing changes until you save it. If the refusal is right, there’s nothing to fix.",
     });
   }
+  // A file tool's call has no program to test or rerun; the agent asks again itself.
+  if (what === "call") return options.map((o) => ({ ...o, copyTitle: "Copy the CLI command: " + o.cmd }));
   options.push(
     {
       action: { kind: "test", run: n },
       goal: "Changed the blueprint?",
-      what: "See whether this program gets through now.",
+      what: "See whether this " + what + " gets through now.",
       label: f.inForce !== null ? "Test against blueprint v" + f.inForce : "Test against the blueprint in force",
       caution: false,
       cmd: "submilli playground test " + n,
@@ -237,7 +269,11 @@ function decisionRow(f: Frame, r: Show, d: ShowDecision): DecisionRow {
   const ref = d.refs[0];
   const id = "d" + ref;
   const ex = f.data.explains[ref];
-  const call = (f.session.calls[r.run] || []).find((c) => c.check?.ref === ref);
+  const calls = (f.session.calls[r.run] || []).filter((c) => c.check && d.refs.includes(c.check.ref));
+  const call = calls.find((c) => c.check?.ref === ref);
+  // A repeated check names each line that asked, as the code pane's steps do.
+  const lines = [...new Set(calls.map((c) => c.line).filter((l): l is number => !!l))];
+  const bytes = calls.reduce((sum, c) => sum + (c.bytes || 0), 0);
   const spot = ruleSpot(f, r, d, ex);
   const copyText = decisionRef(f.names, r, d);
   return {
@@ -248,7 +284,7 @@ function decisionRow(f: Frame, r: Show, d: ShowDecision): DecisionRow {
     title: " · " + d.caller + " → " + d.capability + (d.refs.length > 1 ? " ×" + d.refs.length : ""),
     status: d.outcome === "deny" ? "Denied" : "Allowed",
     tone: d.outcome === "deny" ? "bad" : "ok",
-    meta: "blueprint v" + r.blueprint_version + (call && call.line ? " · program line " + call.line + " · " + (call.bytes ? size(call.bytes) + " fetched" : "nothing fetched") : ""),
+    meta: "blueprint v" + r.blueprint_version + (lines.length ? " · " + programLines(lines) + " · " + (bytes ? size(bytes) + " fetched" : "nothing fetched") : ""),
     decidedBy: decidedBy(d, ex),
     near: nearOf(ex),
     context: ctx(r.untrusted.contexts?.[ref]),
@@ -259,6 +295,13 @@ function decisionRow(f: Frame, r: Show, d: ShowDecision): DecisionRow {
     line: call ? call.line : null,
     next: ex ? ex.next : [],
   };
+}
+
+/** "program line 4", "program lines 4 and 9", or the first three and how many more. */
+function programLines(lines: number[]): string {
+  if (lines.length === 1) return "program line " + lines[0];
+  if (lines.length === 2) return "program lines " + lines[0] + " and " + lines[1];
+  return "program lines " + lines.slice(0, 3).join(", ") + (lines.length > 3 ? " (+" + (lines.length - 3) + " more)" : "");
 }
 
 function followRow(f: Frame, r: Show, fu: Show, again: AgainOption[], all: number[]): FollowRow {
@@ -279,8 +322,15 @@ function followRow(f: Frame, r: Show, fu: Show, again: AgainOption[], all: numbe
   }));
   if (cmp && !fixed) for (const u of cmp.unmatched) changes.push({ tone: "", text: capitalize(u) + "." });
   const refused = r.decisions.some((d) => d.outcome === "deny");
+  // A rerun uses the variables bound now, so a check it got past may owe that to them, not to a blueprint change.
+  const otherVars = Object.fromEntries(Object.entries(fu.variables).filter(([k, v]) => r.variables[k] !== v));
+  const byVars = !!fu.rerun_of && Object.keys(otherVars).length > 0;
+  const byChange = fu.blueprint_version !== r.blueprint_version && !byVars;
+  const allowed = fixed ? "check " + fixed.before + " is now allowed" + (fixed.rule ? " (rule " + fixed.rule.name + ", line " + fixed.rule.line + ")" : "") : "";
   const verdict = fixed
-    ? "Your change worked: check " + fixed.before + " is now allowed" + (fixed.rule ? " (rule " + fixed.rule.name + ", line " + fixed.rule.line + ")" : "") + "."
+    ? byChange
+      ? "Your change worked: " + allowed + "."
+      : capitalize(allowed) + "." + (byVars ? " This rerun used other variables than run " + r.run + ": " + boundVars(otherVars) + "." : "")
     : w === word && cmp && !cmp.changes.length
       ? "Same result as run " + r.run + (refused ? ": refused at the same check, so nothing changed that check." : ".")
       : "";
@@ -290,8 +340,10 @@ function followRow(f: Frame, r: Show, fu: Show, again: AgainOption[], all: numbe
       ? "The program then went further than run " + r.run + " did. Its next call, below, has no recorded reply, so the test stopped rather than send it. Nothing was sent."
       : w === "completed"
         ? "The program then went further than run " + r.run + " did, and finished."
-        : "The program then went further than run " + r.run + " did.";
+        : "The program then went further than run " + r.run + " did, but it " + (w === "denied" ? "was denied at a later check" : w === "cancelled" ? "was cancelled" : w === "rejected" ? "didn’t compile" : "failed") + "; its error is below.";
   const stopDetail = (ut.stop_detail || "").replace("the recorded run", "run " + r.run);
+  const fuError = uncut(w === "stopped" ? "" : fu.untrusted.error || "", !!f.ui.whole[n]);
+  const fuResult = uncut(fu.untrusted.result || "", !!f.ui.whole[n]);
   const copyText = runRef(f.names, fu);
   return {
     n,
@@ -307,7 +359,7 @@ function followRow(f: Frame, r: Show, fu: Show, again: AgainOption[], all: numbe
     further,
     showFurther: !!further && w !== "stopped",
     what: fu.rerun_of
-      ? "Run " + r.run + "’s program, run for real with the variables set at the time."
+      ? "Run " + r.run + "’s program, run for real with the variables set at the time: " + boundVars(fu.variables) + "."
       : "Run " + r.run + "’s program, tested against blueprint v" + fu.blueprint_version + " with run " + r.run + "’s variables. " +
         (test?.mode === "reads-live"
           ? "Reads with no recorded reply went to the real service."
@@ -325,12 +377,14 @@ function followRow(f: Frame, r: Show, fu: Show, again: AgainOption[], all: numbe
     triedLabel: tried ? tried.run + ", " + followKind(tried).toLowerCase() + ", " + end(tried.outcome) : "",
     wentLive: (ut.went_live_keys || []).join("\n"),
     // A stopped test was cancelled at the call; that isn't an error to show.
-    error: w === "stopped" ? "" : fu.untrusted.error || "",
-    result: fu.untrusted.result || "",
+    error: fuError.text,
+    result: fuResult.text,
+    cut: [fuError.cut, fuResult.cut].filter(Boolean)[0] || "",
+    less: fuError.less || fuResult.less,
     copyText,
     refTitle: forAsst(copyText),
     compareCmd: "submilli playground compare " + r.run + " " + n,
-    againHead: "Try run " + r.run + "’s program again",
+    againHead: "Try run " + r.run + "’s " + (fileTool(f, r.run) ? "call" : "program") + " again",
     again,
   };
 }
@@ -341,17 +395,21 @@ function runRow(f: Frame, r: Show, i: number, runs: Show[]): RunRow {
   const open = !!f.ui.open[id];
   const word = end(r.outcome);
   const again = againOptions(f, r, word);
-  const later = runs[i + 1];
+  // The agent's own next program, not one your coding assistant or a file tool ran meanwhile.
+  const later = byAgent(f, n) ? runs.slice(i + 1).find((x) => byAgent(f, x.run) && !fileTool(f, x.run)) : undefined;
   const againNote =
     word === "rejected" ? "This program didn’t compile, so running it again gives the same error." + (later ? " The agent’s next program is run " + later.run + "." : "") : "";
   const ups = f.stepping ? [] : followUps(f, n);
   const ascending = [...ups].sort((a, b) => a - b);
-  const follow = ups.map((x) => followRow(f, r, f.data.runs[x], again, ascending));
+  // Drafting a rule is offered only under a follow-up that is still refused.
+  const againAfter = (fu: Show) => (fu.decisions.some((d) => d.outcome === "deny") ? again : again.filter((o) => o.action.kind !== "draft"));
+  const follow = ups.map((x) => followRow(f, r, f.data.runs[x], againAfter(f.data.runs[x]), ascending));
   const decisions = r.decisions.map((d) => decisionRow(f, r, d));
   const denials = r.decisions.filter((d) => d.outcome === "deny").length;
   const allowed = r.decisions.length - denials;
   const returned = f.session.returned[n];
-  const err = r.untrusted.error || "";
+  const err = uncut(r.untrusted.error || "", !!f.ui.whole[r.run]);
+  const result = uncut(r.untrusted.result || "", !!f.ui.whole[r.run]);
   const copyText = runRef(f.names, r);
   return {
     n,
@@ -359,15 +417,19 @@ function runRow(f: Frame, r: Show, i: number, runs: Show[]): RunRow {
     word,
     selected: f.ui.sel === id,
     open,
-    title: "Run " + n + " · the agent’s " + ordinal(programNumber(f, n)) + " program",
+    thing: fileTool(f, n) ? "call" : "program",
+    title: "Run " + n + " · " + (!byAgent(f, n) ? "run by your assistant" : fileTool(f, n) ? "the agent’s " + fileTool(f, n) + " call" : "the agent’s " + ordinal(programNumber(f, n)) + " program"),
     status: capitalize(word),
     tone: tone(word),
     meta:
-      when(r.started_at) + " · " + r.wall_ms + " ms · blueprint v" + r.blueprint_version +
-      (word === "completed" ? " · returned to agent " + size(returned || 0) : " · error sent to agent" + (returned ? ", " + size(returned) : "")),
-    preview: !open && err ? err.split("\n")[0] : "",
-    error: err,
-    result: r.untrusted.result || "",
+      when(r.started_at) + " · " + duration(r.wall_ms) + " · blueprint v" + r.blueprint_version +
+      (!byAgent(f, n) ? "" : word === "completed" ? " · returned to agent " + size(returned || 0) : " · error sent to agent" + (returned ? ", " + size(returned) : "")),
+    preview: !open && err.text ? err.text.split("\n")[0] : "",
+    error: err.text,
+    result: result.text,
+    cut: [err.cut, result.cut].filter(Boolean)[0] || "",
+    less: err.less || result.less,
+
     copyText,
     refTitle: forAsst(copyText),
     again,
@@ -395,33 +457,39 @@ export function logPane(f: Frame): LogPane {
     if (x.open && x.checksOpen) for (const d of x.decisions) ids.push(d.id);
     if (x.open && x.followOpen) for (const fu of x.follow) ids.push(fu.id);
   }
-  const allOpen = ids.length > 0 && ids.every((i) => f.ui.open[i]);
-  const atCall = f.atCall;
+  const allOpen = ids.length > 0 && ids.every((i) => f.ui.open[i]) && rows.every((x) => !x.follow.length || x.followOpen);
+  // The program running at the cursor, or at the latest one running now that hasn't made a call yet.
+  const runningRun = f.atCall ? f.atCall.run : f.running.length ? f.running[f.running.length - 1] : null;
   let empty: string | null = null;
-  if (!rows.length && !atCall) {
+  if (!rows.length && runningRun === null) {
     empty = f.ui.mode !== "open" || (!f.stepping && !runs.length) ? "No runs yet." : runs.length ? "Nothing matches this filter." : "Step forward to see runs.";
   }
+  const whose = (n: number) => (byAgent(f, n) ? "the agent’s " + ordinal(programNumber(f, n)) + " program" : "run by your assistant");
   return {
-    count: plural(rows.length, "run", "runs"),
+    count: rows.length === all.length ? plural(rows.length, "run", "runs") : rows.length + " of " + plural(all.length, "run", "runs"),
     rows,
     empty,
-    runningNote: atCall ? "Run " + atCall.run + ", the agent’s " + ordinal(programNumber(f, atCall.run)) + " program, is running. It appears here when it ends." : "",
+    runningNote: runningRun !== null ? "Run " + runningRun + ", " + whose(runningRun) + ", is running. It appears here when it ends." : "",
+    runningRun,
     allLabel: allOpen ? "Collapse all" : "Expand all",
     ids,
     allOpen,
   };
 }
 
-/** What Expand all (or Collapse all) changes: every row, with its checks, opens or closes. */
-export function expandAll(log: LogPane, ui: UiState): Pick<UiState, "open" | "checksOpen"> {
+/** What Expand all (or Collapse all) changes: every row, with its checks and its reruns, opens or closes. */
+export function expandAll(log: LogPane, ui: UiState): Pick<UiState, "open" | "checksOpen" | "followOpen"> {
   const open = { ...ui.open };
   const checksOpen = { ...ui.checksOpen };
+  const followOpen = { ...ui.followOpen };
   for (const i of log.ids) open[i] = !log.allOpen;
   if (!log.allOpen) {
     for (const x of log.rows) {
       checksOpen[x.n] = true;
       for (const d of x.decisions) open[d.id] = true;
+      if (x.follow.length) followOpen[x.n] = true;
+      for (const fu of x.follow) open[fu.id] = true;
     }
   }
-  return { open, checksOpen };
+  return { open, checksOpen, followOpen };
 }

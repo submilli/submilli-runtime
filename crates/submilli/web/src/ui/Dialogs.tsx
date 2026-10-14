@@ -1,12 +1,12 @@
 // The page's dialogs, the More panel and the toast. Each dialog takes focus when it opens;
 // the page gives focus back to whatever opened it when it closes.
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 
 import type { Draft, Status } from "../api/types";
 import type { BlueprintDialog } from "../model/blueprint";
 import { forAsst } from "../model/refs";
 import type { FixedVar, SessionRow } from "../model/sessions";
-import { CloseIcon, cls } from "./controls";
+import { CloseIcon, cls, Inline } from "./controls";
 import { BP_LOADING, DRAFT_NOTE, draftCommand, draftWhere } from "./wording";
 
 function useTakeFocus<T extends HTMLElement>() {
@@ -20,11 +20,39 @@ function useTakeFocus<T extends HTMLElement>() {
   return ref;
 }
 
+const FOCUSABLE = "button, [href], input, textarea, select, [tabindex]:not([tabindex='-1'])";
+
+/** Tab and Shift+Tab go round the dialog's own controls, not out to the page behind it. */
+function keepFocusIn(ev: KeyboardEvent<HTMLDivElement>) {
+  if (ev.key !== "Tab") return;
+  const all = [...ev.currentTarget.querySelectorAll<HTMLElement>(FOCUSABLE)];
+  if (!all.length) return;
+  const first = all[0];
+  const last = all[all.length - 1];
+  const at = document.activeElement;
+  if (ev.shiftKey && (at === first || at === ev.currentTarget)) {
+    ev.preventDefault();
+    last.focus();
+  } else if (!ev.shiftKey && at === last) {
+    ev.preventDefault();
+    first.focus();
+  }
+}
+
 function Dialog(props: { id: string; title: ReactNode; size: "wide" | "narrow" | "bp"; onClose: () => void; actions?: ReactNode; children: ReactNode }) {
   const ref = useTakeFocus<HTMLDivElement>();
+  // Only a click pressed and let go on the overlay closes it; one that starts or ends in
+  // the dialog, such as selecting text past its edge, doesn't.
+  const pressedOn = useRef<EventTarget | null>(null);
+  const releasedOn = useRef<EventTarget | null>(null);
   return (
-    <div className="pg-overlay" onClick={(ev) => ev.target === ev.currentTarget && props.onClose()}>
-      <div className={"pg-dialog " + props.size} role="dialog" aria-modal="true" aria-labelledby={props.id} tabIndex={-1} ref={ref}>
+    <div
+      className="pg-overlay"
+      onPointerDown={(ev) => (pressedOn.current = ev.target)}
+      onPointerUp={(ev) => (releasedOn.current = ev.target)}
+      onClick={(ev) => ev.target === ev.currentTarget && pressedOn.current === ev.currentTarget && releasedOn.current === ev.currentTarget && props.onClose()}
+    >
+      <div className={"pg-dialog " + props.size} role="dialog" aria-modal="true" aria-labelledby={props.id} tabIndex={-1} ref={ref} onKeyDown={keepFocusIn}>
         <div className="pg-dialog-head">
           <h2 id={props.id}>{props.title}</h2>
           <div className="pg-dialog-actions">
@@ -83,9 +111,14 @@ export function SessionsDialog(props: {
                   </span>
                 </td>
                 <td className="mono nowrap">
-                  <button className="pg-cmd" title={s.copyText ? forAsst(s.copyText) : undefined} onClick={() => s.copyText && props.copy(s.copyText, "reference")}>
-                    {s.short}
-                  </button>
+                  {s.copyText ? (
+                    <button className="pg-cmd" title={forAsst(s.copyText)} onClick={() => props.copy(s.copyText, "reference")}>
+                      {s.short}
+                    </button>
+                  ) : (
+                    // Not started on the playground yet: nothing to copy.
+                    <span className="pg-muted pg-small">{s.short}</span>
+                  )}
                 </td>
                 <td className="nowrap">{s.started}</td>
                 <td>{s.source}</td>
@@ -102,12 +135,12 @@ export function SessionsDialog(props: {
                 </td>
                 <td className="nowrap">
                   {s.runs}
-                  {s.denied && (
-                    <>
+                  {s.ends.map((e) => (
+                    <span key={e.text}>
                       {" · "}
-                      <span className="pg-denied">denied</span>
-                    </>
-                  )}
+                      <span className={cls("pg-denied", e.tone)}>{e.text}</span>
+                    </span>
+                  ))}
                 </td>
                 <td className="nowrap">{s.follow}</td>
                 <td className="pg-rowend nowrap">
@@ -128,16 +161,30 @@ export function SessionsDialog(props: {
   );
 }
 
-export function VarsDialog(props: { vars: FixedVar[]; onClose: () => void }) {
+export function VarsDialog(props: { vars: FixedVar[]; settings: { name: string; value: string }[]; onClose: () => void }) {
+  // One table, so the values line up; the agent's settings under their own heading.
   return (
-    <Dialog id="dlg-allvars" title="Session variables" size="narrow" onClose={props.onClose}>
+    <Dialog id="dlg-allvars" title={props.settings.length ? "Session variables and settings" : "Session variables"} size="narrow" onClose={props.onClose}>
       <div className="pg-dialog-body">
         <table className="pg-kv">
           <tbody>
             {props.vars.map((v) => (
-              <tr key={v.name}>
+              <tr key={"v-" + v.name}>
                 <td>{v.name}</td>
                 <td className="val">{v.value}</td>
+              </tr>
+            ))}
+            {props.settings.length > 0 && (
+              <tr>
+                <th colSpan={2} scope="colgroup">
+                  Agent settings
+                </th>
+              </tr>
+            )}
+            {props.settings.map((p) => (
+              <tr key={"s-" + p.name}>
+                <td>{p.name}</td>
+                <td className="val">{p.value}</td>
               </tr>
             ))}
           </tbody>
@@ -208,10 +255,14 @@ export function BlueprintView(props: {
 }) {
   const { d } = props;
   const box = useRef<HTMLDivElement>(null);
-  // The lit rule comes to the middle when the dialog opens or the version changes.
+  // The lit rule comes to the middle of the text when the dialog opens or the version
+  // changes; only the text scrolls, so the versions and what is lit stay in view.
   const lit = d.lines.findIndex((l) => l.active);
   useEffect(() => {
-    box.current?.querySelector(".pg-line.active")?.scrollIntoView?.({ block: "center" });
+    const el = box.current;
+    const active = el?.querySelector<HTMLElement>(".pg-line.active");
+    // `.pg-bp` is positioned, so a line's offset is from the top of the text.
+    if (el && active) el.scrollTop = active.offsetTop - el.clientHeight / 2;
   }, [d.version, lit, d.lines.length]);
   return (
     <Dialog id="dlg-bp" title={d.title} size="bp" onClose={props.onClose}>
@@ -296,10 +347,27 @@ export function DraftDialog(props: { draft: Draft; refText: string; onClose: () 
   );
 }
 
-export function MorePanel(props: { commands: string[]; focus: boolean; onFocus: () => void }) {
+export function MorePanel(props: { commands: string[]; focus: boolean; onFocus: () => void; onLeave: (to: Element | null) => void; onBack: () => void }) {
   const ref = useTakeFocus<HTMLDivElement>();
   return (
-    <div className="pg-more" role="dialog" aria-label="More" tabIndex={-1} ref={ref}>
+    <div
+      className="pg-more"
+      role="dialog"
+      aria-label="More"
+      tabIndex={-1}
+      ref={ref}
+      // Focus leaving it, as Tab past its last button does, closes it.
+      onBlur={(ev) => !ev.currentTarget.contains(ev.relatedTarget) && props.onLeave(ev.relatedTarget instanceof Element ? ev.relatedTarget : null)}
+      // It opens from More, so Shift+Tab out of it goes back to More, not to the page's end.
+      onKeyDown={(ev) => {
+        if (ev.key !== "Tab" || !ev.shiftKey) return;
+        const first = ev.currentTarget.querySelector<HTMLElement>("button, [href], [tabindex='0']");
+        if (document.activeElement === first || document.activeElement === ev.currentTarget) {
+          ev.preventDefault();
+          props.onBack();
+        }
+      }}
+    >
       <h3>Use with your coding assistant</h3>
       <p>
         Every Copy for assistant gives one line: what the item is, and the command that prints it. Paste it into Claude Code or another coding
@@ -327,12 +395,23 @@ export function ToastView(props: { toast: Toast; onHold: () => void; onRelease: 
   return (
     <div className="pg-toast" role="status" onMouseEnter={props.onHold} onMouseLeave={props.onRelease}>
       <div className="pg-toast-text">
-        <div>{props.toast.head}</div>
+        <div>
+          <Inline text={props.toast.head} />
+        </div>
         {props.toast.body && <code className="pg-toast-body">{props.toast.body}</code>}
       </div>
       <button className="pg-link" onClick={props.onDismiss}>
         Dismiss
       </button>
+    </div>
+  );
+}
+
+/** A line over the panes: a notice, or something the reader should know before going on. */
+export function Callout(props: { text: string; children?: ReactNode; tone?: "bad" }) {
+  return (
+    <div className={cls("pg-callout", props.tone)} role="note">
+      <Inline text={props.text} /> {props.children}
     </div>
   );
 }

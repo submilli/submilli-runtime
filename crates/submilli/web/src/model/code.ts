@@ -4,7 +4,14 @@ import { sourceKey, type Show } from "../api/types";
 import { capitalize, size } from "./format";
 import { programRef } from "./refs";
 import { selectedRun } from "./chat";
-import { endedRuns, programNumber, type Call, type Frame } from "./steps";
+import { byAgent, endedRuns, fileTool, programNumber, type Call, type Frame } from "./steps";
+
+/** "program 2", or the run your coding assistant made. */
+function programName(f: Frame, run: number): string {
+  const tool = fileTool(f, run);
+  if (tool) return "the agent’s " + tool + " call";
+  return byAgent(f, run) ? "program " + programNumber(f, run) : "your assistant’s program";
+}
 
 export interface CodeLine {
   num: number;
@@ -33,10 +40,19 @@ function sourceOf(f: Frame, run: number): number {
   return (r && (r.test?.source_run || r.rerun_of)) || run;
 }
 
+/**
+ * A check as the log finds it: the log lists repeats of one call as one row, under the
+ * first check's number, so a later one says which row it is in.
+ */
+function checkName(f: Frame, run: number, ref: string): string {
+  const group = f.data.runs[run]?.decisions.find((d) => d.refs.includes(ref));
+  return group && group.refs[0] !== ref ? "check " + ref + "; the log lists it under check " + group.refs[0] + ", ×" + group.refs.length : "check " + ref;
+}
+
 // "main → acme.com/charges.list, allowed by the blueprint (check 1.1)", or just who called what.
-function callWhat(c: Call): string {
+function callWhat(f: Frame, c: Call): string {
   const k = c.check;
-  return k ? k.caller + " → " + k.capability + ", " + (k.allowed ? "allowed" : "denied") + " by the blueprint (check " + k.ref + ")" : c.caller + " → " + c.capability;
+  return k ? k.caller + " → " + k.capability + ", " + (k.allowed ? "allowed" : "denied") + " by the blueprint (" + checkName(f, c.run, k.ref) + ")" : c.caller + " → " + c.capability;
 }
 
 function fetched(c: Call): string {
@@ -44,12 +60,12 @@ function fetched(c: Call): string {
 }
 
 /** The note for a step on a call, in one of three forms: a program line making a call, one calling into a package, or a line inside the package. */
-function stepNoteOf(c: Call, inPackage: boolean): string {
+function stepNoteOf(f: Frame, c: Call, inPackage: boolean): string {
   const pkg = c.pkg;
   if (inPackage && pkg) {
     const where = "Inside " + pkg.package + (pkg.function ? ", " + pkg.function + "()" : "") + ", line " + pkg.line;
     const k = c.check;
-    const verdict = k ? (k.allowed ? "Allowed" : "Denied") + " (check " + k.ref + ")" : "";
+    const verdict = k ? (k.allowed ? "Allowed" : "Denied") + " (" + checkName(f, c.run, k.ref) + ")" : "";
     // A package's check asks on the program's behalf; its own calls answer to its own rules.
     if (k && k.caller !== pkg.package) {
       return where + " asks the blueprint whether the program may use " + k.capability + ". " + verdict + ".";
@@ -61,7 +77,7 @@ function stepNoteOf(c: Call, inPackage: boolean): string {
     return "Line " + c.line + " calls into " + pkg.package + (pkg.function ? " (" + pkg.function + ")" : "") + ". Step → to follow it into the package’s code.";
   }
   const bytes = fetched(c);
-  return "Line " + c.line + " made a call: " + callWhat(c) + (bytes ? ", " + bytes : "") + ".";
+  return "Line " + c.line + " made a call: " + callWhat(f, c) + (bytes ? ", " + bytes : "") + ".";
 }
 
 function linesOf(text: string, active: number | null): CodeLine[] {
@@ -85,7 +101,8 @@ export function codePane(f: Frame): CodePane {
 
   let active: number | null = null;
   if (ui.sel && ui.sel.startsWith("d") && picked !== null) {
-    const ref = ui.sel.slice(1);
+    // A link to a repeated check lights the line of the one it names, not the first.
+    const ref = ui.asked && ui.asked.sel === ui.sel ? ui.asked.ref : ui.sel.slice(1);
     const c = (f.session.calls[picked] || []).find((x) => x.check?.ref === ref);
     active = c ? c.line : null;
   }
@@ -99,32 +116,37 @@ export function codePane(f: Frame): CodePane {
       const src = data.sources[sourceKey(pkg.package, pkg.module)];
       const cut = src && src.truncated && src.note ? " " + capitalize(src.note) + "." : "";
       return {
-        sub: pkg.package + " · " + pkg.module + " · called from program " + programNumber(f, atCall.run) + ", line " + c.line,
+        sub: pkg.package + " · " + pkg.module + " · called from " + programName(f, atCall.run) + ", line " + c.line,
         lines: src ? linesOf(src.untrusted.text, pkg.line) : [],
         isPackage: true,
         // The page serves the package as installed now, not the build a past run used.
         codeNote: src ? "The package’s source as installed now, which may differ from the build this run used." + cut : "",
-        stepNote: stepNoteOf(c, true),
+        stepNote: stepNoteOf(f, c, true),
         empty: src ? null : pkg.package + " · " + pkg.module + ": its source isn’t available.",
         programRef: null,
       };
     }
     if (c) {
       active = c.line;
-      blank.stepNote = stepNoteOf(c, false);
+      blank.stepNote = stepNoteOf(f, c, false);
     }
   }
 
   if (!codeRun) {
-    return { ...blank, sub: "", lines: [], empty: "No program yet at this point. Step forward (→) to reach the agent’s first program." };
+    // A program shows once its run's record is read, which is when the run ends.
+    const running = atCall ? atCall.run : f.running.length ? f.running[f.running.length - 1] : null;
+    if (running !== null) return { ...blank, sub: "run " + running, lines: [], empty: "Run " + running + "’s program shows here once it ends." };
+    // Stepping forward only helps a reader who is stepped back.
+    const empty = f.stepping ? "No program yet at this point. Step forward (→) to reach the agent’s first program." : "The programs the agent sends appear here.";
+    return { ...blank, sub: "", lines: [], empty };
   }
   const text = codeRun.untrusted.program;
   return {
     ...blank,
-    sub: "program " + programNumber(f, codeRun.run) + " · run " + codeRun.run,
+    sub: programName(f, codeRun.run) + " · run " + codeRun.run,
     lines: text ? linesOf(text, active) : [],
     codeNote: shown !== null && shown !== codeRun.run ? "Run " + shown + " ran this same program, from run " + codeRun.run + "." : "",
-    empty: text ? null : "Run " + codeRun.run + "’s program wasn’t recorded.",
+    empty: text ? null : fileTool(f, codeRun.run) ? "Run " + codeRun.run + " was the agent’s " + fileTool(f, codeRun.run) + " call, not a program." : "Run " + codeRun.run + "’s program wasn’t recorded.",
     programRef: programRef(f.names, codeRun.run),
   };
 }

@@ -1,6 +1,6 @@
 // The New session form. What it holds stays in the page until the first message is
 // sent with it; Start session only checks it the way the playground would.
-import type { FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 
 import type { Status } from "../api/types";
 import {
@@ -25,9 +25,22 @@ export function Setup(props: {
   copy: (text: string, what: "reference" | "command") => void;
 }) {
   const { status, form, onForm } = props;
+  // Open while it holds settings; emptying it to retype doesn't close it.
+  const [advanced, setAdvanced] = useState(!!form.providerJson.trim());
   const check = checkSetup(status, form);
   const help = varsHelp(check);
   const set = (patch: Partial<SetupForm>) => onForm({ ...form, ...patch });
+  // A field that stops the start says so, and points to the line under it that says why.
+  const bad = (field: string, note?: string) => ({
+    "aria-invalid": !!check.invalid[field] || undefined,
+    "aria-describedby": [note, check.invalid[field] && field !== "json" && "bad-" + field].filter(Boolean).join(" ") || undefined,
+  });
+  const why = (field: string) =>
+    check.invalid[field] ? (
+      <small id={"bad-" + field} className="pg-field-err">
+        {check.invalid[field]}
+      </small>
+    ) : null;
   const submit = (ev: FormEvent) => {
     ev.preventDefault();
     if (!check.cantStart) props.onStart();
@@ -60,19 +73,25 @@ export function Setup(props: {
             <label className="pg-vfield" key={d.name}>
               <span className="pg-vname">
                 {d.name}
-                {d.required && <em className="req">required</em>}
+                {d.required ? <em className="req">required</em> : <em className="opt">optional</em>}
               </span>
               <input
                 value={form.fields[d.name] ?? ""}
                 onChange={(ev) => set({ fields: { ...form.fields, [d.name]: ev.target.value } })}
                 aria-required={d.required}
+                {...bad(d.name, "vars-note")}
                 autoFocus={i === 0}
                 spellCheck={false}
               />
-              <small>{fieldNote(status)}</small>
+              {why(d.name)}
             </label>
           ))}
         </div>
+      )}
+      {!form.varJson && (
+        <small id="vars-note" className="pg-muted pg-small">
+          {fieldNote(status)}
+        </small>
       )}
       {form.varJson && (
         <>
@@ -81,7 +100,7 @@ export function Setup(props: {
             rows={4}
             spellCheck={false}
             aria-label="Session variables as JSON"
-            aria-describedby="json-help"
+            {...bad("json", "json-help")}
             value={form.varJsonText}
             onChange={(ev) => set({ varJsonText: ev.target.value })}
           />
@@ -110,7 +129,8 @@ export function Setup(props: {
         </div>
         <label className="pg-vfield">
           <span className="pg-vname">Model</span>
-          <input value={form.model} onChange={(ev) => set({ model: ev.target.value })} spellCheck={false} />
+          <input value={form.model} onChange={(ev) => set({ model: ev.target.value })} spellCheck={false} {...bad("model")} />
+          {why("model")}
           <small>{modelHint(status, form.provider)}</small>
         </label>
         <div className="pg-vfield" role="group" aria-label="Reasoning effort">
@@ -120,6 +140,7 @@ export function Setup(props: {
               <Gated
                 key={o.effort}
                 reasonId="effort-help"
+                pressed={o.pressed}
                 className={cls("pg-btn", o.pressed && "pg-primary")}
                 blocked={o.disabled ? effortHint(form.provider) : null}
                 onClick={() => set({ effort: o.effort })}
@@ -134,21 +155,24 @@ export function Setup(props: {
           <span className="pg-vname">
             Max output<em className="opt">tokens, optional</em>
           </span>
-          <input value={form.max} onChange={(ev) => set({ max: ev.target.value })} inputMode="numeric" placeholder="4096" />
+          <input value={form.max} onChange={(ev) => set({ max: ev.target.value })} inputMode="numeric" placeholder="4096" {...bad("max")} />
+          {why("max")}
           <small>The most one answer may take.</small>
         </label>
       </div>
-      <details className="pg-advanced" open={!!form.providerJson.trim() || undefined}>
+      <details className="pg-advanced" open={advanced} onToggle={(ev) => setAdvanced(ev.currentTarget.open)}>
         <summary>Advanced: provider settings (JSON)</summary>
         <textarea
           className="pg-json"
           rows={4}
           spellCheck={false}
           aria-label="Provider settings as JSON"
+          {...bad("provider")}
           placeholder='{"temperature": 0.2}'
           value={form.providerJson}
           onChange={(ev) => set({ providerJson: ev.target.value })}
         />
+        {why("provider")}
         <small>
           Fields added to every request, in the provider’s own API terms. Fields the playground sets itself (the model, the
           conversation, the tools, the instructions) can’t be set here.
@@ -156,9 +180,22 @@ export function Setup(props: {
       </details>
       <div className="pg-setupcli">
         <span>Same from the CLI</span>
-        <button type="button" className="pg-cmd" title="Copy this command" onClick={() => props.copy(check.cli, "command")}>
-          {check.cli}
-        </button>
+        {/* The CLI's chat takes the bound variables, so ones set here are bound first. */}
+        {check.cliBind && (
+          <>
+            <button type="button" className="pg-cmd" title="Copy this command" onClick={() => props.copy(check.cliBind, "command")}>
+              {check.cliBind}
+            </button>
+            <span>(the binding stays for later runs, and the next start)</span>
+          </>
+        )}
+        {check.cli ? (
+          <button type="button" className="pg-cmd" title="Copy this command" onClick={() => props.copy(check.cli, "command")}>
+            {check.cli}
+          </button>
+        ) : (
+          <span>shows once the form can start a session.</span>
+        )}
       </div>
       <div className="pg-setup-row">
         <Gated type="submit" className="pg-btn pg-primary" reasonId="setup-hint" blocked={check.cantStart ? check.hint : null}>

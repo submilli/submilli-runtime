@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { expandAll, logPane, type RunRow } from "./log";
+import { duration, tone } from "./format";
+import { expandAll, logPane, uncut, type RunRow } from "./log";
 import { frame } from "./steps";
 import { chatSession, withStoppedTests } from "./testdata";
 import { INITIAL_UI, type UiState } from "./ui";
@@ -114,12 +115,26 @@ describe("the log's run rows", () => {
     expect(only("follow")).toEqual([1, 2]);
     const none = logPane(frame({ ...chatSession(), events: chatSession().events.slice(0, 11) }, { ...INITIAL_UI, filter: "problems" }));
     expect(none.empty).toBe("Nothing matches this filter.");
-    expect(none.count).toBe("0 runs");
+    expect(none.count).toBe("0 of 1 run");
   });
 });
 
 describe("the log's decision rows", () => {
   const rows = allOpen(chatSession());
+
+  it("name every line a repeated check was asked from, and all it fetched", () => {
+    const data = chatSession();
+    const show = data.runs[1];
+    data.runs[1] = { ...show, decisions: [{ ...show.decisions[0], refs: ["1.1", "1.2"] }] };
+    // The second call asks from another line.
+    data.events = data.events.map((e) => {
+      const body = e.body as { event?: { kind?: string; call_index?: number; line?: { line: number } } };
+      return e.run === 1 && body.event?.kind === "call-started" && body.event.call_index === 1
+        ? ({ ...e, body: { ...body, event: { ...body.event, line: { line: 9, column: 3 } } } } as typeof e)
+        : e;
+    });
+    expect(row(allOpen(data), 1).decisions[0].meta).toBe("blueprint v1 · program lines 4 and 9 · 21.5 kB fetched");
+  });
 
   it("explain a refusal by the default with the nearest rule's failed comparisons", () => {
     expect(row(rows, 2).decisions[0]).toMatchObject({
@@ -216,6 +231,15 @@ describe("the log's follow-up rows", () => {
     );
   });
 
+  it("don't credit a blueprint change when a rerun got past a check with other variables", () => {
+    const data = chatSession();
+    data.compares[7] = { ...data.compares[7], changes: data.compares[5].changes.filter((c) => c.kind === "newly-allowed") };
+    data.runs[7] = { ...data.runs[7], blueprint_version: data.runs[1].blueprint_version, variables: { customerId: "cus_globex" } };
+    expect(row(allOpen(data), 1).follow[0].verdict).toBe(
+      "Check 2.1 is now allowed (rule globex-support, line 35). This rerun used other variables than run 1: customerId=cus_globex.",
+    );
+  });
+
   it("say a rerun got the same result", () => {
     const f7 = row(allOpen(chatSession()), 1).follow[0];
     expect(f7).toMatchObject({
@@ -223,7 +247,7 @@ describe("the log's follow-up rows", () => {
       status: "Completed",
       verdict: "Same result as run 1.",
       further: "",
-      what: "Run 1’s program, run for real with the variables set at the time.",
+      what: "Run 1’s program, run for real with the variables set at the time: customerId=cus_northwind.",
     });
   });
 
@@ -272,7 +296,93 @@ describe("Expand all", () => {
     expect(log.allLabel).toBe("Collapse all");
     expect(log.rows.every((r) => r.open && r.checksOpen)).toBe(true);
     expect(log.rows.flatMap((r) => r.decisions).every((d) => d.open)).toBe(true);
+    // Reruns by you too, and each rerun in them.
+    const withReruns = log.rows.filter((r) => r.follow.length);
+    expect(withReruns.length).toBeGreaterThan(0);
+    expect(withReruns.every((r) => r.followOpen && r.follow.every((f) => f.open))).toBe(true);
     const shut = logPane(frame(data, { ...opened, ...expandAll(log, opened) }));
     expect(shut.rows.every((r) => !r.open)).toBe(true);
+  });
+});
+
+describe("a result the server cut", () => {
+  it("says how much shows, without the CLI's flag", () => {
+    expect(uncut("abc…[4000 of 280000 bytes shown; --include-payloads shows all]")).toEqual({ text: "abc…", cut: "Shows 4 kB of 280 kB.", less: false });
+    expect(uncut("whole")).toEqual({ text: "whole", cut: "", less: false });
+  });
+
+  it("once read whole, shows it all with Show less, or its first part again", () => {
+    const long = "x".repeat(5000);
+    expect(uncut(long, true)).toEqual({ text: long, cut: "", less: true });
+    expect(uncut(long, false)).toEqual({ text: "x".repeat(4000) + "…", cut: "Shows 4 kB of 5 kB.", less: false });
+  });
+});
+
+describe("runs as they happen", () => {
+  // Run 99 started and has made no call yet: it has no step of its own.
+  const started = (data: PageData) => {
+    const template = data.events.find((e) => "event" in e.body && e.body.event.kind === "run-started")!;
+    data.events = [...data.events, { ...template, session_seq: 999, event_id: "started-99", run: 99, position: { ...template.position, at_micros: 9e15, run: 99 } }];
+    return data;
+  };
+
+  it("say a run that hasn't made a call yet is running, after the runs that ended", () => {
+    const log = logPane(frame(started(chatSession()), INITIAL_UI));
+    expect(log.runningRun).toBe(99);
+    expect(log.runningNote).toBe("Run 99, the agent’s 5th program, is running. It appears here when it ends.");
+  });
+
+  it("name a run the coding assistant made as theirs, not the agent's", () => {
+    const data = chatSession();
+    data.runs[3] = { ...data.runs[3], source: "assistant" };
+    const rows = logPane(frame(data, INITIAL_UI)).rows;
+    expect(row(rows, 3).title).toBe("Run 3 · run by your assistant");
+    expect(row(rows, 4).title).toBe("Run 4 · the agent’s 3rd program");
+  });
+});
+
+describe("how a run's end and length are shown", () => {
+  it("gives a run you cancelled its own quiet colour, apart from failures", () => {
+    expect([tone("completed"), tone("stopped"), tone("cancelled"), tone("failed"), tone("denied")]).toEqual(["ok", "warn", "quiet", "bad", "bad"]);
+  });
+
+  it("gives milliseconds under a second, then seconds", () => {
+    expect([duration(323), duration(999), duration(1000), duration(87005)]).toEqual(["323 ms", "999 ms", "1.0 s", "87.0 s"]);
+  });
+});
+
+describe("a run that was one of the agent's file tools", () => {
+  it("is named as that call, not as a program, and doesn't take a program's number", () => {
+    const data = chatSession();
+    data.runs[1] = { ...data.runs[1], entry: "mcp:list_files" };
+    const rows = logPane(frame(data, INITIAL_UI)).rows;
+    expect(row(rows, 1).title).toBe("Run 1 · the agent’s list_files call");
+    expect(row(rows, 2).title).toBe("Run 2 · the agent’s 1st program");
+  });
+
+  it("offers only a rule for one the blueprint refused: it has no program to test or rerun", () => {
+    const data = chatSession();
+    data.runs[2] = { ...data.runs[2], entry: "mcp:list_files" };
+    const denied = row(logPane(frame(data, INITIAL_UI)).rows, 2);
+    expect(denied.thing).toBe("call");
+    expect(denied.again.map((a) => a.cmd)).toEqual(["submilli playground draft-rule 2.1"]);
+  });
+});
+
+describe("your coding assistant's runs among the agent's", () => {
+  it("are known as theirs while still running, from who started them", () => {
+    const data = chatSession();
+    const template = data.events.find((e) => "event" in e.body && e.body.event.kind === "run-started")!;
+    const body = template.body as { event: Record<string, unknown> };
+    data.events = [...data.events, { ...template, session_seq: 999, event_id: "started-99", run: 99, body: { event: { ...body.event, label: "assistant" } } } as typeof template];
+    expect(logPane(frame(data, INITIAL_UI)).runningNote).toBe("Run 99, run by your assistant, is running. It appears here when it ends.");
+  });
+
+  it("aren't named as the agent's next program after one that didn't compile", () => {
+    // Run 3 didn't compile; run 4 after it was the coding assistant's, and the agent made none after.
+    const data = chatSession();
+    data.runs[4] = { ...data.runs[4], source: "assistant" };
+    const note = row(logPane(frame(data, INITIAL_UI)).rows, 3).againNote;
+    expect(note).toBe("This program didn’t compile, so running it again gives the same error.");
   });
 });

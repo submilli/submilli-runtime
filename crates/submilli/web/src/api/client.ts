@@ -6,6 +6,9 @@ import type { ActionAnswer } from "./types";
 /** Where the page keeps its browser session token between loads. */
 export const SESSION_KEY = "submilli-playground-session";
 
+/** What the page says when the playground doesn't answer at all. */
+export const UNREACHABLE = "The playground didn’t answer. If it stopped or restarted, start it and run `submilli playground open` for a new link.";
+
 /** What an action route said: accepted with its result, or refused with the CLI's words. */
 export type ActionOutcome<T> =
   | { ok: true; result: T; text: string }
@@ -50,8 +53,9 @@ export class Client {
   }
 
   /**
-   * An action route. These answer HTTP 200 with `{exit, result, text}`; any `exit` but
-   * 0 is a refusal, carried with the message the CLI would print.
+   * An action route. These answer HTTP 200 with `{exit, result, text}`. A refusal has
+   * `result.error`, with the message the CLI would print. A run that was made and ended
+   * denied, stopped or failed exits non-zero too, as the CLI does, but it is a result.
    */
   async act<T>(path: string, body: unknown): Promise<ActionOutcome<T>> {
     let response: Response;
@@ -63,20 +67,17 @@ export class Client {
       });
     } catch (error) {
       if (error instanceof SignedOutError) throw error;
-      return { ok: false, kind: "unreachable", message: "the playground did not answer" };
+      return { ok: false, kind: "unreachable", message: UNREACHABLE };
     }
     if (!response.ok) {
       const { code, message } = await errorBody(response);
       return { ok: false, kind: code, message };
     }
     const answer = (await response.json()) as ActionAnswer<T>;
-    if (answer.exit !== 0) {
-      const error = answer.result.error;
-      return {
-        ok: false,
-        kind: error?.kind ?? "failed",
-        message: error?.message ?? answer.text,
-      };
+    const error = answer.result.error;
+    if (answer.exit !== 0 && error) return { ok: false, kind: error.kind, message: error.message };
+    if (answer.exit !== 0 && typeof (answer.result as { run?: unknown }).run !== "number") {
+      return { ok: false, kind: "failed", message: answer.text };
     }
     return { ok: true, result: answer.result, text: answer.text };
   }
