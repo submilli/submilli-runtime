@@ -1684,6 +1684,16 @@ impl Inferer<'_> {
                 (arg_id, param_ty)
             })
             .collect();
+        let mut callback_params = Vec::new();
+        for (arg_id, param_ty) in &args_with_param_types {
+            if self.is_context_sensitive_function(*arg_id)?
+                || self.literal_holds_context_sensitive_function(*arg_id)?
+            {
+                callback_params.push(param_ty);
+            }
+        }
+        let fixed = self
+            .type_params_bindable_by_later_arguments(&args_with_param_types, inferred_generics)?;
         let arguments = GenericArguments {
             inferred_generics,
             sourced_by_literals: self
@@ -1692,6 +1702,10 @@ impl Inferer<'_> {
                 &args_with_param_types,
                 ret,
                 inferred_generics,
+                FixedByCallbacks {
+                    names: &fixed,
+                    callback_params: &callback_params,
+                },
             ),
         };
         let mut typed_slots: Vec<Option<ExprId>> = vec![None; args.len()];
@@ -2628,7 +2642,12 @@ struct LiteralTypeArguments {
 }
 
 impl LiteralTypeArguments {
-    fn new(args: &[(ExprId, Type)], ret: &Type, inferred_generics: &[String]) -> Self {
+    fn new(
+        args: &[(ExprId, Type)],
+        ret: &Type,
+        inferred_generics: &[String],
+        fixed: FixedByCallbacks<'_>,
+    ) -> Self {
         let in_result = top_level_type_params(ret);
         let mut kept = Vec::new();
         let mut sole = Vec::new();
@@ -2639,6 +2658,10 @@ impl LiteralTypeArguments {
                 .map(|(_, param)| param)
                 .filter(|param| super::expr::mentions_type_var(param, &|var| var == name))
                 .collect();
+            if fixed.widens(name, &mentioning) {
+                widened.push(name.clone());
+                continue;
+            }
             let only_top_level = mentioning
                 .iter()
                 .all(|param| top_level_type_params(param).contains(&name.as_str()));
@@ -2681,6 +2704,49 @@ impl LiteralTypeArguments {
         top_level_type_params(param)
             .iter()
             .any(|name| self.widened.iter().any(|widened| widened == name))
+    }
+}
+
+/// The type parameters a context-sensitive callback fixes by typing a
+/// parameter of its own (see `type_params_bindable_by_later_arguments`), and the
+/// parameters that callbacks are passed for.
+struct FixedByCallbacks<'a> {
+    names: &'a std::collections::BTreeSet<String>,
+    callback_params: &'a [&'a Type],
+}
+
+impl FixedByCallbacks<'_> {
+    /// Whether the fresh literals passed for `name` widen, as tsc widens the
+    /// candidates of a type parameter it fixes when they were all inferred at
+    /// the top level: `iterate((x) => x + 1, c ? 1 : 2)` binds `number`. Only
+    /// callbacks mention `name` other than at the top level of a parameter.
+    fn widens(&self, name: &str, mentioning: &[&Type]) -> bool {
+        self.names.contains(name)
+            && mentioning.iter().all(|param| {
+                top_level_type_params(param).contains(&name)
+                    || (self.callback_params.contains(param)
+                        && mentions_only_in_functions(param, name))
+            })
+    }
+}
+
+/// Whether every mention of type parameter `name` in `ty` is inside a
+/// function type, so a value of `ty` gives no candidate for it but a
+/// function's.
+fn mentions_only_in_functions(ty: &Type, name: &str) -> bool {
+    match ty.peel() {
+        Type::Function { .. } => true,
+        Type::TypeVar(var) => var != name,
+        Type::Union(members) => members
+            .iter()
+            .all(|member| mentions_only_in_functions(member, name)),
+        Type::Object { fields, index } => {
+            index.is_none()
+                && fields
+                    .values()
+                    .all(|field| mentions_only_in_functions(&field.ty, name))
+        }
+        other => !super::expr::mentions_type_var(other, &|var| var == name),
     }
 }
 
