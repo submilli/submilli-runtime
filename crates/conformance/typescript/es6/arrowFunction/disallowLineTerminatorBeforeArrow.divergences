@@ -1,4 +1,4 @@
-types: 48 of 71 tsc entries compared, 0 differ
+types: 53 of 71 tsc entries compared, 0 differ
 
 errors:
 line 4: tsc TS1200: Line terminator not permitted before arrow. (we accept)

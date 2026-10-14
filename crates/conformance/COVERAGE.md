@@ -33,17 +33,17 @@ Upstream: 5055 TypeScript tests. Suite: 886 TypeScript cases, 711 test262 cases.
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
 | `number` | §1.1 | done | 1514 | 358 | 1156 | 0 | 4026 | 1 of 1 | — | — |  |
-| `string` | §1.1 | done | 1566 | 363 | 1203 | 0 | 3362 | 1 of 1 | — | — |  |
+| `string` | §1.1 | done | 1566 | 363 | 1203 | 0 | 3364 | 1 of 1 | — | — |  |
 | `boolean` | §1.1 | done | 493 | 151 | 342 | 0 | 2431 | 1 of 1 | — | — |  |
 | `null` | §1.1 | done | 401 | 111 | 290 | 0 | 1566 | 1 of 1 | — | — |  |
-| `undefined` | §1.1 | done | 386 | 153 | 233 | 0 | 1275 | 1 of 1 | — | — |  |
+| `undefined` | §1.1 | done | 386 | 153 | 233 | 0 | 1279 | 1 of 1 | — | — |  |
 | `void` | §1.1 | done | 521 | 79 | 442 | 0 | 1307 | 1 of 1 | — | — |  |
 | `never` | §1.1 | done | 74 | 15 | 59 | 0 | 152 | 1 of 1 | — | — |  |
 | `bigint` | §1.1 | done | 16 | 3 | 13 | 0 | 50 | 1 of 1 | 16 | 71 |  |
 | Radix literals (`0x`/`0b`/`0o`) | §1.1 | done | 25 | 7 | 18 | 0 | 31 | 4 of 4 | — | — |  |
 | Numeric separators (`1_000`) | §1.1 | done | 11 | 6 | 5 | 0 | 70 | 1 of 1 | — | — |  |
 | `unknown` | §2.11 | done | 77 | 15 | 62 | 0 | 1010 | 1 of 1 | — | — |  |
-| Object types (`{ x: T }`) | §1.2 | done | 1575 | 289 | 1286 | 0 | 1641 | 1 of 1 | — | — |  |
+| Object types (`{ x: T }`) | §1.2 | done | 1575 | 289 | 1286 | 0 | 1642 | 1 of 1 | — | — |  |
 | Optional properties (`a?: T`) | §1.2 | done | 129 | 45 | 84 | 0 | 55 | 1 of 1 | — | — |  |
 | Object literal shorthand (`{ x }`) | §1.2 | done | 83 | 12 | 71 | 0 | 16 | 1 of 1 | — | — |  |
 | Arrays (`T[]`) | §1.2 | done | 833 | 201 | 632 | 0 | 728 | 1 of 1 | 73 | 298 |  |
@@ -51,7 +51,7 @@ Upstream: 5055 TypeScript tests. Suite: 886 TypeScript cases, 711 test262 cases.
 | Optional methods | §1.2 | done | 33 | 7 | 26 | 0 | 3 | 1 of 1 | — | — |  |
 | Tuples (`[T, U]`) | §1.2 | done | 153 | 43 | 110 | 0 | 255 | 1 of 1 | — | — |  |
 | `readonly` arrays and tuples | §1.2 | done | 24 | 5 | 19 | 0 | 43 | 1 of 1 | — | — |  |
-| Union types (`A | B`) | §1.2 | done | 462 | 194 | 268 | 0 | 2176 | 1 of 1 | — | — |  |
+| Union types (`A | B`) | §1.2 | done | 462 | 194 | 268 | 0 | 2178 | 1 of 1 | — | — |  |
 | Type aliases (`type X = …`) | §1.2 | done | 319 | 68 | 251 | 0 | 431 | 1 of 1 | — | — |  |
 | Literal types (`"foo"`, `42`, `true`) | §1.2 | done | 295 | 82 | 213 | 0 | 1449 | 2 of 2 | — | — |  |
 

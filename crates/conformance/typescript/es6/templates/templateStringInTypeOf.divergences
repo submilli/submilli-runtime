@@ -1,9 +1,1 @@
-types: 3 of 5 tsc entries compared, 2 differ
-
-line 2: x
-  tsc:  "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
-  ours: string
-
-line 2: typeof `abc${ 123 }def`
-  tsc:  "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
-  ours: string
+types: 3 of 5 tsc entries compared, 0 differ

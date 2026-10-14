@@ -1,1 +1,0 @@
-line 2 type: bug SUB-1607 a parameter default that an array pattern takes apart is typed as an array, where tsc types it as a tuple
