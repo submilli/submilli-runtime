@@ -5950,10 +5950,10 @@ impl Inferer<'_> {
             .then(|| {
                 self.own_object_literal_type(
                     &merged,
+                    &spread_index_values,
                     expected,
                     expected_fields.as_ref(),
                     interface_target.is_some(),
-                    has_spread,
                 )
             })
             .flatten();
@@ -6093,20 +6093,20 @@ impl Inferer<'_> {
     /// as in tsc: `{ value: 10 }` against `{ value: number; error?: string }` is
     /// `{ value: number }`. Codegen builds it from its field origins instead.
     /// `None` keeps the expected type: against an interface with methods, whose
-    /// methods a value reaches through the interface's own dispatch; with a
-    /// spread, whose fields take their optionality from the expected shape; and
-    /// against an unbound type parameter, which a call site infers from the
-    /// expected shape.
+    /// methods a value reaches through the interface's own dispatch; and against
+    /// an unbound type parameter, which a call site infers from the expected
+    /// shape. A spread's fields keep their own optionality: `{ ...c && { a } }`
+    /// is `{ a?: string }` whatever the expected type requires.
     fn own_object_literal_type(
         &self,
         merged: &std::collections::BTreeMap<
             String,
             (crate::ObjectField, crate::TypedObjectFieldSource),
         >,
+        spread_index_values: &[Type],
         expected: Option<&Type>,
         expected_fields: Option<&std::collections::BTreeMap<String, crate::ObjectField>>,
         against_interface: bool,
-        has_spread: bool,
     ) -> Option<Type> {
         let expected = expected?;
         let expected_fields = expected_fields?;
@@ -6114,11 +6114,23 @@ impl Inferer<'_> {
             && expected_fields
                 .values()
                 .any(|field| field.method || matches!(field.ty.peel(), Type::Function { .. }));
-        if dispatches_methods || has_spread || type_contains_type_var(expected) {
+        if dispatches_methods || type_contains_type_var(expected) {
             return None;
         }
+        // A spread record's index signature holds the named fields too, as the
+        // literal's type below has it.
+        let index = (!spread_index_values.is_empty()).then(|| crate::IndexSignature {
+            value: Box::new(Type::union(
+                spread_index_values
+                    .iter()
+                    .cloned()
+                    .chain(merged.values().map(|(field, _)| field.ty.clone()))
+                    .collect(),
+            )),
+            readonly: false,
+        });
         let own = Type::Object {
-            index: None,
+            index,
             fields: merged
                 .iter()
                 .map(|(name, (field, _))| (name.clone(), field.clone()))
@@ -14897,6 +14909,24 @@ function main(): void { if (result < 10) { } }
             }
             other => panic!("expected lone MethodCall, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn spread_object_literal_keeps_its_own_type_under_an_expected_type() {
+        // tsc types the literal by its spreads: a conditional spread's fields
+        // are optional, a plain one's keep their own optionality.
+        let ta = run_clean(
+            "interface P { a?: number; b?: number; c?: number }\n\
+             const flag = Math.random() > 0.5;\n\
+             const conditional: P = { ...(flag && { a: 1 }), b: 2 };\n\
+             const plain: P = { ...{ a: 1 } };\n\
+             function main(): void {}",
+        );
+        assert_eq!(
+            nth_decl_value_ty(&ta, 1).to_string(),
+            "{ a?: number; b: number }"
+        );
+        assert_eq!(nth_decl_value_ty(&ta, 2).to_string(), "{ a: number }");
     }
 
     #[test]
