@@ -111,6 +111,7 @@ impl<'a> Inferer<'a> {
             types: &self.types,
             registry: &self.type_registry,
             limits: &self.type_limits,
+            strict_subtype: false,
         }
     }
 

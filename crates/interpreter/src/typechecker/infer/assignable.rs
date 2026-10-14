@@ -23,6 +23,9 @@ pub(crate) struct TypeResolver<'a> {
     /// Records an oversized type met while resolving, for the inferer's next
     /// checkpoint; the resolver itself answers as if the type were `Error`.
     pub(crate) limits: &'a crate::type_size::TypeLimits,
+    /// Relate by tsc's strict subtype relation instead of assignability; see
+    /// [`strict_subtype`].
+    pub(crate) strict_subtype: bool,
 }
 
 /// A single way a class fails to satisfy an interface it declares it `implements`.
@@ -686,6 +689,71 @@ pub(crate) fn assignable(actual: &Type, expected: &Type, types: TypeResolver) ->
     assignable_rec(actual, expected, types, &mut seen)
 }
 
+/// Whether `actual` is a subtype of `expected` by tsc's strict subtype
+/// relation, which reduces a union where tsc does (`c ? a : b`, the results of
+/// a union call): assignability, except that a primitive is no subtype of an
+/// object type, an object type is no subtype of one with an optional field it
+/// lacks, and a function is no subtype of one that takes fewer parameters or
+/// requires an argument it lets a caller omit.
+pub(crate) fn strict_subtype(actual: &Type, expected: &Type, types: TypeResolver) -> bool {
+    let types = TypeResolver {
+        strict_subtype: true,
+        ..types
+    };
+    assignable(actual, expected, types)
+}
+
+/// Whether a value of `ty` is a primitive, which tsc's strict subtype relation
+/// keeps apart from object types even where it is assignable to one.
+fn is_primitive(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::String
+            | Type::StringLiteral(_)
+            | Type::StringEnum { .. }
+            | Type::Number
+            | Type::NumberLiteral(_)
+            | Type::NumberEnum { .. }
+            | Type::BigInt
+            | Type::BigIntLiteral(_)
+            | Type::Boolean
+            | Type::BooleanLiteral(_)
+            | Type::Null
+            | Type::Undefined
+            | Type::Void
+    )
+}
+
+/// tsc's strict arity rule for a function of `actual`'s shape to be a subtype
+/// of one of `expected`'s: it takes no parameter the other lacks, unless that
+/// one has a rest parameter, and makes no argument optional that the other
+/// requires at a type `actual` accepts in turn (`related`).
+fn strict_arity_fits(
+    actual: (&[Type], usize, bool),
+    expected: (&[Type], usize, bool),
+    mut related: impl FnMut(&Type, &Type) -> bool,
+) -> bool {
+    let (actual_params, actual_optional, actual_rest) = actual;
+    let (expected_params, expected_optional, expected_rest) = expected;
+    if !expected_rest && (actual_rest || actual_params.len() > expected_params.len()) {
+        return false;
+    }
+    let required = |params: &[Type], optional: usize, rest: bool| {
+        params
+            .len()
+            .saturating_sub(usize::from(rest))
+            .saturating_sub(optional)
+    };
+    let optional_here = required(actual_params, actual_optional, actual_rest)
+        ..required(expected_params, expected_optional, expected_rest);
+    optional_here.into_iter().all(|position| {
+        match (actual_params.get(position), expected_params.get(position)) {
+            (Some(actual), Some(expected)) => !related(actual, expected),
+            _ => true,
+        }
+    })
+}
+
 fn assignable_rec(
     actual: &Type,
     expected: &Type,
@@ -830,6 +898,11 @@ fn assignable_rec(
         (Type::Null | Type::Undefined | Type::Void, _) if expected.is_empty_object() => false,
         (Type::GenericParam { .. }, _) if expected.is_empty_object() => false,
         (_, _) if expected.is_empty_object() => true,
+        (_, Type::Object { .. } | Type::InterfaceRef { .. } | Type::ClassRef { .. })
+            if types.strict_subtype && is_primitive(actual) =>
+        {
+            false
+        }
         (Type::GenericParam { id: a, .. }, Type::GenericParam { id: b, .. }) => a == b,
         (Type::GenericParam { .. }, _) | (_, Type::GenericParam { .. }) => false,
         // Explicit before the `==` fallback, which would reject `StringLiteral("foo") <: String`.
@@ -1064,9 +1137,18 @@ fn assignable_rec(
                 ret: re,
                 predicate: predicate_e,
                 has_rest: rest_e,
-                optional: _,
+                optional: optional_e,
             },
         ) => {
+            if types.strict_subtype
+                && !strict_arity_fits(
+                    (pa, *optional_a, *rest_a),
+                    (pe, *optional_e, *rest_e),
+                    |a, e| assignable_rec(a, e, types, seen),
+                )
+            {
+                return false;
+            }
             // A rest function can't stand for one whose own rest arguments
             // it would have to unpack.
             if *rest_e && !rest_a {
@@ -1148,7 +1230,7 @@ fn assignable_rec(
                     }
                     assignable_rec(&a_field.read_ty(), &e_field.read_ty(), types, seen)
                 }
-                None => e_field.optional,
+                None => e_field.optional && !types.strict_subtype,
             })
         }
         // Structural compatibility for *data-only* interfaces, both directions:
@@ -1575,6 +1657,7 @@ mod tests {
                 types: &types,
                 registry: &registry,
                 limits: &limits,
+                strict_subtype: false,
             },
         )
     }
@@ -1982,6 +2065,7 @@ mod tests {
                 types: ns,
                 registry: &registry,
                 limits: &limits,
+                strict_subtype: false,
             },
         )
     }

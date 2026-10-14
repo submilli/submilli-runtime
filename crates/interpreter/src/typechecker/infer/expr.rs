@@ -15,7 +15,7 @@ use crate::{
     TypedExpr, TypedExprKind, TypedParam, UnOp, ValueKind, ValueSymbol,
 };
 
-use super::assignable::TypeResolver;
+use super::assignable::{TypeResolver, strict_subtype};
 use super::format_signature::SignatureKind;
 use super::namespace_symbol;
 use super::reserved::{is_reserved_object_field, override_field_signature, reserved_field_message};
@@ -1521,7 +1521,12 @@ impl Inferer<'_> {
                 {
                     joined
                 } else {
-                    branch_result_type(lhs_kept, rhs_ty, self.resolver())
+                    conditional_result_type(
+                        lhs_kept,
+                        rhs_ty,
+                        has_object_literal(self.ast, [lhs, rhs])?,
+                        self.resolver(),
+                    )
                 };
                 Ok((
                     TypedExprKind::Binary {
@@ -10229,7 +10234,12 @@ impl Inferer<'_> {
         if let Some(joined) = empty_literal_join(self.ast, (then_, &then_ty), (else_, &else_ty))? {
             return Ok(joined);
         }
-        Ok(conditional_result_type(then_ty, else_ty, self.resolver()))
+        Ok(conditional_result_type(
+            then_ty,
+            else_ty,
+            has_object_literal(self.ast, [then_, else_])?,
+            self.resolver(),
+        ))
     }
 
     /// The type of `a || b` or `a ?? b` when `a` decides the result: `a`'s own,
@@ -10442,7 +10452,12 @@ impl Inferer<'_> {
             match empty_literal_join(self.ast, (lhs, &present), (rhs, &rhs_ty))? {
                 Some(joined) => joined,
                 // TypeScript reduces `a ?? b` by subtype, so `{} | "d"` is `{}`.
-                None => match conditional_result_type(present, rhs_ty, self.resolver()) {
+                None => match conditional_result_type(
+                    present,
+                    rhs_ty,
+                    has_object_literal(self.ast, [lhs, rhs])?,
+                    self.resolver(),
+                ) {
                     Type::Union(members) => {
                         Type::union(crate::types::without_members_of_empty_object(members))
                     }
@@ -12472,33 +12487,47 @@ fn string_key_as_field(ast: &crate::Ast, part: ChainPart) -> Result<ChainPart, C
     Ok(part)
 }
 
-/// The type of an expression that evaluates to one of two operands. `void`
-/// has no value to join with the other operand's, so an expression that may
-/// produce it is `void` as a whole: usable for its effects, and refused
-/// wherever a value is needed.
+/// The type of an expression that evaluates to one of two operands: the union
+/// of their types reduced by tsc's strict subtype relation, as tsc reduces
+/// `c ? a : b`, `a || b` and `a ?? b`. `object_literal_operand` says whether
+/// either operand is an object literal, which tsc normalizes rather than
+/// reduces, so distinct object shapes stay apart.
 fn conditional_result_type(
     left: Type,
     right: Type,
+    object_literal_operand: bool,
     types: super::assignable::TypeResolver<'_>,
 ) -> Type {
-    branch_result_type(left, right, types)
-}
-
-fn branch_result_type(left: Type, right: Type, types: super::assignable::TypeResolver<'_>) -> Type {
     // `c ? 1 : {}` is `1 | {}` in TypeScript; only widening reduces it to `{}`.
     let one_is_empty_object = left.is_empty_object() != right.is_empty_object();
     let distinct_object_shapes = matches!(left.peel(), Type::Object { .. })
         && matches!(right.peel(), Type::Object { .. })
         && left.peel() != right.peel();
-    if distinct_object_shapes || one_is_empty_object {
+    if one_is_empty_object || (distinct_object_shapes && object_literal_operand) {
         Type::union(vec![left, right])
-    } else if assignable(&left, &right, types) {
+    } else if matches!(left.peel(), Type::Error) || matches!(right.peel(), Type::Error) {
         right
-    } else if assignable(&right, &left, types) {
+    } else if strict_subtype(&right, &left, types) {
         left
+    } else if strict_subtype(&left, &right, types) {
+        right
     } else {
         Type::union(vec![left, right])
     }
+}
+
+/// Whether either of `operands` is an object literal, under any parentheses.
+fn has_object_literal(ast: &crate::Ast, operands: [ExprId; 2]) -> Result<bool, CompilerFailure> {
+    for operand in operands {
+        let id = peel_parens(ast, operand)?;
+        if matches!(
+            &ast.try_expr(id).map_err(super::arena_failure)?.kind,
+            ExprKind::ObjectLiteral { .. }
+        ) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// An empty object literal reads as none of an all-optional object's fields,
