@@ -170,7 +170,7 @@ fn entry(store: &FileSecretStore, file: &SealedFile) -> Result<FileEntry, StoreE
         blueprint: blueprint.to_owned(),
         server: server.to_owned(),
         credential: grant,
-        scopes: credential.scopes,
+        scopes: crate::adapters::mcp_grant_store::grant_scopes(&credential),
     }))
 }
 

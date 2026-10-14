@@ -22,13 +22,13 @@ pub(crate) async fn get(
         sqlx::query("SELECT * FROM mcp_grants WHERE blueprint_name=? AND server_name=?")
             .bind(blueprint)
             .bind(server)
-            .fetch_optional(&mut *connection)
+            .fetch_optional(connection)
             .await
             .map_err(database)?
     else {
         return Ok(None);
     };
-    decode(connection, sealer, row).await.map(Some)
+    decode(sealer, row).map(Some)
 }
 
 /// The version on file, without opening the token.
@@ -63,10 +63,10 @@ pub(crate) async fn overviews(
     blueprint: Option<&str>,
 ) -> Result<Vec<GrantOverview>, StoreError> {
     let rows = sqlx::query(
-        "SELECT blueprint_name, server_name, kind, client_id, updated_unix_ms FROM mcp_grants WHERE ?1 IS NULL OR blueprint_name = ?1 ORDER BY blueprint_name, server_name",
+        "SELECT blueprint_name, server_name, kind, client_id, scopes, updated_unix_ms FROM mcp_grants WHERE ?1 IS NULL OR blueprint_name = ?1 ORDER BY blueprint_name, server_name",
     )
     .bind(blueprint)
-    .fetch_all(&mut *connection)
+    .fetch_all(connection)
     .await
     .map_err(database)?;
     let mut overviews = Vec::with_capacity(rows.len());
@@ -85,7 +85,7 @@ pub(crate) async fn overviews(
         };
         let updated_at = time(row.try_get("updated_unix_ms").map_err(database)?, &entry)?;
         let client_id = row.try_get("client_id").map_err(database)?;
-        let scopes = scopes(connection, &blueprint, &server).await?;
+        let scopes = scopes(&row)?;
         overviews.push(GrantOverview {
             blueprint,
             server,
@@ -126,9 +126,10 @@ pub(crate) async fn save(
     let revision = i64::try_from(grant.revision())
         .map_err(|_| StoreError::Io("grant revision overflow".into()))?;
     let updated_unix_ms = unix_ms(grant.updated_at())?;
+    let scopes = grant.scopes().join(" ");
     let written = match grant.replaces() {
         None => {
-        sqlx::query("INSERT INTO mcp_grants(blueprint_name,server_name,login_id,kind,sealed_token,client_id,token_endpoint,revision,updated_unix_ms) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(blueprint_name,server_name) DO NOTHING")
+        sqlx::query("INSERT INTO mcp_grants(blueprint_name,server_name,login_id,kind,sealed_token,client_id,token_endpoint,scopes,revision,updated_unix_ms) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(blueprint_name,server_name) DO NOTHING")
             .bind(blueprint)
             .bind(server)
             .bind(grant.login_id())
@@ -136,6 +137,7 @@ pub(crate) async fn save(
             .bind(sealed)
             .bind(client_id)
             .bind(token_endpoint)
+            .bind(&scopes)
             .bind(revision)
             .bind(updated_unix_ms)
             .execute(&mut *connection)
@@ -144,41 +146,26 @@ pub(crate) async fn save(
         Some(replaced) => {
         let replaced_revision = i64::try_from(replaced.revision)
             .map_err(|_| StoreError::Io("grant revision overflow".into()))?;
-        sqlx::query("UPDATE mcp_grants SET login_id=?,kind=?,sealed_token=?,client_id=?,token_endpoint=?,revision=?,updated_unix_ms=? WHERE blueprint_name=? AND server_name=? AND login_id=? AND revision=?")
+        sqlx::query("UPDATE mcp_grants SET login_id=?,kind=?,sealed_token=?,client_id=?,token_endpoint=?,scopes=?,revision=?,updated_unix_ms=? WHERE blueprint_name=? AND server_name=? AND login_id=? AND revision=?")
             .bind(grant.login_id())
             .bind(kind)
             .bind(sealed)
             .bind(client_id)
             .bind(token_endpoint)
+            .bind(&scopes)
             .bind(revision)
             .bind(updated_unix_ms)
             .bind(blueprint)
             .bind(server)
             .bind(&replaced.login_id)
             .bind(replaced_revision)
-            .execute(&mut *connection)
+            .execute(connection)
             .await
         }
     }
     .map_err(database)?;
     if written.rows_affected() == 0 {
         return Err(StoreError::Conflict);
-    }
-    sqlx::query("DELETE FROM mcp_grant_scopes WHERE blueprint_name=? AND server_name=?")
-        .bind(blueprint)
-        .bind(server)
-        .execute(&mut *connection)
-        .await
-        .map_err(database)?;
-    for (position, scope) in grant.scopes().iter().enumerate() {
-        sqlx::query("INSERT INTO mcp_grant_scopes(blueprint_name,server_name,position,scope) VALUES (?,?,?,?)")
-            .bind(blueprint)
-            .bind(server)
-            .bind(i64::try_from(position).map_err(|_| StoreError::Io("too many scopes".into()))?)
-            .bind(scope)
-            .execute(&mut *connection)
-            .await
-            .map_err(database)?;
     }
     Ok(())
 }
@@ -188,12 +175,6 @@ pub(crate) async fn remove(
     blueprint: &str,
     server: &str,
 ) -> Result<bool, StoreError> {
-    sqlx::query("DELETE FROM mcp_grant_scopes WHERE blueprint_name=? AND server_name=?")
-        .bind(blueprint)
-        .bind(server)
-        .execute(&mut *connection)
-        .await
-        .map_err(database)?;
     let removed = sqlx::query("DELETE FROM mcp_grants WHERE blueprint_name=? AND server_name=?")
         .bind(blueprint)
         .bind(server)
@@ -207,11 +188,6 @@ pub(crate) async fn remove_for_blueprint(
     connection: &mut SqliteConnection,
     blueprint: &str,
 ) -> Result<(), StoreError> {
-    sqlx::query("DELETE FROM mcp_grant_scopes WHERE blueprint_name=?")
-        .bind(blueprint)
-        .execute(&mut *connection)
-        .await
-        .map_err(database)?;
     sqlx::query("DELETE FROM mcp_grants WHERE blueprint_name=?")
         .bind(blueprint)
         .execute(connection)
@@ -220,11 +196,7 @@ pub(crate) async fn remove_for_blueprint(
     Ok(())
 }
 
-async fn decode(
-    connection: &mut SqliteConnection,
-    sealer: &Sealer,
-    row: SqliteRow,
-) -> Result<McpGrant, StoreError> {
+fn decode(sealer: &Sealer, row: SqliteRow) -> Result<McpGrant, StoreError> {
     let blueprint: String = row.try_get("blueprint_name").map_err(database)?;
     let server: String = row.try_get("server_name").map_err(database)?;
     let entry = entry_name(&blueprint, &server);
@@ -248,7 +220,7 @@ async fn decode(
     };
     let revision: i64 = row.try_get("revision").map_err(database)?;
     let updated_at = time(row.try_get("updated_unix_ms").map_err(database)?, &entry)?;
-    let scopes = scopes(connection, &blueprint, &server).await?;
+    let scopes = scopes(&row)?;
     McpGrant::restore(
         blueprint,
         server,
@@ -261,19 +233,10 @@ async fn decode(
     .map_err(|error| StoreError::Credentials(format!("{entry} is invalid: {error}")))
 }
 
-async fn scopes(
-    connection: &mut SqliteConnection,
-    blueprint: &str,
-    server: &str,
-) -> Result<Vec<String>, StoreError> {
-    sqlx::query_scalar(
-        "SELECT scope FROM mcp_grant_scopes WHERE blueprint_name=? AND server_name=? ORDER BY position",
-    )
-    .bind(blueprint)
-    .bind(server)
-    .fetch_all(connection)
-    .await
-    .map_err(database)
+/// The space-separated scopes column, in order; empty when there are none.
+fn scopes(row: &SqliteRow) -> Result<Vec<String>, StoreError> {
+    let scopes: &str = row.try_get("scopes").map_err(database)?;
+    Ok(scopes.split_whitespace().map(str::to_owned).collect())
 }
 
 fn time(unix_ms: i64, entry: &str) -> Result<std::time::SystemTime, StoreError> {

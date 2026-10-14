@@ -663,7 +663,6 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
                 "blueprint_revisions",
                 "blueprints",
                 "idempotent_requests",
-                "mcp_grant_scopes",
                 "mcp_grants",
                 "secrets",
                 "session_cleanup",

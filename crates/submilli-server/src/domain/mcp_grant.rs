@@ -16,6 +16,8 @@ pub enum GrantError {
     EmptyToken,
     #[error("a refresh grant needs a token endpoint")]
     MissingTokenEndpoint,
+    #[error("an OAuth scope must be non-empty and hold no whitespace")]
+    InvalidScope,
     #[error("a static grant has no refresh token to rotate")]
     NotRefreshable,
     #[error("the grant revision counter is exhausted")]
@@ -87,6 +89,18 @@ impl std::fmt::Debug for GrantCredential {
                 .finish(),
         }
     }
+}
+
+/// OAuth sends scopes space-separated (RFC 6749 §3.3), and a scope is printable
+/// ASCII without spaces, so none can be empty or hold whitespace.
+fn validate_scopes(scopes: &[String]) -> Result<(), GrantError> {
+    if scopes
+        .iter()
+        .any(|scope| scope.is_empty() || scope.contains(char::is_whitespace))
+    {
+        return Err(GrantError::InvalidScope);
+    }
+    Ok(())
 }
 
 /// Which login a grant holds, and how far it has changed since.
@@ -177,6 +191,7 @@ impl McpGrant {
             return Err(GrantError::MissingName);
         }
         credential.validate()?;
+        validate_scopes(&scopes)?;
         Ok(Self {
             blueprint,
             server,
@@ -201,6 +216,7 @@ impl McpGrant {
             return Err(GrantError::MissingName);
         }
         credential.validate()?;
+        validate_scopes(&scopes)?;
         let revision = self.next_revision()?;
         self.remember_replaced();
         self.login_id = login_id;
@@ -385,6 +401,38 @@ mod tests {
                 now,
             ),
             Err(GrantError::MissingTokenEndpoint)
+        );
+    }
+
+    #[test]
+    fn a_scope_is_one_non_empty_word() {
+        let now = SystemTime::UNIX_EPOCH;
+        for scope in ["", "read write", "read\twrite"] {
+            assert_eq!(
+                McpGrant::deposit(
+                    "bp".into(),
+                    "srv".into(),
+                    "l".into(),
+                    refresh("t"),
+                    vec![scope.into()],
+                    now
+                ),
+                Err(GrantError::InvalidScope),
+                "{scope:?}"
+            );
+        }
+        let mut grant = McpGrant::deposit(
+            "bp".into(),
+            "srv".into(),
+            "l".into(),
+            refresh("t"),
+            vec!["read:user".into()],
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            grant.replace("l2".into(), refresh("t2"), vec!["a b".into()], now),
+            Err(GrantError::InvalidScope)
         );
     }
 

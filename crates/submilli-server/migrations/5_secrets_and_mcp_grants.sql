@@ -15,18 +15,11 @@ CREATE TABLE mcp_grants (
     sealed_token BLOB NOT NULL CHECK(length(sealed_token) > 9),
     client_id TEXT,
     token_endpoint TEXT,
+    -- Space-separated, as OAuth sends them; a scope never holds a space.
+    scopes TEXT NOT NULL CHECK(scopes = trim(scopes, ' ') AND instr(scopes, '  ') = 0),
     revision INTEGER NOT NULL CHECK(revision >= 0),
     updated_unix_ms INTEGER NOT NULL CHECK(updated_unix_ms >= 0),
     PRIMARY KEY(blueprint_name, server_name),
     CHECK((kind = 'refresh' AND token_endpoint IS NOT NULL AND length(token_endpoint) > 0)
        OR (kind = 'static' AND client_id IS NULL AND token_endpoint IS NULL))
-);
-
-CREATE TABLE mcp_grant_scopes (
-    blueprint_name TEXT NOT NULL,
-    server_name TEXT NOT NULL,
-    position INTEGER NOT NULL CHECK(position >= 0),
-    scope TEXT NOT NULL,
-    PRIMARY KEY(blueprint_name, server_name, position),
-    FOREIGN KEY(blueprint_name, server_name) REFERENCES mcp_grants(blueprint_name, server_name) ON DELETE CASCADE
 );

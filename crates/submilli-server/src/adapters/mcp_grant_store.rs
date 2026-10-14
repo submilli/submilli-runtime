@@ -115,6 +115,17 @@ pub(crate) fn grant_credential(
     }
 }
 
+/// The credential's scopes one per entry. A configured `"read write"` already
+/// asks for two scopes, since OAuth sends them space-separated.
+pub(crate) fn grant_scopes(credential: &OAuthCredential) -> Vec<String> {
+    credential
+        .scopes
+        .iter()
+        .flat_map(|scope| scope.split_whitespace())
+        .map(str::to_owned)
+        .collect()
+}
+
 fn summary(overview: GrantOverview) -> GrantSummary {
     GrantSummary {
         updated_unix_ms: unix_ms(overview.updated_at).ok(),
@@ -168,7 +179,7 @@ impl McpGrantStore for DatabaseGrantStore {
                 blueprint,
                 server,
                 grant_credential(credential)?,
-                credential.scopes.clone(),
+                grant_scopes(credential),
             )
             .await
             .map(|version| revision(&version))
@@ -265,6 +276,33 @@ mod tests {
         assert_eq!(stored.credential, refresh("one"));
         assert_eq!(stored.revision, revision);
         assert_eq!(grants.revision("bp", "srv").await.unwrap(), Some(revision));
+    }
+
+    #[tokio::test]
+    async fn a_grant_without_scopes_round_trips_and_lists() {
+        let (_db, _units, grants) = store().await;
+        let credential = OAuthCredential {
+            scopes: vec![],
+            ..refresh("one")
+        };
+        grants.deposit("bp", "srv", &credential).await.unwrap();
+        let stored = grants.load("bp", "srv").await.unwrap().unwrap();
+        assert_eq!(stored.credential, credential);
+        let listed = grants.list(None).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].scopes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_scope_holding_a_space_is_kept_as_the_scopes_it_names() {
+        let (_db, _units, grants) = store().await;
+        let credential = OAuthCredential {
+            scopes: vec!["read write".into(), " admin ".into()],
+            ..refresh("one")
+        };
+        grants.deposit("bp", "srv", &credential).await.unwrap();
+        let stored = grants.load("bp", "srv").await.unwrap().unwrap();
+        assert_eq!(stored.credential.scopes, ["read", "write", "admin"]);
     }
 
     #[tokio::test]
