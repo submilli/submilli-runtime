@@ -836,6 +836,13 @@ impl<'a> Inferer<'a> {
         receiver_ty: &Type,
         name: &str,
     ) -> bool {
+        // A type literal's own field of function type shadows the built-in
+        // method of the same name (`toString?: () => string`).
+        if matches!(receiver_ty.peel(), Type::Object { fields, .. }
+            if fields.get(name).is_some_and(|field| !field.method))
+        {
+            return false;
+        }
         let Some((sig, ..)) = self.find_method(receiver_ty, name) else {
             return false;
         };
