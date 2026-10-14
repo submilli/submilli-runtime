@@ -892,9 +892,9 @@ pub struct Ast {
     pub exported_decls: Vec<ExportedDecl>,
     /// The `undefined` a typed `let x: T;` starts with, synthesized by the parser.
     pub implicit_initializers: std::collections::BTreeSet<ExprId>,
-    /// Every `undefined` the compiler writes itself: implicit initializers and
-    /// the padding of a destructured tuple. Each reads the value `undefined`,
-    /// even where a binding named `undefined` is in scope.
+    /// Every `undefined` the compiler writes itself, such as an implicit
+    /// initializer. Each reads the value `undefined`, even where a binding
+    /// named `undefined` is in scope.
     pub synthetic_undefined: std::collections::BTreeSet<ExprId>,
     /// Destructuring defaults, keyed by the ternary `lower_patterns` makes of each.
     pub binding_defaults: std::collections::BTreeMap<ExprId, BindingDefault>,

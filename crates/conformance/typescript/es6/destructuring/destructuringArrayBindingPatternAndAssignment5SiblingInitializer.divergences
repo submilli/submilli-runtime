@@ -1,20 +1,4 @@
-types: 36 of 52 tsc entries compared, 9 differ
-
-line 6: [1]
-  tsc:  [number]
-  ours: [number, undefined]
-
-line 7: [1]
-  tsc:  [number]
-  ours: [number, undefined]
-
-line 12: ['hi']
-  tsc:  [string]
-  ours: [string, undefined]
-
-line 13: ['hi']
-  tsc:  [string]
-  ours: [string, undefined]
+types: 36 of 52 tsc entries compared, 5 differ
 
 line 26: a
   tsc:  number | undefined

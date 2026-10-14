@@ -609,7 +609,7 @@ impl Inferer<'_> {
             super::inference_failure("missing saved destructuring component").with_span(saved.span)
         })?;
         // Unannotated, a component that is only `undefined` (a slot past the
-        // end of a padded tuple) or `void` says nothing of its default, which
+        // end of a tuple literal) or `void` says nothing of its default, which
         // then types alone. An annotation's component still checks it.
         let component = binding.write_type();
         let says_nothing = matches!(component.peel(), Type::Undefined | Type::Void);

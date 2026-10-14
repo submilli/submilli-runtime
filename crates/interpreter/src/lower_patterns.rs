@@ -543,8 +543,7 @@ impl LowerCtx {
             None => tuple_source_len(ast, &binding, value)?,
             Some(_) => None,
         };
-        if let Some(len) = tuple_len {
-            pad_tuple_source(ast, value, len)?;
+        if tuple_len.is_some() {
             ast.tuple_pattern_sources.insert(value);
         }
         let pattern_span = binding.span();
@@ -728,7 +727,13 @@ impl LowerCtx {
                             slot_arity: elems_len,
                         },
                     );
-                    let access = if default.is_some() {
+                    // A tuple literal holds nothing past its end, so a defaulted
+                    // slot there reads `undefined`, as tsc reads it, and the
+                    // literal keeps its own length.
+                    let past_tuple_end = tuple_len.is_some_and(|len| i >= len);
+                    let access = if default.is_some() && past_tuple_end {
+                        push_void_zero(ast, local.span)?
+                    } else if default.is_some() {
                         self.guard_defaulted_array_read(ast, recv, idx, access, local.span)?
                     } else {
                         access
@@ -799,8 +804,7 @@ impl LowerCtx {
             },
             span,
         )?;
-        let zero = push_expr(ast, ExprKind::Number(0.0), span)?;
-        let undefined = push_expr(ast, ExprKind::Void { operand: zero }, span)?;
+        let undefined = push_void_zero(ast, span)?;
         push_expr(
             ast,
             ExprKind::Ternary {
@@ -835,8 +839,7 @@ impl LowerCtx {
             .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
         out.push(declaration);
         let saved_value = push_expr(ast, ExprKind::Identifier(saved.clone()), span)?;
-        let zero = push_expr(ast, ExprKind::Number(0.0), span)?;
-        let undefined = push_expr(ast, ExprKind::Void { operand: zero }, span)?;
+        let undefined = push_void_zero(ast, span)?;
         let condition = push_expr(
             ast,
             ExprKind::Binary {
@@ -870,18 +873,13 @@ impl LowerCtx {
 /// The length of `value` when it is an array literal without spreads that
 /// `binding`, an array pattern, takes apart slot by slot, so TypeScript types
 /// it as a tuple. A pattern of only a rest element takes the literal whole, as
-/// an array. When every slot past the literal's end has a default or is a
-/// hole, the length is the pattern's: [`pad_tuple_source`] fills those slots
-/// with `undefined`, as tsc pads the tuple (`const [a, b = a] = [1]`).
+/// an array.
 fn tuple_source_len(
     ast: &Ast,
     binding: &Binding,
     value: ExprId,
 ) -> Result<Option<usize>, CompilerFailure> {
-    let Binding::Array {
-        elems, defaults, ..
-    } = binding
-    else {
+    let Binding::Array { elems, .. } = binding else {
         return Ok(None);
     };
     if elems.is_empty() {
@@ -897,51 +895,7 @@ fn tuple_source_len(
     let has_spread = elements
         .iter()
         .any(|element| matches!(element, crate::ArrayLiteralElement::Spread { .. }));
-    if has_spread {
-        return Ok(None);
-    }
-    let padded = elems.len() > elements.len()
-        && (elements.len()..elems.len()).all(|slot| {
-            elems.get(slot).is_some_and(Option::is_none)
-                || defaults.get(slot).is_some_and(Option::is_some)
-        });
-    Ok(Some(if padded { elems.len() } else { elements.len() }))
-}
-
-/// Append `undefined` to the array literal `value` until it holds `len`
-/// elements. The literal only feeds a pattern's hidden source, so the padding
-/// is never observed; it gives each defaulted or hole slot an element to read.
-fn pad_tuple_source(ast: &mut Ast, value: ExprId, len: usize) -> Result<(), CompilerFailure> {
-    let expr = ast
-        .try_expr(value)
-        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
-    let span = expr.span;
-    let ExprKind::ArrayLiteral { elements } = &expr.kind else {
-        return Ok(());
-    };
-    let missing = len.saturating_sub(elements.len());
-    if missing == 0 {
-        return Ok(());
-    }
-    let mut padding = Vec::with_capacity(missing);
-    for _ in 0..missing {
-        let undefined = Ident {
-            name: "undefined".to_string(),
-            span,
-        };
-        let element = push_expr(ast, ExprKind::Identifier(undefined), span)?;
-        ast.synthetic_undefined.insert(element);
-        padding.push(crate::ArrayLiteralElement::Value(element));
-    }
-    // The same literal, borrowed mutably now that the padding is allocated.
-    if let ExprKind::ArrayLiteral { elements } = &mut ast
-        .try_expr_mut(value)
-        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
-        .kind
-    {
-        elements.extend(padding);
-    }
-    Ok(())
+    Ok((!has_spread).then_some(elements.len()))
 }
 
 /// `source.slice(from, source.length)`: the elements an array pattern's rest
@@ -1036,6 +990,12 @@ fn remaining_elements(
 fn push_expr(ast: &mut Ast, kind: ExprKind, span: Span) -> Result<ExprId, CompilerFailure> {
     ast.try_push_expr(Expr { kind, span })
         .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))
+}
+
+/// `void 0`, which is `undefined` even where a source binding shadows the name.
+fn push_void_zero(ast: &mut Ast, span: Span) -> Result<ExprId, CompilerFailure> {
+    let zero = push_expr(ast, ExprKind::Number(0.0), span)?;
+    push_expr(ast, ExprKind::Void { operand: zero }, span)
 }
 
 fn make_decl(

@@ -1,8 +1,4 @@
-types: 24 of 33 tsc entries compared, 3 differ
-
-line 4: []
-  tsc:  []
-  ours: [undefined]
+types: 24 of 33 tsc entries compared, 2 differ
 
 line 4: x = !x
   tsc:  true
