@@ -8,15 +8,17 @@ slug: server/deploy-with-compose
 # Turn on HTTPS was not run under Docker (no engine was available); the
 # SUBMILLI_TLS_* variables and --health-check over HTTPS were run with the
 # release binaries on main 51ce450b.
-# The application-token override was checked against the configuration loader
-# and parsed as YAML on 2026-10-14. Container startup was not run because no
-# Docker engine was available.
+# The application-token configuration was checked with the published 0.4.1
+# macOS binaries on 2026-10-14: the user token ran a local program and was denied
+# admin operations; the admin token could manage Blueprints. Missing and unknown
+# tokens were rejected. Container startup was not run because no Docker engine
+# was available.
 sidebar:
   order: 6
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "12dea03c0b07d41229b61b2d6d261f41aff4bec7169e3e4bc7ffbb88ea16e84c"
+  contentHash: "fb19d4ebb8191fceaffd34f06cd7108c5b02c27d0a775e0facb66e571ad89e4a"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -132,6 +134,10 @@ The server keeps the admin token from the published file. The application's
 `SUBMILLI_SERVER_TOKEN` variable receives the separate user token stored as
 `SUBMILLI_APP_TOKEN` in `.env`. Name the application's variables as its client
 expects. The server reads that same user token from `app-token`.
+
+Both tokens appear in `docker compose config`, and container environment
+variables are visible through `docker inspect`. Limit access to Docker and
+keep this output private.
 
 Compose keeps the host file modes for these mounts outside Docker Swarm.
 Make `server.yaml` readable by the server's uid `65532`, then apply the
