@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createDocsInvitationController } from '../src/lib/docs-invitation-client.ts';
 
-function fixture({ storage = new Map(), session = new Map(), response = { ok: true, json: async () => ({ ok: true }) }, fetchImpl, invitation = true, overlay = false, mutationObserver } = {}) {
+function fixture({ storage = new Map(), session = new Map(), response = { ok: true, json: async () => ({ ok: true }) }, fetchImpl, invitation = true, overlay = false, mutationObserver, engaged = true } = {}) {
+  if (engaged) session.set('submilli.docs-invitation.engaged.v1', '1');
   let now = 0;
   let timeout;
   const requests = [];
@@ -24,6 +25,8 @@ function fixture({ storage = new Map(), session = new Map(), response = { ok: tr
   };
   const document = {
     visibilityState: 'visible',
+    baseURI: 'https://docs.example.test/docs/quickstart/',
+    scrollingElement: { scrollTop: 0 },
     body: {},
     querySelector(selector) { return selector === '[data-docs-invitation]' ? (invitation ? root : undefined) : (overlay ? {} : undefined); },
     getElementById() { return undefined; },
@@ -50,7 +53,7 @@ function fixture({ storage = new Map(), session = new Map(), response = { ok: tr
   return { controller, root, fields, listeners, storage, session, document, requests, get timeout() { return timeout; }, advance(ms) { now += ms; } };
 }
 
-test('shows after ten seconds of visible browsing without taking focus', () => {
+test('shows after ten seconds of engaged visible browsing without taking focus', () => {
   const f = fixture();
   f.controller.bind();
   assert.equal(f.timeout.delay, 10_000);
@@ -58,6 +61,85 @@ test('shows after ten seconds of visible browsing without taking focus', () => {
   f.advance(10_000); f.timeout.fn();
   assert.equal(f.root.hidden, false);
   assert.equal(f.fields.input.reported, undefined);
+});
+
+test('landing and elapsed time alone never show the invitation', () => {
+  const f = fixture({ engaged: false });
+  f.controller.bind(); f.advance(10_000); f.timeout.fn();
+  assert.equal(f.root.hidden, true);
+  assert.equal(f.controller.state.engaged, false);
+  f.controller.onVisibilityChange();
+  assert.equal(f.root.hidden, true);
+});
+
+test('a real docs link qualifies, preserves engagement across pages, and keeps the time minimum', () => {
+  const f = fixture({ engaged: false });
+  f.controller.bind();
+  const target = { closest(selector) { return selector === 'a[href]' ? { getAttribute: () => '/docs/packages/' } : undefined; } };
+  f.listeners.click({ isTrusted: false, button: 0, target });
+  assert.equal(f.controller.state.engaged, false);
+  f.listeners.click({ isTrusted: true, button: 0, target });
+  assert.equal(f.controller.state.engaged, true);
+  assert.equal(f.root.hidden, true);
+  f.advance(4_000); f.controller.pauseForNavigation();
+  const next = fixture({ session: f.session, engaged: false });
+  next.controller.bind();
+  assert.equal(next.timeout.delay, 6_000);
+  next.advance(6_000); next.timeout.fn();
+  assert.equal(next.root.hidden, false);
+});
+
+test('external links, empty search and synthetic input do not qualify', () => {
+  const f = fixture({ engaged: false }); f.controller.bind();
+  const external = { closest(selector) { return selector === 'a[href]' ? { getAttribute: () => 'https://example.org/' } : undefined; } };
+  f.listeners.click({ isTrusted: true, button: 0, target: external });
+  f.listeners.input({ isTrusted: true, target: { matches: () => true, value: ' ' } });
+  f.listeners.input({ isTrusted: false, target: { matches: () => true, value: 'blueprints' } });
+  assert.equal(f.controller.state.engaged, false);
+  f.advance(10_000); f.timeout.fn();
+  f.listeners.input({ isTrusted: true, target: { matches: () => true, value: 'blueprints' } });
+  assert.equal(f.root.hidden, false);
+});
+
+test('using a copy control qualifies without taking focus', () => {
+  const f = fixture({ engaged: false }); f.controller.bind();
+  f.advance(10_000); f.timeout.fn();
+  const target = { closest(selector) { return selector.startsWith('[data-copy-page]') ? {} : undefined; } };
+  f.listeners.click({ isTrusted: true, button: 0, target });
+  assert.equal(f.root.hidden, false);
+  assert.equal(f.fields.input.reported, undefined);
+});
+
+test('scrolling needs reader input and movement, not restoration or tiny jitter', () => {
+  const f = fixture({ engaged: false }); f.controller.bind();
+  f.advance(10_000); f.timeout.fn();
+  f.document.scrollingElement.scrollTop = 500; f.listeners.scroll();
+  assert.equal(f.root.hidden, true);
+  f.listeners.wheel({ isTrusted: false, type: 'wheel' });
+  f.document.scrollingElement.scrollTop = 600; f.listeners.scroll();
+  assert.equal(f.root.hidden, true);
+  f.listeners.wheel({ isTrusted: true, type: 'wheel' });
+  f.document.scrollingElement.scrollTop = 679; f.listeners.scroll();
+  assert.equal(f.root.hidden, true);
+  f.document.scrollingElement.scrollTop = 680; f.listeners.scroll();
+  assert.equal(f.root.hidden, false);
+});
+
+test('expired scroll intent and editing arrow keys do not qualify, but touch and reading keys do', () => {
+  const f = fixture({ engaged: false }); f.controller.bind();
+  f.listeners.wheel({ isTrusted: true, type: 'wheel' }); f.advance(1501);
+  f.document.scrollingElement.scrollTop = 200; f.listeners.scroll();
+  assert.equal(f.controller.state.engaged, false);
+  f.listeners.keydown({ isTrusted: true, type: 'keydown', key: 'ArrowDown', target: { closest: () => ({}) } });
+  f.document.scrollingElement.scrollTop = 400; f.listeners.scroll();
+  assert.equal(f.controller.state.engaged, false);
+  f.listeners.touchmove({ isTrusted: true, type: 'touchmove' });
+  f.document.scrollingElement.scrollTop = 480; f.listeners.scroll();
+  assert.equal(f.controller.state.engaged, true);
+  const keyboard = fixture({ engaged: false }); keyboard.controller.bind();
+  keyboard.listeners.keydown({ isTrusted: true, type: 'keydown', key: 'PageDown', target: { closest: () => undefined } });
+  keyboard.document.scrollingElement.scrollTop = 80; keyboard.listeners.scroll();
+  assert.equal(keyboard.controller.state.engaged, true);
 });
 
 test('pauses while hidden and resumes with remaining visible time', () => {
