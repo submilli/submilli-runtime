@@ -138,7 +138,7 @@ not satisfy these gates.
   the final release candidate checkout, before tagging, pushing, or publishing.
   Do not dispatch a GitHub Actions conformance run for release verification;
   the Nightly tests workflow is for nightly checks only. This is the explicit pre-release exception
-  to keeping conformance disabled during development and PR verification.
+  to keeping test262 conformance disabled during development and PR verification.
   `SUBMILLI_FULL_TEST` does not enable conformance. Clear inherited filters and
   baseline-update/output settings and opt in with the nightly-only flag:
 

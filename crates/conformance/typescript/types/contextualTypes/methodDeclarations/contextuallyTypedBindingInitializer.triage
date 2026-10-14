@@ -1,1 +1,1 @@
-line 13 type: by-design spec §2.3 a literal checked against an interface with methods is typed as the interface, which a plain object type isn't assignable to
+line 13 type: by-design spec §2.3 a literal checked against an interface with methods is typed as the interface; a function-typed field declares a method (§1.2)

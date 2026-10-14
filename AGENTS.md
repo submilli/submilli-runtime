@@ -291,7 +291,7 @@ determinism sweeps, compiler type limits (`type_limits`), Git memory-limit tests
 `accessors_do_not_pay_for_the_whole_receiver` and
 `operations_charge_for_the_input_they_process`. Conformance filters and
 baseline-update settings do not opt in. Nightly CI enables the flag; PR CI
-enables it for the TypeScript conformance suite alone. The
+enables it only for the TypeScript conformance suite. The
 [release skill](.agents/skills/release/SKILL.md) requires all these checks on the
 final release candidate before publication. Enable the flag during development
 only for focused verification of changes to these tests or their selection,
@@ -316,10 +316,11 @@ cargo run -p submilli -- build test --skip-network
 ```
 
 When the change touches the compiler or the TypeScript conformance suite, also run
-that suite, as PR CI does. It takes a few seconds once built:
+that suite, as PR CI does. It takes a few seconds after the workspace test run,
+since `--workspace` reuses that build:
 
 ```sh
-SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test --workspace --test typescript
+SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test --workspace --test typescript
 ```
 
 During development, run affected Rust tests with full tests explicitly
