@@ -901,10 +901,9 @@ impl Inferer<'_> {
         let Some(want) = expected else {
             return Ok(id);
         };
-        let present = super::narrowing::strip_nullish(ty);
-        if !present.peel().is_empty_object()
+        if !is_possibly_nullish_empty_object(ty)
             || !reads_object_fields(want)
-            || !assignable(&present, want, self.resolver())
+            || !assignable(&super::narrowing::strip_nullish(ty), want, self.resolver())
         {
             return Ok(id);
         }
@@ -13214,6 +13213,22 @@ fn is_definitely_falsy(ty: &Type) -> bool {
         Type::NumberLiteral(value) => value.0 == 0.0,
         Type::StringLiteral(value) => value.is_empty(),
         _ => false,
+    }
+}
+
+/// Whether `ty` is `{}` (or a narrowed `T & {}`), possibly with `null` and
+/// `undefined` members: a type that holds any value. `unknown` and a bare type
+/// parameter are not, though they strip to `{}`; a cast from them stays checked.
+fn is_possibly_nullish_empty_object(ty: &Type) -> bool {
+    let is_nullish = |member: &Type| matches!(member.peel(), Type::Null | Type::Undefined);
+    match ty.peel() {
+        Type::Union(members) => {
+            members.iter().any(|member| member.peel().is_empty_object())
+                && members
+                    .iter()
+                    .all(|member| is_nullish(member) || member.peel().is_empty_object())
+        }
+        other => other.is_empty_object(),
     }
 }
 
