@@ -37,6 +37,10 @@ function narrowedGeneric<T>(value: T): string {
   return "nullish";
 }
 
+function castNullable(value: {} | null): string {
+  return String((value as Options).a);
+}
+
 class Holder {
   a: number = 3;
 }
@@ -75,6 +79,7 @@ function main(): void {
   assert(narrowedGeneric(5) === "undefined", "a type parameter narrowed to non-nullish");
   assert(narrowedGeneric({ a: 4 }) === "4", "holding an object");
   assert((n as Options).a === undefined, "a cast");
+  assert(castNullable(2) === "undefined", "a cast from a nullable `{}`");
   assert((s as { [k: string]: unknown })["0"] === "s", "a cast to an index signature");
   assert(readA(new Map<string, number>()) === "undefined", "a Map has no own fields");
   assert(readA(new Set<number>()) === "undefined", "nor a Set");

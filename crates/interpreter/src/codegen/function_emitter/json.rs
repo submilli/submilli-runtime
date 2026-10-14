@@ -99,7 +99,8 @@ fn may_stringify_undefined(ctx: &CodegenCtx, ty: &Type) -> bool {
 }
 
 /// A constructor binding used as a value (`Number`) is a function, which JSON
-/// leaves out.
+/// leaves out. Its tag (`static_value_tag`) is the native-function text the
+/// runtime also builds the closure from, so both read the kind from it.
 fn is_constructor_value(ctx: &CodegenCtx, ty: &Type) -> bool {
     let Type::InterfaceRef { mangled, .. } = ty else {
         return false;

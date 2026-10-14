@@ -299,7 +299,9 @@ fn json_stringify_may_return_undefined(ty: &Type, types: TypeResolver<'_>) -> bo
 /// Whether `ty` types a constructor binding used as a value (`Number`,
 /// `Map`), which is a function at run time. The prelude names these
 /// static-dispatch interfaces `…Constructor`, as TypeScript's lib does;
-/// `Console` is the one that types a plain object.
+/// `Console` is the one that types a plain object. Codegen tells the two
+/// apart by binding name instead (`static_value_tag` in codegen/mod.rs), and
+/// every prelude constructor interface is bound to a capitalized name.
 fn is_constructor_binding(ty: &Type, types: TypeResolver<'_>) -> bool {
     let Type::InterfaceRef { mangled, name, .. } = ty else {
         return false;
@@ -899,9 +901,10 @@ impl Inferer<'_> {
         let Some(want) = expected else {
             return Ok(id);
         };
-        if !super::narrowing::strip_nullish(ty).peel().is_empty_object()
+        let present = super::narrowing::strip_nullish(ty);
+        if !present.peel().is_empty_object()
             || !reads_object_fields(want)
-            || !assignable(ty, want, self.resolver())
+            || !assignable(&present, want, self.resolver())
         {
             return Ok(id);
         }
