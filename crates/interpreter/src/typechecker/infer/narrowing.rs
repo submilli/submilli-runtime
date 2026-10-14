@@ -583,35 +583,36 @@ pub fn discriminant_table_for_key(
     Some(table)
 }
 
-/// Tuple-union analog of [`union_discriminant`]: find a position whose element
-/// type is a literal and pairwise distinct across variants.
-/// Positions are tried only up to the smallest variant's arity.
-pub fn tuple_union_discriminant(members: &[Type]) -> Option<(usize, DiscriminantTable)> {
+/// The literals that name each member of a union of tuples at `position`,
+/// when every member has a literal there. A tuple shorter than `position`
+/// reads `undefined`, as a destructuring pattern reads it. A member whose
+/// position is optional may hold either, so then the position is no
+/// discriminant.
+pub fn tuple_position_discriminant(members: &[Type], position: usize) -> Option<DiscriminantTable> {
     if members.len() < 2 {
         return None;
     }
-    let tuples: Vec<&crate::types::TupleType> = members
-        .iter()
-        .map(|m| match m.peel() {
-            Type::Tuple(elements) => Some(elements),
-            _ => None,
-        })
-        .collect::<Option<_>>()?;
-    let min_arity = tuples.iter().map(|t| t.required_len()).min().unwrap_or(0);
-    (0..min_arity).find_map(|position| {
-        let mut table = DiscriminantTable::default();
-        for (idx, tuple) in tuples.iter().enumerate() {
-            let lit = tuple.get(position).and_then(unit_value)?;
-            // Positions are required, so each one names one member, `undefined`
-            // included.
-            table.insert(
-                lit,
-                VariantIdx(u32::try_from(idx).ok()?),
-                UndefinedNames::One,
-            )?;
-        }
-        Some((position, table))
-    })
+    let mut table = DiscriminantTable::default();
+    for (idx, member) in members.iter().enumerate() {
+        let Type::Tuple(elements) = member.peel() else {
+            return None;
+        };
+        let lit = if position >= elements.len() {
+            LiteralValue::Undefined
+        } else if position < elements.required_len() {
+            elements.get(position).and_then(unit_value)?
+        } else {
+            return None;
+        };
+        // Present or not, a position holds one value, so each one names one
+        // member, `undefined` included.
+        table.insert(
+            lit,
+            VariantIdx(u32::try_from(idx).ok()?),
+            UndefinedNames::One,
+        )?;
+    }
+    Some(table)
 }
 
 /// The literal a `case` label compares against: `None` for an expression

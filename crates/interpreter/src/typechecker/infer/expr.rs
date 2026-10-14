@@ -8427,9 +8427,9 @@ impl Inferer<'_> {
 
     /// The element a read at `index` gives from a union of arrays and tuples: the
     /// union of each member's element there. An array member gives its element at
-    /// any index; a tuple member needs a non-negative integer literal within its
-    /// arity, since its positions have distinct types and no runtime length check
-    /// guards a shorter variant.
+    /// any index; a tuple member needs a non-negative integer literal, since its
+    /// positions have distinct types, within its arity unless a destructuring
+    /// pattern reads it.
     fn array_like_union_element(
         &mut self,
         members: &[Type],
@@ -8455,6 +8455,11 @@ impl Inferer<'_> {
                         Some(min_tuple_arity.map_or(positions.len(), |m| m.min(positions.len())));
                     match literal_idx.and_then(|idx| positions.get(idx)) {
                         Some(element) => elements.push(element.clone()),
+                        // A pattern reads a slot a shorter tuple lacks as
+                        // `undefined`, as tsc does; codegen checks the length.
+                        None if literal_idx.is_some() && pattern_origin.is_some() => {
+                            elements.push(Type::Undefined)
+                        }
                         None => tuple_lacks_index = true,
                     }
                 }

@@ -606,10 +606,10 @@ impl Inferer<'_> {
             None => match self.top_symbols.get(&saved.name).map(|entry| &entry.kind) {
                 Some(ValueKind::Const { ty, .. } | ValueKind::Let { ty, .. }) => ty,
                 _ => {
-                    return Err(super::inference_failure(
-                        "missing saved destructuring component",
-                    )
-                    .with_span(saved.span));
+                    return Err(
+                        super::inference_failure("missing saved destructuring component")
+                            .with_span(saved.span),
+                    );
                 }
             },
         };
@@ -1935,9 +1935,9 @@ impl Inferer<'_> {
         })
     }
 
-    /// Whether `value` reads a field of a destructured parameter.
+    /// Whether `value` reads a field or element of a destructured parameter.
     fn reads_pattern_parameter(&self, value: ExprId) -> Result<bool, CompilerFailure> {
-        let ExprKind::FieldAccess { receiver, .. } =
+        let (ExprKind::FieldAccess { receiver, .. } | ExprKind::IndexAccess { receiver, .. }) =
             &self.ast.try_expr(value).map_err(super::arena_failure)?.kind
         else {
             return Ok(false);
@@ -2011,9 +2011,11 @@ impl Inferer<'_> {
             .map(|view| view.narrowed_ty.clone()))
     }
 
+    /// What a pattern's slot at `index` reads from `source`: a slot past a
+    /// tuple's end reads `undefined`.
     pub(super) fn pattern_index_flow_type(source: &Type, index: usize) -> Option<Type> {
         match source.peel() {
-            Type::Tuple(elems) => elems.get(index).cloned(),
+            Type::Tuple(elems) => Some(elems.get(index).cloned().unwrap_or(Type::Undefined)),
             Type::Array(elem) => Some((**elem).clone()),
             Type::Union(members) => members
                 .iter()

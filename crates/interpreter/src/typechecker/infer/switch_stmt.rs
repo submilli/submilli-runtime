@@ -415,13 +415,19 @@ impl Inferer<'_> {
                 .try_stmt(d.body)
                 .map_err(super::arena_failure)?
                 .span;
-            let env = self.build_default_narrow_env(
+            let mut env = self.build_default_narrow_env(
                 &residual,
                 &site,
                 covered.ruled_out(&site),
                 narrowed_before,
                 body_span,
             )?;
+            env.extend_env(self.aliased_default_env(
+                typed_disc,
+                &covered,
+                narrowed_before,
+                body_span,
+            )?);
             self.push_narrow_frame(env.clone());
             self.switch_depth += 1;
             self.reachable = entry_reachable;
@@ -465,6 +471,12 @@ impl Inferer<'_> {
                 &residual,
                 &site,
                 covered.ruled_out(&site),
+                narrowed_before,
+                switch_span,
+            )?);
+            natural.extend_env(self.aliased_default_env(
+                typed_disc,
+                &covered,
                 narrowed_before,
                 switch_span,
             )?);
@@ -779,8 +791,7 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?;
             if let Type::Union(members) = receiver_expr.ty.peel()
                 && let Some(position) = index_position(&index_expr.kind)
-                && let Some((disc_pos, table)) = narrowing::tuple_union_discriminant(members)
-                && disc_pos == position
+                && let Some(table) = narrowing::tuple_position_discriminant(members, position)
             {
                 let kept = table.uncovered_members(members, &covered.literals);
                 let missing = Type::union(
@@ -806,6 +817,41 @@ impl Inferer<'_> {
                 (residual, ResidualSite::Anonymous)
             },
         )
+    }
+
+    /// What a `switch` on a `const` destructured from a union leaves for its
+    /// `default`, through the value it was read from: after
+    /// `const { kind, payload } = action`, a `switch (kind)` whose cases cover
+    /// every member leaves `payload` as `never`, as testing `kind` would.
+    fn aliased_default_env(
+        &mut self,
+        typed_disc: ExprId,
+        covered: &CaseCoverage,
+        narrowed_before: bool,
+        body_span: Span,
+    ) -> Result<narrowing::NarrowEnv, CompilerFailure> {
+        let Some(initializer) = self.alias_initializer(typed_disc)? else {
+            return Ok(narrowing::NarrowEnv::new());
+        };
+        let initializer_ty = self
+            .typed_ast
+            .try_expr(initializer)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .clone();
+        let (residual, site) =
+            self.compute_switch_residual(initializer, &initializer_ty, covered)?;
+        if !matches!(site, ResidualSite::DiscriminatedReceiver { .. }) {
+            return Ok(narrowing::NarrowEnv::new());
+        }
+        let env = self.build_default_narrow_env(
+            &residual,
+            &site,
+            covered.ruled_out(&site),
+            narrowed_before,
+            body_span,
+        )?;
+        self.destructured_alias_views(env)
     }
 
     /// What a `switch` on a union's discriminant leaves for its `default`: the

@@ -647,7 +647,8 @@ impl LowerCtx {
                     let access = if absent && field.default.is_some() {
                         push_void_zero(ast, field.span)?
                     } else {
-                        let recv = push_expr(ast, ExprKind::Identifier(source.clone()), field.span)?;
+                        let recv =
+                            push_expr(ast, ExprKind::Identifier(source.clone()), field.span)?;
                         push_expr(
                             ast,
                             ExprKind::FieldAccess {
