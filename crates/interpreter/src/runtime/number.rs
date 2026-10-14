@@ -101,22 +101,24 @@ fn fixed_ties_away_from_zero(x: f64, digits: usize) -> String {
 /// `number`, a decimal spelled with ASCII digits and at most one point, plus
 /// one unit in its last digit: "2.2" gives "2.3" and "9.99" gives "10.00".
 fn increment_last_digit(number: &str) -> String {
-    let mut bytes = number.as_bytes().to_vec();
-    let carried_out = !bytes.iter_mut().rev().any(|byte| match *byte {
-        b'.' => false,
-        b'9' => {
-            *byte = b'0';
-            false
+    let mut digits = number.to_owned().into_bytes();
+    for byte in digits.iter_mut().rev() {
+        match *byte {
+            b'.' => continue,
+            b'9' => *byte = b'0',
+            _ => {
+                *byte += 1;
+                return ascii_text(digits);
+            }
         }
-        _ => {
-            *byte += 1;
-            true
-        }
-    });
-    if carried_out {
-        bytes.insert(0, b'1');
     }
-    String::from_utf8_lossy(&bytes).into_owned()
+    digits.insert(0, b'1');
+    ascii_text(digits)
+}
+
+/// `bytes`, ASCII by construction, as a `String`; nothing is replaced.
+fn ascii_text(bytes: Vec<u8>) -> String {
+    bytes.into_iter().map(char::from).collect()
 }
 
 /// JS-spec `Number#toExponential(fractionDigits)`. A NaN `fractionDigits`
