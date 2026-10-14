@@ -1107,16 +1107,22 @@ impl Inferer<'_> {
 /// discriminant: when its type is made of literals alone, which cases can
 /// cover. One with a member such as `string`, `null` or `undefined`, even in
 /// a single member of a discriminated union, can't be listed out, so the
-/// switch may simply fall through. Neither need a `typeof` value: its type
-/// lists every tag whatever the operand is, so a switch on it lists the tags
-/// the operand can have.
+/// switch may simply fall through. Neither need one on `typeof` tags: a
+/// `typeof` value's type lists every tag whatever its operand is, even after
+/// narrowing removes some, so a switch on it lists the tags its operand can
+/// have.
 fn requires_every_case(disc_ty: &Type) -> bool {
-    if *disc_ty.peel() == super::expr::typeof_result_type() {
+    let members = narrowing::union_members(disc_ty);
+    if members.iter().all(|member| is_typeof_tag(member)) {
         return false;
     }
-    narrowing::union_members(disc_ty).into_iter().all(|member| {
+    members.into_iter().all(|member| {
         narrowing::unit_literal_value(member).is_some() || matches!(member.peel(), Type::Boolean)
     })
+}
+
+fn is_typeof_tag(ty: &Type) -> bool {
+    narrowing::union_members(&super::expr::typeof_result_type()).contains(&ty.peel())
 }
 
 fn format_residual_missing(residual: &Type) -> String {
