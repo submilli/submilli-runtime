@@ -1,0 +1,10 @@
+=== parserReturnStatement2.ts ===
+{
+   return;
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

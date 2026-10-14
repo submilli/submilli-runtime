@@ -1,0 +1,1 @@
+logicalNotOperatorWithBooleanType.ts(22,25): error TS2872: This kind of expression is always truthy.

@@ -1,0 +1,19 @@
+=== templateStringWithEmbeddedInstanceOf.ts ===
+let x = `abc${ "hello" instanceof String }def`;
+>x : string
+>  : ^^^^^^
+>`abc${ "hello" instanceof String }def` : string
+>                                       : ^^^^^^
+>"hello" instanceof String : boolean
+>                          : ^^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+>String : StringConstructor
+>       : ^^^^^^^^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

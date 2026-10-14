@@ -1,0 +1,172 @@
+=== voidOperatorWithBooleanType.ts ===
+// void  operator on boolean type
+let BOOLEAN: boolean = null as unknown as (boolean);
+>BOOLEAN : boolean
+>        : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+function foo(): boolean { return true; }
+>foo : () => boolean
+>    : ^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+
+
+class A {
+>A : A
+>  : ^
+
+    public a: boolean;
+>a : boolean
+>  : ^^^^^^^
+
+    static foo(): boolean { return false; }
+>foo : () => boolean
+>    : ^^^^^^^^^^^^^
+>false : false
+>      : ^^^^^
+
+}
+/*pruned*/;
+
+
+
+let objA = new A();
+>objA : A
+>     : ^
+>new A() : A
+>        : ^
+>A : typeof A
+>  : ^^^^^^^^
+
+
+// boolean type var
+let ResultIsAny1 = void BOOLEAN;
+>ResultIsAny1 : undefined
+>             : ^^^^^^^^^
+>void BOOLEAN : undefined
+>             : ^^^^^^^^^
+>BOOLEAN : boolean
+>        : ^^^^^^^
+
+
+// boolean type literal
+let ResultIsAny2 = void true;
+>ResultIsAny2 : undefined
+>             : ^^^^^^^^^
+>void true : undefined
+>          : ^^^^^^^^^
+>true : true
+>     : ^^^^
+
+let ResultIsAny3 = void { x: true, y: false };
+>ResultIsAny3 : undefined
+>             : ^^^^^^^^^
+>void { x: true, y: false } : undefined
+>                           : ^^^^^^^^^
+>{ x: true, y: false } : { x: boolean; y: boolean; }
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+>y : boolean
+>  : ^^^^^^^
+>false : false
+>      : ^^^^^
+
+
+// boolean type expressions
+let ResultIsAny4 = void objA.a;
+>ResultIsAny4 : undefined
+>             : ^^^^^^^^^
+>void objA.a : undefined
+>            : ^^^^^^^^^
+>objA.a : boolean
+>       : ^^^^^^^
+>objA : A
+>     : ^
+>a : boolean
+>  : ^^^^^^^
+
+/*pruned*/;
+let ResultIsAny6 = void foo();
+>ResultIsAny6 : undefined
+>             : ^^^^^^^^^
+>void foo() : undefined
+>           : ^^^^^^^^^
+>foo() : boolean
+>      : ^^^^^^^
+>foo : () => boolean
+>    : ^^^^^^^^^^^^^
+
+let ResultIsAny7 = void A.foo();
+>ResultIsAny7 : undefined
+>             : ^^^^^^^^^
+>void A.foo() : undefined
+>             : ^^^^^^^^^
+>A.foo() : boolean
+>        : ^^^^^^^
+>A.foo : () => boolean
+>      : ^^^^^^^^^^^^^
+>A : typeof A
+>  : ^^^^^^^^
+>foo : () => boolean
+>    : ^^^^^^^^^^^^^
+
+
+// multiple void  operator
+let ResultIsAny8 = void void BOOLEAN;
+>ResultIsAny8 : undefined
+>             : ^^^^^^^^^
+>void void BOOLEAN : undefined
+>                  : ^^^^^^^^^
+>void BOOLEAN : undefined
+>             : ^^^^^^^^^
+>BOOLEAN : boolean
+>        : ^^^^^^^
+
+
+// miss assignment operators
+void true;
+>void true : undefined
+>          : ^^^^^^^^^
+>true : true
+>     : ^^^^
+
+void BOOLEAN;
+>void BOOLEAN : undefined
+>             : ^^^^^^^^^
+>BOOLEAN : boolean
+>        : ^^^^^^^
+
+void foo();
+>void foo() : undefined
+>           : ^^^^^^^^^
+>foo() : boolean
+>      : ^^^^^^^
+>foo : () => boolean
+>    : ^^^^^^^^^^^^^
+
+/*pruned*/;
+void objA.a;
+>void objA.a : undefined
+>            : ^^^^^^^^^
+>objA.a : boolean
+>       : ^^^^^^^
+>objA : A
+>     : ^
+>a : boolean
+>  : ^^^^^^^
+
+/**/;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

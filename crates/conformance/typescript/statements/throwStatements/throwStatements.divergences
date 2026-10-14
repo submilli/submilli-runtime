@@ -1,0 +1,42 @@
+types: 29 of 53 tsc entries compared, 5 differ
+
+line 40: anAny
+  tsc:  any
+  ours: null
+
+line 41: anAny
+  tsc:  any
+  ours: null
+
+line 44: anUndefined
+  tsc:  any
+  ours: undefined
+
+line 45: anUndefined
+  tsc:  any
+  ours: undefined
+
+line 83: ['a', ['b']]
+  tsc:  (string | string[])[]
+  ours: string[]
+
+errors:
+line 32: ours: expected `Error`, got `number` (tsc accepts)
+line 34: ours: expected `Error`, got `string` (tsc accepts)
+line 41: ours: expected `Error`, got `null` (tsc accepts)
+line 45: ours: expected `Error`, got `undefined` (tsc accepts)
+line 48: ours: expected `Error`, got `C` (tsc accepts)
+line 52: ours: expected `Error`, got `{ id: number }` (tsc accepts)
+line 55: ours: expected `Error`, got `(arg0: string) => number` (tsc accepts)
+line 56: ours: expected `Error`, got `number` (tsc accepts)
+line 74: ours: expected `Error`, got `number` (tsc accepts)
+line 75: ours: expected `Error`, got `boolean` (tsc accepts)
+line 76: ours: expected `Error`, got `null` (tsc accepts)
+line 77: ours: expected `Error`, got `undefined` (tsc accepts)
+line 78: ours: expected `Error`, got `string` (tsc accepts)
+line 79: ours: expected `Error`, got `() => string` (tsc accepts)
+line 81: ours: expected `Error`, got `{ x: number; y: number }` (tsc accepts)
+line 82: ours: expected `Error`, got `never[]` (tsc accepts)
+line 83: ours: expected `string` (matching first element), got `string[]` (tsc accepts)
+line 84: ours: expected `Error`, got `RegExp` (tsc accepts)
+line 86: ours: expected `Error`, got `C` (tsc accepts)

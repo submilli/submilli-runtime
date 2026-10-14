@@ -1,0 +1,21 @@
+=== templateStringWithEmbeddedConditional.ts ===
+let x = `abc${ true ? false : " " }def`;
+>x : string
+>  : ^^^^^^
+>`abc${ true ? false : " " }def` : string
+>                                : ^^^^^^
+>true ? false : " " : false | " "
+>                   : ^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>false : false
+>      : ^^^^^
+>" " : " "
+>    : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,4 @@
+parserAmbiguity3.ts(2,1): error TS2304: Cannot find name 'f'.
+parserAmbiguity3.ts(2,3): error TS2304: Cannot find name 'g'.
+parserAmbiguity3.ts(2,7): error TS2304: Cannot find name 'A'.
+parserAmbiguity3.ts(2,10): error TS2304: Cannot find name 'B'.

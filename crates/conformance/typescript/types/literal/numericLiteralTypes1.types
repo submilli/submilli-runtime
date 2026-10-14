@@ -1,0 +1,721 @@
+=== numericLiteralTypes1.ts ===
+type A1 = 1;
+>A1 : 1
+>   : ^
+
+type A2 = 1.0;
+>A2 : 1
+>   : ^
+
+type A3 = 1e0;
+>A3 : 1
+>   : ^
+
+type A4 = 10e-1;
+>A4 : 1
+>   : ^
+
+type A5 = 1 | 1.0 | 1e0 | 10e-1;
+>A5 : 1
+>   : ^
+
+
+function f1(): void {
+>f1 : () => void
+>   : ^^^^^^^^^^
+
+    let a: A1 = 1;
+>a : 1
+>  : ^
+>1 : 1
+>  : ^
+
+    let a_2: A2 = 1;
+>a_2 : 1
+>    : ^
+>1 : 1
+>  : ^
+
+    let a_3: A3 = 1;
+>a_3 : 1
+>    : ^
+>1 : 1
+>  : ^
+
+    let a_4: A4 = 1;
+>a_4 : 1
+>    : ^
+>1 : 1
+>  : ^
+
+    let a_5: A5 = 1;
+>a_5 : 1
+>    : ^
+>1 : 1
+>  : ^
+
+}
+
+type B1 = -1 | 0 | 1;
+>B1 : B1
+>   : ^^
+>-1 : -1
+>   : ^^
+>1 : 1
+>  : ^
+
+type B2 = 1 | 0 | -1;
+>B2 : B2
+>   : ^^
+>-1 : -1
+>   : ^^
+>1 : 1
+>  : ^
+
+type B3 = 0 | -1 | 1;
+>B3 : B3
+>   : ^^
+>-1 : -1
+>   : ^^
+>1 : 1
+>  : ^
+
+
+function f2(): void {
+>f2 : () => void
+>   : ^^^^^^^^^^
+
+    let b: B1 = -1;
+>b : B1
+>  : ^^
+>-1 : -1
+>   : ^^
+>1 : 1
+>  : ^
+
+    let b_2: B2 = 0;
+>b_2 : B2
+>    : ^^
+>0 : 0
+>  : ^
+
+    let b_3: B3 = 1;
+>b_3 : B3
+>    : ^^
+>1 : 1
+>  : ^
+
+}
+
+function f3(a: 1, b: 0 | 1 | 2): void {
+>f3 : (a: 1, b: 0 | 1 | 2) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let x = a + b;
+>x : number
+>  : ^^^^^^
+>a + b : number
+>      : ^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let x_2 = a - b;
+>x_2 : number
+>    : ^^^^^^
+>a - b : number
+>      : ^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let x_3 = a * b;
+>x_3 : number
+>    : ^^^^^^
+>a * b : number
+>      : ^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let x_4 = a / b;
+>x_4 : number
+>    : ^^^^^^
+>a / b : number
+>      : ^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let x_5 = a % b;
+>x_5 : number
+>    : ^^^^^^
+>a % b : number
+>      : ^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let x_6 = a | b;
+>x_6 : number
+>    : ^^^^^^
+>a | b : number
+>      : ^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let x_7 = a & b;
+>x_7 : number
+>    : ^^^^^^
+>a & b : number
+>      : ^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let x_8 = a ^ b;
+>x_8 : number
+>    : ^^^^^^
+>a ^ b : number
+>      : ^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let x_9 = -b;
+>x_9 : number
+>    : ^^^^^^
+>-b : number
+>   : ^^^^^^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let x_10 = ~b;
+>x_10 : number
+>     : ^^^^^^
+>~b : number
+>   : ^^^^^^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let y = a == b;
+>y : boolean
+>  : ^^^^^^^
+>a == b : boolean
+>       : ^^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let y_2 = a != b;
+>y_2 : boolean
+>    : ^^^^^^^
+>a != b : boolean
+>       : ^^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let y_3 = a === b;
+>y_3 : boolean
+>    : ^^^^^^^
+>a === b : boolean
+>        : ^^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let y_4 = a !== b;
+>y_4 : boolean
+>    : ^^^^^^^
+>a !== b : boolean
+>        : ^^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let y_5 = a > b;
+>y_5 : boolean
+>    : ^^^^^^^
+>a > b : boolean
+>      : ^^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let y_6 = a < b;
+>y_6 : boolean
+>    : ^^^^^^^
+>a < b : boolean
+>      : ^^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let y_7 = a >= b;
+>y_7 : boolean
+>    : ^^^^^^^
+>a >= b : boolean
+>       : ^^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let y_8 = a <= b;
+>y_8 : boolean
+>    : ^^^^^^^
+>a <= b : boolean
+>       : ^^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    let y_9 = !b;
+>y_9 : boolean
+>    : ^^^^^^^
+>!b : boolean
+>   : ^^^^^^^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+}
+
+function f4(a: 1, b: 0 | 1 | 2): void {
+>f4 : (a: 1, b: 0 | 1 | 2) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    a++;
+>a++ : number
+>    : ^^^^^^
+>a : number
+>  : ^^^^^^
+
+    b++;
+>b++ : number
+>    : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+}
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+function f5(a: 1, b: 0 | 1 | 2): void {
+>f5 : (a: 1, b: 0 | 1 | 2) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : 1
+>  : ^
+>b : 0 | 1 | 2
+>  : ^^^^^^^^^
+
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+}
+
+function assertNever(x: never): never {
+>assertNever : (x: never) => never
+>            : ^^^^^^^^^^^^^^^^^^^
+>x : never
+>  : ^^^^^
+
+    throw new Error("Unexpected value");
+>new Error("Unexpected value") : Error
+>                              : ^^^^^
+>Error : ErrorConstructor
+>      : ^^^^^^^^^^^^^^^^
+>"Unexpected value" : "Unexpected value"
+>                   : ^^^^^^^^^^^^^^^^^^
+
+}
+
+type Tag = 0 | 1 | 2;
+>Tag : Tag
+>    : ^^^
+
+
+function f10(x: Tag): "a" | "b" | "c" {
+>f10 : (x: Tag) => "a" | "b" | "c"
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : Tag
+>  : ^^^
+
+    switch (x) {
+>x : Tag
+>  : ^^^
+
+        case 0: return "a";
+>0 : 0
+>  : ^
+>"a" : "a"
+>    : ^^^
+
+        case 1: return "b";
+>1 : 1
+>  : ^
+>"b" : "b"
+>    : ^^^
+
+        case 2: return "c";
+>2 : 2
+>  : ^
+>"c" : "c"
+>    : ^^^
+
+    }
+}
+
+function f11(x: Tag): "a" | "b" | "c" {
+>f11 : (x: Tag) => "a" | "b" | "c"
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : Tag
+>  : ^^^
+
+    switch (x) {
+>x : Tag
+>  : ^^^
+
+        case 0: return "a";
+>0 : 0
+>  : ^
+>"a" : "a"
+>    : ^^^
+
+        case 1: return "b";
+>1 : 1
+>  : ^
+>"b" : "b"
+>    : ^^^
+
+        case 2: return "c";
+>2 : 2
+>  : ^
+>"c" : "c"
+>    : ^^^
+
+    }
+    return assertNever(x);
+>assertNever(x) : never
+>               : ^^^^^
+>assertNever : (x: never) => never
+>            : ^^^^^^^^^^^^^^^^^^^
+>x : never
+>  : ^^^^^
+
+}
+
+function f12(x: Tag): void {
+>f12 : (x: Tag) => void
+>    : ^^^^^^^^^^^^^^^^
+>x : Tag
+>  : ^^^
+
+    if (x) {
+>x : Tag
+>  : ^^^
+
+        x;
+>x : 1 | 2
+>  : ^^^^^
+
+    }
+    else {
+        x;
+>x : 0
+>  : ^
+
+    }
+}
+
+function f13(x: Tag): void {
+>f13 : (x: Tag) => void
+>    : ^^^^^^^^^^^^^^^^
+>x : Tag
+>  : ^^^
+
+    if (x === 0 || x === 2) {
+>x === 0 || x === 2 : boolean
+>                   : ^^^^^^^
+>x === 0 : boolean
+>        : ^^^^^^^
+>x : Tag
+>  : ^^^
+>0 : 0
+>  : ^
+>x === 2 : boolean
+>        : ^^^^^^^
+>x : 1 | 2
+>  : ^^^^^
+>2 : 2
+>  : ^
+
+        x;
+>x : 0 | 2
+>  : ^^^^^
+
+    }
+    else {
+        x;
+>x : 1
+>  : ^
+
+    }
+}
+
+function f14(x: 0 | 1 | 2, y: string): void {
+>f14 : (x: 0 | 1 | 2, y: string) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : 0 | 1 | 2
+>  : ^^^^^^^^^
+>y : string
+>  : ^^^^^^
+
+    let a = x && y;
+>a : string | 0
+>  : ^^^^^^^^^^
+>x && y : string | 0
+>       : ^^^^^^^^^^
+>x : 0 | 1 | 2
+>  : ^^^^^^^^^
+>y : string
+>  : ^^^^^^
+
+    let b = x || y;
+>b : string | 1 | 2
+>  : ^^^^^^^^^^^^^^
+>x || y : string | 1 | 2
+>       : ^^^^^^^^^^^^^^
+>x : 0 | 1 | 2
+>  : ^^^^^^^^^
+>y : string
+>  : ^^^^^^
+
+}
+
+function f15(x: 0 | false, y: 1 | "one"): void {
+>f15 : (x: 0 | false, y: 1 | "one") => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : false | 0
+>  : ^^^^^^^^^
+>false : false
+>      : ^^^^^
+>y : 1 | "one"
+>  : ^^^^^^^^^
+
+    let a = x && y;
+>a : false | 0
+>  : ^^^^^^^^^
+>x && y : false | 0
+>       : ^^^^^^^^^
+>x : false | 0
+>  : ^^^^^^^^^
+>y : 1 | "one"
+>  : ^^^^^^^^^
+
+    let b = y && x;
+>b : false | 0
+>  : ^^^^^^^^^
+>y && x : false | 0
+>       : ^^^^^^^^^
+>y : 1 | "one"
+>  : ^^^^^^^^^
+>x : false | 0
+>  : ^^^^^^^^^
+
+    let c = x || y;
+>c : 1 | "one"
+>  : ^^^^^^^^^
+>x || y : 1 | "one"
+>       : ^^^^^^^^^
+>x : false | 0
+>  : ^^^^^^^^^
+>y : 1 | "one"
+>  : ^^^^^^^^^
+
+    let d = y || x;
+>d : 1 | "one"
+>  : ^^^^^^^^^
+>y || x : 1 | "one"
+>       : ^^^^^^^^^
+>y : 1 | "one"
+>  : ^^^^^^^^^
+>x : false | 0
+>  : ^^^^^^^^^
+
+    let e = !x;
+>e : boolean
+>  : ^^^^^^^
+>!x : true
+>   : ^^^^
+>x : false | 0
+>  : ^^^^^^^^^
+
+    let f = !y;
+>f : boolean
+>  : ^^^^^^^
+>!y : false
+>   : ^^^^^
+>y : 1 | "one"
+>  : ^^^^^^^^^
+
+}
+
+type Item =
+>Item : Item
+>     : ^^^^
+
+    { kind: 0, a: string } |
+>kind : 0
+>     : ^
+>a : string
+>  : ^^^^^^
+
+    { kind: 1, b: string } |
+>kind : 1
+>     : ^
+>b : string
+>  : ^^^^^^
+
+    { kind: 2, c: string };
+>kind : 2
+>     : ^
+>c : string
+>  : ^^^^^^
+
+
+function f20(x: Item): string {
+>f20 : (x: Item) => string
+>    : ^^^^^^^^^^^^^^^^^^^
+>x : Item
+>  : ^^^^
+
+    switch (x.kind) {
+>x.kind : 0 | 1 | 2
+>       : ^^^^^^^^^
+>x : Item
+>  : ^^^^
+>kind : 0 | 1 | 2
+>     : ^^^^^^^^^
+
+        case 0: return x.a;
+>0 : 0
+>  : ^
+>x.a : string
+>    : ^^^^^^
+>x : { kind: 0; a: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+
+        case 1: return x.b;
+>1 : 1
+>  : ^
+>x.b : string
+>    : ^^^^^^
+>x : { kind: 1; b: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>b : string
+>  : ^^^^^^
+
+        case 2: return x.c;
+>2 : 2
+>  : ^
+>x.c : string
+>    : ^^^^^^
+>x : { kind: 2; c: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>c : string
+>  : ^^^^^^
+
+    }
+}
+
+function f21(x: Item): string {
+>f21 : (x: Item) => string
+>    : ^^^^^^^^^^^^^^^^^^^
+>x : Item
+>  : ^^^^
+
+    switch (x.kind) {
+>x.kind : 0 | 1 | 2
+>       : ^^^^^^^^^
+>x : Item
+>  : ^^^^
+>kind : 0 | 1 | 2
+>     : ^^^^^^^^^
+
+        case 0: return x.a;
+>0 : 0
+>  : ^
+>x.a : string
+>    : ^^^^^^
+>x : { kind: 0; a: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+
+        case 1: return x.b;
+>1 : 1
+>  : ^
+>x.b : string
+>    : ^^^^^^
+>x : { kind: 1; b: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>b : string
+>  : ^^^^^^
+
+        case 2: return x.c;
+>2 : 2
+>  : ^
+>x.c : string
+>    : ^^^^^^
+>x : { kind: 2; c: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>c : string
+>  : ^^^^^^
+
+    }
+    return assertNever(x);
+>assertNever(x) : never
+>               : ^^^^^
+>assertNever : (x: never) => never
+>            : ^^^^^^^^^^^^^^^^^^^
+>x : never
+>  : ^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

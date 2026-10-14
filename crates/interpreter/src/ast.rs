@@ -854,6 +854,9 @@ pub struct BindingDefault {
 pub struct PatternOrigin {
     pub pattern_span: Span,
     pub slot_arity: usize,
+    /// The slot has a default, so a read past a tuple's end is `undefined`
+    /// rather than an error, as in tsc; lowering guards the read by length.
+    pub defaulted: bool,
 }
 
 /// A top-level declaration marked `export` (Form 1: `export function …`,
@@ -883,6 +886,16 @@ pub struct Ast {
     /// the pattern, so each name gets its element's type and a pattern longer
     /// than the literal is a compile error (populated by `lower_patterns`).
     pub tuple_pattern_sources: std::collections::BTreeSet<ExprId>,
+    /// For a parameter's tuple literal default shorter than its pattern, the
+    /// defaults of the slots past its end. TypeScript pads the default's type
+    /// with an optional element for each, so a caller may pass them.
+    pub tuple_pattern_pad_defaults: std::collections::BTreeMap<ExprId, Vec<ExprId>>,
+    /// Unannotated object literals an object pattern takes apart, with the
+    /// properties the pattern gives defaults: `{ a, b = 0 } = { a: 1, b: 2 }`.
+    /// TypeScript types such a literal from the pattern, so those properties
+    /// are optional in its type (populated by `lower_patterns`).
+    pub object_pattern_sources:
+        std::collections::BTreeMap<ExprId, std::collections::BTreeSet<String>>,
     /// Pattern decomposition statements, run immediately after their parameter initializes.
     pub parameter_bindings: std::collections::HashMap<Span, Vec<StmtId>>,
     /// Source names in lowered for-of heads, whose TDZ includes the iterable.
@@ -895,9 +908,9 @@ pub struct Ast {
     pub exported_decls: Vec<ExportedDecl>,
     /// The `undefined` a typed `let x: T;` starts with, synthesized by the parser.
     pub implicit_initializers: std::collections::BTreeSet<ExprId>,
-    /// Every `undefined` the compiler writes itself: implicit initializers and
-    /// the padding of a destructured tuple. Each reads the value `undefined`,
-    /// even where a binding named `undefined` is in scope.
+    /// Every `undefined` the compiler writes itself, such as an implicit
+    /// initializer. Each reads the value `undefined`, even where a binding
+    /// named `undefined` is in scope.
     pub synthetic_undefined: std::collections::BTreeSet<ExprId>,
     /// Destructuring defaults, keyed by the ternary `lower_patterns` makes of each.
     pub binding_defaults: std::collections::BTreeMap<ExprId, BindingDefault>,

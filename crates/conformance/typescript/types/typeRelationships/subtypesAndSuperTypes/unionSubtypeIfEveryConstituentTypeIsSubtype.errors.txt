@@ -1,0 +1,23 @@
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(17,5): error TS2411: Property 'foo' of type 'string | number' is not assignable to 'string' index type 'number'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(23,5): error TS2411: Property 'foo' of type 'string | number' is not assignable to 'string' index type 'string'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(24,5): error TS2411: Property 'foo2' of type 'number' is not assignable to 'string' index type 'string'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(30,5): error TS2411: Property 'foo' of type 'string | number' is not assignable to 'string' index type 'boolean'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(31,5): error TS2411: Property 'foo2' of type 'number' is not assignable to 'string' index type 'boolean'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(44,5): error TS2411: Property 'foo' of type 'string | number' is not assignable to 'string' index type 'RegExp'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(45,5): error TS2411: Property 'foo2' of type 'number' is not assignable to 'string' index type 'RegExp'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(51,5): error TS2411: Property 'foo' of type 'string | number' is not assignable to 'string' index type '{ bar: number; }'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(52,5): error TS2411: Property 'foo2' of type 'number' is not assignable to 'string' index type '{ bar: number; }'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(58,5): error TS2411: Property 'foo' of type 'string | number' is not assignable to 'string' index type 'number[]'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(59,5): error TS2411: Property 'foo2' of type 'number' is not assignable to 'string' index type 'number[]'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(65,5): error TS2411: Property 'foo' of type 'string | number' is not assignable to 'string' index type 'I8'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(66,5): error TS2411: Property 'foo2' of type 'number' is not assignable to 'string' index type 'I8'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(69,11): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(72,5): error TS2411: Property 'foo' of type 'string | number' is not assignable to 'string' index type 'A'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(73,5): error TS2411: Property 'foo2' of type 'number' is not assignable to 'string' index type 'A'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(76,15): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(79,5): error TS2411: Property 'foo' of type 'string | number' is not assignable to 'string' index type 'A2<number>'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(80,5): error TS2411: Property 'foo2' of type 'number' is not assignable to 'string' index type 'A2<number>'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(101,5): error TS2411: Property 'foo' of type 'string | number' is not assignable to 'string' index type 'E2'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(117,11): error TS2564: Property 'baz' has no initializer and is not definitely assigned in the constructor.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(130,5): error TS2411: Property 'foo' of type 'string | number' is not assignable to 'string' index type 'T'.
+unionSubtypeIfEveryConstituentTypeIsSubtype.ts(131,5): error TS2411: Property 'foo2' of type 'number' is not assignable to 'string' index type 'T'.

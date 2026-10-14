@@ -1,0 +1,13 @@
+=== parser645086_3.ts ===
+let v = /[\]/]/
+>v : RegExp
+>  : ^^^^^^
+>/[\]/]/ : RegExp
+>        : ^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

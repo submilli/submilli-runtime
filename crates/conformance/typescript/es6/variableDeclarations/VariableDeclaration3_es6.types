@@ -1,0 +1,13 @@
+=== VariableDeclaration3_es6.ts ===
+const a = 1
+>a : 1
+>  : ^
+>1 : 1
+>  : ^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

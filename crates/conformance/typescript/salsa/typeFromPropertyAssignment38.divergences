@@ -1,0 +1,21 @@
+types: 4 of 14 tsc entries compared, 4 differ
+
+line 7: F
+  tsc:  typeof F
+  ours: () => void
+
+line 9: f
+  tsc:  { (): void; prop: number; }
+  ours: () => void
+
+line 9: function () {}
+  tsc:  { (): void; prop: number; }
+  ours: () => void
+
+line 10: f
+  tsc:  { (): void; prop: number; }
+  ours: () => void
+
+errors:
+line 7: ours: expected `number`, got `string` (tsc accepts)
+line 10: ours: expected `number`, got `string` (tsc accepts)

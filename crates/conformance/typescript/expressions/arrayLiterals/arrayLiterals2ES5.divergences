@@ -1,0 +1,32 @@
+types: 59 of 101 tsc entries compared, 6 differ
+
+line 49: d0
+  tsc:  (string | number | boolean)[]
+  ours: number[]
+
+line 49: [1, true, ...temp,]
+  tsc:  (string | number | boolean)[]
+  ours: number[]
+
+line 53: [...temp, ...temp1]
+  tsc:  (string | number)[]
+  ours: string[]
+
+line 58: d9
+  tsc:  (string | number[])[]
+  ours: number[][]
+
+line 58: [[...temp1], ...["hello"]]
+  tsc:  (string | number[])[]
+  ours: number[][]
+
+line 58: ["hello"]
+  tsc:  string[]
+  ours: number[][]
+
+errors:
+line 47: ours: interface base must be an interface or structural object type (tsc accepts)
+line 48: ours: interface base must be an interface or structural object type (tsc accepts)
+line 49: ours: expected `number` (matching first element), got `boolean` (tsc accepts)
+line 53: ours: expected `string` (matching first element), got `number` (tsc accepts)
+line 58: ours: expected `number[]`, got `string` (tsc accepts)

@@ -1,0 +1,1 @@
+line 3 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (both reject the optional parameter with a default; tsc keeps `| undefined`)

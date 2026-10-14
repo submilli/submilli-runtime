@@ -1,0 +1,103 @@
+=== functionWithUseStrictAndSimpleParameterList.ts ===
+/*pruned*/;
+
+
+
+export let foo = 10;
+>foo : number
+>    : ^^^^^^
+>10 : 10
+>   : ^^
+
+function b(a: number = 10): void {
+>b : (a?: number) => void
+>  : ^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>10 : 10
+>   : ^^
+
+}
+
+function container(): void {
+>container : () => void
+>          : ^^^^^^^^^^
+
+    "use strict";
+>"use strict" : "use strict"
+>             : ^^^^^^^^^^^^
+
+    function f(a: number = 10): void {
+>f : (a?: number) => void
+>  : ^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>10 : 10
+>   : ^^
+
+    }
+}
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+
+
+function invalidPrologue(a: number = 10, b: number = 20): void {
+>invalidPrologue : (a?: number, b?: number) => void
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>10 : 10
+>   : ^^
+>b : number
+>  : ^^^^^^
+>20 : 20
+>   : ^^
+
+    "foo";
+>"foo" : "foo"
+>      : ^^^^^
+
+    const c = 1;
+>c : 1
+>  : ^
+>1 : 1
+>  : ^
+
+    "use strict";
+>"use strict" : "use strict"
+>             : ^^^^^^^^^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

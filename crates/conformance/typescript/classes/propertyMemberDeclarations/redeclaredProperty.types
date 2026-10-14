@@ -1,0 +1,62 @@
+=== redeclaredProperty.ts ===
+class Base {
+>Base : Base
+>     : ^^^^
+
+  b: number = 1;
+>b : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+}
+
+class Derived extends Base {
+>Derived : Derived
+>        : ^^^^^^^
+>Base : Base
+>     : ^^^^
+
+  b: number;
+>b : number
+>  : ^^^^^^
+
+  d: number = this.b;
+>d : number
+>  : ^^^^^^
+>this.b : number
+>       : ^^^^^^
+>this : this
+>     : ^^^^
+>b : number
+>  : ^^^^^^
+
+
+  constructor() {
+    super();
+>super() : void
+>        : ^^^^
+>super : typeof Base
+>      : ^^^^^^^^^^^
+
+    this.b = 2;
+>this.b = 2 : 2
+>           : ^
+>this.b : number
+>       : ^^^^^^
+>this : this
+>     : ^^^^
+>b : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+
+  }
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

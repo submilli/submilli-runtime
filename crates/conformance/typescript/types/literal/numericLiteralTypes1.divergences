@@ -1,0 +1,41 @@
+types: 167 of 244 tsc entries compared, 9 differ
+
+line 9: a
+  tsc:  1
+  ours: A1
+
+line 10: a_2
+  tsc:  1
+  ours: A2
+
+line 11: a_3
+  tsc:  1
+  ours: A3
+
+line 12: a_4
+  tsc:  1
+  ours: A4
+
+line 13: a_5
+  tsc:  1
+  ours: A5
+
+line 112: a
+  tsc:  false | 0
+  ours: 0 | 1 | "one" | false
+
+line 112: x && y
+  tsc:  false | 0
+  ours: 0 | 1 | "one" | false
+
+line 115: d
+  tsc:  1 | "one"
+  ours: 0 | 1 | "one" | false
+
+line 115: y || x
+  tsc:  1 | "one"
+  ours: 0 | 1 | "one" | false
+
+errors:
+line 85: ours: unreachable code (tsc accepts)
+line 139: ours: unreachable code (tsc accepts)

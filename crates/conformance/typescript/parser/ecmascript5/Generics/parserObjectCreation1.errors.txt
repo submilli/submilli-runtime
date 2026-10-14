@@ -1,0 +1,1 @@
+parserObjectCreation1.ts(2,5): error TS2322: Type 'number[][]' is not assignable to type 'number[]'.   Type 'number[]' is not assignable to type 'number'.

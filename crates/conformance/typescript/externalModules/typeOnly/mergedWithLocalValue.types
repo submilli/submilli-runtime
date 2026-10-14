@@ -1,0 +1,27 @@
+=== mergedWithLocalValue.ts ===
+export type A = "a";
+>A : "a"
+>  : ^^^
+
+
+import type { A } from "./a";
+>A : "a"
+>  : ^^^
+
+const A: A = "a";
+>A : "a"
+>  : ^^^
+>"a" : "a"
+>    : ^^^
+
+A.toUpperCase();
+>A.toUpperCase() : string
+>                : ^^^^^^
+>A.toUpperCase : () => string
+>              : ^^^^^^^^^^^^
+>A : "a"
+>  : ^^^
+>toUpperCase : () => string
+>            : ^^^^^^^^^^^^
+
+

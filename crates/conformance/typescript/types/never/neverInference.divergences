@@ -1,0 +1,9 @@
+types: 23 of 49 tsc entries compared, 2 differ
+
+line 32: Array.from([])
+  tsc:  never[]
+  ours: a[]
+
+line 32: []
+  tsc:  never[]
+  ours: a[]

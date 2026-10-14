@@ -1,0 +1,4 @@
+typeParameterAsBaseType.ts(5,20): error TS2304: Cannot find name 'T'.
+typeParameterAsBaseType.ts(6,24): error TS2304: Cannot find name 'U'.
+typeParameterAsBaseType.ts(8,24): error TS2312: An interface can only extend an object type or intersection of object types with statically known members.
+typeParameterAsBaseType.ts(9,28): error TS2312: An interface can only extend an object type or intersection of object types with statically known members.

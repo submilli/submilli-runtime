@@ -1,0 +1,17 @@
+=== templateStringWithEmbeddedUnaryPlus.ts ===
+let x = `abc${ +Infinity }def`;
+>x : string
+>  : ^^^^^^
+>`abc${ +Infinity }def` : "abcInfinitydef"
+>                       : ^^^^^^^^^^^^^^^^
+>+Infinity : number
+>          : ^^^^^^
+>Infinity : number
+>         : ^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

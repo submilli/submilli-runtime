@@ -1007,6 +1007,12 @@ impl CodegenAnalysis {
                     self.dependency_usage
                         .note_value(crate::mangle::prelude("__value_to_string"));
                 }
+                Intrinsic::ToObject => {
+                    self.dependency_usage.note_member(crate::mangle::extend(
+                        &crate::mangle::prelude("ObjectConstructor"),
+                        "#toObject",
+                    ));
+                }
                 Intrinsic::Assert => {}
             },
             TypedExprKind::MethodCall {

@@ -1,0 +1,4 @@
+derivedClassOverridesPrivates.ts(3,13): error TS2564: Property 'x' has no initializer and is not definitely assigned in the constructor.
+derivedClassOverridesPrivates.ts(6,7): error TS2415: Class 'Derived' incorrectly extends base class 'Base'.   Types have separate declarations of a private property 'x'.
+derivedClassOverridesPrivates.ts(7,13): error TS2564: Property 'x' has no initializer and is not definitely assigned in the constructor.
+derivedClassOverridesPrivates.ts(14,7): error TS2417: Class static side 'typeof Derived2' incorrectly extends base class static side 'typeof Base2'.   Types have separate declarations of a private property 'y'.

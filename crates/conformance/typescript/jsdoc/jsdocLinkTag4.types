@@ -1,0 +1,21 @@
+=== jsdocLinkTag4.ts ===
+export interface A {}
+>A : A
+>  : ^
+
+
+import * as a from "./a";
+>a : typeof a
+>  : ^^^^^^^^
+
+
+/**
+ * @param {number} a - see {@link a.A}
+ */
+export function foo(a: string): void {}
+>foo : (a: string) => void
+>    : ^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+
+

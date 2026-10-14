@@ -83,6 +83,16 @@ impl Inferer<'_> {
         )))
     }
 
+    /// `env`, a narrowing of the value destructured `const`s were read from,
+    /// with those `const`s narrowed to match and kept on constant references.
+    pub(super) fn destructured_alias_views(
+        &mut self,
+        mut env: narrowing::NarrowEnv,
+    ) -> Result<narrowing::NarrowEnv, CompilerFailure> {
+        self.narrow_destructured_siblings(&mut env)?;
+        self.constant_reference_views(env)
+    }
+
     /// A `const` read off a narrowed object narrows with it: after
     /// `const { kind, payload } = data`, testing `kind` narrows `data`, and so
     /// `payload` reads the matching member's field.
@@ -115,14 +125,23 @@ impl Inferer<'_> {
         initializer: ExprId,
         env: &narrowing::NarrowEnv,
     ) -> Result<Option<narrowing::NarrowedView>, CompilerFailure> {
-        let TypedExprKind::FieldAccess { receiver, name } = self
+        let (receiver, member) = match self
             .typed_ast
             .try_expr(initializer)
             .map_err(crate::typechecker::arena_failure)?
             .kind
             .clone()
-        else {
-            return Ok(None);
+        {
+            TypedExprKind::FieldAccess { receiver, name } => {
+                (receiver, narrowing::PathElem::Field(name.name))
+            }
+            TypedExprKind::IndexAccess { receiver, index } => {
+                let Some(element) = self.index_path_elem(index)? else {
+                    return Ok(None);
+                };
+                (receiver, element)
+            }
+            _ => return Ok(None),
         };
         let receiver = self
             .typed_ast
@@ -131,15 +150,27 @@ impl Inferer<'_> {
         let Some(receiver_path) = self.expr_to_reference_path(receiver)? else {
             return Ok(None);
         };
+        // A receiver written after the sibling was read may hold another
+        // value by the time `env` narrows it.
+        if !self.is_constant_reference(&receiver_path) {
+            return Ok(None);
+        }
         let Some(receiver_view) = env.get(&receiver_path) else {
             return Ok(None);
         };
-        let Some(field_ty) = self.field_read_type(&receiver_view.narrowed_ty, &name.name) else {
+        let Some(field_ty) = self.member_read_type(&receiver_view.narrowed_ty, &member) else {
             return Ok(None);
         };
         let Some((declared_ty, declared_at)) = self.constant_declaration(&sibling.root) else {
             return Ok(None);
         };
+        // The sibling may already be narrower than its receiver's member: after
+        // `if (action.payload) { const { kind, payload } = action; … }`,
+        // `payload` excludes `undefined`, which testing `kind` doesn't restore.
+        let current = self
+            .lookup_narrowed_view(sibling)
+            .map_or(&declared_ty, |view| &view.narrowed_ty);
+        let field_ty = self.narrowed_within(&field_ty, current);
         let Some(source_kind) = self.synthesize_unnarrowed_source(sibling, declared_at)? else {
             return Ok(None);
         };
@@ -177,17 +208,36 @@ impl Inferer<'_> {
         }
     }
 
-    /// What reading `field` gives on each member of `receiver`, joined.
-    fn field_read_type(&self, receiver: &Type, field: &str) -> Option<Type> {
-        let members = match receiver.peel() {
-            Type::Union(members) => members.clone(),
-            _ => vec![receiver.clone()],
-        };
-        let member_types: Option<Vec<Type>> = members
-            .iter()
-            .map(|member| self.union_member_field_read_ty(member, field).ok())
+    /// What reading `elem` gives on each member of `receiver`, joined: a field,
+    /// or a tuple's element at a constant position.
+    fn member_read_type(&self, receiver: &Type, elem: &narrowing::PathElem) -> Option<Type> {
+        // A receiver with no value left reads none either.
+        if matches!(receiver.peel(), Type::Never) || narrowing::is_ruled_out(receiver) {
+            return Some(receiver.clone());
+        }
+        let member_types: Option<Vec<Type>> = narrowing::union_members(receiver)
+            .into_iter()
+            .map(|member| self.member_element_read_type(member, elem))
             .collect();
         member_types.map(Type::union)
+    }
+
+    /// What reading `elem` off one union member gives. A pattern reads past a
+    /// shorter tuple's end as `undefined`.
+    fn member_element_read_type(&self, member: &Type, elem: &narrowing::PathElem) -> Option<Type> {
+        match elem {
+            narrowing::PathElem::Field(field) => {
+                self.union_member_field_read_ty(member, field).ok()
+            }
+            narrowing::PathElem::Index(narrowing::LiteralValue::Number(n)) => {
+                let Type::Tuple(elements) = member.peel() else {
+                    return None;
+                };
+                let position = narrowing::tuple_position(n.0)?;
+                Some(elements.get(position).cloned().unwrap_or(Type::Undefined))
+            }
+            _ => None,
+        }
     }
 
     /// `cond` with the aliased `const` it tests replaced by its initializer:
@@ -223,7 +273,10 @@ impl Inferer<'_> {
     }
 
     /// The initializer of the aliased `const` that `expr` reads, if it reads one.
-    fn alias_initializer(&self, expr: ExprId) -> Result<Option<ExprId>, CompilerFailure> {
+    pub(super) fn alias_initializer(
+        &self,
+        expr: ExprId,
+    ) -> Result<Option<ExprId>, CompilerFailure> {
         let expr = self
             .typed_ast
             .try_expr(expr)
@@ -261,6 +314,27 @@ impl Inferer<'_> {
             kept.insert(path, view);
         }
         Ok(kept)
+    }
+
+    /// `ty` narrowed to what `current` still holds: each member of `ty` that
+    /// `current` admits, or else the members of `current` within it.
+    fn narrowed_within(&self, ty: &Type, current: &Type) -> Type {
+        let current_members = narrowing::union_members(current);
+        Type::union(
+            narrowing::union_members(ty)
+                .into_iter()
+                .flat_map(|member| {
+                    if super::assignable(member, current, self.resolver()) {
+                        return vec![member.clone()];
+                    }
+                    current_members
+                        .iter()
+                        .filter(|held| super::assignable(held, member, self.resolver()))
+                        .map(|held| (*held).clone())
+                        .collect()
+                })
+                .collect(),
+        )
     }
 
     /// The members of `ty` that `current` admits. The initializer was typed

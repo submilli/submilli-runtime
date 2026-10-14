@@ -755,8 +755,10 @@ impl<'a> Inferer<'a> {
                 },
             );
         }
-        // A field that is only the compared value reads as `never` once proven
-        // otherwise, but re-reads its live value: an alias may have written it.
+        // A field narrowed to only the compared value reads its declared type,
+        // less that value, once proven otherwise: a call or an alias may have
+        // written it since, and codegen would trust a `never`. Only a field
+        // that can't hold anything else is `never`.
         // `typeof x === "object"` leaves an `unknown` `x` an object or `null`,
         // which Submilli spells `unknown` for want of an `object` type; ruling
         // out a nullish value then leaves it `unknown`, not `{}`, so `in` and
@@ -765,16 +767,25 @@ impl<'a> Inferer<'a> {
             && self
                 .lookup_narrowed_view(&path)
                 .is_some_and(|view| view.facts.contains(narrowing::TypeFacts::IS_OBJECT));
+        let strip_compared = |ty: &Type| {
+            if compares_undefined {
+                narrowing::strip_undefined(ty)
+            } else {
+                narrowing::strip_null(ty)
+            }
+        };
         let stripped = if tested_object {
             path_ty.clone()
-        } else if compares_undefined {
-            narrowing::strip_undefined(&path_ty)
         } else {
-            narrowing::strip_null(&path_ty)
+            strip_compared(&path_ty)
         };
-        let unequal_ty = match stripped {
-            ty if narrowing::is_ruled_out(&ty) && !self.rules_out_to_never(&path) => Type::Never,
-            ty => ty,
+        let unequal_ty = if narrowing::is_ruled_out(&stripped) && !self.rules_out_to_never(&path) {
+            self.declared_path_ty(&path)
+                .map(|declared| strip_compared(&declared))
+                .filter(|declared| !narrowing::is_ruled_out(declared))
+                .unwrap_or(Type::Never)
+        } else {
+            stripped
         };
         neq_env.insert(
             path,
@@ -1562,12 +1573,9 @@ impl<'a> Inferer<'a> {
                 split
             }
             DiscriminantKey::Position(pos) => {
-                let Some((disc_pos, table)) = narrowing::tuple_union_discriminant(members) else {
+                let Some(table) = narrowing::tuple_position_discriminant(members, *pos) else {
                     return Ok(None);
                 };
-                if disc_pos != *pos {
-                    return Ok(None);
-                }
                 let Some(split) = table.partition(members, &literal) else {
                     return Ok(None);
                 };
@@ -2977,10 +2985,13 @@ fn add_missing_views(env: &mut narrowing::NarrowEnv, extra: narrowing::NarrowEnv
 /// discriminant: the members type it differently, some with a unit type such
 /// as `null`, as [`Inferer::discriminant_field_types`] requires of a field.
 fn discriminant_element_types(members: &[Type], position: usize) -> Option<Vec<Option<Type>>> {
+    // A tuple shorter than `position` reads `undefined` there, as a pattern does.
     let element_tys: Vec<Type> = members
         .iter()
         .map(|member| match member.peel() {
-            Type::Tuple(elements) => elements.get(position).cloned(),
+            Type::Tuple(elements) => {
+                Some(elements.get(position).cloned().unwrap_or(Type::Undefined))
+            }
             _ => None,
         })
         .collect::<Option<_>>()?;

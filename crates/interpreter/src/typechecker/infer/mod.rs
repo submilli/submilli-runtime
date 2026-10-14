@@ -23,6 +23,7 @@ mod iife;
 mod import_graph;
 mod imports;
 mod inference_sources;
+mod instantiated_literals;
 mod likely_mistakes;
 mod literal_freshness;
 mod literal_prebinding;
@@ -190,6 +191,7 @@ pub fn infer_with_transitive_checked<'a>(
         if_condition_ands: BTreeMap::new(),
         literal_hint_interfaces: BTreeMap::new(),
         held_arguments: BTreeMap::new(),
+        pending_static_receiver: None,
         values_widening_candidates: BTreeSet::new(),
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),
@@ -480,6 +482,7 @@ pub fn infer_package_checked<'a>(
         if_condition_ands: BTreeMap::new(),
         literal_hint_interfaces: BTreeMap::new(),
         held_arguments: BTreeMap::new(),
+        pending_static_receiver: None,
         values_widening_candidates: BTreeSet::new(),
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),
@@ -969,6 +972,14 @@ pub(super) struct Inferer<'a> {
     /// union of strings with arrays checks each argument against both
     /// signatures this way.
     pub(super) held_arguments: BTreeMap<crate::ExprId, crate::ExprId>,
+    /// The class a static member just inferred was named through, when it
+    /// inherits the member: `Sub` in `Sub.hello()`. The expression the
+    /// member's inference returns records it (see
+    /// [`crate::TypedAst::inherited_static_receivers`]). It is set only after
+    /// the member's arguments are inferred, and each `infer_expr` takes it
+    /// before pushing its node, so a nested expression never takes the
+    /// note meant for its parent.
+    pub(super) pending_static_receiver: Option<crate::MangledName>,
     /// Values of literal argument slots typed as a type parameter an earlier
     /// value bound to a candidate: one the candidate fits widens it rather
     /// than mismatching it (`{ v: new Dog(), w: new Animal() }`).

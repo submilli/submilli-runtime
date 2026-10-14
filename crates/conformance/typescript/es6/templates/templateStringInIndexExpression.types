@@ -1,0 +1,17 @@
+=== templateStringInIndexExpression.ts ===
+`abc${0}abc`[`0`];
+>`abc${0}abc`[`0`] : string
+>                  : ^^^^^^
+>`abc${0}abc` : "abc0abc"
+>             : ^^^^^^^^^
+>0 : 0
+>  : ^
+>`0` : "0"
+>    : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

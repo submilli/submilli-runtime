@@ -1,0 +1,8 @@
+types: 4 of 57 tsc entries compared, 0 differ
+
+errors:
+line 10: ours: unresolved identifier `SharedArrayBuffer` (tsc accepts)
+line 11: ours: unresolved identifier `Int32Array` (tsc accepts)
+line 12: ours: unresolved identifier `SharedArrayBuffer` (tsc accepts)
+line 13: ours: unresolved identifier `BigInt64Array` (tsc accepts)
+line 14: ours: unresolved identifier `Atomics` (tsc accepts)

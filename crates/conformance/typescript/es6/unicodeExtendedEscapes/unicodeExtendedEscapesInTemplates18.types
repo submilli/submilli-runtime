@@ -1,0 +1,15 @@
+=== unicodeExtendedEscapesInTemplates18.ts ===
+
+let x = `\u{65}\u{65}`;
+>x : string
+>  : ^^^^^^
+>`\u{65}\u{65}` : "ee"
+>               : ^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,2 @@
+parserMemberAccessorDeclaration12.ts(3,8): error TS1054: A 'get' accessor cannot have parameters.
+parserMemberAccessorDeclaration12.ts(3,8): error TS2378: A 'get' accessor must return a value.

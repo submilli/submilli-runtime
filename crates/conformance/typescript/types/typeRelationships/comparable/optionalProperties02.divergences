@@ -1,0 +1,4 @@
+types: 2 of 8 tsc entries compared, 0 differ
+
+errors:
+line 10: ours: cannot cast `{ a: undefined }` to `Foo`: no assignable direction between these types (tsc accepts)

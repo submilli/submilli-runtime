@@ -116,6 +116,26 @@ impl ChainField {
     }
 }
 
+/// The type of `typeof x` read as a value: the tags `typeof` can return, as
+/// TypeScript types it, whatever `x` is.
+pub(super) fn typeof_result_type() -> Type {
+    Type::union(
+        [
+            "string",
+            "number",
+            "bigint",
+            "boolean",
+            "symbol",
+            "undefined",
+            "object",
+            "function",
+        ]
+        .into_iter()
+        .map(|tag| Type::StringLiteral(tag.into()))
+        .collect(),
+    )
+}
+
 /// Whether `expected` asks for a literal type: it is one `is_literal` accepts,
 /// or a union with such a member. Decides whether a literal expression keeps
 /// its literal type or widens to its primitive. Peels through aliases so
@@ -291,7 +311,31 @@ fn admits_undefined_leaf(member: &Type) -> bool {
 
 /// Whether `JSON.stringify` of a `ty` may return `undefined`.
 fn json_stringify_may_return_undefined(ty: &Type, types: TypeResolver<'_>) -> bool {
-    any_resolved_member(ty, types, &Type::stringifies_to_undefined)
+    any_resolved_member(ty, types, &|member| {
+        Type::stringifies_to_undefined(member) || is_constructor_binding(member, types)
+    })
+}
+
+/// Whether `ty` types a constructor binding used as a value (`Number`,
+/// `Map`), which is a function at run time. The prelude names these
+/// static-dispatch interfaces `…Constructor`, as TypeScript's lib does;
+/// `Console` is the one that types a plain object. Codegen tells the two
+/// apart by binding name instead (`static_value_tag` in codegen/mod.rs), and
+/// every prelude constructor interface is bound to a capitalized name.
+fn is_constructor_binding(ty: &Type, types: TypeResolver<'_>) -> bool {
+    let Type::InterfaceRef { mangled, name, .. } = ty else {
+        return false;
+    };
+    types.lookup(mangled, name).is_some_and(|symbol| {
+        symbol.name.ends_with("Constructor")
+            && matches!(
+                symbol.kind,
+                crate::TypeKind::Interface {
+                    dispatch: crate::Dispatch::Static,
+                    ..
+                }
+            )
+    })
 }
 
 /// Whether any member of `ty`, through unions and alias bodies, satisfies
@@ -667,6 +711,11 @@ impl Inferer<'_> {
                 self.next_function_keeps_returned_literals = keeps_returned_literals;
                 return self.infer_expr_keeping_literals(inner, expected, keeps_literal);
             }
+            ExprKind::ObjectLiteral { members }
+                if expected.is_none() && self.ast.object_pattern_sources.contains_key(&expr_id) =>
+            {
+                self.infer_pattern_object_literal(expr_id, members, span)
+            }
             ExprKind::ObjectLiteral { members } => {
                 let errors_before = self.error_count();
                 let inferred = self.infer_object_literal_expr(expr_id, members, expected, span);
@@ -782,6 +831,7 @@ impl Inferer<'_> {
                 Ok((TypedExprKind::Null, Type::Error))
             }
         })?;
+        let static_receiver = self.pending_static_receiver.take();
         // an expression's type must be free of bare recursion
         // back-edges — codegen lowers `AliasRef` to the universal
         // `$Object`, but the equivalent inline alias-to-object peels to
@@ -842,6 +892,11 @@ impl Inferer<'_> {
                 ty: ty.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
+        if let Some(receiver) = static_receiver {
+            self.typed_ast
+                .inherited_static_receivers
+                .insert(id, receiver);
+        }
         self.record_narrowed_read_freshness(id)?;
         self.record_runtime_type_test(&ty)
             .map_err(|failure| failure.with_span(span))?;
@@ -850,7 +905,43 @@ impl Inferer<'_> {
         if !limit_was_pending {
             self.type_size_checkpoint(Some(span))?;
         }
+        let id = self.as_object_for(id, &ty, expected, span)?;
         Ok((id, ty))
+    }
+
+    /// `id`, a value of type `ty`, as the object an `expected` object type
+    /// reads. `{}` (or `{}` that may be nullish, or `T & {}`) holds any value, and
+    /// TypeScript lets it into an object type whose fields are all optional
+    /// or that has an index signature, whose slot holds only an object. A
+    /// plain object or class instance passes as it is; another value becomes
+    /// a copy of the fields JavaScript would read from it (a string's or
+    /// array's indices), so later writes to either are not shared.
+    fn as_object_for(
+        &mut self,
+        id: ExprId,
+        ty: &Type,
+        expected: Option<&Type>,
+        span: Span,
+    ) -> Result<ExprId, CompilerFailure> {
+        let Some(want) = expected else {
+            return Ok(id);
+        };
+        if !is_possibly_nullish_empty_object(ty)
+            || !reads_object_fields(want)
+            || !assignable(&super::narrowing::strip_nullish(ty), want, self.resolver())
+        {
+            return Ok(id);
+        }
+        self.typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::IntrinsicCall {
+                    kind: Intrinsic::ToObject,
+                    args: vec![id],
+                },
+                span,
+                ty: ty.clone(),
+            })
+            .map_err(crate::typechecker::arena_failure)
     }
 
     /// Whether `expr_id`, a literal argument slot's value, widens the earlier
@@ -1165,8 +1256,6 @@ impl Inferer<'_> {
         Ok(unresolved_ref(ident))
     }
 
-    // Keep recursive logical chains out of the larger arithmetic dispatcher:
-    // its debug stack frame includes temporaries from every operator branch.
     fn infer_binary(
         &mut self,
         op: BinOp,
@@ -1175,14 +1264,264 @@ impl Inferer<'_> {
         expected: Option<&Type>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        // One method per operator family: a nested `&&` or `+` chain then
+        // recurses through that family's frame alone. Debug builds give every
+        // local its own stack slot, so one large match would carry all arms'
+        // locals into each level.
         match op {
-            BinOp::And | BinOp::Or => self.infer_logical_binary(op, lhs, rhs, expected),
+            // `??` is lifted out of the generic Binary arm into
+            // its own typed-AST node so codegen and the type-result rule
+            // (`union(strip_nullish(lhs), rhs)`) can be specialised cleanly.
             BinOp::NullishCoalesce => self.infer_nullish_coalesce(lhs, rhs, expected, span),
-            _ => self.infer_nonlogical_binary(op, lhs, rhs, span),
+            BinOp::Add => self.infer_addition(lhs, rhs, span),
+            BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Div
+            | BinOp::Rem
+            | BinOp::Pow
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::BitXor
+            | BinOp::Shl
+            | BinOp::Shr
+            | BinOp::UnsignedShr => self.infer_arithmetic(op, lhs, rhs, span),
+            BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
+                self.infer_ordering(op, lhs, rhs, span)
+            }
+            BinOp::Eq | BinOp::NotEq => self.infer_equality(op, lhs, rhs, span),
+            BinOp::And | BinOp::Or => self.infer_logical(op, lhs, rhs, expected),
+            BinOp::In => self.infer_in_operator(lhs, rhs, span),
         }
     }
 
-    fn infer_logical_binary(
+    /// `+`: numeric addition or string concatenation.
+    fn infer_addition(
+        &mut self,
+        lhs: ExprId,
+        rhs: ExprId,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        // No hint propagation: `+` is overloaded on `number`/`string`,
+        // and either operand alone determines the result. Pushing the
+        // outer hint into operands would let the boundary check fire
+        // on a mistyped operand and then the operator-level rule would
+        // fire again — duplicate diagnostic.
+        let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
+        let (typed_rhs, rt) = self.infer_expr(rhs, None)?;
+        // arithmetic/concat is structural — peel
+        // aliases so `type ID = number; let x: ID = 1; x + x`
+        // typechecks against the (Number, Number) arm.
+        let result_ty = match (lt.peel(), rt.peel()) {
+            (Type::Error, _) | (_, Type::Error) => Type::Error,
+            // `+` on un-narrowed `unknown` is rejected.
+            (Type::Unknown, _) | (_, Type::Unknown) => {
+                self.error_with_help(
+                    span,
+                    "cannot apply `+` to `unknown`".to_string(),
+                    vec![
+                        "narrow first with `typeof x === \"number\"` \
+                         or `typeof x === \"string\"` before adding"
+                            .to_string(),
+                    ],
+                );
+                Type::Error
+            }
+            _ => {
+                if let Some(ty) = plus_result(&lt, &rt) {
+                    ty
+                } else {
+                    let message = format!("`+` not defined for `{lt}` and `{rt}`");
+                    let help = mixed_string_number_add_help(&lt, &rt)
+                        .map(|h| vec![h.to_string()])
+                        .unwrap_or_default();
+                    let culprit =
+                        self.nullable_binary_culprit((typed_lhs, &lt), (typed_rhs, &rt), |l, r| {
+                            plus_result(l, r).is_some()
+                        });
+                    self.error_with_narrowing_hint(span, message, help, culprit)?;
+                    Type::Error
+                }
+            }
+        };
+        Ok((
+            TypedExprKind::Binary {
+                op: BinOp::Add,
+                lhs: typed_lhs,
+                rhs: typed_rhs,
+            },
+            result_ty,
+        ))
+    }
+
+    /// Arithmetic and bitwise operators other than `+`.
+    fn infer_arithmetic(
+        &mut self,
+        op: BinOp,
+        lhs: ExprId,
+        rhs: ExprId,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        // arithmetic accepts `number × number`
+        // or `bigint × bigint`. Mixed `number ↔ bigint` falls
+        // through to the catch-all "not defined for" error.
+        // `**` uses the same type rules; the bigint-pow host
+        // function additionally traps at runtime if the
+        // exponent is negative or doesn't fit in u32 (a
+        // semantic constraint, not a static one).
+        // Inferred without a forced hint so a literal lhs
+        // picks its own widened type and the rhs gets the
+        // lhs type as a hint.
+        let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
+        let rhs_hint = match lt.peel() {
+            Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
+            Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
+            _ => None,
+        };
+        let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref())?;
+        let result_ty = match (lt.peel(), rt.peel()) {
+            (Type::Error, _) | (_, Type::Error) => Type::Error,
+            (Type::Unknown, _) | (_, Type::Unknown) => {
+                self.error_with_help(
+                    span,
+                    format!("cannot apply `{}` to `unknown`", op_symbol(op)),
+                    vec![
+                        "narrow first with `typeof x === \"number\"` \
+                         before doing arithmetic"
+                            .to_string(),
+                    ],
+                );
+                Type::Error
+            }
+            _ => {
+                if let Some(ty) = super::stmt::binary_arith_result(op, &lt, &rt) {
+                    ty
+                } else {
+                    let culprit =
+                        self.nullable_binary_culprit((typed_lhs, &lt), (typed_rhs, &rt), |l, r| {
+                            super::stmt::binary_arith_result(op, l, r).is_some()
+                        });
+                    self.error_with_narrowing_hint(
+                        span,
+                        format!("`{}` not defined for `{lt}` and `{rt}`", op_symbol(op)),
+                        Vec::new(),
+                        culprit,
+                    )?;
+                    Type::Error
+                }
+            }
+        };
+        Ok((
+            TypedExprKind::Binary {
+                op,
+                lhs: typed_lhs,
+                rhs: typed_rhs,
+            },
+            result_ty,
+        ))
+    }
+
+    /// `<`, `>`, `<=` and `>=`.
+    fn infer_ordering(
+        &mut self,
+        op: BinOp,
+        lhs: ExprId,
+        rhs: ExprId,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        // ordering accepts `number × number`, `bigint × bigint`, or
+        // `string × string` (lexicographic). Inferred without a forced
+        // hint so the rhs takes the lhs type as a hint (mirroring
+        // `===` / `!==`). Strings keep `None` as the rhs hint so a
+        // mixed `string < number` doesn't also emit "expected string".
+        let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
+        let rhs_hint = match lt.peel() {
+            Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
+            Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
+            _ => None,
+        };
+        let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref())?;
+        if matches!(lt.peel(), Type::Unknown) || matches!(rt.peel(), Type::Unknown) {
+            // ordering comparisons on un-narrowed
+            // `unknown` are rejected. Same rationale as
+            // `infer_arithmetic`.
+            self.error_with_help(
+                span,
+                format!("cannot apply `{}` to `unknown`", op_symbol(op)),
+                vec![
+                    "narrow first with `typeof x === \"number\"` \
+                     before comparing"
+                        .to_string(),
+                ],
+            );
+        } else if !matches!((lt.peel(), rt.peel()), (Type::Error, _) | (_, Type::Error))
+            && !ordering_accepts(&lt, &rt)
+        {
+            let culprit =
+                self.nullable_binary_culprit((typed_lhs, &lt), (typed_rhs, &rt), ordering_accepts);
+            self.error_with_narrowing_hint(
+                span,
+                format!("`{}` not defined for `{lt}` and `{rt}`", op_symbol(op)),
+                Vec::new(),
+                culprit,
+            )?;
+        }
+        Ok((
+            TypedExprKind::Binary {
+                op,
+                lhs: typed_lhs,
+                rhs: typed_rhs,
+            },
+            Type::Boolean,
+        ))
+    }
+
+    /// `===` and `!==`.
+    fn infer_equality(
+        &mut self,
+        op: BinOp,
+        lhs: ExprId,
+        rhs: ExprId,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        // forgiveness: rewrite `typeof x === "T"` and
+        // `typeof x !== "T"` (plus the swapped sides) to
+        // `Is` / `!Is`. Falls through if no `typeof` operand.
+        if let Some(folded) = self.try_typeof_fold(op, lhs, rhs, span)? {
+            return Ok(folded);
+        }
+        let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
+        // Contextual types help literals and callbacks, but an equality
+        // operand is not an assignment into the other operand's type.
+        let contextual_rhs = is_context_typed_literal(self.ast, rhs)?;
+        let rhs_hint = contextual_rhs.then_some(&lt);
+        let (typed_rhs, _) = self.infer_expr(rhs, rhs_hint)?;
+        let lhs_operand = self.comparison_operand(lhs, typed_lhs)?;
+        let rhs_operand = self.comparison_operand(rhs, typed_rhs)?;
+        if !super::comparison_operand::operands_comparable(
+            &lhs_operand,
+            &rhs_operand,
+            self.resolver(),
+        ) {
+            self.error(
+                self.ast.try_expr(rhs).map_err(super::arena_failure)?.span,
+                super::diagnostics::mismatch_message(&lhs_operand.label, &rhs_operand.label),
+            );
+        }
+        if self.is_global_nan(typed_lhs)? || self.is_global_nan(typed_rhs)? {
+            self.error_nan_comparison(op, span);
+        }
+        Ok((
+            TypedExprKind::Binary {
+                op,
+                lhs: typed_lhs,
+                rhs: typed_rhs,
+            },
+            Type::Boolean,
+        ))
+    }
+
+    /// `&&` and `||`.
+    fn infer_logical(
         &mut self,
         op: BinOp,
         lhs: ExprId,
@@ -1234,7 +1573,11 @@ impl Inferer<'_> {
         let rhs_env = match op {
             BinOp::And => true_env,
             BinOp::Or => false_env,
-            _ => return Err(super::inference_failure("matched And | Or above")),
+            _ => {
+                return Err(super::inference_failure(
+                    "`infer_logical` takes `&&` or `||`",
+                ));
+            }
         };
         // `a || b` is `a` when `a` is never falsy, so only `a` meets what
         // is expected of it. `b` still takes it as context unless it is a
@@ -1252,7 +1595,11 @@ impl Inferer<'_> {
         let lhs_kept = match op {
             BinOp::And => super::narrowing::falsy_part(&lhs_ty),
             BinOp::Or => super::narrowing::truthy_part(&lhs_ty),
-            _ => return Err(super::inference_failure("matched And | Or above")),
+            _ => {
+                return Err(super::inference_failure(
+                    "`infer_logical` takes `&&` or `||`",
+                ));
+            }
         };
         let result_ty = if condition_error {
             Type::Error
@@ -1280,287 +1627,6 @@ impl Inferer<'_> {
             },
             result_ty,
         ))
-    }
-
-    fn infer_nonlogical_binary(
-        &mut self,
-        op: BinOp,
-        lhs: ExprId,
-        rhs: ExprId,
-        span: Span,
-    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        // human-readable operator symbol for diagnostics.
-        // Inline-defined so the helper stays scoped to this method.
-        fn op_symbol(op: BinOp) -> &'static str {
-            match op {
-                BinOp::Add => "+",
-                BinOp::Sub => "-",
-                BinOp::Mul => "*",
-                BinOp::Div => "/",
-                BinOp::Rem => "%",
-                BinOp::Pow => "**",
-                BinOp::BitAnd => "&",
-                BinOp::BitOr => "|",
-                BinOp::BitXor => "^",
-                BinOp::Shl => "<<",
-                BinOp::Shr => ">>",
-                BinOp::UnsignedShr => ">>>",
-                BinOp::Lt => "<",
-                BinOp::Gt => ">",
-                BinOp::Le => "<=",
-                BinOp::Ge => ">=",
-                BinOp::Eq => "===",
-                BinOp::NotEq => "!==",
-                BinOp::And => "&&",
-                BinOp::Or => "||",
-                BinOp::In => "in",
-                BinOp::NullishCoalesce => "??",
-            }
-        }
-        fn mixed_string_number_add_help(lt: &Type, rt: &Type) -> Option<&'static str> {
-            let left_is_string = matches!(lt.peel(), Type::String | Type::StringLiteral(_));
-            let right_is_string = matches!(rt.peel(), Type::String | Type::StringLiteral(_));
-            let left_is_number = matches!(lt.peel(), Type::Number | Type::NumberLiteral(_));
-            let right_is_number = matches!(rt.peel(), Type::Number | Type::NumberLiteral(_));
-
-            match (
-                left_is_string,
-                right_is_string,
-                left_is_number,
-                right_is_number,
-            ) {
-                (true, false, false, true) => Some(
-                    "`+` does not coerce; wrap the number with `String(...)` before concatenating",
-                ),
-                (false, true, true, false) => Some(
-                    "`+` does not coerce; convert the string with `Number(...)`, `parseInt(...)`, or `parseFloat(...)` before adding",
-                ),
-                _ => None,
-            }
-        }
-        match op {
-            BinOp::Add => {
-                // No hint propagation: `+` is overloaded on `number`/`string`,
-                // and either operand alone determines the result. Pushing the
-                // outer hint into operands would let the boundary check fire
-                // on a mistyped operand and then the operator-level rule would
-                // fire again — duplicate diagnostic.
-                let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
-                let (typed_rhs, rt) = self.infer_expr(rhs, None)?;
-                // arithmetic/concat is structural — peel
-                // aliases so `type ID = number; let x: ID = 1; x + x`
-                // typechecks against the (Number, Number) arm.
-                let result_ty = match (lt.peel(), rt.peel()) {
-                    (Type::Error, _) | (_, Type::Error) => Type::Error,
-                    // `+` on un-narrowed `unknown` is rejected.
-                    (Type::Unknown, _) | (_, Type::Unknown) => {
-                        self.error_with_help(
-                            span,
-                            "cannot apply `+` to `unknown`".to_string(),
-                            vec![
-                                "narrow first with `typeof x === \"number\"` \
-                                 or `typeof x === \"string\"` before adding"
-                                    .to_string(),
-                            ],
-                        );
-                        Type::Error
-                    }
-                    _ => {
-                        if let Some(ty) = plus_result(&lt, &rt) {
-                            ty
-                        } else {
-                            let message = format!("`+` not defined for `{lt}` and `{rt}`");
-                            let help = mixed_string_number_add_help(&lt, &rt)
-                                .map(|h| vec![h.to_string()])
-                                .unwrap_or_default();
-                            let culprit = self.nullable_binary_culprit(
-                                (typed_lhs, &lt),
-                                (typed_rhs, &rt),
-                                |l, r| plus_result(l, r).is_some(),
-                            );
-                            self.error_with_narrowing_hint(span, message, help, culprit)?;
-                            Type::Error
-                        }
-                    }
-                };
-                Ok((
-                    TypedExprKind::Binary {
-                        op,
-                        lhs: typed_lhs,
-                        rhs: typed_rhs,
-                    },
-                    result_ty,
-                ))
-            }
-            BinOp::Sub
-            | BinOp::Mul
-            | BinOp::Div
-            | BinOp::Rem
-            | BinOp::Pow
-            | BinOp::BitAnd
-            | BinOp::BitOr
-            | BinOp::BitXor
-            | BinOp::Shl
-            | BinOp::Shr
-            | BinOp::UnsignedShr => {
-                // arithmetic accepts `number × number`
-                // or `bigint × bigint`. Mixed `number ↔ bigint` falls
-                // through to the catch-all "not defined for" error.
-                // `**` uses the same type rules; the bigint-pow host
-                // function additionally traps at runtime if the
-                // exponent is negative or doesn't fit in u32 (a
-                // semantic constraint, not a static one).
-                // Inferred without a forced hint so a literal lhs
-                // picks its own widened type and the rhs gets the
-                // lhs type as a hint.
-                let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
-                let rhs_hint = match lt.peel() {
-                    Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
-                    Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
-                    _ => None,
-                };
-                let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref())?;
-                let result_ty = match (lt.peel(), rt.peel()) {
-                    (Type::Error, _) | (_, Type::Error) => Type::Error,
-                    (Type::Unknown, _) | (_, Type::Unknown) => {
-                        self.error_with_help(
-                            span,
-                            format!("cannot apply `{}` to `unknown`", op_symbol(op)),
-                            vec![
-                                "narrow first with `typeof x === \"number\"` \
-                                 before doing arithmetic"
-                                    .to_string(),
-                            ],
-                        );
-                        Type::Error
-                    }
-                    _ => {
-                        if let Some(ty) = super::stmt::binary_arith_result(op, &lt, &rt) {
-                            ty
-                        } else {
-                            let culprit = self.nullable_binary_culprit(
-                                (typed_lhs, &lt),
-                                (typed_rhs, &rt),
-                                |l, r| super::stmt::binary_arith_result(op, l, r).is_some(),
-                            );
-                            self.error_with_narrowing_hint(
-                                span,
-                                format!("`{}` not defined for `{lt}` and `{rt}`", op_symbol(op)),
-                                Vec::new(),
-                                culprit,
-                            )?;
-                            Type::Error
-                        }
-                    }
-                };
-                Ok((
-                    TypedExprKind::Binary {
-                        op,
-                        lhs: typed_lhs,
-                        rhs: typed_rhs,
-                    },
-                    result_ty,
-                ))
-            }
-            BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
-                // ordering accepts `number × number`, `bigint × bigint`, or
-                // `string × string` (lexicographic). Inferred without a forced
-                // hint so the rhs takes the lhs type as a hint (mirroring
-                // `===` / `!==`). Strings keep `None` as the rhs hint so a
-                // mixed `string < number` doesn't also emit "expected string".
-                let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
-                let rhs_hint = match lt.peel() {
-                    Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
-                    Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
-                    _ => None,
-                };
-                let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref())?;
-                if matches!(lt.peel(), Type::Unknown) || matches!(rt.peel(), Type::Unknown) {
-                    // ordering comparisons on un-narrowed
-                    // `unknown` are rejected. Same rationale as the
-                    // arithmetic arm.
-                    self.error_with_help(
-                        span,
-                        format!("cannot apply `{}` to `unknown`", op_symbol(op)),
-                        vec![
-                            "narrow first with `typeof x === \"number\"` \
-                             before comparing"
-                                .to_string(),
-                        ],
-                    );
-                } else if !matches!((lt.peel(), rt.peel()), (Type::Error, _) | (_, Type::Error))
-                    && !ordering_accepts(&lt, &rt)
-                {
-                    let culprit = self.nullable_binary_culprit(
-                        (typed_lhs, &lt),
-                        (typed_rhs, &rt),
-                        ordering_accepts,
-                    );
-                    self.error_with_narrowing_hint(
-                        span,
-                        format!("`{}` not defined for `{lt}` and `{rt}`", op_symbol(op)),
-                        Vec::new(),
-                        culprit,
-                    )?;
-                }
-                Ok((
-                    TypedExprKind::Binary {
-                        op,
-                        lhs: typed_lhs,
-                        rhs: typed_rhs,
-                    },
-                    Type::Boolean,
-                ))
-            }
-            BinOp::Eq | BinOp::NotEq => {
-                // forgiveness: rewrite `typeof x === "T"` and
-                // `typeof x !== "T"` (plus the swapped sides) to
-                // `Is` / `!Is`. Falls through if no `typeof` operand.
-                if let Some(folded) = self.try_typeof_fold(op, lhs, rhs, span)? {
-                    return Ok(folded);
-                }
-                let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
-                // Contextual types help literals and callbacks, but an equality
-                // operand is not an assignment into the other operand's type.
-                let contextual_rhs = is_context_typed_literal(self.ast, rhs)?;
-                let rhs_hint = contextual_rhs.then_some(&lt);
-                let (typed_rhs, _) = self.infer_expr(rhs, rhs_hint)?;
-                let lhs_operand = self.comparison_operand(lhs, typed_lhs)?;
-                let rhs_operand = self.comparison_operand(rhs, typed_rhs)?;
-                if !super::comparison_operand::operands_comparable(
-                    &lhs_operand,
-                    &rhs_operand,
-                    self.resolver(),
-                ) {
-                    self.error(
-                        self.ast.try_expr(rhs).map_err(super::arena_failure)?.span,
-                        super::diagnostics::mismatch_message(
-                            &lhs_operand.label,
-                            &rhs_operand.label,
-                        ),
-                    );
-                }
-                if self.is_global_nan(typed_lhs)? || self.is_global_nan(typed_rhs)? {
-                    self.error_nan_comparison(op, span);
-                }
-                Ok((
-                    TypedExprKind::Binary {
-                        op,
-                        lhs: typed_lhs,
-                        rhs: typed_rhs,
-                    },
-                    Type::Boolean,
-                ))
-            }
-            BinOp::And | BinOp::Or => Err(super::inference_failure(
-                "logical operators handled by infer_binary dispatch",
-            )),
-            BinOp::In => self.infer_in_operator(lhs, rhs, span),
-            // Dispatched directly by infer_binary.
-            BinOp::NullishCoalesce => Err(super::inference_failure(
-                "NullishCoalesce handled by infer_binary dispatch",
-            )),
-        }
     }
 
     /// `"field" in obj`. LHS must be a string literal; RHS
@@ -1908,12 +1974,27 @@ impl Inferer<'_> {
                 span,
             )?;
         }
-        Ok((
+        // The tag is one of the eight `typeof` returns in TypeScript, `symbol`
+        // included. Typing it as their union by a cast makes the union
+        // declared, not fresh, so `let t = typeof x` keeps it, as in
+        // TypeScript. The sequence shares the expression's span, so it carries
+        // the union too.
+        let tag_ty = typeof_result_type();
+        let tag = self.push_synthetic_expr(
             TypedExprKind::Sequence {
                 stmts: vec![binding],
                 result,
             },
-            Type::String,
+            tag_ty.clone(),
+            span,
+        )?;
+        Ok((
+            TypedExprKind::Cast {
+                value: tag,
+                target_ty: tag_ty.clone(),
+                check: None,
+            },
+            tag_ty,
         ))
     }
 
@@ -2261,15 +2342,17 @@ impl Inferer<'_> {
                 matches!(sym.kind, crate::TypeKind::Class { .. }).then(|| sym.mangled_name.clone())
             });
             if let Some(class_mangled) = class_target {
-                return self.infer_class_static_call(
+                let call = self.infer_class_static_call(
                     recv_ident.name.clone(),
-                    class_mangled,
+                    class_mangled.clone(),
                     name.clone(),
                     type_args,
                     args,
                     expected,
                     span,
                 );
+                self.note_inherited_static_receiver(&class_mangled, &name.name);
+                return call;
             }
         }
 
@@ -4021,6 +4104,17 @@ impl Inferer<'_> {
         )
     }
 
+    /// Has the expression being inferred record `class` as the class it names
+    /// when `class` inherits its static `member` rather than declaring it.
+    fn note_inherited_static_receiver(&mut self, class: &crate::MangledName, member: &str) {
+        let inherits = self
+            .class_static_in_chain(class, member)
+            .is_some_and(|(_, owner)| owner != *class);
+        if inherits {
+            self.pending_static_receiver = Some(class.clone());
+        }
+    }
+
     /// `ClassName.member` in non-call position: a static field reads the backing
     /// module global; a non-generic static method becomes a `FunctionRef` value.
     fn infer_class_static_access(
@@ -4902,6 +4996,15 @@ impl Inferer<'_> {
                 .try_expr(operands[0])
                 .map_err(crate::typechecker::arena_failure)?
                 .clone();
+            // The outer node replaces this one, so it takes over its guard.
+            if let Some(receiver) = self
+                .typed_ast
+                .inherited_static_receivers
+                .get(&operands[0])
+                .cloned()
+            {
+                self.pending_static_receiver = Some(receiver);
+            }
             // A template is a `string` whatever it interpolates, as in
             // TypeScript: `` `${h}` `` with `h: "hello"` is not `"hello"`,
             // unless a string literal type is expected of it.
@@ -5947,10 +6050,10 @@ impl Inferer<'_> {
             .then(|| {
                 self.own_object_literal_type(
                     &merged,
+                    &spread_index_values,
                     expected,
                     expected_fields.as_ref(),
                     interface_target.is_some(),
-                    has_spread,
                 )
             })
             .flatten();
@@ -6143,20 +6246,20 @@ impl Inferer<'_> {
     /// as in tsc: `{ value: 10 }` against `{ value: number; error?: string }` is
     /// `{ value: number }`. Codegen builds it from its field origins instead.
     /// `None` keeps the expected type: against an interface with methods, whose
-    /// methods a value reaches through the interface's own dispatch; with a
-    /// spread, whose fields take their optionality from the expected shape; and
-    /// against an unbound type parameter, which a call site infers from the
-    /// expected shape.
+    /// methods a value reaches through the interface's own dispatch; and against
+    /// an unbound type parameter, which a call site infers from the expected
+    /// shape. A spread's fields keep their own optionality: `{ ...c && { a } }`
+    /// is `{ a?: string }` whatever the expected type requires.
     fn own_object_literal_type(
         &self,
         merged: &std::collections::BTreeMap<
             String,
             (crate::ObjectField, crate::TypedObjectFieldSource),
         >,
+        spread_index_values: &[Type],
         expected: Option<&Type>,
         expected_fields: Option<&std::collections::BTreeMap<String, crate::ObjectField>>,
         against_interface: bool,
-        has_spread: bool,
     ) -> Option<Type> {
         let expected = expected?;
         let expected_fields = expected_fields?;
@@ -6164,11 +6267,23 @@ impl Inferer<'_> {
             && expected_fields
                 .values()
                 .any(|field| field.method || matches!(field.ty.peel(), Type::Function { .. }));
-        if dispatches_methods || has_spread || type_contains_type_var(expected) {
+        if dispatches_methods || type_contains_type_var(expected) {
             return None;
         }
+        // A spread record's index signature holds the named fields too, as the
+        // literal's type below has it.
+        let index = (!spread_index_values.is_empty()).then(|| crate::IndexSignature {
+            value: Box::new(Type::union(
+                spread_index_values
+                    .iter()
+                    .cloned()
+                    .chain(merged.values().map(|(field, _)| field.ty.clone()))
+                    .collect(),
+            )),
+            readonly: false,
+        });
         let own = Type::Object {
-            index: None,
+            index,
             fields: merged
                 .iter()
                 .map(|(name, (field, _))| (name.clone(), field.clone()))
@@ -7444,12 +7559,70 @@ impl Inferer<'_> {
             element_types.push(self.widen_fresh_literals(typed_id, &ty)?);
             typed_elements.push(typed_id);
         }
+        let padding = self.tuple_pattern_padding(literal)?;
+        let mut tuple = crate::types::TupleType::from(element_types.clone());
+        tuple.optional = padding.len();
+        tuple.elements.extend(padding);
         Ok((
             TypedExprKind::TupleLiteral {
                 elements: typed_elements,
-                element_types: element_types.clone(),
+                element_types,
             },
-            Type::Tuple(element_types.into()),
+            Type::Tuple(tuple),
+        ))
+    }
+
+    /// The optional elements a parameter's tuple default gains for the
+    /// pattern's defaulted slots past its end, each typed as its default
+    /// widened, or `undefined`. Only literal defaults are typed here, before
+    /// the pattern infers them; with any other, the tuple keeps its length.
+    fn tuple_pattern_padding(&self, literal: ExprId) -> Result<Vec<Type>, CompilerFailure> {
+        let Some(defaults) = self.ast.tuple_pattern_pad_defaults.get(&literal) else {
+            return Ok(Vec::new());
+        };
+        let mut padding = Vec::with_capacity(defaults.len());
+        for &default in defaults {
+            let Some(ty) = super::forward_globals::stated_literal_type(self.ast, default)? else {
+                return Ok(Vec::new());
+            };
+            padding.push(Type::union(vec![ty.widen_literal(), Type::Undefined]));
+        }
+        Ok(padding)
+    }
+
+    /// An object literal an object pattern takes apart, typed as TypeScript
+    /// types it from the pattern: each property the pattern gives a default
+    /// is optional, since the default stands in for it.
+    fn infer_pattern_object_literal(
+        &mut self,
+        literal: ExprId,
+        members: Vec<crate::ObjectLiteralMember>,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let (kind, ty) = self.infer_object_literal_expr(literal, members, None, span)?;
+        let Type::Object { index, mut fields } = ty.clone() else {
+            return Ok((kind, ty));
+        };
+        let defaulted = self
+            .ast
+            .object_pattern_sources
+            .get(&literal)
+            .into_iter()
+            .flatten();
+        for name in defaulted {
+            if let Some(field) = fields.get_mut(name) {
+                field.optional = true;
+            }
+        }
+        let target = Type::Object { index, fields };
+        let value = self.push_synthetic_expr(kind, ty, span)?;
+        Ok((
+            TypedExprKind::Cast {
+                value,
+                target_ty: target.clone(),
+                check: None,
+            },
+            target,
         ))
     }
 
@@ -7745,12 +7918,15 @@ impl Inferer<'_> {
                         // `ClassName.member` read: static field → backing global,
                         // static method → function value. A value binding of the
                         // same name shadows the class (checked above).
-                        return Ok(self.infer_class_static_access(
+                        let member = name.name.clone();
+                        let access = self.infer_class_static_access(
                             recv_name,
-                            enum_mangled,
+                            enum_mangled.clone(),
                             name,
                             span,
-                        ));
+                        );
+                        self.note_inherited_static_receiver(&enum_mangled, &member);
+                        return Ok(access);
                     }
                     _ => {
                         // Identifier resolves to a non-enum type —
@@ -8310,6 +8486,13 @@ impl Inferer<'_> {
                 };
                 match literal_idx {
                     Some(idx) if idx < elements.len() => elements[idx].clone(),
+                    Some(_)
+                        if pattern_origin
+                            .as_ref()
+                            .is_some_and(|origin| origin.defaulted) =>
+                    {
+                        Type::Undefined
+                    }
                     Some(idx) => {
                         if let Some(origin) = &pattern_origin {
                             let message = format!(
@@ -8470,9 +8653,9 @@ impl Inferer<'_> {
 
     /// The element a read at `index` gives from a union of arrays and tuples: the
     /// union of each member's element there. An array member gives its element at
-    /// any index; a tuple member needs a non-negative integer literal within its
-    /// arity, since its positions have distinct types and no runtime length check
-    /// guards a shorter variant.
+    /// any index; a tuple member needs a non-negative integer literal, since its
+    /// positions have distinct types, within its arity unless a destructuring
+    /// pattern reads it.
     fn array_like_union_element(
         &mut self,
         members: &[Type],
@@ -8498,6 +8681,11 @@ impl Inferer<'_> {
                         Some(min_tuple_arity.map_or(positions.len(), |m| m.min(positions.len())));
                     match literal_idx.and_then(|idx| positions.get(idx)) {
                         Some(element) => elements.push(element.clone()),
+                        // A pattern reads a slot a shorter tuple lacks as
+                        // `undefined`, as tsc does; codegen checks the length.
+                        None if literal_idx.is_some() && pattern_origin.is_some() => {
+                            elements.push(Type::Undefined);
+                        }
                         None => tuple_lacks_index = true,
                     }
                 }
@@ -10496,6 +10684,10 @@ impl Inferer<'_> {
             .filter(|_| type_admits_nullish(&lhs_ty, self.resolver()))
             .cloned();
         let fallback_hint = (cannot_be_typed_alone(self.ast, rhs)?
+            && !self
+                .ast
+                .tuple_pattern_sources
+                .contains(&peel_parens(self.ast, rhs)?)
             && !matches!(
                 lhs_ty.peel(),
                 Type::Error | Type::Null | Type::Undefined | Type::Void
@@ -11753,6 +11945,7 @@ impl Inferer<'_> {
             );
             return Ok((TypedExprKind::Null, Type::Error));
         }
+        let inner_id = self.as_object_for(inner_id, &inner_ty, Some(&target_ty), span)?;
         // Deep check only when the source isn't a proven subtype of the target.
         // A proven upcast emits no runtime test, so it doesn't need the target
         // to be runtime-verifiable — `m as Map<K, V>` on an `m` that already is
@@ -13107,9 +13300,60 @@ pub(super) fn required_count_of_function_type(
         .map_or(0, |index| index + 1)
 }
 
+/// Human-readable operator symbol for diagnostics.
+fn op_symbol(op: BinOp) -> &'static str {
+    match op {
+        BinOp::Add => "+",
+        BinOp::Sub => "-",
+        BinOp::Mul => "*",
+        BinOp::Div => "/",
+        BinOp::Rem => "%",
+        BinOp::Pow => "**",
+        BinOp::BitAnd => "&",
+        BinOp::BitOr => "|",
+        BinOp::BitXor => "^",
+        BinOp::Shl => "<<",
+        BinOp::Shr => ">>",
+        BinOp::UnsignedShr => ">>>",
+        BinOp::Lt => "<",
+        BinOp::Gt => ">",
+        BinOp::Le => "<=",
+        BinOp::Ge => ">=",
+        BinOp::Eq => "===",
+        BinOp::NotEq => "!==",
+        BinOp::And => "&&",
+        BinOp::Or => "||",
+        BinOp::In => "in",
+        BinOp::NullishCoalesce => "??",
+    }
+}
+
+/// Help for adding a string and a number: `+` does not coerce either side.
+fn mixed_string_number_add_help(lt: &Type, rt: &Type) -> Option<&'static str> {
+    let left_is_string = matches!(lt.peel(), Type::String | Type::StringLiteral(_));
+    let right_is_string = matches!(rt.peel(), Type::String | Type::StringLiteral(_));
+    let left_is_number = matches!(lt.peel(), Type::Number | Type::NumberLiteral(_));
+    let right_is_number = matches!(rt.peel(), Type::Number | Type::NumberLiteral(_));
+
+    match (
+        left_is_string,
+        right_is_string,
+        left_is_number,
+        right_is_number,
+    ) {
+        (true, false, false, true) => {
+            Some("`+` does not coerce; wrap the number with `String(...)` before concatenating")
+        }
+        (false, true, true, false) => Some(
+            "`+` does not coerce; convert the string with `Number(...)`, `parseInt(...)`, or `parseFloat(...)` before adding",
+        ),
+        _ => None,
+    }
+}
+
 /// The pairs `+` is defined for, and the result. The single source of truth for both
-/// the `+` arm and the narrowing hint it emits: a hint may only claim a guard is the
-/// fix when the guarded pair is one this accepts.
+/// [`Inferer::infer_addition`] and the narrowing hint it emits: a hint may only claim
+/// a guard is the fix when the guarded pair is one this accepts.
 pub(super) fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
     match never_operand_result(lt, rt, NeverPartners::NumericOrString) {
         NeverOperand::Accepted(result) => return Some(result),
@@ -13251,6 +13495,39 @@ fn is_definitely_falsy(ty: &Type) -> bool {
         Type::NumberLiteral(value) => value.0 == 0.0,
         Type::StringLiteral(value) => value.is_empty(),
         _ => false,
+    }
+}
+
+/// Whether `ty` is `{}` (or a narrowed `T & {}`), possibly with `null` and
+/// `undefined` members: a type that holds any value. `unknown` and a bare type
+/// parameter are not, though they strip to `{}`; a cast from them stays checked.
+fn is_possibly_nullish_empty_object(ty: &Type) -> bool {
+    let is_nullish = |member: &Type| matches!(member.peel(), Type::Null | Type::Undefined);
+    match ty.peel() {
+        Type::Union(members) => {
+            members.iter().any(|member| member.peel().is_empty_object())
+                && members
+                    .iter()
+                    .all(|member| is_nullish(member) || member.peel().is_empty_object())
+        }
+        other => other.is_empty_object(),
+    }
+}
+
+/// Whether a value of type `ty` has its fields read as an object's: an
+/// object type other than `{}` or an interface, possibly nullish.
+fn reads_object_fields(ty: &Type) -> bool {
+    let present = super::narrowing::strip_nullish(ty);
+    let reads_fields = |member: &Type| {
+        !member.is_empty_object()
+            && matches!(
+                member.lowered(),
+                Type::Object { .. } | Type::InterfaceRef { .. }
+            )
+    };
+    match present.peel() {
+        Type::Union(members) => members.iter().all(reads_fields),
+        other => reads_fields(other),
     }
 }
 
@@ -15009,6 +15286,43 @@ function main(): void { if (result < 10) { } }
             }
             other => panic!("expected lone MethodCall, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn spread_object_literal_keeps_its_own_type_under_an_expected_type() {
+        // tsc types the literal by its spreads: a conditional spread's fields
+        // are optional, a plain one's keep their own optionality.
+        let ta = run_clean(
+            "interface P { a?: number; b?: number; c?: number }\n\
+             const flag = Math.random() > 0.5;\n\
+             const conditional: P = { ...(flag && { a: 1 }), b: 2 };\n\
+             const plain: P = { ...{ a: 1 } };\n\
+             function main(): void {}",
+        );
+        assert_eq!(
+            nth_decl_value_ty(&ta, 1).to_string(),
+            "{ a?: number; b: number }"
+        );
+        assert_eq!(nth_decl_value_ty(&ta, 2).to_string(), "{ a: number }");
+    }
+
+    #[test]
+    fn closure_literal_return_widens_unless_its_context_names_a_literal() {
+        // tsc keeps a returned literal only where the contextual return type
+        // names a literal of its kind, whatever the context's other members.
+        let ta = run_clean(
+            "const a = 100;\n\
+             const plain: () => number = () => a;\n\
+             const nullable: (() => number) | undefined = () => a;\n\
+             const named: () => 0 | 100 = () => a;\n\
+             const mixed: () => \"q\" | number = () => a;\n\
+             function main(): void {}",
+        );
+        let returned = |n| nth_decl_value_ty(&ta, n).to_string();
+        assert_eq!(returned(1), "() => number");
+        assert_eq!(returned(2), "() => number");
+        assert_eq!(returned(3), "() => 100");
+        assert_eq!(returned(4), "() => number");
     }
 
     #[test]

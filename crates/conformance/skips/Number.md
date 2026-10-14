@@ -26,7 +26,7 @@ constant-descriptor write tests (`MAX_VALUE`/`MIN_VALUE` `S15.7.3.x_A2-A4`,
 
 | Case | Gap |
 |:--|:--|
-| `Number/prototype/toExponential/return-values` | `toExponential` rounds exact ties half-to-even — `(25).toExponential(0)` is `"2e+1"` — where the standard picks the larger candidate (`"3e+1"`). spec.md documents the half-to-even tie rule only for `toFixed`; for `toExponential` it says "follow the standard's forms", so this is a gap, not a documented divergence. All other rows of the table pass. |
+| `Number/prototype/toExponential/return-values` | `toExponential` rounds exact ties half-to-even — `(25).toExponential(0)` is `"2e+1"` — where the standard picks the larger candidate (`"3e+1"`). `toFixed` rounds ties as the standard does; for `toExponential` spec.md says "follow the standard's forms", so this is a gap, not a documented divergence. All other rows of the table pass. |
 | `Number/prototype/toPrecision/infinity` | `toPrecision` validates the 1..100 precision range before the NaN/Infinity short-circuit and throws; the standard returns `"Infinity"`/`"-Infinity"` (and `"NaN"`) first, only then range-checks. `toExponential` gets this order right (its `infinity.js` is ported and passes); `toPrecision/nan.js` would hit the same gap but is built on a `valueOf` coercion trap, so it stays rejected. |
 
 ## Pinned divergences (`expect-error`)

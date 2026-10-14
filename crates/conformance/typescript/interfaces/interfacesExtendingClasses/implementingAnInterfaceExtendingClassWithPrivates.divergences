@@ -1,0 +1,7 @@
+types: 0 of 14 tsc entries compared, 0 differ
+
+errors:
+line 13: tsc TS2420: Class 'Bar2' incorrectly implements interface 'I'.   Property 'x' is missing in type 'Bar2' but required in type 'I'. (we accept)
+line 17: tsc TS2420: Class 'Bar3' incorrectly implements interface 'I'.   Property 'x' is private in type 'I' but not in type 'Bar3'. (we accept)
+line 22: tsc TS2420: Class 'Bar4' incorrectly implements interface 'I'.   Types have separate declarations of a private property 'x'. (we accept)
+line 6: ours: interface base must be an interface or structural object type (tsc accepts)

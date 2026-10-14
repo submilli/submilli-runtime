@@ -1,0 +1,2 @@
+parserSuperExpression3.ts(4,10): error TS2339: Property 'super' does not exist on type 'C'.
+parserSuperExpression3.ts(4,16): error TS2304: Cannot find name 'T'.

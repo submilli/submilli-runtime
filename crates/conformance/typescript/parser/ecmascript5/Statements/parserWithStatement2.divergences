@@ -1,0 +1,4 @@
+types: 0 of 2 tsc entries compared, 0 differ
+
+errors:
+line 3: ours: `return` outside function (tsc accepts)

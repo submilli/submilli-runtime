@@ -611,7 +611,11 @@ fn entries_by_line(typed: &TypedAst, source: &str) -> EntriesByLine {
         .filter_map(|(span, ty, retained)| {
             Some((span, span_text(source, span)?, Claim::Binding(retained), ty))
         });
-    let mut nodes: Vec<(Span, &str, Claim, Type)> = expressions.chain(names).collect();
+    let assignments = assignment_statements(typed)
+        .into_iter()
+        .filter_map(|(span, ty)| Some((span, span_text(source, span)?, Claim::AssignedValue, ty)));
+    let mut nodes: Vec<(Span, &str, Claim, Type)> =
+        expressions.chain(names).chain(assignments).collect();
     nodes.sort_by_key(|(span, _, claim, _)| (span.start, Reverse(span.end), Reverse(*claim)));
     nodes.dedup_by(|a, b| a.0.start == b.0.start && a.0.end == b.0.end);
 
@@ -698,6 +702,9 @@ fn is_semantic_reference_cast(
 enum Claim {
     /// A variable reference whose span is not a name: a closure's capture.
     SynthesizedReference,
+    /// An assignment written as a statement, such as a `for` update, which
+    /// `tsc` types as an expression by its value.
+    AssignedValue,
     /// Any other expression. The last one created at a span is the construct
     /// itself, created after the pieces synthesized for it.
     Expression(bool, usize),
@@ -819,6 +826,21 @@ fn postfix_operands(
             Some((span, ty.clone(), reachable.expressions.contains(&id)))
         })
         .collect()
+}
+
+/// Each assignment to a variable written as a statement, with its value's
+/// type. Without a `;` its span is the assignment's own, as in a `for` update.
+fn assignment_statements(typed: &TypedAst) -> Vec<(Span, Type)> {
+    let mut out = Vec::new();
+    for i in 0..typed.stmts_len() {
+        let statement = typed.try_stmt(StmtId(i as u32)).unwrap();
+        if let TypedStmtKind::AssignLocal { value, .. }
+        | TypedStmtKind::AssignGlobal { value, .. } = &statement.kind
+        {
+            out.push((statement.span, typed.try_expr(*value).unwrap().ty.clone()));
+        }
+    }
+    out
 }
 
 /// `tsc`'s entries from a `.types` baseline, keyed by line in the case.

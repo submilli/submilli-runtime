@@ -1,0 +1,5 @@
+types: 1 of 10 tsc entries compared, 0 differ
+
+errors:
+line 7: ours: `+` not defined for `number` and `{}` (tsc accepts)
+line 13: ours: class `Bet` does not implement `Aleph`: member `q` has an incompatible signature (tsc accepts)
