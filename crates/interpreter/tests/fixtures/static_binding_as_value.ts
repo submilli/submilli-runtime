@@ -32,6 +32,7 @@ function main(): void {
   assert(typeof ctor === "function", "a constructor is a function");
   assert(typeof value === "object", "console is an object");
   assert(JSON.stringify(ctor) === undefined, "serializing a constructor");
+  assert(JSON.stringify(Number) === undefined, "serializing a constructor typed as itself");
   assert(JSON.stringify([Map]) === "[null]", "a constructor in an array serializes as null");
   assert(JSON.stringify({ f: Number, g: 1 }) === '{"g":1}', "a constructor field is left out");
   if (typeof value === "object" && value !== null) {

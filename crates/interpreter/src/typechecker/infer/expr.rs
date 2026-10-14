@@ -291,7 +291,29 @@ fn admits_undefined_leaf(member: &Type) -> bool {
 
 /// Whether `JSON.stringify` of a `ty` may return `undefined`.
 fn json_stringify_may_return_undefined(ty: &Type, types: TypeResolver<'_>) -> bool {
-    any_resolved_member(ty, types, &Type::stringifies_to_undefined)
+    any_resolved_member(ty, types, &|member| {
+        Type::stringifies_to_undefined(member) || is_constructor_binding(member, types)
+    })
+}
+
+/// Whether `ty` types a constructor binding used as a value (`Number`,
+/// `Map`), which is a function at run time. The prelude names these
+/// static-dispatch interfaces `…Constructor`, as TypeScript's lib does;
+/// `Console` is the one that types a plain object.
+fn is_constructor_binding(ty: &Type, types: TypeResolver<'_>) -> bool {
+    let Type::InterfaceRef { mangled, name, .. } = ty else {
+        return false;
+    };
+    types.lookup(mangled, name).is_some_and(|symbol| {
+        symbol.name.ends_with("Constructor")
+            && matches!(
+                symbol.kind,
+                crate::TypeKind::Interface {
+                    dispatch: crate::Dispatch::Static,
+                    ..
+                }
+            )
+    })
 }
 
 /// Whether any member of `ty`, through unions and alias bodies, satisfies

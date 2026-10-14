@@ -44,8 +44,12 @@ fn build_static_value_object(
     let text = String::from_utf16_lossy(&read_string_units(caller, &tag, "static value tag")?);
     // Codegen's `static_value_tag` gives constructors their native-function
     // text and every other binding `[object name]`, so the text says which.
-    if text.starts_with("function ") {
-        return build_constructor_closure(caller, &intr, tag, text);
+    if let Some(signature) = text.strip_prefix("function ") {
+        let name = signature
+            .split_once('(')
+            .map_or(signature, |(name, _)| name);
+        let message = format!("{name} used as a value can't be called");
+        return build_constructor_closure(caller, &intr, tag, text, message);
     }
     build_namespace_object(caller, &intr, text)
 }
@@ -59,12 +63,9 @@ fn build_constructor_closure(
     intr: &IntrinsicTypes,
     tag: Val,
     text: String,
+    message: String,
 ) -> wasmtime::Result<Val> {
     let closure_vtable = host_closure_vtable(caller)?;
-    let message = format!(
-        "{} used as a value can't be called",
-        constructor_name(&text)
-    );
     let vtable = vtable_printing(caller, intr, &closure_vtable, text)?;
     let (function_ty, closure_ty) = next_closure_type(caller.engine(), intr)?;
     let function = host_func(&mut *caller, function_ty, move |caller, _, _| {
@@ -77,12 +78,6 @@ fn build_constructor_closure(
         &[vtable, Val::FuncRef(Some(function)), tag, Val::I64(0)],
     )?;
     Ok(Val::AnyRef(Some(closure.to_anyref())))
-}
-
-/// `Number` from `function Number() { [native code] }`.
-fn constructor_name(text: &str) -> &str {
-    let rest = text.strip_prefix("function ").unwrap_or(text);
-    rest.split_once('(').map_or(rest, |(name, _)| name)
 }
 
 /// An object with no own keys, so key enumeration and JSON see `{}` as for
