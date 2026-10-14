@@ -978,9 +978,10 @@ impl Inferer<'_> {
     }
 
     /// Whether the discriminant is a `typeof` value: the expression itself, or
-    /// a binding declared with its type (all eight tags, however written). That type lists every tag whatever the
-    /// operand is, even once narrowing removes some, so a switch on it need
-    /// list only the tags its operand can have.
+    /// a binding declared with its type (all eight tags, however written).
+    /// That type lists every tag whatever the operand is, even once narrowing
+    /// removes some, so a switch on it need list only the tags its operand
+    /// can have.
     fn reads_typeof_value(&self, typed_disc: ExprId) -> Result<bool, CompilerFailure> {
         let tags = super::expr::typeof_result_type();
         let disc_expr = self
