@@ -1,1 +1,0 @@
-line 4, 5 type: bug SUB-1626 destructuring defaults against an empty literal differ from tsc (`[]` is `[undefined]`, and `x = !x` in the update is `boolean`, where tsc narrows `x` to `false`)

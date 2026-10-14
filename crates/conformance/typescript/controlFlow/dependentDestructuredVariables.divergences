@@ -1,4 +1,4 @@
-types: 172 of 316 tsc entries compared, 16 differ
+types: 173 of 316 tsc entries compared, 16 differ
 
 line 38: payload
   tsc:  never

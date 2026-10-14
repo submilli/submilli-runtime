@@ -1,9 +1,1 @@
-types: 24 of 33 tsc entries compared, 2 differ
-
-line 4: x = !x
-  tsc:  true
-  ours: boolean
-
-line 5: x = !x
-  tsc:  true
-  ours: boolean
+types: 24 of 33 tsc entries compared, 0 differ
