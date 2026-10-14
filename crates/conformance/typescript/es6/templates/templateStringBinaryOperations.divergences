@@ -1,52 +1,4 @@
-types: 84 of 345 tsc entries compared, 12 differ
-
-line 41: `${ 3 & 4 }`
-  tsc:  "0"
-  ours: string
-
-line 42: `2${ 3 & 4 }`
-  tsc:  "20"
-  ours: string
-
-line 43: `${ 3 & 4 }5`
-  tsc:  "05"
-  ours: string
-
-line 44: `2${ 3 & 4 }5`
-  tsc:  "205"
-  ours: string
-
-line 45: `${ 3 & 4 }`
-  tsc:  "0"
-  ours: string
-
-line 46: `2${ 3 & 4 }`
-  tsc:  "20"
-  ours: string
-
-line 47: `${ 3 & 4 }5`
-  tsc:  "05"
-  ours: string
-
-line 48: `2${ 3 & 4 }5`
-  tsc:  "205"
-  ours: string
-
-line 49: `${ 3 & 4 }`
-  tsc:  "0"
-  ours: string
-
-line 50: `2${ 3 & 4 }`
-  tsc:  "20"
-  ours: string
-
-line 51: `${ 3 & 4 }5`
-  tsc:  "05"
-  ours: string
-
-line 52: `2${ 3 & 4 }5`
-  tsc:  "205"
-  ours: string
+types: 84 of 345 tsc entries compared, 0 differ
 
 errors:
 line 2: ours: `+` not defined for `number` and `"3"` (tsc accepts)
@@ -85,15 +37,15 @@ line 36: ours: `+` not defined for `number` and `"12"` (tsc accepts)
 line 37: ours: `+` not defined for `number` and `"212"` (tsc accepts)
 line 38: ours: `+` not defined for `number` and `"125"` (tsc accepts)
 line 39: ours: `+` not defined for `number` and `"2125"` (tsc accepts)
-line 41: ours: `+` not defined for `number` and `string` (tsc accepts)
-line 42: ours: `+` not defined for `number` and `string` (tsc accepts)
-line 43: ours: `+` not defined for `number` and `string` (tsc accepts)
-line 44: ours: `+` not defined for `number` and `string` (tsc accepts)
-line 45: ours: `+` not defined for `string` and `number` (tsc accepts)
-line 46: ours: `+` not defined for `string` and `number` (tsc accepts)
-line 47: ours: `+` not defined for `string` and `number` (tsc accepts)
-line 48: ours: `+` not defined for `string` and `number` (tsc accepts)
-line 49: ours: `+` not defined for `number` and `string` (tsc accepts)
-line 50: ours: `+` not defined for `number` and `string` (tsc accepts)
-line 51: ours: `+` not defined for `number` and `string` (tsc accepts)
-line 52: ours: `+` not defined for `number` and `string` (tsc accepts)
+line 41: ours: `+` not defined for `number` and `"0"` (tsc accepts)
+line 42: ours: `+` not defined for `number` and `"20"` (tsc accepts)
+line 43: ours: `+` not defined for `number` and `"05"` (tsc accepts)
+line 44: ours: `+` not defined for `number` and `"205"` (tsc accepts)
+line 45: ours: `+` not defined for `"0"` and `number` (tsc accepts)
+line 46: ours: `+` not defined for `"20"` and `number` (tsc accepts)
+line 47: ours: `+` not defined for `"05"` and `number` (tsc accepts)
+line 48: ours: `+` not defined for `"205"` and `number` (tsc accepts)
+line 49: ours: `+` not defined for `number` and `"0"` (tsc accepts)
+line 50: ours: `+` not defined for `number` and `"20"` (tsc accepts)
+line 51: ours: `+` not defined for `number` and `"05"` (tsc accepts)
+line 52: ours: `+` not defined for `number` and `"205"` (tsc accepts)

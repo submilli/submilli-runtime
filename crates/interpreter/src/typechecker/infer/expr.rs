@@ -116,6 +116,26 @@ impl ChainField {
     }
 }
 
+/// The type of `typeof x` read as a value: the tags `typeof` can return, as
+/// TypeScript types it, whatever `x` is.
+pub(super) fn typeof_result_type() -> Type {
+    Type::union(
+        [
+            "string",
+            "number",
+            "bigint",
+            "boolean",
+            "symbol",
+            "undefined",
+            "object",
+            "function",
+        ]
+        .into_iter()
+        .map(|tag| Type::StringLiteral(tag.into()))
+        .collect(),
+    )
+}
+
 /// Whether `expected` asks for a literal type: it is one `is_literal` accepts,
 /// or a union with such a member. Decides whether a literal expression keeps
 /// its literal type or widens to its primitive. Peels through aliases so
@@ -1883,12 +1903,27 @@ impl Inferer<'_> {
                 span,
             )?;
         }
-        Ok((
+        // The tag is one of the eight `typeof` returns in TypeScript, `symbol`
+        // included. Typing it as their union by a cast makes the union
+        // declared, not fresh, so `let t = typeof x` keeps it, as in
+        // TypeScript. The sequence shares the expression's span, so it carries
+        // the union too.
+        let tag_ty = typeof_result_type();
+        let tag = self.push_synthetic_expr(
             TypedExprKind::Sequence {
                 stmts: vec![binding],
                 result,
             },
-            Type::String,
+            tag_ty.clone(),
+            span,
+        )?;
+        Ok((
+            TypedExprKind::Cast {
+                value: tag,
+                target_ty: tag_ty.clone(),
+                check: None,
+            },
+            tag_ty,
         ))
     }
 
@@ -5912,10 +5947,10 @@ impl Inferer<'_> {
             .then(|| {
                 self.own_object_literal_type(
                     &merged,
+                    &spread_index_values,
                     expected,
                     expected_fields.as_ref(),
                     interface_target.is_some(),
-                    has_spread,
                 )
             })
             .flatten();
@@ -6055,20 +6090,20 @@ impl Inferer<'_> {
     /// as in tsc: `{ value: 10 }` against `{ value: number; error?: string }` is
     /// `{ value: number }`. Codegen builds it from its field origins instead.
     /// `None` keeps the expected type: against an interface with methods, whose
-    /// methods a value reaches through the interface's own dispatch; with a
-    /// spread, whose fields take their optionality from the expected shape; and
-    /// against an unbound type parameter, which a call site infers from the
-    /// expected shape.
+    /// methods a value reaches through the interface's own dispatch; and against
+    /// an unbound type parameter, which a call site infers from the expected
+    /// shape. A spread's fields keep their own optionality: `{ ...c && { a } }`
+    /// is `{ a?: string }` whatever the expected type requires.
     fn own_object_literal_type(
         &self,
         merged: &std::collections::BTreeMap<
             String,
             (crate::ObjectField, crate::TypedObjectFieldSource),
         >,
+        spread_index_values: &[Type],
         expected: Option<&Type>,
         expected_fields: Option<&std::collections::BTreeMap<String, crate::ObjectField>>,
         against_interface: bool,
-        has_spread: bool,
     ) -> Option<Type> {
         let expected = expected?;
         let expected_fields = expected_fields?;
@@ -6076,11 +6111,23 @@ impl Inferer<'_> {
             && expected_fields
                 .values()
                 .any(|field| field.method || matches!(field.ty.peel(), Type::Function { .. }));
-        if dispatches_methods || has_spread || type_contains_type_var(expected) {
+        if dispatches_methods || type_contains_type_var(expected) {
             return None;
         }
+        // A spread record's index signature holds the named fields too, as the
+        // literal's type below has it.
+        let index = (!spread_index_values.is_empty()).then(|| crate::IndexSignature {
+            value: Box::new(Type::union(
+                spread_index_values
+                    .iter()
+                    .cloned()
+                    .chain(merged.values().map(|(field, _)| field.ty.clone()))
+                    .collect(),
+            )),
+            readonly: false,
+        });
         let own = Type::Object {
-            index: None,
+            index,
             fields: merged
                 .iter()
                 .map(|(name, (field, _))| (name.clone(), field.clone()))
@@ -14984,6 +15031,43 @@ function main(): void { if (result < 10) { } }
             }
             other => panic!("expected lone MethodCall, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn spread_object_literal_keeps_its_own_type_under_an_expected_type() {
+        // tsc types the literal by its spreads: a conditional spread's fields
+        // are optional, a plain one's keep their own optionality.
+        let ta = run_clean(
+            "interface P { a?: number; b?: number; c?: number }\n\
+             const flag = Math.random() > 0.5;\n\
+             const conditional: P = { ...(flag && { a: 1 }), b: 2 };\n\
+             const plain: P = { ...{ a: 1 } };\n\
+             function main(): void {}",
+        );
+        assert_eq!(
+            nth_decl_value_ty(&ta, 1).to_string(),
+            "{ a?: number; b: number }"
+        );
+        assert_eq!(nth_decl_value_ty(&ta, 2).to_string(), "{ a: number }");
+    }
+
+    #[test]
+    fn closure_literal_return_widens_unless_its_context_names_a_literal() {
+        // tsc keeps a returned literal only where the contextual return type
+        // names a literal of its kind, whatever the context's other members.
+        let ta = run_clean(
+            "const a = 100;\n\
+             const plain: () => number = () => a;\n\
+             const nullable: (() => number) | undefined = () => a;\n\
+             const named: () => 0 | 100 = () => a;\n\
+             const mixed: () => \"q\" | number = () => a;\n\
+             function main(): void {}",
+        );
+        let returned = |n| nth_decl_value_ty(&ta, n).to_string();
+        assert_eq!(returned(1), "() => number");
+        assert_eq!(returned(2), "() => number");
+        assert_eq!(returned(3), "() => 100");
+        assert_eq!(returned(4), "() => number");
     }
 
     #[test]

@@ -446,7 +446,7 @@ impl Inferer<'_> {
             let leaves_values_unmatched =
                 !matches!(residual, Type::Never) && !narrowing::is_ruled_out(&residual);
             if leaves_values_unmatched {
-                if requires_every_case(&disc_ty) {
+                if !self.reads_typeof_value(typed_disc)? && requires_every_case(&disc_ty) {
                     self.emit_non_exhaustive(&residual, &site, switch_span);
                 }
                 any_arm_reachable_exit |= entry_reachable;
@@ -1021,6 +1021,51 @@ impl Inferer<'_> {
             };
             self.innermost_narrowing(&prefix).is_some()
         }))
+    }
+
+    /// Whether the discriminant is a `typeof` value: the expression itself, or
+    /// a binding declared with its type (all eight tags, however written).
+    /// That type lists every tag whatever the operand is, even once narrowing
+    /// removes some, so a switch on it need list only the tags its operand
+    /// can have.
+    fn reads_typeof_value(&self, typed_disc: ExprId) -> Result<bool, CompilerFailure> {
+        let tags = super::expr::typeof_result_type();
+        let disc_expr = self
+            .typed_ast
+            .try_expr(typed_disc)
+            .map_err(crate::typechecker::arena_failure)?;
+        if matches!(&disc_expr.kind, TypedExprKind::Cast { target_ty, .. } if *target_ty == tags) {
+            return Ok(true);
+        }
+        let Some(path) = self.expr_to_reference_path(disc_expr)? else {
+            return Ok(false);
+        };
+        if !path.chain.is_empty() {
+            return Ok(false);
+        }
+        let declared = match &path.root {
+            narrowing::BindingId::Local { name, decl_scope } => self
+                .scopes
+                .get_binding(name, *decl_scope)
+                .map(super::scopes::ScopeEntry::write_type),
+            narrowing::BindingId::Global(mangled) => self.global_declared_type(mangled),
+            _ => None,
+        };
+        Ok(declared.is_some_and(|ty| *ty.peel() == tags))
+    }
+
+    /// The declared type of the module `let` or `const` named `mangled`.
+    fn global_declared_type(&self, mangled: &crate::MangledName) -> Option<&Type> {
+        self.top_symbols
+            .values()
+            .find_map(|symbol| match &symbol.kind {
+                crate::ValueKind::Const { ty, .. } | crate::ValueKind::Let { ty, .. }
+                    if &symbol.mangled_name == mangled =>
+                {
+                    Some(ty)
+                }
+                _ => None,
+            })
     }
 
     /// The values the discriminant was already known not to hold.
