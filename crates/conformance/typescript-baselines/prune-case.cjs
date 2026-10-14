@@ -1,8 +1,12 @@
 // Prunes a ported case down to what Submilli supports, keeping the rest: each pass
-// blanks the statements holding our errors that lack support, and the uses `tsc`
-// then rejects, until none are left. ../typescript/README.md#pruning has the rules.
+// blanks the statements holding our errors that lack support, the uses `tsc` then
+// rejects, and, given the codes upstream's baselines report, each statement where
+// `tsc` reports one they don't, until none are left. ../typescript/README.md#pruning
+// has the rules.
 //
-// Usage: node prune-case.cjs <typescript_case_errors> <ported case.ts>
+// Usage: node prune-case.cjs <typescript_case_errors> <ported case.ts> [<codes>]
+// where <codes> lists the error codes `tsc` may report on the case, comma-separated
+// (`2322,2339`), and may be empty.
 // Build the first with `cargo build --release -p conformance --example
 // typescript_case_errors`; it lands in target/release/examples/. The case is
 // rewritten in place, and a JSON summary printed.
@@ -19,15 +23,21 @@ const MARKERS = ["/*pruned*/", "/**/"];
 const PLACEHOLDER = "= null as unknown as (";
 
 function main() {
-  const [caseErrors, file] = process.argv.slice(2);
+  const [caseErrors, file, codes] = process.argv.slice(2);
   if (!caseErrors || !file) {
-    console.error("usage: node prune-case.cjs <typescript_case_errors> <ported case.ts>");
+    console.error("usage: node prune-case.cjs <typescript_case_errors> <ported case.ts> [<codes>]");
     process.exit(2);
   }
-  console.log(JSON.stringify(prune(caseErrors, file)));
+  const expectedCodes = codes === undefined ? null : new Set(codes.split(",").filter(Boolean).map(Number));
+  console.log(JSON.stringify(prune(caseErrors, file, expectedCodes)));
 }
 
-function prune(caseErrors, file) {
+/** Prunes the ported case `file`. With `expectedCodes`, the codes of the errors
+ * upstream's baselines report, a statement where `tsc` reports another is pruned
+ * too: the port caused that error, as when `var` becoming `let` makes a hoisted read
+ * one before its declaration, or strictness makes an unannotated parameter `any`,
+ * so the statement checks the port rather than what the case is about. */
+function prune(caseErrors, file, expectedCodes = null) {
   const original = fs.readFileSync(file, "utf8");
   const originalTscErrors = new Set(tscErrors(file).map(errorKey));
   let text = original;
@@ -35,6 +45,8 @@ function prune(caseErrors, file) {
   // What drove the pruning: each of our errors that lacked support, with the code it
   // was on, in the order they came up.
   const lacking = new Map();
+  // Each error the port caused, by code, with the code it was on.
+  const portCaused = new Map();
   const finish = (error) => ({
     file,
     passes,
@@ -42,14 +54,18 @@ function prune(caseErrors, file) {
     codeLinesBefore: codeLines(original),
     codeLinesAfter: codeLines(text),
     lacking: [...lacking.values()],
+    portCaused: [...portCaused.values()],
   });
+  const codeOn = (line) => (text.split("\n")[line - 1] ?? "").trim();
   for (; passes < MAX_PASSES; passes++) {
-    const found = errorsToPrune(caseErrors, file, text, originalTscErrors);
+    const found = errorsToPrune(caseErrors, file, text, originalTscErrors, expectedCodes);
     if (found.error) return finish(found.error);
     for (const { line, message } of found.lacking) {
-      const code = (text.split("\n")[line - 1] ?? "").trim();
-      const key = `${message}\n${code}`;
-      if (!lacking.has(key)) lacking.set(key, { message, code });
+      const key = `${message}\n${codeOn(line)}`;
+      if (!lacking.has(key)) lacking.set(key, { message, code: codeOn(line) });
+    }
+    for (const { line, code } of found.portCaused) {
+      if (!portCaused.has(code)) portCaused.set(code, { code: `TS${code}`, on: codeOn(line) });
     }
     if (!found.errors.length) return finish(null);
     const offsets = found.errors.map((e) => e.offset).join(", ");
@@ -63,9 +79,10 @@ function prune(caseErrors, file) {
   return finish(`still pruning after ${MAX_PASSES} passes`);
 }
 
-/** Where each of our errors that lacks support is, and each `tsc` error pruning
- * caused: `{ offset, file }`, the file being the index of the case's file it is in. */
-function errorsToPrune(caseErrors, file, text, originalTscErrors) {
+/** Where each of our errors that lacks support is, each `tsc` error pruning caused,
+ * and each the port caused, one whose code isn't in `expectedCodes` when that is
+ * given: `{ offset, file }`, the file being the index of the case's file it is in. */
+function errorsToPrune(caseErrors, file, text, originalTscErrors, expectedCodes) {
   const ours = ourErrors(caseErrors, file);
   if (ours.error) return ours;
   const tsc = tscErrors(file);
@@ -74,10 +91,12 @@ function errorsToPrune(caseErrors, file, text, originalTscErrors) {
   // line too, and the feature we lack where it doesn't.
   const lacking = ours.errors.filter((e) => e.kind === "unsupported" || (e.kind === "unclear" && !tscRejects.has(e.line)));
   const errors = lacking.map((e) => ({ offset: offsetOf(text, e.line, e.column), file: e.file }));
+  const causedByPruning = (e) => !originalTscErrors.has(errorKey(e));
+  const portCaused = expectedCodes ? tsc.filter((e) => !causedByPruning(e) && !expectedCodes.has(e.code)) : [];
   for (const e of tsc) {
-    if (!originalTscErrors.has(errorKey(e))) errors.push({ offset: e.start, file: e.file });
+    if (causedByPruning(e) || portCaused.includes(e)) errors.push({ offset: e.start, file: e.file });
   }
-  return { errors, lacking };
+  return { errors, lacking, portCaused };
 }
 
 function ourErrors(caseErrors, file) {

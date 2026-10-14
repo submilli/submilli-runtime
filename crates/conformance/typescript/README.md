@@ -44,16 +44,20 @@ suite when:
   signatures, each with the feature;
 - it is TypeScript, not JavaScript, and each of its files is a module we can check
   (see [Multi-file cases](#multi-file-cases));
-- the port leaves it checking the same thing: `tsc` reports no error on it the
-  upstream baseline lacks (such as a redeclaration from `var` becoming `let`, or one
-  from making a `@strict: false` case strict), other than for a class field with no
-  initializer;
+- the port leaves it checking the same thing: once pruned, `tsc` reports no error
+  on it the upstream baseline lacks (such as a redeclaration from `var` becoming
+  `let`, or one from making a `@strict: false` case strict), other than for a class
+  field with no initializer. Pruning takes out the statements holding such errors;
+  a case is left out when one is outside every statement;
 - it isn't a copy of another case after the mechanical port;
 - when pruning cut something, it kept at least a third of the case's code lines, and
   at least five, not counting the values the port supplies; and
-- it still checks at least five things: `tsc` types compared, plus lines `tsc`
-  rejects other than for a class field with no initializer (an error only because
-  the port makes every case strict).
+- it still checks something: `tsc` types compared, plus lines `tsc` rejects other
+  than for a class field with no initializer (an error only because the port makes
+  every case strict). A case pruning cut something from must check at least five
+  such things, since what is left of one checking less is mostly the scaffolding of
+  what was cut. A case pruning cut nothing from checks what upstream wrote it to,
+  however little.
 
 The cases ported before pruning existed are whole. Some of them reject a line where
 Submilli differs from TypeScript by design (an array literal's elements must share
@@ -65,7 +69,7 @@ reasons and a detail:
 | Reason | Detail |
 |:-------|:-------|
 | not supported | The feature, for a listed directory or name, for JavaScript, or for a kind of file we can't check. For a case pruning cut too much of, our first error that lacked support and the code it was on. |
-| the port changes what it checks | The error `tsc` reports on the port and not upstream. |
+| the port changes what it checks | The errors `tsc` reports on the port and not upstream: those pruning couldn't take out, or, for a case pruning cut too much of with nothing we lack, those it took out. |
 | duplicate | The case it is a copy of. |
 | checks too little | How many things it checks, when pruning cut nothing. |
 | porter failure | What went wrong. A bug in the porter, to fix. |
@@ -275,7 +279,11 @@ baselines for them.
 
 `typescript-baselines/prune-case.cjs` blanks the statement holding each of our errors
 that lacks support, and each that may, where `tsc` accepts the line, and repeats
-until none are left. Our type errors stay, so where
+until none are left. It also blanks each statement where `tsc` reports an error
+whose code upstream's baselines for the case lack: the port caused it, as when
+`var` becoming `let` makes a hoisted read one before its declaration, or
+strictness makes an unannotated parameter implicitly `any`, so that statement checks
+the port rather than what the case is about. Our type errors stay, so where
 we reject code `tsc` accepts, the runner records it. Blanking a declaration breaks its
 uses, where `tsc` then reports errors the unpruned case didn't have; those statements
 go on the next pass.
