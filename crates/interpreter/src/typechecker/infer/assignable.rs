@@ -775,6 +775,55 @@ fn strict_arity_fits(
     })
 }
 
+/// A function into a method of an object type, whose parameters tsc compares
+/// bivariantly: a parameter that is only a supertype of the method's still
+/// fits. Checked by widening each such parameter to the method's and relating
+/// the functions as usual, so arity and returns follow the ordinary rules.
+fn method_assignable(
+    actual: &Type,
+    expected: &Type,
+    types: TypeResolver,
+    seen: &mut Vec<(Type, Type)>,
+) -> bool {
+    if assignable_rec(actual, expected, types, seen) {
+        return true;
+    }
+    let (
+        Type::Function {
+            params,
+            ret,
+            predicate,
+            has_rest,
+            optional,
+        },
+        Type::Function {
+            params: expected_params,
+            ..
+        },
+    ) = (actual.peel(), expected.peel())
+    else {
+        return false;
+    };
+    let mut widened = params.clone();
+    let mut widened_any = false;
+    for (param, expected_param) in widened.iter_mut().zip(expected_params) {
+        if !assignable_rec(expected_param, param, types, seen)
+            && assignable_rec(param, expected_param, types, seen)
+        {
+            *param = expected_param.clone();
+            widened_any = true;
+        }
+    }
+    let widened = Type::Function {
+        params: widened,
+        ret: ret.clone(),
+        predicate: predicate.clone(),
+        has_rest: *has_rest,
+        optional: *optional,
+    };
+    widened_any && assignable_rec(&widened, expected, types, seen)
+}
+
 fn assignable_rec(
     actual: &Type,
     expected: &Type,
@@ -1248,6 +1297,9 @@ fn assignable_rec(
                 Some(a_field) => {
                     if a_field.optional && !e_field.optional {
                         return false;
+                    }
+                    if e_field.method {
+                        return method_assignable(&a_field.ty, &e_field.ty, types, seen);
                     }
                     assignable_rec(&a_field.read_ty(), &e_field.read_ty(), types, seen)
                 }
