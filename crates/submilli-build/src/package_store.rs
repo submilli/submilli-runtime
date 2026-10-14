@@ -592,7 +592,7 @@ fn validate_artifact_name(
 /// directory) and `leaf`. Routes through the canonical org/leaf validator so the
 /// store, blueprint, and build manifest agree on what a package name may be.
 pub(crate) fn split_scoped_name(name: &str) -> Option<(&str, &str)> {
-    let (org, leaf) = submilli_blueprint::validate_scoped_name(name).ok()?;
+    let (org, leaf) = submilli_policy::validate_scoped_name(name).ok()?;
     // Keep the `@` prefix on the scope so the layout stays `@org/leaf` on disk.
     Some((&name[..org.len() + 1], leaf))
 }

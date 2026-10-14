@@ -37,7 +37,7 @@ use super::capability_names::{
 use super::declared_packages::{self, DeclaredPackages};
 use super::file::{has_capability_rule, has_matching_rule};
 use super::package_secrets::missing_package_secret_warnings;
-use submilli_build::blueprint_validation::unreported_field_errors;
+use submilli_shared::blueprint_validation::unreported_field_errors;
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -226,7 +226,7 @@ fn collect_requires_findings(
             ));
             continue;
         }
-        if let Some(message) = submilli_build::blueprint_validation::missing_required_rule(
+        if let Some(message) = submilli_shared::blueprint_validation::missing_required_rule(
             blueprint, package, required,
         ) {
             errors.push(message);

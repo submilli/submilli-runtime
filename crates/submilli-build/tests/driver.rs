@@ -808,27 +808,5 @@ export function v(customer: string, total: number): void {{
                 .collect::<Vec<_>>(),
             ["customer", "total"]
         );
-        install_packages(&store, &built).unwrap();
-        let yaml = "name: fields\npackages: ['@acme/sdk']\npermissions:\n  main:\n    - capability: acme.com/v\n      filter: total < 100\n      action: allow\n";
-        let blueprint = submilli_blueprint::parse(yaml).unwrap();
-        submilli_build::blueprint_validation::validate_packages(&blueprint, &store).unwrap();
-        let invalid = submilli_blueprint::parse(&yaml.replace("total <", "typo <")).unwrap();
-        let error =
-            submilli_build::blueprint_validation::validate_packages(&invalid, &store).unwrap_err();
-        let submilli_build::blueprint_validation::PackageValidationError::InvalidFilter(problem) =
-            error
-        else {
-            panic!("expected invalid filter, got {error}");
-        };
-        assert_eq!(
-            problem.path,
-            Some(submilli_blueprint::yaml_path![
-                "permissions",
-                "main",
-                0usize,
-                "filter"
-            ])
-        );
-        assert!(problem.message.contains("tests `typo`"));
     }
 }

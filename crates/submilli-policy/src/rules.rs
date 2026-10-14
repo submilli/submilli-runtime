@@ -1,25 +1,27 @@
-//! The blueprint `permissions:` block — the per-caller capability rules the
-//! semantic-security engine evaluates. Keyed by caller identifier (`main` for
-//! the user script, package name for library code), each caller maps to an
-//! ordered rule list walked top-to-bottom, first-match-wins. A caller absent
-//! from the map — or a caller whose rules all miss — falls through to the
-//! top-level `default`.
+//! Permission rules: the per-caller capability rules a check evaluates. Keyed
+//! by caller identifier (`main` for the user script, package name for library
+//! code), each caller maps to an ordered rule list walked top-to-bottom,
+//! first-match-wins. A caller absent from the map, or a caller whose rules all
+//! miss, falls through to the default action.
 //!
-//! Each rule's optional `filter` is a [`FilterExpr`] from [`crate::filter`],
-//! parsed at registration time so a malformed filter fails when the blueprint is
-//! added rather than at the first `check()`.
+//! Each rule's optional `filter` is a [`FilterExpr`], parsed when the rule is
+//! deserialized so a malformed filter fails when the rules are loaded rather
+//! than at the first check.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 use crate::filter::{ComparisonFailure, FilterExpr, VarBindings};
-use crate::{BlueprintError, Fault, yaml_path};
 
-/// Fall-through action when no rule matches. Absent in the blueprint, it
-/// defaults to `Deny` (deny-by-default): a policy-free blueprint denies every
-/// capability. `allow` flips the posture to allow-by-default — every capability
-/// is permitted unless a rule denies it — for trusted deployments that prefer a
+/// Rules per caller identifier, each list in evaluation order.
+pub type Permissions = BTreeMap<String, Vec<PermissionRule>>;
+
+/// Fall-through action when no rule matches. It defaults to `Deny`
+/// (deny-by-default): a rule set without rules denies every capability.
+/// `allow` flips the posture to allow-by-default — every capability is
+/// permitted unless a rule denies it — for trusted deployments that prefer a
 /// blocklist over an allowlist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -36,6 +38,8 @@ pub enum DefaultAction {
 pub enum Action {
     Allow,
     Deny,
+    /// Needs a person's approval. `PermissionCheck` (the `engine` feature)
+    /// treats it as a denial until calls can suspend for approval.
     AskHuman,
 }
 
@@ -59,64 +63,172 @@ pub struct PermissionRule {
     /// otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The capability the rule decides, such as `http.get`.
     pub capability: String,
+    /// The condition on the call's context; a rule without one matches every
+    /// call to its capability.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<FilterExpr>,
     pub action: Action,
 }
 
-/// Structural checks beyond what serde already enforces (malformed filters are
-/// rejected at deserialize time); this catches the empty caller / capability
-/// cases serde can't express.
-pub(crate) fn validate(
-    permissions: &BTreeMap<String, Vec<PermissionRule>>,
-) -> Result<(), BlueprintError> {
+/// Why a rule set is malformed, beyond what deserializing it already rejects
+/// (a malformed filter, an unknown field). Says which caller and rule, as data,
+/// so a caller can point at the rule in its own source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuleError {
+    /// A caller block's identifier is empty.
+    EmptyCaller { caller: String },
+    /// The rule at zero-based `index` in `caller`'s block names no capability.
+    EmptyCapability { caller: String, index: usize },
+    /// The rule at zero-based `index` in `caller`'s block has an empty name.
+    EmptyName { caller: String, index: usize },
+}
+
+impl fmt::Display for RuleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RuleError::EmptyCaller { .. } => f.write_str("caller identifier must not be empty"),
+            RuleError::EmptyCapability { caller, .. } => {
+                write!(f, "caller '{caller}': a rule has an empty capability name")
+            }
+            RuleError::EmptyName { caller, .. } => {
+                write!(f, "caller '{caller}': a rule has an empty name")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RuleError {}
+
+/// Check what deserializing `permissions` can't: no empty caller identifier,
+/// capability name or rule name. Reports the first problem found.
+pub fn validate_rules(permissions: &Permissions) -> Result<(), RuleError> {
     for (caller, rules) in permissions {
         if caller.is_empty() {
-            return Err(BlueprintError::InvalidPermissions(Fault::at(
-                yaml_path!["permissions", caller],
-                "caller identifier must not be empty",
-            )));
+            return Err(RuleError::EmptyCaller {
+                caller: caller.clone(),
+            });
         }
-        for (i, rule) in rules.iter().enumerate() {
+        for (index, rule) in rules.iter().enumerate() {
             if rule.capability.is_empty() {
-                return Err(BlueprintError::InvalidPermissions(Fault::at(
-                    yaml_path!["permissions", caller, i, "capability"],
-                    format!("caller '{caller}': a rule has an empty capability name"),
-                )));
+                return Err(RuleError::EmptyCapability {
+                    caller: caller.clone(),
+                    index,
+                });
             }
             if rule.name.as_deref() == Some("") {
-                return Err(BlueprintError::InvalidPermissions(Fault::at(
-                    yaml_path!["permissions", caller, i, "name"],
-                    format!("caller '{caller}': a rule has an empty name"),
-                )));
+                return Err(RuleError::EmptyName {
+                    caller: caller.clone(),
+                    index,
+                });
             }
         }
     }
     Ok(())
 }
 
-/// Walk the rules for `caller` and return the resolved action. No caller block,
-/// or no rule matching `(capability, ctx)`, falls through to `default`.
-pub(crate) fn resolve(
-    permissions: &BTreeMap<String, Vec<PermissionRule>>,
-    default_action: DefaultAction,
-    caller: &str,
-    capability: &str,
-    ctx: &serde_json::Value,
-    vars: &VarBindings,
-) -> Action {
-    resolve_with_rule(permissions, default_action, caller, capability, ctx, vars).0
+/// The outcome of resolving one capability call against a rule set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Decision {
+    pub action: Action,
+    /// Zero-based index of the deciding rule within the caller's block;
+    /// `None` when the default decided.
+    pub rule: Option<usize>,
 }
 
-pub(crate) fn resolve_with_rule(
-    permissions: &BTreeMap<String, Vec<PermissionRule>>,
+/// A source of permission rules and the default they fall through to, and the
+/// evaluation over them. Implemented by [`RuleSet`]; a type that already holds
+/// its rules (such as a blueprint) implements the two accessors to be checked
+/// without copying them.
+pub trait Rules {
+    /// Rules per caller identifier.
+    fn permissions(&self) -> &Permissions;
+
+    /// The action when no rule matches.
+    fn default_action(&self) -> DefaultAction;
+
+    /// Resolve a capability call by `caller` with `context`, the JSON object
+    /// the capability's check reports. `vars` binds `${vars.NAME}` operands.
+    /// No parsing happens here, so it is cheap to call per check.
+    fn resolve(
+        &self,
+        caller: &str,
+        capability: &str,
+        context: &serde_json::Value,
+        vars: &VarBindings,
+    ) -> Decision {
+        resolve_with_rule(
+            self.permissions(),
+            self.default_action(),
+            caller,
+            capability,
+            context,
+            vars,
+        )
+    }
+
+    /// [`Self::resolve`] plus the reasoning: the deciding rule or default, and
+    /// the rules that named the capability but whose filters rejected the
+    /// call. `action` always equals what [`Self::resolve`] returns.
+    fn explain(
+        &self,
+        caller: &str,
+        capability: &str,
+        context: &serde_json::Value,
+        vars: &VarBindings,
+    ) -> Resolution {
+        explain_resolution(
+            self.permissions(),
+            self.default_action(),
+            caller,
+            capability,
+            context,
+            vars,
+        )
+    }
+}
+
+/// An owned, validated set of permission rules with its default action.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuleSet {
+    permissions: Permissions,
+    default_action: DefaultAction,
+}
+
+impl RuleSet {
+    /// A rule set from rules per caller and the default action, validated
+    /// with [`validate_rules`].
+    pub fn new(permissions: Permissions, default_action: DefaultAction) -> Result<Self, RuleError> {
+        validate_rules(&permissions)?;
+        Ok(RuleSet {
+            permissions,
+            default_action,
+        })
+    }
+}
+
+impl Rules for RuleSet {
+    fn permissions(&self) -> &Permissions {
+        &self.permissions
+    }
+
+    fn default_action(&self) -> DefaultAction {
+        self.default_action
+    }
+}
+
+/// Walk the rules for `caller` and return the [`Decision`]: the resolved
+/// action and the deciding rule's index. No caller block, or no rule matching
+/// `(capability, ctx)`, falls through to `default_action` with no index.
+fn resolve_with_rule(
+    permissions: &Permissions,
     default_action: DefaultAction,
     caller: &str,
     capability: &str,
     ctx: &serde_json::Value,
     vars: &VarBindings,
-) -> (Action, Option<usize>) {
+) -> Decision {
     if let Some(rules) = permissions.get(caller) {
         for (index, rule) in rules.iter().enumerate() {
             if rule.capability == capability
@@ -125,17 +237,23 @@ pub(crate) fn resolve_with_rule(
                     .as_ref()
                     .is_none_or(|f| f.matches_with(ctx, vars))
             {
-                return (rule.action, Some(index));
+                return Decision {
+                    action: rule.action,
+                    rule: Some(index),
+                };
             }
         }
     }
-    (default_action.into(), None)
+    Decision {
+        action: default_action.into(),
+        rule: None,
+    }
 }
 
 /// A resolved decision with the reasoning behind it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Resolution {
-    /// Identical to what [`resolve`] returns for the same inputs.
+    /// Identical to what [`Rules::resolve`] returns for the same inputs.
     pub action: Action,
     pub cause: ResolutionCause,
     /// Rules for the capability, ahead of the deciding rule (or all of them
@@ -171,16 +289,18 @@ pub struct NearMiss {
     pub failures: Vec<ComparisonFailure>,
 }
 
-pub(crate) fn explain(
-    permissions: &BTreeMap<String, Vec<PermissionRule>>,
+fn explain_resolution(
+    permissions: &Permissions,
     default_action: DefaultAction,
     caller: &str,
     capability: &str,
     ctx: &serde_json::Value,
     vars: &VarBindings,
 ) -> Resolution {
-    let (action, matched) =
-        resolve_with_rule(permissions, default_action, caller, capability, ctx, vars);
+    let Decision {
+        action,
+        rule: matched,
+    } = resolve_with_rule(permissions, default_action, caller, capability, ctx, vars);
     let rules = permissions.get(caller);
     let rule_ref = |index: usize, rule: &PermissionRule| RuleRef {
         caller: caller.to_string(),
@@ -221,6 +341,17 @@ pub(crate) fn explain(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn resolve(
+        permissions: &Permissions,
+        default_action: DefaultAction,
+        caller: &str,
+        capability: &str,
+        ctx: &serde_json::Value,
+        vars: &VarBindings,
+    ) -> Action {
+        resolve_with_rule(permissions, default_action, caller, capability, ctx, vars).action
+    }
 
     fn filter(s: &str) -> FilterExpr {
         crate::filter::parse(s).expect("valid filter")
@@ -360,7 +491,7 @@ mod tests {
         bindings: &VarBindings,
     ) -> Resolution {
         let perms = BTreeMap::from([("main".to_string(), rules)]);
-        let resolution = explain(&perms, default, "main", capability, &ctx, bindings);
+        let resolution = explain_resolution(&perms, default, "main", capability, &ctx, bindings);
         // The explanation never disagrees with enforcement.
         assert_eq!(
             resolution.action,
@@ -437,7 +568,7 @@ mod tests {
     #[test]
     fn explain_without_caller_block_reports_it() {
         let perms = BTreeMap::new();
-        let resolution = explain(
+        let resolution = explain_resolution(
             &perms,
             DefaultAction::Deny,
             "main",
@@ -527,6 +658,32 @@ mod tests {
             "main".to_string(),
             vec![rule(Some(""), "a", None, Action::Allow)],
         )]);
-        assert!(validate(&perms).is_err());
+        assert!(validate_rules(&perms).is_err());
+    }
+
+    #[test]
+    fn a_rule_set_is_validated_when_built() {
+        let empty_capability = BTreeMap::from([(
+            "main".to_string(),
+            vec![
+                rule(None, "a", None, Action::Allow),
+                rule(None, "", None, Action::Allow),
+            ],
+        )]);
+        assert_eq!(
+            RuleSet::new(empty_capability, DefaultAction::Deny),
+            Err(RuleError::EmptyCapability {
+                caller: "main".to_string(),
+                index: 1,
+            })
+        );
+        let rules = RuleSet::new(Permissions::new(), DefaultAction::AskHuman).unwrap();
+        assert_eq!(
+            rules.resolve("main", "a", &json!({}), &VarBindings::new()),
+            Decision {
+                action: Action::AskHuman,
+                rule: None,
+            }
+        );
     }
 }

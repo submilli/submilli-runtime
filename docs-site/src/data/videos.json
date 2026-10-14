@@ -32,26 +32,6 @@
       "language": "en"
     },
     {
-      "id": "using",
-      "title": "Submilli quickstart",
-      "status": "published",
-      "destination": "Start here → Quickstart",
-      "description": "Install the skill, create a package and blueprint, and run your first program with the Submilli server.",
-      "canonicalPath": "/docs/quickstart/",
-      "embedUrl": "https://submilli-videos.onrender.com/embed/using/",
-      "language": "en"
-    },
-    {
-      "id": "works",
-      "title": "How Submilli works",
-      "status": "published",
-      "destination": "Start here → The server",
-      "description": "Why Submilli uses a constrained TypeScript language, WebAssembly execution, and packages with actionable errors.",
-      "canonicalPath": "/docs/server/#what-happens-to-a-program",
-      "embedUrl": "https://submilli-videos.onrender.com/embed/works/",
-      "language": "en"
-    },
-    {
       "id": "packages",
       "title": "Packages",
       "status": "published",
@@ -69,6 +49,26 @@
       "description": "Define allowed operations ahead of time, deny everything else, and bind access to trusted customer information.",
       "canonicalPath": "/docs/blueprints/",
       "embedUrl": "https://submilli-videos.onrender.com/embed/blueprints/",
+      "language": "en"
+    },
+    {
+      "id": "using",
+      "title": "Submilli quickstart",
+      "status": "published",
+      "destination": "Start here → Quickstart",
+      "description": "Install the skill, create a package and blueprint, and run your first program with the Submilli server.",
+      "canonicalPath": "/docs/quickstart/",
+      "embedUrl": "https://submilli-videos.onrender.com/embed/using/",
+      "language": "en"
+    },
+    {
+      "id": "works",
+      "title": "How Submilli works",
+      "status": "published",
+      "destination": "Start here → The server",
+      "description": "Why Submilli uses a constrained TypeScript language, WebAssembly execution, and packages with actionable errors.",
+      "canonicalPath": "/docs/server/#what-happens-to-a-program",
+      "embedUrl": "https://submilli-videos.onrender.com/embed/works/",
       "language": "en"
     }
   ]
