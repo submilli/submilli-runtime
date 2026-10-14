@@ -116,6 +116,26 @@ impl ChainField {
     }
 }
 
+/// The type of `typeof x` read as a value: the tags `typeof` can return, as
+/// TypeScript types it, whatever `x` is.
+fn typeof_result_type() -> Type {
+    Type::union(
+        [
+            "string",
+            "number",
+            "bigint",
+            "boolean",
+            "symbol",
+            "undefined",
+            "object",
+            "function",
+        ]
+        .into_iter()
+        .map(|tag| Type::StringLiteral(tag.into()))
+        .collect(),
+    )
+}
+
 /// Whether `expected` asks for a literal type: it is one `is_literal` accepts,
 /// or a union with such a member. Decides whether a literal expression keeps
 /// its literal type or widens to its primitive. Peels through aliases so
@@ -1887,12 +1907,26 @@ impl Inferer<'_> {
                 span,
             )?;
         }
-        Ok((
+        // The tag is one of the strings above. Typing it as their union by a
+        // cast makes the union declared, not fresh, so `let t = typeof x` keeps
+        // it, as in TypeScript. The sequence shares the expression's span, so
+        // it carries the union too.
+        let tag_ty = typeof_result_type();
+        let tag = self.push_synthetic_expr(
             TypedExprKind::Sequence {
                 stmts: vec![binding],
                 result,
             },
-            Type::String,
+            tag_ty.clone(),
+            span,
+        )?;
+        Ok((
+            TypedExprKind::Cast {
+                value: tag,
+                target_ty: tag_ty.clone(),
+                check: None,
+            },
+            tag_ty,
         ))
     }
 
