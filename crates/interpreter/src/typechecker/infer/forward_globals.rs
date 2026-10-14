@@ -312,7 +312,10 @@ impl Inferer<'_> {
 /// The literal type an initializer states without being inferred: a literal
 /// token through any parentheses, or a `?:` whose branches are literals of one
 /// primitive type. Any other initializer states nothing.
-fn stated_literal_type(ast: &crate::Ast, value: ExprId) -> Result<Option<Type>, CompilerFailure> {
+pub(super) fn stated_literal_type(
+    ast: &crate::Ast,
+    value: ExprId,
+) -> Result<Option<Type>, CompilerFailure> {
     Ok(
         match &ast.try_expr(value).map_err(super::arena_failure)?.kind {
             ExprKind::Number(v) => Some(Type::NumberLiteral(crate::types::LiteralF64(*v))),

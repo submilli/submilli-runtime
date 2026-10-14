@@ -1562,12 +1562,9 @@ impl<'a> Inferer<'a> {
                 split
             }
             DiscriminantKey::Position(pos) => {
-                let Some((disc_pos, table)) = narrowing::tuple_union_discriminant(members) else {
+                let Some(table) = narrowing::tuple_position_discriminant(members, *pos) else {
                     return Ok(None);
                 };
-                if disc_pos != *pos {
-                    return Ok(None);
-                }
                 let Some(split) = table.partition(members, &literal) else {
                     return Ok(None);
                 };
@@ -2977,10 +2974,13 @@ fn add_missing_views(env: &mut narrowing::NarrowEnv, extra: narrowing::NarrowEnv
 /// discriminant: the members type it differently, some with a unit type such
 /// as `null`, as [`Inferer::discriminant_field_types`] requires of a field.
 fn discriminant_element_types(members: &[Type], position: usize) -> Option<Vec<Option<Type>>> {
+    // A tuple shorter than `position` reads `undefined` there, as a pattern does.
     let element_tys: Vec<Type> = members
         .iter()
         .map(|member| match member.peel() {
-            Type::Tuple(elements) => elements.get(position).cloned(),
+            Type::Tuple(elements) => {
+                Some(elements.get(position).cloned().unwrap_or(Type::Undefined))
+            }
             _ => None,
         })
         .collect::<Option<_>>()?;

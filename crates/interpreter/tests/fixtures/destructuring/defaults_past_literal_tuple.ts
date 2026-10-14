@@ -1,7 +1,7 @@
 // An array pattern longer than the literal it takes apart is accepted when
-// every slot past the literal's end has a default or is a hole, as tsc pads
-// the tuple with `undefined`. A defaulted slot past the end takes its
-// default's type.
+// every slot past the literal's end has a default or is a hole, as in tsc.
+// A defaulted slot past the end reads `undefined` and takes its default's
+// type, and the literal keeps its own length (`[1]` is `[number]`).
 function main(): void {
   const [a, b = 2] = [1];
   assert(a === 1 && b === 2, "a constant default");
@@ -22,6 +22,8 @@ function main(): void {
   const [l, list = []] = [1];
   const [base, read = () => base] = [4];
   assert(JSON.stringify(shape) === "{}" && list.length === 0 && read() === 4, "defaults that need no hint");
+  const [empty = "e"] = [];
+  assert(empty === "e", "a default against an empty literal");
   const [only, ...rest] = [7];
   assert(only === 7 && rest.length === 0, "a rest element past the end");
 }
