@@ -1107,8 +1107,13 @@ impl Inferer<'_> {
 /// discriminant: when its type is made of literals alone, which cases can
 /// cover. One with a member such as `string`, `null` or `undefined`, even in
 /// a single member of a discriminated union, can't be listed out, so the
-/// switch may simply fall through.
+/// switch may simply fall through. Neither need a `typeof` value: its type
+/// lists every tag whatever the operand is, so a switch on it lists the tags
+/// the operand can have.
 fn requires_every_case(disc_ty: &Type) -> bool {
+    if *disc_ty.peel() == super::expr::typeof_result_type() {
+        return false;
+    }
     narrowing::union_members(disc_ty).into_iter().all(|member| {
         narrowing::unit_literal_value(member).is_some() || matches!(member.peel(), Type::Boolean)
     })

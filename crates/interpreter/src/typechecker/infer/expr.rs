@@ -118,7 +118,7 @@ impl ChainField {
 
 /// The type of `typeof x` read as a value: the tags `typeof` can return, as
 /// TypeScript types it, whatever `x` is.
-fn typeof_result_type() -> Type {
+pub(super) fn typeof_result_type() -> Type {
     Type::union(
         [
             "string",
