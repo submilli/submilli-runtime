@@ -1165,12 +1165,123 @@ impl Inferer<'_> {
         Ok(unresolved_ref(ident))
     }
 
+    // Keep recursive logical chains out of the larger arithmetic dispatcher:
+    // its debug stack frame includes temporaries from every operator branch.
     fn infer_binary(
         &mut self,
         op: BinOp,
         lhs: ExprId,
         rhs: ExprId,
         expected: Option<&Type>,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        match op {
+            BinOp::And | BinOp::Or => self.infer_logical_binary(op, lhs, rhs, expected),
+            BinOp::NullishCoalesce => self.infer_nullish_coalesce(lhs, rhs, expected, span),
+            _ => self.infer_nonlogical_binary(op, lhs, rhs, span),
+        }
+    }
+
+    fn infer_logical_binary(
+        &mut self,
+        op: BinOp,
+        lhs: ExprId,
+        rhs: ExprId,
+        expected: Option<&Type>,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        // JS value-returning logicals. The RHS is inferred
+        // under the LHS predicate's narrowing — true-env
+        // for `&&`, false-env for `||` — and wrapped in
+        // `TypedExprKind::Narrowed` so codegen materializes
+        // the shadow local for in-region references. Result
+        // type is TS-style: the branch that keeps the LHS
+        // contributes only the values that can short-circuit
+        // there (`falsy_part` for `&&`, `truthy_part` for `||`).
+        let lhs_context = if op == BinOp::Or {
+            self.left_operand_context(
+                lhs,
+                expected,
+                &[Type::Null, Type::Undefined, Type::BooleanLiteral(false)],
+            )?
+        } else {
+            None
+        };
+        let (typed_lhs, lhs_ty) = self.infer_with_soft_context(lhs, lhs_context)?;
+        self.check_constant_truthiness(lhs)?;
+        let mut condition_error = false;
+        if matches!(lhs_ty.peel(), Type::Unknown) {
+            // `&&`/`||` on un-narrowed `unknown`
+            // rejected with a "narrow first" hint instead of
+            // the generic "expected boolean" mismatch.
+            condition_error = true;
+            let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
+            self.error_with_help(
+                lhs_span,
+                "cannot use `unknown` in a boolean context".to_string(),
+                vec![
+                    "narrow first with `typeof x === \"…\"`, \
+                     `x === null`, or `Array.isArray(x)` before \
+                     using as a condition"
+                        .to_string(),
+                ],
+            );
+        } else if !super::narrowing::condition_compatible(&lhs_ty) {
+            condition_error = true;
+            let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
+            self.error_non_condition_type(lhs_span, &lhs_ty);
+        }
+        let (true_env, false_env) = self.predicate_envs(typed_lhs)?;
+        let rhs_env = match op {
+            BinOp::And => true_env,
+            BinOp::Or => false_env,
+            _ => return Err(super::inference_failure("matched And | Or above")),
+        };
+        // `a || b` is `a` when `a` is never falsy, so only `a` meets what
+        // is expected of it. `b` still takes it as context unless it is a
+        // read, which the context can't change: `[]`, a tuple, a callback
+        // or an object literal for an interface all type by it.
+        let lhs_decides = op == BinOp::Or && super::narrowing::is_never_falsy(&lhs_ty);
+        let rhs_expected = if lhs_decides && self.is_read(rhs)? {
+            None
+        } else {
+            expected
+        };
+        let (typed_rhs, rhs_ty) = self.infer_conditional_operand(rhs, &rhs_env, rhs_expected)?;
+        let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
+        let wrapped_rhs = self.wrap_narrow_exprs(typed_rhs, &rhs_env, rhs_span)?;
+        let lhs_kept = match op {
+            BinOp::And => super::narrowing::falsy_part(&lhs_ty),
+            BinOp::Or => super::narrowing::truthy_part(&lhs_ty),
+            _ => return Err(super::inference_failure("matched And | Or above")),
+        };
+        let result_ty = if condition_error {
+            Type::Error
+        } else if let Some(decided) = lhs_decides
+            .then(|| self.deciding_left_type(&lhs_kept, &rhs_ty))
+            .flatten()
+        {
+            decided
+        } else if let Some(joined) = empty_literal_join(self.ast, (lhs, &lhs_kept), (rhs, &rhs_ty))?
+        {
+            joined
+        } else {
+            branch_result_type(lhs_kept, rhs_ty, self.resolver())
+        };
+        Ok((
+            TypedExprKind::Binary {
+                op,
+                lhs: typed_lhs,
+                rhs: wrapped_rhs,
+            },
+            result_ty,
+        ))
+    }
+
+    fn infer_nonlogical_binary(
+        &mut self,
+        op: BinOp,
+        lhs: ExprId,
+        rhs: ExprId,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         // human-readable operator symbol for diagnostics.
@@ -1221,12 +1332,6 @@ impl Inferer<'_> {
                 ),
                 _ => None,
             }
-        }
-        // `??` is lifted out of the generic Binary arm into
-        // its own typed-AST node so codegen and the type-result rule
-        // (`union(strip_nullish(lhs), rhs)`) can be specialised cleanly.
-        if matches!(op, BinOp::NullishCoalesce) {
-            return self.infer_nullish_coalesce(lhs, rhs, expected, span);
         }
         match op {
             BinOp::Add => {
@@ -1442,102 +1547,13 @@ impl Inferer<'_> {
                     Type::Boolean,
                 ))
             }
-            BinOp::And | BinOp::Or => {
-                // JS value-returning logicals. The RHS is inferred
-                // under the LHS predicate's narrowing — true-env
-                // for `&&`, false-env for `||` — and wrapped in
-                // `TypedExprKind::Narrowed` so codegen materializes
-                // the shadow local for in-region references. Result
-                // type is TS-style: the branch that keeps the LHS
-                // contributes only the values that can short-circuit
-                // there (`falsy_part` for `&&`, `truthy_part` for `||`).
-                let lhs_context = if op == BinOp::Or {
-                    self.left_operand_context(
-                        lhs,
-                        expected,
-                        &[Type::Null, Type::Undefined, Type::BooleanLiteral(false)],
-                    )?
-                } else {
-                    None
-                };
-                let (typed_lhs, lhs_ty) = self.infer_with_soft_context(lhs, lhs_context)?;
-                self.check_constant_truthiness(lhs)?;
-                let mut condition_error = false;
-                if matches!(lhs_ty.peel(), Type::Unknown) {
-                    // `&&`/`||` on un-narrowed `unknown`
-                    // rejected with a "narrow first" hint instead of
-                    // the generic "expected boolean" mismatch.
-                    condition_error = true;
-                    let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
-                    self.error_with_help(
-                        lhs_span,
-                        "cannot use `unknown` in a boolean context".to_string(),
-                        vec![
-                            "narrow first with `typeof x === \"…\"`, \
-                             `x === null`, or `Array.isArray(x)` before \
-                             using as a condition"
-                                .to_string(),
-                        ],
-                    );
-                } else if !super::narrowing::condition_compatible(&lhs_ty) {
-                    condition_error = true;
-                    let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
-                    self.error_non_condition_type(lhs_span, &lhs_ty);
-                }
-                let (true_env, false_env) = self.predicate_envs(typed_lhs)?;
-                let rhs_env = match op {
-                    BinOp::And => true_env,
-                    BinOp::Or => false_env,
-                    _ => return Err(super::inference_failure("matched And | Or above")),
-                };
-                // `a || b` is `a` when `a` is never falsy, so only `a` meets what
-                // is expected of it. `b` still takes it as context unless it is a
-                // read, which the context can't change: `[]`, a tuple, a callback
-                // or an object literal for an interface all type by it.
-                let lhs_decides = op == BinOp::Or && super::narrowing::is_never_falsy(&lhs_ty);
-                let rhs_expected = if lhs_decides && self.is_read(rhs)? {
-                    None
-                } else {
-                    expected
-                };
-                let (typed_rhs, rhs_ty) =
-                    self.infer_conditional_operand(rhs, &rhs_env, rhs_expected)?;
-                let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
-                let wrapped_rhs = self.wrap_narrow_exprs(typed_rhs, &rhs_env, rhs_span)?;
-                let lhs_kept = match op {
-                    BinOp::And => super::narrowing::falsy_part(&lhs_ty),
-                    BinOp::Or => super::narrowing::truthy_part(&lhs_ty),
-                    _ => return Err(super::inference_failure("matched And | Or above")),
-                };
-                let result_ty = if condition_error {
-                    Type::Error
-                } else if let Some(decided) = lhs_decides
-                    .then(|| self.deciding_left_type(&lhs_kept, &rhs_ty))
-                    .flatten()
-                {
-                    decided
-                } else if let Some(joined) =
-                    empty_literal_join(self.ast, (lhs, &lhs_kept), (rhs, &rhs_ty))?
-                {
-                    joined
-                } else {
-                    branch_result_type(lhs_kept, rhs_ty, self.resolver())
-                };
-                Ok((
-                    TypedExprKind::Binary {
-                        op,
-                        lhs: typed_lhs,
-                        rhs: wrapped_rhs,
-                    },
-                    result_ty,
-                ))
-            }
+            BinOp::And | BinOp::Or => Err(super::inference_failure(
+                "logical operators handled by infer_binary dispatch",
+            )),
             BinOp::In => self.infer_in_operator(lhs, rhs, span),
-            // Lifted earlier in this function — the early-return at
-            // the top of `infer_binary` keeps `NullishCoalesce` out of
-            // this match.
+            // Dispatched directly by infer_binary.
             BinOp::NullishCoalesce => Err(super::inference_failure(
-                "NullishCoalesce handled by early return",
+                "NullishCoalesce handled by infer_binary dispatch",
             )),
         }
     }
