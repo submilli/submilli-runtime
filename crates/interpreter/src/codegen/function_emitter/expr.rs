@@ -2619,10 +2619,19 @@ fn emit_object_spread(
             emitter.instruction(null_object.clone());
         }
         emitter.instruction(Instruction::Call(merge));
-        if let Some(accumulator) = accumulator {
+        if let Some(NonObjectSource {
+            accumulator,
+            opaque,
+        }) = accumulator
+        {
             emitter.emit_else();
             emitter.instruction(Instruction::LocalGet(accumulator));
-            emitter.instruction(null_object.clone());
+            // A string or an array held in `{}` copies its indices, which the
+            // merge reads from it; a nullish or other primitive copies nothing.
+            match opaque {
+                Some(source) => emitter.instruction(Instruction::LocalGet(source)),
+                None => emitter.instruction(null_object.clone()),
+            }
             emit_spread_shape_argument(emitter, ctx, final_shape, &null_object);
             emitter.instruction(null_object.clone());
             emitter.instruction(Instruction::Call(merge));
@@ -2666,17 +2675,25 @@ fn may_hold_non_object(ty: &Type) -> bool {
     }
 }
 
+/// The locals the `else` arm of [`emit_object_source_test`] reads.
+struct NonObjectSource {
+    accumulator: u32,
+    /// The source, when it is held as an opaque `$Object` (as `{}` is), which
+    /// may be a string or an array.
+    opaque: Option<u32>,
+}
+
 /// With the accumulator and then the source on the stack, opens an `if` on
 /// whether the source is an object, whose result is the merged object. Inside
 /// it, the accumulator and the source, as an `$ObjectShape`, are on the stack.
-/// Returns the local holding the accumulator, for the `else` arm.
+/// Returns the locals the `else` arm reads.
 fn emit_object_source_test(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     source_ty: &Type,
     object: u32,
     object_shape: u32,
-) -> Result<u32, crate::compiler_error::CompilerFailure> {
+) -> Result<NonObjectSource, crate::compiler_error::CompilerFailure> {
     let source_type = match ctx.symbols.value_type(source_ty)? {
         ValType::Ref(reference) => ValType::Ref(RefType {
             nullable: true,
@@ -2684,6 +2701,7 @@ fn emit_object_source_test(
         }),
         other => other,
     };
+    let opaque = source_type == object_ref(object);
     let source = emitter.add_anonymous_local(source_type)?;
     emitter.instruction(Instruction::LocalSet(source));
     let accumulator = emitter.add_anonymous_local(object_ref(object))?;
@@ -2701,7 +2719,10 @@ fn emit_object_source_test(
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
         object_shape,
     )));
-    Ok(accumulator)
+    Ok(NonObjectSource {
+        accumulator,
+        opaque: opaque.then_some(source),
+    })
 }
 
 /// Union sources may carry a known field with an incompatible hidden value.

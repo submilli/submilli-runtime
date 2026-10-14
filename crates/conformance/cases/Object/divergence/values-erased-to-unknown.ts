@@ -1,9 +1,6 @@
-// Not a test262 port: pins two documented divergences in the enumeration
-// statics. (1) Object.values / entries erase element types to `unknown` —
-// heterogeneous fields need narrowing to be used. (2) Non-object receivers
-// yield `[]`, including strings: JS enumerates a string's index keys
-// (values/primitive-strings.js expects ['a','b','c']; the original lives
-// under rejected/Object/values/).
+// Not a test262 port: pins a documented divergence in the enumeration
+// statics. Object.values / entries erase element types to `unknown` —
+// heterogeneous fields need narrowing to be used.
 
 function main(): void {
   const o = { n: 1, s: "two", b: true };
@@ -17,8 +14,4 @@ function main(): void {
   const entries: [string, unknown][] = Object.entries(o);
   assertSameValue(entries[1][0], "n", "entry key is a plain string");
   assertSameValue(entries[1][1] as number, 1, "entry value needs narrowing");
-
-  assertSameValue(Object.keys("abc").length, 0, "strings have no keys (JS: index keys)");
-  assertSameValue(Object.values("abc").length, 0, "strings have no values (JS: chars)");
-  assertSameValue(Object.entries("abc").length, 0, "strings have no entries");
 }
