@@ -454,7 +454,7 @@ impl FieldTypes {
 /// Whether `context` names a literal type of the kind of a literal in `ty`,
 /// tsc's `isLiteralOfContextualType`: `boolean` counts as `true | false`, and
 /// an enum as the union of its members.
-fn is_literal_of_context(ty: &Type, context: &Type) -> bool {
+pub(super) fn is_literal_of_context(ty: &Type, context: &Type) -> bool {
     let literal_kinds = literal_kinds_named(context);
     union_members(ty)
         .into_iter()

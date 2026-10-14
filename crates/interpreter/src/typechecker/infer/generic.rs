@@ -1771,7 +1771,9 @@ impl Inferer<'_> {
     /// Check each argument against its parameter once the call's type
     /// parameters are all bound, as tsc does after inference: unification
     /// takes an argument as a candidate, which a later one may widen past
-    /// what an earlier one accepts. One `already_reported` at is skipped.
+    /// what an earlier one accepts. One `already_reported` at is skipped. An
+    /// argument that fits takes the literal types it keeps against the
+    /// instantiated parameter, as tsc types it in that second check.
     fn check_arguments_after_inference(
         &mut self,
         sub: &TypeParamSubstitution,
@@ -1780,9 +1782,13 @@ impl Inferer<'_> {
     ) -> Result<(), CompilerFailure> {
         for check in checks {
             let param = sub.apply_or_record(&check.param_ty, &self.type_limits);
-            if super::expr::type_contains_type_var(&param)
-                || super::assignable(&check.arg_ty, &param, self.resolver())
-            {
+            if super::expr::type_contains_type_var(&param) {
+                continue;
+            }
+            if super::assignable(&check.arg_ty, &param, self.resolver()) {
+                if super::expr::type_contains_type_var(&check.param_ty) {
+                    self.retype_argument_literals(check.arg, &param)?;
+                }
                 continue;
             }
             let span = self.argument_span(check.arg)?;
