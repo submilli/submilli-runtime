@@ -5300,7 +5300,10 @@ mod tests {
         let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
         assert_eq!(
             messages,
-            ["unknown type `Nope`", "class `Base` used before its declaration"],
+            [
+                "unknown type `Nope`",
+                "class `Base` used before its declaration"
+            ],
             "conformance is checked after every signature binds, so declaration \
              order must not resurrect the cascade"
         );
