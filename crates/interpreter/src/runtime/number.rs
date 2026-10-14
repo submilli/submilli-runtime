@@ -45,10 +45,6 @@ pub fn format_number_js(n: f64) -> String {
 }
 
 /// JS-spec `Number#toFixed(digits)`.
-///
-/// Exact-tie rounding follows Rust's binary-value formatting (half-to-even),
-/// where JS rounds ties away from zero — visible only when the value sits
-/// exactly on a representable midpoint, e.g. `(2.5).toFixed(0)`.
 pub fn to_fixed_js(x: f64, digits: f64) -> Result<String, String> {
     let d = digits.trunc();
     if !(0.0..=100.0).contains(&d) || digits.is_nan() {
@@ -57,7 +53,67 @@ pub fn to_fixed_js(x: f64, digits: f64) -> Result<String, String> {
     if !x.is_finite() || x.abs() >= 1e21 {
         return Ok(format_number_js(x));
     }
-    Ok(format!("{:.*}", d as usize, x))
+    let digits = d as usize;
+    let magnitude = fixed_ties_away_from_zero(x.abs(), digits);
+    // JS keeps the sign of a negative value that rounds to zero (`-0.0001`
+    // gives "-0.00") but drops it for -0 itself.
+    Ok(if x < 0.0 {
+        format!("-{magnitude}")
+    } else {
+        magnitude
+    })
+}
+
+/// Digits past the decimal point that spell any f64 exactly: the smallest
+/// subnormal has 1074 of them.
+const EXACT_FRACTION_DIGITS: usize = 1074;
+
+/// The non-negative `x` with `digits` fraction digits, an exact tie rounded
+/// up as JS's `toFixed` picks "the larger n". Rust's formatting rounds the
+/// binary value correctly but breaks an exact tie to even, so
+/// `(2.25).toFixed(1)` would be "2.2" where JS gives "2.3".
+fn fixed_ties_away_from_zero(x: f64, digits: usize) -> String {
+    let rounded = format!("{x:.digits$}");
+    // Only a value whose next digit rounds to 5 can sit on a tie; checking
+    // that first spares the exact spelling for nearly every call.
+    let one_more = digits + 1;
+    if !format!("{x:.one_more$}").ends_with('5') {
+        return rounded;
+    }
+    let exact = format!("{x:.EXACT_FRACTION_DIGITS$}");
+    let point = exact
+        .find('.')
+        .expect("fixed formatting with digits has a point");
+    let rest = &exact[point + 1 + digits..];
+    let is_tie = rest.starts_with('5') && rest[1..].bytes().all(|b| b == b'0');
+    if !is_tie {
+        return rounded;
+    }
+    let truncated = &exact[..if digits == 0 {
+        point
+    } else {
+        point + 1 + digits
+    }];
+    increment_last_digit(truncated)
+}
+
+/// `number`, a decimal spelled with ASCII digits and at most one point, plus
+/// one unit in its last digit: "2.2" gives "2.3" and "9.99" gives "10.00".
+fn increment_last_digit(number: &str) -> String {
+    let mut bytes = number.as_bytes().to_vec();
+    for byte in bytes.iter_mut().rev() {
+        match *byte {
+            b'.' => continue,
+            b'9' => *byte = b'0',
+            _ => {
+                *byte += 1;
+                return String::from_utf8(bytes).expect("ASCII digits");
+            }
+        }
+    }
+    let mut carried = String::from("1");
+    carried.push_str(std::str::from_utf8(&bytes).expect("ASCII digits"));
+    carried
 }
 
 /// JS-spec `Number#toExponential(fractionDigits)`. A NaN `fractionDigits`
@@ -409,7 +465,43 @@ pub(crate) fn pow_js(base: f64, exponent: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_float_js, parse_int_js, string_to_number_js, to_uint8};
+    use super::{parse_float_js, parse_int_js, string_to_number_js, to_fixed_js, to_uint8};
+
+    #[test]
+    fn to_fixed_matches_node_including_exact_ties() {
+        // Expected strings are Node 24's.
+        let cases: [(f64, f64, &str); 22] = [
+            (2.25, 1.0, "2.3"),
+            (0.125, 2.0, "0.13"),
+            (2.5, 0.0, "3"),
+            (-2.25, 1.0, "-2.3"),
+            (0.5, 0.0, "1"),
+            (1.5, 0.0, "2"),
+            (-0.5, 0.0, "-1"),
+            (9.5, 0.0, "10"),
+            (99.995, 2.0, "100.00"),
+            (0.0625, 3.0, "0.063"),
+            (1.005, 2.0, "1.00"),
+            (1.45, 1.0, "1.4"),
+            (8.345, 2.0, "8.35"),
+            (-0.0001, 2.0, "-0.00"),
+            (-0.0, 2.0, "0.00"),
+            (0.0, 0.0, "0"),
+            (123.456, 10.0, "123.4560000000"),
+            (0.1, 20.0, "0.10000000000000000555"),
+            (5e-324, 2.0, "0.00"),
+            (100000000000000070000.0, 1.0, "100000000000000065536.0"),
+            (0.15, 1.0, "0.1"),
+            (1e-7, 8.0, "0.00000010"),
+        ];
+        for (x, digits, expected) in cases {
+            assert_eq!(
+                to_fixed_js(x, digits).unwrap(),
+                expected,
+                "({x}).toFixed({digits})"
+            );
+        }
+    }
 
     #[test]
     fn to_uint8_wraps_modulo_256() {
