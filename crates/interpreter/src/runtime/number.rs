@@ -81,39 +81,41 @@ fn fixed_ties_away_from_zero(x: f64, digits: usize) -> String {
         return rounded;
     }
     let exact = format!("{x:.EXACT_FRACTION_DIGITS$}");
-    let point = exact
-        .find('.')
-        .expect("fixed formatting with digits has a point");
-    let rest = &exact[point + 1 + digits..];
-    let is_tie = rest.starts_with('5') && rest[1..].bytes().all(|b| b == b'0');
-    if !is_tie {
+    let Some(point) = exact.find('.') else {
         return rounded;
-    }
-    let truncated = &exact[..if digits == 0 {
+    };
+    let kept_end = if digits == 0 {
         point
     } else {
         point + 1 + digits
-    }];
-    increment_last_digit(truncated)
+    };
+    let Some(rest) = exact.get(point + 1 + digits..) else {
+        return rounded;
+    };
+    let is_tie = rest
+        .strip_prefix('5')
+        .is_some_and(|tail| tail.bytes().all(|b| b == b'0'));
+    if !is_tie {
+        return rounded;
+    }
+    increment_last_digit(&exact[..kept_end])
 }
 
 /// `number`, a decimal spelled with ASCII digits and at most one point, plus
 /// one unit in its last digit: "2.2" gives "2.3" and "9.99" gives "10.00".
 fn increment_last_digit(number: &str) -> String {
-    let mut bytes = number.as_bytes().to_vec();
-    for byte in bytes.iter_mut().rev() {
-        match *byte {
-            b'.' => continue,
-            b'9' => *byte = b'0',
+    let mut chars: Vec<char> = number.chars().collect();
+    for digit in chars.iter_mut().rev() {
+        match *digit {
+            '.' => continue,
+            '9' => *digit = '0',
             _ => {
-                *byte += 1;
-                return String::from_utf8(bytes).expect("ASCII digits");
+                *digit = char::from_digit(digit.to_digit(10).unwrap_or(0) + 1, 10).unwrap_or('1');
+                return chars.into_iter().collect();
             }
         }
     }
-    let mut carried = String::from("1");
-    carried.push_str(std::str::from_utf8(&bytes).expect("ASCII digits"));
-    carried
+    std::iter::once('1').chain(chars).collect()
 }
 
 /// JS-spec `Number#toExponential(fractionDigits)`. A NaN `fractionDigits`
