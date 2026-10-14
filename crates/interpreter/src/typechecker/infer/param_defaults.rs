@@ -80,7 +80,12 @@ impl Inferer<'_> {
         } else {
             input_ty.clone()
         };
-        let (default_value, default_ty) = self.infer_expr(default, Some(&declared))?;
+        // An unannotated parameter's type is its default's own, which an object
+        // pattern shapes; typing the default against it again would lose that.
+        let shaped_by_pattern =
+            param.ty.is_none() && self.ast.object_pattern_sources.contains_key(&default);
+        let expected = (!shaped_by_pattern).then_some(&declared);
+        let (default_value, default_ty) = self.infer_expr(default, expected)?;
         let default_span = self.ast.try_expr(default).map_err(arena_failure)?.span;
         // Replace only the outer contextual mismatch with the parameter
         // diagnostic; keep errors from inside the initializer intact.

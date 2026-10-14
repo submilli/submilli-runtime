@@ -4,6 +4,8 @@
 //! Synthesised array-pattern `IndexAccess` nodes are tagged in [`Ast::pattern_origins`]
 //! so the typechecker can rephrase index errors as destructure-specific diagnostics.
 
+use std::collections::BTreeSet;
+
 use crate::compiler_error::{CompilerFailure, CompilerStage};
 use crate::tree_height;
 
@@ -318,7 +320,7 @@ impl LowerCtx {
             dst.clone(),
             root,
             /*doc=*/ None,
-            /*tuple_len=*/ None,
+            /*literal=*/ None,
         )?;
         let mut source_bindings = Vec::new();
         for &id in &decompose {
@@ -539,13 +541,10 @@ impl LowerCtx {
             }
         };
 
-        let tuple_len = match ty {
-            None => tuple_source_len(ast, &binding, value)?,
+        let literal = match ty {
+            None => mark_literal_source(ast, &binding, value)?,
             Some(_) => None,
         };
-        if tuple_len.is_some() {
-            ast.tuple_pattern_sources.insert(value);
-        }
         let pattern_span = binding.span();
         let dst = self.fresh(PATTERN_VALUE, pattern_span)?;
         let annotated = ty.is_some();
@@ -568,7 +567,7 @@ impl LowerCtx {
             is_const,
             annotated,
         };
-        out.extend(self.emit_decompose(ast, binding, dst, root, doc, tuple_len)?);
+        out.extend(self.emit_decompose(ast, binding, dst, root, doc, literal.as_ref())?);
         Ok(out)
     }
 
@@ -588,16 +587,22 @@ impl LowerCtx {
                 annotated: param.ty.is_some(),
             };
             // An unannotated parameter takes its type from its default, which
-            // an array pattern types as a tuple, as a declaration's initializer.
-            let tuple_len = match (&param.ty, param.default) {
-                (None, Some(default)) => tuple_source_len(ast, &pattern, default)?,
+            // the pattern types as a declaration's initializer. A caller may
+            // pass an object with properties the default lacks, so only a
+            // tuple's length bounds what the parameter holds.
+            let literal = match (&param.ty, param.default) {
+                (None, Some(default)) => mark_literal_source(ast, &pattern, default)?
+                    .filter(|literal| matches!(literal, LiteralSource::Tuple(_))),
                 _ => None,
             };
-            if let Some(default) = param.default.filter(|_| tuple_len.is_some()) {
-                ast.tuple_pattern_sources.insert(default);
-            }
-            let statements =
-                self.emit_decompose(ast, pattern, fresh, root, /*doc=*/ None, tuple_len)?;
+            let statements = self.emit_decompose(
+                ast,
+                pattern,
+                fresh,
+                root,
+                /*doc=*/ None,
+                literal.as_ref(),
+            )?;
             if ast
                 .parameter_bindings
                 .insert(param.name.span, statements)
@@ -612,8 +617,8 @@ impl LowerCtx {
         Ok(())
     }
 
-    /// `doc` attaches to the first emitted stmt only. `tuple_len` is the length
-    /// of the tuple-typed array literal `source` holds, if it holds one.
+    /// `doc` attaches to the first emitted stmt only. `literal` describes the
+    /// literal `source` holds, if the pattern types one.
     fn emit_decompose(
         &mut self,
         ast: &mut Ast,
@@ -621,7 +626,7 @@ impl LowerCtx {
         source: Ident,
         root: PatternRoot,
         mut doc: Option<crate::DocComment>,
-        tuple_len: Option<usize>,
+        literal: Option<&LiteralSource>,
     ) -> Result<Vec<StmtId>, CompilerFailure> {
         let is_const = root.is_const;
         let mut out = Vec::new();
@@ -633,21 +638,25 @@ impl LowerCtx {
             } => {
                 let bound_names: Vec<Ident> = fields.iter().map(|f| f.source.clone()).collect();
                 for field in fields {
-                    let recv = ast
-                        .try_push_expr(Expr {
-                            kind: ExprKind::Identifier(source.clone()),
-                            span: field.span,
-                        })
-                        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
-                    let access = ast
-                        .try_push_expr(Expr {
-                            kind: ExprKind::FieldAccess {
+                    // A defaulted property the literal lacks reads `undefined`,
+                    // as tsc reads it.
+                    let absent = matches!(
+                        literal,
+                        Some(LiteralSource::Object(names)) if !names.contains(&field.source.name)
+                    );
+                    let access = if absent && field.default.is_some() {
+                        push_void_zero(ast, field.span)?
+                    } else {
+                        let recv = push_expr(ast, ExprKind::Identifier(source.clone()), field.span)?;
+                        push_expr(
+                            ast,
+                            ExprKind::FieldAccess {
                                 receiver: recv,
                                 name: field.source.clone(),
                             },
-                            span: field.span,
-                        })
-                        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
+                            field.span,
+                        )?
+                    };
                     let value = self.apply_binding_default(
                         ast,
                         access,
@@ -738,7 +747,8 @@ impl LowerCtx {
                     // A tuple literal holds nothing past its end, so a defaulted
                     // slot there reads `undefined`, as tsc reads it, and the
                     // literal keeps its own length.
-                    let past_tuple_end = tuple_len.is_some_and(|len| i >= len);
+                    let past_tuple_end =
+                        matches!(literal, Some(LiteralSource::Tuple(len)) if i >= *len);
                     let access = if default.is_some() && past_tuple_end {
                         push_void_zero(ast, local.span)?
                     } else if default.is_some() {
@@ -763,8 +773,8 @@ impl LowerCtx {
                     out.push(decl);
                 }
                 if let Some(rest_ident) = rest {
-                    let rest_value = match tuple_len {
-                        Some(len) if len > elems_len => {
+                    let rest_value = match literal {
+                        Some(&LiteralSource::Tuple(len)) if len > elems_len => {
                             remaining_elements(ast, &source, elems_len..len, rest_ident.span)?
                         }
                         _ => array_rest(ast, &source, elems_len, rest_ident.span)?,
@@ -876,6 +886,70 @@ impl LowerCtx {
         );
         Ok(selected)
     }
+}
+
+/// A literal a pattern takes apart, which TypeScript types from the pattern.
+enum LiteralSource {
+    /// An array literal of this many elements, typed as a tuple.
+    Tuple(usize),
+    /// An object literal with these property names.
+    Object(BTreeSet<String>),
+}
+
+/// Describe the literal `value` that `binding` takes apart, and record how
+/// inference types it: an array literal as a tuple, and an object literal
+/// with each defaulted property the pattern reads optional, as tsc types it.
+fn mark_literal_source(
+    ast: &mut Ast,
+    binding: &Binding,
+    value: ExprId,
+) -> Result<Option<LiteralSource>, CompilerFailure> {
+    if let Some(len) = tuple_source_len(ast, binding, value)? {
+        ast.tuple_pattern_sources.insert(value);
+        return Ok(Some(LiteralSource::Tuple(len)));
+    }
+    let Some(names) = object_literal_names(ast, binding, value)? else {
+        return Ok(None);
+    };
+    let Binding::Object { fields, .. } = binding else {
+        return Ok(None);
+    };
+    let defaulted: BTreeSet<String> = fields
+        .iter()
+        .filter(|field| field.default.is_some() && names.contains(&field.source.name))
+        .map(|field| field.source.name.clone())
+        .collect();
+    if !defaulted.is_empty() {
+        ast.object_pattern_sources.insert(value, defaulted);
+    }
+    Ok(Some(LiteralSource::Object(names)))
+}
+
+/// The property names of `value` when it is an object literal that `binding`,
+/// an object pattern, takes apart, and every property it has is named.
+fn object_literal_names(
+    ast: &Ast,
+    binding: &Binding,
+    value: ExprId,
+) -> Result<Option<BTreeSet<String>>, CompilerFailure> {
+    if !matches!(binding, Binding::Object { .. }) {
+        return Ok(None);
+    }
+    let ExprKind::ObjectLiteral { members } = &ast
+        .try_expr(value)
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+        .kind
+    else {
+        return Ok(None);
+    };
+    let mut names = BTreeSet::new();
+    for member in members {
+        let crate::ObjectLiteralMember::Field(field) = member else {
+            return Ok(None);
+        };
+        names.insert(field.name.name.clone());
+    }
+    Ok(Some(names))
 }
 
 /// The length of `value` when it is an array literal without spreads that

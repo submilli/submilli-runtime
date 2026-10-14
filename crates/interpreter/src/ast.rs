@@ -880,6 +880,12 @@ pub struct Ast {
     /// the pattern, so each name gets its element's type and a pattern longer
     /// than the literal is a compile error (populated by `lower_patterns`).
     pub tuple_pattern_sources: std::collections::BTreeSet<ExprId>,
+    /// Unannotated object literals an object pattern takes apart, with the
+    /// properties the pattern gives defaults: `{ a, b = 0 } = { a: 1, b: 2 }`.
+    /// TypeScript types such a literal from the pattern, so those properties
+    /// are optional in its type (populated by `lower_patterns`).
+    pub object_pattern_sources:
+        std::collections::BTreeMap<ExprId, std::collections::BTreeSet<String>>,
     /// Pattern decomposition statements, run immediately after their parameter initializes.
     pub parameter_bindings: std::collections::HashMap<Span, Vec<StmtId>>,
     /// Source names in lowered for-of heads, whose TDZ includes the iterable.

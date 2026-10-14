@@ -667,6 +667,11 @@ impl Inferer<'_> {
                 self.next_function_keeps_returned_literals = keeps_returned_literals;
                 return self.infer_expr_keeping_literals(inner, expected, keeps_literal);
             }
+            ExprKind::ObjectLiteral { members }
+                if expected.is_none() && self.ast.object_pattern_sources.contains_key(&expr_id) =>
+            {
+                self.infer_pattern_object_literal(expr_id, members, span)
+            }
             ExprKind::ObjectLiteral { members } => {
                 let errors_before = self.error_count();
                 let inferred = self.infer_object_literal_expr(expr_id, members, expected, span);
@@ -7366,6 +7371,42 @@ impl Inferer<'_> {
                 element_types: element_types.clone(),
             },
             Type::Tuple(element_types.into()),
+        ))
+    }
+
+    /// An object literal an object pattern takes apart, typed as TypeScript
+    /// types it from the pattern: each property the pattern gives a default
+    /// is optional, since the default stands in for it.
+    fn infer_pattern_object_literal(
+        &mut self,
+        literal: ExprId,
+        members: Vec<crate::ObjectLiteralMember>,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let (kind, ty) = self.infer_object_literal_expr(literal, members, None, span)?;
+        let Type::Object { index, mut fields } = ty.clone() else {
+            return Ok((kind, ty));
+        };
+        let defaulted = self
+            .ast
+            .object_pattern_sources
+            .get(&literal)
+            .into_iter()
+            .flatten();
+        for name in defaulted {
+            if let Some(field) = fields.get_mut(name) {
+                field.optional = true;
+            }
+        }
+        let target = Type::Object { index, fields };
+        let value = self.push_synthetic_expr(kind, ty, span)?;
+        Ok((
+            TypedExprKind::Cast {
+                value,
+                target_ty: target.clone(),
+                check: None,
+            },
+            target,
         ))
     }
 
