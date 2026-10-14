@@ -84,12 +84,8 @@ fn fixed_ties_away_from_zero(x: f64, digits: usize) -> String {
     let Some(point) = exact.find('.') else {
         return rounded;
     };
-    let kept_end = if digits == 0 {
-        point
-    } else {
-        point + 1 + digits
-    };
-    let Some(rest) = exact.get(point + 1 + digits..) else {
+    let fraction_end = point + 1 + digits;
+    let Some(rest) = exact.get(fraction_end..) else {
         return rounded;
     };
     let is_tie = rest
@@ -98,24 +94,29 @@ fn fixed_ties_away_from_zero(x: f64, digits: usize) -> String {
     if !is_tie {
         return rounded;
     }
+    let kept_end = if digits == 0 { point } else { fraction_end };
     increment_last_digit(&exact[..kept_end])
 }
 
 /// `number`, a decimal spelled with ASCII digits and at most one point, plus
 /// one unit in its last digit: "2.2" gives "2.3" and "9.99" gives "10.00".
 fn increment_last_digit(number: &str) -> String {
-    let mut chars: Vec<char> = number.chars().collect();
-    for digit in chars.iter_mut().rev() {
-        match *digit {
-            '.' => continue,
-            '9' => *digit = '0',
-            _ => {
-                *digit = char::from_digit(digit.to_digit(10).unwrap_or(0) + 1, 10).unwrap_or('1');
-                return chars.into_iter().collect();
-            }
+    let mut bytes = number.as_bytes().to_vec();
+    let carried_out = !bytes.iter_mut().rev().any(|byte| match *byte {
+        b'.' => false,
+        b'9' => {
+            *byte = b'0';
+            false
         }
+        _ => {
+            *byte += 1;
+            true
+        }
+    });
+    if carried_out {
+        bytes.insert(0, b'1');
     }
-    std::iter::once('1').chain(chars).collect()
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// JS-spec `Number#toExponential(fractionDigits)`. A NaN `fractionDigits`
