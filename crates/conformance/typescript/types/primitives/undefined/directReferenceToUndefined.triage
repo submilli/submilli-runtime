@@ -1,0 +1,1 @@
+line 3 type: by-design spec §Excluded-Features there is no `any`, so `let b = null` is `null`, where tsc makes it an evolving `any` (here `let y = undefined` is `undefined`)

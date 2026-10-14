@@ -1,0 +1,2 @@
+line 4 extra: by-design spec §2.3 a name has a single declaration site, so a class can't merge with an interface
+line 6 missed: artifact we reject the class merging with an interface, on line 4

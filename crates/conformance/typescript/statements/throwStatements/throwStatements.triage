@@ -1,0 +1,5 @@
+line 32, 34, 41, 45, 48, 52, 55, 56, 74, 75, 76, 77, 78, 79, 81, 82, 84, 86 extra: by-design spec §1.8 `throw` accepts only `Error` values
+line 40, 41 type: by-design spec §Excluded-Features there is no `any`, so `let b = null` is `null`, where tsc makes it an evolving `any`
+line 44, 45 type: by-design spec §Excluded-Features there is no `any`, so `let b = null` is `null`, where tsc makes it an evolving `any` (here `let anUndefined = undefined` is `undefined`)
+line 83 extra: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
+line 83 type: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type

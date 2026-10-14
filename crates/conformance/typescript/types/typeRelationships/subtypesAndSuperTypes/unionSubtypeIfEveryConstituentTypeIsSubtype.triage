@@ -1,0 +1,23 @@
+line 14 extra: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, here (tsc's on line 17)
+line 17 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 14
+line 21 extra: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, here (tsc's on lines 23 and 24)
+line 23, 24 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 21
+line 28 extra: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, here (tsc's on lines 30 and 31)
+line 30, 31 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 28
+line 42 extra: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, here (tsc's on lines 44 and 45)
+line 44, 45 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 42
+line 49 extra: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, here (tsc's on lines 51 and 52)
+line 51, 52 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 49
+line 56 extra: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, here (tsc's on lines 58 and 59)
+line 58, 59 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 56
+line 63 extra: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, here (tsc's on lines 65 and 66)
+line 65, 66 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 63
+line 70 extra: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, here (tsc's on lines 72 and 73)
+line 72, 73 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 70
+line 77 extra: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, here (tsc's on lines 79 and 80)
+line 79, 80 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 77
+line 128 extra: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, here (tsc's on lines 130 and 131)
+line 130, 131 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 128
+line 99 extra: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, here (tsc's on line 101); also by-design spec §1.2 enums are nominal, so a `number` isn't assignable to a numeric enum (`foo2` on line 102)
+line 101 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 99
+line 64 extra: bug SUB-1722 an interface member that breaks its index signature is reported again at every reference to the interface (`I8`, declared on line 56)

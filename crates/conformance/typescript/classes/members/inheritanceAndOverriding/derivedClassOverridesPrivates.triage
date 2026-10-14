@@ -1,0 +1,3 @@
+line 6 missed: by-design spec §2.2 privacy is module-scoped, so a subclass in the same module may redeclare an inherited `private` field with a type assignable to it
+line 14 missed: by-design spec §2.2 statics live in their own namespace and share no slot, so a subclass may redeclare an inherited static
+line 11, 15 extra: by-design spec §2.2 a static field requires an initializer

@@ -1,0 +1,7 @@
+line 25, 31 type: bug SUB-1555 a destructured binding's default keeps its literal type where tsc widens it
+line 26, 27, 28, 32, 33, 34, 35, 36 type: bug SUB-1608 a pattern's defaults don't shape the initializer literal, where tsc makes defaulted members optional and allows missing ones
+line 25, 28 extra: bug SUB-1608 a pattern's defaults don't shape the initializer literal, where tsc makes defaulted members optional and allows missing ones
+line 31 extra: bug SUB-1626 destructuring defaults against an empty literal differ from tsc (`{ x = d } = {}` is rejected)
+line 55, 56, 57, 60, 61, 62, 66, 67 type: bug SUB-1607 a parameter default that an array pattern takes apart is typed as an array, where tsc types it as a tuple
+line 65 type: bug SUB-1555 a destructured binding's default keeps its literal type where tsc widens it; also bug SUB-1607 a parameter default that an array pattern takes apart is typed as an array, where tsc types it as a tuple
+line 67 extra: bug SUB-1607 a parameter default that an array pattern takes apart is typed as an array, where tsc types it as a tuple

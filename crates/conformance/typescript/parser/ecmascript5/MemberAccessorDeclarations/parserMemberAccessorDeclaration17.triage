@@ -1,0 +1,1 @@
+line 3 missed: bug SUB-1726 a setter whose parameter is optional or has a default value is accepted (optional, TS1051)

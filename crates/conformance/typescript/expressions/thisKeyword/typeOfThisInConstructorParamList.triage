@@ -1,0 +1,1 @@
+line 5 extra: by-design spec §2.2 `this` is valid only inside class method and constructor bodies and field initializers, so not in a parameter default
