@@ -4,6 +4,7 @@ import EditLink from './EditLink.astro';
 import LastUpdated from './LastUpdated.astro';
 import Pagination from './Pagination.astro';
 import { DOCS_INDEX, markdownPath } from '../lib/agent-docs';
+import DocsInvitation from './DocsInvitation.astro';
 
 const { entry } = Astro.locals.starlightRoute;
 const slug = entry.id === 'index' ? '' : entry.id;
@@ -24,6 +25,7 @@ const slug = entry.id === 'index' ? '' : entry.id;
 			<LastUpdated />
 		</div>
 	</div>
+	<DocsInvitation />
 </footer>
 
 <style>
