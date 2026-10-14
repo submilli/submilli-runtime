@@ -1,0 +1,5 @@
+line 6, 10, 14, 20 type: by-design spec §1.4 an unannotated closure's block `return`s must share one type, where tsc infers their union
+line 8, 12, 16, 24 extra: by-design spec §1.4 an unannotated closure's block `return`s must share one type, where tsc infers their union
+line 44 missed: bug SUB-1733 `undefined === function () {…}` is accepted, where tsc reports it always false (TS2839) and we reject the same comparison with an arrow
+line 45 extra: by-design spec §1.8 `throw` accepts only `Error` values
+line 46 extra: by-design spec §1.5 code after a `throw` is unreachable

@@ -1,0 +1,2 @@
+line 26, 27, 28, 32, 33, 34, 35, 36 type: bug SUB-1744 a parameter's object pattern default lacking a defaulted property isn't shaped by the pattern, where tsc makes the pattern's defaulted properties optional in the parameter type
+line 25, 28, 31 extra: bug SUB-1744 a parameter's object pattern default lacking a defaulted property isn't shaped by the pattern, where tsc makes the pattern's defaulted properties optional in the parameter type

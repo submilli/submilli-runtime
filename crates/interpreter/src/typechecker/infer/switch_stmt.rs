@@ -415,13 +415,19 @@ impl Inferer<'_> {
                 .try_stmt(d.body)
                 .map_err(super::arena_failure)?
                 .span;
-            let env = self.build_default_narrow_env(
+            let mut env = self.build_default_narrow_env(
                 &residual,
                 &site,
                 covered.ruled_out(&site),
                 narrowed_before,
                 body_span,
             )?;
+            env.extend_env(self.aliased_default_env(
+                typed_disc,
+                &covered,
+                narrowed_before,
+                body_span,
+            )?);
             self.push_narrow_frame(env.clone());
             self.switch_depth += 1;
             self.reachable = entry_reachable;
@@ -440,7 +446,7 @@ impl Inferer<'_> {
             let leaves_values_unmatched =
                 !matches!(residual, Type::Never) && !narrowing::is_ruled_out(&residual);
             if leaves_values_unmatched {
-                if requires_every_case(&disc_ty) {
+                if !self.reads_typeof_value(typed_disc)? && requires_every_case(&disc_ty) {
                     self.emit_non_exhaustive(&residual, &site, switch_span);
                 }
                 any_arm_reachable_exit |= entry_reachable;
@@ -465,6 +471,12 @@ impl Inferer<'_> {
                 &residual,
                 &site,
                 covered.ruled_out(&site),
+                narrowed_before,
+                switch_span,
+            )?);
+            natural.extend_env(self.aliased_default_env(
+                typed_disc,
+                &covered,
                 narrowed_before,
                 switch_span,
             )?);
@@ -779,8 +791,7 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?;
             if let Type::Union(members) = receiver_expr.ty.peel()
                 && let Some(position) = index_position(&index_expr.kind)
-                && let Some((disc_pos, table)) = narrowing::tuple_union_discriminant(members)
-                && disc_pos == position
+                && let Some(table) = narrowing::tuple_position_discriminant(members, position)
             {
                 let kept = table.uncovered_members(members, &covered.literals);
                 let missing = Type::union(
@@ -806,6 +817,41 @@ impl Inferer<'_> {
                 (residual, ResidualSite::Anonymous)
             },
         )
+    }
+
+    /// What a `switch` on a `const` destructured from a union leaves for its
+    /// `default`, through the value it was read from: after
+    /// `const { kind, payload } = action`, a `switch (kind)` whose cases cover
+    /// every member leaves `payload` as `never`, as testing `kind` would.
+    fn aliased_default_env(
+        &mut self,
+        typed_disc: ExprId,
+        covered: &CaseCoverage,
+        narrowed_before: bool,
+        body_span: Span,
+    ) -> Result<narrowing::NarrowEnv, CompilerFailure> {
+        let Some(initializer) = self.alias_initializer(typed_disc)? else {
+            return Ok(narrowing::NarrowEnv::new());
+        };
+        let initializer_ty = self
+            .typed_ast
+            .try_expr(initializer)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .clone();
+        let (residual, site) =
+            self.compute_switch_residual(initializer, &initializer_ty, covered)?;
+        if !matches!(site, ResidualSite::DiscriminatedReceiver { .. }) {
+            return Ok(narrowing::NarrowEnv::new());
+        }
+        let env = self.build_default_narrow_env(
+            &residual,
+            &site,
+            covered.ruled_out(&site),
+            narrowed_before,
+            body_span,
+        )?;
+        self.destructured_alias_views(env)
     }
 
     /// What a `switch` on a union's discriminant leaves for its `default`: the
@@ -975,6 +1021,51 @@ impl Inferer<'_> {
             };
             self.innermost_narrowing(&prefix).is_some()
         }))
+    }
+
+    /// Whether the discriminant is a `typeof` value: the expression itself, or
+    /// a binding declared with its type (all eight tags, however written).
+    /// That type lists every tag whatever the operand is, even once narrowing
+    /// removes some, so a switch on it need list only the tags its operand
+    /// can have.
+    fn reads_typeof_value(&self, typed_disc: ExprId) -> Result<bool, CompilerFailure> {
+        let tags = super::expr::typeof_result_type();
+        let disc_expr = self
+            .typed_ast
+            .try_expr(typed_disc)
+            .map_err(crate::typechecker::arena_failure)?;
+        if matches!(&disc_expr.kind, TypedExprKind::Cast { target_ty, .. } if *target_ty == tags) {
+            return Ok(true);
+        }
+        let Some(path) = self.expr_to_reference_path(disc_expr)? else {
+            return Ok(false);
+        };
+        if !path.chain.is_empty() {
+            return Ok(false);
+        }
+        let declared = match &path.root {
+            narrowing::BindingId::Local { name, decl_scope } => self
+                .scopes
+                .get_binding(name, *decl_scope)
+                .map(super::scopes::ScopeEntry::write_type),
+            narrowing::BindingId::Global(mangled) => self.global_declared_type(mangled),
+            _ => None,
+        };
+        Ok(declared.is_some_and(|ty| *ty.peel() == tags))
+    }
+
+    /// The declared type of the module `let` or `const` named `mangled`.
+    fn global_declared_type(&self, mangled: &crate::MangledName) -> Option<&Type> {
+        self.top_symbols
+            .values()
+            .find_map(|symbol| match &symbol.kind {
+                crate::ValueKind::Const { ty, .. } | crate::ValueKind::Let { ty, .. }
+                    if &symbol.mangled_name == mangled =>
+                {
+                    Some(ty)
+                }
+                _ => None,
+            })
     }
 
     /// The values the discriminant was already known not to hold.

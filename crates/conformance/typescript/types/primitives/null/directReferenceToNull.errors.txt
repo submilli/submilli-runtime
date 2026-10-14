@@ -1,0 +1,2 @@
+directReferenceToNull.ts(2,8): error TS2304: Cannot find name 'Null'.
+directReferenceToNull.ts(2,35): error TS2304: Cannot find name 'Null'.

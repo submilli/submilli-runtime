@@ -1,0 +1,6 @@
+types: 2 of 23 tsc entries compared, 0 differ
+
+errors:
+line 6: ours: expected `void`, got `number` (tsc accepts)
+line 20: ours: expected `void`, got `{ x: number }` (tsc accepts)
+line 34: ours: cannot cast `null` to `T`: no assignable direction between these types (tsc accepts)

@@ -1,0 +1,20 @@
+=== objectBindingPatternKeywordIdentifiers06.ts ===
+
+let { as: as } = { as: 1 }
+>as : any
+>   : ^^^
+>as : number
+>   : ^^^^^^
+>{ as: 1 } : { as: number; }
+>          : ^^^^^^^^^^^^^^^
+>as : number
+>   : ^^^^^^
+>1 : 1
+>  : ^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

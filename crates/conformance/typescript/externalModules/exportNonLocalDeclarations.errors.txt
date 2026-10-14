@@ -1,0 +1,2 @@
+exportNonLocalDeclarations.ts(3,10): error TS2661: Cannot export 'string'. Only local declarations can be exported from a module.
+exportNonLocalDeclarations.ts(4,15): error TS2661: Cannot export 'number'. Only local declarations can be exported from a module.

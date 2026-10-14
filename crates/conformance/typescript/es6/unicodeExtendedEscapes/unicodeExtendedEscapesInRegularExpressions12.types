@@ -1,0 +1,15 @@
+=== unicodeExtendedEscapesInRegularExpressions12.ts ===
+
+let x = /\u{FFFFFFFF}/gu;
+>x : RegExp
+>  : ^^^^^^
+>/\u{FFFFFFFF}/gu : RegExp
+>                 : ^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

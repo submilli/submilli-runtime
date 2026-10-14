@@ -1,0 +1,126 @@
+=== parameterInitializersForwardReferencing1.ts ===
+
+let foo: string = "";
+>foo : string
+>    : ^^^^^^
+>"" : ""
+>   : ^^
+
+
+function f1 (bar: string = foo): string { // unexpected compiler error; works at runtime
+>f1 : (bar?: string) => string
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^
+>bar : string
+>    : ^^^^^^
+>foo : string
+>    : ^^^^^^
+
+    let foo: number = 2;
+>foo : number
+>    : ^^^^^^
+>2 : 2
+>  : ^
+
+    return bar; // returns 1
+>bar : string
+>    : ^^^^^^
+
+}
+
+function f2 (bar: (baz?: string) => string = (baz: string = foo) => baz): string { // unexpected compiler error; works at runtime
+>f2 : (bar?: (baz?: string) => string) => string
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>bar : (baz?: string) => string
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^
+>baz : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
+>(baz: string = foo) => baz : (baz?: string) => string
+>                           : ^^^^^^^^^^^^^^^^^^^^^^^^
+>baz : string
+>    : ^^^^^^
+>foo : string
+>    : ^^^^^^
+>baz : string
+>    : ^^^^^^
+
+    let foo: number = 2;
+>foo : number
+>    : ^^^^^^
+>2 : 2
+>  : ^
+
+    return bar(); // returns 1
+>bar() : string
+>      : ^^^^^^
+>bar : (baz?: string) => string
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^
+
+}
+
+function f3 (bar: number = foo, foo: number = 2): number { // correct compiler error, error at runtime
+>f3 : (bar?: number, foo?: number) => number
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>bar : number
+>    : ^^^^^^
+>foo : number
+>    : ^^^^^^
+>foo : number
+>    : ^^^^^^
+>2 : 2
+>  : ^
+
+    return bar;
+>bar : number
+>    : ^^^^^^
+
+}
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+
+class Foo {
+>Foo : Foo
+>    : ^^^
+
+    constructor(public x: number = 12, public y: number = x) {}
+>x : number
+>  : ^^^^^^
+>12 : 12
+>   : ^^
+>y : number
+>  : ^^^^^^
+>x : number
+>  : ^^^^^^
+
+}
+
+function f8(foo1: string, bar: string = foo1): void { }
+>f8 : (foo1: string, bar?: string) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>foo1 : string
+>     : ^^^^^^
+>bar : string
+>    : ^^^^^^
+>foo1 : string
+>     : ^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

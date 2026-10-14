@@ -1,0 +1,33 @@
+types: 24 of 53 tsc entries compared, 7 differ
+
+line 5: arr1
+  tsc:  (number[] | string[])[]
+  ours: number[][]
+
+line 5: [[], [1], ['']]
+  tsc:  (number[] | string[])[]
+  ours: number[][]
+
+line 5: ['']
+  tsc:  string[]
+  ours: number[]
+
+line 7: arr2
+  tsc:  (number[] | string[] | null[])[]
+  ours: null[][]
+
+line 7: [[null], [1], ['']]
+  tsc:  (number[] | string[] | null[])[]
+  ours: null[][]
+
+line 7: [1]
+  tsc:  number[]
+  ours: null[]
+
+line 7: ['']
+  tsc:  string[]
+  ours: null[]
+
+errors:
+line 5: ours: expected `number`, got `string` (tsc accepts)
+line 7: ours: expected `null`, got `number` (tsc accepts)

@@ -1,0 +1,27 @@
+=== parserTypeQuery5.ts ===
+let v: typeof A.B = null as unknown as (typeof A.B);
+>v : any
+>  : ^^^
+>A.B : any
+>    : ^^^
+>A : any
+>  : ^^^
+>B : any
+>  : ^^^
+>null as unknown as (typeof A.B) : any
+>                                : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>A.B : any
+>    : ^^^
+>A : any
+>  : ^^^
+>B : any
+>  : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

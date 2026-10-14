@@ -1,0 +1,46 @@
+=== privateStaticMemberAccessibility.ts ===
+class Base {
+>Base : Base
+>     : ^^^^
+
+    private static foo: string;
+>foo : string
+>    : ^^^^^^
+
+}
+
+class Derived extends Base {
+>Derived : Derived
+>        : ^^^^^^^
+>Base : Base
+>     : ^^^^
+
+    static bar: string = Base.foo; // error
+>bar : string
+>    : ^^^^^^
+>Base.foo : string
+>         : ^^^^^^
+>Base : typeof Base
+>     : ^^^^^^^^^^^
+>foo : string
+>    : ^^^^^^
+
+    bing: () => string = () => Base.foo; // error
+>bing : () => string
+>     : ^^^^^^^^^^^^
+>() => Base.foo : () => string
+>               : ^^^^^^^^^^^^
+>Base.foo : string
+>         : ^^^^^^
+>Base : typeof Base
+>     : ^^^^^^^^^^^
+>foo : string
+>    : ^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

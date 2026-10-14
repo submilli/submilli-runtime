@@ -1,0 +1,1 @@
+line 3 extra: by-design spec §Excluded-Features the `with` statement is excluded (we read `with (1)` as a call, so the `return` stands alone at the top level, where tsc leaves the `with` body unchecked)

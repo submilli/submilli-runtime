@@ -1,0 +1,35 @@
+=== typeOfThisInStaticMembers6.ts ===
+class C {
+>C : C
+>  : ^
+
+    static f: number = 1
+>f : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+}
+
+class D extends C {
+>D : D
+>  : ^
+>C : C
+>  : ^
+
+    static c: void = super();
+>c : void
+>  : ^^^^
+>super() : void
+>        : ^^^^
+>super : any
+>      : ^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,15 @@
+=== VariableDeclaration4_es6.ts ===
+const a: number = null as unknown as (number);
+>a : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

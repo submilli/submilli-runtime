@@ -1,1 +1,0 @@
-line 27 type: bug SUB-1617 a defaulted parameter that a closure assigns reads with `undefined`, where tsc removes it

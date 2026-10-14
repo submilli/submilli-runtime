@@ -1,0 +1,20 @@
+=== parserAccessibilityAfterStatic10.ts ===
+class Outer
+>Outer : Outer
+>      : ^^^^^
+
+{
+static public intI<T>(): void {}
+>intI : <T>() => void
+>     : ^^^^^^^^^^^^^
+>T : T
+>  : ^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

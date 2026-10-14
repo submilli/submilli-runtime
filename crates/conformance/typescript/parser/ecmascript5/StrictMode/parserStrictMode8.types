@@ -1,0 +1,16 @@
+=== parserStrictMode8.ts ===
+"use strict";
+>"use strict" : "use strict"
+>             : ^^^^^^^^^^^^
+
+function eval(): void {
+>eval : { (x: string): any; (): void; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

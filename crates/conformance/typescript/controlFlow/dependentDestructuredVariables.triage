@@ -1,6 +1,0 @@
-line 38, 111 type: bug SUB-1609 destructured variables miss narrowings tsc applies (a `switch` default)
-line 93, 96 type: bug SUB-1609 destructured variables miss narrowings tsc applies (a source whose field a guard narrowed)
-line 93, 96 extra: bug SUB-1609 destructured variables miss narrowings tsc applies (a source whose field a guard narrowed)
-line 357, 362 type: bug SUB-1609 destructured variables miss narrowings tsc applies (tuple elements)
-line 411, 434 extra: bug SUB-1609 destructured variables miss narrowings tsc applies (tuples of different lengths)
-line 412, 413, 415, 416, 418, 419, 422, 425, 428, 435 type: bug SUB-1609 destructured variables miss narrowings tsc applies (tuples of different lengths)

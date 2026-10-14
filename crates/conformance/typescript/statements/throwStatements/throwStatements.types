@@ -1,0 +1,227 @@
+=== throwStatements.ts ===
+
+// all legal
+
+interface I {
+>I : I
+>  : ^
+
+    id: number;
+>id : number
+>   : ^^^^^^
+
+}
+
+class C implements I {
+>C : C
+>  : ^
+
+    id: number;
+>id : number
+>   : ^^^^^^
+
+}
+
+/*pruned*/;
+
+
+
+
+
+function F(x: string): number { return 42; }
+>F : (x: string) => number
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>42 : 42
+>   : ^^
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+let aNumber = 9.9;
+>aNumber : number
+>        : ^^^^^^
+>9.9 : 9.9
+>    : ^^^
+
+throw aNumber;
+>aNumber : number
+>        : ^^^^^^
+
+let aString = 'this is a string';
+>aString : string
+>        : ^^^^^^
+>'this is a string' : "this is a string"
+>                   : ^^^^^^^^^^^^^^^^^^
+
+throw aString;
+>aString : string
+>        : ^^^^^^
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+let anAny = null;
+>anAny : any
+>      : ^^^
+
+throw anAny;
+>anAny : any
+>      : ^^^
+
+/*pruned*/;
+/*pruned*/;
+let anUndefined = undefined;
+>anUndefined : any
+>            : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+throw anUndefined;
+>anUndefined : any
+>            : ^^^
+
+
+let aClass = new C();
+>aClass : C
+>       : ^
+>new C() : C
+>        : ^
+>C : typeof C
+>  : ^^^^^^^^
+
+throw aClass;
+>aClass : C
+>       : ^
+
+/*pruned*/;
+/*pruned*/;
+let anObjectLiteral = { id: 12 };
+>anObjectLiteral : { id: number; }
+>                : ^^^^^^^^^^^^^^^
+>{ id: 12 } : { id: number; }
+>           : ^^^^^^^^^^^^^^^
+>id : number
+>   : ^^^^^^
+>12 : 12
+>   : ^^
+
+throw anObjectLiteral;
+>anObjectLiteral : { id: number; }
+>                : ^^^^^^^^^^^^^^^
+
+
+let aFunction = F;
+>aFunction : (x: string) => number
+>          : ^^^^^^^^^^^^^^^^^^^^^
+>F : (x: string) => number
+>  : ^^^^^^^^^^^^^^^^^^^^^
+
+throw aFunction;
+>aFunction : (x: string) => number
+>          : ^^^^^^^^^^^^^^^^^^^^^
+
+throw aFunction('');
+>aFunction('') : number
+>              : ^^^^^^
+>aFunction : (x: string) => number
+>          : ^^^^^^^^^^^^^^^^^^^^^
+>'' : ""
+>   : ^^
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+// no initializer or annotation, so this is an 'any'
+/**/;
+/**/;
+
+// literals
+throw 0.0;
+>0.0 : 0
+>    : ^
+
+throw false;
+>false : false
+>      : ^^^^^
+
+throw null;
+throw undefined;
+>undefined : undefined
+>          : ^^^^^^^^^
+
+throw 'a string';
+>'a string' : "a string"
+>           : ^^^^^^^^^^
+
+throw function () { return 'a string' };
+>function () { return 'a string' } : () => string
+>                                  : ^^^^^^^^^^^^
+>'a string' : "a string"
+>           : ^^^^^^^^^^
+
+/*pruned*/;
+throw { x: 12, y: 13 };
+>{ x: 12, y: 13 } : { x: number; y: number; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>12 : 12
+>   : ^^
+>y : number
+>  : ^^^^^^
+>13 : 13
+>   : ^^
+
+throw [];
+>[] : never[]
+>   : ^^^^^^^
+
+throw ['a', ['b']];
+>['a', ['b']] : (string | string[])[]
+>             : ^^^^^^^^^^^^^^^^^^^^^
+>'a' : "a"
+>    : ^^^
+>['b'] : string[]
+>      : ^^^^^^^^
+>'b' : "b"
+>    : ^^^
+
+throw /[a-z]/;
+>/[a-z]/ : RegExp
+>        : ^^^^^^
+
+/*pruned*/;
+throw new C();
+>new C() : C
+>        : ^
+>C : typeof C
+>  : ^^^^^^^^
+
+/*pruned*/;
+/*pruned*/;
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

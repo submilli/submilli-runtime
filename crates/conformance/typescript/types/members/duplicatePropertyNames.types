@@ -1,0 +1,127 @@
+=== duplicatePropertyNames.ts ===
+// duplicate property names are an error in all types
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+/**/;
+
+
+
+
+
+
+
+
+
+
+interface I {
+>I : I
+>  : ^
+
+    foo: string;
+>foo : string
+>    : ^^^^^^
+
+    foo: string;
+>foo : string
+>    : ^^^^^^
+
+}
+
+let a: {
+>a : { foo: string; bar: () => {}; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    foo: string;
+>foo : string
+>    : ^^^^^^
+
+    foo: string;
+>foo : string
+>    : ^^^^^^
+
+
+    bar: () => {};
+>bar : () => {}
+>    : ^^^^^^^^
+
+    bar: () => {};
+>bar : () => {}
+>    : ^^^^^^^^
+
+} = null as unknown as ({
+>null as unknown as ({     foo: string;     foo: string;      bar: () => {};     bar: () => {}; }) : { foo: string; bar: () => {}; }
+>                                                                                                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    foo: string;
+>foo : string
+>    : ^^^^^^
+
+    foo: string;
+>foo : string
+>    : ^^^^^^
+
+
+    bar: () => {};
+>bar : () => {}
+>    : ^^^^^^^^
+
+    bar: () => {};
+>bar : () => {}
+>    : ^^^^^^^^
+
+});
+
+let b = {
+>b : { foo: string; bar: () => void; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{     foo: '',     foo: '',     bar: () => { },     bar: () => { } } : { foo: string; bar: () => void; }
+>                                                                     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    foo: '',
+>foo : string
+>    : ^^^^^^
+>'' : ""
+>   : ^^
+
+    foo: '',
+>foo : string
+>    : ^^^^^^
+>'' : ""
+>   : ^^
+
+    bar: () => { },
+>bar : () => void
+>    : ^^^^^^^^^^
+>() => { } : () => void
+>          : ^^^^^^^^^^
+
+    bar: () => { }
+>bar : () => void
+>    : ^^^^^^^^^^
+>() => { } : () => void
+>          : ^^^^^^^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

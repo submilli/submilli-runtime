@@ -1,0 +1,1 @@
+accessorsOverrideProperty10.ts(11,7): error TS2611: 'x' is defined as a property in class 'B', but is overridden here in 'C' as an accessor.

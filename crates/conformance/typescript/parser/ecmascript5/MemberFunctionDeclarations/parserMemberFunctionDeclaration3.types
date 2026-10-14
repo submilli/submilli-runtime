@@ -1,0 +1,16 @@
+=== parserMemberFunctionDeclaration3.ts ===
+class C {
+>C : C
+>  : ^
+
+    static public Foo(): void { }
+>Foo : () => void
+>    : ^^^^^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

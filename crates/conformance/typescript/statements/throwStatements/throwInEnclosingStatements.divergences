@@ -1,0 +1,13 @@
+types: 21 of 38 tsc entries compared, 0 differ
+
+errors:
+line 14: ours: expected `Error`, got `"a"` (tsc accepts)
+line 16: ours: expected `Error`, got `string` (tsc accepts)
+line 21: ours: expected `Error`, got `number` (tsc accepts)
+line 24: ours: expected `Error`, got `number` (tsc accepts)
+line 28: ours: expected `Error`, got `null` (tsc accepts)
+line 31: ours: expected `Error`, got `number` (tsc accepts)
+line 34: ours: property `value` has no initializer and is not assigned in the constructor (tsc accepts)
+line 36: ours: expected `Error`, got `T` (tsc accepts)
+line 40: ours: expected `Error`, got `C<T>` (tsc accepts)
+line 47: ours: `this` is only valid inside a class method or constructor body (tsc accepts)

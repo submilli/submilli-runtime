@@ -1,0 +1,1 @@
+parserMemberAccessorDeclaration17.ts(3,13): error TS1051: A 'set' accessor cannot have an optional parameter.

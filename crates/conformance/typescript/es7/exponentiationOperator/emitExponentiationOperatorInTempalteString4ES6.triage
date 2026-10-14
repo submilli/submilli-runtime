@@ -1,1 +1,0 @@
-line 13, 21, 28 type: bug SUB-1613 `typeof x` used as a value is `string`, where tsc gives the union of the tag strings

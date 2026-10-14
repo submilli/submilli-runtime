@@ -1,0 +1,1 @@
+line 12 extra: by-design spec §2.11 a cast's source and target must be related by assignability in one direction, where tsc's comparable relation also relates them (here `{ r1, o }` and `Foo`, missing the required `r2`)

@@ -1,0 +1,4 @@
+types: 1 of 8 tsc entries compared, 0 differ
+
+errors:
+line 7: ours: `m` redeclares an inherited method as a field (tsc accepts)

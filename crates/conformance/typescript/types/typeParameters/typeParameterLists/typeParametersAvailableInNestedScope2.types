@@ -1,0 +1,62 @@
+=== typeParametersAvailableInNestedScope2.ts ===
+function foo<T, U>(x: T, y: U): void {
+>foo : <T, U>(x: T, y: U) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>x : T
+>  : ^
+>y : U
+>  : ^
+
+    function bar<V>(z: V): void {
+>bar : <V>(z: V) => void
+>    : ^^^^^^^^^^^^^^^^^
+>V : V
+>  : ^
+>z : V
+>  : ^
+
+        function baz<W>(a: W): void {
+>baz : <W>(a: W) => void
+>    : ^^^^^^^^^^^^^^^^^
+>W : W
+>  : ^
+>a : W
+>  : ^
+
+            let c: T = null as unknown as (T);
+>c : T
+>  : ^
+>null as unknown as (T) : T
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+            let d: U = null as unknown as (U);
+>d : U
+>  : ^
+>null as unknown as (U) : U
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+            let e: V = null as unknown as (V);
+>e : V
+>  : ^
+>null as unknown as (V) : V
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+        }
+    }
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

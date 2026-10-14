@@ -1,0 +1,121 @@
+=== logicalNotOperatorWithBooleanType.ts ===
+// ! operator on boolean type
+let BOOLEAN: boolean = null as unknown as (boolean);
+>BOOLEAN : boolean
+>        : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+function foo(): boolean { return true; }
+>foo : () => boolean
+>    : ^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+
+
+/**/;
+
+
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+// boolean type var
+let ResultIsBoolean1 = !BOOLEAN;
+>ResultIsBoolean1 : boolean
+>                 : ^^^^^^^
+>!BOOLEAN : boolean
+>         : ^^^^^^^
+>BOOLEAN : boolean
+>        : ^^^^^^^
+
+
+// boolean type literal
+let ResultIsBoolean2 = !true;
+>ResultIsBoolean2 : boolean
+>                 : ^^^^^^^
+>!true : false
+>      : ^^^^^
+>true : true
+>     : ^^^^
+
+let ResultIsBoolean3 = !{ x: true, y: false };
+>ResultIsBoolean3 : boolean
+>                 : ^^^^^^^
+>!{ x: true, y: false } : false
+>                       : ^^^^^
+>{ x: true, y: false } : { x: boolean; y: boolean; }
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+>y : boolean
+>  : ^^^^^^^
+>false : false
+>      : ^^^^^
+
+
+// boolean type expressions
+/*pruned*/;
+/*pruned*/;
+let ResultIsBoolean6 = !foo();
+>ResultIsBoolean6 : boolean
+>                 : ^^^^^^^
+>!foo() : boolean
+>       : ^^^^^^^
+>foo() : boolean
+>      : ^^^^^^^
+>foo : () => boolean
+>    : ^^^^^^^^^^^^^
+
+/*pruned*/;
+
+// multiple ! operators
+let ResultIsBoolean = !!BOOLEAN;
+>ResultIsBoolean : boolean
+>                : ^^^^^^^
+>!!BOOLEAN : boolean
+>          : ^^^^^^^
+>!BOOLEAN : boolean
+>         : ^^^^^^^
+>BOOLEAN : boolean
+>        : ^^^^^^^
+
+
+// miss assignment operators
+!true;
+>!true : false
+>      : ^^^^^
+>true : true
+>     : ^^^^
+
+!BOOLEAN;
+>!BOOLEAN : boolean
+>         : ^^^^^^^
+>BOOLEAN : boolean
+>        : ^^^^^^^
+
+!foo();
+>!foo() : boolean
+>       : ^^^^^^^
+>foo() : boolean
+>      : ^^^^^^^
+>foo : () => boolean
+>    : ^^^^^^^^^^^^^
+
+/*pruned*/;
+/**/;
+/**/;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

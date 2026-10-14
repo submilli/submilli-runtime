@@ -1,2 +1,1 @@
-line 13, 14, 21, 28 type: bug SUB-1613 `typeof x` used as a value is `string`, where tsc gives the union of the tag strings
 line 14 extra: by-design spec §1.6 `+` adds two numbers or concatenates two strings, it never coerces the other operand

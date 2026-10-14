@@ -1,0 +1,8 @@
+types: 7 of 25 tsc entries compared, 0 differ
+
+errors:
+line 32: tsc TS2300: Duplicate identifier 'foo'. (we accept)
+line 37: tsc TS2300: Duplicate identifier 'foo'. (we accept)
+line 40: tsc TS2300: Duplicate identifier 'bar'. (we accept)
+line 43: tsc TS2300: Duplicate identifier 'foo'. (we accept)
+line 46: tsc TS2300: Duplicate identifier 'bar'. (we accept)

@@ -1,0 +1,481 @@
+=== booleanLiteralTypes1.ts ===
+type A1 = true | false;
+>A1 : A1
+>   : ^^
+>true : true
+>     : ^^^^
+>false : false
+>      : ^^^^^
+
+type A2 = false | true;
+>A2 : A2
+>   : ^^
+>false : false
+>      : ^^^^^
+>true : true
+>     : ^^^^
+
+
+function f1(): void {
+>f1 : () => void
+>   : ^^^^^^^^^^
+
+    let a: A1 = null as unknown as (A1);
+>a : A1
+>  : ^^
+>null as unknown as (A1) : A1
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    let a_2: A2 = null as unknown as (A2);
+>a_2 : A2
+>    : ^^
+>null as unknown as (A2) : A2
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    let a_3: true | false = null as unknown as (true | false);
+>a_3 : boolean
+>    : ^^^^^^^
+>true : true
+>     : ^^^^
+>false : false
+>      : ^^^^^
+>null as unknown as (true | false) : boolean
+>                                  : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>true : true
+>     : ^^^^
+>false : false
+>      : ^^^^^
+
+    let a_4: false | true = null as unknown as (false | true);
+>a_4 : boolean
+>    : ^^^^^^^
+>false : false
+>      : ^^^^^
+>true : true
+>     : ^^^^
+>null as unknown as (false | true) : boolean
+>                                  : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>false : false
+>      : ^^^^^
+>true : true
+>     : ^^^^
+
+}
+
+function f2(a: true | false, b: boolean): void {
+>f2 : (a: true | false, b: boolean) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+>false : false
+>      : ^^^^^
+>b : boolean
+>  : ^^^^^^^
+
+    a = b;
+>a = b : boolean
+>      : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+
+    b = a;
+>b = a : boolean
+>      : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+}
+
+function f3(a: true | false, b: true | false): void {
+>f3 : (a: true | false, b: true | false) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+>false : false
+>      : ^^^^^
+>b : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+>false : false
+>      : ^^^^^
+
+    let x = a || b;
+>x : boolean
+>  : ^^^^^^^
+>a || b : boolean
+>       : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+
+    let x_2 = a && b;
+>x_2 : boolean
+>    : ^^^^^^^
+>a && b : boolean
+>       : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+
+    let x_3 = !a;
+>x_3 : boolean
+>    : ^^^^^^^
+>!a : boolean
+>   : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+}
+
+function f4(t: true, f: false): void {
+>f4 : (t: true, f: false) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>t : true
+>  : ^^^^
+>true : true
+>     : ^^^^
+>f : false
+>  : ^^^^^
+>false : false
+>      : ^^^^^
+
+    let x1 = t && f;
+>x1 : false
+>   : ^^^^^
+>t && f : false
+>       : ^^^^^
+>t : true
+>  : ^^^^
+>f : false
+>  : ^^^^^
+
+    let x2 = f && t;
+>x2 : false
+>   : ^^^^^
+>f && t : false
+>       : ^^^^^
+>f : false
+>  : ^^^^^
+>t : true
+>  : ^^^^
+
+    let x3 = t || f;
+>x3 : true
+>   : ^^^^
+>t || f : true
+>       : ^^^^
+>t : true
+>  : ^^^^
+>f : false
+>  : ^^^^^
+
+    let x4 = f || t;
+>x4 : true
+>   : ^^^^
+>f || t : true
+>       : ^^^^
+>f : false
+>  : ^^^^^
+>t : true
+>  : ^^^^
+
+    let x5 = !t;
+>x5 : boolean
+>   : ^^^^^^^
+>!t : false
+>   : ^^^^^
+>t : true
+>  : ^^^^
+
+    let x6 = !f;
+>x6 : boolean
+>   : ^^^^^^^
+>!f : true
+>   : ^^^^
+>f : false
+>  : ^^^^^
+
+}
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+function f5(b: boolean): void {
+>f5 : (b: boolean) => void
+>   : ^^^^^^^^^^^^^^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+}
+
+function assertNever(x: never): never {
+>assertNever : (x: never) => never
+>            : ^^^^^^^^^^^^^^^^^^^
+>x : never
+>  : ^^^^^
+
+    throw new Error("Unexpected value");
+>new Error("Unexpected value") : Error
+>                              : ^^^^^
+>Error : ErrorConstructor
+>      : ^^^^^^^^^^^^^^^^
+>"Unexpected value" : "Unexpected value"
+>                   : ^^^^^^^^^^^^^^^^^^
+
+}
+
+function f10(x: true | false): "true" | "false" {
+>f10 : (x: true | false) => "true" | "false"
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+>false : false
+>      : ^^^^^
+
+    switch (x) {
+>x : boolean
+>  : ^^^^^^^
+
+        case true: return "true";
+>true : true
+>     : ^^^^
+>"true" : "true"
+>       : ^^^^^^
+
+        case false: return "false";
+>false : false
+>      : ^^^^^
+>"false" : "false"
+>        : ^^^^^^^
+
+    }
+}
+
+function f11(x: true | false): "true" | "false" {
+>f11 : (x: true | false) => "true" | "false"
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+>false : false
+>      : ^^^^^
+
+    switch (x) {
+>x : boolean
+>  : ^^^^^^^
+
+        case true: return "true";
+>true : true
+>     : ^^^^
+>"true" : "true"
+>       : ^^^^^^
+
+        case false: return "false";
+>false : false
+>      : ^^^^^
+>"false" : "false"
+>        : ^^^^^^^
+
+    }
+    return assertNever(x);
+>assertNever(x) : never
+>               : ^^^^^
+>assertNever : (x: never) => never
+>            : ^^^^^^^^^^^^^^^^^^^
+>x : never
+>  : ^^^^^
+
+}
+
+function f12(x: true | false): void {
+>f12 : (x: true | false) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+>false : false
+>      : ^^^^^
+
+    if (x) {
+>x : boolean
+>  : ^^^^^^^
+
+        x;
+>x : true
+>  : ^^^^
+
+    }
+    else {
+        x;
+>x : false
+>  : ^^^^^
+
+    }
+}
+
+function f13(x: true | false): void {
+>f13 : (x: true | false) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+>false : false
+>      : ^^^^^
+
+    if (x === true) {
+>x === true : boolean
+>           : ^^^^^^^
+>x : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+
+        x;
+>x : true
+>  : ^^^^
+
+    }
+    else {
+        x;
+>x : false
+>  : ^^^^^
+
+    }
+}
+
+type Item =
+>Item : Item
+>     : ^^^^
+
+    { kind: true, a: string } |
+>kind : true
+>     : ^^^^
+>true : true
+>     : ^^^^
+>a : string
+>  : ^^^^^^
+
+    { kind: false, b: string };
+>kind : false
+>     : ^^^^^
+>false : false
+>      : ^^^^^
+>b : string
+>  : ^^^^^^
+
+
+function f20(x: Item): string {
+>f20 : (x: Item) => string
+>    : ^^^^^^^^^^^^^^^^^^^
+>x : Item
+>  : ^^^^
+
+    switch (x.kind) {
+>x.kind : boolean
+>       : ^^^^^^^
+>x : Item
+>  : ^^^^
+>kind : boolean
+>     : ^^^^^^^
+
+        case true: return x.a;
+>true : true
+>     : ^^^^
+>x.a : string
+>    : ^^^^^^
+>x : { kind: true; a: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+
+        case false: return x.b;
+>false : false
+>      : ^^^^^
+>x.b : string
+>    : ^^^^^^
+>x : { kind: false; b: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : string
+>  : ^^^^^^
+
+    }
+}
+
+function f21(x: Item): string {
+>f21 : (x: Item) => string
+>    : ^^^^^^^^^^^^^^^^^^^
+>x : Item
+>  : ^^^^
+
+    switch (x.kind) {
+>x.kind : boolean
+>       : ^^^^^^^
+>x : Item
+>  : ^^^^
+>kind : boolean
+>     : ^^^^^^^
+
+        case true: return x.a;
+>true : true
+>     : ^^^^
+>x.a : string
+>    : ^^^^^^
+>x : { kind: true; a: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+
+        case false: return x.b;
+>false : false
+>      : ^^^^^
+>x.b : string
+>    : ^^^^^^
+>x : { kind: false; b: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : string
+>  : ^^^^^^
+
+    }
+    return assertNever(x);
+>assertNever(x) : never
+>               : ^^^^^
+>assertNever : (x: never) => never
+>            : ^^^^^^^^^^^^^^^^^^^
+>x : never
+>  : ^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

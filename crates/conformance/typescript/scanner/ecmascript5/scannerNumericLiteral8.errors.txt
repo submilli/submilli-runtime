@@ -1,0 +1,1 @@
+scannerNumericLiteral8.ts(2,1): error TS1121: Octal literals are not allowed. Use the syntax '-0o3'.

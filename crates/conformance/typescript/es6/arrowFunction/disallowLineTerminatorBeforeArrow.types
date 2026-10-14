@@ -1,0 +1,248 @@
+=== disallowLineTerminatorBeforeArrow.ts ===
+let f1 = ()
+>f1 : () => void
+>   : ^^^^^^^^^^
+>()     => { } : () => void
+>              : ^^^^^^^^^^
+
+    => { }
+let f2 = (x: string, y: string) /*
+>f2 : (x: string, y: string) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(x: string, y: string) /*   */  => { } : (x: string, y: string) => void
+>                                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>y : string
+>  : ^^^^^^
+
+  */  => { }
+/*pruned*/;
+
+/*pruned*/;
+
+/*pruned*/;
+
+/*pruned*/;
+
+let f7 = (x: string, y: number, z: number = 10)
+>f7 : (x: string, y: number, z?: number) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(x: string, y: number, z: number = 10)     => { } : (x: string, y: number, z?: number) => void
+>                                                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>z : number
+>  : ^^^^^^
+>10 : 10
+>   : ^^
+
+    => { }
+let f8 = (x: string, y: number, z: number = 10) /*
+>f8 : (x: string, y: number, z?: number) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(x: string, y: number, z: number = 10) /*   */  => { } : (x: string, y: number, z?: number) => void
+>                                                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>z : number
+>  : ^^^^^^
+>10 : 10
+>   : ^^
+
+  */  => { }
+let f9 = (a: number): number
+>f9 : (a: number) => number
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>(a: number): number     => a : (a: number) => number
+>                             : ^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+
+    => a;
+>a : number
+>  : ^^^^^^
+
+let f10 = (a: number) :
+>f10 : (a: number) => number
+>    : ^^^^^^^^^^^^^^^^^^^^^
+>(a: number) :   number     => a : (a: number) => number
+>                                : ^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+
+  number
+    => a
+>a : number
+>  : ^^^^^^
+
+let f11 = (a: number): number /*
+>f11 : (a: number) => number
+>    : ^^^^^^^^^^^^^^^^^^^^^
+>(a: number): number /*     */ => a : (a: number) => number
+>                                   : ^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+
+    */ => a;
+>a : number
+>  : ^^^^^^
+
+let f12 = (a: number) :
+>f12 : (a: number) => number
+>    : ^^^^^^^^^^^^^^^^^^^^^
+>(a: number) :   number /*     */ => a : (a: number) => number
+>                                      : ^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+
+  number /*
+    */ => a
+>a : number
+>  : ^^^^^^
+
+
+// Should be valid.
+let f11_2 = (a: number
+>f11_2 : (a: number) => number
+>      : ^^^^^^^^^^^^^^^^^^^^^
+>(a: number     ) => a : (a: number) => number
+>                      : ^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+
+    ) => a;
+>a : number
+>  : ^^^^^^
+
+
+// Should be valid.
+let f12_2 = (a: number)
+>f12_2 : (a: number) => number
+>      : ^^^^^^^^^^^^^^^^^^^^^
+>(a: number)     : number => a : (a: number) => number
+>                              : ^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+
+    : number => a;
+>a : number
+>  : ^^^^^^
+
+
+// Should be valid.
+let f13 = (a: number):
+>f13 : (a: number) => number
+>    : ^^^^^^^^^^^^^^^^^^^^^
+>(a: number):     number => a : (a: number) => number
+>                             : ^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+
+    number => a;
+>a : number
+>  : ^^^^^^
+
+
+// Should be valid.
+let f14 = () /* */ => {}
+>f14 : () => void
+>    : ^^^^^^^^^^
+>() /* */ => {} : () => void
+>               : ^^^^^^^^^^
+
+
+// Should be valid.
+let f15 = (a: number): number /* */ => a
+>f15 : (a: number) => number
+>    : ^^^^^^^^^^^^^^^^^^^^^
+>(a: number): number /* */ => a : (a: number) => number
+>                               : ^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>a : number
+>  : ^^^^^^
+
+
+// Should be valid.
+let f16 = (a: number, b: number = 10):
+>f16 : (a: number, b?: number) => number
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(a: number, b: number = 10):   number /* */ => a + b : (a: number, b?: number) => number
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>10 : 10
+>   : ^^
+
+  number /* */ => a + b;
+>a + b : number
+>      : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+
+function foo(func: () => boolean): void { }
+>foo : (func: () => boolean) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>func : () => boolean
+>     : ^^^^^^^^^^^^^
+
+foo(()
+>foo(()     => true) : void
+>                    : ^^^^
+>foo : (func: () => boolean) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>()     => true : () => true
+>               : ^^^^^^^^^^
+
+    => true);
+>true : true
+>     : ^^^^
+
+foo(()
+>foo(()     => { return false; }) : void
+>                                 : ^^^^
+>foo : (func: () => boolean) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>()     => { return false; } : () => false
+>                            : ^^^^^^^^^^^
+
+    => { return false; });
+>false : false
+>      : ^^^^^
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

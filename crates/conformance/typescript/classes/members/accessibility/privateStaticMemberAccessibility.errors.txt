@@ -1,0 +1,2 @@
+privateStaticMemberAccessibility.ts(7,31): error TS2341: Property 'foo' is private and only accessible within class 'Base'.
+privateStaticMemberAccessibility.ts(8,37): error TS2341: Property 'foo' is private and only accessible within class 'Base'.

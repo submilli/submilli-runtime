@@ -1,0 +1,4 @@
+logicalNotOperatorWithStringType.ts(23,25): error TS2873: This kind of expression is always falsy.
+logicalNotOperatorWithStringType.ts(24,25): error TS2872: This kind of expression is always truthy.
+logicalNotOperatorWithStringType.ts(25,25): error TS2872: This kind of expression is always truthy.
+logicalNotOperatorWithStringType.ts(41,2): error TS2873: This kind of expression is always falsy.

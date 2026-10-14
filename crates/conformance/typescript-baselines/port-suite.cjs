@@ -16,7 +16,7 @@ const { execFile } = require("child_process");
 const { promisify } = require("util");
 const ts = require("typescript");
 const { fileNames, splitCase, duplicateModules } = require("./case-files.cjs");
-const { caseProgram } = require("./tsc-case.cjs");
+const { caseProgram, OPTION_LINE } = require("./tsc-case.cjs");
 
 const run = promisify(execFile);
 const casesDir = path.join(__dirname, "..", "typescript");
@@ -112,7 +112,8 @@ const JAVASCRIPT_FEATURE = "JavaScript";
 // are. The first that matches a file's name names it.
 const UNSUPPORTED_FILES = [
   [/(^|\/)node_modules\//, "`node_modules` packages"],
-  [/\.d\.[mc]?ts$/i, "declaration files (`.d.ts`)"],
+  // Also one for another kind of file, such as `component.d.html.ts`.
+  [/\.d\.([^/]+\.)?[mc]?ts$/i, "declaration files (`.d.ts`)"],
   [/\.tsx$/i, "JSX"],
   [/\.json$/i, "JSON modules"],
   [/\.[mc]ts$/i, "`.mts` and `.cts` files"],
@@ -147,8 +148,11 @@ const REDECLARED_TYPE_ERROR = "TS2403";
 // How much of a case pruning must keep, when it cut something.
 const MIN_CODE_LINES = 5;
 const MIN_KEPT_FRACTION = 1 / 3;
-// What a case must still check: `tsc` types compared plus lines `tsc` rejects.
+// What a case must still check: `tsc` types compared plus lines `tsc` rejects. A
+// pruned case checking less is mostly the scaffolding of what was cut; one pruning
+// cut nothing from checks what upstream wrote it to, however little.
 const MIN_CHECKS = 5;
+const MIN_CHECKS_WHOLE = 1;
 
 async function main() {
   const args = process.argv.slice(2);
@@ -181,7 +185,8 @@ async function main() {
       await run("node", [path.join(__dirname, "write-baselines.cjs")], { maxBuffer: 1 << 26 });
       await updateDivergences(portedList);
       const causes = new Map(kept.map((r) => [r.rel, r.cause]));
-      const thin = unique.map((rel) => ({ rel, checks: checksOf(rel) })).filter((c) => c.checks < MIN_CHECKS);
+      const minChecks = (rel) => (causes.get(rel) ? MIN_CHECKS : MIN_CHECKS_WHOLE);
+      const thin = unique.map((rel) => ({ rel, checks: checksOf(rel) })).filter((c) => c.checks < minChecks(c.rel));
       for (const { rel, checks } of thin) {
         removeCase(rel);
         excluded.push(causes.get(rel) ?? exclusion(rel, REASONS.thin, `${checks} after the port`));
@@ -318,22 +323,39 @@ async function portCase(upstream, caseErrors, rel) {
     if (upstreamErrors.has(`error ${REDECLARED_TYPE_ERROR}`)) {
       return drop(REASONS.port, `it renames the repeated \`var\` declarations whose types \`tsc\` checks (${REDECLARED_TYPE_ERROR})`);
     }
-    const caused = portCausedErrors(upstreamErrors, await tscErrorText(to));
-    if (caused.length) return drop(REASONS.port, `\`tsc\` then reports ${caused.join(", ")}`);
-    const { stdout } = await run("node", [path.join(__dirname, "prune-case.cjs"), caseErrors, to]);
+    // Pruning takes out each statement where `tsc` reports an error upstream doesn't.
+    const expectedCodes = [...upstreamErrors, `error ${STRICT_FIELD_ERROR}`].map((code) => code.replace("error TS", ""));
+    const { stdout } = await run("node", [path.join(__dirname, "prune-case.cjs"), caseErrors, to, expectedCodes.join(",")]);
     const summary = JSON.parse(stdout);
     if (summary.error) {
       const ours = summary.lacking[0];
+      // An error about the case as a whole, such as a circular import, is on its first
+      // line, an option line no statement holds: a feature we lack, not a porter bug.
+      if (summary.lacking.length && summary.lacking.every((l) => OPTION_LINE.test(l.code))) {
+        return drop(REASONS.unsupported, ours.message);
+      }
       return drop(REASONS.porter, ours ? `${summary.error}; our first unsupported error: ${ours.message}` : summary.error);
     }
+    if (summary.unprunable.length) return drop(REASONS.port, portCausedDetail(summary.unprunable));
     const { codeLinesBefore: before, codeLinesAfter: after } = summary;
     const pruned = summary.passes > 0;
-    const cause = pruned ? unsupportedCause(rel, summary.lacking) : null;
+    const cause = pruned ? pruningCause(rel, summary) : null;
     if (pruned && (after < MIN_CODE_LINES || after < before * MIN_KEPT_FRACTION)) return drop(cause.reason, cause.detail);
     return { rel, kept: true, cause: pruned ? cause : null };
   } catch (e) {
     return drop(REASONS.porter, e.message.split("\n")[0]);
   }
+}
+
+/** Why pruning cut what it did from a case: a feature we lack (`unsupportedCause`),
+ * or, when nothing we lack was cut, the errors the port caused. */
+function pruningCause(rel, summary) {
+  if (summary.lacking.length || !summary.portCaused.length) return unsupportedCause(rel, summary.lacking);
+  return exclusion(rel, REASONS.port, portCausedDetail(summary.portCaused.map((e) => e.code)));
+}
+
+function portCausedDetail(codes) {
+  return `\`tsc\` then reports ${codes.join(", ")}`;
 }
 
 /** A case pruning cut for a feature we lack: our first error that lacked support,
@@ -349,16 +371,6 @@ function unsupportedCause(rel, lacking) {
   return exclusion(rel, REASONS.unsupported, `${top.message}, on ${fence} ${code} ${fence}`);
 }
 
-/** The codes of errors `tsc` reports on the ported case that the upstream baseline lacks:
- * the port caused it, as when `var` becoming `let` makes a repeated declaration a
- * redeclaration, or strictness
- * inverts what a `@strict: false` case checks. Such a case tests the port. */
-function portCausedErrors(upstreamCodes, portedErrors) {
-  return [...errorCodes(portedErrors)]
-    .filter((code) => code !== `error ${STRICT_FIELD_ERROR}` && !upstreamCodes.has(code))
-    .map((code) => code.replace("error ", ""));
-}
-
 /** The `error TSn` codes of the upstream baselines for a case, under any options. */
 function upstreamErrorCodes(upstream, rel) {
   const name = path.basename(rel, ".ts");
@@ -371,14 +383,6 @@ function upstreamErrorCodes(upstream, rel) {
 
 function errorCodes(text) {
   return new Set(text.match(/error TS\d+/g) ?? []);
-}
-
-/** `tsc`'s errors on a case, one `error TSn: message` per line. */
-async function tscErrorText(file) {
-  const { stdout } = await run("node", [path.join(__dirname, "tsc-case.cjs"), file], { maxBuffer: 1 << 26 });
-  return JSON.parse(stdout)
-    .map((e) => `error TS${e.code}: ${e.message}`)
-    .join("\n");
 }
 
 function printReasons(excluded) {
@@ -527,7 +531,7 @@ function findCases(dir) {
     .sort();
 }
 
-module.exports = { exclusionBeforePort, isJavaScript, excludedDirectory, findCases, wasPruned, upstreamErrorCodes, portCausedErrors, codeOf, unsupportedCause, writeExcluded };
+module.exports = { exclusionBeforePort, isJavaScript, excludedDirectory, findCases, wasPruned, upstreamErrorCodes, codeOf, unsupportedCause, writeExcluded };
 
 if (require.main === module) main().catch((e) => {
   console.error(e);

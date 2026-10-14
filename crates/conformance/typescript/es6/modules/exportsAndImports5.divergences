@@ -1,0 +1,4 @@
+types: 1 of 6 tsc entries compared, 0 differ
+
+errors:
+line 9: ours: exported function `f` uses private type `A` in its signature (tsc accepts)

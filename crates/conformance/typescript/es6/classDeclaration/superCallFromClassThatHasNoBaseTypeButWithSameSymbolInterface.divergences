@@ -1,0 +1,5 @@
+types: 0 of 5 tsc entries compared, 0 differ
+
+errors:
+line 6: tsc TS2335: 'super' can only be referenced in a derived class. (we accept)
+line 4: ours: duplicate declaration of class `Foo` (tsc accepts)

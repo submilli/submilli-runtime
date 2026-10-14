@@ -1,0 +1,23 @@
+=== nullishCoalescingOperator6.ts ===
+
+function foo(foo: string, bar: string = foo ?? "bar"): void { }
+>foo : (foo: string, bar?: string) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>foo : string
+>    : ^^^^^^
+>bar : string
+>    : ^^^^^^
+>foo ?? "bar" : string
+>             : ^^^^^^
+>foo : string
+>    : ^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

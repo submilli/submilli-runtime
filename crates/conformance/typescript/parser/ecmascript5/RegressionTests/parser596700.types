@@ -1,0 +1,13 @@
+=== parser596700.ts ===
+let regex2 = /[a-z/]$/i;
+>regex2 : RegExp
+>       : ^^^^^^
+>/[a-z/]$/i : RegExp
+>           : ^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

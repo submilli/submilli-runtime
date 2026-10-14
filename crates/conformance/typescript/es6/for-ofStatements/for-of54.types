@@ -1,0 +1,20 @@
+=== for-of54.ts ===
+for (let v of []) {
+>v : never
+>  : ^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+    let v = 0;
+>v : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

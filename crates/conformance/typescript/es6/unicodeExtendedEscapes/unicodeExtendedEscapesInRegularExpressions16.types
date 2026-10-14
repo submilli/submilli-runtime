@@ -1,0 +1,15 @@
+=== unicodeExtendedEscapesInRegularExpressions16.ts ===
+
+let x = /\u{ABCD}\u{EF12}\u{3456}\u{7890}/gu;
+>x : RegExp
+>  : ^^^^^^
+>/\u{ABCD}\u{EF12}\u{3456}\u{7890}/gu : RegExp
+>                                     : ^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

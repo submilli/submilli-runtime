@@ -1,0 +1,3 @@
+parserRegularExpressionDivideAmbiguity5.ts(2,1): error TS2304: Cannot find name 'model'.
+parserRegularExpressionDivideAmbiguity5.ts(2,17): error TS2304: Cannot find name 'rotateY'.
+parserRegularExpressionDivideAmbiguity5.ts(2,42): error TS2304: Cannot find name 'rotateZ'.
