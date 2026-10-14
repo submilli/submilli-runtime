@@ -1,4 +1,4 @@
-import posthog from 'posthog-js/dist/module.no-external';
+import posthog from 'posthog-js';
 import { attributionFor, mergeAttribution, safeUrl } from './analytics-utils';
 
 const key = import.meta.env.PUBLIC_POSTHOG_KEY;
@@ -9,6 +9,7 @@ let active = false;
 let initialized = false;
 let lastPageviewUrl: string | undefined;
 let isTest = new URLSearchParams(location.search).get('analytics_test') === '1';
+isTest ||= hasVerificationAttribution();
 try {
 	if (isTest) sessionStorage.setItem('submilli.analytics-test', '1');
 	isTest ||= sessionStorage.getItem('submilli.analytics-test') === '1';
@@ -30,15 +31,26 @@ function writeStorage(storageKey: string, value: string) {
 	}
 }
 
-function stripReplayQuery(value: string) {
+function hasVerificationAttribution() {
+	const markers = new Set(['e2e', 'deployment_verification', 'verification', 'funnel_test', 'utm_e2e']);
+	const marked = (touch: unknown) => touch && typeof touch === 'object'
+		&& Object.entries(touch).some(([key, value]) => key.startsWith('utm_') && markers.has(String(value).trim().toLowerCase()));
 	try {
-		const url = new URL(value, location.href);
-		url.search = '';
-		url.hash = '';
-		return url.href;
+		if (marked(Object.fromEntries(new URL(location.href).searchParams))) return true;
+		const prior = JSON.parse(readStorage(attributionKey) || 'null');
+		return Boolean(marked(prior?.first) || marked(prior?.latest));
 	} catch {
-		return undefined;
+		return false;
 	}
+}
+
+function applyQueryOptOut() {
+	try {
+		if (new URL(location.href).searchParams.get('analytics') !== 'off') return false;
+		writeStorage(consentKey, 'denied');
+		return true;
+	} catch {}
+	return false;
 }
 
 function capture(event: string, properties: Record<string, unknown> = {}) {
@@ -84,7 +96,7 @@ function instrumentClicks() {
 			});
 			if (cta === 'meeting') {
 				capture('booking_cta_clicked', {
-					cta_location: 'docs',
+					cta_location: anchor.dataset.analyticsLocation || 'docs',
 					booking_provider: 'google_calendar',
 					destination,
 					external: url.host !== location.host,
@@ -104,21 +116,18 @@ function start(explicitConsent = false) {
 			save_campaign_params: false,
 			capture_pageview: false,
 			capture_pageleave: false,
-			disable_session_recording: true,
+			disable_session_recording: location.hostname !== 'submilli.ai' || isTest,
 			enable_recording_console_log: false,
 			capture_exceptions: false,
 			session_recording: {
-				maskAllInputs: true,
-				blockSelector: 'input[type="hidden"], input[type="file"]',
-				maskAttributeFn(name, value) {
-					return ['action', 'href', 'src'].includes(name.toLowerCase()) ? stripReplayQuery(value) || '' : value;
-				},
+				maskAllInputs: false,
+				maskInputOptions: { password: false },
+				maskTextClass: '',
+				maskTextSelector: '',
+				blockClass: '',
+				blockSelector: '',
 				recordHeaders: false,
 				recordBody: false,
-				maskCapturedNetworkRequestFn(request) {
-					const name = stripReplayQuery(request.name);
-					return name ? { ...request, name } : undefined;
-				},
 			},
 			disable_surveys: true,
 			advanced_disable_feature_flags: true,
@@ -150,11 +159,13 @@ function start(explicitConsent = false) {
 	trackPageview();
 }
 
+const queryOptOut = applyQueryOptOut();
+
 if (key && host) {
 	const choice = document.getElementById('analytics-choice');
 	const settings = document.getElementById('analytics-settings');
 	if (settings) settings.hidden = false;
-	if (readStorage(consentKey) !== 'denied') start();
+	if (!queryOptOut && readStorage(consentKey) !== 'denied') start();
 	settings?.addEventListener('click', () => { if (choice) choice.hidden = false; });
 	document.querySelectorAll<HTMLButtonElement>('[data-consent]').forEach(button => {
 		button.addEventListener('click', () => {
@@ -166,7 +177,10 @@ if (key && host) {
 			}
 			else {
 				active = false;
-				if (initialized) posthog.opt_out_capturing();
+				if (initialized) {
+					posthog.stopSessionRecording();
+					posthog.opt_out_capturing();
+				}
 				try { localStorage.removeItem(attributionKey); } catch {}
 			}
 			if (choice) choice.hidden = true;
@@ -174,4 +188,13 @@ if (key && host) {
 	});
 	instrumentClicks();
 	document.addEventListener('astro:page-load', trackPageview);
+	window.addEventListener('storage', event => {
+		if ((event.key === consentKey && event.newValue === 'denied') || (event.key === null && readStorage(consentKey) === 'denied')) {
+			active = false;
+			if (initialized) {
+				posthog.stopSessionRecording();
+				posthog.opt_out_capturing();
+			}
+		}
+	});
 }

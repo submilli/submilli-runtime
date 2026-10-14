@@ -190,16 +190,27 @@ capture token; do not put a secret in source or commit an environment file.
 Analytics follows the marketing site’s opt-out behavior and respects the existing
 `submilli.analytics-consent.v1` preference and PostHog opt-out. Readers can change
 the preference using the docs analytics settings. Automatic capture, automatic
-pageviews, feature flags, surveys, session recording, and recorded request
+pageviews, feature flags, surveys, and recorded request
 bodies are disabled. Pageviews are emitted once per canonical
 docs URL, including client-side `astro:page-load` navigation. URL properties are
-reduced to origin and path before capture. Session recording is disabled for the
-docs site; the masking configuration remains defensive if that setting changes.
+reduced to origin and path before capture. Session replay loads through PostHog's
+default browser bundle on the canonical `submilli.ai` hostname only, using the
+existing project's recording rules. Input masking is explicitly disabled at the
+owner's request; replay can include text readers enter. Console logs, network
+headers/bodies and error capture remain disabled. Preview origins and marked
+`analytics_test` sessions do not record.
+
+Internal browsers must open `https://submilli.ai/docs/?analytics=off` once per
+browser/profile. The query applies before SDK initialization and saves the shared
+website/docs opt-out; a denial in another tab also stops recording. A browser
+whose identity has never been supplied cannot be matched to a team member.
+The internal cohort is a reporting filter, not a browser recording gate. Verify
+the three team members' browser opt-outs separately before claiming exclusion.
 
 The event inventory is `$pageview` (`page_path`, `$current_url`),
 `link_clicked` (`destination`, `external`), and `docs_cta_clicked`
 (`cta_id`, `destination`, `external`). Meeting clicks also emit the existing
-`booking_cta_clicked` contract (`cta_location: docs`,
+`booking_cta_clicked` contract (`cta_location: docs` or `docs-invitation`,
 `booking_provider: google_calendar`, `destination`, `external`) so website
 funnels can include docs traffic. CTA IDs cover `meeting`, `website`, `github`,
 `discord`, `agent_setup`, `view_markdown`, and `agent_docs`.
@@ -213,6 +224,26 @@ The direct Render hostname is a separate origin and cannot join that identity.
 Production capture requires configuring both public environment values in the
 docs Render service and rebuilding after merge; repository checks alone do not
 verify received production events.
+
+## Reader invitation
+
+The dismissible invitation appears after ten seconds of visible docs browsing and
+offers an email form plus the same Google scheduler as the header. It takes no
+focus and does not block navigation. Set `PUBLIC_CONTACT_ENDPOINT` to a verified
+production contact-intake URL to enable it; without an endpoint it stays hidden.
+Excluded routes include 404, hidden sidebar pages and standalone video embeds.
+
+The endpoint accepts JSON `{ "email": "reader@example.com", "form_id": "docs-invitation" }`
+and must return a 2xx `{ "ok": true }` only after durable contact storage.
+Validate input server-side, deduplicate by normalized email, allow only the
+production origin via CORS, and keep service credentials on the server. No email
+is stored in browser storage or added to explicit analytics events. Configure the
+current contact service only after verifying its durable-storage receipt. A
+preview uses only a local mock endpoint, never production contact storage.
+
+After deployment, the PR author verifies real email storage and retry semantics,
+the booking destination, a production replay, and each team browser's opt-out.
+An enabled SDK or recording toggle alone does not establish working playback.
 
 Coverage is limited to JavaScript-enabled HTML visits. Direct Markdown, `llms.txt`,
 and bot requests without JavaScript are not counted; agent-docs CTA clicks measure
