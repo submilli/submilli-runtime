@@ -2599,10 +2599,11 @@ fn emit_object_spread(
             .ta
             .source_type(source.expr_id())
             .map_err(crate::codegen::arena_failure)?;
-        // A source that may hold `null` or a falsy primitive copies nothing
-        // when it does: the merge then takes no source, which still applies
+        // A source that may hold something other than an object branches on
+        // it: `null` or a primitive copies nothing, while a string or array
+        // held in `{}` copies its indices. Either way the merge still applies
         // the final shape.
-        let accumulator = if may_hold_non_object(narrowed_ty) {
+        let non_object_source = if may_hold_non_object(narrowed_ty) {
             Some(emit_object_source_test(
                 emitter,
                 ctx,
@@ -2626,7 +2627,7 @@ fn emit_object_spread(
         if let Some(NonObjectSource {
             accumulator,
             opaque,
-        }) = accumulator
+        }) = non_object_source
         {
             emitter.emit_else();
             emitter.instruction(Instruction::LocalGet(accumulator));
