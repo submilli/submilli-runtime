@@ -52,11 +52,15 @@ impl<'a> Inferer<'a> {
                     let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
                     let (typed_value, value_ty) =
                         self.infer_expr_keeping_literals(value, hint.as_ref(), true)?;
-                    // Reassignable, so a fresh literal widens; see the block-scoped
-                    // `Let` arm in `stmt.rs`.
-                    let bound = match hint {
-                        Some(hint) => hint,
-                        None => self.widen_fresh_literals(typed_value, &value_ty)?,
+                    // Reassignable, so a fresh literal widens, except for an
+                    // annotated pattern's default; see the block-scoped `Let`
+                    // arm in `stmt.rs`.
+                    let annotated_default =
+                        self.annotated_default_binding_type(value, &value_ty)?;
+                    let bound = match (hint, annotated_default) {
+                        (Some(hint), _) => hint,
+                        (None, Some(component)) => component,
+                        (None, None) => self.widen_fresh_literals(typed_value, &value_ty)?,
                     };
                     let bound = self.pattern_binding_storage_type(value, bound)?;
                     let bound = self.global_storage_ty(&name.name, bound);

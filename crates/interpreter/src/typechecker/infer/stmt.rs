@@ -499,11 +499,18 @@ impl Inferer<'_> {
         // let b = a;` binds `number`, not `1`. A literal type the value got from
         // a declaration stays (`let v = c` with `c: "x"` is `"x"`), and an
         // explicit annotation is honoured as written. Parameter patterns
-        // inherit their member's declared type despite being mutable.
-        let bound = match hint {
-            Some(hint) => hint,
-            None if preserve_binding_literals => value_ty.clone(),
-            None => self.widen_fresh_literals(typed_value, &value_ty)?,
+        // inherit their member's declared type despite being mutable. A fresh
+        // literal an unannotated pattern's default supplies widens, while a
+        // defaulted binding of an annotated pattern takes its member's
+        // written type.
+        let annotated_default = self.annotated_default_binding_type(value, &value_ty)?;
+        let keeps_literals =
+            preserve_binding_literals && !self.ast.binding_defaults.contains_key(&value);
+        let bound = match (hint, annotated_default) {
+            (Some(hint), _) => hint,
+            (None, Some(component)) => component,
+            (None, None) if keeps_literals => value_ty.clone(),
+            (None, None) => self.widen_fresh_literals(typed_value, &value_ty)?,
         };
         let bound = self.pattern_binding_storage_type(value, bound)?;
         let bound = self.local_storage_ty(&name, bound);
@@ -574,6 +581,40 @@ impl Inferer<'_> {
             boxed: false,
             doc,
         })
+    }
+
+    /// The type a binding takes from `value` of type `value_ty` when `value`
+    /// is the lowered default of a pattern whose type is written: the
+    /// component it binds, which the default must fit, without `undefined`,
+    /// as in TypeScript. The default's literal doesn't widen it, and a narrowed
+    /// initializer doesn't narrow it.
+    pub(super) fn annotated_default_binding_type(
+        &self,
+        value: ExprId,
+        value_ty: &Type,
+    ) -> Result<Option<Type>, CompilerFailure> {
+        let Some(binding_default) = self.ast.binding_defaults.get(&value) else {
+            return Ok(None);
+        };
+        if !binding_default.annotated {
+            return Ok(None);
+        }
+        let saved = &binding_default.saved;
+        // A module-level pattern saves its component in a module global.
+        let component = match self.scopes.get(&saved.name) {
+            Some(local) => local.write_type(),
+            None => match self.top_symbols.get(&saved.name).map(|entry| &entry.kind) {
+                Some(ValueKind::Const { ty, .. } | ValueKind::Let { ty, .. }) => ty,
+                _ => {
+                    return Err(super::inference_failure(
+                        "missing saved destructuring component",
+                    )
+                    .with_span(saved.span));
+                }
+            },
+        };
+        let component = super::param_defaults::without_undefined(component);
+        Ok(Some(Type::union(vec![component, value_ty.clone()])))
     }
 
     /// The type a destructuring default (`let { tags = [] } = options`) is

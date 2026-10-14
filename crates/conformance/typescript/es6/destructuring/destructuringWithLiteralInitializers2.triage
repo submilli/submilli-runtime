@@ -1,1 +1,0 @@
-line 10, 15, 16, 23, 24, 28, 29, 30 type: bug SUB-1555 a destructured binding's default keeps its literal type where tsc widens it
