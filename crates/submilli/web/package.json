@@ -6,6 +6,7 @@
     "node": ">=22.12"
   },
   "scripts": {
+    "dev": "node scripts/dev.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "build": "tsc --noEmit && vite build"

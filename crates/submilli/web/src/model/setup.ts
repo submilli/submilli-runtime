@@ -1,6 +1,6 @@
 // The New session form: its variables, the agent and its settings, checked as the
 // playground would check them before the first message goes.
-import type { ChatSettings, DeclaredVariable, Status } from "../api/types";
+import type { ChatSettings, DeclaredVariable, SavedKey, SessionSummary, Status } from "../api/types";
 import { namesOf } from "./refs";
 import { providerName } from "./format";
 
@@ -46,11 +46,35 @@ function split(named: string): [string, string] {
 }
 
 /** The form as it opens: the default model, and the variables the playground is bound with. */
-export function initialSetup(status: Status): SetupForm {
-  const [provider, model] = split(status.chat_models[0] || ":");
+export function initialSetup(status: Status, sessions: SessionSummary[] = []): SetupForm {
   const fields: Record<string, string> = {};
   for (const d of declaredVariables(status)) fields[d.name] = status.binding.variables[d.name] || "";
+  // The agent and its settings carry on from the latest session an agent chatted in.
+  const last = latestAgent(sessions);
+  if (last?.model) {
+    const [provider, model] = split(last.model);
+    const s = last.settings ?? {};
+    return {
+      ...INITIAL_SETUP,
+      provider,
+      model,
+      effort: provider === "openai" ? s.effort ?? "" : "",
+      max: s.max_output !== undefined ? String(s.max_output) : "",
+      providerJson: s.provider && Object.keys(s.provider).length ? JSON.stringify(s.provider) : "",
+      fields,
+    };
+  }
+  // Else the playground's default, else the first provider, whose key the form helps add.
+  const first = providerOptions(status, "")[0];
+  const [provider, model] = status.chat_models[0] ? split(status.chat_models[0]) : [first?.provider || "", first?.model || ""];
   return { ...INITIAL_SETUP, provider, model, fields };
+}
+
+/** The most recently started session an agent chatted in. */
+function latestAgent(sessions: SessionSummary[]): SessionSummary | undefined {
+  let latest: SessionSummary | undefined;
+  for (const s of sessions) if (s.model && (!latest || s.started_at_micros > latest.started_at_micros)) latest = s;
+  return latest;
 }
 
 /** The variables in a JSON object: one object of text values, each declared by the blueprint. */
@@ -114,7 +138,9 @@ export function checkSetup(status: Status, form: SetupForm): SetupCheck {
     invalid[field] = text;
     problem = problem || text;
   };
-  if (!model) fail("model", "Give the model’s name.");
+  // Without a model key there's no agent to set up; the Agent field says how to add one.
+  if (form.provider && !hasKey(status, form.provider)) problem = providerName(form.provider) + " needs a key first: use Add a key under Agent.";
+  else if (!model) fail("model", "Give the model’s name.");
   else if (!/^(models\/)?[A-Za-z0-9._-]+$/.test(model)) fail("model", "A model name is letters, digits, “.”, “_”, and “-”.");
   if (form.effort) set.effort = form.effort;
   if (max) {
@@ -214,17 +240,49 @@ export function fieldNote(status: Status): string {
   return "Declared in blueprint " + blueprintLabel(status) + ". Fixed once the session starts.";
 }
 
-/** One button per provider the playground has a model key for, with its default model. */
-export function providerOptions(status: Status, provider: string): { provider: string; label: string; model: string; pressed: boolean }[] {
-  const seen = new Set<string>();
-  const out: { provider: string; label: string; model: string; pressed: boolean }[] = [];
+/** The providers chat works with, in the order the page offers them, and the key each needs. */
+const CHAT_PROVIDERS: [string, string][] = [
+  ["anthropic", "ANTHROPIC_API_KEY"],
+  ["openai", "OPENAI_API_KEY"],
+  ["google", "GEMINI_API_KEY"],
+];
+
+/** Whether the playground has a key for `provider`, wherever it found it. */
+export function hasKey(status: Status, provider: string): boolean {
+  return status.chat_models.some((m) => m.startsWith(provider + ":")) || !!status.model_keys?.some((k) => k.provider === provider && k.from);
+}
+
+/** The Agent field's note: how to add a key when there's none yet, else where keys stay. */
+export function agentNote(status: Status): string {
+  return status.chat_models.length
+    ? "Keys stay with the playground; this page never sees one once it’s saved."
+    : "No model key yet. Add one with Add a key, put it in the project’s .env, or run `submilli secret put OPENAI_API_KEY`.";
+}
+
+/**
+ * One button per provider chat works with, each with its default model. Every one can be
+ * picked; one without a key says so, and the form won't start until it has one.
+ */
+export function providerOptions(
+  status: Status,
+  provider: string,
+): { provider: string; label: string; model: string; pressed: boolean; needs: string | null }[] {
+  const models = new Map<string, string>();
   for (const named of status.chat_models) {
     const [p, m] = split(named);
-    if (seen.has(p)) continue;
-    seen.add(p);
-    out.push({ provider: p, label: providerName(p), model: m, pressed: p === provider });
+    if (!models.has(p)) models.set(p, m);
   }
-  return out;
+  for (const k of status.model_keys ?? []) if (!models.has(k.provider) && k.default_model) models.set(k.provider, k.default_model);
+  const known = CHAT_PROVIDERS.map(([p]) => p);
+  // A provider the server offers that the page doesn't know yet still shows, after the rest.
+  const all = [...CHAT_PROVIDERS, ...[...models.keys()].filter((p) => !known.includes(p)).map((p): [string, string] => [p, ""])];
+  return all.map(([p, key]) => ({
+    provider: p,
+    label: providerName(p),
+    model: models.get(p) || "",
+    pressed: p === provider,
+    needs: hasKey(status, p) ? null : "No " + providerName(p) + " key yet (" + key + ").",
+  }));
 }
 
 export function modelHint(status: Status, provider: string): string {
@@ -232,18 +290,52 @@ export function modelHint(status: Status, provider: string): string {
   return "Default for " + providerName(provider) + ": " + split(named)[1] + ". Any model name the provider knows works; an unknown one gets the provider’s own error.";
 }
 
-/** Claude's effort isn't available yet, so only Default can be picked for it. */
+/** Only OpenAI takes an effort for now, so elsewhere only Default can be picked. */
 export function effortOptions(provider: string, effort: string): { effort: string; label: string; pressed: boolean; disabled: boolean }[] {
   return [
     ["", "Default"],
     ["low", "Low"],
     ["medium", "Medium"],
     ["high", "High"],
-  ].map(([e, label]) => ({ effort: e, label, pressed: e === effort, disabled: provider === "anthropic" && e !== "" }));
+  ].map(([e, label]) => ({ effort: e, label, pressed: e === effort, disabled: provider !== "openai" && e !== "" }));
 }
 
 export function effortHint(provider: string): string {
-  return provider === "anthropic"
-    ? "Not available for Claude yet: its thinking has to be handed back with each tool result, which chat doesn’t do yet."
-    : "OpenAI’s reasoning effort.";
+  if (provider === "anthropic") return "Not available for Claude yet: its thinking has to be handed back with each tool result, which chat doesn’t do yet.";
+  if (provider === "openai") return "How hard the model reasons before it answers. Default leaves it to the model.";
+  return "Not available for " + providerName(provider) + " yet: its thinking setting differs from model to model.";
+}
+
+/** What the key dialog says about `provider`'s key now: none, saved here, or one that comes first. */
+export function keyNow(status: Status, provider: string): { text: string; saved: boolean } {
+  const key = status.model_keys?.find((k) => k.provider === provider);
+  const name = providerName(provider);
+  const variable = key?.variable || keyVariable(provider);
+  // A playground too old to say where its keys are still says which providers have one.
+  if (!key?.from) return hasKey(status, provider) ? { text: "A " + name + " key is in use.", saved: false } : { text: "No " + name + " key yet.", saved: false };
+  if (key.from === "secret_store") return { text: "A saved " + name + " key is in use. Saving replaces it.", saved: true };
+  const where = key.from === "env_file" ? "the project’s .env" : "the shell the playground started from";
+  return {
+    text: "The " + name + " key in use comes from " + where + ", which comes first. A key saved here is used once " + variable + " is gone from there.",
+    saved: false,
+  };
+}
+
+/** The line under the key field: where a saved key goes. */
+export function keyNote(status: Status, provider: string): string {
+  const variable = status.model_keys?.find((k) => k.provider === provider)?.variable || keyVariable(provider);
+  return "Saved on this machine in your local secret store, as `submilli secret put " + variable + "` does. It isn’t shown again.";
+}
+
+/** The notice after a save: done, or saved but not used yet. */
+export function keySaved(provider: string, saved: SavedKey, removed: boolean): string {
+  const name = providerName(provider);
+  if (removed) return saved.from ? "Removed the saved " + name + " key; the one from " + (saved.from === "env_file" ? "the project’s .env" : "the shell") + " is in use." : "Removed the saved " + name + " key.";
+  if (saved.from === "secret_store") return "Saved the " + name + " key.";
+  return "Saved the " + name + " key, but the one from " + (saved.from === "env_file" ? "the project’s .env" : "the shell") + " comes first.";
+}
+
+/** The variable a key for `provider` goes under, as `submilli secret put` names it. */
+export function keyVariable(provider: string): string {
+  return CHAT_PROVIDERS.find(([p]) => p === provider)?.[1] || "";
 }

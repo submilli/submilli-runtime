@@ -34,6 +34,8 @@ export function Gated(props: {
   /** For a button that is one of a set of choices. */
   pressed?: boolean;
   onClick?: () => void;
+  /** Pressed while blocked: it still does nothing, but the caller may show more of why. */
+  onBlocked?: () => void;
   children: ReactNode;
 }) {
   const own = useId();
@@ -51,6 +53,7 @@ export function Gated(props: {
         onClick={(ev) => {
           if (blocked) {
             ev.preventDefault();
+            props.onBlocked?.();
             return;
           }
           props.onClick?.();

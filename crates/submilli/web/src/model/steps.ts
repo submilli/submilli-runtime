@@ -281,7 +281,16 @@ export function frame(data: PageData, ui: UiState): Frame {
 }
 
 /** Runs the coding assistant or the page started in the session, not the agent. */
-const NOT_THE_AGENT = new Set(["assistant", "example"]);
+const NOT_THE_AGENT = new Set(["assistant", "example", "test", "rerun"]);
+
+/** "your rerun of run 1" or "your test of run 2", for a run that was one; otherwise `null`. */
+export function followUpName(f: Frame, run: number): string | null {
+  const show = f.data.runs[run];
+  const source = show?.source ?? f.session.labels[run];
+  if (source !== "test" && source !== "rerun") return null;
+  const of = show ? show.rerun_of ?? show.test?.source_run ?? null : null;
+  return "your " + source + (of !== null && of !== undefined ? " of run " + of : "");
+}
 
 /** Whether the agent ran this program, rather than the developer's coding assistant. */
 export function byAgent(f: Frame, run: number): boolean {

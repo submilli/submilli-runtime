@@ -5,7 +5,7 @@ import type { SessionBar as Bar } from "../model/sessions";
 import { forAsst } from "../model/refs";
 import type { SetupForm } from "../model/setup";
 import { NO_SESSIONS } from "./wording";
-import { Setup } from "./Setup";
+import { Setup, type KeyActions } from "./Setup";
 import { CancelButton } from "./controls";
 
 function LockIcon() {
@@ -30,6 +30,8 @@ export function SessionBar(props: {
   cancelling: boolean;
   onForm: (form: SetupForm) => void;
   onStart: () => void;
+  /** Saves a model key typed in the form's key dialog, and says what it did. */
+  keys: KeyActions;
   onBack: () => void;
   onCopy: () => void;
   onAllVars: () => void;
@@ -95,7 +97,7 @@ export function SessionBar(props: {
               <span className="pg-muted pg-small">Nothing is started until you press Start session.</span>
             </>
           )}
-          <Setup status={props.status} form={props.form} onForm={props.onForm} onStart={props.onStart} copy={props.copy} />
+          <Setup status={props.status} form={props.form} onForm={props.onForm} onStart={props.onStart} copy={props.copy} keys={props.keys} />
         </>
       )}
     </section>

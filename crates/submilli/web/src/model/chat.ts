@@ -14,7 +14,9 @@ export type ChatItem =
   /** A new session's first message, sent and not answered yet. */
   | { kind: "wait"; text: string }
   /** A message the agent couldn't answer, and why. */
-  | { kind: "failed"; text: string; note: string };
+  | { kind: "failed"; text: string; note: string }
+  /** A message whose answer was stopped from the page. */
+  | { kind: "stopped"; text: string; note: string };
 
 /** The agent's tools other than running a program, by the name they're called with. */
 const TOOLS: Record<string, string> = {
@@ -76,9 +78,25 @@ export function chatItems(f: Frame): ChatItem[] {
   return items;
 }
 
-export function chatEmptyText(f: Frame): string {
+/** In a test's or rerun's own session: which it is, and of which run, when known. */
+export function followUpSession(f: Frame, knownSource: number | null = null): { kind: "test" | "rerun"; run: number | null; source: number | null } | null {
+  if (f.ui.mode !== "open" || !f.info) return null;
+  const kind = f.info.sources.includes("rerun") ? "rerun" : f.info.sources.includes("test") ? "test" : null;
+  if (!kind) return null;
+  const run = f.info.runs[0] ?? f.running[0] ?? null;
+  const show = run !== null ? f.data.runs[run] : undefined;
+  // While it runs there is no record yet; the run it followed may be known from where it was started.
+  return { kind, run, source: (show ? show.rerun_of ?? show.test?.source_run : null) ?? knownSource };
+}
+
+export function chatEmptyText(f: Frame, knownSource: number | null = null): string {
   if (f.ui.mode === "setup") return "Set the session’s variables, then start a session to chat.";
   if (f.ui.mode === "fresh") return "Session started. Ask the agent to do a task.";
+  const fu = followUpSession(f, knownSource);
+  if (fu) {
+    const what = (fu.run !== null ? "run " + fu.run + ", " : "") + "a " + fu.kind + (fu.source !== null ? " of run " + fu.source : "");
+    return "No chat: this session is " + what + " that you started. The agent never saw it. Step through its calls with ← →.";
+  }
   // At the latest event with nothing said, there is no task to step to.
   if (!f.stepping && f.ui.mode === "open") return f.info?.model ? "No messages in this session yet." : "No chat in this session: its runs came from your coding assistant or the CLI.";
   return "Step forward to see the task.";
@@ -91,16 +109,28 @@ export interface AskBox {
   primary: boolean;
   /** Why it can't be used, when that's because the reader stepped back. */
   reason?: string;
+  /** The agent is answering a message sent here: Send becomes Stop. */
+  stop?: boolean;
+  /** When there's no chat to send into: why, shown in the box's place, and whether New session is offered there. */
+  none?: { text: string; offer: boolean; /** Back to the session the reader came from, by its short id. */ back?: string };
 }
 
 /** Whether a message can be sent: a new session takes its first; an open chat session takes more. */
+/** No box to type in: a line saying why, and New session where it's the way on. */
+export function noChat(text: string, offer: boolean): AskBox {
+  return { placeholder: "", disabled: true, primary: false, none: { text, offer } };
+}
+
 export function askBox(f: Frame): AskBox {
   if (f.ui.mode === "fresh") return { placeholder: "Ask the agent to do a task…", disabled: false, primary: true };
-  if (f.ui.mode === "setup") return { placeholder: "Start a session to chat", disabled: true, primary: false };
+  // The form is open above, so its Start session is the way on.
+  if (f.ui.mode === "setup") return noChat("Start the session above to chat.", false);
+  const fu = followUpSession(f);
+  if (fu) return noChat("A " + fu.kind + " takes no messages.", false);
   const open = !!(f.info && f.info.model && f.info.open);
   const blocked = actionBlock(f);
   if (open && blocked) return { placeholder: "Reply in this session…", disabled: true, primary: false, reason: blocked };
   if (open) return { placeholder: "Reply in this session…", disabled: false, primary: true };
-  if (f.info?.open) return { placeholder: "No agent chats in this session. Start a new one to chat.", disabled: true, primary: false };
-  return { placeholder: "This session has ended. Start a new one to chat.", disabled: true, primary: false };
+  if (f.info?.open) return noChat("No agent chats in this session.", true);
+  return noChat(f.info ? "This session has ended." : "No session yet.", true);
 }

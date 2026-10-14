@@ -4,7 +4,7 @@ import { bpRuleLine } from "./blueprint";
 import { boundVars, capitalize, ctx, duration, end, ordinal, plainBy, plural, size, tone, when, type Tone } from "./format";
 import { decisionRef, forAsst, runRef } from "./refs";
 import { countWords, followUps } from "./summary";
-import { byAgent, endedRuns, fileTool, programNumber, type Frame } from "./steps";
+import { byAgent, endedRuns, fileTool, followUpName, programNumber, type Frame } from "./steps";
 import type { UiState } from "./ui";
 
 /** What a button runs: the page acts on it, and `cmd` is the same from the CLI. */
@@ -97,6 +97,9 @@ export interface FollowRow {
   copyText: string;
   refTitle: string;
   compareCmd: string;
+  /** Its own session, where its calls can be stepped through, and what to call it there. */
+  session: string | null;
+  stepLabel: string;
   againHead: string;
   again: AgainOption[];
 }
@@ -384,6 +387,8 @@ function followRow(f: Frame, r: Show, fu: Show, again: AgainOption[], all: numbe
     copyText,
     refTitle: forAsst(copyText),
     compareCmd: "submilli playground compare " + r.run + " " + n,
+    session: fu.session,
+    stepLabel: "Step through this " + (fu.rerun_of ? "rerun" : "test"),
     againHead: "Try run " + r.run + "’s " + (fileTool(f, r.run) ? "call" : "program") + " again",
     again,
   };
@@ -418,7 +423,7 @@ function runRow(f: Frame, r: Show, i: number, runs: Show[]): RunRow {
     selected: f.ui.sel === id,
     open,
     thing: fileTool(f, n) ? "call" : "program",
-    title: "Run " + n + " · " + (!byAgent(f, n) ? "run by your assistant" : fileTool(f, n) ? "the agent’s " + fileTool(f, n) + " call" : "the agent’s " + ordinal(programNumber(f, n)) + " program"),
+    title: "Run " + n + " · " + (!byAgent(f, n) ? followUpName(f, n) ?? "run by your assistant" : fileTool(f, n) ? "the agent’s " + fileTool(f, n) + " call" : "the agent’s " + ordinal(programNumber(f, n)) + " program"),
     status: capitalize(word),
     tone: tone(word),
     meta:
@@ -464,7 +469,7 @@ export function logPane(f: Frame): LogPane {
   if (!rows.length && runningRun === null) {
     empty = f.ui.mode !== "open" || (!f.stepping && !runs.length) ? "No runs yet." : runs.length ? "Nothing matches this filter." : "Step forward to see runs.";
   }
-  const whose = (n: number) => (byAgent(f, n) ? "the agent’s " + ordinal(programNumber(f, n)) + " program" : "run by your assistant");
+  const whose = (n: number) => (byAgent(f, n) ? "the agent’s " + ordinal(programNumber(f, n)) + " program" : followUpName(f, n) ?? "run by your assistant");
   return {
     count: rows.length === all.length ? plural(rows.length, "run", "runs") : rows.length + " of " + plural(all.length, "run", "runs"),
     rows,

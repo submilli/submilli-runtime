@@ -178,6 +178,14 @@ pub(crate) const ROUTES: &[Route] = &[
         handler: || post(cancel),
     },
     Route {
+        method: "POST",
+        path: "/api/model-key",
+        group: Group::Viewer,
+        // The CLI's own way is `submilli secret put`, outside `submilli playground`.
+        command: None,
+        handler: || post(model_key),
+    },
+    Route {
         method: "GET",
         path: "/api/status",
         group: Group::Viewer,
@@ -454,6 +462,40 @@ async fn cancel(
         actions.cancel(&request).await
     })
     .await
+}
+
+/// A provider's model key typed on the page, or `"key": null` to remove the saved one.
+#[derive(serde::Deserialize)]
+struct ModelKeyRequest {
+    provider: String,
+    key: Option<String>,
+}
+
+/// Saves a model key the developer typed on the page into the local secret store, as
+/// `submilli secret put <VARIABLE>` would, or removes it. The key is never echoed, not
+/// even in a refusal: a body it can't read gets a fixed message.
+async fn model_key(request: Result<Json<ModelKeyRequest>, JsonRejection>) -> Response {
+    let Ok(Json(request)) = request else {
+        return host::error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "send {\"provider\": \"<provider>\", \"key\": \"<key>\" or null}",
+        );
+    };
+    let saved = tokio::task::spawn_blocking(move || {
+        super::keys::save_provider_key(&request.provider, request.key.as_deref())
+    })
+    .await;
+    match saved {
+        // Shaped like an action's answer, so the page reads it the same way.
+        Ok(Ok(saved)) => Json(json!({ "exit": 0, "result": saved, "text": "" })).into_response(),
+        Ok(Err(message)) => host::error(StatusCode::BAD_REQUEST, "refused", &message),
+        Err(_) => host::error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed",
+            "saving the key stopped partway; try again",
+        ),
+    }
 }
 
 async fn bridge_binding(State(state): State<ControlState>) -> Response {
@@ -1113,7 +1155,7 @@ mod tests {
     /// Routes only the page calls, with no CLI subcommand. A package's source serves the
     /// page's step into a package's line; on the command line `show` and `explain` name
     /// that line, and the file is the developer's to open.
-    const PAGE_ONLY: &[&str] = &["/api/packages/source"];
+    const PAGE_ONLY: &[&str] = &["/api/packages/source", "/api/model-key"];
 
     #[test]
     fn every_action_and_read_route_has_a_cli_subcommand() {
@@ -1187,6 +1229,7 @@ mod tests {
             ("GET", "/api/compare/{a}/{b}", Viewer),
             ("GET", "/api/audit", Viewer),
             ("GET", "/api/changes", Viewer),
+            ("POST", "/api/model-key", Viewer),
             ("GET", "/api/packages/source", Viewer),
             ("GET", "/api/sessions", Viewer),
             ("GET", "/api/sessions/{session}/events", Viewer),

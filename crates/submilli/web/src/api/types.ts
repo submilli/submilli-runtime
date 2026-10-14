@@ -15,6 +15,8 @@ export interface Status {
   stopping: boolean;
   blueprint_status: { version: number | null; refused: BlueprintRefusal | null };
   binding: { variables: Record<string, string>; secrets: string[] };
+  /** Each provider chat works with, the variable its key goes under, and where its key is found now. */
+  model_keys?: ModelKey[];
   /** The variables the blueprint in force declares. */
   declared_variables: DeclaredVariable[];
 }
@@ -80,6 +82,16 @@ export interface ChatSettings {
 /** `GET /api/runs`. */
 export interface RunList {
   runs: RunSummary[];
+  /** Runs in flight now, newest first; absent when there are none. */
+  running?: RunningRow[];
+}
+
+export interface RunningRow {
+  run: number;
+  /** Who started it: `test`, `rerun`, `browser-chat`, … */
+  source: string;
+  started_at_micros: number;
+  session: string | null;
 }
 
 export interface RunSummary {
@@ -364,4 +376,21 @@ export interface PageData {
 
 export function sourceKey(pkg: string, module: string): string {
   return pkg + '\u0000' + module;
+}
+
+/** Where a model key is found: the shell, the project's `.env`, or the local secret store. */
+export type KeySource = "environment" | "env_file" | "secret_store";
+
+export interface ModelKey {
+  provider: string;
+  variable: string;
+  /** The model a session with this provider gets unless it names one. */
+  default_model?: string;
+  from: KeySource | null;
+}
+
+/** `POST /api/model-key`: the variable the key was saved under, and where chat finds the provider's key now. */
+export interface SavedKey {
+  variable: string;
+  from: KeySource | null;
 }

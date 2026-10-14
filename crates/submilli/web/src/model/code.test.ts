@@ -109,7 +109,7 @@ describe("the code pane at the latest event", () => {
     expect(picked.sub).toBe("program 2 · run 2");
     expect(picked.codeNote).toBe("Run 5 ran this same program, from run 2.");
     expect(picked.programRef).toBe(
-      "Submilli playground program of run 2 in project billing-demo. Print it: submilli playground show 2 --program",
+      "Submilli playground, the program of run 2 (details - project: `billing-demo`, see_with: `submilli playground show 2 --program`)",
     );
   });
 

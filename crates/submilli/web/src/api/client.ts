@@ -9,6 +9,9 @@ export const SESSION_KEY = "submilli-playground-session";
 /** What the page says when the playground doesn't answer at all. */
 export const UNREACHABLE = "The playground didn’t answer. If it stopped or restarted, start it and run `submilli playground open` for a new link.";
 
+/** The kind of an action the page stopped waiting for, with Stop. */
+export const STOPPED = "stopped";
+
 /** What an action route said: accepted with its result, or refused with the CLI's words. */
 export type ActionOutcome<T> =
   | { ok: true; result: T; text: string }
@@ -57,16 +60,19 @@ export class Client {
    * `result.error`, with the message the CLI would print. A run that was made and ended
    * denied, stopped or failed exits non-zero too, as the CLI does, but it is a result.
    */
-  async act<T>(path: string, body: unknown): Promise<ActionOutcome<T>> {
+  async act<T>(path: string, body: unknown, signal?: AbortSignal): Promise<ActionOutcome<T>> {
     let response: Response;
     try {
       response = await this.request(path, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
+        signal,
       });
     } catch (error) {
       if (error instanceof SignedOutError) throw error;
+      // Given up on by the page: the playground stops what the request started.
+      if (signal?.aborted) return { ok: false, kind: STOPPED, message: "stopped" };
       return { ok: false, kind: "unreachable", message: UNREACHABLE };
     }
     if (!response.ok) {

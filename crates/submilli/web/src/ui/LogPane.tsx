@@ -24,6 +24,8 @@ export interface LogActions {
   showAll: (run: number) => void;
   /** Cuts a result or error shown whole back to its first part. */
   showLess: (run: number) => void;
+  /** Opens a test's or rerun's own session at that run, to step through it. */
+  stepThrough: (session: string, run: number) => void;
 }
 
 /**
@@ -233,6 +235,11 @@ function FollowUp({ f, a }: { f: FollowRow; a: LogActions }) {
             </div>
           )}
           <div className="pg-actions">
+            {f.session && (
+              <button className="pg-btn" onClick={() => f.session && a.stepThrough(f.session, f.n)}>
+                {f.stepLabel}
+              </button>
+            )}
             <button className="pg-link" title={f.refTitle} onClick={() => a.copy(f.copyText, "reference")}>
               Copy for assistant
             </button>

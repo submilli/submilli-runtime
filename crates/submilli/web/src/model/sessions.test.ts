@@ -32,7 +32,7 @@ describe("the sessions dialog", () => {
       taskMuted: false,
       short: "5e550000",
       copyText:
-        "Submilli playground session 5e550000-0000-4000-8000-000000000004 in project billing-demo. Its runs: submilli playground runs --session 5e550000-0000-4000-8000-000000000004",
+        "Submilli playground, session 5e550000 (details - project: `billing-demo`, see_with: `submilli playground runs --session 5e550000-0000-4000-8000-000000000004`)",
       started: "Oct 13, 13:26 UTC",
       source: "Chat",
       agent: "Claude · claude-sonnet-5-5",
@@ -58,7 +58,7 @@ describe("the session bar", () => {
     expect(sessionBar(frame(chatSession(), INITIAL_UI))).toEqual({
       short: "5e550000",
       copyText:
-        "Submilli playground session 5e550000-0000-4000-8000-000000000004 in project billing-demo. Its runs: submilli playground runs --session 5e550000-0000-4000-8000-000000000004",
+        "Submilli playground, session 5e550000 (details - project: `billing-demo`, see_with: `submilli playground runs --session 5e550000-0000-4000-8000-000000000004`)",
       vars: [{ name: "customerId", value: "cus_northwind", full: "customerId=cus_northwind" }],
       moreVars: "",
       allVars: [{ name: "customerId", value: "cus_northwind", full: "customerId=cus_northwind" }],
@@ -120,7 +120,7 @@ describe("a session started for the coding assistant", () => {
     data.events = [];
     const f = frame(data, INITIAL_UI);
     expect(sessionBar(f)).toMatchObject({ state: "Open", live: true });
-    expect(askBox(f)).toMatchObject({ disabled: true, placeholder: "No agent chats in this session. Start a new one to chat." });
+    expect(askBox(f)).toMatchObject({ disabled: true, none: { text: "No agent chats in this session.", offer: true } });
     expect(chatEmptyText(f)).toBe("No chat in this session: its runs came from your coding assistant or the CLI.");
   });
 });

@@ -88,7 +88,7 @@ describe("the log's run rows", () => {
       "Oct 13, 13:26 UTC · 299 ms · blueprint v1 · returned to agent 103 B",
     ]);
     expect(row(rows, 1).copyText).toBe(
-      "Submilli playground run 1 in project billing-demo (chat, completed, blueprint billing v1). Details: submilli playground show 1",
+      "Submilli playground, run 1 (details - project: `billing-demo`, blueprint: `billing v1`, outcome: `completed`, see_with: `submilli playground show 1`)",
     );
     expect(row(rows, 1).refTitle).toBe("Copies a line to paste into your coding assistant: " + row(rows, 1).copyText);
   });
@@ -166,7 +166,7 @@ describe("the log's decision rows", () => {
       inspectLabel: "Blueprint v1, line 27",
       line: 4,
       next: ["submilli playground show 2", "submilli playground draft-rule 2.1"],
-      copyText: "Submilli playground decision 2.1 in project billing-demo (denied main → acme.com/charges.list, blueprint billing v1). Details: submilli playground explain 2.1",
+      copyText: "Submilli playground, check 2.1 (details - project: `billing-demo`, blueprint: `billing v1`, outcome: `denied`, call: `main → acme.com/charges.list`, see_with: `submilli playground explain 2.1`)",
     });
   });
 

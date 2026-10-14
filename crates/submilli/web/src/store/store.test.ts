@@ -480,3 +480,36 @@ test("a reload comes back to the session the tab showed, not the newest", async 
   await store.start();
   expect(store.getSnapshot().data.sessionId).toBe(other);
 });
+
+test("a session opened while the last one had a flush waiting still shows its live events", async () => {
+  const server = new FakeServer();
+  signedIn(server);
+  // Session 4's feed stays open, so one more event can arrive while the page is on it.
+  let more: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const live = (text: string) => more?.enqueue(new TextEncoder().encode(text));
+  const one = fixture("feed-session-1.sse").split("\n\n")[0] + "\n\n";
+  let fed: ReadableStreamDefaultController<Uint8Array> | null = null;
+  server.handle = (call) => {
+    if (call.url === `/api/sessions/${SESSION(4)}/events`)
+      return new Response(new ReadableStream({ start: (c) => { more = c; c.enqueue(new TextEncoder().encode(fixture("feed-session-4.sse"))); } }), { headers: { "content-type": "text/event-stream" } });
+    // Session 1 sends nothing at first, then its run's start, as a run in flight does.
+    if (call.url === `/api/sessions/${SESSION(1)}/events`)
+      return new Response(new ReadableStream({ start: (c) => (fed = c) }), { headers: { "content-type": "text/event-stream" } });
+    return undefined;
+  };
+  const frames: (() => void)[] = [];
+  const runFrames = () => frames.splice(0).forEach((cb) => cb());
+  const { store: s, started } = start(server, "", (cb) => frames.push(cb));
+  await started;
+  runFrames();
+  // An event on session 4 waits for its frame, and session 1 opens before it comes.
+  live(fixture("feed-session-4.sse").split("\n\n")[0].replace(/"session_seq":\d+/, '"session_seq":999') + "\n\n");
+  await new Promise((r) => setTimeout(r, 10));
+  const opened = s.openSession(SESSION(1));
+  runFrames();
+  await opened;
+  fed!.enqueue(new TextEncoder().encode(one));
+  await new Promise((r) => setTimeout(r, 10));
+  runFrames();
+  expect(s.getSnapshot().data.events.map((e) => e.session_seq)).toEqual([1]);
+});

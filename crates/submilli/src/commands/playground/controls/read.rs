@@ -2164,6 +2164,23 @@ pub(crate) fn sessions(
             .saturating_add(summary.wall_ms.saturating_mul(1000));
         session.last_active_micros = session.last_active_micros.max(ended);
     }
+    // A session whose only run is still in flight, as a test's or rerun's own session is
+    // until its run ends, is listed from the start, so it can be opened and watched. Its
+    // run is listed once stored. As with the run list, only while the playground that
+    // noted the run is running.
+    if let Some(store) = reader.store.as_ref().filter(|_| reader.page.base.is_some()) {
+        for run in store.running()? {
+            let Some(id) = &run.session_id else {
+                continue;
+            };
+            let session = session_row(&mut rows, id, run.started_at_micros);
+            session.started_at_micros = session.started_at_micros.min(run.started_at_micros);
+            session.last_active_micros = session.last_active_micros.max(run.started_at_micros);
+            if !session.sources.contains(&run.label) {
+                session.sources.push(run.label);
+            }
+        }
+    }
     mark_expired(&mut rows, now_micros);
     count_follow_ups(reader, &mut rows)?;
     let mut sessions: Vec<SessionRow> = rows.into_values().collect();

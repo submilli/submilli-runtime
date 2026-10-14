@@ -1,4 +1,5 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test } from "vitest";
 
 import { App } from "./App";
@@ -53,5 +54,10 @@ test("with no sessions yet, the page says so and offers New session", async () =
   localStorage.setItem(SESSION_KEY, server.token);
   await show(server, "");
   expect(await screen.findByText("No sessions yet. Start one with New session.")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "New session" })).toBeInTheDocument();
+  // The chat has no box to type in yet: it says why and offers New session there too.
+  const chat = within(screen.getByRole("region", { name: "Chat" }));
+  expect(chat.queryByRole("textbox")).not.toBeInTheDocument();
+  expect(chat.getByText("No session yet.")).toBeInTheDocument();
+  await userEvent.click(chat.getByRole("button", { name: "New session" }));
+  expect(await screen.findByRole("button", { name: "Start session" })).toBeInTheDocument();
 });

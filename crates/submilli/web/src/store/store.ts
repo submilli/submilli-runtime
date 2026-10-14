@@ -11,6 +11,9 @@ import type {
   FeedSignal,
   PackageSource,
   PageData,
+  RunList,
+  RunningRow,
+  SavedKey,
   SessionList,
   SessionSummary,
   Show,
@@ -263,6 +266,9 @@ export function createStore(options: StoreOptions = {}) {
     generation += 1;
     const mine = generation;
     queue = [];
+    // A flush the last session had waiting is dropped with it; the new session's events
+    // get one of their own.
+    frameQueued = false;
     set({ feedError: null, noSessions: false, newSession: null, sessionLoading: true });
     setData({ sessionId: id, events: [], feedEnded: false });
     keepShown(id);
@@ -522,11 +528,12 @@ export function createStore(options: StoreOptions = {}) {
     action: Omit<ActionState, "state" | "message">,
     path: string,
     body: unknown,
+    signal?: AbortSignal,
   ): Promise<ActionOutcome<T>> => {
     set({ action: { ...action, state: "pending", message: null } });
     let outcome: ActionOutcome<T>;
     try {
-      outcome = await client.act<T>(path, body);
+      outcome = await client.act<T>(path, body, signal);
     } catch (error) {
       if (!(error instanceof SignedOutError)) throw error;
       outcome = { ok: false, kind: "signed-out", message: SIGNED_OUT_LINE };
@@ -540,6 +547,9 @@ export function createStore(options: StoreOptions = {}) {
   const followedUp = <T,>(run: number, outcome: ActionOutcome<T>): ActionOutcome<T> => {
     if (outcome.ok) {
       void loadRun(run, true);
+      // The new run too: read as it finished, it may not have said yet which run it followed.
+      const made = (outcome.result as { run?: unknown }).run;
+      if (typeof made === "number") void loadRun(made, true);
       // Its run ends in a throwaway session whose events this feed never sees, so the
       // blueprint version it ran against would otherwise show only on the next re-read.
       void refreshStatus();
@@ -555,8 +565,45 @@ export function createStore(options: StoreOptions = {}) {
 
   const cancel = (run: number) => act({ name: "cancel", run }, "/api/cancel", { run });
 
+  /**
+   * The run a test or rerun from the page started, while it's in flight: the newest
+   * running run under that label that started at `since` (epoch microseconds) or later.
+   * It runs in a throwaway session, so only the run list knows it. Looked for a few times,
+   * as the run is numbered a moment after the request goes.
+   */
+  const followUpInFlight = async (label: "test" | "rerun", since: number): Promise<RunningRow | null> => {
+    for (let tries = 0; tries < 5; tries++) {
+      try {
+        const list = await client.read<RunList>("/api/runs?limit=1");
+        const row = (list.running ?? []).filter((r) => r.source === label && r.started_at_micros >= since).sort((a, b) => b.run - a.run)[0];
+        if (row) return row;
+      } catch {
+        // Try again.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    return null;
+  };
+
   const draft = (decision: string) =>
     act<Draft>({ name: "draft", decision }, "/api/draft-rule", { decision });
+
+  /**
+   * Saves a model key typed on the page in the local secret store (`key: null` removes
+   * the saved one), then reads status again so the provider shows. The key goes no further
+   * than the request.
+   */
+  const saveModelKey = async (provider: string, key: string | null): Promise<ActionOutcome<SavedKey>> => {
+    let outcome: ActionOutcome<SavedKey>;
+    try {
+      outcome = await client.act<SavedKey>("/api/model-key", { provider, key });
+    } catch (error) {
+      if (!(error instanceof SignedOutError)) throw error;
+      outcome = { ok: false, kind: "signed-out", message: SIGNED_OUT_LINE };
+    }
+    if (outcome.ok) await refreshStatus();
+    return outcome;
+  };
 
   const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
     // Closing the tab would cancel the agent mid-answer.
@@ -569,6 +616,19 @@ export function createStore(options: StoreOptions = {}) {
    * session with `settings`. The answer comes only after the agent's last reply, so a
    * new session is looked for in the session list meanwhile and followed live.
    */
+  // The chat the page waits on, so Stop can give it up.
+  let chatAbort: AbortController | null = null;
+
+  /**
+   * Stops the agent answering the pending chat: the request is given up, which the
+   * playground takes as the chat being cancelled before its next step, and `runs`, the
+   * programs it is running now, are cancelled.
+   */
+  const stopChat = (runs: number[]) => {
+    chatAbort?.abort();
+    for (const run of runs) void client.act("/api/cancel", { run }).catch(() => undefined);
+  };
+
   const chat = async (message: string, settings?: NewSessionSettings) => {
     const shown = snap.data.sessionId;
     const starting = settings !== undefined || shown === null;
@@ -579,6 +639,8 @@ export function createStore(options: StoreOptions = {}) {
       body.session = shown;
     }
     set({ pendingChat: { message, session: starting ? null : shown } });
+    const abort = new AbortController();
+    chatAbort = abort;
     window.addEventListener("beforeunload", warnBeforeLeaving);
     let polling = false;
     if (starting) {
@@ -599,7 +661,7 @@ export function createStore(options: StoreOptions = {}) {
       })();
     }
     try {
-      const outcome = await act<AgentResult>({ name: "chat" }, "/api/agent", body);
+      const outcome = await act<AgentResult>({ name: "chat" }, "/api/agent", body, abort.signal);
       if (starting) {
         polling = false;
         // A chat that failed after its session started still made the session; it is
@@ -621,6 +683,7 @@ export function createStore(options: StoreOptions = {}) {
       polling = false;
       awaitingChat = null;
       if (starting) followNewChat = false;
+      if (chatAbort === abort) chatAbort = null;
       window.removeEventListener("beforeunload", warnBeforeLeaving);
       set({ pendingChat: null });
     }
@@ -720,8 +783,11 @@ export function createStore(options: StoreOptions = {}) {
     test,
     rerun,
     cancel,
+    followUpInFlight,
     draft,
+    saveModelKey,
     chat,
+    stopChat,
   };
 }
 

@@ -28,6 +28,8 @@ export interface Call {
   method: string;
   headers: Headers;
   body: unknown;
+  /** The request's signal, so a handler can answer a request the page gives up. */
+  signal?: AbortSignal;
 }
 
 /** One way to answer a feed request: the text to send, and whether to close after it. */
@@ -64,7 +66,7 @@ export class FakeServer {
     const url = String(input);
     const headers = new Headers(init.headers);
     const body = typeof init.body === "string" ? JSON.parse(init.body) : undefined;
-    const call = { url, method: init.method ?? "GET", headers, body };
+    const call = { url, method: init.method ?? "GET", headers, body, signal: init.signal ?? undefined };
     this.calls.push(call);
     const custom = await this.handle(call);
     if (custom) return custom;

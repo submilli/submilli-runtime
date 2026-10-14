@@ -73,11 +73,10 @@ describe("the chat at the latest event", () => {
   it("an open chat session takes a reply; a stepped-back or ended one doesn't", () => {
     expect(askBox(frame(data, INITIAL_UI))).toEqual({ placeholder: "Reply in this session…", disabled: false, primary: true });
     expect(askBox(atStep(3))).toMatchObject({ disabled: true, reason: "Back to latest to use this" });
-    expect(askBox(frame(plainSession(), INITIAL_UI))).toEqual({
-      placeholder: "This session has ended. Start a new one to chat.",
-      disabled: true,
-      primary: false,
-    });
+    // An ended one has no box to type in: it says so, and offers New session.
+    expect(askBox(frame(plainSession(), INITIAL_UI)).none).toEqual({ text: "This session has ended.", offer: true });
+    // While the New session form is open, its own Start session is the way on.
+    expect(askBox(frame(data, { ...INITIAL_UI, mode: "setup" })).none).toEqual({ text: "Start the session above to chat.", offer: false });
   });
 
   it("a new session's messages show while the agent answers", () => {
@@ -91,5 +90,21 @@ describe("the chat at the latest event", () => {
     const none = frame({ ...data, sessionId: null, events: [] }, { ...INITIAL_UI, mode: "fresh", fresh: { ...fresh, messages: [] } });
     expect(chatEmptyText(none)).toBe("Session started. Ask the agent to do a task.");
     expect(chatEmptyText(frame(data, { ...INITIAL_UI, mode: "setup" }))).toBe("Set the session’s variables, then start a session to chat.");
+  });
+});
+
+describe("a rerun's own session", () => {
+  const running = (): ReturnType<typeof chatSession> => {
+    const d = chatSession();
+    const id = "rerun-session";
+    const summary = { ...d.sessions[0], session: id, sources: ["rerun"], runs: [], run_count: 0, model: undefined };
+    return { ...d, sessions: [summary], sessionId: id, events: [], runs: {} };
+  };
+
+  it("names the run it reran while it runs, when the page knows it, and takes no messages", () => {
+    const f = frame(running(), INITIAL_UI);
+    expect(chatEmptyText(f, 3)).toBe("No chat: this session is a rerun of run 3 that you started. The agent never saw it. Step through its calls with ← →.");
+    expect(chatEmptyText(f)).toBe("No chat: this session is a rerun that you started. The agent never saw it. Step through its calls with ← →.");
+    expect(askBox(f).none?.text).toBe("A rerun takes no messages.");
   });
 });

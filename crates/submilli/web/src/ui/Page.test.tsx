@@ -250,7 +250,7 @@ test("the sessions dialog lists sessions newest first, and Open loads one into t
 
   await user.click(within(rows[1]).getByRole("button", { name: "Open" }));
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  expect(await within(logPane()).findByText("Run 7 · the agent’s 1st program")).toBeInTheDocument();
+  expect(await within(logPane()).findByText("Run 7 · your rerun of run 1")).toBeInTheDocument();
   expect(within(logPane()).queryByText("Run 4 · the agent’s 4th program")).not.toBeInTheDocument();
   expect(within(codeRegion()).getByText("Run 7 ran this same program, from run 1.")).toBeInTheDocument();
   expect(server.requests()).toContain(`GET /api/sessions/${SESSION(1)}/events`);
@@ -337,6 +337,26 @@ test("test from a refusal row starts a test run, which shows under its source ru
   expect(within(row("f5")).getByText("Completed")).toBeInTheDocument();
   // Focus moves from the pressed button on to the new row.
   await vi.waitFor(() => expect(rowHead("f5")).toHaveFocus());
+});
+
+test("a rerun's row opens its own session to step through, and Back returns to the row", async () => {
+  const { server, user } = await openPage();
+  await runsLoaded();
+  await user.click(rowHead("r1"));
+  await user.click(within(row("r1")).getByText(/^Reruns by you \(/));
+  await user.click(rowHead("f7"));
+  await user.click(within(row("f7")).getByRole("button", { name: "Step through this rerun" }));
+
+  await expect.poll(() => server.requests()).toContain(`GET /api/sessions/${SESSION(1)}/events`);
+  const chat = screen.getByRole("region", { name: "Chat" });
+  expect(await within(chat).findByText(/No chat: this session is run 7, a rerun of run 1 that you started\. The agent never saw it\./)).toBeInTheDocument();
+  expect(within(chat).getByText("A rerun takes no messages.")).toBeInTheDocument();
+  // Opened at the rerun.
+  expect(row("r7").className).toContain("selected");
+
+  await user.click(within(chat).getByRole("button", { name: "Back to session " + SESSION(4).slice(0, 8) }));
+  await expect.poll(() => document.getElementById("pgrow-f7")?.className ?? "").toContain("selected");
+  expect(within(chat).queryByRole("button", { name: /^Back to session/ })).not.toBeInTheDocument();
 });
 
 test("a refused action shows the server's message in the toast", async () => {
@@ -436,6 +456,51 @@ test("New session with variables and a model starts a browser chat, shown in the
   await expect.poll(() => server.requests()).toContain(`GET /api/sessions/${SESSION(8)}/events`);
 });
 
+test("New session starts with the latest chat session's agent and settings, Advanced open when it has some", async () => {
+  const server = new FakeServer();
+  const list = fixtureJson<SessionList>("sessions.json");
+  // The latest chat session on OpenAI with settings, and an older one on Claude.
+  const chat = list.sessions[3];
+  list.sessions[3] = { ...chat, model: "openai:gpt-6-luna", settings: { effort: "low", max_output: 2000, provider: { temperature: 0.2 } } };
+  list.sessions.push({ ...chat, session: SESSION(9), started_at_micros: chat.started_at_micros - 1 });
+  server.handle = (call) => (call.url === "/api/sessions" ? json(list) : undefined);
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "New session" }));
+  expect(screen.getByRole("button", { name: /^OpenAI/ })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("textbox", { name: /^Model/ })).toHaveValue("gpt-6-luna");
+  expect(screen.getByRole("button", { name: "Low" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("textbox", { name: /^Max output/ })).toHaveValue("2000");
+  const settings = screen.getByRole("textbox", { name: "Provider settings as JSON" });
+  expect(settings).toHaveValue('{"temperature":0.2}');
+  expect(settings).toBeVisible();
+});
+
+test("a rerun running from the page can be cancelled from its notice", async () => {
+  const server = new FakeServer();
+  let cancelled: (() => void) | null = null;
+  const made = { ...fixtureJson<Show>("model-show-8-stopped.json"), outcome: { kind: "cancelled" } };
+  server.handle = (call) => {
+    if (call.url === "/api/rerun") return new Promise<Response>((resolve) => (cancelled = () => resolve(json({ exit: 1, result: made, text: "" }))));
+    if (call.url === "/api/runs?limit=1") return json({ runs: [], running: [{ run: 8, source: "rerun", started_at_micros: Date.now() * 1000, session: "throwaway" }] });
+    if (call.url === "/api/cancel") {
+      cancelled?.();
+      return json({ exit: 0, result: { kind: "cancel", run: 8 }, text: "" });
+    }
+    return undefined;
+  };
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.click(rowHead("r2"));
+  await user.click(within(row("r2")).getByRole("button", { name: "Rerun for real…" }));
+  await user.click(within(screen.getByRole("dialog", { name: "Rerun run 2 for real?" })).getByRole("button", { name: "Rerun for real" }));
+  const notice = (await screen.findByText("Running:")).closest(".pg-toast") as HTMLElement;
+  await user.click(within(notice).getByRole("button", { name: "Cancel" }));
+  await expect.poll(() => posts(server).map((c) => [c.url, c.body])).toContainEqual(["/api/cancel", { run: 8 }]);
+  // The rerun ends, cancelled, and says so as any other.
+  expect(await screen.findByText(/^Run 8 cancelled\. It’s under run 2/)).toBeInTheDocument();
+});
+
 test("Start session is blocked while a required variable is empty", async () => {
   const { server, user } = await openPage();
   await runsLoaded();
@@ -497,7 +562,7 @@ test("Copy for assistant puts the reference on the clipboard and shows the toast
   await user.click(rowHead("r2"));
   await user.click(within(row("r2")).getAllByRole("button", { name: "Copy for assistant" })[0]);
   const line =
-    "Submilli playground run 2 in project billing-demo (chat, denied, blueprint billing v1). Details: submilli playground show 2";
+    "Submilli playground, run 2 (details - project: `billing-demo`, blueprint: `billing v1`, outcome: `denied at check 2.1`, see_with: `submilli playground show 2`)";
   expect(await navigator.clipboard.readText()).toBe(line);
   const toast = screen.getByRole("status");
   expect(within(toast).getByText("Copied line for your assistant:")).toBeInTheDocument();
@@ -565,6 +630,120 @@ test("Tab stays inside an open dialog", async () => {
   expect(dialog.contains(document.activeElement)).toBe(true);
 });
 
+test("a form just opened shows no field as wrong until it's typed in or Start session is pressed", async () => {
+  const server = new FakeServer();
+  const status = fixtureJson<Record<string, unknown> & { binding: Record<string, unknown> }>("status.json");
+  status.binding = { ...status.binding, variables: {} };
+  server.handle = (call) => (call.url === "/api/status" ? json(status) : undefined);
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "New session" }));
+  const field = screen.getByRole("textbox", { name: /customerId/ });
+  expect(field).toHaveValue("");
+  expect(screen.queryByText("Required.")).not.toBeInTheDocument();
+  expect(field).not.toHaveAttribute("aria-invalid");
+  await user.click(screen.getByRole("button", { name: "Start session" }));
+  expect(screen.getByText("Required.")).toBeInTheDocument();
+  expect(field).toHaveAttribute("aria-invalid", "true");
+});
+
+test("with no model key, every provider can be picked, and the form says how to add a key", async () => {
+  const server = new FakeServer();
+  const status = fixtureJson<Record<string, unknown>>("status.json");
+  status.chat_models = [];
+  status.model_keys = [
+    { provider: "anthropic", variable: "ANTHROPIC_API_KEY", default_model: "claude-sonnet-5-5", from: null },
+    { provider: "openai", variable: "OPENAI_API_KEY", default_model: "gpt-5.5", from: null },
+    { provider: "google", variable: "GEMINI_API_KEY", default_model: "gemini-flash-latest", from: null },
+  ];
+  server.handle = (call) => (call.url === "/api/status" ? json(status) : undefined);
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "New session" }));
+  expect(screen.getByText(/No model key yet\. Add one with Add a key, put it in the project’s \.env/)).toBeInTheDocument();
+  const agent = within(screen.getByRole("group", { name: "Provider" }));
+  await user.click(agent.getByRole("button", { name: /^Gemini/ }));
+  expect(agent.getByRole("button", { name: /^Gemini/ })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("textbox", { name: /^Model/ })).toHaveValue("gemini-flash-latest");
+  expect(screen.getByText("Gemini needs a key first: use Add a key under Agent.")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Start session" })).toHaveAttribute("aria-disabled", "true");
+});
+
+test("a model key typed in the form's key dialog is saved, masked, and the provider shows", async () => {
+  const server = new FakeServer();
+  let saved = false;
+  const status = () => {
+    const s = fixtureJson<Record<string, unknown>>("status.json");
+    s.chat_models = saved ? ["openai:gpt-5.5"] : [];
+    s.model_keys = [
+      { provider: "anthropic", variable: "ANTHROPIC_API_KEY", from: null },
+      { provider: "openai", variable: "OPENAI_API_KEY", from: saved ? "secret_store" : null },
+      { provider: "google", variable: "GEMINI_API_KEY", from: null },
+    ];
+    return s;
+  };
+  server.handle = (call) => {
+    if (call.url === "/api/status") return json(status());
+    if (call.url === "/api/model-key") {
+      saved = true;
+      return json({ exit: 0, result: { variable: "OPENAI_API_KEY", from: "secret_store" }, text: "" });
+    }
+    return undefined;
+  };
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "New session" }));
+  await user.click(screen.getByRole("button", { name: "Add a key…" }));
+  const dialog = within(screen.getByRole("dialog", { name: "Model key" }));
+  await user.click(dialog.getByRole("button", { name: "OpenAI" }));
+  expect(dialog.getByText("No OpenAI key yet.")).toBeInTheDocument();
+  const field = dialog.getByLabelText("OpenAI API key");
+  expect(field).toHaveAttribute("type", "password");
+  expect(field).toHaveAttribute("autocomplete", "off");
+  await user.type(field, "sk-test-123");
+  await user.click(dialog.getByRole("button", { name: "Save key" }));
+  expect(server.calls.find((c) => c.url === "/api/model-key")?.body).toEqual({ provider: "openai", key: "sk-test-123" });
+  expect(await screen.findByText("Saved the OpenAI key.")).toBeInTheDocument();
+  expect(screen.queryByRole("dialog", { name: "Model key" })).not.toBeInTheDocument();
+  // The provider is picked now, and the key is nowhere on the page.
+  expect(await screen.findByRole("textbox", { name: /^Model/ })).toHaveValue("gpt-5.5");
+  expect(document.body.textContent).not.toContain("sk-test-123");
+  expect([...document.querySelectorAll("input")].some((i) => i.value === "sk-test-123")).toBe(false);
+});
+
+test("removing a saved model key asks once more before it goes", async () => {
+  const server = new FakeServer();
+  const status = fixtureJson<Record<string, unknown>>("status.json");
+  status.chat_models = ["openai:gpt-5.5"];
+  status.model_keys = [
+    { provider: "anthropic", variable: "ANTHROPIC_API_KEY", default_model: "claude-sonnet-5-5", from: null },
+    { provider: "openai", variable: "OPENAI_API_KEY", default_model: "gpt-5.5", from: "secret_store" },
+    { provider: "google", variable: "GEMINI_API_KEY", default_model: "gemini-flash-latest", from: null },
+  ];
+  server.handle = (call) => {
+    if (call.url === "/api/status") return json(status);
+    if (call.url === "/api/model-key") return json({ exit: 0, result: { variable: "OPENAI_API_KEY", from: null }, text: "" });
+    return undefined;
+  };
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "New session" }));
+  // The form carries on the last session's agent, Claude here; the key is OpenAI's.
+  await user.click(screen.getByRole("button", { name: "OpenAI" }));
+  await user.click(screen.getByRole("button", { name: "Replace or remove the OpenAI key…" }));
+  const dialog = within(screen.getByRole("dialog", { name: "Model key" }));
+  expect(dialog.getByText("A saved OpenAI key is in use. Saving replaces it.")).toBeInTheDocument();
+  await user.click(dialog.getByRole("button", { name: "Remove saved key…" }));
+  expect(dialog.getByText("Remove the saved OpenAI key? Chat can’t use OpenAI until you add a key again.")).toBeInTheDocument();
+  // Keep it goes back, with nothing sent.
+  await user.click(dialog.getByRole("button", { name: "Keep it" }));
+  expect(server.calls.some((c) => c.url === "/api/model-key")).toBe(false);
+  await user.click(dialog.getByRole("button", { name: "Remove saved key…" }));
+  await user.click(dialog.getByRole("button", { name: "Remove key" }));
+  expect(server.calls.find((c) => c.url === "/api/model-key")?.body).toEqual({ provider: "openai", key: null });
+  expect(await screen.findByText("Removed the saved OpenAI key.")).toBeInTheDocument();
+});
+
 test("a blueprint edit the playground refused is said, with the version that stays", async () => {
   const server = new FakeServer();
   const status = fixtureJson<Record<string, unknown> & { blueprint_status: Record<string, unknown> }>("status.json");
@@ -573,6 +752,21 @@ test("a blueprint edit the playground refused is said, with the version that sta
   await openPage(server);
   const note = await screen.findByText((_, el) => el?.getAttribute("role") === "note" && /wasn’t taken/.test(el.textContent ?? ""));
   expect(note.textContent).toContain("duplicate field permissions (line 30). Version 2 stays in force, and runs use it.");
+});
+
+test("Shift+Enter starts a new line in the message; Enter sends it, lines and all", async () => {
+  const server = new FakeServer();
+  server.handle = (call) => (call.url === "/api/agent" ? json({ exit: 1, result: { error: { kind: "failure", message: "no" } }, text: "" }) : undefined);
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "New session" }));
+  await user.click(screen.getByRole("button", { name: "Start session" }));
+  const box = screen.getByRole("textbox", { name: "Message the agent" });
+  await user.type(box, "First line{Shift>}{Enter}{/Shift}second line");
+  expect(box).toHaveValue("First line\nsecond line");
+  expect(server.calls.some((c) => c.url === "/api/agent")).toBe(false);
+  await user.type(box, "{Enter}");
+  await vi.waitFor(() => expect(server.calls.find((c) => c.url === "/api/agent")?.body).toMatchObject({ task: "First line\nsecond line" }));
 });
 
 test("a first message the agent couldn't answer shows in the chat, with what to do", async () => {
@@ -591,6 +785,52 @@ test("a first message the agent couldn't answer shows in the chat, with what to 
   expect(failed.textContent).toContain("Nothing was started.");
   // The message is kept, to send again.
   expect(screen.getByRole("textbox", { name: "Message the agent" })).toHaveValue("Hello");
+});
+
+test("Stop gives up the message the agent is answering, and says so", async () => {
+  const server = new FakeServer();
+  // The answer never comes; the request ends only when the page gives it up.
+  server.handle = (call) =>
+    call.url === "/api/agent"
+      ? new Promise<Response>((_, reject) => call.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))))
+      : undefined;
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.type(screen.getByRole("textbox", { name: "Message the agent" }), "Take your time{Enter}");
+  expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
+  await user.click(await screen.findByRole("button", { name: "Stop" }));
+  expect(await screen.findByText(/You stopped the agent\. It stops after the step it’s on/)).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  // Sent, so it's in the session already: the box doesn't get it back.
+  expect(screen.getByRole("textbox", { name: "Message the agent" })).toHaveValue("");
+  expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+});
+
+test("Stop on a new session's first message leaves it in the session it started, not in the box", async () => {
+  const server = new FakeServer();
+  let sent = false;
+  server.handle = (call) => {
+    if (call.url === "/api/sessions") {
+      const list = fixtureJson<SessionList>("sessions.json");
+      if (sent) list.sessions.unshift({ ...list.sessions[3], session: SESSION(8), sources: ["browser-chat"], runs: [], run_count: 0 });
+      return json(list);
+    }
+    if (call.url === "/api/agent") {
+      sent = true;
+      return new Promise<Response>((_, reject) => call.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))));
+    }
+    return undefined;
+  };
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "New session" }));
+  await user.click(screen.getByRole("button", { name: "Start session" }));
+  await user.type(screen.getByRole("textbox", { name: "Message the agent" }), "Hello{Enter}");
+  // The session it started is listed and opened while the agent answers.
+  await expect.poll(() => server.requests()).toContain(`GET /api/sessions/${SESSION(8)}/events`);
+  await user.click(await screen.findByRole("button", { name: "Stop" }));
+  expect(await screen.findByText(/You stopped the agent\. It stops after the step it’s on/)).toBeInTheDocument();
+  expect(screen.getByRole("textbox", { name: "Message the agent" })).toHaveValue("");
 });
 
 test("a message the agent couldn't answer still says so after a reload", async () => {
@@ -658,8 +898,12 @@ test("dismissing the unknown-run notice puts focus in the ask box", async () => 
   history.replaceState(null, "", "/#run=999");
   const { user } = await openPage();
   await screen.findByText("Run 999 isn’t recorded in this playground.");
+  const focus = vi.spyOn(HTMLElement.prototype, "focus");
   await user.click(screen.getByRole("button", { name: "Dismiss" }));
   await vi.waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message the agent" })));
+  // Without moving the page: the reader may have scrolled away from the box.
+  expect(focus).toHaveBeenLastCalledWith({ preventScroll: true });
+  focus.mockRestore();
 });
 
 test("a run's link is dropped from the address once another session opens or a new one is set up", async () => {

@@ -54,6 +54,16 @@ export function chatFailed(message: string, started: boolean): { text: string; n
   };
 }
 
+/** A message whose answer the reader stopped, where it was sent. */
+export function chatStopped(started: boolean): { text: string; note: string } {
+  return {
+    text: "You stopped the agent.",
+    note: started
+      ? "It stops after the step it’s on, and what it ran stays in the log. Send another message when you’re ready."
+      : "Nothing was started. Send again when you’re ready.",
+  };
+}
+
 export const SIGNED_OUT_WHY = "You’re signed out: the login link was used or has expired, or the playground restarted.";
 
 /** Why the first load failed; the page tries again on its own. */

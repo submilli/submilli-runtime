@@ -102,9 +102,16 @@ describe("the agent and its settings", () => {
     expect(checkSetup(status, form({ fields: ok, providerJson: '{"thinking": {}}' })).hint).toBe(
       "Provider settings can’t set “thinking”: the playground sets it itself (Claude’s thinking isn’t supported yet).",
     );
+    const withOpenai: Status = { ...status, chat_models: [...status.chat_models, "openai:gpt-5.5"] };
     expect(
-      checkSetup(status, form({ fields: ok, provider: "openai", model: "gpt-5", effort: "low", providerJson: '{"reasoning": {"effort": "high"}}' })).hint,
+      checkSetup(withOpenai, form({ fields: ok, provider: "openai", model: "gpt-5", effort: "low", providerJson: '{"reasoning": {"effort": "high"}}' })).hint,
     ).toBe("Provider settings can’t set “reasoning.effort”: Effort sets it.");
+  });
+
+  it("let a provider without a key be picked, but not start until it has one", () => {
+    const f = checkSetup(status, form({ fields: ok, provider: "google", model: "gemini-flash-latest" }));
+    expect(f.cantStart).toBe(true);
+    expect(f.hint).toBe("Gemini needs a key first: use Add a key under Agent.");
   });
 
   it("offer effort only where the provider takes it", () => {
@@ -117,11 +124,20 @@ describe("the agent and its settings", () => {
     expect(effortHint("anthropic")).toBe(
       "Not available for Claude yet: its thinking has to be handed back with each tool result, which chat doesn’t do yet.",
     );
-    expect(effortHint("openai")).toBe("OpenAI’s reasoning effort.");
+    expect(effortHint("openai")).toBe("How hard the model reasons before it answers. Default leaves it to the model.");
+    // Gemini doesn't take one either; the CLI says the same.
+    expect(effortOptions("google", "").filter((o) => !o.disabled).map((o) => o.label)).toEqual(["Default"]);
+    expect(effortOptions("openai", "").every((o) => !o.disabled)).toBe(true);
+    expect(effortHint("google")).toBe("Not available for Gemini yet: its thinking setting differs from model to model.");
   });
 
   it("offer one provider per model the playground started with, and its default model", () => {
-    expect(providerOptions(status, "anthropic")).toEqual([{ provider: "anthropic", label: "Claude", model: "claude-sonnet-5-5", pressed: true }]);
+    expect(providerOptions(status, "anthropic")).toEqual([
+      { provider: "anthropic", label: "Claude", model: "claude-sonnet-5-5", pressed: true, needs: null },
+      // Every provider chat works with can be picked; one without a key says so.
+      { provider: "openai", label: "OpenAI", model: "", pressed: false, needs: "No OpenAI key yet (OPENAI_API_KEY)." },
+      { provider: "google", label: "Gemini", model: "", pressed: false, needs: "No Gemini key yet (GEMINI_API_KEY)." },
+    ]);
     expect(modelHint(status, "anthropic")).toBe(
       "Default for Claude: claude-sonnet-5-5. Any model name the provider knows works; an unknown one gets the provider’s own error.",
     );

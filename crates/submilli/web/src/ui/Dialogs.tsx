@@ -1,11 +1,14 @@
 // The page's dialogs, the More panel and the toast. Each dialog takes focus when it opens;
 // the page gives focus back to whatever opened it when it closes.
-import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 
-import type { Draft, Status } from "../api/types";
+import type { ActionOutcome } from "../api/client";
+import type { Draft, SavedKey, Status } from "../api/types";
 import type { BlueprintDialog } from "../model/blueprint";
 import { forAsst } from "../model/refs";
 import type { FixedVar, SessionRow } from "../model/sessions";
+import { keyNote, keyNow, keySaved } from "../model/setup";
+import { providerName } from "../model/format";
 import { CloseIcon, cls, Inline } from "./controls";
 import { BP_LOADING, DRAFT_NOTE, draftCommand, draftWhere } from "./wording";
 
@@ -157,6 +160,121 @@ export function SessionsDialog(props: {
         </table>
         <p className="pg-muted">Newest first. Tests and reruns aren't listed as sessions; they show under the run they reran.</p>
       </div>
+    </Dialog>
+  );
+}
+
+/**
+ * Adds or replaces a provider's model key: typed in a masked field and saved in the local
+ * secret store, as `submilli secret put` does. The key leaves the field only in the save
+ * request, and the field is emptied whatever the outcome.
+ */
+export function KeyDialog(props: {
+  status: Status;
+  provider: string;
+  onSave: (provider: string, key: string | null) => Promise<ActionOutcome<SavedKey>>;
+  /** After a save or removal: what to say, and which provider's key it was. */
+  onDone: (notice: string, provider: string, removed: boolean) => void;
+  onClose: () => void;
+}) {
+  const providers = (props.status.model_keys?.length ? props.status.model_keys.map((k) => k.provider) : ["anthropic", "openai", "google"]);
+  const [provider, setProvider] = useState(props.provider || providers[0] || "");
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  // Removing a saved key asks once more: chat can't use that provider until one is added again.
+  const [removing, setRemoving] = useState(false);
+  const now = keyNow(props.status, provider);
+  const name = providerName(provider);
+  const run = async (value: string | null) => {
+    setBusy(true);
+    setError("");
+    const outcome = await props.onSave(provider, value);
+    setBusy(false);
+    setKey("");
+    setRemoving(false);
+    if (!outcome.ok) return setError(outcome.message);
+    props.onDone(keySaved(provider, outcome.result, value === null), provider, value === null);
+  };
+  const submit = (ev: FormEvent) => {
+    ev.preventDefault();
+    if (key.trim() && !busy) void run(key);
+  };
+  return (
+    <Dialog id="dlg-key" title="Model key" size="narrow" onClose={props.onClose}>
+      <form className="pg-dialog-body pg-keyform" onSubmit={submit}>
+        <div className="pg-choices" role="group" aria-label="Provider">
+          {providers.map((p) => (
+            <button
+              type="button"
+              key={p}
+              className={cls("pg-btn", p === provider && "pg-primary")}
+              aria-pressed={p === provider}
+              onClick={() => {
+                setProvider(p);
+                setError("");
+                setRemoving(false);
+              }}
+            >
+              {providerName(p)}
+            </button>
+          ))}
+        </div>
+        <p id="key-now">{now.text}</p>
+        {removing ? (
+          <div className="pg-confirm" role="group" aria-label="Confirm removal">
+            <p>
+              Remove the saved {name} key? Chat can’t use {name} until you add a key again.
+            </p>
+            <div className="pg-setup-row">
+              <button type="button" className="pg-btn pg-danger" data-autofocus="true" disabled={busy} onClick={() => void run(null)}>
+                Remove key
+              </button>
+              <button type="button" className="pg-btn" onClick={() => setRemoving(false)}>
+                Keep it
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <label className="pg-vfield">
+              <span className="pg-vname">{now.saved || now.text.startsWith("A ") ? "New " + name + " API key" : name + " API key"}</span>
+              <input
+                type="password"
+                aria-label={name + " API key"}
+                autoComplete="off"
+                spellCheck={false}
+                data-autofocus="true"
+                value={key}
+                onChange={(ev) => setKey(ev.target.value)}
+                aria-describedby={"key-now key-note" + (error ? " key-error" : "")}
+                aria-invalid={!!error || undefined}
+              />
+              {error && (
+                <small id="key-error" className="pg-field-err">
+                  {error}
+                </small>
+              )}
+              <small id="key-note">
+                <Inline text={keyNote(props.status, provider)} />
+              </small>
+            </label>
+            <div className="pg-setup-row">
+              <button type="submit" className="pg-btn pg-primary" aria-disabled={!key.trim() || busy || undefined} disabled={busy}>
+                {now.saved ? "Replace key" : "Save key"}
+              </button>
+              {now.saved && (
+                <button type="button" className="pg-btn" disabled={busy} onClick={() => setRemoving(true)}>
+                  Remove saved key…
+                </button>
+              )}
+              <button type="button" className="pg-btn" onClick={props.onClose}>
+                Cancel
+              </button>
+            </div>
+          </>
+        )}
+      </form>
     </Dialog>
   );
 }
@@ -389,9 +507,13 @@ export interface Toast {
   body?: string;
   /** Closes itself after a few seconds; a toast that must be read or copied from stays. */
   auto: boolean;
+  /** What it says is running can be cancelled from here. */
+  cancelable?: boolean;
+  /** What it says is running can be watched, in its own session. */
+  watchable?: boolean;
 }
 
-export function ToastView(props: { toast: Toast; onHold: () => void; onRelease: () => void; onDismiss: () => void }) {
+export function ToastView(props: { toast: Toast; onHold: () => void; onRelease: () => void; onDismiss: () => void; onCancel?: () => void; onWatch?: () => void }) {
   return (
     <div className="pg-toast" role="status" onMouseEnter={props.onHold} onMouseLeave={props.onRelease}>
       <div className="pg-toast-text">
@@ -400,6 +522,16 @@ export function ToastView(props: { toast: Toast; onHold: () => void; onRelease: 
         </div>
         {props.toast.body && <code className="pg-toast-body">{props.toast.body}</code>}
       </div>
+      {props.toast.watchable && props.onWatch && (
+        <button className="pg-btn" onClick={props.onWatch}>
+          Watch it
+        </button>
+      )}
+      {props.toast.cancelable && props.onCancel && (
+        <button className="pg-btn" onClick={props.onCancel}>
+          Cancel
+        </button>
+      )}
       <button className="pg-link" onClick={props.onDismiss}>
         Dismiss
       </button>

@@ -34,7 +34,7 @@ describe("the blueprint dialog", () => {
     expect(d.focus).toEqual({
       label: "Highlighted: line 27, nearest rule charges-for-signed-in-customer",
       copyText:
-        "Blueprint billing v1, line 27 (nearest rule charges-for-signed-in-customer), in Submilli playground project billing-demo. Print that version: submilli playground changes --version 1",
+        "Submilli playground, blueprint line 27 (details - project: `billing-demo`, blueprint: `billing v1`, rule: `nearest rule charges-for-signed-in-customer`, see_with: `submilli playground changes --version 1`)",
     });
   });
 

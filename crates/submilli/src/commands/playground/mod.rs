@@ -37,6 +37,8 @@ mod fsx;
 #[cfg(unix)]
 mod host;
 #[cfg(unix)]
+mod keys;
+#[cfg(unix)]
 mod labels;
 #[cfg(unix)]
 mod log;
@@ -153,9 +155,9 @@ pub enum PlaygroundCmd {
     /// Chat with an agent using your own model key, the way a production agent runs: it uses
     /// the playground's tools and prints its answer. Each chat starts a session; send the
     /// next message in it with `--session`. The session stays open until it sits idle past
-    /// the blueprint's idle timeout or `session end` ends it. The key comes from the
-    /// playground's environment
-    /// (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY), the model from `--model` or
+    /// the blueprint's idle timeout or `session end` ends it. The key (ANTHROPIC_API_KEY,
+    /// OPENAI_API_KEY, or GEMINI_API_KEY) comes from the playground's environment, else the
+    /// project's `.env`, else `submilli secret put <NAME>`; the model from `--model` or
     /// SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
     Chat(ChatArgs),
     /// Copy a coding assistant's stand-in conversation to the running playground: a
@@ -966,7 +968,7 @@ impl<'a> ReadyRecord<'a> {
                 println!("{heading} (pid {}).", self.description.pid);
                 print_description(self.description, self.packages_error);
                 println!(
-                    "  open:       {}  (single use, expires in {})",
+                    "  open:       {}  (signs in one browser; open it within {})",
                     self.login_url,
                     login_code_ttl_text()
                 );
@@ -1015,7 +1017,10 @@ fn print_description(description: &host::Description, packages_error: Option<&st
     }
     match &description.provider {
         Some(provider) => {
-            println!("  provider:   {provider} (keys exported after start need a restart)");
+            match &description.key_from {
+                Some(from) => println!("  provider:   {provider} (key from {from})"),
+                None => println!("  provider:   {provider}"),
+            }
             if !description.chat_models.is_empty() {
                 println!(
                     "  chat:       {} (another: chat --model <provider>:<model>)",
@@ -1024,9 +1029,15 @@ fn print_description(description: &host::Description, packages_error: Option<&st
             }
         }
         None => println!(
-            "  provider:   none; export ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY \
-             and restart"
+            "  provider:   none; put ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY in \
+             the project's .env, or `submilli secret put OPENAI_API_KEY` (no restart needed)"
         ),
+    }
+    if description.env_file_tracked {
+        println!(
+            "  warning:    the project's .env isn't ignored by git; add it to .gitignore so \
+             its keys aren't committed"
+        );
     }
     println!("  log:        {}", description.log_file.display());
     print_packages(&description.packages, packages_error);
@@ -1250,9 +1261,30 @@ mod unix {
             return Ok(false);
         }
         let scaffolded = scaffold::init(&root)?;
-        report_init(&scaffolded, Output::Text);
+        // The starter's data has a customer to try it with, so its playground starts
+        // bound to it: the page's New session form opens filled in.
+        let state = StateDir::for_project(&scaffolded.root);
+        state.create()?;
+        let binding = super::state::RememberedBinding {
+            variables: [(STARTER_VARIABLE.0.to_owned(), STARTER_VARIABLE.1.to_owned())].into(),
+            ..Default::default()
+        };
+        super::state::write_binding_at(&state.binding_path(), &binding)?;
+        for file in &scaffolded.files {
+            eprintln!("created {}", file.display());
+        }
+        eprintln!(
+            "Created a starter project: package {}, blueprint `{}`, and {}={} bound, a customer in its data.",
+            scaffold::PACKAGE_NAME,
+            scaffold::BLUEPRINT_NAME,
+            STARTER_VARIABLE.0,
+            STARTER_VARIABLE.1,
+        );
         Ok(true)
     }
+
+    /// The variable the starter's example runs under, and a customer in its data.
+    const STARTER_VARIABLE: (&str, &str) = ("customerId", "cus_northwind");
 
     pub(super) fn init(output: Output) -> Result<ExitCode> {
         let cwd = std::env::current_dir().context("reading the current directory")?;
@@ -1586,7 +1618,10 @@ mod unix {
             ),
             Output::Text => {
                 println!("{login_url}");
-                println!("Single use; expires in {}.", login_code_ttl_text());
+                println!(
+                    "Signs in one browser; open it within {}.",
+                    login_code_ttl_text()
+                );
             }
         }
         Ok(ExitCode::SUCCESS)

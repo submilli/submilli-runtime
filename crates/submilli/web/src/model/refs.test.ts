@@ -13,25 +13,25 @@ describe("copy-for-assistant lines", () => {
 
   it("each read as one line with the command that prints the item", () => {
     expect(runRef(names, data.runs[2])).toBe(
-      "Submilli playground run 2 in project billing-demo (chat, denied, blueprint billing v1). Details: submilli playground show 2",
+      "Submilli playground, run 2 (details - project: `billing-demo`, blueprint: `billing v1`, outcome: `denied at check 2.1`, see_with: `submilli playground show 2`)",
     );
     expect(runRef(names, data.runs[3])).toBe(
-      "Submilli playground run 3 in project billing-demo (chat, rejected, blueprint billing v1). Details: submilli playground show 3",
+      "Submilli playground, run 3 (details - project: `billing-demo`, blueprint: `billing v1`, outcome: `rejected: its program didn’t compile`, see_with: `submilli playground show 3`)",
     );
     expect(decisionRef(names, data.runs[1], data.runs[1].decisions[1])).toBe(
-      "Submilli playground decision 1.2 in project billing-demo (allowed @acme/billing → fs.read, blueprint billing v1). Details: submilli playground explain 1.2",
+      "Submilli playground, check 1.2 (details - project: `billing-demo`, blueprint: `billing v1`, outcome: `allowed`, call: `@acme/billing → fs.read`, see_with: `submilli playground explain 1.2`)",
     );
     expect(programRef(names, 4)).toBe(
-      "Submilli playground program of run 4 in project billing-demo. Print it: submilli playground show 4 --program",
+      "Submilli playground, the program of run 4 (details - project: `billing-demo`, see_with: `submilli playground show 4 --program`)",
     );
     expect(sessionRef(names, "5e550000-0000-4000-8000-000000000004")).toBe(
-      "Submilli playground session 5e550000-0000-4000-8000-000000000004 in project billing-demo. Its runs: submilli playground runs --session 5e550000-0000-4000-8000-000000000004",
+      "Submilli playground, session 5e550000 (details - project: `billing-demo`, see_with: `submilli playground runs --session 5e550000-0000-4000-8000-000000000004`)",
     );
     expect(ruleRef(names, 2, 35, "rule globex-support")).toBe(
-      "Blueprint billing v2, line 35 (rule globex-support), in Submilli playground project billing-demo. Print that version: submilli playground changes --version 2",
+      "Submilli playground, blueprint line 35 (details - project: `billing-demo`, blueprint: `billing v2`, rule: `globex-support`, see_with: `submilli playground changes --version 2`)",
     );
     expect(ruleRef(names, 2, 35, "")).toBe(
-      "Blueprint billing v2, line 35, in Submilli playground project billing-demo. Print that version: submilli playground changes --version 2",
+      "Submilli playground, blueprint line 35 (details - project: `billing-demo`, blueprint: `billing v2`, see_with: `submilli playground changes --version 2`)",
     );
   });
 

@@ -69,7 +69,7 @@ const PROVIDERS: [ProviderRow; 3] = [
         name: "openai",
         kind: ProviderKind::OpenAi,
         keys: &["OPENAI_API_KEY"],
-        default_model: "gpt-5.5",
+        default_model: "gpt-6-luna",
         base_url_variable: "OPENAI_BASE_URL",
         default_base_url: "https://api.openai.com",
     },
@@ -106,8 +106,9 @@ pub(crate) fn choose(env: impl Fn(&str) -> Option<String>) -> Result<Choice, Str
             key_of(&env, row).map(|key| choice(&env, row, row.default_model.to_owned(), key))
         })
         .ok_or_else(|| {
-            "no provider configured: start the playground with ANTHROPIC_API_KEY, \
-             OPENAI_API_KEY, or GEMINI_API_KEY set (and optionally \
+            "no provider configured: set ANTHROPIC_API_KEY, OPENAI_API_KEY, or \
+             GEMINI_API_KEY in the project's .env, with `submilli secret put <NAME>`, or \
+             in the shell before the playground starts (and optionally \
              SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>)"
                 .to_owned()
         })
@@ -238,19 +239,73 @@ pub(crate) fn max_calls_per_answer(requested: Option<u16>) -> Result<usize, Stri
     Ok(usize::from(limit))
 }
 
-/// [`choose`] from this process's environment.
+/// Whether `name` is one the playground reads for chat: a provider's key or address,
+/// or the model variable. Only these come from the project's `.env` or the secret store.
+pub(crate) fn reads(name: &str) -> bool {
+    name == MODEL_VARIABLE
+        || PROVIDERS
+            .iter()
+            .any(|row| row.keys.contains(&name) || row.base_url_variable == name)
+}
+
+/// [`choose`] from where the playground finds keys (see [`super::keys`]).
 pub(crate) fn configured() -> Result<Choice, String> {
-    choose(|name| std::env::var(name).ok())
+    choose(super::keys::value)
 }
 
-/// [`choose_named`] from this process's environment.
+/// [`choose_named`] from where the playground finds keys.
 pub(crate) fn configured_named(named: &str, source: &str) -> Result<Choice, String> {
-    choose_named(|name| std::env::var(name).ok(), named, source)
+    choose_named(super::keys::value, named, source)
 }
 
-/// [`offered`] from this process's environment.
+/// [`offered`] from where the playground finds keys.
 pub(crate) fn offered_here() -> Vec<String> {
-    offered(|name| std::env::var(name).ok())
+    offered(super::keys::value)
+}
+
+/// The variable a key saved for `provider` goes under: its first.
+pub(crate) fn key_variable(provider: &str) -> Option<&'static str> {
+    PROVIDERS
+        .iter()
+        .find(|row| row.name == provider)
+        .and_then(|row| row.keys.first().copied())
+}
+
+/// Where chat finds `provider`'s key now, under any of its variables.
+pub(crate) fn key_from(provider: &str) -> Option<super::keys::Source> {
+    let row = PROVIDERS.iter().find(|row| row.name == provider)?;
+    row.keys
+        .iter()
+        .find_map(|key| super::keys::lookup(key).map(|(_, source)| source))
+}
+
+/// For each provider chat works with: the variable its key goes under, its default
+/// model, and where its key is found now.
+pub(crate) fn keys_now() -> Vec<ProviderKey> {
+    PROVIDERS
+        .iter()
+        .map(|row| ProviderKey {
+            provider: row.name.to_owned(),
+            variable: row.keys[0].to_owned(),
+            default_model: row.default_model.to_owned(),
+            from: key_from(row.name),
+        })
+        .collect()
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct ProviderKey {
+    pub(crate) provider: String,
+    pub(crate) variable: String,
+    /// The model a session with this provider gets unless it names one.
+    pub(crate) default_model: String,
+    pub(crate) from: Option<super::keys::Source>,
+}
+
+/// Where `choice`'s key was found.
+pub(crate) fn key_source(choice: &Choice) -> Option<super::keys::Source> {
+    super::keys::lookup(choice.key_variable).map(|(_, source)| source)
 }
 
 impl Choice {
@@ -577,7 +632,7 @@ pub(crate) enum Stopped {
 /// it sits idle past the blueprint's idle timeout, or `session end` does.
 pub(crate) fn run(setup: &Setup<'_>, task: &str) -> Result<Outcome, String> {
     // Trimmed as `choose` read it, so the header and the redaction use the same text.
-    let key = std::env::var(setup.choice.key_variable)
+    let key = super::keys::value(setup.choice.key_variable)
         .map(|key| key.trim().to_owned())
         .unwrap_or_default();
     let clean = |message: String| {
@@ -1044,7 +1099,7 @@ mod tests {
     fn without_it_the_first_key_set_picks_with_its_default_model() {
         let chosen = choose(env(&[("OPENAI_API_KEY", "o"), ("GOOGLE_API_KEY", "g")])).unwrap();
         assert_eq!(chosen.provider, "openai");
-        assert_eq!(chosen.model, "gpt-5.5");
+        assert_eq!(chosen.model, "gpt-6-luna");
         assert_eq!(chosen.base_url, "https://api.openai.com");
         let chosen = choose(env(&[("GOOGLE_API_KEY", "g")])).unwrap();
         assert_eq!(chosen.key_variable, "GOOGLE_API_KEY");

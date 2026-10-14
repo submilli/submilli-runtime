@@ -4,13 +4,15 @@ import { sourceKey, type Show } from "../api/types";
 import { capitalize, size } from "./format";
 import { programRef } from "./refs";
 import { selectedRun } from "./chat";
-import { byAgent, endedRuns, fileTool, programNumber, type Call, type Frame } from "./steps";
+import { byAgent, endedRuns, fileTool, followUpName, programNumber, type Call, type Frame } from "./steps";
 
 /** "program 2", or the run your coding assistant made. */
 function programName(f: Frame, run: number): string {
   const tool = fileTool(f, run);
   if (tool) return "the agent’s " + tool + " call";
-  return byAgent(f, run) ? "program " + programNumber(f, run) : "your assistant’s program";
+  if (byAgent(f, run)) return "program " + programNumber(f, run);
+  const followUp = followUpName(f, run);
+  return followUp ? "the program of " + followUp : "your assistant’s program";
 }
 
 export interface CodeLine {

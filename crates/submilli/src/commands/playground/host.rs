@@ -75,8 +75,13 @@ pub(crate) struct Description {
     pub(crate) egress_grants: Vec<String>,
     pub(crate) provider: Option<String>,
     pub(crate) model: Option<String>,
+    /// Where the provider's key was found, in words: "the project's .env".
+    pub(crate) key_from: Option<String>,
+    /// The project's `.env` is in a git repository that doesn't ignore it.
+    pub(crate) env_file_tracked: bool,
     /// The models a chat can use, as `<provider>:<model>`, the default first: one for
-    /// each provider whose key the playground started with.
+    /// each provider the playground has a key for. `status` reads them again, so a key
+    /// added to the `.env` or the secret store shows without a restart.
     pub(crate) chat_models: Vec<String>,
     /// The blueprint's package closure at start: each package's origin and whether a
     /// program may import it. `status` reads it again for the blueprint in force.
@@ -115,6 +120,9 @@ pub(crate) struct Status {
     pub(crate) health: Option<String>,
     /// The binding new runs get: variable values, and secret names only.
     pub(crate) binding: BindingView,
+    /// Each provider chat works with, the variable its key goes under, and where its key
+    /// is found now: the page offers to add or replace one.
+    pub(crate) model_keys: Vec<super::agent::ProviderKey>,
 }
 
 /// A variable the blueprint declares, and whether a run must have a value for it.
@@ -526,7 +534,8 @@ fn describe(
     server_port: u16,
     packages: Vec<ClosureEntry>,
 ) -> Description {
-    let (provider, model) = detect_provider();
+    super::keys::use_project(&options.project.root);
+    let (provider, model, key_from) = detect_provider();
     let provider = provider.map(str::to_owned);
     Description {
         project: options.project.root.clone(),
@@ -543,24 +552,24 @@ fn describe(
         egress_grants: options.egress.grants(),
         provider,
         model,
+        key_from,
+        env_file_tracked: super::keys::env_file_tracked(&options.project.root),
         chat_models: super::agent::offered_here(),
         packages,
     }
 }
 
-/// The bring-your-own-key provider the environment names when the playground
-/// starts. Only which variable is set is read here, never its value.
-fn detect_provider() -> (Option<&'static str>, Option<String>) {
+/// The bring-your-own-key provider chat uses now, its model, and where its key was
+/// found. Only where a key is is reported, never its value.
+fn detect_provider() -> (Option<&'static str>, Option<String>, Option<String>) {
     match super::agent::configured() {
-        Ok(choice) => (Some(choice.provider), Some(choice.model)),
+        Ok(choice) => {
+            let from = super::agent::key_source(&choice).map(|source| source.words().to_owned());
+            (Some(choice.provider), Some(choice.model), from)
+        }
         // Not configured, or configured wrong: `chat` says how; the model variable is
         // shown as it was set.
-        Err(_) => (
-            None,
-            std::env::var(super::agent::MODEL_VARIABLE)
-                .ok()
-                .filter(|model| !model.trim().is_empty()),
-        ),
+        Err(_) => (None, super::keys::value(super::agent::MODEL_VARIABLE), None),
     }
 }
 
@@ -827,6 +836,23 @@ pub(crate) async fn mint_login_code(State(state): State<ControlState>) -> Respon
 
 pub(crate) async fn status(State(state): State<ControlState>) -> Response {
     let mut description = state.0.description.clone();
+    // A key added to the project's `.env` or the secret store since start counts now.
+    let mut model_keys = Vec::new();
+    if let Ok(((provider, model, key_from), offered, keys)) = tokio::task::spawn_blocking(|| {
+        (
+            detect_provider(),
+            super::agent::offered_here(),
+            super::agent::keys_now(),
+        )
+    })
+    .await
+    {
+        description.provider = provider.map(str::to_owned);
+        description.model = model;
+        description.key_from = key_from;
+        description.chat_models = offered;
+        model_keys = keys;
+    }
     let mut declared_variables = Vec::new();
     // The variables and the closure of the blueprint in force now, which a save may have
     // changed.
@@ -868,6 +894,7 @@ pub(crate) async fn status(State(state): State<ControlState>) -> Response {
         packages_error,
         health: None,
         binding: state.actions().binding_view(),
+        model_keys,
     })
     .into_response()
 }

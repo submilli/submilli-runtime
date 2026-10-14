@@ -6,13 +6,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Draft, Show } from "../api/types";
 import { sourceKey } from "../api/types";
 import { packageRules, blueprintDialog } from "../model/blueprint";
-import { askBox, chatEmptyText, chatItems, runWord, type ChatItem } from "../model/chat";
+import { askBox, chatEmptyText, chatItems, noChat, runWord, type ChatItem } from "../model/chat";
 import { codePane } from "../model/code";
 import { capitalize, copyNotice, end, plainBy } from "../model/format";
 import { expandAll, logPane, type Action, type RuleSpot } from "../model/log";
 import { actionBlock, footer, sessionBar, sessionRows } from "../model/sessions";
 import { checkSetup, initialSetup, INITIAL_SETUP, type SetupForm } from "../model/setup";
-import { AT_START, frame, nextKey, playFrom, prevKey, runsInFlight } from "../model/steps";
+import { AT_START, byAgent, frame, nextKey, playFrom, prevKey, runsInFlight } from "../model/steps";
 import { summary } from "../model/summary";
 import { INITIAL_UI, type Dialog, type UiState } from "../model/ui";
 import type { NewSessionSettings, PageStore, Snapshot } from "../store/store";
@@ -24,7 +24,7 @@ import { LogPane, type LogActions } from "./LogPane";
 import { SessionBar } from "./SessionBar";
 import { StepBar, Summary } from "./Summary";
 import { useFollow } from "./useFollow";
-import { UNREACHABLE } from "../api/client";
+import { STOPPED, UNREACHABLE } from "../api/client";
 import { runHash } from "../api/login";
 import {
   newSessionNotice,
@@ -36,6 +36,7 @@ import {
   answering,
   blueprintRefused,
   chatFailed,
+  chatStopped,
   commandOf,
   confirmOf,
   draftRef,
@@ -90,7 +91,7 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
   const [cancelling, setCancelling] = useState<number | null>(null);
   // An action the page sent and is waiting on, so a second click doesn't send it again.
   const busy = useRef(false);
-  const askInput = useRef<HTMLInputElement>(null);
+  const askInput = useRef<HTMLTextAreaElement>(null);
   // A row picked before it exists (a new rerun) comes into view once it does.
   const scrollTo = useRef<string | null>(null);
   // The new row of a test or rerun the page started, to take focus once it shows.
@@ -152,12 +153,18 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
   // Another session shown starts the reader over, at its latest event. One being set up
   // stays as it is: its Back now goes to the session shown.
   const shown = useRef(data.sessionId);
+  // What to show in the next session opened, as when stepping through a rerun opens its session at the rerun.
+  const showNext = useRef<Partial<UiState> | null>(null);
   useEffect(() => {
     if (shown.current === data.sessionId) return;
     shown.current = data.sessionId;
     setChatText("");
+    const next = showNext.current ?? {};
+    showNext.current = null;
+    // Stepping through a rerun is left once another session than its own shows.
+    if (stepping && data.sessionId !== stepping.to) setStepping(null);
     // A dialog or More the reader opened meanwhile stays open.
-    setUi((u) => (u.mode === "setup" ? u : { ...INITIAL_UI, focus: u.focus, dlg: u.dlg, more: u.more }));
+    setUi((u) => (u.mode === "setup" ? u : { ...INITIAL_UI, focus: u.focus, dlg: u.dlg, more: u.more, ...next }));
     setSetupFrom(ui.mode === "setup" && data.sessionId !== null ? INITIAL_UI : null);
     // A run's link names one session; once another shows, it no longer applies. One still
     // waiting for its session to show stays.
@@ -322,11 +329,18 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
         openDlg("draft");
         return;
       }
-      showToast({ head: "Running:", body: commandOf(action), auto: false });
-      const outcome = action.kind === "test" ? await store.test(action.run, action.mode) : await store.rerun(action.run);
+      const startedIn = shown.current;
+      showToast({ head: "Running:", body: commandOf(action), auto: false, cancelable: true, watchable: true });
+      // Runs started from now on are this action's, for its Cancel.
+      followUp.current = { label: action.kind, since: Date.now() * 1000 - 2_000_000, source: action.run };
+      const outcome = await (action.kind === "test" ? store.test(action.run, action.mode) : store.rerun(action.run)).finally(() => {
+        followUp.current = null;
+      });
       if (!outcome.ok) return refused(outcome.message);
       const made: Show = outcome.result;
       const source = action.run;
+      // Watched in its own session meanwhile: the reader is there, so only the notice says how it ended.
+      if (shown.current !== startedIn) return showToast({ head: followUpDone(source, made.run, end(made.outcome)), auto: true });
       // The new run shows under the run it followed, opened so it can be seen.
       focusRow.current = "f" + made.run;
       patch((u) => ({
@@ -345,6 +359,47 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
     setPending(null);
     closeDlg();
     if (action) void act(action, true);
+  };
+
+  // A test's or rerun's own session, opened from its row: where the reader came from, so they can go back.
+  const [stepping, setStepping] = useState<{ to: string; from: string | null; run: number; source: number | null; kind: string } | null>(null);
+  const stepThrough = async (session: string, run: number, kind?: "test" | "rerun", from?: number) => {
+    const made = data.runs[run];
+    const source = made ? made.rerun_of ?? made.test?.source_run ?? null : from ?? null;
+    // Listed first, so the session opens with its runs.
+    await store.refreshSessions();
+    setStepping({ to: session, from: data.sessionId, run, source, kind: kind ?? (made?.rerun_of ? "rerun" : "test") });
+    showNext.current = { sel: "r" + run, open: { ["r" + run]: true } };
+    void store.openSession(session);
+  };
+  const stepBack = () => {
+    const back = stepping;
+    if (!back?.from) return;
+    // Back where the row was: under its source run, opened.
+    if (back.source !== null) showNext.current = { sel: "f" + back.run, open: { ["r" + back.source]: true, ["f" + back.run]: true }, followOpen: { [back.source]: true } };
+    scrollTo.current = "f" + back.run;
+    void store.openSession(back.from);
+  };
+
+  // The test or rerun running now, for the Cancel on its notice.
+  const followUp = useRef<{ label: "test" | "rerun"; since: number; source: number } | null>(null);
+  // Opens the running test's or rerun's own session, to watch its calls as they come.
+  const watchFollowUp = async () => {
+    const going = followUp.current;
+    if (!going) return;
+    const row = await store.followUpInFlight(going.label, going.since);
+    if (row?.session) await stepThrough(row.session, row.run, going.label, going.source);
+  };
+  const cancelFollowUp = async () => {
+    const going = followUp.current;
+    if (!going) return;
+    const row = await store.followUpInFlight(going.label, going.since);
+    // Finished meanwhile: what it did shows as it ends.
+    if (row === null || !followUp.current) return;
+    const run = row.run;
+    showToast({ head: "Cancelling run " + run + ": it ends as cancelled once its calls drain.", auto: false });
+    const outcome = await store.cancel(run);
+    if (!outcome.ok && followUp.current) refused(outcome.message);
   };
 
   // Cancel waits until the run has ended, not just until the playground took the request.
@@ -379,7 +434,7 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
     forgetRunLink();
     // The form is in the session bar, which focus view hides.
     setUi(() => ({ ...INITIAL_UI, mode: "setup" }));
-    setForm(initialSetup(status));
+    setForm(initialSetup(status, data.sessions));
     // A message typed for another session isn't the new one's first.
     setChatText("");
   };
@@ -423,9 +478,11 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
       if (!outcome.ok) {
         // The failure shows where the message went: in the session the playground made
         // for it, or, when none was made, in the new session still being set up.
-        setFailure({ session, message: outcome.message, started: session !== null });
+        const stopped = outcome.kind === STOPPED;
+        setFailure({ session, message: outcome.message, started: session !== null, stopped });
         if (session === null) setUi((u) => (u.mode === "fresh" && u.fresh ? { ...u, fresh: { ...u.fresh, messages: u.fresh.messages.filter((m) => m !== text) } } : u));
-        setChatText(text);
+        // Kept to send again, unless it was stopped in the session it started, which has it.
+        if (!(stopped && session !== null)) setChatText(text);
         return;
       }
       // The answer can come before the session is listed; it is shown now either way.
@@ -434,9 +491,11 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
     }
     const { outcome, session } = await store.chat(text);
     if (!outcome.ok) {
-      setFailure({ session, message: outcome.message, started: true });
-      // Kept for the reader to send again, in the session it was written for.
-      if (session === data.sessionId) setChatText(text);
+      const stopped = outcome.kind === STOPPED;
+      setFailure({ session, message: outcome.message, started: true, stopped });
+      // Kept for the reader to send again, in the session it was written for; a stopped
+      // message is already in the session.
+      if (session === data.sessionId && !stopped) setChatText(text);
     }
   };
 
@@ -463,13 +522,14 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
   // The notice's button goes with it, so focus goes on to the ask box.
   const dismissNotice = () => {
     store.dismissNotice();
-    setTimeout(() => askInput.current?.focus(), 0);
+    setTimeout(() => askInput.current?.focus({ preventScroll: true }), 0);
   };
   const dismissToast = () => {
     setToast(null);
     const back = toastFrom.current;
     toastFrom.current = null;
-    if (back instanceof HTMLElement && back.isConnected && back !== document.body) back.focus();
+    // Focus goes back without moving the page: the reader may have scrolled away since.
+    if (back instanceof HTMLElement && back.isConnected && back !== document.body) back.focus({ preventScroll: true });
   };
   // Focus view's own button goes when it ends, so focus moves to More, which turns it on again.
   const leaveFocus = () => {
@@ -511,12 +571,14 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
   const waitingHere = !!snap.pendingChat && ui.mode === "open" && snap.pendingChat.session === data.sessionId;
   if (waitingHere && !f.stepping) chat.push({ kind: "wait", text: WAITING });
   const failedHere = failure && (ui.mode === "fresh" ? failure.session === null : ui.mode === "open" && failure.session === data.sessionId);
-  if (failure && failedHere && !f.stepping) chat.push({ kind: "failed", ...chatFailed(failure.message, failure.started) });
+  if (failure && failedHere && !f.stepping)
+    chat.push(failure.stopped ? { kind: "stopped", ...chatStopped(failure.started) } : { kind: "failed", ...chatFailed(failure.message, failure.started) });
   const box = askBox(f);
-  const askState = snap.unreachable
+  const backTo = stepping && stepping.from && data.sessionId === stepping.to ? stepping.from.slice(0, 8) : "";
+  const askState = backTo && box.none ? { ...box, none: { ...box.none, back: backTo } } : snap.unreachable
     ? { ...box, disabled: true, primary: false, reason: UNREACHABLE.split(". ")[0] + "." }
     : snap.pendingChat && !box.disabled
-      ? { ...box, disabled: true, primary: false, reason: answering(ui.mode === "open" && snap.pendingChat.session === data.sessionId ? null : snap.pendingChat.session ?? "new") }
+      ? { ...box, disabled: true, primary: false, reason: answering(waitingHere || ui.mode === "fresh" ? null : snap.pendingChat.session ?? "new"), stop: waitingHere || ui.mode === "fresh" }
       : box;
   const pane = codePane(f);
   const srcKey = atPackage ? sourceKey(atPackage.package, atPackage.module) : null;
@@ -548,6 +610,7 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
       void store.loadPayloads(run);
     },
     showLess: (run) => patch((u) => ({ whole: { ...u.whole, [run]: false } })),
+    stepThrough: (session, run) => void stepThrough(session, run),
   };
 
   // The commands the More panel shows use this session's own numbers: a program that
@@ -605,6 +668,7 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
           cancelling={cancelling !== null && cancelling === cancelRun}
           onForm={setForm}
           onStart={startSession}
+          keys={{ save: store.saveModelKey, done: (notice) => showToast({ head: notice, auto: true }) }}
           onBack={goBack}
           onCopy={() =>
             bar && bar.copyText
@@ -656,14 +720,17 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
       <main className="pg-app">
         <ChatPane
           items={chat}
-          empty={snap.noSessions && ui.mode === "open" ? NO_SESSIONS_CHAT : ui.mode === "open" && (snap.sessionLoading || snap.feed === "connecting") ? SESSION_LOADING : chatEmptyText(f)}
-          box={snap.noSessions && ui.mode === "open" ? { placeholder: "Start a session to chat", disabled: true, primary: false } : askState}
+          empty={snap.noSessions && ui.mode === "open" ? NO_SESSIONS_CHAT : ui.mode === "open" && (snap.sessionLoading || snap.feed === "connecting") ? SESSION_LOADING : chatEmptyText(f, stepping && data.sessionId === stepping.to ? stepping.source : null)}
+          box={snap.noSessions && ui.mode === "open" ? noChat("No session yet.", true) : askState}
           text={chatText}
           scrollRef={chatFollow.ref}
           inputRef={askInput}
           onScroll={chatFollow.onScroll}
           onText={setChatText}
           onSend={() => void send()}
+          onStop={() => store.stopChat(f.running.filter((n) => byAgent(f, n)))}
+          onNew={newSession}
+          onBack={stepBack}
           onPick={(run) => patch((u) => ({ sel: "r" + run, program: null, open: { ...u.open, ["r" + run]: true } }))}
         />
         <CodePane
@@ -700,6 +767,8 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
           onHold={() => toastTimer.current && clearTimeout(toastTimer.current)}
           onRelease={() => toast.auto && showToast(toast, TOAST_AFTER_HOVER_MS)}
           onDismiss={dismissToast}
+          onCancel={() => void cancelFollowUp()}
+          onWatch={() => void watchFollowUp()}
         />
       )}
 
@@ -766,6 +835,8 @@ interface Failure {
   session: string | null;
   message: string;
   started: boolean;
+  /** Stopped from the page rather than failed. */
+  stopped?: boolean;
 }
 
 const FAILURE_KEY = "submilli-playground-chat-failure";

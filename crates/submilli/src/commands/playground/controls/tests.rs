@@ -1205,6 +1205,43 @@ fn runs_in_flight_are_listed_first_with_cancel_only_while_the_playground_runs() 
 }
 
 #[test]
+fn a_session_whose_run_is_still_in_flight_is_listed_while_the_playground_runs() {
+    let mut fixture = Fixture::new();
+    let stored = fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]));
+    fixture
+        .store
+        .mark_running(stored + 1, "rerun", Some("s-rerun"), 1_700_000_000_000_000)
+        .unwrap();
+    let (reader, _dir) = fixture.reader_with(
+        Page {
+            base: Some("http://127.0.0.1:9/".into()),
+        },
+        Vec::new(),
+    );
+    let listed = read::sessions(&reader, 20, 1_700_000_000_000_000).unwrap();
+    let row = listed
+        .sessions
+        .iter()
+        .find(|row| row.session == "s-rerun")
+        .expect("the rerun's session is listed");
+    assert_eq!(row.sources, ["rerun"]);
+    // Its run shows once it is stored; until then it has none.
+    assert!(row.runs.is_empty());
+
+    // With the playground stopped, the notes are not trusted.
+    let stopped = Reader::for_tests(
+        crate::commands::playground::store::Store::open_read_only(
+            reader.store.as_ref().unwrap().root(),
+        )
+        .unwrap(),
+        Page::default(),
+        Vec::new(),
+    );
+    let listed = read::sessions(&stopped, 20, 1_700_000_000_000_000).unwrap();
+    assert!(listed.sessions.iter().all(|row| row.session != "s-rerun"));
+}
+
+#[test]
 fn a_run_whose_program_caught_a_denial_says_so_in_its_outcome_and_lists_it() {
     let mut fixture = Fixture::new();
     let caught = fixture.run(RunSpec::new(vec![
