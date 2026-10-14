@@ -1,0 +1,2 @@
+parserTypeQuery5.ts(2,15): error TS2304: Cannot find name 'A'.
+parserTypeQuery5.ts(2,48): error TS2304: Cannot find name 'A'.

@@ -1,0 +1,12 @@
+=== parserInterfaceDeclaration8.ts ===
+interface string {
+>string : string
+>       : ^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

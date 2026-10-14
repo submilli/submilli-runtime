@@ -1,0 +1,13 @@
+types: 91 of 164 tsc entries compared, 2 differ
+
+line 25: x2
+  tsc:  false
+  ours: boolean
+
+line 25: f && t
+  tsc:  false
+  ours: boolean
+
+errors:
+line 58: ours: unreachable code (tsc accepts)
+line 95: ours: unreachable code (tsc accepts)

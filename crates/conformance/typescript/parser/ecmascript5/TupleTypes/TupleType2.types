@@ -1,0 +1,15 @@
+=== TupleType2.ts ===
+let v: [number, string] = null as unknown as ([number, string]);
+>v : [number, string]
+>  : ^^^^^^^^^^^^^^^^
+>null as unknown as ([number, string]) : [number, string]
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

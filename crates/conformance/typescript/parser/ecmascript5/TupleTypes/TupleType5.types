@@ -1,0 +1,15 @@
+=== TupleType5.ts ===
+let v: [number,] = null as unknown as ([number,]);
+>v : [number]
+>  : ^^^^^^^^
+>null as unknown as ([number,]) : [number]
+>                               : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,1 @@
+scannerNumericLiteral9.ts(2,1): error TS1489: Decimals with leading zeros are not allowed.

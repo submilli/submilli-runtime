@@ -1,0 +1,217 @@
+=== additionOperatorWithInvalidOperands.ts ===
+function foo(): void { }
+>foo : () => void
+>    : ^^^^^^^^^^
+
+class C {
+>C : C
+>  : ^
+
+    public a: string;
+>a : string
+>  : ^^^^^^
+
+    static foo(): void { }
+>foo : () => void
+>    : ^^^^^^^^^^
+
+}
+enum E { a, b, c }
+>E : E
+>  : ^
+>a : E.a
+>  : ^^^
+>b : E.b
+>  : ^^^
+>c : E.c
+>  : ^^^
+
+/*pruned*/;
+
+let a: boolean = null as unknown as (boolean);
+>a : boolean
+>  : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b: number = null as unknown as (number);
+>b : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+/*pruned*/;
+
+// boolean + every type except any and string
+let r1 = a + a;
+>r1 : any
+>   : ^^^
+>a + a : any
+>      : ^^^
+>a : boolean
+>  : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r2 = a + b;
+>r2 : any
+>   : ^^^
+>a + b : any
+>      : ^^^
+>a : boolean
+>  : ^^^^^^^
+>b : number
+>  : ^^^^^^
+
+/*pruned*/;
+
+// number + every type except any and string
+let r4 = b + a;
+>r4 : any
+>   : ^^^
+>b + a : any
+>      : ^^^
+>b : number
+>  : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r5 = b + b; // number + number is valid
+>r5 : number
+>   : ^^^^^^
+>b + b : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+/*pruned*/;
+
+// object + every type except any and string
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+// other cases
+let r10 = a + true;
+>r10 : any
+>    : ^^^
+>a + true : any
+>         : ^^^
+>a : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+
+let r11 = true + false;
+>r11 : any
+>    : ^^^
+>true + false : any
+>             : ^^^
+>true : true
+>     : ^^^^
+>false : false
+>      : ^^^^^
+
+let r12 = true + 123;
+>r12 : any
+>    : ^^^
+>true + 123 : any
+>           : ^^^
+>true : true
+>     : ^^^^
+>123 : 123
+>    : ^^^
+
+let r13 = {} + {};
+>r13 : any
+>    : ^^^
+>{} + {} : any
+>        : ^^^
+>{} : {}
+>   : ^^
+>{} : {}
+>   : ^^
+
+/*pruned*/;
+let r15 = b + foo;
+>r15 : any
+>    : ^^^
+>b + foo : any
+>        : ^^^
+>b : number
+>  : ^^^^^^
+>foo : () => void
+>    : ^^^^^^^^^^
+
+let r16 = b + foo();
+>r16 : any
+>    : ^^^
+>b + foo() : any
+>          : ^^^
+>b : number
+>  : ^^^^^^
+>foo() : void
+>      : ^^^^
+>foo : () => void
+>    : ^^^^^^^^^^
+
+let r17 = b + C;
+>r17 : any
+>    : ^^^
+>b + C : any
+>      : ^^^
+>b : number
+>  : ^^^^^^
+>C : typeof C
+>  : ^^^^^^^^
+
+let r18 = E.a + new C();
+>r18 : any
+>    : ^^^
+>E.a + new C() : any
+>              : ^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>new C() : C
+>        : ^
+>C : typeof C
+>  : ^^^^^^^^
+
+let r19 = E.a + C.foo();
+>r19 : any
+>    : ^^^
+>E.a + C.foo() : any
+>              : ^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>C.foo() : void
+>        : ^^^^
+>C.foo : () => void
+>      : ^^^^^^^^^^
+>C : typeof C
+>  : ^^^^^^^^
+>foo : () => void
+>    : ^^^^^^^^^^
+
+/*pruned*/;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

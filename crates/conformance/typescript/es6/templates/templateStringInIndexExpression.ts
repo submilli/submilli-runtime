@@ -1,0 +1,4 @@
+// @target: es2015
+`abc${0}abc`[`0`];
+
+function main(): void {}

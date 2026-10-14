@@ -1,0 +1,2 @@
+line 25 type: by-design spec §1.6 `a && b` is `falsy_part(a) | b`, even when `a` is always falsy
+line 58, 95 extra: by-design spec §1.5 code after an exhaustive `switch` is unreachable

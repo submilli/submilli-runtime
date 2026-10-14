@@ -1,0 +1,7 @@
+line 65, 69, 73 type: bug SUB-1503 `x === y` with `x: unknown` doesn't narrow `x` to `y`'s type
+line 65, 69, 73 extra: bug SUB-1503 `x === y` with `x: unknown` doesn't narrow `x` to `y`'s type
+line 113, 117, 123, 126, 129, 138, 244, 250, 256 type: bug SUB-1731 equality with an enum member narrows an `unknown` to the member's value literal (`0`, `"A"`), where tsc narrows to the member type `E.A`
+line 117, 123, 126, 129, 138, 250, 256 extra: bug SUB-1731 equality with an enum member narrows an `unknown` to the member's value literal (`0`, `"A"`), where tsc narrows to the member type `E.A`
+line 137, 139 extra: by-design spec §1.5 a case must end with `break` or `return`, no fallthrough
+line 140, 142, 143 type: bug SUB-1731 equality with an enum member narrows an `unknown` to the member's value literal (`0`, `"A"`), where tsc narrows to the member type `E.A`; also by-design spec §1.5 a case must end with `break` or `return`, no fallthrough
+line 140, 142, 143 extra: bug SUB-1731 equality with an enum member narrows an `unknown` to the member's value literal (`0`, `"A"`), where tsc narrows to the member type `E.A`

@@ -1,0 +1,17 @@
+decrementOperatorWithUnsupportedStringType.ts(9,12): error TS2564: Property 'a' has no initializer and is not definitely assigned in the constructor.
+decrementOperatorWithUnsupportedStringType.ts(22,23): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedStringType.ts(23,23): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedStringType.ts(30,23): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedStringType.ts(31,23): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedStringType.ts(32,24): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedStringType.ts(42,24): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedStringType.ts(44,24): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedStringType.ts(45,24): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedStringType.ts(46,24): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedStringType.ts(47,24): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedStringType.ts(59,1): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedStringType.ts(60,1): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedStringType.ts(61,1): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedStringType.ts(62,1): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedStringType.ts(63,1): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedStringType.ts(64,1): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.

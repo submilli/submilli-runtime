@@ -1,0 +1,1 @@
+unicodeExtendedEscapesInRegularExpressions19.ts(3,13): error TS1125: Hexadecimal digit expected.

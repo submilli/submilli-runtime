@@ -1,0 +1,4 @@
+callNonGenericFunctionWithTypeArguments.ts(7,11): error TS2558: Expected 0 type arguments, but got 1.
+callNonGenericFunctionWithTypeArguments.ts(10,13): error TS2558: Expected 0 type arguments, but got 1.
+callNonGenericFunctionWithTypeArguments.ts(20,22): error TS2558: Expected 0 type arguments, but got 1.
+callNonGenericFunctionWithTypeArguments.ts(33,23): error TS2558: Expected 0 type arguments, but got 1.

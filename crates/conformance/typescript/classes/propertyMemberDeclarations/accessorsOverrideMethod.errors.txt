@@ -1,0 +1,1 @@
+accessorsOverrideMethod.ts(7,9): error TS2423: Class 'A' defines instance member function 'm', but extended class 'B' defines it as instance member accessor.

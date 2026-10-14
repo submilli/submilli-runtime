@@ -1,0 +1,1 @@
+line 2 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (on line 3, tsc types the division by the unresolved `notregexp` as `number`, ours `<error>`)

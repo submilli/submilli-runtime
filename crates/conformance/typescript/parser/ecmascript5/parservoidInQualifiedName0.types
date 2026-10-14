@@ -1,0 +1,15 @@
+=== parservoidInQualifiedName0.ts ===
+let v : void = null as unknown as (void);
+>v : void
+>  : ^^^^
+>null as unknown as (void) : void
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

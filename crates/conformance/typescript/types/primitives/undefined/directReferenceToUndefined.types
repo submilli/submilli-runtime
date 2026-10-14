@@ -1,0 +1,21 @@
+=== directReferenceToUndefined.ts ===
+let x: Undefined = null as unknown as (Undefined);
+>x : Undefined
+>  : ^^^^^^^^^
+>null as unknown as (Undefined) : Undefined
+>                               : ^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let y = undefined;
+>y : any
+>  : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

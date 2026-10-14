@@ -1,0 +1,1 @@
+parserMemberFunctionDeclaration1.ts(3,12): error TS1028: Accessibility modifier already seen.

@@ -1,0 +1,33 @@
+=== interfaceThatHidesBaseProperty2.ts ===
+interface Base {
+>Base : Base
+>     : ^^^^
+
+    x: { a: number };
+>x : { a: number; }
+>  : ^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+
+}
+
+interface Derived extends Base { // error
+>Derived : Derived
+>        : ^^^^^^^
+
+    x: {
+>x : { a: string; }
+>  : ^^^^^^^^^^^^^^
+
+        a: string;
+>a : string
+>  : ^^^^^^
+
+    };
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

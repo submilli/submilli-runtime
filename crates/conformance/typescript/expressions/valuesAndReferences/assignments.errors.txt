@@ -1,0 +1,5 @@
+assignments.ts(16,1): error TS2629: Cannot assign to 'C' because it is a class.
+assignments.ts(19,1): error TS2628: Cannot assign to 'E' because it is an enum.
+assignments.ts(20,3): error TS2540: Cannot assign to 'A' because it is a read-only property.
+assignments.ts(23,1): error TS2630: Cannot assign to 'fn' because it is a function.
+assignments.ts(33,1): error TS2693: 'I' only refers to a type, but is being used as a value here.

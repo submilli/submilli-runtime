@@ -1,0 +1,9 @@
+types: 3 of 10 tsc entries compared, 2 differ
+
+line 5: a
+  tsc:  any
+  ours: number
+
+line 6: b
+  tsc:  any
+  ours: number

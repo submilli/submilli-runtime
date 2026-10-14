@@ -1,0 +1,32 @@
+=== propertyOverridesMethod.ts ===
+class A {
+>A : A
+>  : ^
+
+    m(): void { }
+>m : () => void
+>  : ^^^^^^^^^^
+
+}
+class B extends A {
+>B : B
+>  : ^
+>A : A
+>  : ^
+
+    m: () => number = () => 1
+>m : () => number
+>  : ^^^^^^^^^^^^
+>() => 1 : () => number
+>        : ^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,13 @@
+types: 30 of 59 tsc entries compared, 2 differ
+
+line 42: JSON.parse(data)
+  tsc:  any
+  ours: unknown
+
+line 62: null as unknown as typeof x.p
+  tsc:  "A"
+  ours: T
+
+errors:
+line 33: ours: expected `Error`, got `string` (tsc accepts)
+line 42: ours: `JSON.parse(s)` expects a `string` argument, got `string | (T & string)` (tsc accepts)

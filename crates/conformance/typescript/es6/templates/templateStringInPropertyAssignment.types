@@ -1,0 +1,24 @@
+=== templateStringInPropertyAssignment.ts ===
+let x = {
+>x : { a: string; }
+>  : ^^^^^^^^^^^^^^
+>{     a: `abc${ 123 }def${ 456 }ghi` } : { a: string; }
+>                                       : ^^^^^^^^^^^^^^
+
+    a: `abc${ 123 }def${ 456 }ghi`
+>a : string
+>  : ^^^^^^
+>`abc${ 123 }def${ 456 }ghi` : "abc123def456ghi"
+>                            : ^^^^^^^^^^^^^^^^^
+>123 : 123
+>    : ^^^
+>456 : 456
+>    : ^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

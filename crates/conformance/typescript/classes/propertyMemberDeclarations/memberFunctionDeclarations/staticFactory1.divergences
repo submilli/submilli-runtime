@@ -1,0 +1,4 @@
+types: 4 of 20 tsc entries compared, 0 differ
+
+errors:
+line 5: ours: `this` is not available in a static member (tsc accepts)

@@ -1,0 +1,2 @@
+es2024SharedMemory.ts(15,34): error TS2550: Property 'waitAsync' does not exist on type 'Atomics'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.
+es2024SharedMemory.ts(16,52): error TS2550: Property 'waitAsync' does not exist on type 'Atomics'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.

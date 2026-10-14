@@ -1,0 +1,16 @@
+=== unicodeExtendedEscapesInRegularExpressions14.ts ===
+
+// Shouldn't work, negatives are not allowed.
+let x = /\u{-DDDD}/gu;
+>x : RegExp
+>  : ^^^^^^
+>/\u{-DDDD}/gu : RegExp
+>              : ^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,1 @@
+line 2 extra: by-design spec §1.2 a parameter can't be named with `typeof` from its own signature

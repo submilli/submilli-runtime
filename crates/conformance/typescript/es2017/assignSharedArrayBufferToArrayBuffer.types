@@ -1,0 +1,18 @@
+=== assignSharedArrayBufferToArrayBuffer.ts ===
+
+let foo: ArrayBuffer = new SharedArrayBuffer(1024); // should error
+>foo : ArrayBuffer
+>    : ^^^^^^^^^^^
+>new SharedArrayBuffer(1024) : SharedArrayBuffer
+>                            : ^^^^^^^^^^^^^^^^^
+>SharedArrayBuffer : SharedArrayBufferConstructor
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1024 : 1024
+>     : ^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

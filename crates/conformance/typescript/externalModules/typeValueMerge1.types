@@ -1,0 +1,51 @@
+=== typeValueMerge1.ts ===
+
+export type A = string;
+>A : string
+>  : ^^^^^^
+
+function A(): void {}
+>A : () => void
+>  : ^^^^^^^^^^
+
+export { A };
+>A : () => void
+>  : ^^^^^^^^^^
+
+
+export type B = string;
+>B : string
+>  : ^^^^^^
+
+let B = 10;
+>B : number
+>  : ^^^^^^
+>10 : 10
+>   : ^^
+
+export { B };
+>B : number
+>  : ^^^^^^
+
+
+import { A, B } from "./other";
+>A : () => void
+>  : ^^^^^^^^^^
+>B : number
+>  : ^^^^^^
+
+
+A();
+>A() : void
+>    : ^^^^
+>A : () => void
+>  : ^^^^^^^^^^
+
+
+export const C = B;
+>C : number
+>  : ^^^^^^
+>B : number
+>  : ^^^^^^
+
+

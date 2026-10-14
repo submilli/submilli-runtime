@@ -1,0 +1,482 @@
+=== noUncheckedIndexedAccess.ts ===
+
+/*pruned*/;
+// Validate CheckBooleanOnly works - should error
+/*pruned*/;
+
+enum NumericEnum1 { A, B, C }
+>NumericEnum1 : NumericEnum1
+>             : ^^^^^^^^^^^^
+>A : NumericEnum1.A
+>  : ^^^^^^^^^^^^^^
+>B : NumericEnum1.B
+>  : ^^^^^^^^^^^^^^
+>C : NumericEnum1.C
+>  : ^^^^^^^^^^^^^^
+
+enum NumericEnum2 { A = 0, B = 1 , C = 2 }
+>NumericEnum2 : NumericEnum2
+>             : ^^^^^^^^^^^^
+>A : NumericEnum2.A
+>  : ^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+>B : NumericEnum2.B
+>  : ^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>C : NumericEnum2.C
+>  : ^^^^^^^^^^^^^^
+>2 : 2
+>  : ^
+
+enum StringEnum1 { A = "Alpha", B = "Beta" }
+>StringEnum1 : StringEnum1
+>            : ^^^^^^^^^^^
+>A : StringEnum1.A
+>  : ^^^^^^^^^^^^^
+>"Alpha" : "Alpha"
+>        : ^^^^^^^
+>B : StringEnum1.B
+>  : ^^^^^^^^^^^^^
+>"Beta" : "Beta"
+>       : ^^^^^^
+
+
+const strMap: { [s: string]: boolean } = null as unknown as ({ [s: string]: boolean });
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+>null as unknown as ({ [s: string]: boolean }) : { [s: string]: boolean; }
+>                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>s : string
+>  : ^^^^^^
+
+
+// All of these should be errors
+const e1: boolean = strMap["foo"];
+>e1 : boolean
+>   : ^^^^^^^
+>strMap["foo"] : boolean | undefined
+>              : ^^^^^^^^^^^^^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+const e2: boolean = strMap.bar;
+>e2 : boolean
+>   : ^^^^^^^
+>strMap.bar : boolean | undefined
+>           : ^^^^^^^^^^^^^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>bar : boolean | undefined
+>    : ^^^^^^^^^^^^^^^^^^^
+
+const e3: boolean = strMap[0];
+>e3 : boolean
+>   : ^^^^^^^
+>strMap[0] : boolean | undefined
+>          : ^^^^^^^^^^^^^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+const e4: boolean = strMap[0 as string | number];
+>e4 : boolean
+>   : ^^^^^^^
+>strMap[0 as string | number] : boolean | undefined
+>                             : ^^^^^^^^^^^^^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 as string | number : string | number
+>                     : ^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+const e5: boolean = strMap[0 as string | 0 | 1];
+>e5 : boolean
+>   : ^^^^^^^
+>strMap[0 as string | 0 | 1] : boolean | undefined
+>                            : ^^^^^^^^^^^^^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 as string | 0 | 1 : string | 0 | 1
+>                    : ^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+const e6: boolean = strMap[0 as 0 | 1];
+>e6 : boolean
+>   : ^^^^^^^
+>strMap[0 as 0 | 1] : boolean | undefined
+>                   : ^^^^^^^^^^^^^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 as 0 | 1 : 0 | 1
+>           : ^^^^^
+>0 : 0
+>  : ^
+
+const e7: boolean = strMap["foo" as "foo" | "baz"];
+>e7 : boolean
+>   : ^^^^^^^
+>strMap["foo" as "foo" | "baz"] : boolean | undefined
+>                               : ^^^^^^^^^^^^^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"foo" as "foo" | "baz" : "foo" | "baz"
+>                       : ^^^^^^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+const e8: boolean = strMap[NumericEnum1.A];
+>e8 : boolean
+>   : ^^^^^^^
+>strMap[NumericEnum1.A] : boolean | undefined
+>                       : ^^^^^^^^^^^^^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>NumericEnum1.A : NumericEnum1.A
+>               : ^^^^^^^^^^^^^^
+>NumericEnum1 : typeof NumericEnum1
+>             : ^^^^^^^^^^^^^^^^^^^
+>A : NumericEnum1.A
+>  : ^^^^^^^^^^^^^^
+
+const e9: boolean = strMap[NumericEnum2.A];
+>e9 : boolean
+>   : ^^^^^^^
+>strMap[NumericEnum2.A] : boolean | undefined
+>                       : ^^^^^^^^^^^^^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>NumericEnum2.A : NumericEnum2.A
+>               : ^^^^^^^^^^^^^^
+>NumericEnum2 : typeof NumericEnum2
+>             : ^^^^^^^^^^^^^^^^^^^
+>A : NumericEnum2.A
+>  : ^^^^^^^^^^^^^^
+
+const e10: boolean = strMap[StringEnum1.A];
+>e10 : boolean
+>    : ^^^^^^^
+>strMap[StringEnum1.A] : boolean | undefined
+>                      : ^^^^^^^^^^^^^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>StringEnum1.A : StringEnum1.A
+>              : ^^^^^^^^^^^^^
+>StringEnum1 : typeof StringEnum1
+>            : ^^^^^^^^^^^^^^^^^^
+>A : StringEnum1.A
+>  : ^^^^^^^^^^^^^
+
+const e11: boolean = strMap[StringEnum1.A as StringEnum1];
+>e11 : boolean
+>    : ^^^^^^^
+>strMap[StringEnum1.A as StringEnum1] : boolean | undefined
+>                                     : ^^^^^^^^^^^^^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>StringEnum1.A as StringEnum1 : StringEnum1
+>                             : ^^^^^^^^^^^
+>StringEnum1.A : StringEnum1.A
+>              : ^^^^^^^^^^^^^
+>StringEnum1 : typeof StringEnum1
+>            : ^^^^^^^^^^^^^^^^^^
+>A : StringEnum1.A
+>  : ^^^^^^^^^^^^^
+
+const e12: boolean = strMap[NumericEnum1.A as NumericEnum1];
+>e12 : boolean
+>    : ^^^^^^^
+>strMap[NumericEnum1.A as NumericEnum1] : boolean | undefined
+>                                       : ^^^^^^^^^^^^^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>NumericEnum1.A as NumericEnum1 : NumericEnum1
+>                               : ^^^^^^^^^^^^
+>NumericEnum1.A : NumericEnum1.A
+>               : ^^^^^^^^^^^^^^
+>NumericEnum1 : typeof NumericEnum1
+>             : ^^^^^^^^^^^^^^^^^^^
+>A : NumericEnum1.A
+>  : ^^^^^^^^^^^^^^
+
+const e13: boolean = strMap[NumericEnum2.A as NumericEnum2];
+>e13 : boolean
+>    : ^^^^^^^
+>strMap[NumericEnum2.A as NumericEnum2] : boolean | undefined
+>                                       : ^^^^^^^^^^^^^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>NumericEnum2.A as NumericEnum2 : NumericEnum2
+>                               : ^^^^^^^^^^^^
+>NumericEnum2.A : NumericEnum2.A
+>               : ^^^^^^^^^^^^^^
+>NumericEnum2 : typeof NumericEnum2
+>             : ^^^^^^^^^^^^^^^^^^^
+>A : NumericEnum2.A
+>  : ^^^^^^^^^^^^^^
+
+/*pruned*/;
+
+// Should be OK
+const ok1: boolean | undefined = strMap["foo"];
+>ok1 : boolean | undefined
+>    : ^^^^^^^^^^^^^^^^^^^
+>strMap["foo"] : boolean | undefined
+>              : ^^^^^^^^^^^^^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+const ok2: boolean | undefined = strMap.bar;
+>ok2 : boolean | undefined
+>    : ^^^^^^^^^^^^^^^^^^^
+>strMap.bar : boolean | undefined
+>           : ^^^^^^^^^^^^^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>bar : boolean | undefined
+>    : ^^^^^^^^^^^^^^^^^^^
+
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+// Writes don't allow 'undefined'; all should be errors
+strMap["baz"] = undefined;
+>strMap["baz"] = undefined : undefined
+>                          : ^^^^^^^^^
+>strMap["baz"] : boolean
+>              : ^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"baz" : "baz"
+>      : ^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+strMap.qua = undefined;
+>strMap.qua = undefined : undefined
+>                       : ^^^^^^^^^
+>strMap.qua : boolean
+>           : ^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>qua : boolean
+>    : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+strMap[0] = undefined;
+>strMap[0] = undefined : undefined
+>                      : ^^^^^^^^^
+>strMap[0] : boolean
+>          : ^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+/*pruned*/;
+
+// Numeric lookups are unaffected
+/*pruned*/;
+// All of these should be ok
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+// Generics
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+
+
+// Element access into known properties is ok
+const obj1: { x: string, y: number, [key: string]: string | number } = null as unknown as ({ x: string, y: number, [key: string]: string | number });
+>obj1 : { [key: string]: string | number; x: string; y: number; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>key : string
+>    : ^^^^^^
+>null as unknown as ({ x: string, y: number, [key: string]: string | number }) : { [key: string]: string | number; x: string; y: number; }
+>                                                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>x : string
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>key : string
+>    : ^^^^^^
+
+obj1["x"];
+>obj1["x"] : string
+>          : ^^^^^^
+>obj1 : { [key: string]: string | number; x: string; y: number; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"x" : "x"
+>    : ^^^
+
+const y = "y";
+>y : "y"
+>  : ^^^
+>"y" : "y"
+>    : ^^^
+
+obj1[y];
+>obj1[y] : number
+>        : ^^^^^^
+>obj1 : { [key: string]: string | number; x: string; y: number; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>y : "y"
+>  : ^^^
+
+let yy = "y";
+>yy : string
+>   : ^^^^^^
+>"y" : "y"
+>    : ^^^
+
+obj1[yy];
+>obj1[yy] : string | number | undefined
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj1 : { [key: string]: string | number; x: string; y: number; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>yy : string
+>   : ^^^^^^
+
+let z = "z";
+>z : string
+>  : ^^^^^^
+>"z" : "z"
+>    : ^^^
+
+obj1[z];
+>obj1[z] : string | number | undefined
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj1 : { [key: string]: string | number; x: string; y: number; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>z : string
+>  : ^^^^^^
+
+
+// Distributivity cases
+const strMapUnion: { [s: string]: boolean } | { [s: string]: number } = null as unknown as ({ [s: string]: boolean } | { [s: string]: number });
+>strMapUnion : { [s: string]: boolean; } | { [s: string]: number; }
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+>s : string
+>  : ^^^^^^
+>null as unknown as ({ [s: string]: boolean } | { [s: string]: number }) : { [s: string]: boolean; } | { [s: string]: number; }
+>                                                                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>s : string
+>  : ^^^^^^
+>s : string
+>  : ^^^^^^
+
+// Should error
+const f1: boolean | number = strMapUnion["foo"];
+>f1 : number | boolean
+>   : ^^^^^^^^^^^^^^^^
+>strMapUnion["foo"] : number | boolean | undefined
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strMapUnion : { [s: string]: boolean; } | { [s: string]: number; }
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+
+// Symbol index signatures
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;                       // Should OK
+/*pruned*/;               // Should error
+
+// Variadic tuples
+/*pruned*/;
+/*pruned*/;                                          // Should OK
+/*pruned*/;                                            // Should error
+
+// Generic index type
+const myRecord1: { a: string; b: string } = null as unknown as ({ a: string; b: string });
+>myRecord1 : { a: string; b: string; }
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+>null as unknown as ({ a: string; b: string }) : { a: string; b: string; }
+>                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : string
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+const myRecord2: { a: string; b: string, [key: string]: string } = null as unknown as ({ a: string; b: string, [key: string]: string });
+>myRecord2 : { [key: string]: string; a: string; b: string; }
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+>key : string
+>    : ^^^^^^
+>null as unknown as ({ a: string; b: string, [key: string]: string }) : { [key: string]: string; a: string; b: string; }
+>                                                                     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : string
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+>key : string
+>    : ^^^^^^
+
+/*pruned*/;                                                                           // Should OK
+/*pruned*/;                                                                           // Should OK
+/*pruned*/;
+
+
+
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

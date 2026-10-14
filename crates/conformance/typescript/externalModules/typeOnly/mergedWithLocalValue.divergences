@@ -1,0 +1,9 @@
+types: 3 of 8 tsc entries compared, 2 differ
+
+line 8: A
+  tsc:  "a"
+  ours: A
+
+line 9: A
+  tsc:  "a"
+  ours: A

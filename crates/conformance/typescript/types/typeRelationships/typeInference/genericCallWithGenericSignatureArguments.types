@@ -1,0 +1,237 @@
+=== genericCallWithGenericSignatureArguments.ts ===
+// When a function expression is inferentially typed (section 4.9.3) and a type assigned to a parameter in that expression references type parameters for which inferences are being made,
+// the corresponding inferred type arguments to become fixed and no further candidate inferences are made for them.
+
+function foo<T>(a: (x: T) => T, b: (x: T) => T): (x: T) => T {
+>foo : <T>(a: (x: T) => T, b: (x: T) => T) => (x: T) => T
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>a : (x: T) => T
+>  : ^^^^^^^^^^^
+>x : T
+>  : ^
+>b : (x: T) => T
+>  : ^^^^^^^^^^^
+>x : T
+>  : ^
+>x : T
+>  : ^
+
+    let r: (x: T) => T = null as unknown as ((x: T) => T);
+>r : (x: T) => T
+>  : ^^^^^^^^^^^
+>x : T
+>  : ^
+>null as unknown as ((x: T) => T) : (x: T) => T
+>                                 : ^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>x : T
+>  : ^
+
+    return r;
+>r : (x: T) => T
+>  : ^^^^^^^^^^^
+
+}
+
+//var r1 = foo((x: number) => 1, (x: string) => ''); // error
+let r1b = foo((x) => 1, (x) => ''); // {} => {}
+>r1b : (x: unknown) => unknown
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+>foo((x) => 1, (x) => '') : (x: unknown) => unknown
+>                         : ^^^^^^^^^^^^^^^^^^^^^^^
+>foo : <T>(a: (x: T) => T, b: (x: T) => T) => (x: T) => T
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(x) => 1 : (x: unknown) => number
+>         : ^^^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>1 : 1
+>  : ^
+>(x) => '' : (x: unknown) => string
+>          : ^^^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>'' : ""
+>   : ^^
+
+/*pruned*/;                                           // Object => Object
+/*pruned*/;                                          // number => number
+let r3ii = foo((x: number) => 1, (x: number) => 1); // number => number
+>r3ii : (x: number) => number
+>     : ^^^^^^^^^^^^^^^^^^^^^
+>foo((x: number) => 1, (x: number) => 1) : (x: number) => number
+>                                        : ^^^^^^^^^^^^^^^^^^^^^
+>foo : <T>(a: (x: T) => T, b: (x: T) => T) => (x: T) => T
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(x: number) => 1 : (x: number) => number
+>                 : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>(x: number) => 1 : (x: number) => number
+>                 : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+
+let a: { x: number; y?: number; } = null as unknown as ({ x: number; y?: number; });
+>a : { x: number; y?: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ x: number; y?: number; }) : { x: number; y?: number; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+let b: { x: number; z?: number; } = null as unknown as ({ x: number; z?: number; });
+>b : { x: number; z?: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>z : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ x: number; z?: number; }) : { x: number; z?: number; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>x : number
+>  : ^^^^^^
+>z : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+
+let r4 = foo((x: typeof a) => a, (x: typeof b) => b); // typeof a => typeof a
+>r4 : (x: { x: number; y?: number; }) => { x: number; y?: number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>foo((x: typeof a) => a, (x: typeof b) => b) : (x: { x: number; y?: number; }) => { x: number; y?: number; }
+>                                            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>foo : <T>(a: (x: T) => T, b: (x: T) => T) => (x: T) => T
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(x: typeof a) => a : (x: typeof a) => { x: number; y?: number; }
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : { x: number; y?: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : { x: number; y?: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : { x: number; y?: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(x: typeof b) => b : (x: typeof b) => { x: number; z?: number; }
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : { x: number; z?: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : { x: number; z?: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : { x: number; z?: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let r5 = foo((x: typeof b) => b, (x: typeof a) => a); // typeof b => typeof b
+>r5 : (x: { x: number; z?: number; }) => { x: number; z?: number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>foo((x: typeof b) => b, (x: typeof a) => a) : (x: { x: number; z?: number; }) => { x: number; z?: number; }
+>                                            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>foo : <T>(a: (x: T) => T, b: (x: T) => T) => (x: T) => T
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(x: typeof b) => b : (x: typeof b) => { x: number; z?: number; }
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : { x: number; z?: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : { x: number; z?: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : { x: number; z?: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(x: typeof a) => a : (x: typeof a) => { x: number; y?: number; }
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : { x: number; y?: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : { x: number; y?: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : { x: number; y?: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+function other<T>(x: T): void {
+>other : <T>(x: T) => void
+>      : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    let r6 = foo((a: T) => a, (b: T) => b); // T => T
+>r6 : (x: T) => T
+>   : ^^^^^^^^^^^
+>foo((a: T) => a, (b: T) => b) : (x: T) => T
+>                              : ^^^^^^^^^^^
+>foo : <T>(a: (x: T) => T, b: (x: T) => T) => (x: T) => T
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(a: T) => a : (a: T) => T
+>            : ^^^^^^^^^^^
+>a : T
+>  : ^
+>a : T
+>  : ^
+>(b: T) => b : (b: T) => T
+>            : ^^^^^^^^^^^
+>b : T
+>  : ^
+>b : T
+>  : ^
+
+    let r6b = foo((a) => a, (b) => b); // {} => {}
+>r6b : (x: unknown) => unknown
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+>foo((a) => a, (b) => b) : (x: unknown) => unknown
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^
+>foo : <T>(a: (x: T) => T, b: (x: T) => T) => (x: T) => T
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(a) => a : (a: unknown) => unknown
+>         : ^^^^^^^^^^^^^^^^^^^^^^^
+>a : unknown
+>  : ^^^^^^^
+>a : unknown
+>  : ^^^^^^^
+>(b) => b : (b: unknown) => unknown
+>         : ^^^^^^^^^^^^^^^^^^^^^^^
+>b : unknown
+>  : ^^^^^^^
+>b : unknown
+>  : ^^^^^^^
+
+}
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

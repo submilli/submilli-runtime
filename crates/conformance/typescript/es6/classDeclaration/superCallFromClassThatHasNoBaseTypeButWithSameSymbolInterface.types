@@ -1,0 +1,26 @@
+=== superCallFromClassThatHasNoBaseTypeButWithSameSymbolInterface.ts ===
+interface Foo extends Array<number> {}
+>Foo : Foo
+>    : ^^^
+
+
+class Foo {
+>Foo : Foo
+>    : ^^^
+
+    constructor() {
+        super(); // error
+>super() : void
+>        : ^^^^
+>super : any
+>      : ^^^
+
+    }
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

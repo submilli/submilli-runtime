@@ -1,0 +1,3 @@
+line 10, 12 extra: by-design spec §Excluded-Features `Intl`, `SharedArrayBuffer` and `globalThis` aren't provided
+line 11, 13 extra: by-design spec §Excluded-Features `Intl`, `SharedArrayBuffer` and `globalThis` aren't provided (binary data is `Uint8Array`, so `Int32Array` and `BigInt64Array` aren't either)
+line 14 extra: by-design spec §Excluded-Features `Intl`, `SharedArrayBuffer` and `globalThis` aren't provided (nor `Atomics`, with no shared memory)

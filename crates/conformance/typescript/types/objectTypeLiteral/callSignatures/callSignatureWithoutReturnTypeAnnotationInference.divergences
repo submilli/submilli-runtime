@@ -1,0 +1,5 @@
+types: 32 of 59 tsc entries compared, 1 differ
+
+line 105: foo13
+  tsc:  () => typeof m1
+  ours: () => () => number

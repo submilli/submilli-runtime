@@ -1,0 +1,19 @@
+=== parser509677.ts ===
+let n: { y: string } = null as unknown as ({ y: string });
+>n : { y: string; }
+>  : ^^^^^^^^^^^^^^
+>y : string
+>  : ^^^^^^
+>null as unknown as ({ y: string }) : { y: string; }
+>                                   : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>y : string
+>  : ^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

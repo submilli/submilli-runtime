@@ -1,0 +1,1 @@
+line 7 extra: by-design spec §2.2 redeclaring an inherited member as another kind is rejected, so a field can't override a method

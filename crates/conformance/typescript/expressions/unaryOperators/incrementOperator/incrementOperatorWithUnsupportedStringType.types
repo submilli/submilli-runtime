@@ -1,0 +1,212 @@
+=== incrementOperatorWithUnsupportedStringType.ts ===
+// ++ operator on string type
+let STRING: string = null as unknown as (string);
+>STRING : string
+>       : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let STRING1: string[] = ["", ""];
+>STRING1 : string[]
+>        : ^^^^^^^^
+>["", ""] : string[]
+>         : ^^^^^^^^
+>"" : ""
+>   : ^^
+>"" : ""
+>   : ^^
+
+
+function foo(): string { return ""; }
+>foo : () => string
+>    : ^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+
+/**/;
+
+
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+// string type var
+/*pruned*/;
+/*pruned*/;
+
+let ResultIsNumber3 = STRING++;
+>ResultIsNumber3 : number
+>                : ^^^^^^
+>STRING++ : number
+>         : ^^^^^^
+>STRING : string
+>       : ^^^^^^
+
+let ResultIsNumber4 = STRING1++;
+>ResultIsNumber4 : number
+>                : ^^^^^^
+>STRING1++ : number
+>          : ^^^^^^
+>STRING1 : string[]
+>        : ^^^^^^^^
+
+
+// string type literal
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+let ResultIsNumber8 = ""++;
+>ResultIsNumber8 : number
+>                : ^^^^^^
+>""++ : number
+>     : ^^^^^^
+>"" : ""
+>   : ^^
+
+let ResultIsNumber9 = { x: "", y: "" }++;
+>ResultIsNumber9 : number
+>                : ^^^^^^
+>{ x: "", y: "" }++ : number
+>                   : ^^^^^^
+>{ x: "", y: "" } : { x: string; y: string; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+>y : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+
+let ResultIsNumber10 = { x: "", y: (s: string) => { return s; } }++;
+>ResultIsNumber10 : number
+>                 : ^^^^^^
+>{ x: "", y: (s: string) => { return s; } }++ : number
+>                                             : ^^^^^^
+>{ x: "", y: (s: string) => { return s; } } : { x: string; y: (s: string) => string; }
+>                                           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+>y : (s: string) => string
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>(s: string) => { return s; } : (s: string) => string
+>                             : ^^^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+>s : string
+>  : ^^^^^^
+
+
+// string type expressions
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+/*pruned*/;
+/*pruned*/;
+let ResultIsNumber19 = STRING1[0]++;
+>ResultIsNumber19 : number
+>                 : ^^^^^^
+>STRING1[0]++ : number
+>             : ^^^^^^
+>STRING1[0] : string
+>           : ^^^^^^
+>STRING1 : string[]
+>        : ^^^^^^^^
+>0 : 0
+>  : ^
+
+let ResultIsNumber20 = foo()++;
+>ResultIsNumber20 : number
+>                 : ^^^^^^
+>foo()++ : number
+>        : ^^^^^^
+>foo() : string
+>      : ^^^^^^
+>foo : () => string
+>    : ^^^^^^^^^^^^
+
+/*pruned*/;
+let ResultIsNumber22 = (STRING + STRING)++;
+>ResultIsNumber22 : number
+>                 : ^^^^^^
+>(STRING + STRING)++ : number
+>                    : ^^^^^^
+>(STRING + STRING) : string
+>                  : ^^^^^^
+>STRING + STRING : string
+>                : ^^^^^^
+>STRING : string
+>       : ^^^^^^
+>STRING : string
+>       : ^^^^^^
+
+
+// miss assignment operators
+/**/;
+/**/;
+/**/;
+/*pruned*/;
+/**/;
+/**/;
+/**/;
+/*pruned*/;
+
+""++;
+>""++ : number
+>     : ^^^^^^
+>"" : ""
+>   : ^^
+
+STRING++;
+>STRING++ : number
+>         : ^^^^^^
+>STRING : string
+>       : ^^^^^^
+
+STRING1++;
+>STRING1++ : number
+>          : ^^^^^^
+>STRING1 : string[]
+>        : ^^^^^^^^
+
+STRING1[0]++;
+>STRING1[0]++ : number
+>             : ^^^^^^
+>STRING1[0] : string
+>           : ^^^^^^
+>STRING1 : string[]
+>        : ^^^^^^^^
+>0 : 0
+>  : ^
+
+foo()++;
+>foo()++ : number
+>        : ^^^^^^
+>foo() : string
+>      : ^^^^^^
+>foo : () => string
+>    : ^^^^^^^^^^^^
+
+/**/;
+/**/;
+/*pruned*/;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,7 @@
+types: 0 of 17 tsc entries compared, 0 differ
+
+errors:
+line 6: tsc TS2415: Class 'Derived' incorrectly extends base class 'Base'.   Types have separate declarations of a private property 'x'. (we accept)
+line 14: tsc TS2417: Class static side 'typeof Derived2' incorrectly extends base class static side 'typeof Base2'.   Types have separate declarations of a private property 'y'. (we accept)
+line 11: ours: a static field must be initialized (tsc accepts)
+line 15: ours: a static field must be initialized (tsc accepts)

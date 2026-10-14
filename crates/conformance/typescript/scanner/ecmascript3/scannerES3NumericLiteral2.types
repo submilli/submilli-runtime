@@ -1,0 +1,11 @@
+=== scannerES3NumericLiteral2.ts ===
+01
+>01 : 1
+>   : ^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

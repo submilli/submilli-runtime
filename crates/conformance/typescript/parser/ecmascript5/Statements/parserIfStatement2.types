@@ -1,0 +1,12 @@
+=== parserIfStatement2.ts ===
+if (a) {
+>a : any
+>  : ^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

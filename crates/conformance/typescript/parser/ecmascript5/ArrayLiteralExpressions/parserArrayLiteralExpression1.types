@@ -1,0 +1,13 @@
+=== parserArrayLiteralExpression1.ts ===
+let v = [];
+>v : any[]
+>  : ^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

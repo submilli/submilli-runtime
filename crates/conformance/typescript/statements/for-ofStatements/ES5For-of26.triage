@@ -1,0 +1,1 @@
+line 5, 6 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (both reject destructuring a `number` on line 4; tsc types the bindings `any`, ours by their defaults)

@@ -1,0 +1,1 @@
+line 3 missed: by-design spec §1.8 `catch (e: Error)` is the explicit catch-all (an `Error` subclass annotation filters), where tsc allows only `any` or `unknown`
