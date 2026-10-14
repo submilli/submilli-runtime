@@ -5297,15 +5297,12 @@ mod tests {
             class Base extends Nope { }
         "#;
         let (_, diags) = run(src);
+        let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
         assert_eq!(
-            diags.len(),
-            1,
+            messages,
+            ["unknown type `Nope`", "class `Base` used before its declaration"],
             "conformance is checked after every signature binds, so declaration \
-             order must not resurrect the cascade, got: {diags:?}"
-        );
-        assert!(
-            diags[0].message.contains("unknown type `Nope`"),
-            "got: {diags:?}"
+             order must not resurrect the cascade"
         );
     }
 
@@ -5328,14 +5325,19 @@ mod tests {
     }
 
     #[test]
-    fn implements_satisfied_by_a_later_declared_parent() {
+    fn a_later_declared_parent_reports_only_the_order() {
         let src = r#"
             interface Named { name(): string; }
             class Sub extends Base implements Named { }
             class Base { name(): string { return "b"; } }
         "#;
         let (_, diags) = run(src);
-        assert!(diags.is_empty(), "got: {diags:?}");
+        let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            ["class `Base` used before its declaration"],
+            "only the order is wrong; the interface is satisfied"
+        );
     }
 
     #[test]

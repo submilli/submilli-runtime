@@ -195,6 +195,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         if_condition_ands: Default::default(),
         literal_hint_interfaces: std::collections::BTreeMap::new(),
         held_arguments: std::collections::BTreeMap::new(),
+        pending_static_receiver: None,
         values_widening_candidates: std::collections::BTreeSet::new(),
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),

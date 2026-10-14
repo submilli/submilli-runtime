@@ -4938,6 +4938,15 @@ impl Inferer<'_> {
                 .try_expr(operands[0])
                 .map_err(crate::typechecker::arena_failure)?
                 .clone();
+            // The outer node replaces this one, so it takes over its guard.
+            if let Some(receiver) = self
+                .typed_ast
+                .inherited_static_receivers
+                .get(&operands[0])
+                .cloned()
+            {
+                self.pending_static_receiver = Some(receiver);
+            }
             // A template is a `string` whatever it interpolates, as in
             // TypeScript: `` `${h}` `` with `h: "hello"` is not `"hello"`,
             // unless a string literal type is expected of it.

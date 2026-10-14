@@ -973,7 +973,10 @@ pub(super) struct Inferer<'a> {
     /// The class a static member just inferred was named through, when it
     /// inherits the member: `Sub` in `Sub.hello()`. The expression the
     /// member's inference returns records it (see
-    /// [`crate::TypedAst::inherited_static_receivers`]).
+    /// [`crate::TypedAst::inherited_static_receivers`]). It is set only after
+    /// the member's arguments are inferred, and each `infer_expr` takes it
+    /// before pushing its node, so a nested expression never takes the
+    /// note meant for its parent.
     pub(super) pending_static_receiver: Option<crate::MangledName>,
     /// Values of literal argument slots typed as a type parameter an earlier
     /// value bound to a candidate: one the candidate fits widens it rather

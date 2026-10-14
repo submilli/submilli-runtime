@@ -24,6 +24,7 @@ const early = [
     return hello();
   }),
   attempt(() => Base.hello()),
+  attempt(() => `${Sub.hello()}`),
 ];
 
 class Sub extends Base {}
@@ -35,5 +36,6 @@ function main(): void {
   assert(early[2] === refused, "a function-typed static field through the subclass");
   assert(early[3] === refused, "a static method read as a value");
   assert(early[4] === "hi", "the parent itself is declared");
+  assert(early[5] === refused, "the whole of a template");
   assert(Sub.hello() === "hi" && Sub.count === 5 && Sub.greet() === "greet", "after the declaration");
 }

@@ -28,6 +28,7 @@ TypedAst {
     runtime_chain_types: {},
     spread_mask_fields: {},
     spread_omitted_fields: {},
+    inherited_static_receivers: {},
     exhaustive_switches: {},
     package_name: "main",
     exprs: [
