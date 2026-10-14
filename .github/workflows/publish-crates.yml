@@ -1,0 +1,96 @@
+name: Publish crates
+
+# Publishes `submilli-engine`, `submilli-policy` and `submilli-build` to
+# crates.io, in that order, since each depends on the ones before it at exactly
+# the workspace version. The release workflow calls this with
+# its tagged commit; started by hand, it publishes from main. The `crates-io`
+# environment holds the token, takes only main and `v*` tags, and waits for a
+# reviewer before the job runs.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact runtime release commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: crates-io
+    concurrency:
+      group: publish-crates
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.98.1
+
+      # The crates take the workspace version, so a rerun, or a release cut
+      # after the same version was published by hand, finds them already there.
+      # A rerun after a partial publish picks up where it stopped. The crates
+      # depend on each other at exactly this version, so the ones still to
+      # publish must come from the commit the published ones came from: a
+      # sibling published from another commit means the version needs a bump.
+      - name: Check which crates this version still needs
+        id: version
+        run: |
+          agent='submilli-runtime-ci (https://github.com/submilli/submilli-runtime)'
+          head=$(git rev-parse HEAD)
+          crates=""
+          published=""
+          for crate in submilli-engine submilli-policy submilli-build; do
+            version=$(cargo metadata --format-version 1 --no-deps --locked \
+              | jq -r --arg crate "$crate" '.packages[] | select(.name == $crate) | .version')
+            status=$(curl -s -o /dev/null -w '%{http_code}' -A "$agent" \
+              "https://crates.io/api/v1/crates/$crate/$version")
+            echo "$crate $version: crates.io answered $status"
+            case "$status" in
+              200) published="$published $crate@$version" ;;
+              404) crates="$crates -p $crate" ;;
+              *) echo "::error::crates.io answered $status for $crate $version"; exit 1 ;;
+            esac
+          done
+          if [ -n "$crates" ]; then
+            for entry in $published; do
+              crate=${entry%@*}
+              version=${entry#*@}
+              source=$(curl -sfL -A "$agent" \
+                "https://static.crates.io/crates/$crate/$crate-$version.crate" \
+                | tar -xzO "$crate-$version/.cargo_vcs_info.json" | jq -r .git.sha1)
+              if [ -z "$source" ]; then
+                echo "::error::could not read the commit $crate $version was published from; retry once crates.io serves it"
+                exit 1
+              fi
+              if [ "$source" != "$head" ]; then
+                echo "::error::$crate $version was published from $source, not $head; bump the workspace version"
+                exit 1
+              fi
+            done
+          fi
+          echo "packages=$crates" >> "$GITHUB_OUTPUT"
+
+      # Fail before uploading anything if a package does not build from its
+      # packaged files alone. Cargo packages them together, so a crate can be
+      # verified against siblings that are not on crates.io yet.
+      - name: Package
+        if: steps.version.outputs.packages != ''
+        run: cargo publish --dry-run --locked ${{ steps.version.outputs.packages }}
+
+      # Cargo publishes in dependency order and waits for each to be available
+      # before publishing what depends on it.
+      - name: Publish
+        if: steps.version.outputs.packages != ''
+        run: cargo publish --locked ${{ steps.version.outputs.packages }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
