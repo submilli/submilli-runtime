@@ -1,0 +1,33 @@
+=== parserKeywordsAsIdentifierName1.ts ===
+let big = {
+>big : { break: number; super: number; const: number; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{    break : 0,    super : 0,    const : 0 } : { break: number; super: number; const: number; }
+>                                             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+   break : 0,
+>break : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+
+   super : 0,
+>super : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+
+   const : 0
+>const : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

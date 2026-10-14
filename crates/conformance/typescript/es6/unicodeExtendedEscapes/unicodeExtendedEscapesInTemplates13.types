@@ -1,0 +1,15 @@
+=== unicodeExtendedEscapesInTemplates13.ts ===
+
+let x = `\u{DDDDD}`;
+>x : string
+>  : ^^^^^^
+>`\u{DDDDD}` : "󝷝"
+>            : ^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

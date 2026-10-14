@@ -1,0 +1,209 @@
+=== controlFlowIfStatement.ts ===
+
+/*pruned*/;
+let cond: boolean = null as unknown as (boolean);
+>cond : boolean
+>     : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+/**/;
+/*pruned*/;
+
+
+
+
+
+
+
+;  // string | number
+
+function a(): void {
+>a : () => void
+>  : ^^^^^^^^^^
+
+    let x: string | number = null as unknown as (string | number);
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    if (cond) {
+>cond : boolean
+>     : ^^^^^^^
+
+        x = 42;
+>x = 42 : 42
+>       : ^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>42 : 42
+>   : ^^
+
+    }
+    else {
+        x = "";
+>x = "" : ""
+>       : ^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+        return;
+    }
+    x; // number
+>x : number
+>  : ^^^^^^
+
+}
+function b(): void {
+>b : () => void
+>  : ^^^^^^^^^^
+
+    let x: string | number = null as unknown as (string | number);
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    if (cond) {
+>cond : boolean
+>     : ^^^^^^^
+
+        x = 42;
+>x = 42 : 42
+>       : ^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>42 : 42
+>   : ^^
+
+        throw "";
+>"" : ""
+>   : ^^
+
+    }
+    else {
+        x = "";
+>x = "" : ""
+>       : ^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+    }
+    x; // string
+>x : string
+>  : ^^^^^^
+
+}
+function c<T>(data: string | T): T {
+>c : <T>(data: string | T) => T
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>data : string | T
+>     : ^^^^^^^^^^
+
+    if (typeof data === 'string') {
+>typeof data === 'string' : boolean
+>                         : ^^^^^^^
+>typeof data : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>data : string | T
+>     : ^^^^^^^^^^
+>'string' : "string"
+>         : ^^^^^^^^
+
+        return JSON.parse(data);
+>JSON.parse(data) : any
+>                 : ^^^
+>JSON.parse : (text: string, reviver?: (this: any, key: string, value: any) => any) => any
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>JSON : JSON
+>     : ^^^^
+>parse : (text: string, reviver?: (this: any, key: string, value: any) => any) => any
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>data : string | (T & string)
+>     : ^^^^^^^^^^^^^^^^^^^^^
+
+    }
+    else {
+        return data;
+>data : T
+>     : ^
+
+    }
+}
+/*pruned*/;
+
+
+
+
+
+
+
+
+interface I<T> {
+>I : I<T>
+>  : ^^^^
+>T : T
+>  : ^
+
+  p: T;
+>p : T
+>  : ^
+
+}
+function e(x: I<"A" | "B">): void {
+>e : (x: I<"A" | "B">) => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : I<"A" | "B">
+>  : ^^^^^^^^^^^^
+
+    if (x.p === "A") {
+>x.p === "A" : boolean
+>            : ^^^^^^^
+>x.p : "A" | "B"
+>    : ^^^^^^^^^
+>x : I<"A" | "B">
+>  : ^^^^^^^^^^^^
+>p : "A" | "B"
+>  : ^^^^^^^^^
+>"A" : "A"
+>    : ^^^
+
+        let a: "A" = (null as unknown as typeof x.p)
+>a : "A"
+>  : ^^^
+>(null as unknown as typeof x.p) : "A"
+>                                : ^^^
+>null as unknown as typeof x.p : "A"
+>                              : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>x.p : "A"
+>    : ^^^
+>x : I<"A" | "B">
+>  : ^^^^^^^^^^^^
+>p : "A"
+>  : ^^^
+
+    }
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

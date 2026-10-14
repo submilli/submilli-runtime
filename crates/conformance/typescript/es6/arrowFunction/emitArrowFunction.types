@@ -1,0 +1,64 @@
+=== emitArrowFunction.ts ===
+let f1 = () => { }
+>f1 : () => void
+>   : ^^^^^^^^^^
+>() => { } : () => void
+>          : ^^^^^^^^^^
+
+let f2 = (x: string, y: string) => { }
+>f2 : (x: string, y: string) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(x: string, y: string) => { } : (x: string, y: string) => void
+>                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>y : string
+>  : ^^^^^^
+
+/*pruned*/;
+let f4 = (x: string, y: number, z: number = 10) => { }
+>f4 : (x: string, y: number, z?: number) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(x: string, y: number, z: number = 10) => { } : (x: string, y: number, z?: number) => void
+>                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>z : number
+>  : ^^^^^^
+>10 : 10
+>   : ^^
+
+function foo(func: () => boolean): void { }
+>foo : (func: () => boolean) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>func : () => boolean
+>     : ^^^^^^^^^^^^^
+
+foo(() => true);
+>foo(() => true) : void
+>                : ^^^^
+>foo : (func: () => boolean) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>() => true : () => true
+>           : ^^^^^^^^^^
+>true : true
+>     : ^^^^
+
+foo(() => { return false; });
+>foo(() => { return false; }) : void
+>                             : ^^^^
+>foo : (func: () => boolean) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>() => { return false; } : () => false
+>                        : ^^^^^^^^^^^
+>false : false
+>      : ^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

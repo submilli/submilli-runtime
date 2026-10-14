@@ -1,0 +1,17 @@
+noUncheckedIndexedAccess.ts(16,7): error TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'.
+noUncheckedIndexedAccess.ts(17,7): error TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'.
+noUncheckedIndexedAccess.ts(18,7): error TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'.
+noUncheckedIndexedAccess.ts(19,7): error TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'.
+noUncheckedIndexedAccess.ts(20,7): error TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'.
+noUncheckedIndexedAccess.ts(21,7): error TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'.
+noUncheckedIndexedAccess.ts(22,7): error TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'.
+noUncheckedIndexedAccess.ts(23,7): error TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'.
+noUncheckedIndexedAccess.ts(24,7): error TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'.
+noUncheckedIndexedAccess.ts(25,7): error TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'.
+noUncheckedIndexedAccess.ts(26,7): error TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'.
+noUncheckedIndexedAccess.ts(27,7): error TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'.
+noUncheckedIndexedAccess.ts(28,7): error TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'.
+noUncheckedIndexedAccess.ts(42,1): error TS2322: Type 'undefined' is not assignable to type 'boolean'.
+noUncheckedIndexedAccess.ts(43,1): error TS2322: Type 'undefined' is not assignable to type 'boolean'.
+noUncheckedIndexedAccess.ts(44,1): error TS2322: Type 'undefined' is not assignable to type 'boolean'.
+noUncheckedIndexedAccess.ts(83,7): error TS2322: Type 'number | boolean | undefined' is not assignable to type 'number | boolean'.   Type 'undefined' is not assignable to type 'number | boolean'.

@@ -1,0 +1,8 @@
+=== parser_breakNotInIterationOrSwitchStatement1.ts ===
+break;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

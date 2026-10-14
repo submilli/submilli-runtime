@@ -1,0 +1,9 @@
+types: 1 of 13 tsc entries compared, 0 differ
+
+errors:
+line 5: ours: duplicate public export `A` (tsc accepts)
+line 7: ours: duplicate public export `A` (tsc accepts)
+line 9: ours: duplicate public export `B` (tsc accepts)
+line 11: ours: duplicate public export `B` (tsc accepts)
+line 16: ours: unresolved identifier `A` (tsc accepts)
+line 18: ours: unresolved identifier `B` (tsc accepts)

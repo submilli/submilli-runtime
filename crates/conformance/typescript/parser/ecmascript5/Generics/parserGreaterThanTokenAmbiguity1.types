@@ -1,0 +1,15 @@
+=== parserGreaterThanTokenAmbiguity1.ts ===
+1 >> 2;
+>1 >> 2 : number
+>       : ^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

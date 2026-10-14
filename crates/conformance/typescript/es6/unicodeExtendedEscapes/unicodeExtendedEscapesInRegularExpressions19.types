@@ -1,0 +1,15 @@
+=== unicodeExtendedEscapesInRegularExpressions19.ts ===
+
+let x = /\u{}/gu;
+>x : RegExp
+>  : ^^^^^^
+>/\u{}/gu : RegExp
+>         : ^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,5 @@
+types: 0 of 14 tsc entries compared, 0 differ
+
+errors:
+line 11: tsc TS2300: Duplicate identifier 'T2'. (we accept)
+line 6: ours: a class can only `implements` an interface, but `{ x: string }` is not an interface (tsc accepts)

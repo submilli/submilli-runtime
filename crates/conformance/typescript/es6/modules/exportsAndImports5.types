@@ -1,0 +1,27 @@
+=== exportsAndImports5.ts ===
+
+export interface A { }
+>A : A
+>  : ^
+
+
+import { A } from "./a"
+>A : any
+>  : ^^^
+
+export function f(): A {
+>f : () => A
+>  : ^^^^^^^
+
+    return {};
+>{} : {}
+>   : ^^
+
+}
+export { f as fV2 };
+>f : () => A
+>  : ^^^^^^^
+>fV2 : () => A
+>    : ^^^^^^^
+
+

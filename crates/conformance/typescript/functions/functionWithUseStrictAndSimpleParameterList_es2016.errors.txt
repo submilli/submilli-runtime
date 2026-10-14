@@ -1,0 +1,10 @@
+functionWithUseStrictAndSimpleParameterList_es2016.ts(4,12): error TS1346: This parameter is not allowed with 'use strict' directive.
+functionWithUseStrictAndSimpleParameterList_es2016.ts(5,5): error TS1347: 'use strict' directive cannot be used with non-simple parameter list.
+functionWithUseStrictAndSimpleParameterList_es2016.ts(26,23): error TS1346: This parameter is not allowed with 'use strict' directive.
+functionWithUseStrictAndSimpleParameterList_es2016.ts(27,5): error TS1347: 'use strict' directive cannot be used with non-simple parameter list.
+functionWithUseStrictAndSimpleParameterList_es2016.ts(38,24): error TS1346: This parameter is not allowed with 'use strict' directive.
+functionWithUseStrictAndSimpleParameterList_es2016.ts(38,40): error TS1346: This parameter is not allowed with 'use strict' directive.
+functionWithUseStrictAndSimpleParameterList_es2016.ts(39,5): error TS1347: 'use strict' directive cannot be used with non-simple parameter list.
+functionWithUseStrictAndSimpleParameterList_es2016.ts(42,23): error TS1346: This parameter is not allowed with 'use strict' directive.
+functionWithUseStrictAndSimpleParameterList_es2016.ts(42,39): error TS1346: This parameter is not allowed with 'use strict' directive.
+functionWithUseStrictAndSimpleParameterList_es2016.ts(44,5): error TS1347: 'use strict' directive cannot be used with non-simple parameter list.

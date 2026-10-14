@@ -1,0 +1,15 @@
+=== unicodeExtendedEscapesInStrings15.ts ===
+
+let x = "\u{abcd}\u{ef12}\u{3456}\u{7890}";
+>x : string
+>  : ^^^^^^
+>"\u{abcd}\u{ef12}\u{3456}\u{7890}" : "ꯍ㑖碐"
+>                                   : ^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

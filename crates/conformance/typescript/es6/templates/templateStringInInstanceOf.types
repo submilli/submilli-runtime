@@ -1,0 +1,19 @@
+=== templateStringInInstanceOf.ts ===
+let x = `abc${ 0 }def` instanceof String;
+>x : boolean
+>  : ^^^^^^^
+>`abc${ 0 }def` instanceof String : boolean
+>                                 : ^^^^^^^
+>`abc${ 0 }def` : "abc0def"
+>               : ^^^^^^^^^
+>0 : 0
+>  : ^
+>String : StringConstructor
+>       : ^^^^^^^^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

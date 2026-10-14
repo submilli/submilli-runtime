@@ -1,0 +1,2 @@
+parserRegularExpression3.ts(2,1): error TS2304: Cannot find name 'Foo'.
+parserRegularExpression3.ts(2,6): error TS2872: This kind of expression is always truthy.

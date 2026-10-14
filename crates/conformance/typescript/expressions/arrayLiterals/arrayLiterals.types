@@ -1,0 +1,154 @@
+=== arrayLiterals.ts ===
+// Empty array literal with no contextual type has type Undefined[]
+
+let arr1= [[], [1], ['']];
+>arr1 : (number[] | string[])[]
+>     : ^^^^^^^^^^^^^^^^^^^^^^^
+>[[], [1], ['']] : (number[] | string[])[]
+>                : ^^^^^^^^^^^^^^^^^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+>[1] : number[]
+>    : ^^^^^^^^
+>1 : 1
+>  : ^
+>[''] : string[]
+>     : ^^^^^^^^
+>'' : ""
+>   : ^^
+
+
+let arr2 = [[null], [1], ['']];
+>arr2 : (number[] | string[] | null[])[]
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>[[null], [1], ['']] : (number[] | string[] | null[])[]
+>                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>[null] : null[]
+>       : ^^^^^^
+>[1] : number[]
+>    : ^^^^^^^^
+>1 : 1
+>  : ^
+>[''] : string[]
+>     : ^^^^^^^^
+>'' : ""
+>   : ^^
+
+
+
+// Array literal with elements of only EveryType E has type E[]
+let stringArrArr = [[''], [""]];
+>stringArrArr : string[][]
+>             : ^^^^^^^^^^
+>[[''], [""]] : string[][]
+>             : ^^^^^^^^^^
+>[''] : string[]
+>     : ^^^^^^^^
+>'' : ""
+>   : ^^
+>[""] : string[]
+>     : ^^^^^^^^
+>"" : ""
+>   : ^^
+
+
+let stringArr = ['', ""];
+>stringArr : string[]
+>          : ^^^^^^^^
+>['', ""] : string[]
+>         : ^^^^^^^^
+>'' : ""
+>   : ^^
+>"" : ""
+>   : ^^
+
+
+let numberArr = [0, 0.0, 0x00, 1e1];
+>numberArr : number[]
+>          : ^^^^^^^^
+>[0, 0.0, 0x00, 1e1] : number[]
+>                    : ^^^^^^^^
+>0 : 0
+>  : ^
+>0.0 : 0
+>    : ^
+>0x00 : 0
+>     : ^
+>1e1 : 10
+>    : ^^
+
+
+let boolArr = [false, true, false, true];
+>boolArr : boolean[]
+>        : ^^^^^^^^^
+>[false, true, false, true] : boolean[]
+>                           : ^^^^^^^^^
+>false : false
+>      : ^^^^^
+>true : true
+>     : ^^^^
+>false : false
+>      : ^^^^^
+>true : true
+>     : ^^^^
+
+
+/*pruned*/;
+/*pruned*/;
+
+/*pruned*/;
+/*pruned*/;                                                                   // Should OK, not be a parse error
+
+// Contextual type C with numeric index signature makes array literal of EveryType E of type BCT(E,C)[]
+/*pruned*/;
+let context2 = [{ a: '', b: 0, c: '' }, { a: "", b: 3, c: 0 }];
+>context2 : ({ a: string; b: number; c: string; } | { a: string; b: number; c: number; })[]
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>[{ a: '', b: 0, c: '' }, { a: "", b: 3, c: 0 }] : ({ a: string; b: number; c: string; } | { a: string; b: number; c: number; })[]
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: '', b: 0, c: '' } : { a: string; b: number; c: string; }
+>                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+>b : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>c : string
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+>{ a: "", b: 3, c: 0 } : { a: string; b: number; c: number; }
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+>b : number
+>  : ^^^^^^
+>3 : 3
+>  : ^
+>c : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+
+// Contextual type C with numeric index signature of type Base makes array literal of Derived have type Base[]
+/*pruned*/;
+/*pruned*/;                              ;
+/*pruned*/;                              ;
+/*pruned*/;
+
+// Contextual type C with numeric index signature of type Base makes array literal of Derived1 and Derived2 have type Base[]
+/*pruned*/;
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

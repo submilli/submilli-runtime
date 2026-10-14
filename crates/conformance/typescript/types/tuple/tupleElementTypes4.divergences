@@ -1,0 +1,13 @@
+types: 4 of 7 tsc entries compared, 3 differ
+
+line 2: a
+  tsc:  number
+  ours: number | undefined
+
+line 2: b
+  tsc:  undefined
+  ours: number | undefined
+
+line 2: [0, undefined]
+  tsc:  [number, undefined]
+  ours: (number | undefined)[]

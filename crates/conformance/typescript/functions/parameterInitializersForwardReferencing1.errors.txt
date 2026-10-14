@@ -1,0 +1,1 @@
+parameterInitializersForwardReferencing1.ts(16,28): error TS2373: Parameter 'bar' cannot reference identifier 'foo' declared after it.

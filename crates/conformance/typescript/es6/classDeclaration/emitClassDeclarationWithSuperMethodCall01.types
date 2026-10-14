@@ -1,0 +1,45 @@
+=== emitClassDeclarationWithSuperMethodCall01.ts ===
+
+class Parent {
+>Parent : Parent
+>       : ^^^^^^
+
+    foo(): void {
+>foo : () => void
+>    : ^^^^^^^^^^
+
+    }
+}
+
+class Foo extends Parent {
+>Foo : Foo
+>    : ^^^
+>Parent : Parent
+>       : ^^^^^^
+
+    foo(): void {
+>foo : () => void
+>    : ^^^^^^^^^^
+
+        let x = () => super.foo();
+>x : () => void
+>  : ^^^^^^^^^^
+>() => super.foo() : () => void
+>                  : ^^^^^^^^^^
+>super.foo() : void
+>            : ^^^^
+>super.foo : () => void
+>          : ^^^^^^^^^^
+>super : Parent
+>      : ^^^^^^
+>foo : () => void
+>    : ^^^^^^^^^^
+
+    }
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

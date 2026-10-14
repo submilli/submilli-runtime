@@ -1,0 +1,24 @@
+=== restElementWithInitializer1.ts ===
+let a: number[] = null as unknown as (number[]);
+>a : number[]
+>  : ^^^^^^^^
+>null as unknown as (number[]) : number[]
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let [...x = a] = a;  // Error, rest element cannot have initializer
+>x : number[]
+>  : ^^^^^^^^
+>a : number[]
+>  : ^^^^^^^^
+>a : number[]
+>  : ^^^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

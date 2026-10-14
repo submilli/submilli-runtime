@@ -1,0 +1,245 @@
+=== namedTupleMembers.ts ===
+
+export type Segment = [length: number, count: number];
+>Segment : Segment
+>        : ^^^^^^^
+
+
+export type SegmentAnnotated = [
+>SegmentAnnotated : SegmentAnnotated
+>                 : ^^^^^^^^^^^^^^^^
+
+    /**
+     * Size of message buffer segment handles
+     */
+    length: number,
+    /**
+     * Number of segments handled at once
+     */
+    count: number
+];
+
+let a: Segment = null as unknown as (Segment);
+>a : Segment
+>  : ^^^^^^^
+>null as unknown as (Segment) : Segment
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b: SegmentAnnotated = null as unknown as (SegmentAnnotated);
+>b : SegmentAnnotated
+>  : ^^^^^^^^^^^^^^^^
+>null as unknown as (SegmentAnnotated) : SegmentAnnotated
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let c: [number, number] = null as unknown as ([number, number]);
+>c : [number, number]
+>  : ^^^^^^^^^^^^^^^^
+>null as unknown as ([number, number]) : [number, number]
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let d: [a: number, b: number] = null as unknown as ([a: number, b: number]);
+>d : [a: number, b: number]
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ([a: number, b: number]) : [a: number, b: number]
+>                                            : ^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+a = b;
+>a = b : SegmentAnnotated
+>      : ^^^^^^^^^^^^^^^^
+>a : Segment
+>  : ^^^^^^^
+>b : SegmentAnnotated
+>  : ^^^^^^^^^^^^^^^^
+
+a = c;
+>a = c : [number, number]
+>      : ^^^^^^^^^^^^^^^^
+>a : Segment
+>  : ^^^^^^^
+>c : [number, number]
+>  : ^^^^^^^^^^^^^^^^
+
+a = d;
+>a = d : [a: number, b: number]
+>      : ^^^^^^^^^^^^^^^^^^^^^^
+>a : Segment
+>  : ^^^^^^^
+>d : [a: number, b: number]
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+
+
+b = a;
+>b = a : Segment
+>      : ^^^^^^^
+>b : SegmentAnnotated
+>  : ^^^^^^^^^^^^^^^^
+>a : Segment
+>  : ^^^^^^^
+
+b = c;
+>b = c : [number, number]
+>      : ^^^^^^^^^^^^^^^^
+>b : SegmentAnnotated
+>  : ^^^^^^^^^^^^^^^^
+>c : [number, number]
+>  : ^^^^^^^^^^^^^^^^
+
+b = d;
+>b = d : [a: number, b: number]
+>      : ^^^^^^^^^^^^^^^^^^^^^^
+>b : SegmentAnnotated
+>  : ^^^^^^^^^^^^^^^^
+>d : [a: number, b: number]
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+
+
+c = a;
+>c = a : Segment
+>      : ^^^^^^^
+>c : [number, number]
+>  : ^^^^^^^^^^^^^^^^
+>a : Segment
+>  : ^^^^^^^
+
+c = b;
+>c = b : SegmentAnnotated
+>      : ^^^^^^^^^^^^^^^^
+>c : [number, number]
+>  : ^^^^^^^^^^^^^^^^
+>b : SegmentAnnotated
+>  : ^^^^^^^^^^^^^^^^
+
+c = d;
+>c = d : [a: number, b: number]
+>      : ^^^^^^^^^^^^^^^^^^^^^^
+>c : [number, number]
+>  : ^^^^^^^^^^^^^^^^
+>d : [a: number, b: number]
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+
+
+d = a;
+>d = a : Segment
+>      : ^^^^^^^
+>d : [a: number, b: number]
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+>a : Segment
+>  : ^^^^^^^
+
+d = b;
+>d = b : SegmentAnnotated
+>      : ^^^^^^^^^^^^^^^^
+>d : [a: number, b: number]
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+>b : SegmentAnnotated
+>  : ^^^^^^^^^^^^^^^^
+
+d = c;
+>d = c : [number, number]
+>      : ^^^^^^^^^^^^^^^^
+>d : [a: number, b: number]
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+>c : [number, number]
+>  : ^^^^^^^^^^^^^^^^
+
+
+/*pruned*/;
+
+/*pruned*/;
+
+/*pruned*/;
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+export function readSegment([length, count]: [number, number]): void {}
+>readSegment : ([length, count]: [number, number]) => void
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>length : number
+>       : ^^^^^^
+>count : number
+>      : ^^^^^^
+
+
+// documenting binding pattern behavior (currently does _not_ generate tuple names)
+/*pruned*/;
+
+export type RecursiveTupleA = [initial: string, next: RecursiveTupleA];
+>RecursiveTupleA : RecursiveTupleA
+>                : ^^^^^^^^^^^^^^^
+
+
+export type RecursiveTupleB = [first: string, ptr: RecursiveTupleB];
+>RecursiveTupleB : RecursiveTupleB
+>                : ^^^^^^^^^^^^^^^
+
+
+let q: RecursiveTupleA = null as unknown as (RecursiveTupleA);
+>q : RecursiveTupleA
+>  : ^^^^^^^^^^^^^^^
+>null as unknown as (RecursiveTupleA) : RecursiveTupleA
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let r: RecursiveTupleB = null as unknown as (RecursiveTupleB);
+>r : RecursiveTupleB
+>  : ^^^^^^^^^^^^^^^
+>null as unknown as (RecursiveTupleB) : RecursiveTupleB
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+q = r;
+>q = r : RecursiveTupleB
+>      : ^^^^^^^^^^^^^^^
+>q : RecursiveTupleA
+>  : ^^^^^^^^^^^^^^^
+>r : RecursiveTupleB
+>  : ^^^^^^^^^^^^^^^
+
+r = q;
+>r = q : RecursiveTupleA
+>      : ^^^^^^^^^^^^^^^
+>r : RecursiveTupleB
+>  : ^^^^^^^^^^^^^^^
+>q : RecursiveTupleA
+>  : ^^^^^^^^^^^^^^^
+
+
+/*pruned*/;
+/*pruned*/;
+
+/*pruned*/;
+/*pruned*/;
+
+/**/;
+/**/;
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+/*pruned*/;                                                           // one tuple with captures arguments as first member
+/*pruned*/;                                               // captured arguments list re-spread
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

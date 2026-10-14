@@ -1,0 +1,20 @@
+=== propertyNamedPrototype.ts ===
+class C {
+>C : C
+>  : ^
+
+    prototype: number; // ok
+>prototype : number
+>          : ^^^^^^
+
+    static prototype: C; // error
+>prototype : C
+>          : ^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

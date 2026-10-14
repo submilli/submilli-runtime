@@ -1,0 +1,25 @@
+=== parserSuperExpression2.ts ===
+class C {
+>C : C
+>  : ^
+
+  M(): void {
+>M : () => void
+>  : ^^^^^^^^^^
+
+    super<T>(0);
+>super<T>(0) : void
+>            : ^^^^
+>super : any
+>      : ^^^
+>0 : 0
+>  : ^
+
+  }
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

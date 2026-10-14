@@ -1,0 +1,83 @@
+=== objectLiteralShorthandPropertiesAssignmentErrorFromMissingIdentifier.ts ===
+let id: number = 10000;
+>id : number
+>   : ^^^^^^
+>10000 : 10000
+>      : ^^^^^
+
+/*pruned*/;
+
+let person: { b: string; id: number } = { name, id };  // error
+>person : { b: string; id: number; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : string
+>  : ^^^^^^
+>id : number
+>   : ^^^^^^
+>{ name, id } : { name: void; id: number; }
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>name : void
+>     : ^^^^
+>id : number
+>   : ^^^^^^
+
+function bar(name: string, id: number): { name: number, id: string } { return { name, id }; }  // error
+>bar : (name: string, id: number) => { name: number; id: string; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>name : string
+>     : ^^^^^^
+>id : number
+>   : ^^^^^^
+>name : number
+>     : ^^^^^^
+>id : string
+>   : ^^^^^^
+>{ name, id } : { name: string; id: number; }
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>name : string
+>     : ^^^^^^
+>id : number
+>   : ^^^^^^
+
+function foo(name: string, id: number): { name: string, id: number } { return { name, id }; }  // error
+>foo : (name: string, id: number) => { name: string; id: number; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>name : string
+>     : ^^^^^^
+>id : number
+>   : ^^^^^^
+>name : string
+>     : ^^^^^^
+>id : number
+>   : ^^^^^^
+>{ name, id } : { name: string; id: number; }
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>name : string
+>     : ^^^^^^
+>id : number
+>   : ^^^^^^
+
+/*pruned*/;                                                    // ok
+let person2: { name: string, id: number } = bar("hello", 5);
+>person2 : { name: string; id: number; }
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>name : string
+>     : ^^^^^^
+>id : number
+>   : ^^^^^^
+>bar("hello", 5) : { name: number; id: string; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>bar : (name: string, id: number) => { name: number; id: string; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+>5 : 5
+>  : ^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,205 @@
+=== forStatementsMultipleValidDecl.ts ===
+
+// all expected to be valid
+
+for (let x: number; ;) { }
+>x : number
+>  : ^^^^^^
+
+for (let x = 2; ;) { }
+>x : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+
+
+for (let x = <number>undefined; ;) { }
+>x : number
+>  : ^^^^^^
+><number>undefined : number
+>                  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+// new declaration space, making redeclaring x as a string valid
+function declSpace(): void {
+>declSpace : () => void
+>          : ^^^^^^^^^^
+
+    for (let x = 'this is a string'; ;) { }
+>x : string
+>  : ^^^^^^
+>'this is a string' : "this is a string"
+>                   : ^^^^^^^^^^^^^^^^^^
+
+}
+interface Point { x: number; y: number; }
+>Point : Point
+>      : ^^^^^
+>x : number
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+
+
+for (let p: Point; ;) { }
+>p : Point
+>  : ^^^^^
+
+for (let p = { x: 1, y: 2 }; ;) { }
+>p : { x: number; y: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: 1, y: 2 } : { x: number; y: number; }
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>y : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+
+for (let p: Point = { x: 0, y: undefined }; ;) { }
+>p : Point
+>  : ^^^^^
+>{ x: 0, y: undefined } : { x: number; y: undefined; }
+>                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>y : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+for (let p = { x: 1, y: <number>undefined }; ;) { }
+>p : { x: number; y: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: 1, y: <number>undefined } : { x: number; y: number; }
+>                               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>y : number
+>  : ^^^^^^
+><number>undefined : number
+>                  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+for (let p: { x: number; y: number; } = { x: 1, y: 2 }; ;) { }
+>p : { x: number; y: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>{ x: 1, y: 2 } : { x: number; y: number; }
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>y : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+
+for (let p = <{ x: number; y: number; }>{ x: 0, y: undefined }; ;) { }
+>p : { x: number; y: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+><{ x: number; y: number; }>{ x: 0, y: undefined } : { x: number; y: number; }
+>                                                  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>{ x: 0, y: undefined } : { x: number; y: undefined; }
+>                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>y : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+/*pruned*/;
+
+for (let fn = function (s: string) { return 42; }; ;) { }
+>fn : (s: string) => number
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>function (s: string) { return 42; } : (s: string) => number
+>                                    : ^^^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+>42 : 42
+>   : ^^
+
+for (let fn = (s: string) => 3; ;) { }
+>fn : (s: string) => number
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>(s: string) => 3 : (s: string) => number
+>                 : ^^^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+>3 : 3
+>  : ^
+
+for (let fn: (s: string) => number; ;) { }
+>fn : (s: string) => number
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+
+/*pruned*/;
+for (let fn = <(s: string) => number> null; ;) { }
+>fn : (s: string) => number
+>   : ^^^^^^^^^^^^^^^^^^^^^
+><(s: string) => number> null : (s: string) => number
+>                             : ^^^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+
+/*pruned*/;
+
+for (let a: string[]; ;) { }
+>a : string[]
+>  : ^^^^^^^^
+
+for (let a = ['a', 'b']; ;) { }
+>a : string[]
+>  : ^^^^^^^^
+>['a', 'b'] : string[]
+>           : ^^^^^^^^
+>'a' : "a"
+>    : ^^^
+>'b' : "b"
+>    : ^^^
+
+for (let a = <string[]>[]; ;) { }
+>a : string[]
+>  : ^^^^^^^^
+><string[]>[] : string[]
+>             : ^^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+for (let a: string[] = []; ;) { }
+>a : string[]
+>  : ^^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+/*pruned*/;
+/*pruned*/;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

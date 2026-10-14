@@ -1,0 +1,1 @@
+parserInterfaceDeclaration8.ts(2,11): error TS2427: Interface name cannot be 'string'.

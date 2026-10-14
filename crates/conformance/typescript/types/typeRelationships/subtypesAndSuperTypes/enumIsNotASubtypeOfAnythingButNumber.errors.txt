@@ -1,0 +1,13 @@
+enumIsNotASubtypeOfAnythingButNumber.ts(20,5): error TS2411: Property 'foo' of type 'E' is not assignable to 'string' index type 'string'.
+enumIsNotASubtypeOfAnythingButNumber.ts(26,5): error TS2411: Property 'foo' of type 'E' is not assignable to 'string' index type 'boolean'.
+enumIsNotASubtypeOfAnythingButNumber.ts(38,5): error TS2411: Property 'foo' of type 'E' is not assignable to 'string' index type 'RegExp'.
+enumIsNotASubtypeOfAnythingButNumber.ts(44,5): error TS2411: Property 'foo' of type 'E' is not assignable to 'string' index type '{ bar: number; }'.
+enumIsNotASubtypeOfAnythingButNumber.ts(50,5): error TS2411: Property 'foo' of type 'E' is not assignable to 'string' index type 'number[]'.
+enumIsNotASubtypeOfAnythingButNumber.ts(56,5): error TS2411: Property 'foo' of type 'E' is not assignable to 'string' index type 'I8'.
+enumIsNotASubtypeOfAnythingButNumber.ts(59,11): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.
+enumIsNotASubtypeOfAnythingButNumber.ts(62,5): error TS2411: Property 'foo' of type 'E' is not assignable to 'string' index type 'A'.
+enumIsNotASubtypeOfAnythingButNumber.ts(65,15): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.
+enumIsNotASubtypeOfAnythingButNumber.ts(68,5): error TS2411: Property 'foo' of type 'E' is not assignable to 'string' index type 'A2<number>'.
+enumIsNotASubtypeOfAnythingButNumber.ts(87,5): error TS2411: Property 'foo' of type 'E' is not assignable to 'string' index type 'E2'.
+enumIsNotASubtypeOfAnythingButNumber.ts(101,11): error TS2564: Property 'baz' has no initializer and is not definitely assigned in the constructor.
+enumIsNotASubtypeOfAnythingButNumber.ts(113,5): error TS2411: Property 'foo' of type 'E' is not assignable to 'string' index type 'T'.

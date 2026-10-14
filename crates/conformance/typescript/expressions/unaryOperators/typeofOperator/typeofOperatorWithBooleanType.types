@@ -1,0 +1,219 @@
+=== typeofOperatorWithBooleanType.ts ===
+
+// typeof  operator on boolean type
+let BOOLEAN: boolean = null as unknown as (boolean);
+>BOOLEAN : boolean
+>        : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+function foo(): boolean { return true; }
+>foo : () => boolean
+>    : ^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+
+
+class A {
+>A : A
+>  : ^
+
+    public a: boolean;
+>a : boolean
+>  : ^^^^^^^
+
+    static foo(): boolean { return false; }
+>foo : () => boolean
+>    : ^^^^^^^^^^^^^
+>false : false
+>      : ^^^^^
+
+}
+/*pruned*/;
+
+
+
+let objA = new A();
+>objA : A
+>     : ^
+>new A() : A
+>        : ^
+>A : typeof A
+>  : ^^^^^^^^
+
+
+// boolean type var
+let ResultIsString1 = typeof BOOLEAN;
+>ResultIsString1 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof BOOLEAN : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>BOOLEAN : boolean
+>        : ^^^^^^^
+
+
+// boolean type literal
+let ResultIsString2 = typeof true;
+>ResultIsString2 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof true : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+
+let ResultIsString3 = typeof { x: true, y: false };
+>ResultIsString3 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof { x: true, y: false } : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: true, y: false } : { x: boolean; y: boolean; }
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+>y : boolean
+>  : ^^^^^^^
+>false : false
+>      : ^^^^^
+
+
+// boolean type expressions
+let ResultIsString4 = typeof objA.a;
+>ResultIsString4 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof objA.a : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>objA.a : boolean
+>       : ^^^^^^^
+>objA : A
+>     : ^
+>a : boolean
+>  : ^^^^^^^
+
+/*pruned*/;
+let ResultIsString6 = typeof foo();
+>ResultIsString6 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof foo() : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>foo() : boolean
+>      : ^^^^^^^
+>foo : () => boolean
+>    : ^^^^^^^^^^^^^
+
+let ResultIsString7 = typeof A.foo();
+>ResultIsString7 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof A.foo() : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>A.foo() : boolean
+>        : ^^^^^^^
+>A.foo : () => boolean
+>      : ^^^^^^^^^^^^^
+>A : typeof A
+>  : ^^^^^^^^
+>foo : () => boolean
+>    : ^^^^^^^^^^^^^
+
+
+// multiple typeof  operator
+let ResultIsString8 = typeof typeof BOOLEAN;
+>ResultIsString8 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof typeof BOOLEAN : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof BOOLEAN : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>BOOLEAN : boolean
+>        : ^^^^^^^
+
+
+// miss assignment operators
+typeof true;
+>typeof true : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+
+typeof BOOLEAN;
+>typeof BOOLEAN : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>BOOLEAN : boolean
+>        : ^^^^^^^
+
+typeof foo();
+>typeof foo() : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>foo() : boolean
+>      : ^^^^^^^
+>foo : () => boolean
+>    : ^^^^^^^^^^^^^
+
+/*pruned*/;
+typeof objA.a;
+>typeof objA.a : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>objA.a : boolean
+>       : ^^^^^^^
+>objA : A
+>     : ^
+>a : boolean
+>  : ^^^^^^^
+
+/*pruned*/;
+
+// use typeof in type query
+let z: boolean = null as unknown as (boolean);
+>z : boolean
+>  : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let x: boolean[] = null as unknown as (boolean[]);
+>x : boolean[]
+>  : ^^^^^^^^^
+>null as unknown as (boolean[]) : boolean[]
+>                               : ^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let r: () => boolean = null as unknown as (() => boolean);
+>r : () => boolean
+>  : ^^^^^^^^^^^^^
+>null as unknown as (() => boolean) : () => boolean
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+/*pruned*/;
+let y = { a: true, b: false};
+>y : { a: boolean; b: boolean; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: true, b: false} : { a: boolean; b: boolean; }
+>                     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+>b : boolean
+>  : ^^^^^^^
+>false : false
+>      : ^^^^^
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

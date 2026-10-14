@@ -1,0 +1,37 @@
+=== subtypingWithCallSignaturesA.ts ===
+function foo3(cb: (x: number) => number): typeof cb { return null as unknown as (typeof cb); }
+>foo3 : (cb: (x: number) => number) => typeof cb
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>cb : (x: number) => number
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>cb : (x: number) => number
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (typeof cb) : (x: number) => number
+>                               : ^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>cb : (x: number) => number
+>   : ^^^^^^^^^^^^^^^^^^^^^
+
+let r5 = foo3((x: number) => ''); // error
+>r5 : (x: number) => number
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>foo3((x: number) => '') : (x: number) => number
+>                        : ^^^^^^^^^^^^^^^^^^^^^
+>foo3 : (cb: (x: number) => number) => typeof cb
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(x: number) => '' : (x: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

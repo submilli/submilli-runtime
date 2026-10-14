@@ -1,0 +1,8 @@
+// @target: es2015
+class C {
+  M(): void {
+    super<T>(0);
+  }
+}
+
+function main(): void {}

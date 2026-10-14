@@ -1,0 +1,2 @@
+propertyNamedPrototype.ts(3,5): error TS2564: Property 'prototype' has no initializer and is not definitely assigned in the constructor.
+propertyNamedPrototype.ts(4,12): error TS2699: Static property 'prototype' conflicts with built-in property 'Function.prototype' of constructor function 'C'.

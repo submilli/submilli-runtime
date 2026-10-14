@@ -1,0 +1,107 @@
+types: 57 of 106 tsc entries compared, 25 differ
+
+line 25: y
+  tsc:  number
+  ours: 0
+
+line 26: f5
+  tsc:  ({ x, y }?: { x: number; y?: number | undefined; }) => void
+  ours: (arg0?: { x: number }) => void
+
+line 27: f5
+  tsc:  ({ x, y }?: { x: number; y?: number | undefined; }) => void
+  ours: (arg0?: { x: number }) => void
+
+line 28: f5
+  tsc:  ({ x, y }?: { x: number; y?: number | undefined; }) => void
+  ours: (arg0?: { x: number }) => void
+
+line 31: x
+  tsc:  number
+  ours: 0
+
+line 31: y
+  tsc:  number
+  ours: 0
+
+line 32: f6
+  tsc:  ({ x, y }?: { x?: number | undefined; y?: number | undefined; }) => void
+  ours: (arg0?: {}) => void
+
+line 33: f6
+  tsc:  ({ x, y }?: { x?: number | undefined; y?: number | undefined; }) => void
+  ours: (arg0?: {}) => void
+
+line 34: f6
+  tsc:  ({ x, y }?: { x?: number | undefined; y?: number | undefined; }) => void
+  ours: (arg0?: {}) => void
+
+line 35: f6
+  tsc:  ({ x, y }?: { x?: number | undefined; y?: number | undefined; }) => void
+  ours: (arg0?: {}) => void
+
+line 36: f6
+  tsc:  ({ x, y }?: { x?: number | undefined; y?: number | undefined; }) => void
+  ours: (arg0?: {}) => void
+
+line 55: [0, 0]
+  tsc:  [number, number]
+  ours: number[]
+
+line 56: g3
+  tsc:  ([x, y]?: [number, number]) => void
+  ours: (arg0?: number[]) => void
+
+line 57: g3
+  tsc:  ([x, y]?: [number, number]) => void
+  ours: (arg0?: number[]) => void
+
+line 57: [1, 1]
+  tsc:  [number, number]
+  ours: number[]
+
+line 60: [0]
+  tsc:  [number]
+  ours: number[]
+
+line 61: g4
+  tsc:  ([x, y]?: [number, (number | undefined)?]) => void
+  ours: (arg0?: number[]) => void
+
+line 62: g4
+  tsc:  ([x, y]?: [number, (number | undefined)?]) => void
+  ours: (arg0?: number[]) => void
+
+line 62: [1, 1]
+  tsc:  [number, number]
+  ours: number[]
+
+line 65: x
+  tsc:  number
+  ours: 0
+
+line 65: y
+  tsc:  number
+  ours: 0
+
+line 65: []
+  tsc:  []
+  ours: never[]
+
+line 66: g5
+  tsc:  ([x, y]?: [(number | undefined)?, (number | undefined)?]) => void
+  ours: (arg0?: never[]) => void
+
+line 67: g5
+  tsc:  ([x, y]?: [(number | undefined)?, (number | undefined)?]) => void
+  ours: (arg0?: never[]) => void
+
+line 67: [1, 1]
+  tsc:  [number, number]
+  ours: never[]
+
+errors:
+line 25: ours: field `y` does not exist on `{ x: number }` (tsc accepts)
+line 28: ours: object literal has unknown field `y` for the target type (tsc accepts)
+line 31: ours: field `x` does not exist on `{}` (tsc accepts)
+line 67: ours: expected `never`, got `number` (tsc accepts)

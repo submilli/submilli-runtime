@@ -1,0 +1,130 @@
+=== callNonGenericFunctionWithTypeArguments.ts ===
+// it is always illegal to provide type arguments to a non-generic function
+// all invocations here are illegal
+
+function f(x: number): null { return null; }
+>f : (x: number) => null
+>  : ^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+let r = f<string>(1);
+>r : null
+>  : ^^^^
+>f<string>(1) : null
+>             : ^^^^
+>f : (x: number) => null
+>  : ^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+
+let f2 = (x: number) => { return null; }
+>f2 : (x: number) => null
+>   : ^^^^^^^^^^^^^^^^^^^
+>(x: number) => { return null; } : (x: number) => null
+>                                : ^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+let r2 = f2<string>(1);
+>r2 : null
+>   : ^^^^
+>f2<string>(1) : null
+>              : ^^^^
+>f2 : (x: number) => null
+>   : ^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+
+/*pruned*/;
+/*pruned*/;
+
+class C {
+>C : C
+>  : ^
+
+    f(x: number): null {
+>f : (x: number) => null
+>  : ^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+        return null;
+    }
+}
+let r4 = (new C()).f<string>(1);
+>r4 : null
+>   : ^^^^
+>(new C()).f<string>(1) : null
+>                       : ^^^^
+>(new C()).f : (x: number) => null
+>            : ^^^^^^^^^^^^^^^^^^^
+>(new C()) : C
+>          : ^
+>new C() : C
+>        : ^
+>C : typeof C
+>  : ^^^^^^^^
+>f : (x: number) => null
+>  : ^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+
+/*pruned*/;
+
+
+/*pruned*/;
+/*pruned*/;
+
+class C2 {
+>C2 : C2
+>   : ^^
+
+    f(x: number): null {
+>f : (x: number) => null
+>  : ^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+        return null;
+    }
+}
+let r6 = (new C2()).f<string>(1);
+>r6 : null
+>   : ^^^^
+>(new C2()).f<string>(1) : null
+>                        : ^^^^
+>(new C2()).f : (x: number) => null
+>             : ^^^^^^^^^^^^^^^^^^^
+>(new C2()) : C2
+>           : ^^
+>new C2() : C2
+>         : ^^
+>C2 : typeof C2
+>   : ^^^^^^^^^
+>f : (x: number) => null
+>  : ^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+
+/*pruned*/;
+
+
+/*pruned*/;
+/*pruned*/;
+
+/**/;
+/*pruned*/;
+
+/*pruned*/;
+/*pruned*/;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

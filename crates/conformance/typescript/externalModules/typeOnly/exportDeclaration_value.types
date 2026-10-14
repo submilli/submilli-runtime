@@ -1,0 +1,23 @@
+=== exportDeclaration_value.ts ===
+const A = {};
+>A : {}
+>  : ^^
+>{} : {}
+>   : ^^
+
+export type { A };
+>A : any
+>  : ^^^
+
+export const AA = {};
+>AA : {}
+>   : ^^
+>{} : {}
+>   : ^^
+
+
+export type { AA } from './a';
+>AA : any
+>   : ^^^
+
+

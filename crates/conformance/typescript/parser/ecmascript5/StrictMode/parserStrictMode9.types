@@ -1,0 +1,20 @@
+=== parserStrictMode9.ts ===
+"use strict";
+>"use strict" : "use strict"
+>             : ^^^^^^^^^^^^
+
+let v = function eval() {
+>v : () => void
+>  : ^^^^^^^^^^
+>function eval() { } : () => void
+>                    : ^^^^^^^^^^
+>eval : () => void
+>     : ^^^^^^^^^^
+
+};
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

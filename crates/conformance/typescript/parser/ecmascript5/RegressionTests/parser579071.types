@@ -1,0 +1,13 @@
+=== parser579071.ts ===
+let x = /fo(o/;
+>x : RegExp
+>  : ^^^^^^
+>/fo(o/ : RegExp
+>       : ^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

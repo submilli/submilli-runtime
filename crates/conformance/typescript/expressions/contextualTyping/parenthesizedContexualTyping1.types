@@ -1,0 +1,161 @@
+=== parenthesizedContexualTyping1.ts ===
+
+/*pruned*/;
+/*pruned*/;
+function fun<T>(g: (x: T) => T, x: T): T {
+>fun : <T>(g: (x: T) => T, x: T) => T
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>g : (x: T) => T
+>  : ^^^^^^^^^^^
+>x : T
+>  : ^
+>x : T
+>  : ^
+
+    return g(x);
+>g(x) : T
+>     : ^
+>g : (x: T) => T
+>  : ^^^^^^^^^^^
+>x : T
+>  : ^
+
+}
+
+let a = fun(x => x, 10);
+>a : number
+>  : ^^^^^^
+>fun(x => x, 10) : number
+>                : ^^^^^^
+>fun : <T>(g: (x: T) => T, x: T) => T
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x => x : (x: number) => number
+>       : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>x : number
+>  : ^^^^^^
+>10 : 10
+>   : ^^
+
+let b = fun((x => x), 10);
+>b : number
+>  : ^^^^^^
+>fun((x => x), 10) : number
+>                  : ^^^^^^
+>fun : <T>(g: (x: T) => T, x: T) => T
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(x => x) : (x: number) => number
+>         : ^^^^^^^^^^^^^^^^^^^^^
+>x => x : (x: number) => number
+>       : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>x : number
+>  : ^^^^^^
+>10 : 10
+>   : ^^
+
+let c = fun(((x => x)), 10);
+>c : number
+>  : ^^^^^^
+>fun(((x => x)), 10) : number
+>                    : ^^^^^^
+>fun : <T>(g: (x: T) => T, x: T) => T
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>((x => x)) : (x: number) => number
+>           : ^^^^^^^^^^^^^^^^^^^^^
+>(x => x) : (x: number) => number
+>         : ^^^^^^^^^^^^^^^^^^^^^
+>x => x : (x: number) => number
+>       : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>x : number
+>  : ^^^^^^
+>10 : 10
+>   : ^^
+
+let d = fun((((x => x))), 10);
+>d : number
+>  : ^^^^^^
+>fun((((x => x))), 10) : number
+>                      : ^^^^^^
+>fun : <T>(g: (x: T) => T, x: T) => T
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(((x => x))) : (x: number) => number
+>             : ^^^^^^^^^^^^^^^^^^^^^
+>((x => x)) : (x: number) => number
+>           : ^^^^^^^^^^^^^^^^^^^^^
+>(x => x) : (x: number) => number
+>         : ^^^^^^^^^^^^^^^^^^^^^
+>x => x : (x: number) => number
+>       : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>x : number
+>  : ^^^^^^
+>10 : 10
+>   : ^^
+
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+// Ternaries in parens
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+let lambda1: (x: number) => number = x => x;
+>lambda1 : (x: number) => number
+>        : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>x => x : (x: number) => number
+>       : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>x : number
+>  : ^^^^^^
+
+let lambda2: (x: number) => number = (x => x);
+>lambda2 : (x: number) => number
+>        : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>(x => x) : (x: number) => number
+>         : ^^^^^^^^^^^^^^^^^^^^^
+>x => x : (x: number) => number
+>       : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>x : number
+>  : ^^^^^^
+
+
+type ObjType = { x: (p: number) => string; y: (p: string) => number };
+>ObjType : ObjType
+>        : ^^^^^^^
+>x : (p: number) => string
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>p : number
+>  : ^^^^^^
+>y : (p: string) => number
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>p : string
+>  : ^^^^^^
+
+/*pruned*/;
+/*pruned*/;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

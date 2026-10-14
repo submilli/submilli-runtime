@@ -1,0 +1,2 @@
+directReferenceToUndefined.ts(2,8): error TS2304: Cannot find name 'Undefined'.
+directReferenceToUndefined.ts(2,40): error TS2304: Cannot find name 'Undefined'.

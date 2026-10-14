@@ -1,0 +1,4 @@
+types: 2 of 21 tsc entries compared, 0 differ
+
+errors:
+line 3: ours: a nested function cannot be generic (tsc accepts)
