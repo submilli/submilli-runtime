@@ -1,2 +1,1 @@
 line 17, 26 type: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`
-line 43 type: bug SUB-1609 destructured variables miss narrowings tsc applies (an optional element the initializer leaves out)

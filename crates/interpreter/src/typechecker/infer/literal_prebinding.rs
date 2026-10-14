@@ -124,7 +124,7 @@ impl Inferer<'_> {
     /// tsc fixes a type parameter when it types such a parameter, so a
     /// callback before that one whose result gives it adds a candidate first,
     /// which no later argument may fix ahead of it.
-    fn type_params_bindable_by_later_arguments(
+    pub(super) fn type_params_bindable_by_later_arguments(
         &self,
         args: &[(ExprId, Type)],
         generics: &[String],

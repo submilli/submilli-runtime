@@ -53,7 +53,10 @@ impl Inferer<'_> {
         let mut prologue = Vec::new();
         for (param, input_ty) in params.iter().zip(input_types) {
             if let Some(default) = param.default {
-                self.lower_parameter_default(param, input_ty, default, &mut prologue)?;
+                let reads_before = self.parameter_read_types(params);
+                let written =
+                    self.lower_default_capturing_writes(param, input_ty, default, &mut prologue)?;
+                self.join_default_writes(params, param, reads_before, &written);
             } else {
                 let incoming = self.parameter_input(param, input_ty)?;
                 prologue.push(self.initialize_parameter(param, input_ty, incoming)?);
@@ -80,7 +83,12 @@ impl Inferer<'_> {
         } else {
             input_ty.clone()
         };
-        let (default_value, default_ty) = self.infer_expr(default, Some(&declared))?;
+        // An unannotated parameter's type is its default's own, which an object
+        // pattern shapes; typing the default against it again would lose that.
+        let shaped_by_pattern =
+            param.ty.is_none() && self.ast.object_pattern_sources.contains_key(&default);
+        let expected = (!shaped_by_pattern).then_some(&declared);
+        let (default_value, default_ty) = self.infer_expr(default, expected)?;
         let default_span = self.ast.try_expr(default).map_err(arena_failure)?.span;
         // Replace only the outer contextual mismatch with the parameter
         // diagnostic; keep errors from inside the initializer intact.
@@ -126,6 +134,69 @@ impl Inferer<'_> {
         prologue.push(self.initialize_parameter(param, input_ty, value)?);
         self.bind_initialized_parameter(param, input_ty, body_ty, write_ty);
         Ok(())
+    }
+
+    /// Lowers `param`'s default in a narrowing frame of its own and returns
+    /// what that frame left: the narrowings its writes installed, which must
+    /// not leak into the body, since the default may not run.
+    fn lower_default_capturing_writes(
+        &mut self,
+        param: &ParamDecl,
+        input_ty: &Type,
+        default: ExprId,
+        prologue: &mut Vec<StmtId>,
+    ) -> Result<super::narrowing::NarrowEnv, CompilerFailure> {
+        self.push_narrow_frame(super::narrowing::NarrowEnv::new());
+        let lowered = self.lower_parameter_default(param, input_ty, default, prologue);
+        // The frame comes off before an error propagates, to keep the stack
+        // balanced.
+        let (written, _) = self.pop_narrow_frame_capture()?;
+        lowered?;
+        Ok(written)
+    }
+
+    fn parameter_read_types(&self, params: &[ParamDecl]) -> Vec<Option<Type>> {
+        params
+            .iter()
+            .map(|param| {
+                self.scopes
+                    .get(&param.name.name)
+                    .map(|entry| entry.ty.clone())
+            })
+            .collect()
+    }
+
+    /// A default that writes an earlier parameter resets its read to the
+    /// declared type. The default may not run, so the read joins what it was
+    /// before with what the default left (`written`), as tsc's flow does.
+    fn join_default_writes(
+        &mut self,
+        params: &[ParamDecl],
+        defaulted: &ParamDecl,
+        reads_before: Vec<Option<Type>>,
+        written: &super::narrowing::NarrowEnv,
+    ) {
+        for (param, before) in params.iter().zip(reads_before) {
+            let name = &param.name.name;
+            if name == &defaulted.name.name {
+                continue;
+            }
+            let (Some(before), Some(entry)) = (before, self.scopes.get(name)) else {
+                continue;
+            };
+            if entry.ty == before {
+                continue;
+            }
+            let path = super::narrowing::ReferencePath::root(super::narrowing::BindingId::Local {
+                name: name.clone(),
+                decl_scope: entry.decl_scope,
+            });
+            let after = written
+                .get(&path)
+                .map_or_else(|| entry.ty.clone(), |view| view.narrowed_ty.clone());
+            self.scopes
+                .set_parameter_read_type(name, Type::union(vec![before, after]));
+        }
     }
 
     fn parameter_write_type(

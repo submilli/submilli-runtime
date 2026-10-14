@@ -295,10 +295,15 @@ impl TypeParamSubstitution {
     }
 
     /// Whether `ty` mentions a candidate binding that some argument other
-    /// than an object or array literal gave.
+    /// than an object or array literal gave, and that a literal's value can't
+    /// widen: one of literal types and `null` or `undefined` (a callback's
+    /// `1 | null`) widens to a base type a literal gives, as tsc infers their
+    /// common supertype.
     pub fn mentions_non_literal_candidate_binding(&self, ty: &Type) -> bool {
         super::infer::expr::mentions_type_var(ty, &|name| {
-            self.is_candidate_binding(name) && !self.literal_candidates.contains(name)
+            self.is_candidate_binding(name)
+                && !self.literal_candidates.contains(name)
+                && !self.bindings.get(name).is_some_and(is_literals_or_nullish)
         })
     }
 
@@ -2046,6 +2051,13 @@ fn unfixed_binding(name: &str, arg: &Type) -> Type {
         }
         _ => arg.clone(),
     }
+}
+
+/// Whether every member of `ty` is a literal type, `null` or `undefined`.
+fn is_literals_or_nullish(ty: &Type) -> bool {
+    ty.all_members(&|member| {
+        member.is_literal_type() || matches!(member, Type::Null | Type::Undefined)
+    })
 }
 
 fn is_primitive_literal(ty: &Type) -> bool {

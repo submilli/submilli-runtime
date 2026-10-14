@@ -4424,11 +4424,12 @@ fn is_optional_tuple_position(
     Ok(index.fract() == 0.0 && tuple_permits_missing_index(receiver, index))
 }
 
+/// Whether a read at `index` may find no element: an optional position, or,
+/// in a union a destructuring pattern reads, one past a shorter tuple's end.
+/// Inference rejects any other read past a tuple's end.
 fn tuple_permits_missing_index(receiver: &Type, index: f64) -> bool {
     match receiver.lowered() {
-        Type::Tuple(elements) => {
-            index >= elements.required_len() as f64 && index < elements.len() as f64
-        }
+        Type::Tuple(elements) => index >= elements.required_len() as f64,
         Type::Union(members) => members
             .iter()
             .any(|member| tuple_permits_missing_index(member, index)),
