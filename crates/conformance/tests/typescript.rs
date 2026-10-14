@@ -592,6 +592,9 @@ fn entries_by_line(typed: &TypedAst, source: &str) -> EntriesByLine {
             return None;
         }
         let e = typed.try_expr(id).unwrap();
+        if is_union_call_signature_cast(typed, e) {
+            return None;
+        }
         let text = span_text(source, e.span)?;
         let retained = reachable.expressions.contains(&id);
         let claim = if retained && is_semantic_reference_cast(typed, e, text) {
@@ -621,6 +624,27 @@ fn entries_by_line(typed: &TypedAst, source: &str) -> EntriesByLine {
             });
     }
     by_line
+}
+
+/// The cast a call through a union of function types puts around its callee,
+/// up to the one signature the call goes through. It shares the callee's span,
+/// but the callee's type is the union, as `tsc` prints it.
+fn is_union_call_signature_cast(typed: &TypedAst, expression: &interpreter::TypedExpr) -> bool {
+    let TypedExprKind::Cast {
+        value,
+        target_ty,
+        check: None,
+    } = &expression.kind
+    else {
+        return false;
+    };
+    let Ok(callee) = typed.try_expr(*value) else {
+        return false;
+    };
+    callee.span == expression.span
+        && matches!(target_ty.peel(), Type::Function { .. })
+        && matches!(callee.ty.peel(), Type::Union(members)
+            if members.iter().all(|member| matches!(member.peel(), Type::Function { .. })))
 }
 
 /// A source identifier may lower to a cast around its wider ABI storage read.

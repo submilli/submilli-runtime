@@ -8,9 +8,17 @@ line 5: !!true ? x : y
   tsc:  { f(x?: string): void; }
   ours: { f: () => void } | { f: (arg0?: string) => void }
 
+line 6: z.f
+  tsc:  (x?: string) => void
+  ours: (() => void) | ((arg0?: string) => void)
+
 line 6: z
   tsc:  { f(x?: string): void; }
   ours: { f: () => void } | { f: (arg0?: string) => void }
+
+line 7: z.f
+  tsc:  (x?: string) => void
+  ours: (() => void) | ((arg0?: string) => void)
 
 line 7: z
   tsc:  { f(x?: string): void; }
@@ -26,7 +34,7 @@ line 11: !!true ? x : y
 
 line 12: z.f
   tsc:  (x?: string) => void
-  ours: (arg0: string | undefined) => void
+  ours: ((arg0: string | undefined) => void) | ((arg0?: string) => void)
 
 line 12: z
   tsc:  { f(x?: string): void; }
@@ -34,19 +42,11 @@ line 12: z
 
 line 13: z.f
   tsc:  (x?: string) => void
-  ours: (arg0: string | undefined) => void
+  ours: ((arg0: string | undefined) => void) | ((arg0?: string) => void)
 
 line 13: z
   tsc:  { f(x?: string): void; }
   ours: { f: (arg0: string | undefined) => void } | { f: (arg0?: string) => void }
-
-line 51: z.f
-  tsc:  (() => void) | ((x?: string) => void)
-  ours: (arg0?: string) => void
-
-line 52: z.f
-  tsc:  (() => void) | ((x?: string) => void)
-  ours: (arg0?: string) => void
 
 line 61: { something() { } }
   tsc:  { something(): void; }
