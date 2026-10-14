@@ -268,6 +268,8 @@ fn inference_fits_production_worker_stack() {
     use std::process::Command;
     use std::time::{Duration, Instant};
 
+    // Each chain recurses through inference and codegen alike; codegen's
+    // emitters are the deepest phase for some of them, such as `===`.
     if std::env::var_os("SUB633_INFERENCE_STACK_CHILD").is_some() {
         for stack_size in [2 * 1024 * 1024, 8 * 1024 * 1024] {
             std::thread::Builder::new()
@@ -283,15 +285,36 @@ fn inference_fits_production_worker_stack() {
                         "function main(): boolean {{ return {}; }}",
                         vec!["true"; 32].join(" && ")
                     );
+                    let or_chain = format!(
+                        "function main(): boolean {{ return {}; }}",
+                        vec!["true"; 32].join(" || ")
+                    );
                     let equality_chain = format!(
                         "function main(): boolean {{ return {}; }}",
                         vec!["true"; 32].join(" === ")
+                    );
+                    let nullish_chain = format!(
+                        "function first(x: number | undefined): number {{ return {} ?? 0; }}\n\
+                         function main(): number {{ return first(1); }}",
+                        vec!["x"; 31].join(" ?? ")
+                    );
+                    let not_chain = format!(
+                        "function main(): boolean {{ return {}true; }}",
+                        "!".repeat(32)
+                    );
+                    let ternary_chain = format!(
+                        "function main(): number {{ return {}0; }}",
+                        "true ? 1 : ".repeat(32)
                     );
                     for source in [
                         nested_finally,
                         &binary_chain,
                         &logical_chain,
+                        &or_chain,
                         &equality_chain,
+                        &nullish_chain,
+                        &not_chain,
+                        &ternary_chain,
                         "function main(): number { return 42; }",
                     ] {
                         let compiled = submilli_engine::compile::compile_script_checked(

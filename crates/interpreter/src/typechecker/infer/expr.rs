@@ -1165,8 +1165,6 @@ impl Inferer<'_> {
         Ok(unresolved_ref(ident))
     }
 
-    // Keep recursive logical chains out of the larger arithmetic dispatcher:
-    // its debug stack frame includes temporaries from every operator branch.
     fn infer_binary(
         &mut self,
         op: BinOp,
@@ -1175,14 +1173,264 @@ impl Inferer<'_> {
         expected: Option<&Type>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        // One method per operator family: a nested `&&` or `+` chain then
+        // recurses through that family's frame alone. Debug builds give every
+        // local its own stack slot, so one large match would carry all arms'
+        // locals into each level.
         match op {
-            BinOp::And | BinOp::Or => self.infer_logical_binary(op, lhs, rhs, expected),
+            // `??` is lifted out of the generic Binary arm into
+            // its own typed-AST node so codegen and the type-result rule
+            // (`union(strip_nullish(lhs), rhs)`) can be specialised cleanly.
             BinOp::NullishCoalesce => self.infer_nullish_coalesce(lhs, rhs, expected, span),
-            _ => self.infer_nonlogical_binary(op, lhs, rhs, span),
+            BinOp::Add => self.infer_addition(lhs, rhs, span),
+            BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Div
+            | BinOp::Rem
+            | BinOp::Pow
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::BitXor
+            | BinOp::Shl
+            | BinOp::Shr
+            | BinOp::UnsignedShr => self.infer_arithmetic(op, lhs, rhs, span),
+            BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
+                self.infer_ordering(op, lhs, rhs, span)
+            }
+            BinOp::Eq | BinOp::NotEq => self.infer_equality(op, lhs, rhs, span),
+            BinOp::And | BinOp::Or => self.infer_logical(op, lhs, rhs, expected),
+            BinOp::In => self.infer_in_operator(lhs, rhs, span),
         }
     }
 
-    fn infer_logical_binary(
+    /// `+`: numeric addition or string concatenation.
+    fn infer_addition(
+        &mut self,
+        lhs: ExprId,
+        rhs: ExprId,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        // No hint propagation: `+` is overloaded on `number`/`string`,
+        // and either operand alone determines the result. Pushing the
+        // outer hint into operands would let the boundary check fire
+        // on a mistyped operand and then the operator-level rule would
+        // fire again — duplicate diagnostic.
+        let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
+        let (typed_rhs, rt) = self.infer_expr(rhs, None)?;
+        // arithmetic/concat is structural — peel
+        // aliases so `type ID = number; let x: ID = 1; x + x`
+        // typechecks against the (Number, Number) arm.
+        let result_ty = match (lt.peel(), rt.peel()) {
+            (Type::Error, _) | (_, Type::Error) => Type::Error,
+            // `+` on un-narrowed `unknown` is rejected.
+            (Type::Unknown, _) | (_, Type::Unknown) => {
+                self.error_with_help(
+                    span,
+                    "cannot apply `+` to `unknown`".to_string(),
+                    vec![
+                        "narrow first with `typeof x === \"number\"` \
+                         or `typeof x === \"string\"` before adding"
+                            .to_string(),
+                    ],
+                );
+                Type::Error
+            }
+            _ => {
+                if let Some(ty) = plus_result(&lt, &rt) {
+                    ty
+                } else {
+                    let message = format!("`+` not defined for `{lt}` and `{rt}`");
+                    let help = mixed_string_number_add_help(&lt, &rt)
+                        .map(|h| vec![h.to_string()])
+                        .unwrap_or_default();
+                    let culprit =
+                        self.nullable_binary_culprit((typed_lhs, &lt), (typed_rhs, &rt), |l, r| {
+                            plus_result(l, r).is_some()
+                        });
+                    self.error_with_narrowing_hint(span, message, help, culprit)?;
+                    Type::Error
+                }
+            }
+        };
+        Ok((
+            TypedExprKind::Binary {
+                op: BinOp::Add,
+                lhs: typed_lhs,
+                rhs: typed_rhs,
+            },
+            result_ty,
+        ))
+    }
+
+    /// Arithmetic and bitwise operators other than `+`.
+    fn infer_arithmetic(
+        &mut self,
+        op: BinOp,
+        lhs: ExprId,
+        rhs: ExprId,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        // arithmetic accepts `number × number`
+        // or `bigint × bigint`. Mixed `number ↔ bigint` falls
+        // through to the catch-all "not defined for" error.
+        // `**` uses the same type rules; the bigint-pow host
+        // function additionally traps at runtime if the
+        // exponent is negative or doesn't fit in u32 (a
+        // semantic constraint, not a static one).
+        // Inferred without a forced hint so a literal lhs
+        // picks its own widened type and the rhs gets the
+        // lhs type as a hint.
+        let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
+        let rhs_hint = match lt.peel() {
+            Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
+            Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
+            _ => None,
+        };
+        let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref())?;
+        let result_ty = match (lt.peel(), rt.peel()) {
+            (Type::Error, _) | (_, Type::Error) => Type::Error,
+            (Type::Unknown, _) | (_, Type::Unknown) => {
+                self.error_with_help(
+                    span,
+                    format!("cannot apply `{}` to `unknown`", op_symbol(op)),
+                    vec![
+                        "narrow first with `typeof x === \"number\"` \
+                         before doing arithmetic"
+                            .to_string(),
+                    ],
+                );
+                Type::Error
+            }
+            _ => {
+                if let Some(ty) = super::stmt::binary_arith_result(op, &lt, &rt) {
+                    ty
+                } else {
+                    let culprit =
+                        self.nullable_binary_culprit((typed_lhs, &lt), (typed_rhs, &rt), |l, r| {
+                            super::stmt::binary_arith_result(op, l, r).is_some()
+                        });
+                    self.error_with_narrowing_hint(
+                        span,
+                        format!("`{}` not defined for `{lt}` and `{rt}`", op_symbol(op)),
+                        Vec::new(),
+                        culprit,
+                    )?;
+                    Type::Error
+                }
+            }
+        };
+        Ok((
+            TypedExprKind::Binary {
+                op,
+                lhs: typed_lhs,
+                rhs: typed_rhs,
+            },
+            result_ty,
+        ))
+    }
+
+    /// `<`, `>`, `<=` and `>=`.
+    fn infer_ordering(
+        &mut self,
+        op: BinOp,
+        lhs: ExprId,
+        rhs: ExprId,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        // ordering accepts `number × number`, `bigint × bigint`, or
+        // `string × string` (lexicographic). Inferred without a forced
+        // hint so the rhs takes the lhs type as a hint (mirroring
+        // `===` / `!==`). Strings keep `None` as the rhs hint so a
+        // mixed `string < number` doesn't also emit "expected string".
+        let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
+        let rhs_hint = match lt.peel() {
+            Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
+            Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
+            _ => None,
+        };
+        let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref())?;
+        if matches!(lt.peel(), Type::Unknown) || matches!(rt.peel(), Type::Unknown) {
+            // ordering comparisons on un-narrowed
+            // `unknown` are rejected. Same rationale as
+            // `infer_arithmetic`.
+            self.error_with_help(
+                span,
+                format!("cannot apply `{}` to `unknown`", op_symbol(op)),
+                vec![
+                    "narrow first with `typeof x === \"number\"` \
+                     before comparing"
+                        .to_string(),
+                ],
+            );
+        } else if !matches!((lt.peel(), rt.peel()), (Type::Error, _) | (_, Type::Error))
+            && !ordering_accepts(&lt, &rt)
+        {
+            let culprit =
+                self.nullable_binary_culprit((typed_lhs, &lt), (typed_rhs, &rt), ordering_accepts);
+            self.error_with_narrowing_hint(
+                span,
+                format!("`{}` not defined for `{lt}` and `{rt}`", op_symbol(op)),
+                Vec::new(),
+                culprit,
+            )?;
+        }
+        Ok((
+            TypedExprKind::Binary {
+                op,
+                lhs: typed_lhs,
+                rhs: typed_rhs,
+            },
+            Type::Boolean,
+        ))
+    }
+
+    /// `===` and `!==`.
+    fn infer_equality(
+        &mut self,
+        op: BinOp,
+        lhs: ExprId,
+        rhs: ExprId,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        // forgiveness: rewrite `typeof x === "T"` and
+        // `typeof x !== "T"` (plus the swapped sides) to
+        // `Is` / `!Is`. Falls through if no `typeof` operand.
+        if let Some(folded) = self.try_typeof_fold(op, lhs, rhs, span)? {
+            return Ok(folded);
+        }
+        let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
+        // Contextual types help literals and callbacks, but an equality
+        // operand is not an assignment into the other operand's type.
+        let contextual_rhs = is_context_typed_literal(self.ast, rhs)?;
+        let rhs_hint = contextual_rhs.then_some(&lt);
+        let (typed_rhs, _) = self.infer_expr(rhs, rhs_hint)?;
+        let lhs_operand = self.comparison_operand(lhs, typed_lhs)?;
+        let rhs_operand = self.comparison_operand(rhs, typed_rhs)?;
+        if !super::comparison_operand::operands_comparable(
+            &lhs_operand,
+            &rhs_operand,
+            self.resolver(),
+        ) {
+            self.error(
+                self.ast.try_expr(rhs).map_err(super::arena_failure)?.span,
+                super::diagnostics::mismatch_message(&lhs_operand.label, &rhs_operand.label),
+            );
+        }
+        if self.is_global_nan(typed_lhs)? || self.is_global_nan(typed_rhs)? {
+            self.error_nan_comparison(op, span);
+        }
+        Ok((
+            TypedExprKind::Binary {
+                op,
+                lhs: typed_lhs,
+                rhs: typed_rhs,
+            },
+            Type::Boolean,
+        ))
+    }
+
+    /// `&&` and `||`.
+    fn infer_logical(
         &mut self,
         op: BinOp,
         lhs: ExprId,
@@ -1234,7 +1482,11 @@ impl Inferer<'_> {
         let rhs_env = match op {
             BinOp::And => true_env,
             BinOp::Or => false_env,
-            _ => return Err(super::inference_failure("matched And | Or above")),
+            _ => {
+                return Err(super::inference_failure(
+                    "`infer_logical` takes `&&` or `||`",
+                ));
+            }
         };
         // `a || b` is `a` when `a` is never falsy, so only `a` meets what
         // is expected of it. `b` still takes it as context unless it is a
@@ -1252,7 +1504,11 @@ impl Inferer<'_> {
         let lhs_kept = match op {
             BinOp::And => super::narrowing::falsy_part(&lhs_ty),
             BinOp::Or => super::narrowing::truthy_part(&lhs_ty),
-            _ => return Err(super::inference_failure("matched And | Or above")),
+            _ => {
+                return Err(super::inference_failure(
+                    "`infer_logical` takes `&&` or `||`",
+                ));
+            }
         };
         let result_ty = if condition_error {
             Type::Error
@@ -1275,287 +1531,6 @@ impl Inferer<'_> {
             },
             result_ty,
         ))
-    }
-
-    fn infer_nonlogical_binary(
-        &mut self,
-        op: BinOp,
-        lhs: ExprId,
-        rhs: ExprId,
-        span: Span,
-    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        // human-readable operator symbol for diagnostics.
-        // Inline-defined so the helper stays scoped to this method.
-        fn op_symbol(op: BinOp) -> &'static str {
-            match op {
-                BinOp::Add => "+",
-                BinOp::Sub => "-",
-                BinOp::Mul => "*",
-                BinOp::Div => "/",
-                BinOp::Rem => "%",
-                BinOp::Pow => "**",
-                BinOp::BitAnd => "&",
-                BinOp::BitOr => "|",
-                BinOp::BitXor => "^",
-                BinOp::Shl => "<<",
-                BinOp::Shr => ">>",
-                BinOp::UnsignedShr => ">>>",
-                BinOp::Lt => "<",
-                BinOp::Gt => ">",
-                BinOp::Le => "<=",
-                BinOp::Ge => ">=",
-                BinOp::Eq => "===",
-                BinOp::NotEq => "!==",
-                BinOp::And => "&&",
-                BinOp::Or => "||",
-                BinOp::In => "in",
-                BinOp::NullishCoalesce => "??",
-            }
-        }
-        fn mixed_string_number_add_help(lt: &Type, rt: &Type) -> Option<&'static str> {
-            let left_is_string = matches!(lt.peel(), Type::String | Type::StringLiteral(_));
-            let right_is_string = matches!(rt.peel(), Type::String | Type::StringLiteral(_));
-            let left_is_number = matches!(lt.peel(), Type::Number | Type::NumberLiteral(_));
-            let right_is_number = matches!(rt.peel(), Type::Number | Type::NumberLiteral(_));
-
-            match (
-                left_is_string,
-                right_is_string,
-                left_is_number,
-                right_is_number,
-            ) {
-                (true, false, false, true) => Some(
-                    "`+` does not coerce; wrap the number with `String(...)` before concatenating",
-                ),
-                (false, true, true, false) => Some(
-                    "`+` does not coerce; convert the string with `Number(...)`, `parseInt(...)`, or `parseFloat(...)` before adding",
-                ),
-                _ => None,
-            }
-        }
-        match op {
-            BinOp::Add => {
-                // No hint propagation: `+` is overloaded on `number`/`string`,
-                // and either operand alone determines the result. Pushing the
-                // outer hint into operands would let the boundary check fire
-                // on a mistyped operand and then the operator-level rule would
-                // fire again — duplicate diagnostic.
-                let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
-                let (typed_rhs, rt) = self.infer_expr(rhs, None)?;
-                // arithmetic/concat is structural — peel
-                // aliases so `type ID = number; let x: ID = 1; x + x`
-                // typechecks against the (Number, Number) arm.
-                let result_ty = match (lt.peel(), rt.peel()) {
-                    (Type::Error, _) | (_, Type::Error) => Type::Error,
-                    // `+` on un-narrowed `unknown` is rejected.
-                    (Type::Unknown, _) | (_, Type::Unknown) => {
-                        self.error_with_help(
-                            span,
-                            "cannot apply `+` to `unknown`".to_string(),
-                            vec![
-                                "narrow first with `typeof x === \"number\"` \
-                                 or `typeof x === \"string\"` before adding"
-                                    .to_string(),
-                            ],
-                        );
-                        Type::Error
-                    }
-                    _ => {
-                        if let Some(ty) = plus_result(&lt, &rt) {
-                            ty
-                        } else {
-                            let message = format!("`+` not defined for `{lt}` and `{rt}`");
-                            let help = mixed_string_number_add_help(&lt, &rt)
-                                .map(|h| vec![h.to_string()])
-                                .unwrap_or_default();
-                            let culprit = self.nullable_binary_culprit(
-                                (typed_lhs, &lt),
-                                (typed_rhs, &rt),
-                                |l, r| plus_result(l, r).is_some(),
-                            );
-                            self.error_with_narrowing_hint(span, message, help, culprit)?;
-                            Type::Error
-                        }
-                    }
-                };
-                Ok((
-                    TypedExprKind::Binary {
-                        op,
-                        lhs: typed_lhs,
-                        rhs: typed_rhs,
-                    },
-                    result_ty,
-                ))
-            }
-            BinOp::Sub
-            | BinOp::Mul
-            | BinOp::Div
-            | BinOp::Rem
-            | BinOp::Pow
-            | BinOp::BitAnd
-            | BinOp::BitOr
-            | BinOp::BitXor
-            | BinOp::Shl
-            | BinOp::Shr
-            | BinOp::UnsignedShr => {
-                // arithmetic accepts `number × number`
-                // or `bigint × bigint`. Mixed `number ↔ bigint` falls
-                // through to the catch-all "not defined for" error.
-                // `**` uses the same type rules; the bigint-pow host
-                // function additionally traps at runtime if the
-                // exponent is negative or doesn't fit in u32 (a
-                // semantic constraint, not a static one).
-                // Inferred without a forced hint so a literal lhs
-                // picks its own widened type and the rhs gets the
-                // lhs type as a hint.
-                let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
-                let rhs_hint = match lt.peel() {
-                    Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
-                    Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
-                    _ => None,
-                };
-                let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref())?;
-                let result_ty = match (lt.peel(), rt.peel()) {
-                    (Type::Error, _) | (_, Type::Error) => Type::Error,
-                    (Type::Unknown, _) | (_, Type::Unknown) => {
-                        self.error_with_help(
-                            span,
-                            format!("cannot apply `{}` to `unknown`", op_symbol(op)),
-                            vec![
-                                "narrow first with `typeof x === \"number\"` \
-                                 before doing arithmetic"
-                                    .to_string(),
-                            ],
-                        );
-                        Type::Error
-                    }
-                    _ => {
-                        if let Some(ty) = super::stmt::binary_arith_result(op, &lt, &rt) {
-                            ty
-                        } else {
-                            let culprit = self.nullable_binary_culprit(
-                                (typed_lhs, &lt),
-                                (typed_rhs, &rt),
-                                |l, r| super::stmt::binary_arith_result(op, l, r).is_some(),
-                            );
-                            self.error_with_narrowing_hint(
-                                span,
-                                format!("`{}` not defined for `{lt}` and `{rt}`", op_symbol(op)),
-                                Vec::new(),
-                                culprit,
-                            )?;
-                            Type::Error
-                        }
-                    }
-                };
-                Ok((
-                    TypedExprKind::Binary {
-                        op,
-                        lhs: typed_lhs,
-                        rhs: typed_rhs,
-                    },
-                    result_ty,
-                ))
-            }
-            BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
-                // ordering accepts `number × number`, `bigint × bigint`, or
-                // `string × string` (lexicographic). Inferred without a forced
-                // hint so the rhs takes the lhs type as a hint (mirroring
-                // `===` / `!==`). Strings keep `None` as the rhs hint so a
-                // mixed `string < number` doesn't also emit "expected string".
-                let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
-                let rhs_hint = match lt.peel() {
-                    Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
-                    Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
-                    _ => None,
-                };
-                let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref())?;
-                if matches!(lt.peel(), Type::Unknown) || matches!(rt.peel(), Type::Unknown) {
-                    // ordering comparisons on un-narrowed
-                    // `unknown` are rejected. Same rationale as the
-                    // arithmetic arm.
-                    self.error_with_help(
-                        span,
-                        format!("cannot apply `{}` to `unknown`", op_symbol(op)),
-                        vec![
-                            "narrow first with `typeof x === \"number\"` \
-                             before comparing"
-                                .to_string(),
-                        ],
-                    );
-                } else if !matches!((lt.peel(), rt.peel()), (Type::Error, _) | (_, Type::Error))
-                    && !ordering_accepts(&lt, &rt)
-                {
-                    let culprit = self.nullable_binary_culprit(
-                        (typed_lhs, &lt),
-                        (typed_rhs, &rt),
-                        ordering_accepts,
-                    );
-                    self.error_with_narrowing_hint(
-                        span,
-                        format!("`{}` not defined for `{lt}` and `{rt}`", op_symbol(op)),
-                        Vec::new(),
-                        culprit,
-                    )?;
-                }
-                Ok((
-                    TypedExprKind::Binary {
-                        op,
-                        lhs: typed_lhs,
-                        rhs: typed_rhs,
-                    },
-                    Type::Boolean,
-                ))
-            }
-            BinOp::Eq | BinOp::NotEq => {
-                // forgiveness: rewrite `typeof x === "T"` and
-                // `typeof x !== "T"` (plus the swapped sides) to
-                // `Is` / `!Is`. Falls through if no `typeof` operand.
-                if let Some(folded) = self.try_typeof_fold(op, lhs, rhs, span)? {
-                    return Ok(folded);
-                }
-                let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
-                // Contextual types help literals and callbacks, but an equality
-                // operand is not an assignment into the other operand's type.
-                let contextual_rhs = is_context_typed_literal(self.ast, rhs)?;
-                let rhs_hint = contextual_rhs.then_some(&lt);
-                let (typed_rhs, _) = self.infer_expr(rhs, rhs_hint)?;
-                let lhs_operand = self.comparison_operand(lhs, typed_lhs)?;
-                let rhs_operand = self.comparison_operand(rhs, typed_rhs)?;
-                if !super::comparison_operand::operands_comparable(
-                    &lhs_operand,
-                    &rhs_operand,
-                    self.resolver(),
-                ) {
-                    self.error(
-                        self.ast.try_expr(rhs).map_err(super::arena_failure)?.span,
-                        super::diagnostics::mismatch_message(
-                            &lhs_operand.label,
-                            &rhs_operand.label,
-                        ),
-                    );
-                }
-                if self.is_global_nan(typed_lhs)? || self.is_global_nan(typed_rhs)? {
-                    self.error_nan_comparison(op, span);
-                }
-                Ok((
-                    TypedExprKind::Binary {
-                        op,
-                        lhs: typed_lhs,
-                        rhs: typed_rhs,
-                    },
-                    Type::Boolean,
-                ))
-            }
-            BinOp::And | BinOp::Or => Err(super::inference_failure(
-                "logical operators handled by infer_binary dispatch",
-            )),
-            BinOp::In => self.infer_in_operator(lhs, rhs, span),
-            // Dispatched directly by infer_binary.
-            BinOp::NullishCoalesce => Err(super::inference_failure(
-                "NullishCoalesce handled by infer_binary dispatch",
-            )),
-        }
     }
 
     /// `"field" in obj`. LHS must be a string literal; RHS
@@ -12977,9 +12952,60 @@ pub(super) fn required_parameter_count(params: &[crate::Param]) -> usize {
         .map_or(0, |index| index + 1)
 }
 
+/// Human-readable operator symbol for diagnostics.
+fn op_symbol(op: BinOp) -> &'static str {
+    match op {
+        BinOp::Add => "+",
+        BinOp::Sub => "-",
+        BinOp::Mul => "*",
+        BinOp::Div => "/",
+        BinOp::Rem => "%",
+        BinOp::Pow => "**",
+        BinOp::BitAnd => "&",
+        BinOp::BitOr => "|",
+        BinOp::BitXor => "^",
+        BinOp::Shl => "<<",
+        BinOp::Shr => ">>",
+        BinOp::UnsignedShr => ">>>",
+        BinOp::Lt => "<",
+        BinOp::Gt => ">",
+        BinOp::Le => "<=",
+        BinOp::Ge => ">=",
+        BinOp::Eq => "===",
+        BinOp::NotEq => "!==",
+        BinOp::And => "&&",
+        BinOp::Or => "||",
+        BinOp::In => "in",
+        BinOp::NullishCoalesce => "??",
+    }
+}
+
+/// Help for adding a string and a number: `+` does not coerce either side.
+fn mixed_string_number_add_help(lt: &Type, rt: &Type) -> Option<&'static str> {
+    let left_is_string = matches!(lt.peel(), Type::String | Type::StringLiteral(_));
+    let right_is_string = matches!(rt.peel(), Type::String | Type::StringLiteral(_));
+    let left_is_number = matches!(lt.peel(), Type::Number | Type::NumberLiteral(_));
+    let right_is_number = matches!(rt.peel(), Type::Number | Type::NumberLiteral(_));
+
+    match (
+        left_is_string,
+        right_is_string,
+        left_is_number,
+        right_is_number,
+    ) {
+        (true, false, false, true) => {
+            Some("`+` does not coerce; wrap the number with `String(...)` before concatenating")
+        }
+        (false, true, true, false) => Some(
+            "`+` does not coerce; convert the string with `Number(...)`, `parseInt(...)`, or `parseFloat(...)` before adding",
+        ),
+        _ => None,
+    }
+}
+
 /// The pairs `+` is defined for, and the result. The single source of truth for both
-/// the `+` arm and the narrowing hint it emits: a hint may only claim a guard is the
-/// fix when the guarded pair is one this accepts.
+/// [`Inferer::infer_addition`] and the narrowing hint it emits: a hint may only claim
+/// a guard is the fix when the guarded pair is one this accepts.
 pub(super) fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
     match never_operand_result(lt, rt, NeverPartners::NumericOrString) {
         NeverOperand::Accepted(result) => return Some(result),
