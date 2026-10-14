@@ -2627,16 +2627,13 @@ impl Inferer<'_> {
                 (min, max)
             }
             (None, Some(ts)) => {
-                if callee_has_rest {
-                    // Trailing rest in the function type: callsite
-                    // accepts `(ts.len() - 1)+` args.
-                    (
-                        ts.len().saturating_sub(1).saturating_sub(callee_optional),
-                        usize::MAX,
-                    )
+                let min = required_argument_count(ts, callee_optional, callee_has_rest);
+                let max = if callee_has_rest {
+                    usize::MAX
                 } else {
-                    (ts.len().saturating_sub(callee_optional), ts.len())
-                }
+                    ts.len()
+                };
+                (min, max)
             }
             (None, None) => (0, 0),
         };
@@ -3129,7 +3126,7 @@ impl Inferer<'_> {
         for p in &params[supplied..fixed_count] {
             let id = match &p.default {
                 Some(default) => self.synthesize_default_arg(default, &p.ty, span)?,
-                None if p.optional => {
+                None if p.optional || p.ty.carries_void() => {
                     self.synthesize_default_arg(&crate::DefaultValue::Undefined, &p.ty, span)?
                 }
                 None => {
@@ -12954,10 +12951,28 @@ pub(super) fn callable_parameter_type(param: &crate::Param) -> Type {
     crate::ObjectField::widen_optional(param.is_omittable(), param.ty.clone())
 }
 
+/// How many leading arguments a call must pass. As in tsc, a trailing
+/// parameter whose type accepts `void` may be left out too: the call passes
+/// `undefined`, which such a parameter holds.
 pub(super) fn required_parameter_count(params: &[crate::Param]) -> usize {
     params
         .iter()
-        .rposition(|p| !p.rest && !p.is_omittable())
+        .rposition(|p| !p.rest && !p.is_omittable() && !p.ty.carries_void())
+        .map_or(0, |index| index + 1)
+}
+
+/// [`required_parameter_count`] for a function type's `params`, of which the
+/// last `optional` fixed ones may be omitted.
+pub(super) fn required_argument_count(params: &[Type], optional: usize, has_rest: bool) -> usize {
+    let fixed = if has_rest {
+        &params[..params.len().saturating_sub(1)]
+    } else {
+        params
+    };
+    let required = fixed.len().saturating_sub(optional);
+    fixed[..required]
+        .iter()
+        .rposition(|ty| !ty.carries_void())
         .map_or(0, |index| index + 1)
 }
 

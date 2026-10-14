@@ -591,6 +591,17 @@ impl Inferer<'_> {
         for (k, v) in interface_bindings {
             sub.insert(k, v);
         }
+        // The receiver instantiates the signature before the call is checked,
+        // so a parameter it makes `void` may go unpassed (`Box<void>.put()`), as
+        // in tsc. Type arguments the call writes or infers come too late for that.
+        let receiver_params: Vec<crate::Param> = sig
+            .params
+            .iter()
+            .map(|param| crate::Param {
+                ty: sub.apply_or_record(&param.ty, &self.type_limits),
+                ..param.clone()
+            })
+            .collect();
 
         if let Some(targs) = &type_args {
             if targs.len() != sig.generics.len() {
@@ -628,7 +639,7 @@ impl Inferer<'_> {
         } else {
             sig.params.len()
         };
-        let min_args = super::expr::required_parameter_count(&sig.params);
+        let min_args = super::expr::required_parameter_count(&receiver_params);
         let arity_ok = args.len() >= min_args && args.len() <= max_args;
         if !arity_ok {
             let help = self.format_signature(SignatureKind::Method {
@@ -705,7 +716,7 @@ impl Inferer<'_> {
                 .record_authored_arguments(span, typed_args.clone());
         }
         if arity_ok {
-            self.fill_omitted_defaults(&sig.params, args.len(), span, &mut typed_args)?;
+            self.fill_omitted_defaults(&receiver_params, args.len(), span, &mut typed_args)?;
         }
         if arity_ok && has_rest {
             self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args)?;

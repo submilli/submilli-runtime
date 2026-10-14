@@ -115,7 +115,9 @@ value, use `x === null || x === undefined`.
 
 A parameter declared `name?: string` accepts omission or explicit undefined.
 A required parameter declared `name: string | undefined` still requires an
-argument. Default parameter and destructuring initializers run for omission
+argument. As in TypeScript, a call may leave out trailing arguments whose
+parameter type includes `void`, such as `resolve: (value: void) => void`
+called as `resolve()`; the parameter receives undefined. Default parameter and destructuring initializers run for omission
 or undefined, never null. Defaults run once, in order, in the callee's scope.
 A callback created in a default may capture a later parameter. Reading or
 assigning that parameter before its initialization throws `ReferenceError`.
