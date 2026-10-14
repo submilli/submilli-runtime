@@ -1,7 +1,8 @@
 //! Calling a value whose type is a union of function types. tsc calls it
-//! through one combined signature: each parameter takes a type every member's
-//! parameter there accepts (their intersection), and the result is the union
-//! of the members' results.
+//! through a member whose signature every other member's accepts the
+//! arguments of, or else through one combined signature: each parameter takes
+//! a type every member's parameter there accepts (their intersection). The
+//! result is the union of the members' results.
 
 use std::collections::BTreeMap;
 
@@ -81,38 +82,21 @@ impl Inferer<'_> {
         members: &[Type],
         arg_count: Option<usize>,
     ) -> Option<Type> {
-        let signatures = members
+        let (signatures, returns): (Vec<Signature>, Vec<Type>) = members
             .iter()
             .map(Signature::of)
-            .collect::<Option<Vec<_>>>()?;
-        let returns_void = signatures.first()?.ret.is_void();
-        if signatures
-            .iter()
-            .any(|sig| sig.ret.is_void() != returns_void)
-        {
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .unzip();
+        let returns_void = returns.first()?.is_void();
+        if returns.iter().any(|ret| ret.is_void() != returns_void) {
             return None;
         }
-        let shared = self.shared_signatures(&signatures);
-        let chosen = if let Some(first) = shared.first() {
-            (*arg_count
-                .and_then(|count| shared.iter().find(|sig| sig.accepts(count)))
-                .unwrap_or(first))
-            .clone()
-        } else {
-            let mut fields_left = MERGE_FIELDS;
-            let mut combined = signatures.first()?.clone();
-            for next in &signatures[1..] {
-                combined = self.combine(&combined, next, &mut fields_left)?;
-            }
-            combined
-        };
+        let chosen = self.choose_signature(&signatures, arg_count)?;
         let ret = if returns_void {
             Type::Void
         } else {
-            strict_subtype_union(
-                signatures.iter().map(|sig| sig.ret.clone()).collect(),
-                self.resolver(),
-            )
+            strict_subtype_union(returns, self.resolver())
         };
         // A closure takes its rest arguments packed after its own fixed
         // parameters, so members whose fixed parameters differ are called
@@ -127,30 +111,47 @@ impl Inferer<'_> {
         Some(chosen.into_function(ret))
     }
 
-    /// The members of a union every other member's signature accepts the
-    /// arguments of: each other requires no more arguments and accepts each
-    /// parameter type it declares.
-    fn shared_signatures<'s>(&self, signatures: &'s [Signature]) -> Vec<&'s Signature> {
-        signatures
+    /// The signature a union of `signatures` is called through: the first
+    /// member whose arguments every other member accepts, preferring one that
+    /// takes `arg_count` arguments, or else all of them combined pairwise.
+    fn choose_signature(
+        &self,
+        signatures: &[Signature],
+        arg_count: Option<usize>,
+    ) -> Option<Signature> {
+        let covering: Vec<&Signature> = signatures
             .iter()
-            .enumerate()
-            .filter(|(index, candidate)| {
-                signatures.iter().enumerate().all(|(other_index, other)| {
-                    other_index == *index
-                        || (other.required() <= candidate.required()
-                            && (0..candidate.params.len()).all(|position| {
-                                match (candidate.type_at(position), other.type_at(position)) {
-                                    (Some(param), Some(accepted)) => {
-                                        assignable(param, accepted, self.resolver())
-                                    }
-                                    (_, None) => true,
-                                    (None, Some(_)) => false,
-                                }
-                            }))
+            .filter(|candidate| {
+                signatures.iter().all(|other| {
+                    std::ptr::eq(other, *candidate) || self.accepts_arguments_of(other, candidate)
                 })
             })
-            .map(|(_, candidate)| candidate)
-            .collect()
+            .collect();
+        if let Some(first) = covering.first() {
+            let fitting =
+                arg_count.and_then(|count| covering.iter().find(|sig| sig.accepts(count)));
+            return Some((*fitting.unwrap_or(first)).clone());
+        }
+        let mut fields_left = MERGE_FIELDS;
+        let mut combined = signatures.first()?.clone();
+        for next in &signatures[1..] {
+            combined = self.combine(&combined, next, &mut fields_left)?;
+        }
+        Some(combined)
+    }
+
+    /// Whether `other` accepts every call `candidate` accepts: it requires no
+    /// more arguments, and accepts the type of each parameter `candidate`
+    /// declares.
+    fn accepts_arguments_of(&self, other: &Signature, candidate: &Signature) -> bool {
+        other.required() <= candidate.required()
+            && (0..candidate.params.len()).all(|position| {
+                match (candidate.type_at(position), other.type_at(position)) {
+                    (Some(param), Some(accepted)) => assignable(param, accepted, self.resolver()),
+                    (_, None) => true,
+                    (None, Some(_)) => false,
+                }
+            })
     }
 
     /// One signature that calls both `left` and `right`, as tsc combines the
@@ -161,30 +162,30 @@ impl Inferer<'_> {
         right: &Signature,
         fields_left: &mut usize,
     ) -> Option<Signature> {
-        let (longest, shorter) = if left.params.len() >= right.params.len() {
+        let (longer, shorter) = if left.params.len() >= right.params.len() {
             (left, right)
         } else {
             (right, left)
         };
         let either_rest = left.rest || right.rest;
-        let extra_rest = either_rest && !longest.rest;
-        let mut params = Vec::with_capacity(longest.params.len() + usize::from(extra_rest));
-        for position in 0..longest.params.len() {
-            let at_position: Vec<&Type> = [longest.type_at(position), shorter.type_at(position)]
+        let rest_from_shorter = either_rest && !longer.rest;
+        let mut params = Vec::with_capacity(longer.params.len() + usize::from(rest_from_shorter));
+        for position in 0..longer.params.len() {
+            let at_position: Vec<&Type> = [longer.type_at(position), shorter.type_at(position)]
                 .into_iter()
                 .flatten()
                 .collect();
             let param = self.common_subtype(&at_position, MERGE_DEPTH, fields_left)?;
-            let is_rest = either_rest && !extra_rest && position + 1 == longest.params.len();
+            let is_rest = either_rest && !rest_from_shorter && position + 1 == longer.params.len();
             params.push(if is_rest {
                 Type::Array(Box::new(param))
             } else {
                 param
             });
         }
-        if extra_rest {
+        if rest_from_shorter {
             params.push(Type::Array(Box::new(
-                shorter.type_at(longest.params.len())?.clone(),
+                shorter.type_at(longer.params.len())?.clone(),
             )));
         }
         let fixed = params.len() - usize::from(either_rest);
@@ -193,7 +194,6 @@ impl Inferer<'_> {
             optional: fixed.saturating_sub(required),
             params,
             rest: either_rest,
-            ret: Type::Void,
         })
     }
 
@@ -343,11 +343,11 @@ struct Signature {
     optional: usize,
     /// Whether the last of `params` is a rest parameter's array.
     rest: bool,
-    ret: Type,
 }
 
 impl Signature {
-    fn of(ty: &Type) -> Option<Self> {
+    /// The signature of function type `ty`, and its return type.
+    fn of(ty: &Type) -> Option<(Self, Type)> {
         let Type::Function {
             params,
             optional,
@@ -361,12 +361,12 @@ impl Signature {
         if *has_rest && params.last()?.rest_element().is_none() {
             return None;
         }
-        Some(Self {
+        let signature = Self {
             params: params.clone(),
             optional: *optional,
             rest: *has_rest,
-            ret: ret.as_ref().clone(),
-        })
+        };
+        Some((signature, ret.as_ref().clone()))
     }
 
     fn fixed(&self) -> usize {
@@ -374,7 +374,7 @@ impl Signature {
     }
 
     fn required(&self) -> usize {
-        self.fixed().saturating_sub(self.optional)
+        super::expr::required_count_of_function_type(&self.params, self.optional, self.rest)
     }
 
     fn accepts(&self, arg_count: usize) -> bool {
@@ -408,7 +408,6 @@ impl Signature {
             optional: params.len().saturating_sub(required),
             params,
             rest: false,
-            ret: self.ret,
         }
     }
 

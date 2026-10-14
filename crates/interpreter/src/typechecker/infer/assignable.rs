@@ -724,106 +724,6 @@ pub(crate) fn strict_subtype_union(types: Vec<Type>, resolver: TypeResolver) -> 
     Type::union(members)
 }
 
-/// Whether a value of `ty` is a primitive, which tsc's strict subtype relation
-/// keeps apart from object types even where it is assignable to one.
-fn is_primitive(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::String
-            | Type::StringLiteral(_)
-            | Type::StringEnum { .. }
-            | Type::Number
-            | Type::NumberLiteral(_)
-            | Type::NumberEnum { .. }
-            | Type::BigInt
-            | Type::BigIntLiteral(_)
-            | Type::Boolean
-            | Type::BooleanLiteral(_)
-            | Type::Null
-            | Type::Undefined
-            | Type::Void
-    )
-}
-
-/// tsc's strict arity rule for a function of `actual`'s shape to be a subtype
-/// of one of `expected`'s: it takes no parameter the other lacks, unless that
-/// one has a rest parameter, and makes no argument optional that the other
-/// requires at a type `actual` accepts in turn (`related`).
-fn strict_arity_fits(
-    actual: (&[Type], usize, bool),
-    expected: (&[Type], usize, bool),
-    mut related: impl FnMut(&Type, &Type) -> bool,
-) -> bool {
-    let (actual_params, actual_optional, actual_rest) = actual;
-    let (expected_params, expected_optional, expected_rest) = expected;
-    if !expected_rest && (actual_rest || actual_params.len() > expected_params.len()) {
-        return false;
-    }
-    let required = |params: &[Type], optional: usize, rest: bool| {
-        params
-            .len()
-            .saturating_sub(usize::from(rest))
-            .saturating_sub(optional)
-    };
-    let optional_here = required(actual_params, actual_optional, actual_rest)
-        ..required(expected_params, expected_optional, expected_rest);
-    optional_here.into_iter().all(|position| {
-        match (actual_params.get(position), expected_params.get(position)) {
-            (Some(actual), Some(expected)) => !related(actual, expected),
-            _ => true,
-        }
-    })
-}
-
-/// A function into a method of an object type, whose parameters tsc compares
-/// bivariantly: a parameter that is only a supertype of the method's still
-/// fits. Checked by widening each such parameter to the method's and relating
-/// the functions as usual, so arity and returns follow the ordinary rules.
-fn method_assignable(
-    actual: &Type,
-    expected: &Type,
-    types: TypeResolver,
-    seen: &mut Vec<(Type, Type)>,
-) -> bool {
-    if assignable_rec(actual, expected, types, seen) {
-        return true;
-    }
-    let (
-        Type::Function {
-            params,
-            ret,
-            predicate,
-            has_rest,
-            optional,
-        },
-        Type::Function {
-            params: expected_params,
-            ..
-        },
-    ) = (actual.peel(), expected.peel())
-    else {
-        return false;
-    };
-    let mut widened = params.clone();
-    let mut widened_any = false;
-    for (param, expected_param) in widened.iter_mut().zip(expected_params) {
-        if !assignable_rec(expected_param, param, types, seen)
-            && assignable_rec(param, expected_param, types, seen)
-        {
-            *param = expected_param.clone();
-            widened_any = true;
-        }
-    }
-    let widened = Type::Function {
-        params: widened,
-        ret: ret.clone(),
-        predicate: predicate.clone(),
-        has_rest: *has_rest,
-        optional: *optional,
-    };
-    widened_any && assignable_rec(&widened, expected, types, seen)
-}
-
 fn assignable_rec(
     actual: &Type,
     expected: &Type,
@@ -1212,8 +1112,16 @@ fn assignable_rec(
         ) => {
             if types.strict_subtype
                 && !strict_arity_fits(
-                    (pa, *optional_a, *rest_a),
-                    (pe, *optional_e, *rest_e),
+                    Arity {
+                        params: pa,
+                        optional: *optional_a,
+                        rest: *rest_a,
+                    },
+                    Arity {
+                        params: pe,
+                        optional: *optional_e,
+                        rest: *rest_e,
+                    },
                     |a, e| assignable_rec(a, e, types, seen),
                 )
             {
@@ -1333,6 +1241,112 @@ fn assignable_rec(
         }
         _ => actual == expected,
     }
+}
+
+/// Whether a value of `ty` is a primitive, which tsc's strict subtype relation
+/// keeps apart from object types even where it is assignable to one.
+fn is_primitive(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::String
+            | Type::StringLiteral(_)
+            | Type::StringEnum { .. }
+            | Type::Number
+            | Type::NumberLiteral(_)
+            | Type::NumberEnum { .. }
+            | Type::BigInt
+            | Type::BigIntLiteral(_)
+            | Type::Boolean
+            | Type::BooleanLiteral(_)
+            | Type::Null
+            | Type::Undefined
+            | Type::Void
+    )
+}
+
+/// Whether `actual` fits method `expected` of an object type, comparing
+/// parameters bivariantly as tsc does: a parameter that is only a supertype
+/// of the method's still fits. Checked by widening each such parameter to the method's and relating
+/// the functions as usual, so arity and returns follow the ordinary rules.
+fn method_assignable(
+    actual: &Type,
+    expected: &Type,
+    types: TypeResolver,
+    seen: &mut Vec<(Type, Type)>,
+) -> bool {
+    if assignable_rec(actual, expected, types, seen) {
+        return true;
+    }
+    let (
+        Type::Function {
+            params,
+            ret,
+            predicate,
+            has_rest,
+            optional,
+        },
+        Type::Function {
+            params: expected_params,
+            ..
+        },
+    ) = (actual.peel(), expected.peel())
+    else {
+        return false;
+    };
+    let mut widened = params.clone();
+    let mut widened_any = false;
+    for (param, expected_param) in widened.iter_mut().zip(expected_params) {
+        if !assignable_rec(expected_param, param, types, seen)
+            && assignable_rec(param, expected_param, types, seen)
+        {
+            *param = expected_param.clone();
+            widened_any = true;
+        }
+    }
+    let widened = Type::Function {
+        params: widened,
+        ret: ret.clone(),
+        predicate: predicate.clone(),
+        has_rest: *has_rest,
+        optional: *optional,
+    };
+    widened_any && assignable_rec(&widened, expected, types, seen)
+}
+
+/// The parameter shape of a function type that arity rules read.
+#[derive(Clone, Copy)]
+struct Arity<'a> {
+    params: &'a [Type],
+    /// Trailing fixed parameters a caller may omit.
+    optional: usize,
+    rest: bool,
+}
+
+impl Arity<'_> {
+    fn required(self) -> usize {
+        super::expr::required_count_of_function_type(self.params, self.optional, self.rest)
+    }
+}
+
+/// tsc's strict arity rule for a function of `actual`'s shape to be a subtype
+/// of one of `expected`'s: it takes no parameter the other lacks, unless that
+/// one has a rest parameter, and makes no argument optional that the other
+/// requires at a type `actual` accepts in turn (`related`).
+fn strict_arity_fits(
+    actual: Arity<'_>,
+    expected: Arity<'_>,
+    mut related: impl FnMut(&Type, &Type) -> bool,
+) -> bool {
+    if !expected.rest && (actual.rest || actual.params.len() > expected.params.len()) {
+        return false;
+    }
+    let omittable_only_in_actual = actual.required()..expected.required();
+    omittable_only_in_actual.into_iter().all(|position| {
+        match (actual.params.get(position), expected.params.get(position)) {
+            (Some(actual), Some(expected)) => !related(actual, expected),
+            _ => true,
+        }
+    })
 }
 
 /// How one instantiation's type arguments relate to another's at the measured

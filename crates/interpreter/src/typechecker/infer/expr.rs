@@ -2633,7 +2633,7 @@ impl Inferer<'_> {
                 (min, max)
             }
             (None, Some(ts)) => {
-                let min = required_argument_count(ts, callee_optional, callee_has_rest);
+                let min = required_count_of_function_type(ts, callee_optional, callee_has_rest);
                 let max = if callee_has_rest {
                     usize::MAX
                 } else {
@@ -5446,59 +5446,6 @@ impl Inferer<'_> {
 
     /// An object literal, with a lone spread of a union retyped to `expected`
     /// when each of its alternatives fits (see `spread_as_its_alternatives`).
-    /// The fields of each member of a union an object literal is checked
-    /// against, when no single member was chosen for it; empty unless every
-    /// member other than `null` and `undefined` is an object shape.
-    fn union_shape_fields(
-        &self,
-        union_members: &[Type],
-    ) -> Vec<BTreeMap<String, crate::ObjectField>> {
-        let mut shapes = Vec::new();
-        for member in union_members {
-            match member.peel() {
-                Type::Null | Type::Undefined => {}
-                Type::Object { fields, .. } => shapes.push(fields.clone()),
-                Type::InterfaceRef {
-                    mangled,
-                    name,
-                    args,
-                    ..
-                } => match self.structural_form(mangled, name, args) {
-                    Some(fields) => shapes.push(fields),
-                    None => return Vec::new(),
-                },
-                _ => return Vec::new(),
-            }
-        }
-        shapes
-    }
-
-    /// The contextual type of a function literal in field `name` of an object
-    /// literal checked against a union of object shapes: as in tsc, the union
-    /// of the field's types in the members that declare it, from which the
-    /// function's parameters take their types.
-    fn function_literal_union_hint(
-        &self,
-        value: ExprId,
-        name: &str,
-        shapes: &[BTreeMap<String, crate::ObjectField>],
-    ) -> Option<Type> {
-        let is_function_literal = self.ast.try_expr(value).is_ok_and(|expr| {
-            matches!(
-                expr.kind,
-                ExprKind::Arrow { .. } | ExprKind::FunctionExpression { .. }
-            )
-        });
-        if !is_function_literal {
-            return None;
-        }
-        let types: Vec<Type> = shapes
-            .iter()
-            .filter_map(|fields| fields.get(name).map(|field| field.ty.clone()))
-            .collect();
-        (!types.is_empty()).then(|| Type::union(types))
-    }
-
     fn infer_object_literal_expr(
         &mut self,
         literal: ExprId,
@@ -6121,6 +6068,59 @@ impl Inferer<'_> {
                 fields: resolved,
             },
         ))
+    }
+
+    /// The fields of each member of a union an object literal is checked
+    /// against, when no single member was chosen for it; empty unless every
+    /// member other than `null` and `undefined` is an object shape.
+    fn union_shape_fields(
+        &self,
+        union_members: &[Type],
+    ) -> Vec<BTreeMap<String, crate::ObjectField>> {
+        let mut shapes = Vec::new();
+        for member in union_members {
+            match member.peel() {
+                Type::Null | Type::Undefined => {}
+                Type::Object { fields, .. } => shapes.push(fields.clone()),
+                Type::InterfaceRef {
+                    mangled,
+                    name,
+                    args,
+                    ..
+                } => match self.structural_form(mangled, name, args) {
+                    Some(fields) => shapes.push(fields),
+                    None => return Vec::new(),
+                },
+                _ => return Vec::new(),
+            }
+        }
+        shapes
+    }
+
+    /// The contextual type of a function literal in field `name` of an object
+    /// literal checked against a union of object shapes: as in tsc, the union
+    /// of the field's types in the members that declare it, from which the
+    /// function's parameters take their types.
+    fn function_literal_union_hint(
+        &self,
+        value: ExprId,
+        name: &str,
+        shapes: &[BTreeMap<String, crate::ObjectField>],
+    ) -> Option<Type> {
+        let is_function_literal = self.ast.try_expr(value).is_ok_and(|expr| {
+            matches!(
+                expr.kind,
+                ExprKind::Arrow { .. } | ExprKind::FunctionExpression { .. }
+            )
+        });
+        if !is_function_literal {
+            return None;
+        }
+        let types: Vec<Type> = shapes
+            .iter()
+            .filter_map(|fields| fields.get(name).map(|field| field.ty.clone()))
+            .collect();
+        (!types.is_empty()).then(|| Type::union(types))
     }
 
     /// The type an object literal checked against `expected` keeps as its own,
@@ -10093,8 +10093,8 @@ impl Inferer<'_> {
         ))
     }
 
-    /// `g++` on a module global — shared by a module `let` and by a writable
-    /// static field, which is the same global under a mangled key.
+    /// Record the narrowed type `++`/`--` reads binding `name` at, keyed by the
+    /// name's span (see `TypedAst::postfix_operand_types`).
     fn record_postfix_operand(&mut self, name: &Ident, operand_ty: &Type) {
         self.typed_ast.postfix_operand_types.insert(
             (name.span.file.0, name.span.start, name.span.end),
@@ -10102,6 +10102,8 @@ impl Inferer<'_> {
         );
     }
 
+    /// `g++` on a module global — shared by a module `let` and by a writable
+    /// static field, which is the same global under a mangled key.
     fn postfix_on_global(
         &mut self,
         op: crate::PostfixOp,
@@ -12569,7 +12571,7 @@ fn string_key_as_field(ast: &crate::Ast, part: ChainPart) -> Result<ChainPart, C
 fn conditional_result_type(
     left: Type,
     right: Type,
-    object_literal_operand: bool,
+    either_is_object_literal: bool,
     types: super::assignable::TypeResolver<'_>,
 ) -> Type {
     // `c ? 1 : {}` is `1 | {}` in TypeScript; only widening reduces it to `{}`.
@@ -12577,9 +12579,12 @@ fn conditional_result_type(
     let distinct_object_shapes = matches!(left.peel(), Type::Object { .. })
         && matches!(right.peel(), Type::Object { .. })
         && left.peel() != right.peel();
-    if one_is_empty_object || (distinct_object_shapes && object_literal_operand) {
+    if one_is_empty_object || (distinct_object_shapes && either_is_object_literal) {
         Type::union(vec![left, right])
     } else if matches!(left.peel(), Type::Error) || matches!(right.peel(), Type::Error) {
+        // `Error` relates to everything both ways, so the subtype checks below
+        // would let an operand that already failed decide the result; the
+        // right operand's type keeps later diagnostics about the valid side.
         right
     } else if strict_subtype(&right, &left, types) {
         left
@@ -13066,8 +13071,14 @@ pub(super) fn required_parameter_count(params: &[crate::Param]) -> usize {
 }
 
 /// [`required_parameter_count`] for a function type's `params`, of which the
-/// last `optional` fixed ones may be omitted.
-pub(super) fn required_argument_count(params: &[Type], optional: usize, has_rest: bool) -> usize {
+/// last `optional` fixed ones may be omitted. Shared by every arity check on
+/// function types, so a trailing `void` parameter is optional in each, as in
+/// tsc's minimum argument count.
+pub(super) fn required_count_of_function_type(
+    params: &[Type],
+    optional: usize,
+    has_rest: bool,
+) -> usize {
     let fixed = if has_rest {
         &params[..params.len().saturating_sub(1)]
     } else {

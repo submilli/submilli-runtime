@@ -4724,9 +4724,6 @@ fn substitute_accessor_sig(
     })
 }
 
-/// How a visibility renders as the source keyword that produces it. `public` is
-/// the default and usually written implicitly, but a diagnostic naming the fix
-/// has to spell it.
 /// Help for an override that requires a parameter the inherited method lets
 /// callers omit. Unlike tsc, which accepts it, the override would receive
 /// `undefined` in a parameter whose type excludes it when called through the
@@ -4744,6 +4741,9 @@ fn required_where_omittable(parent: &MethodSig, child: &MethodSig) -> Option<Str
     ))
 }
 
+/// How a visibility renders as the source keyword that produces it. `public` is
+/// the default and usually written implicitly, but a diagnostic naming the fix
+/// has to spell it.
 fn visibility_keyword(v: Visibility) -> &'static str {
     match v {
         Visibility::Public => "public",
