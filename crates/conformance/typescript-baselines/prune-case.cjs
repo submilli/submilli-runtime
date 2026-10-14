@@ -13,7 +13,7 @@
 const ts = require("typescript");
 const fs = require("fs");
 const { spawnSync } = require("child_process");
-const { tscErrors } = require("./tsc-case.cjs");
+const { tscErrors, OPTION_LINE } = require("./tsc-case.cjs");
 const { splitCase } = require("./case-files.cjs");
 
 const CHECK_TIMEOUT_MS = 20_000;
@@ -45,8 +45,10 @@ function prune(caseErrors, file, expectedCodes = null) {
   // What drove the pruning: each of our errors that lacked support, with the code it
   // was on, in the order they came up.
   const lacking = new Map();
-  // Each error the port caused, by code, with the code it was on.
+  // Each error the port caused, by code, with the code it was on, and the codes of
+  // those left outside every statement, which pruning can't take out.
   const portCaused = new Map();
+  let unprunable = [];
   const finish = (error) => ({
     file,
     passes,
@@ -55,6 +57,7 @@ function prune(caseErrors, file, expectedCodes = null) {
     codeLinesAfter: codeLines(text),
     lacking: [...lacking.values()],
     portCaused: [...portCaused.values()],
+    unprunable,
   });
   const codeOn = (line) => (text.split("\n")[line - 1] ?? "").trim();
   for (; passes < MAX_PASSES; passes++) {
@@ -67,9 +70,17 @@ function prune(caseErrors, file, expectedCodes = null) {
     for (const { line, code } of found.portCaused) {
       if (!portCaused.has(code)) portCaused.set(code, { code: `TS${code}`, on: codeOn(line) });
     }
-    if (!found.errors.length) return finish(null);
-    const offsets = found.errors.map((e) => e.offset).join(", ");
-    const ranges = rangesToBlank(fileOfError(file, text), found.errors);
+    // A `tsc` error the port caused goes with its statement, and is otherwise left:
+    // the recovery `rangesToBlank` falls back on is for errors our parser reports.
+    const portErrors = found.portCaused.map((e) => ({ offset: e.start, file: e.file, statementOnly: true }));
+    const errors = [...found.errors, ...portErrors];
+    if (!errors.length) return finish(null);
+    const offsets = errors.map((e) => e.offset).join(", ");
+    const ranges = rangesToBlank(fileOfError(file, text), errors);
+    if (!ranges.length && !found.errors.length) {
+      unprunable = [...new Set(found.portCaused.map((e) => `TS${e.code}`))];
+      return finish(null);
+    }
     if (!ranges.length) return finish(`nothing to prune at offsets ${offsets}`);
     const previousText = text;
     for (const range of ranges) text = blank(text, range);
@@ -79,9 +90,9 @@ function prune(caseErrors, file, expectedCodes = null) {
   return finish(`still pruning after ${MAX_PASSES} passes`);
 }
 
-/** Where each of our errors that lacks support is, each `tsc` error pruning caused,
- * and each the port caused, one whose code isn't in `expectedCodes` when that is
- * given: `{ offset, file }`, the file being the index of the case's file it is in. */
+/** Where each of our errors that lacks support is and each `tsc` error pruning
+ * caused, as `{ offset, file }`, the file being the index of the case's file it is
+ * in; and the `tsc` errors the port caused (`portCausedErrors`). */
 function errorsToPrune(caseErrors, file, text, originalTscErrors, expectedCodes) {
   const ours = ourErrors(caseErrors, file);
   if (ours.error) return ours;
@@ -91,12 +102,18 @@ function errorsToPrune(caseErrors, file, text, originalTscErrors, expectedCodes)
   // line too, and the feature we lack where it doesn't.
   const lacking = ours.errors.filter((e) => e.kind === "unsupported" || (e.kind === "unclear" && !tscRejects.has(e.line)));
   const errors = lacking.map((e) => ({ offset: offsetOf(text, e.line, e.column), file: e.file }));
-  const causedByPruning = (e) => !originalTscErrors.has(errorKey(e));
-  const portCaused = expectedCodes ? tsc.filter((e) => !causedByPruning(e) && !expectedCodes.has(e.code)) : [];
   for (const e of tsc) {
-    if (causedByPruning(e) || portCaused.includes(e)) errors.push({ offset: e.start, file: e.file });
+    if (!originalTscErrors.has(errorKey(e))) errors.push({ offset: e.start, file: e.file });
   }
-  return { errors, lacking, portCaused };
+  return { errors, lacking, portCaused: portCausedErrors(tsc, originalTscErrors, expectedCodes) };
+}
+
+/** The `tsc` errors the port caused: on the case as ported, before pruning (the
+ * keys in `originalTscErrors`), with a code not in `expectedCodes`. None when
+ * `expectedCodes` is null. */
+function portCausedErrors(tsc, originalTscErrors, expectedCodes) {
+  if (!expectedCodes) return [];
+  return tsc.filter((e) => originalTscErrors.has(errorKey(e)) && !expectedCodes.has(e.code));
 }
 
 function ourErrors(caseErrors, file) {
@@ -144,8 +161,8 @@ function fileOfError(file, text) {
   return ({ offset, file: index }) => ({ ...parsed[index], offset });
 }
 
-/** The ranges to blank for errors at `errors`, each `{ offset, file }`,
- * deduplicated, right to left so blanking one leaves the offsets of the rest in
+/** The ranges to blank for errors at `errors`, each `{ offset, file,
+ * statementOnly? }`, deduplicated, right to left so blanking one leaves the offsets of the rest in
  * place. An outer statement's blank covers any inner one. Each is `{ start, end,
  * body }`, `body` being what `blank` leaves in its place. `fileAt` gives the file
  * an error is in (`fileOfError`). A range never leaves the offsets its file owns:
@@ -164,11 +181,13 @@ function rangesToBlank(fileAt, errors) {
   }
   // An error outside every statement with code, such as one at `main` after a
   // statement our parser couldn't finish, often goes once what caused it is pruned.
-  // Only when no error is in one is it pruned by itself.
+  // Only when no error is in one is it pruned by itself, unless it is
+  // `statementOnly`.
   if (!ranges.size) {
-    for (const file of files) {
+    files.forEach((file, i) => {
+      if (errors[i].statementOnly) return;
       for (const range of recoveryRanges(file.sourceFile, file.offset)) add(file, range);
-    }
+    });
   }
   const sorted = [...ranges.values()].sort((a, b) => b.start - a.start);
   return sorted.filter((u) => !sorted.some((outer) => outer !== u && outer.start <= u.start && u.end <= outer.end));
@@ -221,8 +240,10 @@ function recoveryRanges(sourceFile, offset) {
   const isTopLevel = statements === sourceFile.statements;
   const gapEnd = after?.getStart(sourceFile) ?? (isTopLevel ? sourceFile.text.length : statements.end);
   const tokens = gapTokens(sourceFile.text, gapStart, gapEnd);
-  // Such as `tsc`'s error on a `@ts-expect-error` whose statement pruning took.
-  const comment = tokens.find((t) => t.isComment && !t.isMarker && t.start <= offset && offset < t.end);
+  // Such as `tsc`'s error on a `@ts-expect-error` whose statement pruning took. Not
+  // an option line, which sets how the case is checked: an error there, such as our
+  // circular import's, is about the case as a whole.
+  const comment = tokens.find((t) => t.isComment && !t.isMarker && !t.isOption && t.start <= offset && offset < t.end);
   if (comment) return [comment];
   const skipped = tokens.filter((t) => !t.isComment || t.isUnterminated);
   if (skipped.length) return skipped;
@@ -263,11 +284,12 @@ function gapTokens(text, start, end) {
     const lineEnd = text.indexOf("\n", tokenStart);
     const tokenEnd = isUnterminated && lineEnd !== -1 ? lineEnd : scanner.getTokenEnd();
     const isMarker = isComment && MARKERS.includes(text.slice(tokenStart, scanner.getTokenEnd()));
+    const isOption = isComment && OPTION_LINE.test(text.slice(tokenStart, scanner.getTokenEnd()));
     // A token goes for `;`, keeping the statements `tsc` read either side of it apart.
     // A comment separates nothing, and a statement in its place would, such as
     // between an overload and its implementation.
     const body = isComment && !isUnterminated ? "" : ";";
-    tokens.push({ start: tokenStart, end: Math.min(tokenEnd, end), body, isComment, isUnterminated, isMarker });
+    tokens.push({ start: tokenStart, end: Math.min(tokenEnd, end), body, isComment, isUnterminated, isMarker, isOption });
   }
   return tokens;
 }
@@ -402,6 +424,6 @@ function codeLines(text) {
   }).length;
 }
 
-module.exports = { rangesToBlank, fileOfError };
+module.exports = { rangesToBlank, fileOfError, portCausedErrors };
 
 if (require.main === module) main();
