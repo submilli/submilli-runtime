@@ -1,7 +1,9 @@
 //! Transaction boundaries for keyed requests; execution and waiting occur outside them.
 use super::error::StoreError;
 use super::unit_of_work::UnitOfWorkFactory;
-use crate::domain::idempotent_request::{IdempotentRequest, RecordedOutcome, RequestState};
+use crate::domain::idempotent_request::{
+    IdempotentRequest, RecordedOutcome, RequestState, ResponseRetention,
+};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -15,6 +17,8 @@ pub(crate) enum RequestFailure {
     SessionUnavailable,
     #[error("the previous request outcome is indeterminate")]
     Indeterminate,
+    #[error("the previous request completed, and its response is no longer kept")]
+    Expired,
 }
 
 pub(crate) enum RequestDisposition {
@@ -74,6 +78,7 @@ impl<'a> ReserveRequest<'a> {
                     Ok(RequestDisposition::Completed(outcome.clone()))
                 }
                 RequestState::Indeterminate => Err(RequestFailure::Indeterminate),
+                RequestState::Expired { .. } => Err(RequestFailure::Expired),
             };
         }
         unit.save_request(request.clone()).await?;
@@ -126,15 +131,15 @@ impl ResolveRequest {
         }
         match resolution {
             RequestResolution::Completed(outcome) => {
-                request.complete(reservation.reservation_id(), outcome.clone())?;
-                if let Some(mut session) = unit.get_session(reservation.session_id()).await? {
-                    let now = SystemTime::now();
-                    if session.require_available(now).is_ok() {
-                        session
-                            .record_execution_completed(now)
-                            .map_err(|_| RequestFailure::SessionUnavailable)?;
-                        unit.save_session(session).await?;
-                    }
+                let now = SystemTime::now();
+                request.complete(reservation.reservation_id(), outcome.clone(), now)?;
+                if let Some(mut session) = unit.get_session(reservation.session_id()).await?
+                    && session.require_available(now).is_ok()
+                {
+                    session
+                        .record_execution_completed(now)
+                        .map_err(|_| RequestFailure::SessionUnavailable)?;
+                    unit.save_session(session).await?;
                 }
                 unit.save_request(request).await?;
             }
@@ -171,5 +176,50 @@ impl<'a> RecoverRequests<'a> {
         }
         unit.commit().await?;
         Ok(())
+    }
+}
+
+/// Drop the response bodies [`ResponseRetention`] no longer keeps, leaving
+/// tombstones, so a session's ledger stops growing with its age.
+pub(crate) struct ExpireResponses<'a> {
+    units: &'a dyn UnitOfWorkFactory,
+    retention: ResponseRetention,
+}
+impl<'a> ExpireResponses<'a> {
+    pub fn new(units: &'a dyn UnitOfWorkFactory, retention: ResponseRetention) -> Self {
+        Self { units, retention }
+    }
+
+    /// Returns how many responses expired.
+    pub async fn execute(&self, now: SystemTime) -> Result<u64, StoreError> {
+        let Some(cutoff) = self.retention.cutoff(now) else {
+            return Ok(0);
+        };
+        let mut unit = self.units.begin().await?;
+        let sessions = unit
+            .sessions_with_responses_to_expire(cutoff, self.retention.keep_last)
+            .await?;
+        unit.commit().await?;
+        let mut expired = 0;
+        // One unit per session, so a large backlog (the first sweep after an
+        // upgrade) never holds the writer for the whole ledger at once.
+        for session in sessions {
+            let mut unit = self.units.begin().await?;
+            let completed = unit.completed_responses(&session).await?;
+            let keys: Vec<String> = self
+                .retention
+                .expired(&completed, now)
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
+            if keys.is_empty() {
+                // The session changed since the listing; nothing was written,
+                // so dropping the unit rolls back a read.
+                continue;
+            }
+            expired += unit.expire_responses(&session, keys).await?;
+            unit.commit().await?;
+        }
+        Ok(expired)
     }
 }

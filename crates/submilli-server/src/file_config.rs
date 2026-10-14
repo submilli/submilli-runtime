@@ -109,6 +109,10 @@ pub struct FileConfig {
     pub max_llm_concurrency: Option<usize>,
     /// Runs that may wait on the harness at once, server-wide.
     pub max_suspended_runs: Option<usize>,
+    /// Seconds a keyed execute's response is kept for replay after it completes.
+    pub idempotency_retention: Option<u64>,
+    /// A session's newest keyed-execute responses kept whatever their age.
+    pub idempotency_keep_last: Option<usize>,
     /// Tokens every live execution's `submilli:embedding` calls may spend in
     /// total.
     #[serde(default, deserialize_with = "crate::count::deserialize_optional_count")]
@@ -270,6 +274,8 @@ pub(crate) struct EnvConfig {
     max_execution_llm_tokens: Option<String>,
     max_llm_concurrency: Option<String>,
     max_suspended_runs: Option<String>,
+    idempotency_retention: Option<String>,
+    idempotency_keep_last: Option<String>,
     max_embedding_tokens: Option<String>,
     max_execution_embedding_tokens: Option<String>,
     max_execution_embedding_requests: Option<String>,
@@ -363,6 +369,8 @@ impl EnvConfig {
             max_execution_llm_tokens: var("SUBMILLI_MAX_EXECUTION_LLM_TOKENS"),
             max_llm_concurrency: var("SUBMILLI_MAX_LLM_CONCURRENCY"),
             max_suspended_runs: var("SUBMILLI_MAX_SUSPENDED_RUNS"),
+            idempotency_retention: var("SUBMILLI_IDEMPOTENCY_RETENTION"),
+            idempotency_keep_last: var("SUBMILLI_IDEMPOTENCY_KEEP_LAST"),
             max_embedding_tokens: var("SUBMILLI_MAX_EMBEDDING_TOKENS"),
             max_execution_embedding_tokens: var("SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS"),
             max_execution_embedding_requests: var("SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS"),
@@ -503,6 +511,8 @@ fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
     max_execution_llm_tokens(cli, file, env)?;
     max_llm_concurrency(cli, file, env)?;
     max_suspended_runs(cli, file, env)?;
+    idempotency_retention(cli, file, env)?;
+    idempotency_keep_last(cli, file, env)?;
     max_embedding_tokens(cli, file, env)?;
     max_execution_embedding_tokens(cli, file, env)?;
     max_execution_embedding_requests(cli, file, env)?;
@@ -875,6 +885,39 @@ fn max_suspended_runs(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<O
     ))
 }
 
+/// How long a keyed execute's response is kept for replay, in whole seconds.
+fn idempotency_retention(
+    cli: &Cli,
+    file: &FileConfig,
+    env: &EnvConfig,
+) -> Result<Option<Duration>> {
+    let env_seconds = parse_env(
+        "SUBMILLI_IDEMPOTENCY_RETENTION",
+        "a whole number of seconds",
+        env.idempotency_retention.as_ref(),
+    )?;
+    Ok(explicit(
+        cli.idempotency_retention,
+        env_seconds,
+        file.idempotency_retention,
+    )
+    .map(Duration::from_secs))
+}
+
+/// How many of a session's newest keyed-execute responses outlive the retention.
+fn idempotency_keep_last(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Option<usize>> {
+    let env_count = parse_env(
+        "SUBMILLI_IDEMPOTENCY_KEEP_LAST",
+        "a whole number of responses",
+        env.idempotency_keep_last.as_ref(),
+    )?;
+    Ok(explicit(
+        cli.idempotency_keep_last,
+        env_count,
+        file.idempotency_keep_last,
+    ))
+}
+
 /// The server-wide embedding token ceiling. `None` leaves
 /// [`ServerConfig::max_embedding_tokens`] unset so the session manager's default
 /// applies.
@@ -1005,6 +1048,8 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
     let max_llm_tokens = max_llm_tokens(&cli, &file, &env)?;
     let max_llm_concurrency = max_llm_concurrency(&cli, &file, &env)?;
     let max_suspended_runs = max_suspended_runs(&cli, &file, &env)?;
+    let idempotency_retention = idempotency_retention(&cli, &file, &env)?;
+    let idempotency_keep_last = idempotency_keep_last(&cli, &file, &env)?;
     // The other `LlmLimits` fields are embedder-only, the way `session_kv_limits`
     // is: the per-execution ceiling is the one an operator tunes alongside the
     // aggregate, so it is the only one that gets a rung on the ladder.
@@ -1090,6 +1135,8 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         max_llm_tokens,
         max_llm_concurrency,
         max_suspended_runs,
+        idempotency_retention,
+        idempotency_keep_last,
         embedding_limits,
         max_embedding_tokens,
         max_embedding_concurrency,
@@ -1482,6 +1529,8 @@ mod tests {
             max_execution_llm_tokens: None,
             max_llm_concurrency: None,
             max_suspended_runs: None,
+            idempotency_retention: None,
+            idempotency_keep_last: None,
             max_embedding_tokens: None,
             max_execution_embedding_tokens: None,
             max_execution_embedding_requests: None,
@@ -2983,6 +3032,64 @@ network:
             let limit = max_llm_concurrency(&cli, &file, &env).unwrap();
             assert_eq!(limit, expected, "{tier} should have won");
         }
+    }
+
+    #[test]
+    fn idempotency_retention_walks_the_ladder_and_refuses_a_bad_env_value() {
+        let file = FileConfig {
+            idempotency_retention: Some(60),
+            idempotency_keep_last: Some(5),
+            ..FileConfig::default()
+        };
+        let with_flags = Cli {
+            idempotency_retention: Some(10),
+            idempotency_keep_last: Some(1),
+            ..empty_cli()
+        };
+        let env = env_from(&[
+            ("SUBMILLI_IDEMPOTENCY_RETENTION", "30"),
+            ("SUBMILLI_IDEMPOTENCY_KEEP_LAST", "0"),
+        ]);
+        assert_eq!(
+            idempotency_retention(&with_flags, &file, &env).unwrap(),
+            Some(Duration::from_secs(10))
+        );
+        assert_eq!(
+            idempotency_keep_last(&with_flags, &file, &env).unwrap(),
+            Some(1)
+        );
+        assert_eq!(
+            idempotency_retention(&empty_cli(), &file, &env).unwrap(),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(
+            idempotency_keep_last(&empty_cli(), &file, &env).unwrap(),
+            Some(0)
+        );
+        let no_env = EnvConfig::default();
+        assert_eq!(
+            idempotency_retention(&empty_cli(), &file, &no_env).unwrap(),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            idempotency_keep_last(&empty_cli(), &file, &no_env).unwrap(),
+            Some(5)
+        );
+        let defaults = FileConfig::default();
+        assert_eq!(
+            idempotency_retention(&empty_cli(), &defaults, &no_env).unwrap(),
+            None
+        );
+        assert_eq!(
+            idempotency_keep_last(&empty_cli(), &defaults, &no_env).unwrap(),
+            None
+        );
+        let bad = env_from(&[
+            ("SUBMILLI_IDEMPOTENCY_RETENTION", "1d"),
+            ("SUBMILLI_IDEMPOTENCY_KEEP_LAST", "-1"),
+        ]);
+        assert!(idempotency_retention(&empty_cli(), &defaults, &bad).is_err());
+        assert!(idempotency_keep_last(&empty_cli(), &defaults, &bad).is_err());
     }
 
     /// Zero is rejected on all three, rather than meaning "unlimited" (the

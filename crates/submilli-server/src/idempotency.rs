@@ -45,6 +45,10 @@ pub enum Refusal {
     /// The ledger could not be read or written. The ledger is authoritative, so
     /// a request it cannot record is refused rather than run unguarded.
     Unavailable(String),
+    /// The earlier request completed, but its response outlived the ledger's
+    /// retention. Terminal like [`Refusal::Indeterminate`], with more to say:
+    /// the program did run to an outcome.
+    Expired,
 }
 
 impl Refusal {
@@ -56,13 +60,14 @@ impl Refusal {
             Refusal::Indeterminate => "idempotency_incomplete",
             Refusal::InProgress => "idempotency_in_progress",
             Refusal::Unavailable(_) => "idempotency_unavailable",
+            Refusal::Expired => "idempotency_response_expired",
         }
     }
 
     pub fn status(&self) -> StatusCode {
         match self {
             Refusal::InvalidKey(_) => StatusCode::BAD_REQUEST,
-            Refusal::Conflict | Refusal::Indeterminate => StatusCode::CONFLICT,
+            Refusal::Conflict | Refusal::Indeterminate | Refusal::Expired => StatusCode::CONFLICT,
             // Retryable, so it shares 503 with the ledger being down rather
             // than sitting with the terminal 409s.
             Refusal::InProgress | Refusal::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
@@ -94,6 +99,12 @@ impl Refusal {
             Refusal::Unavailable(_) => {
                 "the server could not record this request's idempotency key, so it was not \
                  executed"
+                    .to_string()
+            }
+            Refusal::Expired => {
+                "an earlier request with this idempotency key completed, but its response \
+                 is no longer retained; it will not run again. Running the code again is a \
+                 new, independent execution"
                     .to_string()
             }
         }
@@ -193,6 +204,9 @@ impl Coordinator {
                 }
                 Err(RequestFailure::Indeterminate) => {
                     return Reservation::Refused(Refusal::Indeterminate);
+                }
+                Err(RequestFailure::Expired) => {
+                    return Reservation::Refused(Refusal::Expired);
                 }
                 Err(error) => {
                     return Reservation::Refused(Refusal::Unavailable(error.to_string()));
@@ -412,6 +426,130 @@ mod tests {
             _ => panic!("duplicate must replay"),
         }
         first.drain().await;
+    }
+
+    #[tokio::test]
+    async fn responses_past_retention_become_tombstones_that_still_refuse_to_run() {
+        use crate::application::idempotency::ExpireResponses;
+        use crate::domain::idempotent_request::{RequestState, ResponseRetention};
+        let (_, units, coordinator) = fixture().await;
+        drop(proceed(coordinator.reserve("session", "k0", "code").await));
+        for key in ["k1", "k2", "k3", "k4", "k5"] {
+            proceed(coordinator.reserve("session", key, "code").await)
+                .complete(201, format!("body of {key}"))
+                .await;
+        }
+        let expire = ExpireResponses::new(units.as_ref(), ResponseRetention::default());
+        let now = SystemTime::now();
+        assert_eq!(
+            expire.execute(now).await.unwrap(),
+            0,
+            "nothing is past the TTL yet"
+        );
+        let later = now + Duration::from_secs(25 * 60 * 60);
+        assert_eq!(expire.execute(later).await.unwrap(), 2);
+        assert_eq!(expire.execute(later).await.unwrap(), 0);
+
+        for key in ["k3", "k4", "k5"] {
+            match coordinator.reserve("session", key, "code").await {
+                Reservation::Replay(outcome) => {
+                    assert_eq!(outcome.body, format!("body of {key}"));
+                }
+                _ => panic!("{key} is among the newest and still replays"),
+            }
+        }
+        for key in ["k1", "k2"] {
+            assert!(matches!(
+                coordinator.reserve("session", key, "code").await,
+                Reservation::Refused(Refusal::Expired)
+            ));
+            assert_eq!(
+                read_request(units.as_ref(), "session", key)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .state(),
+                &RequestState::Expired { status: 201 }
+            );
+        }
+        assert!(matches!(
+            coordinator.reserve("session", "k1", "different").await,
+            Reservation::Refused(Refusal::Conflict)
+        ));
+        assert_eq!(
+            read_request(units.as_ref(), "session", "k0")
+                .await
+                .unwrap()
+                .unwrap()
+                .state(),
+            &RequestState::Indeterminate,
+            "only completed responses expire"
+        );
+        let mut unit = units.begin().await.unwrap();
+        assert_eq!(
+            unit.expire_responses("session", vec!["k0".into(), "k1".into()])
+                .await
+                .unwrap(),
+            0,
+            "a request that is no longer completed is left alone"
+        );
+        drop(unit);
+        coordinator.drain().await;
+    }
+
+    #[tokio::test]
+    async fn each_session_due_expires_in_its_own_unit_and_the_counts_add_up() {
+        use crate::application::idempotency::ExpireResponses;
+        use crate::domain::idempotent_request::{RequestState, ResponseRetention};
+        let (_, units, coordinator) = fixture().await;
+        let mut unit = units.begin().await.unwrap();
+        unit.save_session(
+            Session::create(
+                SessionId::parse("other".into()).unwrap(),
+                SessionBinding::new("test".into(), Default::default()).unwrap(),
+                RootVfs::None,
+                SessionLifetime::new(Duration::from_secs(3600), SystemTime::now()),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        unit.commit().await.unwrap();
+        for session in ["session", "other"] {
+            for key in ["a", "b", "c"] {
+                proceed(coordinator.reserve(session, key, "code").await)
+                    .complete(200, "body".into())
+                    .await;
+            }
+        }
+        let retention = ResponseRetention {
+            ttl: Duration::from_secs(60),
+            keep_last: 1,
+        };
+        let later = SystemTime::now() + Duration::from_secs(120);
+        assert_eq!(
+            ExpireResponses::new(units.as_ref(), retention)
+                .execute(later)
+                .await
+                .unwrap(),
+            4
+        );
+        for session in ["session", "other"] {
+            for (key, kept) in [("a", false), ("b", false), ("c", true)] {
+                let state = read_request(units.as_ref(), session, key)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .state()
+                    .clone();
+                assert_eq!(
+                    matches!(state, RequestState::Completed(_)),
+                    kept,
+                    "{session}/{key}: {state:?}"
+                );
+            }
+        }
+        coordinator.drain().await;
     }
 
     #[tokio::test]

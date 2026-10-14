@@ -112,6 +112,16 @@ pub struct ServerConfig {
     /// Runs that may wait on the harness at once, server-wide. `None` uses
     /// [`crate::runs::DEFAULT_MAX_SUSPENDED_RUNS`].
     pub max_suspended_runs: Option<usize>,
+    /// How long a keyed execute's response is kept for replay after it
+    /// completes. `None` uses [`ResponseRetention::default`]'s.
+    ///
+    /// [`ResponseRetention::default`]: crate::domain::idempotent_request::ResponseRetention
+    pub idempotency_retention: Option<std::time::Duration>,
+    /// How many of a session's newest keyed-execute responses are kept for
+    /// replay whatever their age. `None` uses [`ResponseRetention::default`]'s.
+    ///
+    /// [`ResponseRetention::default`]: crate::domain::idempotent_request::ResponseRetention
+    pub idempotency_keep_last: Option<usize>,
     /// An override for the outbound model dispatch every `submilli:llm` call
     /// rides.
     ///

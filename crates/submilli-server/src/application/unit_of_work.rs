@@ -40,6 +40,27 @@ pub(crate) trait UnitOfWork: Send {
     async fn unfinished_requests(
         &mut self,
     ) -> Result<Vec<crate::domain::idempotent_request::IdempotentRequest>, StoreError>;
+    /// The sessions holding more than `kept` completed responses, at least one
+    /// of them completed at or before `cutoff`.
+    async fn sessions_with_responses_to_expire(
+        &mut self,
+        cutoff: SystemTime,
+        kept: usize,
+    ) -> Result<Vec<String>, StoreError>;
+    /// A session's completed responses, without their bodies.
+    async fn completed_responses(
+        &mut self,
+        session_id: &str,
+    ) -> Result<Vec<crate::domain::idempotent_request::CompletedResponse>, StoreError>;
+    /// Drop the bodies of `keys`, leaving tombstones; a request that is no longer
+    /// completed is left alone. Returns how many expired. A bulk transition in
+    /// storage, deliberately: loading the requests would read the very bodies
+    /// this drops.
+    async fn expire_responses(
+        &mut self,
+        session_id: &str,
+        keys: Vec<String>,
+    ) -> Result<u64, StoreError>;
     async fn get_secret(&mut self, name: &SecretName) -> Result<Option<Secret>, StoreError>;
     async fn save_secret(&mut self, secret: Secret, now: SystemTime) -> Result<(), StoreError>;
     async fn remove_secret(&mut self, name: &SecretName) -> Result<bool, StoreError>;

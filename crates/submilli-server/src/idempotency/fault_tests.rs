@@ -79,6 +79,28 @@ impl UnitOfWork for FaultUnit {
     ) -> Result<Vec<crate::domain::idempotent_request::IdempotentRequest>, StoreError> {
         self.inner.unfinished_requests().await
     }
+    async fn sessions_with_responses_to_expire(
+        &mut self,
+        cutoff: std::time::SystemTime,
+        kept: usize,
+    ) -> Result<Vec<String>, StoreError> {
+        self.inner
+            .sessions_with_responses_to_expire(cutoff, kept)
+            .await
+    }
+    async fn completed_responses(
+        &mut self,
+        session_id: &str,
+    ) -> Result<Vec<crate::domain::idempotent_request::CompletedResponse>, StoreError> {
+        self.inner.completed_responses(session_id).await
+    }
+    async fn expire_responses(
+        &mut self,
+        session_id: &str,
+        keys: Vec<String>,
+    ) -> Result<u64, StoreError> {
+        self.inner.expire_responses(session_id, keys).await
+    }
     async fn get_secret(
         &mut self,
         name: &crate::domain::secret::SecretName,

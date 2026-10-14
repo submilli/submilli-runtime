@@ -64,6 +64,8 @@ flat names listed. A dash means the form doesn't exist.
 | `max_execution_llm_tokens` | `--max-execution-llm-tokens` | `SUBMILLI_MAX_EXECUTION_LLM_TOKENS` | count, at least 1 | `1M` | Model tokens one run may spend. |
 | `max_llm_concurrency` | `--max-llm-concurrency` | `SUBMILLI_MAX_LLM_CONCURRENCY` | prompts, at least 1 | `4` | Prompts of one `llm.batch` in flight at once. |
 | `max_suspended_runs` | `--max-suspended-runs` | `SUBMILLI_MAX_SUSPENDED_RUNS` | runs | `256` | Runs waiting on the harness at an [application tool](/docs/reference/http-api#application-tools) call at once, across the server. Each holds its program in memory. `0` turns application tool calls off. |
+| `idempotency_retention` | `--idempotency-retention` | `SUBMILLI_IDEMPOTENCY_RETENTION` | seconds | `86400` | How long a keyed execute's response is kept for replay after it completes. `0` keeps only the newest `idempotency_keep_last`. See [Idempotency](/docs/reference/http-api#idempotency). |
+| `idempotency_keep_last` | `--idempotency-keep-last` | `SUBMILLI_IDEMPOTENCY_KEEP_LAST` | responses | `3` | A session's newest keyed-execute responses kept for replay whatever their age. `0` keeps each only for `idempotency_retention`. |
 | `max_embedding_tokens` | `--max-embedding-tokens` | `SUBMILLI_MAX_EMBEDDING_TOKENS` | count, at least 1 | `50M` | Embedding tokens across all runs. Separate from the model-token budgets. |
 | `max_execution_embedding_tokens` | `--max-execution-embedding-tokens` | `SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS` | count, at least 1 | `2M` | Embedding tokens one run may spend. |
 | `max_execution_embedding_requests` | `--max-execution-embedding-requests` | `SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS` | count, at least 1 | `1K` | Provider requests one run's `submilli:embedding` calls may send. |
@@ -471,6 +473,10 @@ Options:
           Prompts one `llm.batch` dispatches at once. Bounded deliberately: unbounded fan-out manufactures the rate-limit errors it then cannot honor a `retry-after` against. [default: 4] Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`, which outranks the config file
       --max-suspended-runs <RUNS>
           Runs that may wait on the harness at once, server-wide: each suspended at an application tool call (`@tools`), holding its program in memory. [default: 256] Env: `$SUBMILLI_MAX_SUSPENDED_RUNS`, which outranks the config file
+      --idempotency-retention <SECONDS>
+          Seconds a keyed execute's response is kept for replay after it completes. Past that, the key still refuses to run again, with `idempotency_response_expired`. `0` keeps only the newest `--idempotency-keep-last`. [default: 86400] Env: `$SUBMILLI_IDEMPOTENCY_RETENTION`, which outranks the config file
+      --idempotency-keep-last <RESPONSES>
+          How many of a session's newest keyed-execute responses are kept for replay whatever their age. `0` keeps each only for `--idempotency-retention`. [default: 3] Env: `$SUBMILLI_IDEMPOTENCY_KEEP_LAST`, which outranks the config file
       --max-embedding-tokens <TOKENS>
           Tokens every live execution's `submilli:embedding` calls may spend *in total*. Separate from `--max-llm-tokens`: embedding and `llm.call` spend against different provider credentials and neither can starve the other. [default: 50000000] Env: `$SUBMILLI_MAX_EMBEDDING_TOKENS`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 50M or 10_000
       --max-execution-embedding-tokens <TOKENS>

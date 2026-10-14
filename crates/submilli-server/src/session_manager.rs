@@ -44,6 +44,7 @@ use crate::adapters::session::cleanup_queue::StoredSessionCleanupQueue;
 use crate::adapters::session::credentials::{CredentialCodec, CredentialError};
 use crate::adapters::session::workspaces::LocalSessionWorkspaces;
 use crate::application::sessions::ports::SessionWorkspaces;
+use crate::domain::idempotent_request::ResponseRetention;
 
 use crate::adapters::session::repository::{LoadedSession, SessionPersistence};
 use crate::blueprint::StoreError;
@@ -126,6 +127,8 @@ pub struct SessionManager {
     /// Runs that may suspend at an application tool call. A session with one
     /// unfinished is not idle, and ending the session ends them.
     runs: Arc<RunRegistry>,
+    /// How long keyed executes keep their responses for replay.
+    response_retention: ResponseRetention,
 }
 
 /// How long ending a session waits for its cancelled runs to stop before it
@@ -297,12 +300,19 @@ impl SessionManager {
             llm,
             embedding,
             runs: Arc::new(RunRegistry::default()),
+            response_retention: ResponseRetention::default(),
         }
     }
 
     /// Hold at most `max` runs waiting on the harness at once.
     pub fn with_max_suspended_runs(mut self, max: usize) -> Self {
         self.runs = Arc::new(RunRegistry::new(max));
+        self
+    }
+
+    /// Keep keyed executes' responses for replay as `retention` says.
+    pub fn with_response_retention(mut self, retention: ResponseRetention) -> Self {
+        self.response_retention = retention;
         self
     }
 
@@ -741,12 +751,19 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Expire idle sessions and clean up after them, and expire the keyed-execute
+    /// responses past their retention. Returns how many sessions expired.
     pub async fn reap(&self, now: SystemTime) -> Result<usize, SessionError> {
         let now = if self.store.durable() {
             self.store.now().await?
         } else {
             now
         };
+        // The ledger's bound must not depend on session cleanup succeeding, so
+        // the sweep runs first and reports its own failure.
+        if let Err(error) = self.expire_responses(now).await {
+            tracing::warn!(%error, "expiring idempotent responses failed");
+        }
         // A session whose run waits on the harness is not idle.
         let busy = self.runs.sessions_with_unfinished_runs();
         let count = crate::application::sessions::expire::ExpireSessions::new(
@@ -757,6 +774,17 @@ impl SessionManager {
         .await?;
         self.process_pending_cleanup().await?;
         Ok(count)
+    }
+
+    /// Drop the keyed-execute responses past their retention, leaving tombstones
+    /// that still refuse to run the request again. Returns how many expired.
+    async fn expire_responses(&self, now: SystemTime) -> Result<u64, SessionError> {
+        Ok(crate::application::idempotency::ExpireResponses::new(
+            self.unit_of_work.as_ref(),
+            self.response_retention,
+        )
+        .execute(now)
+        .await?)
     }
 
     async fn process_pending_cleanup(&self) -> Result<(), SessionError> {
@@ -1755,6 +1783,57 @@ mod tests {
         assert!(!mgr.contains("old").await.unwrap());
         assert_eq!(mgr.reap_now().await.unwrap(), 0);
         assert!(!dir.exists(), "an idle rehydrated session is reaped");
+    }
+
+    #[tokio::test]
+    async fn reaping_expires_responses_past_their_retention() {
+        use crate::domain::idempotent_request::{IdempotentRequest, RecordedOutcome, RequestState};
+        let store_dir = tempfile::tempdir().expect("store dir");
+        let root = tempfile::tempdir().expect("session root");
+        let mgr = SessionManager::new(
+            root.path().to_path_buf(),
+            None,
+            Arc::default(),
+            no_http(),
+            file_store(store_dir.path()),
+            CapabilitySettings::default(),
+        )
+        .with_response_retention(ResponseRetention {
+            ttl: Duration::ZERO,
+            keep_last: 0,
+        });
+        mgr.bind("s1", &per_session(HOUR), Arc::default(), no_secrets())
+            .await
+            .unwrap();
+        let mut request = IdempotentRequest::reserve(
+            "s1".into(),
+            "k".into(),
+            "f".into(),
+            "r".into(),
+            "g".into(),
+            SystemTime::now(),
+        )
+        .unwrap();
+        request
+            .complete(
+                "r",
+                RecordedOutcome {
+                    status: 200,
+                    body: "bytes".into(),
+                },
+                SystemTime::now() - Duration::from_secs(1),
+            )
+            .unwrap();
+        let mut unit = mgr.unit_of_work.begin().await.unwrap();
+        unit.save_request(request).await.unwrap();
+        unit.commit().await.unwrap();
+
+        assert_eq!(mgr.reap_now().await.unwrap(), 0, "the session stays");
+        let mut unit = mgr.unit_of_work.begin().await.unwrap();
+        assert_eq!(
+            unit.get_request("s1", "k").await.unwrap().unwrap().state(),
+            &RequestState::Expired { status: 200 }
+        );
     }
 
     #[tokio::test]

@@ -614,7 +614,7 @@ async fn failed_sqlx_migration_rolls_back_schema_and_completion() {
             Box::pin(async move {
                 let mut migrations: Vec<_> = MIGRATOR.iter().cloned().collect();
                 migrations.push(sqlx::migrate::Migration::new(
-                    6,
+                    7,
                     "failing".into(),
                     sqlx::migrate::MigrationType::Simple,
                     "CREATE TABLE partial (value INTEGER); INSERT INTO missing VALUES (1);"
@@ -634,7 +634,7 @@ async fn failed_sqlx_migration_rolls_back_schema_and_completion() {
                         .await?;
                 assert_eq!(count, 0);
                 let count: i64 =
-                    sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE version=6")
+                    sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE version=7")
                         .fetch_one(connection)
                         .await?;
                 assert_eq!(count, 0);
@@ -685,9 +685,92 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
             })
             .await
             .unwrap();
-        assert_eq!(versions, [1, 2, 3, 4, 5]);
+        assert_eq!(versions, [1, 2, 3, 4, 5, 6]);
         database.close().await.unwrap();
     }
+}
+
+/// Key, state, status, body and completion time of one stored request.
+type RequestRow = (String, String, Option<i64>, Option<Vec<u8>>, Option<i64>);
+
+#[tokio::test]
+async fn expiry_migration_keeps_every_request_and_dates_completed_ones_by_creation() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    let mut connection = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .foreign_keys(true),
+    )
+    .await
+    .unwrap();
+    let before: Vec<_> = MIGRATOR
+        .iter()
+        .filter(|migration| migration.version <= 5)
+        .cloned()
+        .collect();
+    sqlx::migrate::Migrator::with_migrations(before)
+        .run_direct(None, &mut connection, false)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO sessions(session_id,record_version,status,blueprint_name,idle_timeout_ms,last_activity_unix_ms,root_vfs_type) VALUES ('s',1,'active','test',0,0,'none');
+         INSERT INTO idempotent_requests(session_id,request_key,fingerprint,reservation_id,owner_generation,created_at_unix_ms,state,response_status,response_body) VALUES
+           ('s','reserved','f','r1','g',10,'reserved',NULL,NULL),
+           ('s','indeterminate','f','r2','g',20,'indeterminate',NULL,NULL),
+           ('s','completed','f','r3','g',30,'completed',200,X'6279746573');",
+    )
+    .execute(&mut connection)
+    .await
+    .unwrap();
+    connection.close().await.unwrap();
+
+    let database = ServerDatabase::open(&path).await.unwrap();
+    let rows: Vec<RequestRow> = database
+        .read(|connection| {
+            Box::pin(async move {
+                Ok(sqlx::query_as("SELECT request_key,state,response_status,response_body,completed_at_unix_ms FROM idempotent_requests ORDER BY created_at_unix_ms")
+                    .fetch_all(connection)
+                    .await?)
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        rows,
+        [
+            ("reserved".into(), "reserved".into(), None, None, None),
+            (
+                "indeterminate".into(),
+                "indeterminate".into(),
+                None,
+                None,
+                None
+            ),
+            (
+                "completed".into(),
+                "completed".into(),
+                Some(200),
+                Some(b"bytes".to_vec()),
+                Some(30)
+            ),
+        ]
+    );
+    let refused = database
+        .transaction(|connection| {
+            Box::pin(async move {
+                sqlx::query(
+                    "UPDATE idempotent_requests SET state='expired' WHERE request_key='completed'",
+                )
+                .execute(connection)
+                .await?;
+                Ok(())
+            })
+        })
+        .await;
+    assert!(refused.is_err(), "an expired row may not keep its body");
+    database.close().await.unwrap();
 }
 
 #[tokio::test]

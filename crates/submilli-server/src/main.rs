@@ -258,6 +258,21 @@ pub struct Cli {
     #[arg(long, value_name = "RUNS")]
     max_suspended_runs: Option<usize>,
 
+    /// Seconds a keyed execute's response is kept for replay after it
+    /// completes. Past that, the key still refuses to run again, with
+    /// `idempotency_response_expired`. `0` keeps only the newest
+    /// `--idempotency-keep-last`. [default: 86400]
+    /// Env: `$SUBMILLI_IDEMPOTENCY_RETENTION`, which outranks the config file.
+    #[arg(long, value_name = "SECONDS")]
+    idempotency_retention: Option<u64>,
+
+    /// How many of a session's newest keyed-execute responses are kept for
+    /// replay whatever their age. `0` keeps each only for
+    /// `--idempotency-retention`. [default: 3]
+    /// Env: `$SUBMILLI_IDEMPOTENCY_KEEP_LAST`, which outranks the config file.
+    #[arg(long, value_name = "RESPONSES")]
+    idempotency_keep_last: Option<usize>,
+
     /// Tokens every live execution's `submilli:embedding` calls may spend *in
     /// total*. Separate from `--max-llm-tokens`: embedding and `llm.call` spend
     /// against different provider credentials and neither can starve the other.

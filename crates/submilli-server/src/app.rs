@@ -41,6 +41,7 @@ use crate::blueprint::BlueprintStore;
 #[cfg(test)]
 use crate::blueprint::InMemoryBlueprintStore;
 use crate::config::{OAuthProvider, VolumeTable};
+use crate::domain::idempotent_request::ResponseRetention;
 use crate::graceful_shutdown::GracefulShutdownTracker;
 use crate::idempotency::Coordinator;
 
@@ -379,6 +380,14 @@ impl AppState {
                 },
             )
             .with_cipher(config.session_cipher.clone())
+            .with_response_retention(ResponseRetention {
+                ttl: config
+                    .idempotency_retention
+                    .unwrap_or(ResponseRetention::default().ttl),
+                keep_last: config
+                    .idempotency_keep_last
+                    .unwrap_or(ResponseRetention::default().keep_last),
+            })
             .with_max_suspended_runs(
                 config
                     .max_suspended_runs
