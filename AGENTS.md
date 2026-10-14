@@ -290,7 +290,8 @@ determinism sweeps, compiler type limits (`type_limits`), Git memory-limit tests
 (`host_memory`), server memory caps (`memory_cap`), and the CLI fuel-accounting tests
 `accessors_do_not_pay_for_the_whole_receiver` and
 `operations_charge_for_the_input_they_process`. Conformance filters and
-baseline-update settings do not opt in. Nightly CI enables the flag; the
+baseline-update settings do not opt in. Nightly CI enables the flag; PR CI
+enables it for the TypeScript conformance suite alone. The
 [release skill](.agents/skills/release/SKILL.md) requires all these checks on the
 final release candidate before publication. Enable the flag during development
 only for focused verification of changes to these tests or their selection,
@@ -312,6 +313,13 @@ At the single post-rebase, pre-PR full-test gate, run:
 ```sh
 SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=0 SUBMILLI_FULL_TEST=1 cargo test --workspace
 cargo run -p submilli -- build test --skip-network
+```
+
+When the change touches the compiler or the TypeScript conformance suite, also run
+that suite, as PR CI does. It takes a few seconds once built:
+
+```sh
+SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test --workspace --test typescript
 ```
 
 During development, run affected Rust tests with full tests explicitly

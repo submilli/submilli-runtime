@@ -52,6 +52,16 @@ jobs:
         env:
           SUBMILLI_FULL_TEST: 1
 
+      # The guard that no divergence from tsc lands unexplained: a change to the
+      # typechecker that moves a `.divergences` file, or adds a divergence no
+      # `.triage` line explains, fails here instead of in the next nightly. The
+      # step above already built this binary with the same features (`--workspace`
+      # keeps them unified), so it only runs the suite, in about five seconds.
+      - name: TypeScript conformance
+        run: cargo test --workspace --test typescript -- --nocapture
+        env:
+          SUBMILLI_TEST_NIGHTLY_ONLY: 1
+
       # The shipped packages' own test files, run under each package's identity.
       # `cargo test` cannot cover this: the identity is stamped by the CLI at
       # compile time, so a regression there surfaces only by running the packages

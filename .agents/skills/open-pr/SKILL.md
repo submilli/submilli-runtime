@@ -84,9 +84,11 @@ code preparation or PR creation merely because Linear is unavailable.
    Fix formatting before review, without modifying unrelated work.
    For routine Submilli Cargo checks, set `SUBMILLI_SKIP_HTTP_TESTS=1`, including
    full compiler/runtime suites. Set `SUBMILLI_TEST_NIGHTLY_ONLY=0` for development
-   and post-rebase PR checks: conformance, compiler determinism, and expensive
+   and post-rebase PR checks: test262 conformance, compiler determinism, and expensive
    CLI fuel-accounting tests do not belong in this workflow. The flag is enabled
-   by nightly CI and, separately, the release skill. For package/example checks, pass `--skip-network`
+   by nightly CI and, separately, the release skill. The exception is the
+   TypeScript conformance suite, which PR CI runs: for compiler or suite changes,
+   run `SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test --workspace --test typescript`. For package/example checks, pass `--skip-network`
    to `build test`; that command ignores `SUBMILLI_SKIP_HTTP_TESTS`. Follow
    `AGENTS.md`'s conditional HTTP policy: use `SUBMILLI_SKIP_HTTP_TESTS=0` for
    affected Rust socket tests; for live package tests, omit `--skip-network` and

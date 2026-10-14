@@ -8,6 +8,8 @@ and the errors it reports. Run with:
 SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test -p conformance --test typescript
 ```
 
+PR CI runs it on every pull request, and the nightly workflow runs it again.
+
 This is the second half of the conformance crate. The test262 cases next door check
 runtime behavior against the ECMAScript standard; these check the typechecker against
 TypeScript.
