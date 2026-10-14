@@ -7383,7 +7383,7 @@ impl Inferer<'_> {
     /// widened, or `undefined`. Only literal defaults are typed here, before
     /// the pattern infers them; with any other, the tuple keeps its length.
     fn tuple_pattern_padding(&self, literal: ExprId) -> Result<Vec<Type>, CompilerFailure> {
-        let Some(defaults) = self.ast.tuple_pattern_pads.get(&literal) else {
+        let Some(defaults) = self.ast.tuple_pattern_pad_defaults.get(&literal) else {
             return Ok(Vec::new());
         };
         let mut padding = Vec::with_capacity(defaults.len());

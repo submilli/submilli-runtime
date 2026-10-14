@@ -886,7 +886,7 @@ pub struct Ast {
     /// For a parameter's tuple literal default shorter than its pattern, the
     /// defaults of the slots past its end. TypeScript pads the default's type
     /// with an optional element for each, so a caller may pass them.
-    pub tuple_pattern_pads: std::collections::BTreeMap<ExprId, Vec<ExprId>>,
+    pub tuple_pattern_pad_defaults: std::collections::BTreeMap<ExprId, Vec<ExprId>>,
     /// Unannotated object literals an object pattern takes apart, with the
     /// properties the pattern gives defaults: `{ a, b = 0 } = { a: 1, b: 2 }`.
     /// TypeScript types such a literal from the pattern, so those properties

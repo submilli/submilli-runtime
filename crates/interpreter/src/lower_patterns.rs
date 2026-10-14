@@ -590,13 +590,14 @@ impl LowerCtx {
             // initializer is. The argument, not the default, is what the
             // pattern takes apart: a caller or a contextual type may supply
             // more elements or properties than the default has.
-            if param.ty.is_none()
-                && let Some(default) = param.default
-                && let Some(LiteralSource::Tuple(len)) =
-                    mark_literal_source(ast, &pattern, default)?
-                && let Some(pads) = defaults_past(&pattern, len)
+            let literal = match (&param.ty, param.default) {
+                (None, Some(default)) => mark_literal_source(ast, &pattern, default)?,
+                _ => None,
+            };
+            if let (Some(LiteralSource::Tuple(len)), Some(default)) = (literal, param.default)
+                && let Some(pad_defaults) = defaults_past_end(&pattern, len)
             {
-                ast.tuple_pattern_pads.insert(default, pads);
+                ast.tuple_pattern_pad_defaults.insert(default, pad_defaults);
             }
             let statements =
                 self.emit_decompose(ast, pattern, fresh, root, /*doc=*/ None, None)?;
@@ -931,8 +932,9 @@ const OBJECT_PROTOTYPE_MEMBERS: &[&str] = &[
     "__proto__",
 ];
 
-/// The defaults of an array pattern's slots from `len` on, when each has one.
-fn defaults_past(binding: &Binding, len: usize) -> Option<Vec<ExprId>> {
+/// The defaults of an array pattern's slots from `len` on, when each is a
+/// named slot with a default.
+fn defaults_past_end(binding: &Binding, len: usize) -> Option<Vec<ExprId>> {
     let Binding::Array {
         elems, defaults, ..
     } = binding
@@ -943,7 +945,7 @@ fn defaults_past(binding: &Binding, len: usize) -> Option<Vec<ExprId>> {
         .iter()
         .zip(defaults)
         .skip(len)
-        .map(|(slot, default)| slot.as_ref().and(*default))
+        .map(|(slot, default)| slot.is_some().then_some(*default).flatten())
         .collect::<Option<_>>()?;
     (!past.is_empty()).then_some(past)
 }
