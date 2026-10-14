@@ -9,7 +9,7 @@ use crate::compiler_error::CompilerFailure;
 use crate::{ExprId, Type, TypedExpr, TypedExprKind};
 
 use super::Inferer;
-use super::assignable::assignable;
+use super::assignable::{assignable, strict_subtype_union};
 
 /// How many objects deep the fields of a combined parameter type merge.
 const MERGE_DEPTH: usize = 8;
@@ -110,7 +110,10 @@ impl Inferer<'_> {
         let ret = if returns_void {
             Type::Void
         } else {
-            Type::union(signatures.iter().map(|sig| sig.ret.clone()).collect())
+            strict_subtype_union(
+                signatures.iter().map(|sig| sig.ret.clone()).collect(),
+                self.resolver(),
+            )
         };
         // A closure takes its rest arguments packed after its own fixed
         // parameters, so members whose fixed parameters differ are called
@@ -195,12 +198,13 @@ impl Inferer<'_> {
         })
     }
 
-    /// A type assignable to each of `types`: the one of them assignable to
-    /// all the others, or, for object types and interfaces, the object with
-    /// every field of each, as tsc's intersection of them has. Merging gives
-    /// up once it is `depth_left` objects deep, so types that refer back to
-    /// themselves don't merge forever, or once it has merged `fields_left`
-    /// more fields.
+    /// A type assignable to each of `types`, as tsc's intersection of them
+    /// is: the one of them assignable to all the others; for unions, the
+    /// members each of them holds; for functions, one taking each parameter
+    /// any of them takes; for object types and interfaces, the object with
+    /// every field of each. Merging gives up once it is `depth_left` objects
+    /// deep, so types that refer back to themselves don't merge forever, or
+    /// once it has merged `fields_left` more fields.
     fn common_subtype(
         &self,
         types: &[&Type],
@@ -215,12 +219,18 @@ impl Inferer<'_> {
         if let Some(narrowest) = narrowest {
             return Some((*narrowest).clone());
         }
+        if types.iter().any(|ty| matches!(ty.peel(), Type::Union(_))) {
+            return self.common_members(types);
+        }
         let depth_left = depth_left.checked_sub(1)?;
+        if types
+            .iter()
+            .all(|ty| matches!(ty.peel(), Type::Function { .. }))
+        {
+            return self.common_function_subtype(types, depth_left, fields_left);
+        }
         let mut merged: BTreeMap<String, Vec<crate::ObjectField>> = BTreeMap::new();
         for ty in types {
-            if matches!(ty.peel(), Type::Union(_)) {
-                return None;
-            }
             let shape = self.sole_object_shape(ty)?;
             for (name, field) in shape {
                 merged.entry(name).or_default().push(field);
@@ -244,6 +254,80 @@ impl Inferer<'_> {
         let combined = Type::Object {
             fields,
             index: None,
+        };
+        types
+            .iter()
+            .all(|ty| assignable(&combined, ty, self.resolver()))
+            .then_some(combined)
+    }
+
+    /// The members of `types`' unions that every one of `types` holds:
+    /// `"a" | "b"` and `"b" | "c"` share `"b"`. `None` when they share none.
+    fn common_members(&self, types: &[&Type]) -> Option<Type> {
+        let mut shared: Vec<Type> = Vec::new();
+        for ty in types {
+            let members = match ty.peel() {
+                Type::Union(members) => members.as_slice(),
+                _ => std::slice::from_ref(*ty),
+            };
+            for member in members {
+                if !shared.contains(member)
+                    && types
+                        .iter()
+                        .all(|other| assignable(member, other, self.resolver()))
+                {
+                    shared.push(member.clone());
+                }
+            }
+        }
+        (!shared.is_empty()).then(|| Type::union(shared))
+    }
+
+    /// A function each of the function types `types` stands for a caller of:
+    /// it takes the parameters they all declare, each at the union of their
+    /// types there, and returns what each of theirs accepts.
+    fn common_function_subtype(
+        &self,
+        types: &[&Type],
+        depth_left: usize,
+        fields_left: &mut usize,
+    ) -> Option<Type> {
+        let mut signatures = Vec::with_capacity(types.len());
+        for ty in types {
+            match ty.peel() {
+                Type::Function {
+                    params,
+                    ret,
+                    predicate: None,
+                    has_rest: false,
+                    ..
+                } => signatures.push((params, ret)),
+                _ => return None,
+            }
+        }
+        let arity = signatures.iter().map(|(params, _)| params.len()).min()?;
+        let params = (0..arity)
+            .map(|position| {
+                Type::union(
+                    signatures
+                        .iter()
+                        .map(|(params, _)| params[position].clone())
+                        .collect(),
+                )
+            })
+            .collect();
+        let returns: Vec<&Type> = signatures.iter().map(|(_, ret)| ret.as_ref()).collect();
+        let ret = if returns.iter().all(|ret| ret.is_void()) {
+            Type::Void
+        } else {
+            self.common_subtype(&returns, depth_left, fields_left)?
+        };
+        let combined = Type::Function {
+            params,
+            optional: 0,
+            ret: Box::new(ret),
+            predicate: None,
+            has_rest: false,
         };
         types
             .iter()

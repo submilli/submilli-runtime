@@ -703,6 +703,27 @@ pub(crate) fn strict_subtype(actual: &Type, expected: &Type, types: TypeResolver
     assignable(actual, expected, types)
 }
 
+/// The union of `types` with each member that is a strict subtype of another
+/// left out, as tsc reduces a union call's results. Of members that are each
+/// other's subtypes, the first stays.
+pub(crate) fn strict_subtype_union(types: Vec<Type>, resolver: TypeResolver) -> Type {
+    let mut members = match Type::union(types) {
+        Type::Union(members) => members,
+        single => return single,
+    };
+    let mut index = members.len();
+    while index > 0 {
+        index -= 1;
+        let absorbed = members.iter().enumerate().any(|(other, member)| {
+            other != index && strict_subtype(&members[index], member, resolver)
+        });
+        if absorbed {
+            members.remove(index);
+        }
+    }
+    Type::union(members)
+}
+
 /// Whether a value of `ty` is a primitive, which tsc's strict subtype relation
 /// keeps apart from object types even where it is assignable to one.
 fn is_primitive(ty: &Type) -> bool {
