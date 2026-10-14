@@ -44,14 +44,21 @@ Default to stable releases. Prereleases and older maintenance lines require
 checking container aliases and GitHub prerelease/latest flags; do not move stable
 aliases back to an older release. This workflow does not publish crates,
 TypeScript packages or `skill-v*` releases unless
-separately requested. The release workflow also publishes `submilli-engine` to
-crates.io, after a reviewer approves its job in the `crates-io` environment; the
-`Publish engine` workflow does the same by hand.
+separately requested. The release workflow also publishes `submilli-engine`,
+`submilli-policy` and `submilli-build` to crates.io, after a reviewer approves
+its job in the `crates-io` environment; the `Publish crates` workflow does the
+same by hand. The workflow refuses to publish a crate when a sibling at the same
+version came from another commit, so bump the version rather than publishing
+missing crates later. A crate's first publish needs a token allowed to publish
+new crates.
 
 ## 2. Prepare versions and documentation
 
 - Update root `Cargo.toml` `[workspace.package].version`. Member crates inherit
   it; inspect their manifests for exceptions and internal version requirements.
+  The published crates pin each other at exactly that version in
+  `[workspace.dependencies]` (`interpreter` and `submilli-policy`); bump those
+  pins with it.
   Do not bump independent dependencies such as `submilli-wasm` or package versions
   just because the runtime changes.
 - Run `cargo build --release --bin submilli --bin submilli-server` to build and

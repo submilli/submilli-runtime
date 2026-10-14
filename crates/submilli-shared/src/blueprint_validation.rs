@@ -1,12 +1,14 @@
-//! Package requirements checked by both local lint and server registration.
+//! Package requirements checked by both local lint and server registration,
+//! and the context fields a blueprint's rule filters test that their
+//! capability's check doesn't report (see [`unreported_fields`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+use interpreter::stdlib::capabilities::{self, Capability};
 use submilli_blueprint::Blueprint;
-
-mod filter_fields;
-pub use filter_fields::{reported_fields, unreported_field_problem, unreported_fields};
-
-use crate::{Artifact, PackageStore, PackageStoreError, RequiredCapability};
+use submilli_build::{Artifact, PackageStore, PackageStoreError, RequiredCapability};
+// Re-exported so blueprint tooling finds the whole field check here.
+pub use submilli_policy::{unreported_field_problem, unreported_fields};
 
 #[derive(Debug)]
 pub enum PackageValidationError {
@@ -108,4 +110,44 @@ pub fn unreported_field_errors(
         }
     }
     errors
+}
+
+/// The context fields `capability`'s check reports: from the catalog for the
+/// standard library, a declared MCP server, or an HTTP method only
+/// `http.request` takes; and from `capabilities.yaml` for each loaded package
+/// that provides it. A package may check a standard library name itself, with
+/// its own context, so the two sources combine.
+/// `None` when nothing known provides `capability`.
+pub fn reported_fields<'a>(
+    blueprint: &Blueprint,
+    artifacts: &'a BTreeMap<String, Artifact>,
+    capability: &str,
+) -> Option<BTreeSet<&'a str>> {
+    let is_mcp_server = capability
+        .strip_prefix("mcp.")
+        .is_some_and(|server| blueprint.mcp.contains_key(server));
+    let catalog_name = if is_mcp_server {
+        "mcp.<server>"
+    } else {
+        capability
+    };
+    let cataloged = capabilities::find_gating(catalog_name);
+    let providers: Vec<_> = artifacts
+        .values()
+        .flat_map(|artifact| &artifact.capabilities.provides)
+        .filter(|entry| entry.name == capability)
+        .collect();
+    if cataloged.is_none() && providers.is_empty() {
+        return None;
+    }
+    let mut fields: BTreeSet<&str> = cataloged
+        .into_iter()
+        .flat_map(Capability::field_names)
+        .collect();
+    fields.extend(
+        providers
+            .into_iter()
+            .flat_map(|entry| entry.fields.keys().map(String::as_str)),
+    );
+    Some(fields)
 }

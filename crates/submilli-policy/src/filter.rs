@@ -7,9 +7,9 @@
 //! string/bool/null `==`/`!=`, `glob` (shell wildcards), `matches` (regex), or
 //! `contains` (array membership).
 //!
-//! Expressions are parsed into an AST at registration time (via [`parse`], which
-//! the [`FilterExpr`] serde impl calls), so a malformed filter fails when the
-//! blueprint is added rather than at the first `check()`. Evaluation never errors:
+//! Expressions are parsed into an AST when rules are loaded (via [`parse`],
+//! which the [`FilterExpr`] serde impl calls), so a malformed filter fails then
+//! rather than at the first `check()`. Evaluation never errors:
 //! a missing field or a wrong-kind value is a non-match.
 
 use std::collections::BTreeMap;
@@ -19,7 +19,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 /// Caller-supplied variable bindings (`${vars.NAME}` → value), resolved per
 /// session and threaded into filter evaluation. Variables are strings; a
-/// comparison coerces by the *other* operand's kind (see [`Comparison::eval`]).
+/// comparison coerces by the *other* operand's kind.
 pub type VarBindings = BTreeMap<String, String>;
 
 /// Why one comparison did not hold, as reported by
@@ -308,7 +308,7 @@ impl FilterExpr {
 
     /// The top-level `and` operands, flattened: `a and (b and c)` yields `a`, `b`,
     /// `c`. A filter that is not an `and` is its own single conjunct.
-    pub(crate) fn conjuncts(&self) -> Vec<&FilterExpr> {
+    pub fn conjuncts(&self) -> Vec<&FilterExpr> {
         let mut out = Vec::new();
         self.collect_flat(&mut out, |expr| match expr {
             Expr::And(left, right) => Some((left, right)),
@@ -318,7 +318,7 @@ impl FilterExpr {
     }
 
     /// The top-level `or` operands, flattened like [`Self::conjuncts`].
-    pub(crate) fn disjuncts(&self) -> Vec<&FilterExpr> {
+    pub fn disjuncts(&self) -> Vec<&FilterExpr> {
         let mut out = Vec::new();
         self.collect_flat(&mut out, |expr| match expr {
             Expr::Or(left, right) => Some((left, right)),
@@ -343,7 +343,7 @@ impl FilterExpr {
 
     /// `(field path, variable)` when this expression is exactly
     /// `field == ${vars.NAME}`: the shape that pins a rule to a session variable.
-    pub(crate) fn as_pin(&self) -> Option<(String, &str)> {
+    pub fn as_pin(&self) -> Option<(String, &str)> {
         match &self.0 {
             Expr::Compare(Comparison {
                 path,
@@ -718,16 +718,17 @@ fn glob_token(pat: &[char], pi: usize) -> Option<(GlobToken, usize)> {
     }
 }
 
-/// `value` as a quoted string literal that parses back to exactly `value`, or
-/// `None` when no literal can: the tokenizer reads any `${vars.` inside quotes
-/// as a variable placeholder and has no escape for it.
-pub(crate) fn quote_literal(value: &str) -> Option<String> {
+/// For writing filters: `value` as a quoted string literal that parses back to
+/// exactly `value`, or `None` when no literal can: the tokenizer reads any
+/// `${vars.` inside quotes as a variable placeholder and has no escape for it.
+pub fn quote_literal(value: &str) -> Option<String> {
     (!value.contains(VAR_PLACEHOLDER)).then(|| format!("\"{}\"", escape_str(value)))
 }
 
-/// True when `name` is written as a bare comparison field: one path segment
-/// the tokenizer reads as a field rather than a keyword or literal.
-pub(crate) fn is_field_name(name: &str) -> bool {
+/// For writing filters: true when `name` is written as a bare comparison
+/// field: one path segment the tokenizer reads as a field rather than a
+/// keyword or literal.
+pub fn is_field_name(name: &str) -> bool {
     let mut chars = name.chars();
     chars
         .next()
@@ -807,8 +808,9 @@ enum Token {
     Interp(Vec<StrSegment>),
 }
 
-/// True for a syntactically valid `${vars.NAME}` variable name.
-pub(crate) fn is_valid_var_name(name: &str) -> bool {
+/// For writing filters: true for a syntactically valid `${vars.NAME}` variable
+/// name.
+pub fn is_valid_var_name(name: &str) -> bool {
     !name.is_empty()
         && name
             .chars()

@@ -5416,12 +5416,12 @@ version = "0.4.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "regex",
  "saphyr-parser",
  "serde",
  "serde_json",
  "serde_path_to_error",
  "serde_yml",
+ "submilli-policy",
  "tokio",
  "url",
 ]
@@ -5433,8 +5433,8 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yml",
- "submilli-blueprint",
  "submilli-engine",
+ "submilli-policy",
  "tempfile",
  "toml",
 ]
@@ -5488,6 +5488,17 @@ dependencies = [
  "wasmparser 0.248.0",
  "wast",
  "zstd",
+]
+
+[[package]]
+name = "submilli-policy"
+version = "0.4.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yml",
+ "submilli-engine",
 ]
 
 [[package]]
@@ -5562,6 +5573,7 @@ dependencies = [
  "submilli-blueprint",
  "submilli-build",
  "submilli-engine",
+ "submilli-policy",
  "tar",
  "tempfile",
  "tokio",

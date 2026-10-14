@@ -1,11 +1,10 @@
-//! Build-side project and package orchestration.
-//!
-//! This crate owns Submilli package-project structure. The first slice is the
-//! v1 `submilli.toml` manifest parser; future build, curate, and package graph
-//! steps live here rather than in the interpreter.
+//! Build-side project and package orchestration: the `submilli.toml`
+//! manifest, building and installing packages, and the package store whose
+//! artifacts an embedder of `submilli-engine` loads
+//! ([`PackageStore::load_closure`]). The artifact format is versioned with the
+//! engine, so this crate is released in lockstep with it.
 
 pub mod artifact;
-pub mod blueprint_validation;
 pub mod capabilities;
 pub mod doc_examples;
 pub mod driver;
@@ -278,7 +277,7 @@ fn lower_manifest(
         let name_span = span(raw_package.name.span());
         let name = raw_package.name.get_ref().clone();
 
-        if let Err(message) = submilli_blueprint::validate_scoped_name(&name) {
+        if let Err(message) = submilli_policy::validate_scoped_name(&name) {
             diagnostics.push(error(name_span, message));
             continue;
         }
