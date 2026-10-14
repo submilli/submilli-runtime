@@ -311,7 +311,31 @@ fn admits_undefined_leaf(member: &Type) -> bool {
 
 /// Whether `JSON.stringify` of a `ty` may return `undefined`.
 fn json_stringify_may_return_undefined(ty: &Type, types: TypeResolver<'_>) -> bool {
-    any_resolved_member(ty, types, &Type::stringifies_to_undefined)
+    any_resolved_member(ty, types, &|member| {
+        Type::stringifies_to_undefined(member) || is_constructor_binding(member, types)
+    })
+}
+
+/// Whether `ty` types a constructor binding used as a value (`Number`,
+/// `Map`), which is a function at run time. The prelude names these
+/// static-dispatch interfaces `…Constructor`, as TypeScript's lib does;
+/// `Console` is the one that types a plain object. Codegen tells the two
+/// apart by binding name instead (`static_value_tag` in codegen/mod.rs), and
+/// every prelude constructor interface is bound to a capitalized name.
+fn is_constructor_binding(ty: &Type, types: TypeResolver<'_>) -> bool {
+    let Type::InterfaceRef { mangled, name, .. } = ty else {
+        return false;
+    };
+    types.lookup(mangled, name).is_some_and(|symbol| {
+        symbol.name.ends_with("Constructor")
+            && matches!(
+                symbol.kind,
+                crate::TypeKind::Interface {
+                    dispatch: crate::Dispatch::Static,
+                    ..
+                }
+            )
+    })
 }
 
 /// Whether any member of `ty`, through unions and alias bodies, satisfies
@@ -807,6 +831,7 @@ impl Inferer<'_> {
                 Ok((TypedExprKind::Null, Type::Error))
             }
         })?;
+        let static_receiver = self.pending_static_receiver.take();
         // an expression's type must be free of bare recursion
         // back-edges — codegen lowers `AliasRef` to the universal
         // `$Object`, but the equivalent inline alias-to-object peels to
@@ -867,6 +892,11 @@ impl Inferer<'_> {
                 ty: ty.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
+        if let Some(receiver) = static_receiver {
+            self.typed_ast
+                .inherited_static_receivers
+                .insert(id, receiver);
+        }
         self.record_narrowed_read_freshness(id)?;
         self.record_runtime_type_test(&ty)
             .map_err(|failure| failure.with_span(span))?;
@@ -875,7 +905,43 @@ impl Inferer<'_> {
         if !limit_was_pending {
             self.type_size_checkpoint(Some(span))?;
         }
+        let id = self.as_object_for(id, &ty, expected, span)?;
         Ok((id, ty))
+    }
+
+    /// `id`, a value of type `ty`, as the object an `expected` object type
+    /// reads. `{}` (or `{}` that may be nullish, or `T & {}`) holds any value, and
+    /// TypeScript lets it into an object type whose fields are all optional
+    /// or that has an index signature, whose slot holds only an object. A
+    /// plain object or class instance passes as it is; another value becomes
+    /// a copy of the fields JavaScript would read from it (a string's or
+    /// array's indices), so later writes to either are not shared.
+    fn as_object_for(
+        &mut self,
+        id: ExprId,
+        ty: &Type,
+        expected: Option<&Type>,
+        span: Span,
+    ) -> Result<ExprId, CompilerFailure> {
+        let Some(want) = expected else {
+            return Ok(id);
+        };
+        if !is_possibly_nullish_empty_object(ty)
+            || !reads_object_fields(want)
+            || !assignable(&super::narrowing::strip_nullish(ty), want, self.resolver())
+        {
+            return Ok(id);
+        }
+        self.typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::IntrinsicCall {
+                    kind: Intrinsic::ToObject,
+                    args: vec![id],
+                },
+                span,
+                ty: ty.clone(),
+            })
+            .map_err(crate::typechecker::arena_failure)
     }
 
     /// Whether `expr_id`, a literal argument slot's value, widens the earlier
@@ -2271,15 +2337,17 @@ impl Inferer<'_> {
                 matches!(sym.kind, crate::TypeKind::Class { .. }).then(|| sym.mangled_name.clone())
             });
             if let Some(class_mangled) = class_target {
-                return self.infer_class_static_call(
+                let call = self.infer_class_static_call(
                     recv_ident.name.clone(),
-                    class_mangled,
+                    class_mangled.clone(),
                     name.clone(),
                     type_args,
                     args,
                     expected,
                     span,
                 );
+                self.note_inherited_static_receiver(&class_mangled, &name.name);
+                return call;
             }
         }
 
@@ -4033,6 +4101,17 @@ impl Inferer<'_> {
         )
     }
 
+    /// Has the expression being inferred record `class` as the class it names
+    /// when `class` inherits its static `member` rather than declaring it.
+    fn note_inherited_static_receiver(&mut self, class: &crate::MangledName, member: &str) {
+        let inherits = self
+            .class_static_in_chain(class, member)
+            .is_some_and(|(_, owner)| owner != *class);
+        if inherits {
+            self.pending_static_receiver = Some(class.clone());
+        }
+    }
+
     /// `ClassName.member` in non-call position: a static field reads the backing
     /// module global; a non-generic static method becomes a `FunctionRef` value.
     fn infer_class_static_access(
@@ -4914,6 +4993,15 @@ impl Inferer<'_> {
                 .try_expr(operands[0])
                 .map_err(crate::typechecker::arena_failure)?
                 .clone();
+            // The outer node replaces this one, so it takes over its guard.
+            if let Some(receiver) = self
+                .typed_ast
+                .inherited_static_receivers
+                .get(&operands[0])
+                .cloned()
+            {
+                self.pending_static_receiver = Some(receiver);
+            }
             // A template is a `string` whatever it interpolates, as in
             // TypeScript: `` `${h}` `` with `h: "hello"` is not `"hello"`,
             // unless a string literal type is expected of it.
@@ -7762,12 +7850,15 @@ impl Inferer<'_> {
                         // `ClassName.member` read: static field → backing global,
                         // static method → function value. A value binding of the
                         // same name shadows the class (checked above).
-                        return Ok(self.infer_class_static_access(
+                        let member = name.name.clone();
+                        let access = self.infer_class_static_access(
                             recv_name,
-                            enum_mangled,
+                            enum_mangled.clone(),
                             name,
                             span,
-                        ));
+                        );
+                        self.note_inherited_static_receiver(&enum_mangled, &member);
+                        return Ok(access);
                     }
                     _ => {
                         // Identifier resolves to a non-enum type —
@@ -11765,6 +11856,7 @@ impl Inferer<'_> {
             );
             return Ok((TypedExprKind::Null, Type::Error));
         }
+        let inner_id = self.as_object_for(inner_id, &inner_ty, Some(&target_ty), span)?;
         // Deep check only when the source isn't a proven subtype of the target.
         // A proven upcast emits no runtime test, so it doesn't need the target
         // to be runtime-verifiable — `m as Map<K, V>` on an `m` that already is
@@ -13273,6 +13365,39 @@ fn is_definitely_falsy(ty: &Type) -> bool {
         Type::NumberLiteral(value) => value.0 == 0.0,
         Type::StringLiteral(value) => value.is_empty(),
         _ => false,
+    }
+}
+
+/// Whether `ty` is `{}` (or a narrowed `T & {}`), possibly with `null` and
+/// `undefined` members: a type that holds any value. `unknown` and a bare type
+/// parameter are not, though they strip to `{}`; a cast from them stays checked.
+fn is_possibly_nullish_empty_object(ty: &Type) -> bool {
+    let is_nullish = |member: &Type| matches!(member.peel(), Type::Null | Type::Undefined);
+    match ty.peel() {
+        Type::Union(members) => {
+            members.iter().any(|member| member.peel().is_empty_object())
+                && members
+                    .iter()
+                    .all(|member| is_nullish(member) || member.peel().is_empty_object())
+        }
+        other => other.is_empty_object(),
+    }
+}
+
+/// Whether a value of type `ty` has its fields read as an object's: an
+/// object type other than `{}` or an interface, possibly nullish.
+fn reads_object_fields(ty: &Type) -> bool {
+    let present = super::narrowing::strip_nullish(ty);
+    let reads_fields = |member: &Type| {
+        !member.is_empty_object()
+            && matches!(
+                member.lowered(),
+                Type::Object { .. } | Type::InterfaceRef { .. }
+            )
+    };
+    match present.peel() {
+        Type::Union(members) => members.iter().all(reads_fields),
+        other => reads_fields(other),
     }
 }
 

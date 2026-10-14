@@ -712,7 +712,9 @@ impl<'a> Unifier<'a> {
                 // forever. Treat it as a fresh binding instead — same hazard the `apply`
                 // guard above handles.
                 if matches!(&resolved, Type::TypeVar(other) if other == name) {
-                    self.sub.bindings.insert(name.clone(), arg_ty.clone());
+                    self.sub
+                        .bindings
+                        .insert(name.clone(), unfixed_binding(name, arg_ty));
                     return Ok(());
                 }
                 let arg_resolved = self.sub.apply_or_record(arg_ty, self.limits);
@@ -797,7 +799,9 @@ impl<'a> Unifier<'a> {
                     }),
                 };
             }
-            self.sub.bindings.insert(name.clone(), arg_ty.clone());
+            self.sub
+                .bindings
+                .insert(name.clone(), unfixed_binding(name, arg_ty));
             if self.infers_from_covariant_argument() {
                 self.sub.widenable.insert(name.clone());
             } else if self.is_argument {
@@ -2030,6 +2034,25 @@ impl TypeParamSubstitution {
     }
 }
 
+/// What an unbound `name` binds to for `arg`. An argument that is a union
+/// with `name` itself as a member comes from a callback that used the still
+/// unfixed parameter, as `(cache: Map<K, V>) => cache.get(k)` returns
+/// `V | undefined` for `V`. tsc fixes such a parameter to `unknown` before it
+/// checks the callback, so the union is `unknown`. Binding the union as it is
+/// would make `name` contain itself, and resolving it would unify forever.
+fn unfixed_binding(name: &str, arg: &Type) -> Type {
+    match arg.peel() {
+        Type::Union(members)
+            if members
+                .iter()
+                .any(|member| matches!(member.peel(), Type::TypeVar(other) if other == name)) =>
+        {
+            Type::Unknown
+        }
+        _ => arg.clone(),
+    }
+}
+
 /// Whether every member of `ty` is a literal type, `null` or `undefined`.
 fn is_literals_or_nullish(ty: &Type) -> bool {
     ty.all_members(&|member| {
@@ -2341,6 +2364,21 @@ mod tests {
         s.insert("T".to_string(), t("T"));
         assert_eq!(unify_bare(&mut s, &t("T"), &Type::Number), Ok(()));
         assert_eq!(s.get("T"), Some(&Type::Number));
+    }
+
+    #[test]
+    fn unify_var_with_union_holding_itself_binds_unknown() {
+        // A callback that read the unfixed `V` returns `V | undefined`;
+        // binding that as is would make `V` contain itself.
+        let own_union = Type::union(vec![t("V"), Type::Undefined]);
+        let mut fresh = TypeParamSubstitution::new();
+        assert_eq!(unify_bare(&mut fresh, &t("V"), &own_union), Ok(()));
+        assert_eq!(fresh.get("V"), Some(&Type::Unknown));
+        let mut self_bound = TypeParamSubstitution::new();
+        self_bound.insert("V".to_string(), t("V"));
+        assert_eq!(unify_bare(&mut self_bound, &t("V"), &own_union), Ok(()));
+        assert_eq!(self_bound.get("V"), Some(&Type::Unknown));
+        assert_eq!(unify_bare(&mut self_bound, &t("V"), &own_union), Ok(()));
     }
 
     #[test]
