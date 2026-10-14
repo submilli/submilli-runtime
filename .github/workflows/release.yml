@@ -245,10 +245,10 @@ jobs:
 
   # Waits for the release binaries to build, since a published crate version
   # cannot be replaced.
-  engine:
-    name: Publish engine
+  crates:
+    name: Publish crates
     needs: [prepare, build]
-    uses: ./.github/workflows/publish-engine.yml
+    uses: ./.github/workflows/publish-crates.yml
     with:
       ref: ${{ needs.prepare.outputs.commit }}
     # A called workflow sees an empty CARGO_REGISTRY_TOKEN from its job's

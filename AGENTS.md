@@ -6,7 +6,7 @@ Read and follow it before making non-trivial changes.
 ## Repository
 
 This workspace contains the compiler/runtime (`interpreter`), CLI (`submilli`),
-HTTP/MCP server (`submilli-server`), supporting build/blueprint/shared crates,
+HTTP/MCP server (`submilli-server`), supporting build/blueprint/policy/shared crates,
 and the conformance suite. Maintained TypeScript packages live in `packages/`.
 
 The runtime embeds [llm-prompt.md](llm-prompt.md) at compile time.

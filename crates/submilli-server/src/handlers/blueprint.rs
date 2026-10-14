@@ -203,10 +203,8 @@ pub(crate) fn verify_packages(
     state: &AppState,
     blueprint: &Blueprint,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    use submilli_build::{
-        PackageStoreError,
-        blueprint_validation::{self, PackageValidationError},
-    };
+    use submilli_build::PackageStoreError;
+    use submilli_shared::blueprint_validation::{self, PackageValidationError};
 
     blueprint_validation::validate_packages(blueprint, state.package_store()).map_err(|error| {
         if let PackageValidationError::InvalidFilter(problem) = &error {

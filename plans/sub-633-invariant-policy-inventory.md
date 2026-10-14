@@ -575,7 +575,7 @@ early return and reentrant path before simplifying a state helper. A generic
 
 Items 11, 36; `0dde88f3`, `5ab68b6b` (merge `9640d6c1`).
 [Substitution](../crates/interpreter/src/typechecker/type_param_substitution.rs),
-[filters](../crates/submilli-blueprint/src/filter.rs).
+[filters](../crates/submilli-policy/src/filter.rs).
 
 Matching BTreeMap key sets established the old lookup invariant; paired ordered
 values avoid the lookup altogether. The old nested comparison match was also
