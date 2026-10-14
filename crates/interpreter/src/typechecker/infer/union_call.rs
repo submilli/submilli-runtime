@@ -104,8 +104,11 @@ impl Inferer<'_> {
         let packs_alike = signatures
             .iter()
             .all(|sig| sig.rest && sig.params.len() == chosen.params.len());
+        let any_rest = signatures.iter().any(|sig| sig.rest);
+        // An omitted optional argument would reach a rest member as an
+        // explicit `undefined`, so the call passes only the ones written.
         let chosen = match arg_count {
-            Some(count) if chosen.rest && !packs_alike => chosen.spread_rest(count),
+            Some(count) if any_rest && !packs_alike => chosen.spread_rest(count).truncated(count),
             _ => chosen,
         };
         Some(chosen.into_function(ret))
@@ -373,8 +376,10 @@ impl Signature {
         self.params.len() - usize::from(self.rest)
     }
 
+    /// Arguments a call must pass. Unlike a direct call's count, a trailing
+    /// `void` parameter stays required here, as in tsc's combined signature.
     fn required(&self) -> usize {
-        super::expr::required_count_of_function_type(&self.params, self.optional, self.rest)
+        self.fixed().saturating_sub(self.optional)
     }
 
     fn accepts(&self, arg_count: usize) -> bool {
@@ -409,6 +414,15 @@ impl Signature {
             params,
             rest: false,
         }
+    }
+
+    /// This fixed signature cut to the `arg_count` arguments a call passes,
+    /// keeping every required parameter.
+    fn truncated(mut self, arg_count: usize) -> Self {
+        let required = self.required();
+        self.params.truncate(arg_count.max(required));
+        self.optional = self.params.len() - required;
+        self
     }
 
     fn into_function(self, ret: Type) -> Type {

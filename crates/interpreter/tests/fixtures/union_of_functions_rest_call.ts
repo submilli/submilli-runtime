@@ -16,6 +16,11 @@ function restOrOptional(f: Rest | OptionalThenRest): string {
   return [f("a"), f("a", "b"), f("a", "b", "c")].join("; ");
 }
 
+// An omitted optional argument isn't passed to the rest member as undefined.
+function optionalOrRest(f: ((a: number, b?: number) => string) | ((...xs: number[]) => string)): string {
+  return [f(1), f(1, 2)].join("; ");
+}
+
 function fixedOrRest(f: Fixed | Rest): string {
   return [f("x"), f("x", "y", "z", "w")].join("; ");
 }
@@ -32,6 +37,8 @@ interface Holder {
 function main(): void {
   assert(restOrOptional(rest) === "rest a []; rest a [b]; rest a [b,c]");
   assert(restOrOptional(optionalThenRest) === "opt a - []; opt a b []; opt a b [c]");
+  assert(optionalOrRest((...xs: number[]) => `n=${xs.length}`) === "n=1; n=2");
+  assert(optionalOrRest((a: number, b?: number) => `${a} ${b ?? "-"}`) === "1 -; 1 2");
   assert(fixedOrRest(fixed) === "fixed x -; fixed x y");
   assert(fixedOrRest(rest) === "rest x []; rest x [y,z,w]");
   assert(restOrPair(rest) === "rest p [q]");
