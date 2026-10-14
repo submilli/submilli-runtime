@@ -25,6 +25,15 @@ class NumberBox extends Box<number> {
     return 7;
   }
 }
+// A middle class that redeclares the optional method leaves the slot alone.
+class Redeclared extends Base {
+  f?(x: number): number;
+}
+class Filled extends Redeclared {
+  f(x: number): number {
+    return x + 1;
+  }
+}
 interface HasF {
   f?(x: number): number;
 }
@@ -37,6 +46,10 @@ function main(): void {
   assert(h.f?.(4) === 400);
   const box: Box<number> = new NumberBox();
   assert(box.get?.() === 7);
+
+  const filled = new Filled();
+  const redeclared: Redeclared = filled;
+  assert(`${filled.f(1)} ${redeclared.f?.(1)} ${filled.run()}` === "2 2 3");
 
   const mid = new Mid();
   const base: Base = mid;

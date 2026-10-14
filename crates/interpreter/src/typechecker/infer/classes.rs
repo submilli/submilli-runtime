@@ -3799,6 +3799,7 @@ impl<'a> Inferer<'a> {
                 optional: sig.optional,
                 initializer: typed_init,
                 auto_assigned: false,
+                method_signature: sig.method,
                 narrowing_check: self.narrowing_check_for(mangled, &name.name),
                 doc: doc.clone(),
             });
@@ -3831,6 +3832,7 @@ impl<'a> Inferer<'a> {
                     optional: sig.optional,
                     initializer: None,
                     auto_assigned: true,
+                    method_signature: false,
                     narrowing_check: self.narrowing_check_for(mangled, &param.name.name),
                     doc: None,
                 });

@@ -1741,12 +1741,16 @@ fn class_decl<'a>(
 /// there — a value the redeclaration's (possibly narrower) type need not admit.
 /// Only the optional case arises: a non-optional field with no initializer must
 /// be assigned in the constructor (`definite_assignment`), which runs after this
-/// setup.
+/// setup. A bodyless optional method emits nothing, so it keeps what the slot
+/// holds, such as a subclass method's closure.
 fn redeclares_uninitialized_slot(
     field: &crate::TypedClassField,
     inherited: &BTreeSet<String>,
 ) -> bool {
-    field.optional && !field.auto_assigned && inherited.contains(&field.name.name)
+    field.optional
+        && !field.auto_assigned
+        && !field.method_signature
+        && inherited.contains(&field.name.name)
 }
 
 /// Export/linker field name of a class's vtable-singleton global. The space in
