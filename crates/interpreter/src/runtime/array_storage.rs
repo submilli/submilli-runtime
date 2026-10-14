@@ -159,6 +159,34 @@ impl ArrayStorage {
         self.set_len(caller, len)
     }
 
+    /// Resize a dense array under the GC allocator's memory cap. New slots
+    /// hold the supplied missing value; removed slots release their references.
+    pub fn resize(
+        &mut self,
+        caller: &mut Caller<'_, StoreData>,
+        length: usize,
+        missing: Val,
+    ) -> wasmtime::Result<()> {
+        let length = checked_length(length)?;
+        fuel::charge(
+            &mut *caller,
+            fuel::ELEM,
+            u64::from(self.len.abs_diff(length)),
+        )?;
+        self.reserve(caller, length)?;
+        for index in self.len..length {
+            self.backing
+                .set(&mut *caller, index, missing)
+                .map_err(fatal_host_error)?;
+        }
+        for index in length..self.len {
+            self.backing
+                .set(&mut *caller, index, Val::null_any_ref())
+                .map_err(fatal_host_error)?;
+        }
+        self.set_len(caller, length)
+    }
+
     /// Writes `elements` over the first `elements.len()` slots, keeping any
     /// elements past them and growing the array if it is shorter. This is how
     /// `Array#sort` writes back: elements its comparator appended survive.
