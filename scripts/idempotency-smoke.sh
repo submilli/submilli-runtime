@@ -6,10 +6,10 @@
 #   scripts/idempotency-smoke.sh [path-to-submilli-server] [--slow]
 #
 # The integration suite drives an in-process axum router with an in-memory
-# ledger. That cannot reach the things this feature actually promises: fsync
-# ordering on a real filesystem, a reservation surviving `kill -9`, a client
-# hanging up mid-execution, or two writers racing into a session directory that
-# does not exist yet. Those need processes, so they live here.
+# database. That cannot reach the things this feature actually promises: a
+# reservation in the SQLite file surviving `kill -9`, a client hanging up
+# mid-execution, or two first writers racing into one session. Those need
+# processes, so they live here.
 #
 # Every program calls a mock HTTP server, so the mock's hit count *is* the
 # number of executions — no inferring "it did not run again" from a response
@@ -31,6 +31,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVER_BIN="${SERVER_BIN:-${REPO_ROOT}/target/debug/submilli-server}"
 
 STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/submilli-idem-XXXXXX")"
+DATABASE="${STATE_DIR}/db/submilli.db"
 SERVER_PID=""
 MOCK_PID=""
 SERVER_PORT=""
@@ -40,8 +41,6 @@ FAILURES=0
 cleanup() {
     [[ -n "$SERVER_PID" ]] && kill -9 "$SERVER_PID" 2>/dev/null || true
     [[ -n "$MOCK_PID" ]] && kill -9 "$MOCK_PID" 2>/dev/null || true
-    # Restored in case a check left it read-only and died before its own repair.
-    chmod -R u+rwX "$STATE_DIR" 2>/dev/null || true
     rm -rf "$STATE_DIR"
 }
 trap cleanup EXIT
@@ -61,8 +60,6 @@ try:
     print(json.load(sys.stdin).get(sys.argv[1], ""))
 except Exception:
     print("")' "$1"; }
-
-hex_of() { python3 -c 'import sys; print(sys.argv[1].encode().hex())' "$1"; }
 
 # ---------------------------------------------------------------- mock server
 
@@ -157,6 +154,8 @@ start_server() {
     SUBMILLI_SERVER_TOKEN="$SERVER_TOKEN" \
     SUBMILLI_BIND=127.0.0.1 \
     SUBMILLI_PORT="$SERVER_PORT" \
+    SUBMILLI_HOME="${STATE_DIR}/home" \
+    SUBMILLI_DATABASE_PATH="$DATABASE" \
     SUBMILLI_SESSION_STORE_DIR="${STATE_DIR}/sessions" \
     SUBMILLI_BLUEPRINT_DIR="${STATE_DIR}/blueprints" \
     SUBMILLI_VFS_SESSION_DIR="${STATE_DIR}/vfs" \
@@ -245,9 +244,15 @@ function main(): string {
   return r.body;
 }' "$MOCK_PORT" "$1" "$MOCK_PORT"; }
 
-ledger_dir() { printf '%s/sessions/idempotency/%s' "$STATE_DIR" "$(hex_of "$1")"; }
+# Reads the server's `idempotent_requests` table while it runs. Session ids are
+# UUIDs from the server, so they are safe to splice into the query.
+ledger_query() { sqlite3 -readonly -cmd '.timeout 5000' "$DATABASE" "$1" || true; }
+ledger_entries() { ledger_query "SELECT count(*) FROM idempotent_requests WHERE session_id='$1'"; }
+ledger_state() { ledger_query "SELECT state FROM idempotent_requests WHERE session_id='$1'"; }
 
 # ---------------------------------------------------------------- setup
+
+command -v sqlite3 >/dev/null || { printf 'the sqlite3 CLI is required to read the ledger\n' >&2; exit 1; }
 
 [[ -x "$SERVER_BIN" ]] || {
     printf 'no server binary at %s\n\nBuild one with:\n  cargo build -p submilli-server\n' \
@@ -289,10 +294,9 @@ else
     fail "expected 404 after the reaper ran, got $(status_of "$resp"): $(body_of "$resp")"
 fi
 
-step "2. Two first writes racing into one new session directory"
-# The root-fsync rework: both writers must end up durable, not just whichever
-# one created the directory. Reverting it passes every automated test, so this
-# is the only check that exercises the concurrent path at all.
+step "2. Two first writes racing into one new session"
+# Both writers must end up recorded, not just whichever reached the session
+# first.
 mock_reset
 sid=$(open_session smoke)
 execute "$sid" "race:a" "$(hitter)" >"${STATE_DIR}/race-a.out" &
@@ -302,7 +306,7 @@ pid_b=$!
 wait "$pid_a" "$pid_b"
 a_status=$(head -1 "${STATE_DIR}/race-a.out")
 b_status=$(head -1 "${STATE_DIR}/race-b.out")
-entries=$(ls "$(ledger_dir "$sid")" 2>/dev/null | grep -c '\.json$' || true)
+entries=$(ledger_entries "$sid")
 if [[ "$a_status" == "200" && "$b_status" == "200" && "$entries" == "2" ]]; then
     ok "both concurrent first writes landed (${entries} ledger entries)"
 else
@@ -363,15 +367,15 @@ until [[ "$(mock_hits)" == "1" ]]; do
     ((SECONDS < deadline)) || { fail "program never reached the mock before the crash"; break; }
     sleep 0.2
 done
-before=$(cat "$(ledger_dir "$sid")"/*.json 2>/dev/null | json_field state || true)
+before=$(ledger_state "$sid")
 crash_server
 start_server
 resp=$(execute "$sid" "crash:1" "$(holder 20)")
 hits=$(mock_hits)
-if [[ "$(error_of "$resp")" == "idempotency_incomplete" && "$hits" == "1" ]]; then
-    ok "reservation survived SIGKILL as '${before:-reserved}'; retry refused, nothing re-ran"
+if [[ "$before" == "reserved" && "$(error_of "$resp")" == "idempotency_incomplete" && "$hits" == "1" ]]; then
+    ok "reservation survived SIGKILL as 'reserved'; retry refused, nothing re-ran"
 else
-    fail "crash: error=$(error_of "$resp") hits=${hits} (want idempotency_incomplete / 1)"
+    fail "crash: before=${before} error=$(error_of "$resp") hits=${hits} (want reserved / idempotency_incomplete / 1)"
 fi
 
 step "6. A retry after the original finished replays byte for byte"
@@ -446,7 +450,7 @@ try:
     print((json.load(sys.stdin).get("error") or {}).get("kind", ""))
 except Exception:
     print("")')
-entries=$(ls -A "$(ledger_dir "$sid")" 2>/dev/null | grep -c '\.json$' || true)
+entries=$(ledger_entries "$sid")
 # Reusing the key with *different* code is the discriminator: had the failure
 # been recorded, this would be a 409 conflict. Running proves the key is free.
 resp=$(execute "$sid" "predispatch:1" "$(hitter)")
@@ -461,30 +465,19 @@ fi
 step "11. Deleting a session purges its ledger"
 sid=$(open_session smoke)
 execute "$sid" "purge:1" "$(hitter)" >/dev/null
-[[ -d "$(ledger_dir "$sid")" ]] || fail "no ledger directory to purge"
+before=$(ledger_entries "$sid")
 api_curl -sf -X DELETE "${BASE}/v1/sessions/${sid}" >/dev/null
-if [[ ! -d "$(ledger_dir "$sid")" ]]; then
-    ok "ledger directory removed with the session"
+after=$(ledger_entries "$sid")
+if [[ "$before" == "1" && "$after" == "0" ]]; then
+    ok "ledger entries removed with the session"
 else
-    fail "ledger directory survived the delete"
+    fail "purge: entries before=${before} after=${after} (want 1 / 0)"
 fi
 
-step "12. A ledger the server cannot write refuses rather than running"
-if [[ "$(id -u)" == "0" ]]; then
-    skip "running as root; permission bits would not be enforced"
-else
-    mock_reset
-    sid=$(open_session smoke)
-    chmod 0500 "${STATE_DIR}/sessions/idempotency"
-    resp=$(execute "$sid" "readonly:1" "$(hitter)")
-    chmod 0700 "${STATE_DIR}/sessions/idempotency"
-    hits=$(mock_hits)
-    if [[ "$(error_of "$resp")" == "idempotency_unavailable" && "$hits" == "0" ]]; then
-        ok "refused with idempotency_unavailable, nothing executed"
-    else
-        fail "read-only ledger: error=$(error_of "$resp") hits=${hits} (want idempotency_unavailable / 0)"
-    fi
-fi
+# The server holds the SQLite file open, so permission bits set while it runs
+# cannot make the ledger unwritable. `idempotency/fault_tests.rs` injects the
+# storage failures that answer `idempotency_unavailable`.
+skip "12. unwritable ledger (covered in-process by idempotency/fault_tests.rs)"
 
 # ================================================================ result
 
