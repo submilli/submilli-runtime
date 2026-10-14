@@ -978,7 +978,7 @@ impl Inferer<'_> {
     }
 
     /// Whether the discriminant is a `typeof` value: the expression itself, or
-    /// a local declared with its type. That type lists every tag whatever the
+    /// a binding declared with its type (all eight tags, however written). That type lists every tag whatever the
     /// operand is, even once narrowing removes some, so a switch on it need
     /// list only the tags its operand can have.
     fn reads_typeof_value(&self, typed_disc: ExprId) -> Result<bool, CompilerFailure> {
@@ -993,14 +993,32 @@ impl Inferer<'_> {
         let Some(path) = self.expr_to_reference_path(disc_expr)? else {
             return Ok(false);
         };
-        let narrowing::BindingId::Local { name, .. } = &path.root else {
+        if !path.chain.is_empty() {
             return Ok(false);
-        };
-        Ok(path.chain.is_empty()
-            && self
+        }
+        let declared = match &path.root {
+            narrowing::BindingId::Local { name, decl_scope } => self
                 .scopes
-                .get(name)
-                .is_some_and(|entry| *entry.write_type().peel() == tags))
+                .get_binding(name, *decl_scope)
+                .map(super::scopes::ScopeEntry::write_type),
+            narrowing::BindingId::Global(mangled) => self.global_declared_type(mangled),
+            _ => None,
+        };
+        Ok(declared.is_some_and(|ty| *ty.peel() == tags))
+    }
+
+    /// The declared type of the module `let` or `const` named `mangled`.
+    fn global_declared_type(&self, mangled: &crate::MangledName) -> Option<&Type> {
+        self.top_symbols
+            .values()
+            .find_map(|symbol| match &symbol.kind {
+                crate::ValueKind::Const { ty, .. } | crate::ValueKind::Let { ty, .. }
+                    if &symbol.mangled_name == mangled =>
+                {
+                    Some(ty)
+                }
+                _ => None,
+            })
     }
 
     /// The values the discriminant was already known not to hold.
