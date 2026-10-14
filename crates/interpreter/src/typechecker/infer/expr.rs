@@ -9822,6 +9822,7 @@ impl Inferer<'_> {
             let operand_ty = self
                 .lookup_narrowed_view(&path)
                 .map_or_else(|| entry.ty.clone(), |view| view.narrowed_ty.clone());
+            self.record_postfix_operand(&target, &operand_ty);
             if !takes_postfix(&operand_ty) {
                 self.error(
                     target.span,
@@ -10094,6 +10095,13 @@ impl Inferer<'_> {
 
     /// `g++` on a module global — shared by a module `let` and by a writable
     /// static field, which is the same global under a mangled key.
+    fn record_postfix_operand(&mut self, name: &Ident, operand_ty: &Type) {
+        self.typed_ast.postfix_operand_types.insert(
+            (name.span.file.0, name.span.start, name.span.end),
+            operand_ty.clone(),
+        );
+    }
+
     fn postfix_on_global(
         &mut self,
         op: crate::PostfixOp,
@@ -10107,6 +10115,7 @@ impl Inferer<'_> {
         let operand_ty = self
             .lookup_narrowed_view(&path)
             .map_or_else(|| ty.clone(), |view| view.narrowed_ty.clone());
+        self.record_postfix_operand(&name, &operand_ty);
         if !takes_postfix(&operand_ty) {
             self.error(
                     name.span,

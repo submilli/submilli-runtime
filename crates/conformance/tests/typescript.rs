@@ -44,7 +44,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use interpreter::{ExprId, Span, StmtId, Type, TypedAst, TypedExprKind, TypedStmtKind};
+use interpreter::{
+    ExprId, PostfixTarget, Span, StmtId, Type, TypedAst, TypedExprKind, TypedStmtKind,
+};
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -780,6 +782,7 @@ fn bindings(
             _ => {}
         }
     }
+    out.extend(postfix_operands(typed, reachable));
     for (span, ty, _) in &mut out {
         if let Some(authored) =
             typed
@@ -790,6 +793,32 @@ fn bindings(
         }
     }
     out
+}
+
+/// The binding a postfix `++`/`--` updates, at the narrowed type it reads the
+/// binding at. The target itself records the declared type it writes back.
+fn postfix_operands(
+    typed: &TypedAst,
+    reachable: &typed_reachability::Reachable,
+) -> Vec<(Span, Type, bool)> {
+    (0..typed.exprs_len())
+        .filter_map(|i| {
+            let id = ExprId(i as u32);
+            let TypedExprKind::PostfixUnary { target, .. } = &typed.try_expr(id).unwrap().kind
+            else {
+                return None;
+            };
+            let span = match target {
+                PostfixTarget::Local { ident, .. } => ident.span,
+                PostfixTarget::Global { name, .. } => name.span,
+                PostfixTarget::Field { .. } | PostfixTarget::Index { .. } => return None,
+            };
+            let ty = typed
+                .postfix_operand_types
+                .get(&(span.file.0, span.start, span.end))?;
+            Some((span, ty.clone(), reachable.expressions.contains(&id)))
+        })
+        .collect()
 }
 
 /// `tsc`'s entries from a `.types` baseline, keyed by line in the case.

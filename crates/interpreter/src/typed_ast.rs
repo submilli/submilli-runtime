@@ -902,6 +902,9 @@ pub struct TypedAst {
     pub authored_arguments: std::collections::BTreeMap<(u32, u32, u32), Vec<ExprId>>,
     /// Parameter declaration types before optional/default ABI input widening.
     pub authored_parameter_types: std::collections::BTreeMap<(u32, u32, u32), Type>,
+    /// The type a binding's postfix `++`/`--` reads it at, keyed by the name's
+    /// span: its narrowed type, where the target records the declared one.
+    pub postfix_operand_types: std::collections::BTreeMap<(u32, u32, u32), Type>,
     /// Synthetic reads of incoming arguments before a parameter becomes initialized.
     pub parameter_inputs: std::collections::BTreeSet<ExprId>,
     /// Callee prologue statements that initialize parameters and pattern bindings.

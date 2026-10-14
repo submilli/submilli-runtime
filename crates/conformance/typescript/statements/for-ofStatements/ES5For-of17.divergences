@@ -1,4 +1,4 @@
-types: 7 of 11 tsc entries compared, 3 differ
+types: 8 of 11 tsc entries compared, 4 differ
 
 line 4: [v]
   tsc:  any[]
@@ -9,5 +9,9 @@ line 5: x
   ours: never
 
 line 5: v
+  tsc:  any
+  ours: never
+
+line 6: v
   tsc:  any
   ours: never

@@ -1,1 +1,1 @@
-line 4, 5 type: artifact the inner `v` is read in its own initializer, which tsc types as `any` for the circular reference
+line 4, 5, 6 type: artifact the inner `v` is read in its own initializer, which tsc types as `any` for the circular reference
