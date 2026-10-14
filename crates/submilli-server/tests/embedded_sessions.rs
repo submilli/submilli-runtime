@@ -12,6 +12,7 @@ use interpreter::RuntimeConfig;
 use submilli_blueprint::VarBindings;
 use submilli_server::audit::AuditConfig;
 use submilli_server::blueprint::InMemoryBlueprintStore;
+use submilli_server::database::ServerDatabase;
 use submilli_server::error::ErrorKind;
 use submilli_server::handlers::execute::ExecuteResponse;
 use submilli_server::record::{
@@ -19,7 +20,7 @@ use submilli_server::record::{
     SessionProgram, SessionRunError, SessionStart, SessionStartError, TestMode, TestRun,
     end_session, run_in_session, run_program, session_variables, start_session, test_program,
 };
-use submilli_server::session_store::{DurableSessionStore, InMemoryDurableSessionStore};
+use submilli_server::session_store::{DurableSessionStore, SqliteSessionStore};
 use submilli_server::{AppState, ServerConfig};
 
 /// `test.com/op` is allowed only for the user the session's `tenant` names.
@@ -190,7 +191,7 @@ fn server(runtime: RuntimeConfig) -> Server {
         ..in_memory_config::config()
     };
     Server {
-        state: AppState::new(config).expect("state"),
+        state: futures::executor::block_on(AppState::new(config)).expect("state"),
         runs,
         _dirs: dirs,
     }
@@ -402,16 +403,20 @@ async fn a_session_that_lost_its_required_secret_is_refused_naming_it() {
         InMemoryBlueprintStore::seed([submilli_blueprint::parse(SECRET_BLUEPRINT).unwrap()])
             .expect("seed"),
     );
-    let sessions: Arc<dyn DurableSessionStore> = Arc::new(InMemoryDurableSessionStore::default());
-    let build = || {
+    let database = Arc::new(ServerDatabase::open_ephemeral().await.expect("database"));
+    let dirs = tempfile::tempdir().expect("dirs");
+    let sessions = SqliteSessionStore::new(database.clone(), None, dirs.path().join("sessions"));
+    let build = || async {
         AppState::new(ServerConfig {
+            database: Some(database.clone()),
             blueprints: Some(blueprints.clone()),
-            session_store: Some(Arc::clone(&sessions)),
+            session_storage_root: Some(dirs.path().join("sessions")),
             ..in_memory_config::config()
         })
+        .await
         .expect("state")
     };
-    let state = build();
+    let state = build().await;
     let session = start_session(
         &state,
         SessionStart {
@@ -427,9 +432,9 @@ async fn a_session_that_lost_its_required_secret_is_refused_naming_it() {
     // does not.
     drop(state);
     let mut record = sessions.load(&session).await.unwrap().unwrap();
-    record.ephemeral_bindings = None;
+    record.sealed_bindings = None;
     sessions.put(record).await.unwrap();
-    let restarted = build();
+    let restarted = build().await;
     restarted.boot().await.expect("boot");
 
     let error = run_in(&restarted, &session, "function main(): void {}")

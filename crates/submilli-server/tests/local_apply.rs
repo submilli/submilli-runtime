@@ -18,7 +18,7 @@ use submilli_build::{
     ArtifactMetadata, ArtifactSource, write_package_artifact_with_docs_and_sources,
 };
 use submilli_server::blueprint::{
-    BlueprintStore, InMemoryBlueprintStore, StoreError, StoredBlueprint,
+    BlueprintStore, SqliteBlueprintStore, StoreError, StoredBlueprint,
 };
 use submilli_server::record::{FinishedRun, RunRecorder, RunRecorderFactory, RunStart};
 use submilli_server::{ApiToken, AppState, AuthConfig, Role, ServerConfig, app};
@@ -77,9 +77,9 @@ struct Server {
     dirs: tempfile::TempDir,
 }
 
-/// An in-memory blueprint store whose replacing writes can be made to fail, or held.
+/// A SQLite blueprint store whose replacing writes can be made to fail, or held.
 struct Flaky {
-    inner: InMemoryBlueprintStore,
+    inner: SqliteBlueprintStore,
     fail: AtomicBool,
     /// The next replacing write announces itself on `entered` and waits for a
     /// `release` permit.
@@ -91,7 +91,15 @@ struct Flaky {
 impl Default for Flaky {
     fn default() -> Self {
         Self {
-            inner: InMemoryBlueprintStore::default(),
+            inner: SqliteBlueprintStore::new(
+                Arc::new(
+                    futures::executor::block_on(
+                        submilli_server::database::ServerDatabase::open_ephemeral(),
+                    )
+                    .expect("database"),
+                ),
+                None,
+            ),
             fail: AtomicBool::new(false),
             hold_next: AtomicBool::new(false),
             entered: tokio::sync::Notify::new(),
@@ -102,6 +110,9 @@ impl Default for Flaky {
 
 #[async_trait::async_trait]
 impl BlueprintStore for Flaky {
+    fn database(&self) -> Option<Arc<submilli_server::database::ServerDatabase>> {
+        self.inner.database()
+    }
     async fn add_yaml(&self, stored: StoredBlueprint) -> Result<(), StoreError> {
         self.inner.add_yaml(stored).await
     }
@@ -148,7 +159,7 @@ impl Server {
                 ApiToken::new("operator", Role::Admin, ADMIN_TOKEN).expect("token"),
             ]),
             session_storage_root: Some(dirs.path().join("sessions")),
-            session_store_dir: Some(dirs.path().join("store")),
+            database_path: Some(dirs.path().join("server.db")),
             package_store_root: Some(dirs.path().join("packages")),
             managed_volume_root: Some(dirs.path().join("volumes")),
             run_recorder: Some(Arc::new(Factory(Arc::clone(&runs)))),
@@ -162,7 +173,7 @@ impl Server {
             None => config,
         };
         Self {
-            state: AppState::new(config).expect("state"),
+            state: futures::executor::block_on(AppState::new(config)).expect("state"),
             runs,
             dirs,
         }

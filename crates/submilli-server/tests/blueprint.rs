@@ -15,7 +15,10 @@ use submilli_server::{AppState, ServerConfig, app};
 use tower::ServiceExt;
 
 fn router() -> Router {
-    app(AppState::new(in_memory_config::config()).expect("build AppState"))
+    app(
+        futures::executor::block_on(AppState::new(in_memory_config::config()))
+            .expect("build AppState"),
+    )
 }
 
 /// Router over pre-parsed blueprints, bypassing the HTTP add path (and its
@@ -25,10 +28,10 @@ fn seeded_router(yamls: &[&str]) -> Router {
         .iter()
         .map(|yaml| submilli_blueprint::parse(yaml).expect("valid blueprint"));
     let store = Arc::new(InMemoryBlueprintStore::seed(blueprints).expect("seed blueprints"));
-    app(AppState::new(ServerConfig {
+    app(futures::executor::block_on(AppState::new(ServerConfig {
         blueprints: Some(store),
         ..in_memory_config::config()
-    })
+    }))
     .expect("build AppState"))
 }
 
@@ -45,35 +48,35 @@ fn router_with_volumes(names: &[&str]) -> Router {
             )
         })
         .collect();
-    app(AppState::new(ServerConfig {
+    app(futures::executor::block_on(AppState::new(ServerConfig {
         volumes,
         ..in_memory_config::config()
-    })
+    }))
     .expect("build AppState"))
 }
 
 /// Router over a store that already holds a blueprint in a form this binary no longer
 /// accepts — the on-disk shape a pre-upgrade server left behind.
-fn router_over_retired_form(dir: &std::path::Path) -> Router {
-    std::fs::write(
-        dir.join("tenant-alpha.000001.yaml"),
-        "name: tenant-alpha\nvfs:\n  mode: persistent\n  volume: tenant-alpha\n",
-    )
-    .expect("plant revision");
-    std::fs::write(
-        dir.join("index.json"),
-        json!({ "tenant-alpha": 1 }).to_string(),
-    )
-    .expect("plant index");
-    let store = Arc::new(
-        submilli_server::blueprint::FileBlueprintStore::new(dir.to_path_buf())
-            .expect("boots with a retired-form revision"),
-    );
-    app(AppState::new(ServerConfig {
-        blueprints: Some(store),
-        ..in_memory_config::config()
+fn router_over_retired_form(_dir: &std::path::Path) -> Router {
+    futures::executor::block_on(async {
+        let database = Arc::new(
+            submilli_server::database::ServerDatabase::open_ephemeral()
+                .await
+                .unwrap(),
+        );
+        database.transaction(|connection| Box::pin(async move {
+            sqlx::query("INSERT INTO blueprint_revisions(name,revision,yaml) VALUES ('tenant-alpha',1,?)")
+                .bind("name: tenant-alpha\nvfs:\n  mode: persistent\n  volume: tenant-alpha\n").execute(&mut *connection).await?;
+            sqlx::query("INSERT INTO blueprints(name,current_revision) VALUES ('tenant-alpha',1)").execute(connection).await?;
+            Ok(())
+        })).await.unwrap();
+        app(AppState::new(ServerConfig {
+            database: Some(database),
+            ..in_memory_config::config()
+        })
+        .await
+        .unwrap())
     })
-    .expect("build AppState"))
 }
 
 /// The reservation is only half a fix if any route still says "unknown blueprint":
@@ -794,6 +797,7 @@ async fn registration_rejects_missing_packages() {
         package_fallback_root: Some(fallback.path().to_path_buf()),
         ..in_memory_config::config()
     })
+    .await
     .expect("state"));
     let (status, body) = post(
         &router,
@@ -863,6 +867,7 @@ async fn registration_checks_dependency_requirements_and_preserves_existing_blue
         package_fallback_root: Some(fallback.path().to_path_buf()),
         ..in_memory_config::config()
     })
+    .await
     .expect("state"));
     let original = json!({"yaml": "name: demo\n"});
     assert_eq!(

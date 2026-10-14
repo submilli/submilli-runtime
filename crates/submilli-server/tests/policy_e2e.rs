@@ -35,7 +35,7 @@ fn router(policy_yaml: &str, package_store_root: Option<&Path>) -> Router {
         package_store_root: package_store_root.map(Path::to_path_buf),
         ..in_memory_config::config()
     };
-    app(AppState::new(config).expect("build AppState"))
+    app(futures::executor::block_on(AppState::new(config)).expect("build AppState"))
 }
 
 async fn send(router: Router, code: &str) -> (StatusCode, Value) {
@@ -696,6 +696,7 @@ async fn an_uncaught_policy_denial_over_mcp_is_a_permission_denied_error() {
         blueprints: Some(blueprints),
         ..ServerConfig::default()
     })
+    .await
     .expect("build AppState");
 
     let post = |body: Value, session: Option<String>| {

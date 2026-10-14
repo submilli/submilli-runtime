@@ -20,7 +20,7 @@ struct Harness {
 }
 
 impl Harness {
-    fn new() -> Self {
+    async fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
         let audit_path = root.path().join("audit.log");
         let factory = Arc::new(|_, _, _| {
@@ -49,6 +49,7 @@ impl Harness {
             },
             factory,
         )
+        .await
         .unwrap();
         Self {
             state,
@@ -119,7 +120,7 @@ impl Harness {
 
 #[tokio::test]
 async fn rest_setup_failure_is_a_runtime_error_audited_under_the_response_id() {
-    let harness = Harness::new();
+    let harness = Harness::new().await;
     let (status, _, body) = harness
         .post(
             "/v1/execute",
@@ -136,7 +137,7 @@ async fn rest_setup_failure_is_a_runtime_error_audited_under_the_response_id() {
 
 #[tokio::test]
 async fn mcp_setup_failure_is_internal_and_audited_under_the_error_id() {
-    let harness = Harness::new();
+    let harness = Harness::new().await;
     let initialize = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
         "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "setup-test", "version": "0"}
     }});

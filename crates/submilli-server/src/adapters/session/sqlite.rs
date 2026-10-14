@@ -11,6 +11,10 @@ pub struct SqliteSessionStore {
 }
 
 impl SqliteSessionStore {
+    pub(crate) fn database_owner(&self) -> Arc<ServerDatabase> {
+        self.database.clone()
+    }
+
     pub fn new(
         database: Arc<ServerDatabase>,
         source: Option<PathBuf>,
@@ -31,13 +35,18 @@ impl DurableSessionStore for SqliteSessionStore {
     }
 
     fn durable(&self) -> bool {
-        true
+        !self.database.is_ephemeral()
     }
 
     async fn initialize(&self) -> Result<(), StoreError> {
         let Some(source) = self.source.clone() else {
             return Ok(());
         };
+        if self.database.is_ephemeral() {
+            return Err(StoreError::Io(
+                "session directory import requires a persistent database".into(),
+            ));
+        }
         let root = self.workspace_root.clone();
         let database_path = self.database.path().to_path_buf();
         let import_source = source.clone();
@@ -478,37 +487,10 @@ fn archive_directory(
     if parent.try_exists().map_err(import_io)? {
         sync_directory_ancestry(parent)?;
     }
-    restore_idempotency_ledger(source, &destination)?;
     if source.try_exists().map_err(import_io)? {
         sync_directory_ancestry(source)?;
     }
     Ok(())
-}
-
-fn restore_idempotency_ledger(source: &Path, archive: &Path) -> Result<(), DatabaseError> {
-    let archived_ledger = archive.join("idempotency");
-    match fs::symlink_metadata(&archived_ledger) {
-        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
-        Ok(_) => {
-            return Err(DatabaseError::Import(
-                "invalid archived idempotency directory".into(),
-            ));
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(import_io(error)),
-    }
-    fs::create_dir_all(source).map_err(import_io)?;
-    let active_ledger = source.join("idempotency");
-    // App construction may create an empty ledger root before import. Never
-    // replace nonempty state if a prior restore or another process wrote it.
-    match fs::remove_dir(&active_ledger) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(import_io(error)),
-    }
-    crate::import_archive::move_directory(&archived_ledger, &active_ledger).map_err(import_io)?;
-    sync_directory_ancestry(archive)?;
-    sync_directory_ancestry(&active_ledger)
 }
 
 fn validate_archive_paths(
@@ -865,7 +847,7 @@ mod tests {
         store.initialize().await.unwrap();
         assert!(!path.exists());
         assert_eq!(
-            fs::read(source.join("idempotency/entry")).unwrap(),
+            fs::read(root.path().join("archive/sessions/idempotency/entry")).unwrap(),
             b"ledger"
         );
         assert_eq!(
@@ -876,7 +858,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn relative_source_directory_is_archived_with_ledger_recovery() {
+    async fn relative_source_directory_archives_legacy_ledger_without_restoring_it() {
         let cwd = std::env::current_dir().unwrap();
         let root = tempfile::tempdir_in(&cwd).unwrap();
         let database = database(root.path()).await;
@@ -898,7 +880,7 @@ mod tests {
         store.initialize().await.unwrap();
         assert!(root.path().join("archive/sessions/one.json").exists());
         assert_eq!(
-            fs::read(source.join("idempotency/entry")).unwrap(),
+            fs::read(root.path().join("archive/sessions/idempotency/entry")).unwrap(),
             b"ledger"
         );
         database.close().await.unwrap();
@@ -937,7 +919,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn interrupted_ledger_restore_preserves_existing_entries() {
+    async fn archived_legacy_ledger_stays_archived() {
         let root = tempfile::tempdir().unwrap();
         let database = database(root.path()).await;
         let source = root.path().join("sessions");
@@ -954,10 +936,10 @@ mod tests {
         store.initialize().await.unwrap();
         store.initialize().await.unwrap();
         assert_eq!(
-            fs::read(source.join("idempotency/entry")).unwrap(),
+            fs::read(root.path().join("archive/sessions/idempotency/entry")).unwrap(),
             b"ledger"
         );
-        assert!(!archived.exists());
+        assert!(archived.exists());
         database.close().await.unwrap();
     }
 
@@ -1079,7 +1061,6 @@ mod tests {
             Arc::default(),
             Arc::new(|| panic!("test does not use HTTP")),
             store,
-            Arc::new(crate::idempotency_store::InMemoryIdempotencyStore::default()),
             crate::session_manager::CapabilitySettings::default(),
         )
     }

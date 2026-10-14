@@ -25,11 +25,11 @@ fn configured(path: std::path::PathBuf, allows: Allows, policy: &str) -> AppStat
     let blueprints = Arc::new(
         InMemoryBlueprintStore::seed([submilli_blueprint::parse(policy).unwrap()]).unwrap(),
     );
-    AppState::new(ServerConfig {
+    futures::executor::block_on(AppState::new(ServerConfig {
         blueprints: Some(blueprints),
         audit,
         ..Default::default()
-    })
+    }))
     .unwrap()
 }
 
@@ -42,7 +42,7 @@ fn configured_with_package(
     let blueprints = Arc::new(
         InMemoryBlueprintStore::seed([submilli_blueprint::parse(policy).unwrap()]).unwrap(),
     );
-    AppState::new(ServerConfig {
+    futures::executor::block_on(AppState::new(ServerConfig {
         blueprints: Some(blueprints),
         package_store_root: Some(package_store_root),
         audit: AuditConfig {
@@ -51,7 +51,7 @@ fn configured_with_package(
             ..Default::default()
         },
         ..Default::default()
-    })
+    }))
     .unwrap()
 }
 
@@ -338,7 +338,7 @@ async fn auth_refusals_have_safe_metadata_and_never_the_token() {
         },
         ..Default::default()
     };
-    let router = app(AppState::new(config).unwrap());
+    let router = app(AppState::new(config).await.unwrap());
     let response = router
         .clone()
         .oneshot(
@@ -457,6 +457,7 @@ async fn shared_output_records_remain_whole_under_concurrent_runs() {
         blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]).unwrap())),
         ..Default::default()
     })
+    .await
     .unwrap();
     let router = app(state);
     let mut tasks = Vec::new();
@@ -509,6 +510,7 @@ async fn invariant_egress_and_quota_decisions_log_only_their_check_context() {
         },
         ..Default::default()
     })
+    .await
     .unwrap();
     let router = app(state);
     let programs = [

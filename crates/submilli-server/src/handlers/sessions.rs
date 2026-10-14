@@ -23,10 +23,10 @@ use submilli_blueprint::{
 };
 
 use crate::app::{AppState, BlueprintForRun};
+use crate::domain::idempotent_request::RecordedOutcome;
 use crate::domain::tools::{DeclaredTool, SessionTools};
 use crate::handlers::execute::{self, ExecuteInputs, SESSION_HEADER, blueprint_miss_message};
 use crate::idempotency::{Refusal, Reservation, ReservationGuard};
-use crate::idempotency_store::RecordedOutcome;
 use crate::record::{SessionRunError, SessionStartError};
 
 /// Opt-in replay guard on the session execute endpoint. Named to match the

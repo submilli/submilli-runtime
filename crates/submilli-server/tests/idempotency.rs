@@ -10,6 +10,8 @@
 #[path = "common/in_memory_config.rs"]
 mod in_memory_config;
 
+#[path = "support/request_records.rs"]
+mod request_records;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -21,12 +23,9 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
+use request_records::{Record as LedgerEntry, RequestRecords, code_fingerprint};
 use serde_json::{Value, json};
 use submilli_server::blueprint::InMemoryBlueprintStore;
-use submilli_server::idempotency_store::{
-    FileIdempotencyStore, IdempotencyStore, InMemoryIdempotencyStore, LedgerEntry, code_fingerprint,
-};
-use submilli_server::session_store::{DurableSessionStore, InMemoryDurableSessionStore};
 use submilli_server::{AppState, ServerConfig, app};
 use tower::ServiceExt;
 
@@ -131,16 +130,17 @@ function main(): string {{
     )
 }
 
-fn router_with_ledger() -> (Router, Arc<dyn IdempotencyStore>) {
-    let ledger: Arc<dyn IdempotencyStore> = Arc::new(InMemoryIdempotencyStore::default());
+async fn router_with_ledger() -> (Router, Arc<RequestRecords>) {
+    let ledger: Arc<RequestRecords> = Arc::new(RequestRecords::ephemeral());
     let blueprint = submilli_blueprint::parse(POLICY).expect("valid blueprint");
     let state = AppState::new(ServerConfig {
         blueprints: Some(Arc::new(
             InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
         )),
-        idempotency_store: Some(Arc::clone(&ledger)),
+        database: Some(ledger.database.clone()),
         ..in_memory_config::config()
     })
+    .await
     .expect("build AppState");
     (app(state), ledger)
 }
@@ -196,7 +196,7 @@ async fn execute(
 #[tokio::test]
 async fn without_a_key_every_request_executes() {
     let mock = spawn_mock(false);
-    let (router, _ledger) = router_with_ledger();
+    let (router, _ledger) = router_with_ledger().await;
     let session = open_session(&router).await;
     let code = calls_mock(mock.port);
 
@@ -214,7 +214,7 @@ async fn without_a_key_every_request_executes() {
 #[tokio::test]
 async fn a_sequential_duplicate_runs_once_and_replays_byte_for_byte() {
     let mock = spawn_mock(false);
-    let (router, _ledger) = router_with_ledger();
+    let (router, _ledger) = router_with_ledger().await;
     let session = open_session(&router).await;
     let code = calls_mock(mock.port);
 
@@ -234,7 +234,7 @@ async fn a_sequential_duplicate_runs_once_and_replays_byte_for_byte() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_concurrent_duplicate_waits_for_the_original() {
     let mock = spawn_mock(true);
-    let (router, _ledger) = router_with_ledger();
+    let (router, _ledger) = router_with_ledger().await;
     let session = open_session(&router).await;
     let code = calls_mock(mock.port);
 
@@ -268,7 +268,7 @@ async fn a_concurrent_duplicate_waits_for_the_original() {
 #[tokio::test]
 async fn a_failing_program_replays_its_error_body_without_re_running() {
     let mock = spawn_mock(false);
-    let (router, _ledger) = router_with_ledger();
+    let (router, _ledger) = router_with_ledger().await;
     let session = open_session(&router).await;
     // Hits the mock, *then* fails: the mock is the execution counter, so byte
     // equality alone would hold even if the program ran twice. `readText` is
@@ -305,7 +305,7 @@ function main(): string {{
 #[tokio::test]
 async fn the_same_key_with_different_code_is_refused_without_executing() {
     let mock = spawn_mock(false);
-    let (router, _ledger) = router_with_ledger();
+    let (router, _ledger) = router_with_ledger().await;
     let session = open_session(&router).await;
     let code = calls_mock(mock.port);
 
@@ -329,7 +329,7 @@ async fn the_same_key_with_different_code_is_refused_without_executing() {
 #[tokio::test]
 async fn the_same_key_in_two_sessions_executes_in_each() {
     let mock = spawn_mock(false);
-    let (router, _ledger) = router_with_ledger();
+    let (router, _ledger) = router_with_ledger().await;
     let first_session = open_session(&router).await;
     let second_session = open_session(&router).await;
     let code = calls_mock(mock.port);
@@ -344,7 +344,7 @@ async fn the_same_key_in_two_sessions_executes_in_each() {
 
 #[tokio::test]
 async fn a_key_on_an_unknown_session_reports_the_unknown_session() {
-    let (router, ledger) = router_with_ledger();
+    let (router, ledger) = router_with_ledger().await;
 
     let (status, body) = execute(
         &router,
@@ -374,9 +374,9 @@ async fn a_key_on_an_unknown_session_reports_the_unknown_session() {
 async fn an_unbound_harness_secret_is_reported_before_the_key_is_considered() {
     const NEEDS_SECRET: &str = "name: needs-secret\ndefault: deny\nvfs: none\nsecrets:\n  TOKEN:\n    harness:\n      required: true\n";
 
-    let ledger: Arc<dyn IdempotencyStore> = Arc::new(InMemoryIdempotencyStore::default());
-    let sessions: Arc<dyn DurableSessionStore> = Arc::new(InMemoryDurableSessionStore::default());
-    let build = || {
+    let ledger: Arc<RequestRecords> = Arc::new(RequestRecords::ephemeral());
+    let session_root = tempfile::tempdir().expect("session root");
+    let build = async || {
         AppState::new(ServerConfig {
             blueprints: Some(Arc::new(
                 InMemoryBlueprintStore::seed([
@@ -384,14 +384,15 @@ async fn an_unbound_harness_secret_is_reported_before_the_key_is_considered() {
                 ])
                 .expect("seed blueprints"),
             )),
-            idempotency_store: Some(Arc::clone(&ledger)),
-            session_store: Some(Arc::clone(&sessions)),
+            database: Some(ledger.database.clone()),
+            session_storage_root: Some(session_root.path().to_owned()),
             ..in_memory_config::config()
         })
+        .await
         .expect("build AppState")
     };
 
-    let router = app(build());
+    let router = app(build().await);
     let req = Request::builder()
         .method("POST")
         .uri("/v1/sessions")
@@ -406,10 +407,23 @@ async fn an_unbound_harness_secret_is_reported_before_the_key_is_considered() {
 
     // Model legacy import: metadata survives, but no credential was persisted.
     drop(router);
-    let mut record = sessions.load(&session).await.unwrap().unwrap();
-    record.ephemeral_bindings = None;
-    sessions.put(record).await.unwrap();
-    let restarted_state = build();
+    let lost_credentials_session = session.clone();
+    ledger
+        .database
+        .transaction(move |connection| {
+            Box::pin(async move {
+                sqlx::query(
+                    "UPDATE sessions SET encrypted_harness_bindings=NULL WHERE session_id=?",
+                )
+                .bind(lost_credentials_session)
+                .execute(connection)
+                .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+    let restarted_state = build().await;
     restarted_state.boot().await.expect("boot");
     let restarted = app(restarted_state);
 
@@ -438,7 +452,7 @@ async fn an_unbound_harness_secret_is_reported_before_the_key_is_considered() {
 #[tokio::test]
 async fn an_empty_key_is_rejected_and_creates_no_entry() {
     let mock = spawn_mock(false);
-    let (router, ledger) = router_with_ledger();
+    let (router, ledger) = router_with_ledger().await;
     let session = open_session(&router).await;
 
     let (status, body) = execute(&router, &session, &calls_mock(mock.port), Some("")).await;
@@ -459,7 +473,7 @@ async fn an_empty_key_is_rejected_and_creates_no_entry() {
 #[tokio::test]
 async fn an_over_long_key_is_rejected() {
     let mock = spawn_mock(false);
-    let (router, _ledger) = router_with_ledger();
+    let (router, _ledger) = router_with_ledger().await;
     let session = open_session(&router).await;
     let too_long = "k".repeat(121);
 
@@ -480,7 +494,7 @@ async fn an_over_long_key_is_rejected() {
 
 #[tokio::test]
 async fn a_pre_dispatch_failure_leaves_no_entry_and_a_retry_runs_again() {
-    let ledger: Arc<dyn IdempotencyStore> = Arc::new(InMemoryIdempotencyStore::default());
+    let ledger: Arc<RequestRecords> = Arc::new(RequestRecords::ephemeral());
     // The blueprint lists a package that is not installed, so import resolution
     // fails before anything reaches the runner.
     let blueprint = submilli_blueprint::parse(
@@ -491,10 +505,11 @@ async fn a_pre_dispatch_failure_leaves_no_entry_and_a_retry_runs_again() {
         blueprints: Some(Arc::new(
             InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
         )),
-        idempotency_store: Some(Arc::clone(&ledger)),
+        database: Some(ledger.database.clone()),
         package_store_root: Some(tempfile::tempdir().unwrap().keep()),
         ..in_memory_config::config()
     })
+    .await
     .expect("build AppState");
     let router = app(state);
 
@@ -533,7 +548,7 @@ function main(): string { return thing(); }"#;
 #[tokio::test]
 async fn a_replay_leaves_last_run_reporting_the_most_recent_execution() {
     let mock = spawn_mock(false);
-    let (router, _ledger) = router_with_ledger();
+    let (router, _ledger) = router_with_ledger().await;
     let session = open_session(&router).await;
 
     execute(&router, &session, &calls_mock(mock.port), Some("k1")).await;
@@ -564,53 +579,35 @@ async fn a_replay_leaves_last_run_reporting_the_most_recent_execution() {
 
 // --- the durable store, end to end ------------------------------------------
 
-/// Every other test here injects the in-memory ledger, so the fsync/rename
-/// layer the whole design rests on would otherwise never run under the HTTP
-/// surface. This drives the real `FileIdempotencyStore` through the endpoint
-/// and reads the resulting tree back off disk.
+/// Exercise a file-backed SQLite database through the HTTP endpoint and inspect
+/// the committed outcome before requesting its replay.
 #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test]
-async fn the_file_backed_ledger_records_and_replays_through_the_endpoint() {
+async fn sqlite_records_and_replays_through_the_endpoint() {
     let mock = spawn_mock(false);
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("ledger");
-    let ledger: Arc<dyn IdempotencyStore> =
-        Arc::new(FileIdempotencyStore::new(root.clone()).expect("file ledger"));
+    let ledger: Arc<RequestRecords> = Arc::new(RequestRecords::file(&root.join("server.db")));
     let blueprint = submilli_blueprint::parse(POLICY).expect("valid blueprint");
     let router = app(AppState::new(ServerConfig {
         blueprints: Some(Arc::new(
             InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
         )),
-        idempotency_store: Some(Arc::clone(&ledger)),
+        database: Some(ledger.database.clone()),
         ..in_memory_config::config()
     })
+    .await
     .expect("build AppState"));
 
     let session = open_session(&router).await;
     let code = calls_mock(mock.port);
     let (_, first_body) = execute(&router, &session, &code, Some("k1")).await;
 
-    // One directory for the session, one file for the key, recorded as completed.
-    let entries: Vec<_> = std::fs::read_dir(
-        root.join(
-            std::fs::read_dir(&root)
-                .expect("store root")
-                .next()
-                .expect("a session directory")
-                .expect("readable")
-                .file_name(),
-        ),
-    )
-    .expect("session dir")
-    .filter_map(Result::ok)
-    .map(|e| e.path())
-    .collect();
-    assert_eq!(entries.len(), 1, "one entry file per key: {entries:?}");
-    let on_disk = std::fs::read_to_string(&entries[0]).expect("entry readable");
-    assert!(
-        on_disk.contains("\"state\": \"completed\""),
-        "the outcome must be durable, got: {on_disk}"
-    );
+    // Completion is stored in the shared database.
+    assert!(matches!(
+        ledger.load(&session, "k1").await.unwrap().unwrap().state,
+        submilli_server::domain::idempotent_request::RequestState::Completed(_)
+    ));
 
     let (_, second_body) = execute(&router, &session, &code, Some("k1")).await;
     assert_eq!(mock.hits(), 1, "the replay must come off disk, not re-run");
@@ -621,7 +618,7 @@ async fn the_file_backed_ledger_records_and_replays_through_the_endpoint() {
 #[tokio::test]
 async fn a_replay_carries_the_same_session_header_and_content_type() {
     let mock = spawn_mock(false);
-    let (router, _ledger) = router_with_ledger();
+    let (router, _ledger) = router_with_ledger().await;
     let session = open_session(&router).await;
     let code = calls_mock(mock.port);
 
@@ -664,14 +661,14 @@ async fn a_replay_carries_the_same_session_header_and_content_type() {
 #[tokio::test]
 async fn a_reservation_that_survived_a_restart_is_refused_as_indeterminate() {
     let mock = spawn_mock(false);
-    let (router, ledger) = router_with_ledger();
+    let (router, ledger) = router_with_ledger().await;
     let session = open_session(&router).await;
     let code = calls_mock(mock.port);
 
     // The shape a crash between reservation and outcome leaves behind: an entry
     // still in the `reserved` state with nothing live holding it.
     ledger
-        .put(LedgerEntry::reserved(
+        .put(LedgerEntry::indeterminate(
             &session,
             "k1",
             code_fingerprint(&code),
@@ -688,10 +685,10 @@ async fn a_reservation_that_survived_a_restart_is_refused_as_indeterminate() {
 
 #[tokio::test]
 async fn a_fingerprint_mismatch_against_an_indeterminate_entry_is_a_conflict() {
-    let (router, ledger) = router_with_ledger();
+    let (router, ledger) = router_with_ledger().await;
     let session = open_session(&router).await;
     ledger
-        .put(LedgerEntry::reserved(
+        .put(LedgerEntry::indeterminate(
             &session,
             "k1",
             code_fingerprint("some other program"),

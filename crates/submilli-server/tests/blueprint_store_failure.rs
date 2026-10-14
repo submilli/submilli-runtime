@@ -17,12 +17,12 @@ use serde_json::{Value, json};
 use submilli_blueprint::{Blueprint, VfsConfig};
 use submilli_server::{
     AppState, ServerConfig, app,
-    blueprint::{BlueprintStore, InMemoryBlueprintStore, StoreError, StoredBlueprint},
+    blueprint::{BlueprintStore, SqliteBlueprintStore, StoreError, StoredBlueprint},
 };
 use tower::ServiceExt;
 
 struct ControlledStore {
-    inner: InMemoryBlueprintStore,
+    inner: SqliteBlueprintStore,
     reads_left: AtomicUsize,
     fail_writes: AtomicBool,
     fail_parsed_reads: AtomicBool,
@@ -40,8 +40,17 @@ impl ControlledStore {
             },
             ..Blueprint::default()
         };
+        let database =
+            Arc::new(
+                futures::executor::block_on(
+                    submilli_server::database::ServerDatabase::open_ephemeral(),
+                )
+                .unwrap(),
+            );
+        let inner = SqliteBlueprintStore::new(database, None);
+        futures::executor::block_on(inner.add(blueprint)).unwrap();
         Self {
-            inner: InMemoryBlueprintStore::seed([blueprint]).unwrap(),
+            inner,
             reads_left: AtomicUsize::new(usize::MAX),
             fail_writes: AtomicBool::new(false),
             fail_parsed_reads: AtomicBool::new(false),
@@ -73,6 +82,9 @@ impl ControlledStore {
 
 #[async_trait::async_trait]
 impl BlueprintStore for ControlledStore {
+    fn database(&self) -> Option<Arc<submilli_server::database::ServerDatabase>> {
+        self.inner.database()
+    }
     async fn add_yaml(&self, stored: StoredBlueprint) -> Result<(), StoreError> {
         self.write()?;
         self.inner.add_yaml(stored).await
@@ -126,11 +138,11 @@ impl Harness {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
         let store = Arc::new(ControlledStore::new());
-        let state = AppState::new(ServerConfig {
+        let state = futures::executor::block_on(AppState::new(ServerConfig {
             blueprints: Some(store.clone()),
             session_storage_root: Some(root.path().into()),
             ..in_memory_config::config()
-        })
+        }))
         .unwrap();
         Self {
             router: app(state.clone()),
@@ -264,6 +276,9 @@ async fn rest_reads_report_internal_failure_and_recover() {
 async fn rest_writes_report_internal_failure_without_changing_store() {
     let harness = Harness::new();
     harness.store.fail_writes.store(true, Ordering::SeqCst);
+    harness.store.database().unwrap().transaction(|connection| Box::pin(async move {
+        sqlx::query("CREATE TRIGGER reject_delete BEFORE DELETE ON blueprints BEGIN SELECT RAISE(FAIL, 'injected'); END").execute(connection).await?; Ok(())
+    })).await.unwrap();
     for (method, route, body) in [
         (
             "POST",
@@ -287,6 +302,20 @@ async fn rest_writes_report_internal_failure_without_changing_store() {
     }
     assert_eq!(harness.store.inner.list().await.unwrap(), vec!["tenant"]);
     harness.store.fail_writes.store(false, Ordering::SeqCst);
+    harness
+        .store
+        .database()
+        .unwrap()
+        .transaction(|connection| {
+            Box::pin(async move {
+                sqlx::query("DROP TRIGGER reject_delete")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
     assert_eq!(
         harness
             .request(
@@ -475,11 +504,38 @@ async fn audit_metadata_read_failure_does_not_block_blueprint_deletion() {
 #[tokio::test]
 async fn authoritative_read_failure_blocks_blueprint_deletion() {
     let harness = Harness::new();
-    harness.store.reads_left.store(0, Ordering::SeqCst);
+    harness
+        .store
+        .database()
+        .unwrap()
+        .transaction(|connection| {
+            Box::pin(async move {
+                sqlx::query("ALTER TABLE blueprints RENAME TO unavailable_blueprints")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
     let (status, _, body) = harness
         .request("DELETE", "/v1/blueprints/tenant", Value::Null, None)
         .await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     assert!(!body.to_string().contains("injected private store detail"));
+    harness
+        .store
+        .database()
+        .unwrap()
+        .transaction(|connection| {
+            Box::pin(async move {
+                sqlx::query("ALTER TABLE unavailable_blueprints RENAME TO blueprints")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
     assert_eq!(harness.store.inner.list().await.unwrap(), ["tenant"]);
 }

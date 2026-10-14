@@ -30,7 +30,7 @@ fn router(yaml: &str, package_store_root: Option<&Path>) -> Router {
         package_store_root: package_store_root.map(Path::to_path_buf),
         ..in_memory_config::config()
     };
-    app(AppState::new(config).expect("build AppState"))
+    app(futures::executor::block_on(AppState::new(config)).expect("build AppState"))
 }
 
 async fn execute(router: Router, code: &str) -> Value {

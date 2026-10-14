@@ -59,7 +59,7 @@ async fn router(telemetry: RunTelemetry, blueprint: &str) -> axum::Router {
         network_policy: NetworkPolicy::deny_private().allow_localhost(true),
         ..in_memory_config::config()
     };
-    let router = app(AppState::new(config).expect("AppState"));
+    let router = app(AppState::new(config).await.expect("AppState"));
     let (status, body) = post(&router, "/v1/blueprints", json!({ "yaml": blueprint })).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     router

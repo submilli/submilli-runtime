@@ -51,9 +51,10 @@ fn router() -> Router {
     let blueprints = Arc::new(InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"));
     let config = ServerConfig {
         blueprints: Some(blueprints),
+        session_storage_root: Some(tempfile::tempdir().expect("sessions").keep()),
         ..in_memory_config::config()
     };
-    app(AppState::new(config).expect("build AppState"))
+    app(futures::executor::block_on(AppState::new(config)).expect("build AppState"))
 }
 
 /// Reports whether the bound `TOKEN` matches what the caller expected, without
@@ -102,11 +103,11 @@ fn secret_router(store_root: &Path) -> Router {
     )
     .expect("valid blueprint");
     let blueprints = Arc::new(InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"));
-    app(AppState::new(ServerConfig {
+    app(futures::executor::block_on(AppState::new(ServerConfig {
         blueprints: Some(blueprints),
         package_store_root: Some(store_root.to_path_buf()),
         ..in_memory_config::config()
-    })
+    }))
     .expect("build AppState"))
 }
 

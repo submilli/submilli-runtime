@@ -41,6 +41,7 @@ async fn open(root: &Path, with_key: bool) -> (Router, Arc<ServerDatabase>) {
         session_cipher: cipher,
         ..Default::default()
     })
+    .await
     .unwrap();
     state.boot().await.unwrap();
     (app(state), database)

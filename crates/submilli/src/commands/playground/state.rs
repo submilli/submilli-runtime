@@ -201,6 +201,10 @@ impl StateDir {
         self.root.join("tokens").join(name)
     }
 
+    pub(crate) fn database_path(&self) -> PathBuf {
+        self.root.join("server").join("server.db")
+    }
+
     pub(crate) fn blueprints_dir(&self) -> PathBuf {
         self.root.join("server").join("blueprints")
     }

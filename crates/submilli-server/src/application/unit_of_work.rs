@@ -24,5 +24,19 @@ pub(crate) trait UnitOfWork: Send {
     async fn save_session(&mut self, session: Session) -> Result<(), StoreError>;
     async fn blueprint_exists(&mut self, name: &str) -> Result<bool, StoreError>;
     async fn remove_blueprint(&mut self, name: &str) -> Result<bool, StoreError>;
+    async fn get_request(
+        &mut self,
+        session_id: &str,
+        key: &str,
+    ) -> Result<Option<crate::domain::idempotent_request::IdempotentRequest>, StoreError>;
+    async fn save_request(
+        &mut self,
+        request: crate::domain::idempotent_request::IdempotentRequest,
+    ) -> Result<(), StoreError>;
+    async fn remove_request(&mut self, session_id: &str, key: &str) -> Result<(), StoreError>;
+    async fn remove_session_requests(&mut self, session_id: &str) -> Result<(), StoreError>;
+    async fn unfinished_requests(
+        &mut self,
+    ) -> Result<Vec<crate::domain::idempotent_request::IdempotentRequest>, StoreError>;
     async fn commit(self: Box<Self>) -> Result<(), StoreError>;
 }

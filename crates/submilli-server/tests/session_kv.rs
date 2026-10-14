@@ -82,7 +82,7 @@ impl Harness {
             ..in_memory_config::config()
         };
         Self {
-            state: AppState::new(tweak(config)).expect("AppState"),
+            state: futures::executor::block_on(AppState::new(tweak(config))).expect("AppState"),
             _vfs_root: Some(vfs_root),
         }
     }
@@ -445,7 +445,7 @@ async fn blueprint_removal_clears_the_store() {
 async fn a_restored_session_starts_with_an_empty_store() {
     let store_dir = tempfile::tempdir().expect("session store dir");
     let vfs_root = tempfile::tempdir().expect("vfs root");
-    let build = || {
+    let build = async || {
         let config = ServerConfig {
             blueprints: Some(Arc::new(
                 InMemoryBlueprintStore::seed(vec![blueprint(
@@ -459,18 +459,19 @@ async fn a_restored_session_starts_with_an_empty_store() {
                 .expect("seed blueprints"),
             )),
             session_storage_root: Some(vfs_root.path().to_path_buf()),
-            session_store_dir: Some(store_dir.path().to_path_buf()),
+            database_path: Some(store_dir.path().join("server.db")),
             ..in_memory_config::config()
         };
-        AppState::new(config).expect("AppState")
+        AppState::new(config).await.expect("AppState")
     };
 
-    let first = Harness::over(build());
+    let first = Harness::over(build().await);
     let session = first.create_session(BLUEPRINT).await;
     ok(&first.rest(&session, SET).await);
 
+    first.state.database().unwrap().close().await.unwrap();
     // Restart: a fresh AppState over the same durable directories.
-    let restarted = Harness::over(build());
+    let restarted = Harness::over(build().await);
     restarted.state.boot().await.expect("boot");
 
     let read = restarted.rest(&session, GET).await;
