@@ -1,18 +1,34 @@
 const DISMISSAL_KEY = 'submilli.docs-invitation.dismissed.v1';
-const ELAPSED_KEY = 'submilli.docs-invitation.elapsed.v1';
-const ENGAGEMENT_KEY = 'submilli.docs-invitation.engaged.v1';
+const NAVIGATION_KEY = 'submilli.docs-invitation.navigation.v1';
 const VISIBLE_DELAY_MS = 10_000;
 const REQUEST_TIMEOUT_MS = 15_000;
+const NAVIGATION_MAX_AGE_MS = 30_000;
 
 type InvitationTarget = HTMLElement & { dataset: DOMStringMap & { endpoint?: string; initialized?: string } };
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function readElapsed(storage: Storage | undefined) {
-	try { const value = Number(storage?.getItem(ELAPSED_KEY)); return Number.isFinite(value) && value >= 0 ? value : 0; } catch { return 0; }
+function docsPath(url: URL) { return url.pathname.replace(/\/$/, ''); }
+function consumeNavigation(storage: Storage | undefined, baseURI: string, now: number) {
+	try {
+		const raw = storage?.getItem(NAVIGATION_KEY);
+		storage?.removeItem(NAVIGATION_KEY);
+		if (!raw) return undefined;
+		const navigation = JSON.parse(raw) as Record<string, unknown> | null;
+		if (navigation?.path !== docsPath(new URL(baseURI))
+			|| typeof navigation.createdAt !== 'number' || !Number.isFinite(navigation.createdAt) || now < navigation.createdAt || now - navigation.createdAt > NAVIGATION_MAX_AGE_MS
+			|| typeof navigation.elapsed !== 'number' || !Number.isFinite(navigation.elapsed) || navigation.elapsed < 0) return undefined;
+		return Math.min(navigation.elapsed, VISIBLE_DELAY_MS);
+	} catch { return undefined; }
+}
+function storeNavigation(storage: Storage | undefined, path: string, createdAt: number, elapsed: number) {
+	try { storage?.setItem(NAVIGATION_KEY, JSON.stringify({ path, createdAt, elapsed: Math.min(elapsed, VISIBLE_DELAY_MS) })); } catch {}
+}
+function opensInCurrentTab(event: MouseEvent, link: Element) {
+	return !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
+		&& !link.hasAttribute('download') && (!link.getAttribute('target') || link.getAttribute('target') === '_self');
 }
 function readStoredFlag(storage: Storage | undefined, key: string) { try { return storage?.getItem(key) === '1'; } catch { return false; } }
 function storeFlag(storage: Storage | undefined, key: string) { try { storage?.setItem(key, '1'); } catch {} }
-function setElapsed(storage: Storage | undefined, elapsed: number) { try { storage?.setItem(ELAPSED_KEY, String(Math.round(elapsed))); } catch {} }
 function parseSuccess(response: Response) {
 	if (!response.ok) return Promise.resolve(false);
 	return response.json().then((body: unknown) => Boolean(body && typeof body === 'object' && (body as { ok?: unknown }).ok === true)).catch(() => false);
@@ -28,8 +44,12 @@ export function createDocsInvitationController({
 	visible?: () => boolean; now?: () => number; abortController?: typeof globalThis.AbortController;
 	mutationObserver?: typeof globalThis.MutationObserver;
 }) {
-	let elapsed = readElapsed(sessionStorage);
-	let engaged = readStoredFlag(sessionStorage, ENGAGEMENT_KEY);
+	// Only a just-clicked docs link can carry engagement into a new document.
+	// Reloads and direct landings must earn it again; dismissal remains durable.
+	const navigationElapsed = consumeNavigation(sessionStorage, document.baseURI, now());
+	let elapsed = navigationElapsed ?? 0;
+	let engaged = navigationElapsed !== undefined;
+	let navigationIntent: { event: MouseEvent; path: string; createdAt: number } | undefined;
 	let scrollIntent: { from: number; until: number } | undefined;
 	let lastStartedAt: number | undefined;
 	let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
@@ -52,7 +72,7 @@ export function createDocsInvitationController({
 	};
 
 	const stopTimer = () => {
-		if (lastStartedAt !== undefined) { elapsed += now() - lastStartedAt; setElapsed(sessionStorage, elapsed); }
+		if (lastStartedAt !== undefined) elapsed += now() - lastStartedAt;
 		lastStartedAt = undefined;
 		if (timer) (clearTimeout || globalThis.clearTimeout)(timer);
 		timer = undefined;
@@ -82,17 +102,18 @@ export function createDocsInvitationController({
 		timer = (setTimeout || globalThis.setTimeout)(() => {
 			timer = undefined;
 			if (lastStartedAt !== undefined) elapsed += now() - lastStartedAt;
-			lastStartedAt = undefined; setElapsed(sessionStorage, elapsed);
+			lastStartedAt = undefined;
 			if (elapsed >= VISIBLE_DELAY_MS) revealOrWatch(); else schedule();
 		}, VISIBLE_DELAY_MS - elapsed);
 	};
 	const recordEngagement = () => {
 		if (!current || dismissed || !visible() || engaged) return;
-		engaged = true; storeFlag(sessionStorage, ENGAGEMENT_KEY);
+		engaged = true;
 		if (elapsed >= VISIBLE_DELAY_MS) revealOrWatch();
 	};
 	const onClick = (event: MouseEvent) => {
 		if (!event.isTrusted || event.button !== 0 || !current) return;
+		navigationIntent = undefined;
 		const target = event.target as Element | null;
 		if (target?.closest?.('[data-docs-invitation]')) return;
 		if (target?.closest?.('[data-copy-page], [data-copy-setup], .section-link-copy, .expressive-code .copy button')) {
@@ -104,7 +125,11 @@ export function createDocsInvitationController({
 			const destination = new URL(link.getAttribute('href') || '', document.baseURI);
 			const page = new URL(document.baseURI);
 			if (destination.origin === page.origin && destination.pathname.startsWith('/docs/')
-				&& (destination.pathname !== page.pathname || destination.hash && destination.hash !== page.hash)) recordEngagement();
+				&& (docsPath(destination) !== docsPath(page) || destination.hash && destination.hash !== page.hash)) {
+				recordEngagement();
+				if (engaged && opensInCurrentTab(event, link) && docsPath(destination) !== docsPath(page))
+					navigationIntent = { event, path: docsPath(destination), createdAt: now() };
+			}
 		} catch { /* A malformed link is not engagement. */ }
 	};
 	const onSearch = (event: Event) => {
@@ -139,9 +164,10 @@ export function createDocsInvitationController({
 		if (current && current !== next) abortRequest();
 		if (!next) { stopTimer(); abortRequest(); current = undefined; disconnectOverlayObserver(); return; }
 		current = next;
+		dismissed ||= readStoredFlag(localStorage, DISMISSAL_KEY);
+		if (dismissed) { stopTimer(); abortRequest(); disconnectOverlayObserver(); next.remove(); current = undefined; return; }
 		if (next.dataset.initialized === 'true') { if (elapsed >= VISIBLE_DELAY_MS) revealOrWatch(); else schedule(); return; }
 		next.dataset.initialized = 'true';
-		if (dismissed) { next.remove(); current = undefined; return; }
 		const form = next.querySelector<HTMLFormElement>('form');
 		const input = next.querySelector<HTMLInputElement>('input[type="email"]');
 		const submit = next.querySelector<HTMLButtonElement>('[data-invitation-submit]');
@@ -179,7 +205,15 @@ export function createDocsInvitationController({
 	};
 	return {
 		bind,
-		pauseForNavigation() { stopTimer(); abortRequest(); current = undefined; scrollIntent = undefined; disconnectOverlayObserver(); },
+		pauseForNavigation() {
+			stopTimer(); abortRequest(); current = undefined; scrollIntent = undefined; disconnectOverlayObserver();
+			// Click capture runs before later handlers can cancel navigation. Commit
+			// carryover only when the document actually leaves and cancellation is known.
+			if (!dismissed && navigationIntent && !navigationIntent.event.defaultPrevented
+				&& now() - navigationIntent.createdAt <= NAVIGATION_MAX_AGE_MS)
+				storeNavigation(sessionStorage, navigationIntent.path, now(), elapsed);
+			navigationIntent = undefined;
+		},
 		onVisibilityChange() { if (visible()) { if (elapsed >= VISIBLE_DELAY_MS) revealOrWatch(); else schedule(); } else stopTimer(); },
 		get state() { return { elapsed, engaged, dismissed, visible: Boolean(current && !current.hidden) }; },
 	};

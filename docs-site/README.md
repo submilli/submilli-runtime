@@ -231,7 +231,10 @@ The dismissible invitation requires ten seconds of visible docs browsing plus a
 reader action: following a docs link, searching, copying a page/code/section link,
 or scrolling at least 80 pixels with wheel, touch or keyboard input. A landing,
 restored scroll position or programmatic click alone never qualifies. Engagement
-and elapsed time carry across docs pages for the current tab session. It offers
+and elapsed time carry into the next page only through a just-clicked docs link.
+Reloads and direct landings require fresh engagement and visible time. Closing it
+or successfully saving an email permanently dismisses it in localStorage for
+that browser and origin. It offers
 an email form plus the same Google scheduler as the header. It takes no
 focus and does not block navigation. Set `PUBLIC_CONTACT_ENDPOINT` to a verified
 production contact-intake URL to enable it; without an endpoint it stays hidden.

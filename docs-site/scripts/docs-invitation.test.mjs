@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createDocsInvitationController } from '../src/lib/docs-invitation-client.ts';
 
-function fixture({ storage = new Map(), session = new Map(), response = { ok: true, json: async () => ({ ok: true }) }, fetchImpl, invitation = true, overlay = false, mutationObserver, engaged = true } = {}) {
-  if (engaged) session.set('submilli.docs-invitation.engaged.v1', '1');
-  let now = 0;
+function fixture({ storage = new Map(), session = new Map(), response = { ok: true, json: async () => ({ ok: true }) }, fetchImpl, invitation = true, overlay = false, mutationObserver, arrivedViaDocsLink = true, baseURI = 'https://docs.example.test/docs/quickstart/', initialNow = 0 } = {}) {
+  if (arrivedViaDocsLink) session.set('submilli.docs-invitation.navigation.v1', JSON.stringify({ path: new URL(baseURI).pathname.replace(/\/$/, ''), createdAt: initialNow, elapsed: 0 }));
+  let now = initialNow;
   let timeout;
   const requests = [];
   const listeners = {};
@@ -25,7 +25,7 @@ function fixture({ storage = new Map(), session = new Map(), response = { ok: tr
   };
   const document = {
     visibilityState: 'visible',
-    baseURI: 'https://docs.example.test/docs/quickstart/',
+    baseURI,
     scrollingElement: { scrollTop: 0 },
     body: {},
     querySelector(selector) { return selector === '[data-docs-invitation]' ? (invitation ? root : undefined) : (overlay ? {} : undefined); },
@@ -39,6 +39,7 @@ function fixture({ storage = new Map(), session = new Map(), response = { ok: tr
   const sessionApi = {
     getItem(key) { return session.get(key) ?? null; },
     setItem(key, value) { session.set(key, value); },
+    removeItem(key) { session.delete(key); },
   };
   const controller = createDocsInvitationController({
     document,
@@ -53,6 +54,11 @@ function fixture({ storage = new Map(), session = new Map(), response = { ok: tr
   return { controller, root, fields, listeners, storage, session, document, requests, get timeout() { return timeout; }, advance(ms) { now += ms; } };
 }
 
+function docsLink(href, attributes = {}) {
+  const link = { getAttribute(name) { return name === 'href' ? href : attributes[name] ?? null; }, hasAttribute(name) { return name in attributes; } };
+  return { closest(selector) { return selector === 'a[href]' ? link : undefined; } };
+}
+
 test('shows after ten seconds of engaged visible browsing without taking focus', () => {
   const f = fixture();
   f.controller.bind();
@@ -64,7 +70,7 @@ test('shows after ten seconds of engaged visible browsing without taking focus',
 });
 
 test('landing and elapsed time alone never show the invitation', () => {
-  const f = fixture({ engaged: false });
+  const f = fixture({ arrivedViaDocsLink: false });
   f.controller.bind(); f.advance(10_000); f.timeout.fn();
   assert.equal(f.root.hidden, true);
   assert.equal(f.controller.state.engaged, false);
@@ -73,16 +79,17 @@ test('landing and elapsed time alone never show the invitation', () => {
 });
 
 test('a real docs link qualifies, preserves engagement across pages, and keeps the time minimum', () => {
-  const f = fixture({ engaged: false });
+  const f = fixture({ arrivedViaDocsLink: false });
   f.controller.bind();
-  const target = { closest(selector) { return selector === 'a[href]' ? { getAttribute: () => '/docs/packages/' } : undefined; } };
+  const target = docsLink('/docs/packages/');
   f.listeners.click({ isTrusted: false, button: 0, target });
   assert.equal(f.controller.state.engaged, false);
+  f.advance(4_000);
   f.listeners.click({ isTrusted: true, button: 0, target });
   assert.equal(f.controller.state.engaged, true);
   assert.equal(f.root.hidden, true);
-  f.advance(4_000); f.controller.pauseForNavigation();
-  const next = fixture({ session: f.session, engaged: false });
+  f.controller.pauseForNavigation();
+  const next = fixture({ session: f.session, arrivedViaDocsLink: false, initialNow: 4_000, baseURI: 'https://docs.example.test/docs/packages' });
   next.controller.bind();
   assert.equal(next.timeout.delay, 6_000);
   next.advance(6_000); next.timeout.fn();
@@ -90,7 +97,7 @@ test('a real docs link qualifies, preserves engagement across pages, and keeps t
 });
 
 test('external links, empty search and synthetic input do not qualify', () => {
-  const f = fixture({ engaged: false }); f.controller.bind();
+  const f = fixture({ arrivedViaDocsLink: false }); f.controller.bind();
   const external = { closest(selector) { return selector === 'a[href]' ? { getAttribute: () => 'https://example.org/' } : undefined; } };
   f.listeners.click({ isTrusted: true, button: 0, target: external });
   f.listeners.input({ isTrusted: true, target: { matches: () => true, value: ' ' } });
@@ -102,7 +109,7 @@ test('external links, empty search and synthetic input do not qualify', () => {
 });
 
 test('using a copy control qualifies without taking focus', () => {
-  const f = fixture({ engaged: false }); f.controller.bind();
+  const f = fixture({ arrivedViaDocsLink: false }); f.controller.bind();
   f.advance(10_000); f.timeout.fn();
   const target = { closest(selector) { return selector.startsWith('[data-copy-page]') ? {} : undefined; } };
   f.listeners.click({ isTrusted: true, button: 0, target });
@@ -111,7 +118,7 @@ test('using a copy control qualifies without taking focus', () => {
 });
 
 test('scrolling needs reader input and movement, not restoration or tiny jitter', () => {
-  const f = fixture({ engaged: false }); f.controller.bind();
+  const f = fixture({ arrivedViaDocsLink: false }); f.controller.bind();
   f.advance(10_000); f.timeout.fn();
   f.document.scrollingElement.scrollTop = 500; f.listeners.scroll();
   assert.equal(f.root.hidden, true);
@@ -126,7 +133,7 @@ test('scrolling needs reader input and movement, not restoration or tiny jitter'
 });
 
 test('expired scroll intent and editing arrow keys do not qualify, but touch and reading keys do', () => {
-  const f = fixture({ engaged: false }); f.controller.bind();
+  const f = fixture({ arrivedViaDocsLink: false }); f.controller.bind();
   f.listeners.wheel({ isTrusted: true, type: 'wheel' }); f.advance(1501);
   f.document.scrollingElement.scrollTop = 200; f.listeners.scroll();
   assert.equal(f.controller.state.engaged, false);
@@ -136,7 +143,7 @@ test('expired scroll intent and editing arrow keys do not qualify, but touch and
   f.listeners.touchmove({ isTrusted: true, type: 'touchmove' });
   f.document.scrollingElement.scrollTop = 480; f.listeners.scroll();
   assert.equal(f.controller.state.engaged, true);
-  const keyboard = fixture({ engaged: false }); keyboard.controller.bind();
+  const keyboard = fixture({ arrivedViaDocsLink: false }); keyboard.controller.bind();
   keyboard.listeners.keydown({ isTrusted: true, type: 'keydown', key: 'PageDown', target: { closest: () => undefined } });
   keyboard.document.scrollingElement.scrollTop = 80; keyboard.listeners.scroll();
   assert.equal(keyboard.controller.state.engaged, true);
@@ -167,16 +174,60 @@ test('a restored document resumes its earned time after navigation', () => {
   assert.equal(f.root.hidden, false);
 });
 
-test('carries visible time across route bindings and reveals an already-earned invitation', () => {
-  const session = new Map();
-  const first = fixture({ session });
-  first.controller.bind(); first.advance(6_000); first.document.visibilityState = 'hidden'; first.controller.onVisibilityChange();
-  assert.equal(session.get('submilli.docs-invitation.elapsed.v1'), '6000');
-  const second = fixture({ session });
-  second.controller.bind(); second.advance(4_000); second.document.visibilityState = 'hidden'; second.controller.onVisibilityChange();
-  assert.equal(second.root.hidden, true);
-  second.document.visibilityState = 'visible'; second.controller.onVisibilityChange();
-  assert.equal(second.root.hidden, false);
+test('reloads and old session flags require fresh engagement and visible time', () => {
+  const first = fixture();
+  first.controller.bind(); first.advance(10_000); first.timeout.fn();
+  assert.equal(first.root.hidden, false);
+  first.session.set('submilli.docs-invitation.engaged.v1', '1');
+  first.session.set('submilli.docs-invitation.elapsed.v1', '10000');
+  const reload = fixture({ session: first.session, arrivedViaDocsLink: false });
+  reload.controller.bind();
+  assert.equal(reload.root.hidden, true);
+  assert.equal(reload.timeout.delay, 10_000);
+  reload.advance(10_000); reload.timeout.fn();
+  assert.equal(reload.root.hidden, true);
+  reload.listeners.wheel({ isTrusted: true, type: 'wheel' });
+  reload.document.scrollingElement.scrollTop = 80; reload.listeners.scroll();
+  assert.equal(reload.root.hidden, false);
+});
+
+test('navigation carry is one-use, path-specific and short-lived', () => {
+  const key = 'submilli.docs-invitation.navigation.v1';
+  for (const token of ['broken', JSON.stringify({path:'/docs/elsewhere',createdAt:0,elapsed:10000}), JSON.stringify({path:'/docs/quickstart',createdAt:0,elapsed:10000}), JSON.stringify({path:'/docs/quickstart',createdAt:40000,elapsed:10000})]) {
+    const session = new Map([[key, token]]);
+    const f = fixture({session, arrivedViaDocsLink:false, initialNow:30001});
+    f.controller.bind();
+    assert.equal(f.controller.state.engaged, false);
+    assert.equal(session.has(key), false);
+  }
+  const session = new Map([[key, JSON.stringify({path:'/docs/quickstart',createdAt:0,elapsed:10000})]]);
+  const visit = fixture({session, arrivedViaDocsLink:false}); visit.controller.bind();
+  assert.equal(visit.root.hidden, false);
+  const reload = fixture({session, arrivedViaDocsLink:false}); reload.controller.bind();
+  assert.equal(reload.root.hidden, true);
+});
+
+test('new-tab, modified, download and same-page links do not carry into another load', () => {
+  const key = 'submilli.docs-invitation.navigation.v1';
+  for (const [target, event] of [[docsLink('/docs/packages/', {target:'_blank'}), {}], [docsLink('/docs/packages/'), {metaKey:true}], [docsLink('/docs/packages/', {download:''}), {}], [docsLink('#installing'), {}]]) {
+    const f = fixture({arrivedViaDocsLink:false}); f.controller.bind();
+    f.listeners.click({isTrusted:true,button:0,target,...event});
+    f.controller.pauseForNavigation();
+    assert.equal(f.session.has(key), false);
+  }
+});
+
+test('later click cancellation never carries engagement into a fresh landing', () => {
+  const f = fixture({arrivedViaDocsLink:false}); f.controller.bind();
+  f.advance(10_000); f.timeout.fn();
+  const event = {isTrusted:true,button:0,target:docsLink('/docs/packages/'),defaultPrevented:false};
+  f.listeners.click(event);
+  event.defaultPrevented = true;
+  f.controller.pauseForNavigation();
+  const landing = fixture({session:f.session,arrivedViaDocsLink:false,baseURI:'https://docs.example.test/docs/packages/',initialNow:10_000});
+  landing.controller.bind();
+  assert.equal(landing.controller.state.engaged, false);
+  assert.equal(landing.root.hidden, true);
 });
 
 test('pauses and defers on routes or overlays where the invitation cannot be shown', () => {
@@ -184,8 +235,8 @@ test('pauses and defers on routes or overlays where the invitation cannot be sho
   hiddenRoute.controller.bind(); hiddenRoute.advance(20_000); hiddenRoute.controller.onVisibilityChange();
   assert.equal(hiddenRoute.root.hidden, true);
 
-  const session = new Map([['submilli.docs-invitation.elapsed.v1', '10000']]);
-  const covered = fixture({ session, overlay: true });
+  const session = new Map([['submilli.docs-invitation.navigation.v1', JSON.stringify({path:'/docs/quickstart',createdAt:0,elapsed:10000})]]);
+  const covered = fixture({ session, arrivedViaDocsLink:false, overlay: true });
   covered.controller.bind();
   assert.equal(covered.root.hidden, true);
   covered.document.querySelector = selector => selector === '[data-docs-invitation]' ? covered.root : undefined;
@@ -200,8 +251,8 @@ test('can defer through a second overlay cycle after the first one clears', () =
     observe() {}
     disconnect() { this.disconnected = true; }
   }
-  const session = new Map([['submilli.docs-invitation.elapsed.v1', '10000']]);
-  const covered = fixture({ session, overlay: true, mutationObserver: FakeObserver });
+  const session = new Map([['submilli.docs-invitation.navigation.v1', JSON.stringify({path:'/docs/quickstart',createdAt:0,elapsed:10000})]]);
+  const covered = fixture({ session, arrivedViaDocsLink:false, overlay: true, mutationObserver: FakeObserver });
   covered.controller.bind();
   assert.equal(observers.length, 1);
   covered.document.querySelector = selector => selector === '[data-docs-invitation]' ? covered.root : undefined;
