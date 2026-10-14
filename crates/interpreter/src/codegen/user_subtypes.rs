@@ -278,7 +278,12 @@ fn emit_subtype_to_string_body(
 
     if !fields.contains_key("toString") {
         let mut f = Function::new(std::iter::empty());
-        emit_indexed_object_dispatch(&mut f, intrinsics, object_vtable_global, 0);
+        emit_indexed_object_dispatch(
+            &mut f,
+            intrinsics,
+            object_vtable_global,
+            IndexedSlot::ToString,
+        );
         crate::codegen::intrinsics::push_string_literal(
             &mut f,
             intrinsics,
@@ -686,6 +691,14 @@ fn emit_conversion_override_body(
     Ok(f)
 }
 
+/// The universal vtable slots an indexed object dispatches, by slot index.
+#[derive(Clone, Copy)]
+enum IndexedSlot {
+    ToString = 0,
+    Equals = 2,
+    Hash = 3,
+}
+
 /// The index records whether insertion changed the shape. Such values use the
 /// same dynamic `toString`/equality/hash hooks as objects created by
 /// JSON.parse: an inserted `toString` entry is one the shape can't see.
@@ -693,9 +706,13 @@ fn emit_indexed_object_dispatch(
     body: &mut Function,
     intrinsics: IntrinsicTypeIndices,
     vtable_global: u32,
-    slot: u32,
+    slot: IndexedSlot,
 ) {
-    let operands = if slot == 2 { 2 } else { 1 };
+    let operands = if matches!(slot, IndexedSlot::Equals) {
+        2
+    } else {
+        1
+    };
     for operand in 0..operands {
         body.instruction(&Instruction::LocalGet(operand));
         body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
@@ -734,12 +751,12 @@ fn emit_indexed_object_dispatch(
     body.instruction(&Instruction::GlobalGet(vtable_global));
     body.instruction(&Instruction::StructGet {
         struct_type_index: intrinsics.vtable,
-        field_index: slot,
+        field_index: slot as u32,
     });
     body.instruction(&Instruction::CallRef(match slot {
-        0 => intrinsics.to_string_fn,
-        2 => intrinsics.equals_fn,
-        _ => intrinsics.hash_fn,
+        IndexedSlot::ToString => intrinsics.to_string_fn,
+        IndexedSlot::Equals => intrinsics.equals_fn,
+        IndexedSlot::Hash => intrinsics.hash_fn,
     }));
     body.instruction(&Instruction::Return);
     body.instruction(&Instruction::End);
@@ -821,7 +838,12 @@ fn emit_subtype_equals_body(
     )));
     f.instruction(&Instruction::LocalSet(b_t));
 
-    emit_indexed_object_dispatch(&mut f, intrinsics, object_vtable_global, 2);
+    emit_indexed_object_dispatch(
+        &mut f,
+        intrinsics,
+        object_vtable_global,
+        IndexedSlot::Equals,
+    );
 
     emit_shape_guard(
         &mut f,
@@ -987,7 +1009,7 @@ fn emit_subtype_hash_body(
     )));
     f.instruction(&Instruction::LocalSet(self_t));
 
-    emit_indexed_object_dispatch(&mut f, intrinsics, object_vtable_global, 3);
+    emit_indexed_object_dispatch(&mut f, intrinsics, object_vtable_global, IndexedSlot::Hash);
 
     // hash = FNV-1a offset basis
     f.instruction(&Instruction::I32Const(0x811c9dc5u32.cast_signed()));
