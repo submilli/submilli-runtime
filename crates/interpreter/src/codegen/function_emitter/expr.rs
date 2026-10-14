@@ -3094,6 +3094,11 @@ fn emit_chain_access(
             // call_refs, unboxing the erased return to the function's
             // declared `ret` — which is this part's `result_ty`, so the
             // value already sits in the slot the next step expects.
+            if let Some(signature) = union_signature
+                && crate::codegen::closure_coercions::is_union_call_cast(receiver_ty, signature)
+            {
+                crate::codegen::closure_coercions::emit_union_call_cast(emitter, ctx, signature)?;
+            }
             emit_indirect_closure_call_with_receiver_on_stack(
                 emitter,
                 ctx,

@@ -22,6 +22,7 @@ TypedAst {
             26,
         ): Number,
     },
+    postfix_operand_types: {},
     parameter_inputs: {},
     parameter_initializations: {},
     runtime_source_types: {},

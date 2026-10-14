@@ -15,7 +15,7 @@ use crate::{
     TypedExpr, TypedExprKind, TypedParam, UnOp, ValueKind, ValueSymbol,
 };
 
-use super::assignable::TypeResolver;
+use super::assignable::{TypeResolver, strict_subtype};
 use super::format_signature::SignatureKind;
 use super::namespace_symbol;
 use super::reserved::{is_reserved_object_field, override_field_signature, reserved_field_message};
@@ -1612,7 +1612,12 @@ impl Inferer<'_> {
         {
             joined
         } else {
-            branch_result_type(lhs_kept, rhs_ty, self.resolver())
+            conditional_result_type(
+                lhs_kept,
+                rhs_ty,
+                has_object_literal(self.ast, [lhs, rhs])?,
+                self.resolver(),
+            )
         };
         Ok((
             TypedExprKind::Binary {
@@ -2584,7 +2589,8 @@ impl Inferer<'_> {
         }
 
         let (typed_callee, callee_ty) = self.infer_expr(callee, None)?;
-        let (typed_callee, callee_ty) = self.cast_up_to_union_signature(typed_callee, callee_ty)?;
+        let (typed_callee, callee_ty) =
+            self.cast_up_to_union_signature(typed_callee, callee_ty, args.len())?;
         // call-signature dispatch — when the callee types
         // as an `InterfaceRef` declaring `@call`, route through the
         // same method-call pipeline as `find_method(_, "new")` for
@@ -2726,16 +2732,13 @@ impl Inferer<'_> {
                 (min, max)
             }
             (None, Some(ts)) => {
-                if callee_has_rest {
-                    // Trailing rest in the function type: callsite
-                    // accepts `(ts.len() - 1)+` args.
-                    (
-                        ts.len().saturating_sub(1).saturating_sub(callee_optional),
-                        usize::MAX,
-                    )
+                let min = required_count_of_function_type(ts, callee_optional, callee_has_rest);
+                let max = if callee_has_rest {
+                    usize::MAX
                 } else {
-                    (ts.len().saturating_sub(callee_optional), ts.len())
-                }
+                    ts.len()
+                };
+                (min, max)
             }
             (None, None) => (0, 0),
         };
@@ -3228,7 +3231,7 @@ impl Inferer<'_> {
         for p in &params[supplied..fixed_count] {
             let id = match &p.default {
                 Some(default) => self.synthesize_default_arg(default, &p.ty, span)?,
-                None if p.optional => {
+                None if p.optional || p.ty.carries_void() => {
                     self.synthesize_default_arg(&crate::DefaultValue::Undefined, &p.ty, span)?
                 }
                 None => {
@@ -5681,6 +5684,10 @@ impl Inferer<'_> {
                 }
                 _ => None,
             };
+        let union_shapes = match (peeled, &expected_fields) {
+            (Some(Type::Union(union_members)), None) => self.union_shape_fields(union_members),
+            _ => Vec::new(),
+        };
         let expected_index = expected.and_then(|ty| self.resolver().index_signature(ty));
         if let Some(want) = expected_fields.as_ref()
             && expected_index.is_none()
@@ -5758,12 +5765,20 @@ impl Inferer<'_> {
                     // wins (the override is invariant, the surrounding
                     // hint can only restate it).
                     let override_sig = override_field_signature(&field.name.name);
-                    let hint = self.object_field_hint(
-                        literal,
-                        &field.name.name,
-                        expected_fields.as_ref(),
-                        expected_index.as_ref(),
-                    );
+                    let hint = self
+                        .object_field_hint(
+                            literal,
+                            &field.name.name,
+                            expected_fields.as_ref(),
+                            expected_index.as_ref(),
+                        )
+                        .or_else(|| {
+                            self.function_literal_union_hint(
+                                field.value,
+                                &field.name.name,
+                                &union_shapes,
+                            )
+                        });
                     let expected_field_ty = expected_fields
                         .as_ref()
                         .and_then(|m| m.get(&field.name.name))
@@ -6172,6 +6187,59 @@ impl Inferer<'_> {
                 fields: resolved,
             },
         ))
+    }
+
+    /// The fields of each member of a union an object literal is checked
+    /// against, when no single member was chosen for it; empty unless every
+    /// member other than `null` and `undefined` is an object shape.
+    fn union_shape_fields(
+        &self,
+        union_members: &[Type],
+    ) -> Vec<BTreeMap<String, crate::ObjectField>> {
+        let mut shapes = Vec::new();
+        for member in union_members {
+            match member.peel() {
+                Type::Null | Type::Undefined => {}
+                Type::Object { fields, .. } => shapes.push(fields.clone()),
+                Type::InterfaceRef {
+                    mangled,
+                    name,
+                    args,
+                    ..
+                } => match self.structural_form(mangled, name, args) {
+                    Some(fields) => shapes.push(fields),
+                    None => return Vec::new(),
+                },
+                _ => return Vec::new(),
+            }
+        }
+        shapes
+    }
+
+    /// The contextual type of a function literal in field `name` of an object
+    /// literal checked against a union of object shapes: as in tsc, the union
+    /// of the field's types in the members that declare it, from which the
+    /// function's parameters take their types.
+    fn function_literal_union_hint(
+        &self,
+        value: ExprId,
+        name: &str,
+        shapes: &[BTreeMap<String, crate::ObjectField>],
+    ) -> Option<Type> {
+        let is_function_literal = self.ast.try_expr(value).is_ok_and(|expr| {
+            matches!(
+                expr.kind,
+                ExprKind::Arrow { .. } | ExprKind::FunctionExpression { .. }
+            )
+        });
+        if !is_function_literal {
+            return None;
+        }
+        let types: Vec<Type> = shapes
+            .iter()
+            .filter_map(|fields| fields.get(name).map(|field| field.ty.clone()))
+            .collect();
+        (!types.is_empty()).then(|| Type::union(types))
     }
 
     /// The type an object literal checked against `expected` keeps as its own,
@@ -9958,6 +10026,7 @@ impl Inferer<'_> {
             let operand_ty = self
                 .lookup_narrowed_view(&path)
                 .map_or_else(|| entry.ty.clone(), |view| view.narrowed_ty.clone());
+            self.record_postfix_operand(&target, &operand_ty);
             if !takes_postfix(&operand_ty) {
                 self.error(
                     target.span,
@@ -10228,6 +10297,15 @@ impl Inferer<'_> {
         ))
     }
 
+    /// Record the narrowed type `++`/`--` reads binding `name` at, keyed by the
+    /// name's span (see `TypedAst::postfix_operand_types`).
+    fn record_postfix_operand(&mut self, name: &Ident, operand_ty: &Type) {
+        self.typed_ast.postfix_operand_types.insert(
+            (name.span.file.0, name.span.start, name.span.end),
+            operand_ty.clone(),
+        );
+    }
+
     /// `g++` on a module global — shared by a module `let` and by a writable
     /// static field, which is the same global under a mangled key.
     fn postfix_on_global(
@@ -10243,6 +10321,7 @@ impl Inferer<'_> {
         let operand_ty = self
             .lookup_narrowed_view(&path)
             .map_or_else(|| ty.clone(), |view| view.narrowed_ty.clone());
+        self.record_postfix_operand(&name, &operand_ty);
         if !takes_postfix(&operand_ty) {
             self.error(
                     name.span,
@@ -10435,7 +10514,12 @@ impl Inferer<'_> {
         if let Some(joined) = empty_literal_join(self.ast, (then_, &then_ty), (else_, &else_ty))? {
             return Ok(joined);
         }
-        Ok(conditional_result_type(then_ty, else_ty, self.resolver()))
+        Ok(conditional_result_type(
+            then_ty,
+            else_ty,
+            has_object_literal(self.ast, [then_, else_])?,
+            self.resolver(),
+        ))
     }
 
     /// The type of `a || b` or `a ?? b` when `a` decides the result: `a`'s own,
@@ -10652,7 +10736,12 @@ impl Inferer<'_> {
             match empty_literal_join(self.ast, (lhs, &present), (rhs, &rhs_ty))? {
                 Some(joined) => joined,
                 // TypeScript reduces `a ?? b` by subtype, so `{} | "d"` is `{}`.
-                None => match conditional_result_type(present, rhs_ty, self.resolver()) {
+                None => match conditional_result_type(
+                    present,
+                    rhs_ty,
+                    has_object_literal(self.ast, [lhs, rhs])?,
+                    self.resolver(),
+                ) {
                     Type::Union(members) => {
                         Type::union(crate::types::without_members_of_empty_object(members))
                     }
@@ -11174,7 +11263,7 @@ impl Inferer<'_> {
                 }
 
                 // Closure-typed receiver: ordinary `Call` part.
-                let union_signature = self.union_signature_of(receiver_ty);
+                let union_signature = self.union_signature_of(receiver_ty, Some(args.len()));
                 let callee_ty = union_signature.as_ref().unwrap_or(receiver_ty);
                 let (ret_ty, typed_args) = match callee_ty.peel() {
                     Type::Function {
@@ -12683,33 +12772,50 @@ fn string_key_as_field(ast: &crate::Ast, part: ChainPart) -> Result<ChainPart, C
     Ok(part)
 }
 
-/// The type of an expression that evaluates to one of two operands. `void`
-/// has no value to join with the other operand's, so an expression that may
-/// produce it is `void` as a whole: usable for its effects, and refused
-/// wherever a value is needed.
+/// The type of an expression that evaluates to one of two operands: the union
+/// of their types reduced by tsc's strict subtype relation, as tsc reduces
+/// `c ? a : b`, `a || b` and `a ?? b`. `object_literal_operand` says whether
+/// either operand is an object literal, which tsc normalizes rather than
+/// reduces, so distinct object shapes stay apart.
 fn conditional_result_type(
     left: Type,
     right: Type,
+    either_is_object_literal: bool,
     types: super::assignable::TypeResolver<'_>,
 ) -> Type {
-    branch_result_type(left, right, types)
-}
-
-fn branch_result_type(left: Type, right: Type, types: super::assignable::TypeResolver<'_>) -> Type {
     // `c ? 1 : {}` is `1 | {}` in TypeScript; only widening reduces it to `{}`.
     let one_is_empty_object = left.is_empty_object() != right.is_empty_object();
     let distinct_object_shapes = matches!(left.peel(), Type::Object { .. })
         && matches!(right.peel(), Type::Object { .. })
         && left.peel() != right.peel();
-    if distinct_object_shapes || one_is_empty_object {
+    if one_is_empty_object || (distinct_object_shapes && either_is_object_literal) {
         Type::union(vec![left, right])
-    } else if assignable(&left, &right, types) {
+    } else if matches!(left.peel(), Type::Error) || matches!(right.peel(), Type::Error) {
+        // `Error` relates to everything both ways, so the subtype checks below
+        // would let an operand that already failed decide the result; the
+        // right operand's type keeps later diagnostics about the valid side.
         right
-    } else if assignable(&right, &left, types) {
+    } else if strict_subtype(&right, &left, types) {
         left
+    } else if strict_subtype(&left, &right, types) {
+        right
     } else {
         Type::union(vec![left, right])
     }
+}
+
+/// Whether either of `operands` is an object literal, under any parentheses.
+fn has_object_literal(ast: &crate::Ast, operands: [ExprId; 2]) -> Result<bool, CompilerFailure> {
+    for operand in operands {
+        let id = peel_parens(ast, operand)?;
+        if matches!(
+            &ast.try_expr(id).map_err(super::arena_failure)?.kind,
+            ExprKind::ObjectLiteral { .. }
+        ) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// An empty object literal reads as none of an all-optional object's fields,
@@ -13163,10 +13269,34 @@ pub(super) fn callable_parameter_type(param: &crate::Param) -> Type {
     crate::ObjectField::widen_optional(param.is_omittable(), param.ty.clone())
 }
 
+/// How many leading arguments a call must pass. As in tsc, a trailing
+/// parameter whose type accepts `void` may be left out too: the call passes
+/// `undefined`, which such a parameter holds.
 pub(super) fn required_parameter_count(params: &[crate::Param]) -> usize {
     params
         .iter()
-        .rposition(|p| !p.rest && !p.is_omittable())
+        .rposition(|p| !p.rest && !p.is_omittable() && !p.ty.carries_void())
+        .map_or(0, |index| index + 1)
+}
+
+/// [`required_parameter_count`] for a function type's `params`, of which the
+/// last `optional` fixed ones may be omitted. Shared by every arity check on
+/// function types, so a trailing `void` parameter is optional in each, as in
+/// tsc's minimum argument count.
+pub(super) fn required_count_of_function_type(
+    params: &[Type],
+    optional: usize,
+    has_rest: bool,
+) -> usize {
+    let fixed = if has_rest {
+        &params[..params.len().saturating_sub(1)]
+    } else {
+        params
+    };
+    let required = fixed.len().saturating_sub(optional);
+    fixed[..required]
+        .iter()
+        .rposition(|ty| !ty.carries_void())
         .map_or(0, |index| index + 1)
 }
 

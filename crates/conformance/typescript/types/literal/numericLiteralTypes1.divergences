@@ -1,4 +1,4 @@
-types: 167 of 244 tsc entries compared, 11 differ
+types: 167 of 244 tsc entries compared, 9 differ
 
 line 9: a
   tsc:  1
@@ -19,14 +19,6 @@ line 12: a_4
 line 13: a_5
   tsc:  1
   ours: A5
-
-line 49: a
-  tsc:  number
-  ours: 1
-
-line 50: b
-  tsc:  number
-  ours: 0 | 1 | 2
 
 line 112: a
   tsc:  false | 0

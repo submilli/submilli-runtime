@@ -1,7 +1,11 @@
-types: 27 of 52 tsc entries compared, 3 differ
+types: 28 of 52 tsc entries compared, 4 differ
 
 line 10: x
   tsc:  string
+  ours: number | string
+
+line 13: x
+  tsc:  number
   ours: number | string
 
 line 21: f

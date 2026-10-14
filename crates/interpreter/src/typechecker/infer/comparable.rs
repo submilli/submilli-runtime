@@ -751,6 +751,7 @@ mod tests {
             types: &types,
             registry: &registry,
             limits: &limits,
+            strict_subtype: false,
         };
         let mut proof = Proof {
             types: resolver,

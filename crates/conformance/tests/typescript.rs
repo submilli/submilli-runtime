@@ -44,7 +44,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use interpreter::{ExprId, Span, StmtId, Type, TypedAst, TypedExprKind, TypedStmtKind};
+use interpreter::{
+    ExprId, PostfixTarget, Span, StmtId, Type, TypedAst, TypedExprKind, TypedStmtKind,
+};
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -592,6 +594,9 @@ fn entries_by_line(typed: &TypedAst, source: &str) -> EntriesByLine {
             return None;
         }
         let e = typed.try_expr(id).unwrap();
+        if is_union_call_signature_cast(typed, e) {
+            return None;
+        }
         let text = span_text(source, e.span)?;
         let retained = reachable.expressions.contains(&id);
         let claim = if retained && is_semantic_reference_cast(typed, e, text) {
@@ -625,6 +630,27 @@ fn entries_by_line(typed: &TypedAst, source: &str) -> EntriesByLine {
             });
     }
     by_line
+}
+
+/// The cast a call through a union of function types puts around its callee,
+/// up to the one signature the call goes through. It shares the callee's span,
+/// but the callee's type is the union, as `tsc` prints it.
+fn is_union_call_signature_cast(typed: &TypedAst, expression: &interpreter::TypedExpr) -> bool {
+    let TypedExprKind::Cast {
+        value,
+        target_ty,
+        check: None,
+    } = &expression.kind
+    else {
+        return false;
+    };
+    let Ok(callee) = typed.try_expr(*value) else {
+        return false;
+    };
+    callee.span == expression.span
+        && matches!(target_ty.peel(), Type::Function { .. })
+        && matches!(callee.ty.peel(), Type::Union(members)
+            if members.iter().all(|member| matches!(member.peel(), Type::Function { .. })))
 }
 
 /// A source identifier may lower to a cast around its wider ABI storage read.
@@ -763,6 +789,7 @@ fn bindings(
             _ => {}
         }
     }
+    out.extend(postfix_operands(typed, reachable));
     for (span, ty, _) in &mut out {
         if let Some(authored) =
             typed
@@ -773,6 +800,32 @@ fn bindings(
         }
     }
     out
+}
+
+/// The binding a postfix `++`/`--` updates, at the narrowed type it reads the
+/// binding at. The target itself records the declared type it writes back.
+fn postfix_operands(
+    typed: &TypedAst,
+    reachable: &typed_reachability::Reachable,
+) -> Vec<(Span, Type, bool)> {
+    (0..typed.exprs_len())
+        .filter_map(|i| {
+            let id = ExprId(i as u32);
+            let TypedExprKind::PostfixUnary { target, .. } = &typed.try_expr(id).unwrap().kind
+            else {
+                return None;
+            };
+            let span = match target {
+                PostfixTarget::Local { ident, .. } => ident.span,
+                PostfixTarget::Global { name, .. } => name.span,
+                PostfixTarget::Field { .. } | PostfixTarget::Index { .. } => return None,
+            };
+            let ty = typed
+                .postfix_operand_types
+                .get(&(span.file.0, span.start, span.end))?;
+            Some((span, ty.clone(), reachable.expressions.contains(&id)))
+        })
+        .collect()
 }
 
 /// Each assignment to a variable written as a statement, with its value's

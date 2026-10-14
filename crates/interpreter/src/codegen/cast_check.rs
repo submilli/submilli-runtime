@@ -76,12 +76,18 @@ pub fn emit_cast(
     }
 
     let Some(check_shape) = check else {
-        if &source_ty
-            != ctx
-                .ta
-                .source_type(value)
-                .map_err(crate::codegen::arena_failure)?
-        {
+        let static_ty = ctx
+            .ta
+            .source_type(value)
+            .map_err(crate::codegen::arena_failure)?;
+        if crate::codegen::closure_coercions::is_union_call_cast(static_ty, target_ty) {
+            emit_expr(emitter, ctx, value)?;
+            cast::emit_box(emitter, ctx, &source_ty)?;
+            return crate::codegen::closure_coercions::emit_union_call_cast(
+                emitter, ctx, target_ty,
+            );
+        }
+        if &source_ty != static_ty {
             emit_expr(emitter, ctx, value)?;
             let enclosing = map_cast_span(emitter, cast_span);
             emit_checked_cast_on_stack(emitter, ctx, &source_ty, target_ty)?;

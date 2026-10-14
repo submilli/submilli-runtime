@@ -1035,6 +1035,10 @@ pub struct FieldSig {
     pub visibility: crate::Visibility,
     pub readonly: bool,
     pub optional: bool,
+    /// Declared as a bodyless optional method (`f?(): T;`), which a subclass
+    /// may override with a method.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub method: bool,
     pub doc: Option<crate::DocComment>,
 }
 

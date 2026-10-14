@@ -1,2 +1,0 @@
-
-line 11 type: bug SUB-1546 `x` in `x++` after a `typeof` guard is recorded with its declared type
