@@ -150,6 +150,11 @@ impl Inferer<'_> {
         let Some(receiver_path) = self.expr_to_reference_path(receiver)? else {
             return Ok(None);
         };
+        // A receiver written after the sibling was read may hold another
+        // value by the time `env` narrows it.
+        if !self.is_constant_reference(&receiver_path) {
+            return Ok(None);
+        }
         let Some(receiver_view) = env.get(&receiver_path) else {
             return Ok(None);
         };
@@ -210,28 +215,29 @@ impl Inferer<'_> {
         if matches!(receiver.peel(), Type::Never) || narrowing::is_ruled_out(receiver) {
             return Some(receiver.clone());
         }
-        let members = match receiver.peel() {
-            Type::Union(members) => members.clone(),
-            _ => vec![receiver.clone()],
-        };
-        let member_types: Option<Vec<Type>> = members
-            .iter()
-            .map(|member| match elem {
-                narrowing::PathElem::Field(field) => {
-                    self.union_member_field_read_ty(member, field).ok()
-                }
-                narrowing::PathElem::Index(narrowing::LiteralValue::Number(n)) => {
-                    let Type::Tuple(elements) = member.peel() else {
-                        return None;
-                    };
-                    // A pattern reads past a shorter tuple's end as `undefined`.
-                    let position = narrowing::tuple_position(n.0)?;
-                    Some(elements.get(position).cloned().unwrap_or(Type::Undefined))
-                }
-                _ => None,
-            })
+        let member_types: Option<Vec<Type>> = narrowing::union_members(receiver)
+            .into_iter()
+            .map(|member| self.member_element_read_type(member, elem))
             .collect();
         member_types.map(Type::union)
+    }
+
+    /// What reading `elem` off one union member gives. A pattern reads past a
+    /// shorter tuple's end as `undefined`.
+    fn member_element_read_type(&self, member: &Type, elem: &narrowing::PathElem) -> Option<Type> {
+        match elem {
+            narrowing::PathElem::Field(field) => {
+                self.union_member_field_read_ty(member, field).ok()
+            }
+            narrowing::PathElem::Index(narrowing::LiteralValue::Number(n)) => {
+                let Type::Tuple(elements) = member.peel() else {
+                    return None;
+                };
+                let position = narrowing::tuple_position(n.0)?;
+                Some(elements.get(position).cloned().unwrap_or(Type::Undefined))
+            }
+            _ => None,
+        }
     }
 
     /// `cond` with the aliased `const` it tests replaced by its initializer:
@@ -313,22 +319,18 @@ impl Inferer<'_> {
     /// `ty` narrowed to what `current` still holds: each member of `ty` that
     /// `current` admits, or else the members of `current` within it.
     fn narrowed_within(&self, ty: &Type, current: &Type) -> Type {
-        let members = |ty: &Type| match ty.peel() {
-            Type::Union(members) => members.clone(),
-            _ => vec![ty.clone()],
-        };
-        let current_members = members(current);
+        let current_members = narrowing::union_members(current);
         Type::union(
-            members(ty)
+            narrowing::union_members(ty)
                 .into_iter()
                 .flat_map(|member| {
-                    if super::assignable(&member, current, self.resolver()) {
-                        return vec![member];
+                    if super::assignable(member, current, self.resolver()) {
+                        return vec![member.clone()];
                     }
                     current_members
                         .iter()
-                        .filter(|held| super::assignable(held, &member, self.resolver()))
-                        .cloned()
+                        .filter(|held| super::assignable(held, member, self.resolver()))
+                        .map(|held| (*held).clone())
                         .collect()
                 })
                 .collect(),

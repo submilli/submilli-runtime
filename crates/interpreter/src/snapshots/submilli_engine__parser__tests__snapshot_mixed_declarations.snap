@@ -210,6 +210,8 @@ Ast {
     ],
     pattern_origins: {},
     tuple_pattern_sources: {},
+    tuple_pattern_pads: {},
+    object_pattern_sources: {},
     parameter_bindings: {},
     for_of_pattern_bindings: {},
     for_pattern_init_bindings: {},

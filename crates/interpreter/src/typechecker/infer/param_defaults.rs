@@ -54,10 +54,8 @@ impl Inferer<'_> {
         for (param, input_ty) in params.iter().zip(input_types) {
             if let Some(default) = param.default {
                 let reads_before = self.parameter_read_types(params);
-                self.push_narrow_frame(super::narrowing::NarrowEnv::new());
-                let lowered = self.lower_parameter_default(param, input_ty, default, &mut prologue);
-                let (written, _) = self.pop_narrow_frame_capture()?;
-                lowered?;
+                let written =
+                    self.lower_default_capturing_writes(param, input_ty, default, &mut prologue)?;
                 self.join_default_writes(params, param, reads_before, &written);
             } else {
                 let incoming = self.parameter_input(param, input_ty)?;
@@ -136,6 +134,25 @@ impl Inferer<'_> {
         prologue.push(self.initialize_parameter(param, input_ty, value)?);
         self.bind_initialized_parameter(param, input_ty, body_ty, write_ty);
         Ok(())
+    }
+
+    /// Lowers `param`'s default in a narrowing frame of its own and returns
+    /// what that frame left: the narrowings its writes installed, which must
+    /// not leak into the body, since the default may not run.
+    fn lower_default_capturing_writes(
+        &mut self,
+        param: &ParamDecl,
+        input_ty: &Type,
+        default: ExprId,
+        prologue: &mut Vec<StmtId>,
+    ) -> Result<super::narrowing::NarrowEnv, CompilerFailure> {
+        self.push_narrow_frame(super::narrowing::NarrowEnv::new());
+        let lowered = self.lower_parameter_default(param, input_ty, default, prologue);
+        // The frame comes off before an error propagates, to keep the stack
+        // balanced.
+        let (written, _) = self.pop_narrow_frame_capture()?;
+        lowered?;
+        Ok(written)
     }
 
     fn parameter_read_types(&self, params: &[ParamDecl]) -> Vec<Option<Type>> {
