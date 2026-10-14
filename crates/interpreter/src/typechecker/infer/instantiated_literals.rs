@@ -13,10 +13,10 @@
 //! Object literals are left alone: codegen lays them out from their type.
 
 use crate::compiler_error::CompilerFailure;
-use crate::types::LiteralF64;
 use crate::{ExprId, Type, TypedArrayElement, TypedExprKind};
 
 use super::Inferer;
+use super::expr::number_literal_type;
 use super::inference_sources::is_literal_of_context;
 
 impl Inferer<'_> {
@@ -43,12 +43,8 @@ impl Inferer<'_> {
                     .filter(|literal| is_literal_of_context(literal, slot))
             }
             TypedExprKind::Number(value) if current == Type::Number => {
-                Some(Type::NumberLiteral(LiteralF64(if *value == 0.0 {
-                    0.0
-                } else {
-                    *value
-                })))
-                .filter(|literal| is_literal_of_context(literal, slot))
+                Some(number_literal_type(*value))
+                    .filter(|literal| is_literal_of_context(literal, slot))
             }
             TypedExprKind::String(value) if current == Type::String => {
                 Some(Type::StringLiteral(value.clone()))
@@ -140,18 +136,18 @@ impl Inferer<'_> {
 /// The one member of `slot`, peeled, that `is_kind` accepts: a parameter such
 /// as `Map`'s `readonly [K, V][] | Iterable<[K, V]> | null` holds one array.
 fn sole_member(slot: &Type, is_kind: impl Fn(&Type) -> bool) -> Option<&Type> {
-    let mut members = match slot.peel() {
-        Type::Union(members) => members
-            .iter()
-            .map(Type::peel)
-            .filter(|m| is_kind(m))
-            .collect(),
-        other => vec![other]
-            .into_iter()
-            .filter(|m| is_kind(m))
-            .collect::<Vec<_>>(),
+    let members: Vec<&Type> = match slot.peel() {
+        Type::Union(members) => members.iter().map(Type::peel).collect(),
+        other => vec![other],
     };
-    (members.len() == 1).then(|| members.remove(0))
+    match members
+        .into_iter()
+        .filter(|m| is_kind(m))
+        .collect::<Vec<_>>()[..]
+    {
+        [only] => Some(only),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

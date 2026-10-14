@@ -1641,6 +1641,27 @@ impl Inferer<'_> {
             .is_some_and(|params| params.iter().all(|p| p.ty.is_some())))
     }
 
+    /// The type parameters a context-sensitive callback fixes by typing a
+    /// parameter of its own, and the parameter types such callbacks are
+    /// passed for.
+    fn type_params_fixed_by_callbacks<'p>(
+        &mut self,
+        args_with_param_types: &'p [(ExprId, Type)],
+        inferred_generics: &[String],
+    ) -> Result<(std::collections::BTreeSet<String>, Vec<&'p Type>), CompilerFailure> {
+        let mut callback_params = Vec::new();
+        for (arg_id, param_ty) in args_with_param_types {
+            if self.is_context_sensitive_function(*arg_id)?
+                || self.literal_holds_context_sensitive_function(*arg_id)?
+            {
+                callback_params.push(param_ty);
+            }
+        }
+        let names =
+            self.type_params_bindable_by_later_arguments(args_with_param_types, inferred_generics)?;
+        Ok((names, callback_params))
+    }
+
     /// Infer a generic call's arguments against `params`, binding its type
     /// parameters in `sub`. A function literal with an unannotated parameter,
     /// passed for a function-typed parameter, is inferred after the others,
@@ -1684,16 +1705,8 @@ impl Inferer<'_> {
                 (arg_id, param_ty)
             })
             .collect();
-        let mut callback_params = Vec::new();
-        for (arg_id, param_ty) in &args_with_param_types {
-            if self.is_context_sensitive_function(*arg_id)?
-                || self.literal_holds_context_sensitive_function(*arg_id)?
-            {
-                callback_params.push(param_ty);
-            }
-        }
-        let fixed = self
-            .type_params_bindable_by_later_arguments(&args_with_param_types, inferred_generics)?;
+        let (fixed_by_callbacks, callback_params) =
+            self.type_params_fixed_by_callbacks(&args_with_param_types, inferred_generics)?;
         let arguments = GenericArguments {
             inferred_generics,
             sourced_by_literals: self
@@ -1703,7 +1716,7 @@ impl Inferer<'_> {
                 ret,
                 inferred_generics,
                 FixedByCallbacks {
-                    names: &fixed,
+                    names: &fixed_by_callbacks,
                     callback_params: &callback_params,
                 },
             ),
@@ -2716,10 +2729,12 @@ struct FixedByCallbacks<'a> {
 }
 
 impl FixedByCallbacks<'_> {
-    /// Whether the fresh literals passed for `name` widen, as tsc widens the
-    /// candidates of a type parameter it fixes when they were all inferred at
-    /// the top level: `iterate((x) => x + 1, c ? 1 : 2)` binds `number`. Only
-    /// callbacks mention `name` other than at the top level of a parameter.
+    /// Whether the fresh literals passed for `name` widen. tsc widens the
+    /// candidates of a type parameter it fixes before a callback's parameter
+    /// when every candidate was inferred at the top level of a parameter:
+    /// `iterate((x) => x + 1, c ? 1 : 2)` binds `number`. So every parameter
+    /// mentioning `name` either is it at the top level or is a callback's
+    /// parameter that mentions it only inside function types.
     fn widens(&self, name: &str, mentioning: &[&Type]) -> bool {
         self.names.contains(name)
             && mentioning.iter().all(|param| {

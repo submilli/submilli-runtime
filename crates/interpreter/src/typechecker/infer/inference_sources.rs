@@ -448,15 +448,12 @@ impl FieldTypes {
     }
 }
 
-/// Whether `param` types a value only through one of `type_params`: it is one,
-/// or a union with one as a member and none inside another member, since tsc
-/// infers from a member's structure before a bare member.
 /// Whether `context` names a literal type of the kind of a literal in `ty`,
 /// tsc's `isLiteralOfContextualType`: `boolean` counts as `true | false`, and
 /// an enum as the union of its members.
 pub(super) fn is_literal_of_context(ty: &Type, context: &Type) -> bool {
     let literal_kinds = literal_kinds_named(context);
-    union_members(ty)
+    peeled_union_members(ty)
         .into_iter()
         .filter(|member| member.is_literal_type())
         .filter_map(literal_kind)
@@ -464,7 +461,7 @@ pub(super) fn is_literal_of_context(ty: &Type, context: &Type) -> bool {
 }
 
 fn literal_kinds_named(context: &Type) -> Vec<Type> {
-    union_members(context)
+    peeled_union_members(context)
         .into_iter()
         .filter(|member| {
             member.is_literal_type()
@@ -489,13 +486,16 @@ fn literal_kind(ty: &Type) -> Option<Type> {
 }
 
 /// `ty`'s members with aliases peeled, or `ty` alone when it is no union.
-fn union_members(ty: &Type) -> Vec<&Type> {
+fn peeled_union_members(ty: &Type) -> Vec<&Type> {
     match ty.peel() {
         Type::Union(members) => members.iter().map(Type::peel).collect(),
         other => vec![other],
     }
 }
 
+/// Whether `param` types a value only through one of `type_params`: it is one,
+/// or a union with one as a member and none inside another member, since tsc
+/// infers from a member's structure before a bare member.
 fn is_typed_by_type_param(param: &Type, type_params: &[String]) -> bool {
     let is_bare = |ty: &Type| is_bare(ty, type_params);
     let mentions_one =

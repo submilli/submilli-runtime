@@ -2030,6 +2030,13 @@ impl TypeParamSubstitution {
     }
 }
 
+/// Whether every member of `ty` is a literal type, `null` or `undefined`.
+fn is_literals_or_nullish(ty: &Type) -> bool {
+    ty.all_members(&|member| {
+        member.is_literal_type() || matches!(member, Type::Null | Type::Undefined)
+    })
+}
+
 fn is_primitive_literal(ty: &Type) -> bool {
     matches!(
         ty,
@@ -2529,11 +2536,4 @@ mod tests {
             .expect("T resolves through U");
         assert_eq!(resolved, vec![Type::Number]);
     }
-}
-
-/// Whether every member of `ty` is a literal type, `null` or `undefined`.
-fn is_literals_or_nullish(ty: &Type) -> bool {
-    ty.all_members(&|member| {
-        member.is_literal_type() || matches!(member, Type::Null | Type::Undefined)
-    })
 }
