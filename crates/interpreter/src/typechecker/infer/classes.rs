@@ -1467,7 +1467,10 @@ impl<'a> Inferer<'a> {
                 vec![
                     format!("inherited: {parent_fn}"),
                     format!("override:  {child_fn}"),
-                ],
+                ]
+                .into_iter()
+                .chain(required_where_omittable(&parent_sig, &child_sig))
+                .collect(),
             );
         }
         Ok(())
@@ -4724,6 +4727,23 @@ fn substitute_accessor_sig(
 /// How a visibility renders as the source keyword that produces it. `public` is
 /// the default and usually written implicitly, but a diagnostic naming the fix
 /// has to spell it.
+/// Help for an override that requires a parameter the inherited method lets
+/// callers omit. Unlike tsc, which accepts it, the override would receive
+/// `undefined` in a parameter whose type excludes it when called through the
+/// parent's type, since an omitted argument takes the callee's own default.
+fn required_where_omittable(parent: &MethodSig, child: &MethodSig) -> Option<String> {
+    let (_, param) = parent
+        .params
+        .iter()
+        .zip(&child.params)
+        .find(|(inherited, own)| inherited.is_omittable() && !own.is_omittable() && !own.rest)?;
+    Some(format!(
+        "a call through the inherited method may omit `{}`, which the override would then \
+         receive as undefined — give it a default, or make it optional",
+        param.name
+    ))
+}
+
 fn visibility_keyword(v: Visibility) -> &'static str {
     match v {
         Visibility::Public => "public",
