@@ -55,7 +55,7 @@ fn accessor_key(prefix: &str, key: &[u16]) -> wasmtime::Result<Vec<u16>> {
     Ok(result)
 }
 
-async fn get(
+pub(super) async fn get(
     caller: &mut Caller<'_, StoreData>,
     object: &Val,
     name: &Val,
@@ -112,7 +112,7 @@ async fn checked_data_value(
     Ok(value)
 }
 
-async fn set(
+pub(super) async fn set(
     caller: &mut Caller<'_, StoreData>,
     object: &Val,
     name: &Val,
@@ -146,7 +146,11 @@ async fn set(
     super::insert_field(caller, object, name, value)
 }
 
-fn has(caller: &mut Caller<'_, StoreData>, object: &Val, name: &Val) -> wasmtime::Result<bool> {
+pub(super) fn has(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    name: &Val,
+) -> wasmtime::Result<bool> {
     let key = read_string_units(caller, name, FIELD_NAME)?;
     if let Some(property) = find(caller, object, &key, false)? {
         return field_is_present(caller, &property.name, &property.value);
