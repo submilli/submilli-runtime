@@ -707,3 +707,15 @@ function main(): void {
     result.expect("successful builders and catchable range errors");
     assert_eq!(host_bytes, 0);
 }
+
+#[test]
+fn object_assign_array_growth_past_the_cap_is_not_catchable() {
+    let source = r#"
+function main(): void {
+  const target: number[] = [];
+  const source: Record<string, number> = { "65536": 1 };
+  try { Object.assign(target, source); } catch (e) { }
+}
+"#;
+    assert_cap_ends_the_run(source, 256 * 1024);
+}

@@ -34,6 +34,12 @@ fn run(raise: &str, body: &str, cfg: RuntimeConfig) -> wasmtime::Result<()> {
 const PRELUDE: &str = r#"
 function recurse(depth: number): number { return recurse(depth + 1) + 1; }
 function spin(): number { let n = 0; while (true) { n = n + 1; } }
+class EntryKey {
+  toString(): string { throw new Error("entry failed"); }
+}
+class RaisingDestination {
+  set value(value: number) { RAISE; }
+}
 class ViaGetter {
   // The `if` keeps the `return` reachable when RAISE is a `throw`.
   get value(): number { if (true) { RAISE; } return 0; }
@@ -82,6 +88,44 @@ const CALLBACK_SITES: &[(&str, &str)] = &[
         r#"const members = new Set<number>();
            members.add(1);
            try { members.forEach((value: number) => { RAISE; }); }
+           catch (e) { return "caught"; }
+           return "done";"#,
+    ),
+    (
+        "Object.fromEntries close",
+        r#"const pair: [string, number] = ["key", 1];
+           const erased: unknown[] = pair;
+           erased[0] = new EntryKey();
+           const iterable: Iterable<[string, number]> = {
+             iterator: (): Iterator<[string, number]> => ({
+               next: (): IteratorResult<[string, number]> => ({ done: false, value: pair }),
+               close: (): void => { RAISE; },
+             }),
+           };
+           try { Object.fromEntries(iterable); } catch (e) { return "caught"; }
+           return "done";"#,
+    ),
+    (
+        "Object.assign setter",
+        r#"try { Object.assign(new RaisingDestination(), { value: 1 }); }
+           catch (e) { return "caught"; }
+           return "done";"#,
+    ),
+    (
+        "Object.groupBy callback",
+        r#"try { Object.groupBy([1], (value: number): number => RAISE); }
+           catch (e) { return "caught"; }
+           return "done";"#,
+    ),
+    (
+        "Object.groupBy close",
+        r#"const iterable: Iterable<number> = {
+             iterator: (): Iterator<number> => ({
+               next: (): IteratorResult<number> => ({ done: false, value: 1 }),
+               close: (): void => { RAISE; },
+             }),
+           };
+           try { Object.groupBy(iterable, (): EntryKey => new EntryKey()); }
            catch (e) { return "caught"; }
            return "done";"#,
     ),
