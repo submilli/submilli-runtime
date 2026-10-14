@@ -700,6 +700,14 @@ impl Inferer<'_> {
             signature_help,
         )?;
 
+        let object_assign =
+            iface_mangled == crate::mangle::prelude("ObjectConstructor") && name.name == "assign";
+        let assign_result = if object_assign {
+            Some(self.object_assign_result(&typed_args)?)
+        } else {
+            None
+        };
+
         if has_rest || typed_args.len() < sig.params.len() {
             self.typed_ast
                 .record_authored_arguments(span, typed_args.clone());
@@ -790,7 +798,10 @@ impl Inferer<'_> {
             let element = self.instantiate(&sub, &Type::TypeVar("T".into()), span)?;
             self.reject_array_like_element_type(&element, span);
         }
-        let mut result_ty = self.instantiate(&sub, &sig.ret, span)?;
+        let mut result_ty = match assign_result {
+            Some(ty) => ty,
+            None => self.instantiate(&sub, &sig.ret, span)?,
+        };
         if array_from_mapper && mapper_type.as_ref().is_some_and(|ty| {
             matches!(ty.peel(), Type::Union(members) if members.iter().any(|member| member.peel() == &Type::Undefined))
         }) {
@@ -824,7 +835,11 @@ impl Inferer<'_> {
                     is_generic: matches!(p.ty, Type::TypeVar(_)),
                 })
                 .collect();
-            let return_cast = if return_needs_cast {
+            let return_cast = if object_assign && result_ty.is_structural_object() {
+                // The host validates and returns its object target. Added
+                // fields are checked on reads, like native dictionary results.
+                Some(Type::any_object())
+            } else if return_needs_cast {
                 Some(result_ty.clone())
             } else {
                 None

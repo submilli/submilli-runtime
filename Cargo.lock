@@ -996,7 +996,7 @@ dependencies = [
 
 [[package]]
 name = "conformance"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "submilli-engine",
  "submilli-wasm",
@@ -5373,7 +5373,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "submilli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5412,36 +5412,36 @@ dependencies = [
 
 [[package]]
 name = "submilli-blueprint"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "regex",
  "saphyr-parser",
  "serde",
  "serde_json",
  "serde_path_to_error",
  "serde_yml",
+ "submilli-policy",
  "tokio",
  "url",
 ]
 
 [[package]]
 name = "submilli-build"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "serde",
  "serde_json",
  "serde_yml",
- "submilli-blueprint",
  "submilli-engine",
+ "submilli-policy",
  "tempfile",
  "toml",
 ]
 
 [[package]]
 name = "submilli-engine"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -5491,8 +5491,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "submilli-policy"
+version = "0.4.1"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yml",
+ "submilli-engine",
+]
+
+[[package]]
 name = "submilli-server"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5541,7 +5552,7 @@ dependencies = [
 
 [[package]]
 name = "submilli-shared"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5562,6 +5573,7 @@ dependencies = [
  "submilli-blueprint",
  "submilli-build",
  "submilli-engine",
+ "submilli-policy",
  "tar",
  "tempfile",
  "tokio",

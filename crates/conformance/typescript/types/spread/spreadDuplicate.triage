@@ -1,3 +1,2 @@
 
-line 22 type: bug SUB-1209 a union of `{}` and an all-optional object type isn't reduced to the object type
-line 17, 21 type: bug SUB-1618 spreading an optional field declared `?: T | undefined` keeps `undefined`, where tsc treats it as `?: T`
+line 17, 21, 22 type: bug SUB-1618 spreading an optional field declared `?: T | undefined` keeps `undefined`, where tsc treats it as `?: T`

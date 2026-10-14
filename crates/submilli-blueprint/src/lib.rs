@@ -6,13 +6,11 @@ pub mod diff;
 mod edit;
 mod embedding;
 mod endpoint;
-mod filter;
 mod git;
 mod llm;
 mod locate;
 mod maps;
 mod mcp;
-mod permissions;
 mod secrets;
 mod variables;
 mod vfs_paths;
@@ -24,6 +22,7 @@ use std::time::Duration;
 
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer, de};
+use submilli_policy::{Decision, Permissions, RuleError, Rules};
 
 pub use auth_proxy::{
     AuthError, AuthProxyRule, AuthSpec, BasicAuth, Injections, SecretResolver, interpolate,
@@ -35,19 +34,18 @@ pub use embedding::{
     EmbeddingConfig, EmbeddingModelDecl, EmbeddingProviderDecl, EmbeddingProviderType,
     limits as embedding_limits,
 };
-pub use filter::{
-    ComparisonFailure, FailureReason, FieldMatch, FilterEvaluation, FilterExpr, VarBindings,
-};
 pub use git::{GitConfig, GitIdentity};
 pub use llm::{LlmConfig, LlmModelDecl, LlmProviderDecl};
 pub use locate::{Citation, RuleLocation, locate_key, locate_rule};
 pub use mcp::{McpAuth, McpServer};
-pub use permissions::{
-    Action, DefaultAction, NearMiss, PermissionRule, Resolution, ResolutionCause, RuleRef,
-};
 pub use secrets::{
     HarnessSecret, HarnessSecretBindings, HarnessSecretError, SecretSource,
     required_harness_secrets, resolve_harness_secrets,
+};
+pub use submilli_policy::{
+    Action, ComparisonFailure, DefaultAction, FailureReason, FieldMatch, FilterEvaluation,
+    FilterExpr, NearMiss, PermissionRule, Resolution, ResolutionCause, RuleRef, VarBindings,
+    validate_scoped_name,
 };
 pub use variables::{VariableDecl, VariableError, resolve_variables};
 
@@ -187,6 +185,9 @@ impl Blueprint {
         self.default_action.is_some() || !self.permissions.is_empty()
     }
 
+    // Blueprint-named entry points for existing callers. They evaluate through
+    // the `Rules` impl below, so the two cannot disagree.
+
     /// Resolve a permission and its zero-based index within the caller's rules.
     /// `None` identifies the blueprint's fall-through default.
     pub fn resolve_permission_with_rule(
@@ -196,14 +197,8 @@ impl Blueprint {
         context: &serde_json::Value,
         vars: &VarBindings,
     ) -> (Action, Option<usize>) {
-        permissions::resolve_with_rule(
-            &self.permissions,
-            self.default_action.unwrap_or_default(),
-            caller,
-            capability,
-            context,
-            vars,
-        )
+        let Decision { action, rule } = Rules::resolve(self, caller, capability, context, vars);
+        (action, rule)
     }
 
     /// [`Self::resolve_permission_with_rule`] plus the reasoning: the deciding
@@ -217,14 +212,7 @@ impl Blueprint {
         context: &serde_json::Value,
         vars: &VarBindings,
     ) -> Resolution {
-        permissions::explain(
-            &self.permissions,
-            self.default_action.unwrap_or_default(),
-            caller,
-            capability,
-            context,
-            vars,
-        )
+        Rules::explain(self, caller, capability, context, vars)
     }
 
     /// Resolve a capability `check()` for `caller` against this blueprint's
@@ -238,14 +226,20 @@ impl Blueprint {
         context: &serde_json::Value,
         vars: &VarBindings,
     ) -> Action {
-        permissions::resolve(
-            &self.permissions,
-            self.default_action.unwrap_or_default(),
-            caller,
-            capability,
-            context,
-            vars,
-        )
+        Rules::resolve(self, caller, capability, context, vars).action
+    }
+}
+
+/// A blueprint's `permissions:` rules and `default:`, so a check can evaluate
+/// them in place.
+impl Rules for Blueprint {
+    fn permissions(&self) -> &Permissions {
+        &self.permissions
+    }
+
+    /// `default:` when set, else `deny`.
+    fn default_action(&self) -> DefaultAction {
+        self.default_action.unwrap_or_default()
     }
 }
 
@@ -1306,7 +1300,7 @@ pub fn parse(yaml: &str) -> Result<Blueprint, BlueprintError> {
     validate_name(&blueprint.name)?;
     validate_packages(&blueprint.packages)?;
     auth_proxy::validate_auth_proxy(&blueprint)?;
-    permissions::validate(&blueprint.permissions)?;
+    validate_permissions(&blueprint.permissions)?;
     variables::validate_variables(&blueprint)?;
     git::validate(&blueprint)?;
     vfs_paths::validate(&blueprint)?;
@@ -1526,60 +1520,21 @@ fn validate_package_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Validate a scoped package name `@org/leaf` and return its parts.
-///
-/// Package namespaces are GitHub-org-rooted: the scope must be a GitHub-org
-/// token (ASCII alphanumeric with single internal hyphens, no leading/trailing
-/// hyphen, no dots, 1–39 chars). The leaf is permissive (`[A-Za-z0-9._-]`, not
-/// `.`/`..`). The `Err` is an LLM-actionable message naming the fix. This is the
-/// single source of truth for package-name shape — the blueprint, the package
-/// store, and the build manifest all route through it.
-pub fn validate_scoped_name(name: &str) -> Result<(&str, &str), String> {
-    let Some(rest) = name.strip_prefix('@') else {
-        return Err(format!(
-            "package `{name}` must use scoped form `@org/name` (GitHub org as the scope)"
-        ));
-    };
-    let mut parts = rest.split('/');
-    let org = parts.next().unwrap_or_default();
-    let leaf = parts.next().unwrap_or_default();
-    if leaf.is_empty() || parts.next().is_some() {
-        return Err(format!(
-            "package `{name}` must use scoped form `@org/name` (exactly one `/`)"
-        ));
-    }
-    if !is_valid_org(org) {
-        return Err(format!(
-            "package `{name}` scope `@{org}` must be a GitHub org: ASCII letters, digits, and single \
-             internal hyphens only (no dots), 1–39 characters"
-        ));
-    }
-    if !is_valid_leaf(leaf) {
-        return Err(format!(
-            "package `{name}` leaf `{leaf}` contains characters outside [A-Za-z0-9._-]"
-        ));
-    }
-    Ok((org, leaf))
-}
-
-/// GitHub org/user rules: 1–39 chars, ASCII alphanumeric or single internal
-/// hyphens, no leading/trailing hyphen.
-fn is_valid_org(org: &str) -> bool {
-    if org.is_empty() || org.len() > 39 {
-        return false;
-    }
-    if org.starts_with('-') || org.ends_with('-') || org.contains("--") {
-        return false;
-    }
-    org.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-}
-
-fn is_valid_leaf(leaf: &str) -> bool {
-    if leaf.is_empty() || leaf == "." || leaf == ".." {
-        return false;
-    }
-    leaf.chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+/// The rule checks deserializing can't express, as a blueprint error that
+/// points at the offending YAML.
+fn validate_permissions(permissions: &Permissions) -> Result<(), BlueprintError> {
+    submilli_policy::validate_rules(permissions).map_err(|error| {
+        let path = match &error {
+            RuleError::EmptyCaller { caller } => yaml_path!["permissions", caller],
+            RuleError::EmptyCapability { caller, index } => {
+                yaml_path!["permissions", caller, *index, "capability"]
+            }
+            RuleError::EmptyName { caller, index } => {
+                yaml_path!["permissions", caller, *index, "name"]
+            }
+        };
+        BlueprintError::InvalidPermissions(Fault::at(path, error.to_string()))
+    })
 }
 
 /// Parse a human duration like `5m`, `30m`, `90s`, `1h`. Units: s, m, h.
@@ -2072,6 +2027,36 @@ permissions:
             matches!(err, BlueprintError::InvalidPermissions(_)),
             "got {err:?}"
         );
+    }
+
+    /// The rule checks `submilli-policy` makes read as they always have, and
+    /// point at the offending YAML.
+    #[test]
+    fn rule_errors_name_the_offending_yaml() {
+        for (rules, message, path) in [
+            (
+                "  '':\n    - {capability: a, action: allow}\n",
+                "caller identifier must not be empty",
+                yaml_path!["permissions", ""],
+            ),
+            (
+                "  main:\n    - {capability: a, action: allow}\n    - {capability: '', action: allow}\n",
+                "caller 'main': a rule has an empty capability name",
+                yaml_path!["permissions", "main", 1usize, "capability"],
+            ),
+            (
+                "  main:\n    - {name: '', capability: a, action: allow}\n",
+                "caller 'main': a rule has an empty name",
+                yaml_path!["permissions", "main", 0usize, "name"],
+            ),
+        ] {
+            let err = parse(&format!("name: x\npermissions:\n{rules}")).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!("invalid permissions config: {message}")
+            );
+            assert_eq!(err.fault().and_then(|fault| fault.path.clone()), Some(path));
+        }
     }
 
     #[test]

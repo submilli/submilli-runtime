@@ -7,6 +7,7 @@
 //! MCP servers and resolve `store:` secrets locally, with the same semantics the
 //! server enforces in production.
 
+pub mod blueprint_validation;
 pub mod embedding;
 pub mod github;
 pub mod host;
