@@ -7,7 +7,10 @@
 //! `codegen/prelude/object_shape.rs`.
 
 use crate::runtime::host::{abi_arg, abi_result};
+mod assign;
 mod dynamic;
+mod from_entries;
+mod group_by;
 mod index;
 mod static_value;
 
@@ -31,6 +34,19 @@ use crate::{PackageDeclaration, Param, Type};
 
 fn ctor_key(method: &str) -> MangledName {
     crate::mangle::extend(&crate::mangle::prelude("ObjectConstructor"), method)
+}
+
+/// Canonical array-index property names, excluding 2^32 - 1.
+fn integer_key(units: &[u16]) -> Option<u32> {
+    if units.is_empty() || (units.len() > 1 && units.first() == Some(&48)) {
+        return None;
+    }
+    let mut number = 0_u32;
+    for &unit in units {
+        let digit = unit.checked_sub(48).filter(|digit| *digit <= 9)?;
+        number = number.checked_mul(10)?.checked_add(u32::from(digit))?;
+    }
+    (number < u32::MAX).then_some(number)
 }
 
 #[derive(Clone, Copy)]
@@ -568,6 +584,73 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         )?;
     }
 
+    for method in ["assign", "groupBy"] {
+        register_host_fn_async(
+            linker,
+            MODULE_NAME,
+            ctor_key(method),
+            ft(
+                vec![
+                    obj.clone(),
+                    if method == "assign" {
+                        ValType::Ref(RefType::new(
+                            false,
+                            HeapType::ConcreteStruct(intrinsic_array_type(&engine)?),
+                        ))
+                    } else {
+                        obj.clone()
+                    },
+                ],
+                vec![if method == "assign" {
+                    obj.clone()
+                } else {
+                    ValType::Ref(RefType::new(
+                        false,
+                        HeapType::ConcreteStruct(intr.object_shape.clone()),
+                    ))
+                }],
+            ),
+            true,
+            move |caller, params, results| {
+                Box::pin(async move {
+                    let first = abi_arg(params, 0)?;
+                    let second = abi_arg(params, 1)?;
+                    *abi_result(results, 0)? = match method {
+                        "assign" => assign::assign(caller, first, second).await?,
+                        "groupBy" => group_by::group_by(caller, first, second).await?,
+                        _ => {
+                            return Err(crate::runtime::host::fatal_host_error(
+                                "invalid object static dispatch",
+                            ));
+                        }
+                    };
+                    Ok(())
+                })
+            },
+        )?;
+    }
+
+    register_host_fn_async(
+        linker,
+        MODULE_NAME,
+        ctor_key("fromEntries"),
+        ft(
+            vec![obj.clone()],
+            vec![ValType::Ref(RefType::new(
+                false,
+                HeapType::ConcreteStruct(intr.object_shape.clone()),
+            ))],
+        ),
+        true,
+        |caller, params, results| {
+            Box::pin(async move {
+                *abi_result(results, 0)? =
+                    from_entries::from_entries(caller, abi_arg(params, 0)?).await?;
+                Ok(())
+            })
+        },
+    )?;
+
     register_host_fn(
         linker,
         MODULE_NAME,
@@ -755,6 +838,30 @@ pub fn declare(defs: &mut PackageDeclaration) {
     );
     declare_method(
         defs,
+        "assign",
+        ctor_key("assign"),
+        assign_params(),
+        Type::TypeVar("T".into()),
+    );
+    declare_method(
+        defs,
+        "groupBy",
+        ctor_key("groupBy"),
+        vec![
+            Param::new("items", Type::Unknown),
+            Param::new("keySelector", Type::Unknown),
+        ],
+        group_by_output(),
+    );
+    declare_method(
+        defs,
+        "fromEntries",
+        ctor_key("fromEntries"),
+        vec![Param::new("entries", from_entries_input())],
+        from_entries_output(),
+    );
+    declare_method(
+        defs,
         "hasOwn",
         ctor_key("hasOwn"),
         vec![obj(), Param::new("key", Type::String)],
@@ -770,6 +877,72 @@ pub fn declare(defs: &mut PackageDeclaration) {
         ],
         Type::Boolean,
     );
+}
+
+fn assign_params() -> Vec<Param> {
+    vec![
+        Param::new("target", Type::TypeVar("T".into())),
+        Param::rest("sources", Type::Array(Box::new(Type::Unknown))),
+    ]
+}
+
+fn group_by_params() -> Vec<Param> {
+    let element = Type::TypeVar("T".into());
+    vec![
+        Param::new(
+            "items",
+            Type::union(vec![
+                Type::Readonly(Box::new(Type::Array(Box::new(element.clone())))),
+                Type::prelude_interface("Iterable", vec![element.clone()]),
+                Type::prelude_interface("Iterator", vec![element.clone()]),
+            ]),
+        ),
+        Param::new(
+            "keySelector",
+            Type::Function {
+                params: vec![element, Type::Number],
+                optional: 0,
+                ret: Box::new(Type::TypeVar("K".into())),
+                predicate: None,
+                has_rest: false,
+            },
+        ),
+    ]
+}
+
+fn group_by_output() -> Type {
+    Type::Object {
+        fields: std::collections::BTreeMap::new(),
+        index: Some(crate::types::IndexSignature {
+            value: Box::new(Type::Array(Box::new(Type::TypeVar("T".into())))),
+            readonly: false,
+        }),
+    }
+}
+
+fn from_entries_input() -> Type {
+    let entry = Type::Readonly(Box::new(Type::Tuple(
+        vec![
+            Type::union(vec![Type::String, Type::Number]),
+            Type::TypeVar("T".to_string()),
+        ]
+        .into(),
+    )));
+    Type::union(vec![
+        Type::Readonly(Box::new(Type::Array(Box::new(entry.clone())))),
+        Type::prelude_interface("Iterable".to_string(), vec![entry.clone()]),
+        Type::prelude_interface("Iterator".to_string(), vec![entry]),
+    ])
+}
+
+fn from_entries_output() -> Type {
+    Type::Object {
+        fields: std::collections::BTreeMap::new(),
+        index: Some(crate::types::IndexSignature {
+            value: Box::new(Type::TypeVar("T".to_string())),
+            readonly: false,
+        }),
+    }
 }
 
 /// The type/interface surface this module implements — its slice of the
@@ -876,6 +1049,29 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ),
                         },
                     ),
+                    ("assign".into(), MethodSig {
+                        optional: false, generics: vec!["T".into()], params: assign_params(),
+                        ret: Type::TypeVar("T".into()), predicate: None,
+                        doc: doc("/** Copies own enumerable values from sources to the original target, in source order. Nullish sources are ignored. */"),
+                    }),
+                    ("groupBy".into(), MethodSig {
+                        optional: false, generics: vec!["K".into(), "T".into()], params: group_by_params(),
+                        ret: group_by_output(), predicate: None,
+                        doc: doc("/** Groups iterable elements by the callback's property key. The callback receives the element and its index; missing groups read as undefined. */"),
+                    }),
+                    (
+                        "fromEntries".to_string(),
+                        MethodSig {
+                            optional: false,
+                            generics: vec!["T".to_string()],
+                            params: vec![Param::new("entries", from_entries_input())],
+                            ret: from_entries_output(),
+                            predicate: None,
+                            doc: doc(
+                                "/** Creates a string-keyed object from entry pairs. Later entries replace earlier values with the same key. Numeric keys are converted to strings. Object.keys preserves entry insertion order; JSON output uses canonical key order. */",
+                            ),
+                        },
+                    ),
                     (
                         "hasOwn".to_string(),
                         MethodSig {
@@ -912,7 +1108,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 properties: BTreeMap::new(),
                 dispatch: Dispatch::Static,
                 doc: doc(
-                    "/** Constructor object for `Object` — the enumeration statics (`keys`/`values`/`entries`/`hasOwn`) and `is`. Accessed via the global `Object` binding. */",
+                    "/** Constructor object for `Object` — the enumeration statics (`keys`/`values`/`entries`/`hasOwn`), `assign`, `fromEntries`, `groupBy` and `is`. Accessed via the global `Object` binding. */",
                 ),
             },
         },
@@ -927,7 +1123,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             kind: ValueKind::Const {
                 ty: Type::prelude_interface("ObjectConstructor".to_string(), Vec::new()),
                 doc: doc(
-                    "/** The `Object` namespace — `Object.keys(o)`, `Object.values(o)`, `Object.entries(o)`, `Object.hasOwn(o, k)`, `Object.is(a, b)`. */",
+                    "/** The `Object` namespace — `Object.keys(o)`, `Object.values(o)`, `Object.entries(o)`, `Object.assign(target, ...sources)`, `Object.fromEntries(entries)`, `Object.groupBy(items, callback)`, `Object.hasOwn(o, k)`, `Object.is(a, b)`. */",
                 ),
             },
         },
