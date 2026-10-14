@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "8b2e285130d62bdc705ab4f93500a9b8576133777739e04cec5e209f79462dd3"
+  contentHash: "2205a17b6f7ffe1bf404c00c1ef204a12d01aaa88a90e96d933928f9322d999c"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -400,10 +400,10 @@ Outbound HTTP: get/post/put/patch/delete/head.
 | `get(url: string, headers?: Headers): Response` | `http.get { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP GET. |
 | `head(url: string, headers?: Headers): Response` | `http.head { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP HEAD. |
 | `options(url: string, headers?: Headers): Response` | `http.options { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP OPTIONS. |
-| `patch(url: string, body?: string \| Uint8Array \| {} \| unknown[] \| null, headers?: Headers): Response` | `http.patch { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP PATCH. |
-| `post(url: string, body?: string \| Uint8Array \| {} \| unknown[] \| null, headers?: Headers): Response` | `http.post { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP POST. |
-| `put(url: string, body?: string \| Uint8Array \| {} \| unknown[] \| null, headers?: Headers): Response` | `http.put { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP PUT. |
-| `request(method: string, url: string, body?: string \| Uint8Array \| {} \| unknown[] \| null, headers?: Headers): Response` | `http.get { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.post { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.put { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.patch { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.delete { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.head { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.options { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue an HTTP request with a runtime-chosen verb. |
+| `patch(url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.patch { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP PATCH. |
+| `post(url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.post { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP POST. |
+| `put(url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.put { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP PUT. |
+| `request(method: string, url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.get { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.post { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.put { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.patch { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.delete { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.head { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.options { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue an HTTP request with a runtime-chosen verb. |
 
 ### `DownloadOptions`
 

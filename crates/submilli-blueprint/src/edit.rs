@@ -25,9 +25,11 @@ use std::ops::RangeInclusive;
 
 use serde_json::Value;
 
-use crate::filter::{self, VarBindings};
-use crate::permissions::{Action, PermissionRule, ResolutionCause, RuleRef};
 use crate::{Blueprint, BlueprintError, VariableDecl};
+use submilli_policy::{
+    Action, PermissionRule, ResolutionCause, RuleRef, VarBindings, is_field_name,
+    is_valid_var_name, quote_literal,
+};
 
 /// The refused call a rule is drafted from.
 #[derive(Debug, Clone, Copy)]
@@ -331,7 +333,7 @@ fn draft_filter(
         let Some(operand) = operand(field, value, vars, declared)? else {
             continue;
         };
-        if !filter::is_field_name(field) {
+        if !is_field_name(field) {
             return Err(DraftError::UnaddressableField {
                 field: field.clone(),
             });
@@ -364,7 +366,7 @@ fn operand(
             require_printable(field, s)?;
             match bound_variable(s, vars, declared) {
                 Some(name) => format!("${{vars.{name}}}"),
-                None => filter::quote_literal(s).ok_or_else(|| DraftError::UnquotableValue {
+                None => quote_literal(s).ok_or_else(|| DraftError::UnquotableValue {
                     field: field.to_string(),
                 })?,
             }
@@ -409,7 +411,7 @@ fn bound_variable<'a>(
         .find(|(name, bound)| {
             bound.as_str() == value
                 && declared.contains_key(name.as_str())
-                && filter::is_valid_var_name(name)
+                && is_valid_var_name(name)
         })
         .map(|(name, _)| name.as_str())
 }

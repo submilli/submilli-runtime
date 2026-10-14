@@ -34,6 +34,7 @@ mod narrow_scopes;
 pub mod narrowing;
 mod nested_functions;
 mod object_normalization;
+mod object_statics;
 mod param_defaults;
 mod predicate_envs;
 mod records;

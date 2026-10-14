@@ -38,11 +38,18 @@ jobs:
       - name: Clippy (gate)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # The engine is published to crates.io. Packaging builds it from the
-      # packaged files alone, so a source file left out of the package fails
-      # here rather than at release.
+      # The engine, policy and build crates are published to crates.io.
+      # Packaging builds each from its packaged files alone, so a source file
+      # left out of a package fails here rather than at release.
       - name: Package for crates.io
-        run: cargo publish --dry-run --locked -p submilli-engine
+        run: cargo publish --dry-run --locked -p submilli-engine -p submilli-policy -p submilli-build
+
+      # The workspace build always turns on `submilli-policy`'s `engine`
+      # feature; embedders may not, so lint and test it without the feature too.
+      - name: Policy crate without the engine
+        run: |
+          cargo clippy --locked -p submilli-policy --all-targets -- -D warnings
+          cargo test --locked -p submilli-policy
 
       # The fixture harness defaults to a smoke subset (196 of 1054) for fast local
       # iteration. CI has no such constraint — the full sweep is a few seconds — and
@@ -51,6 +58,16 @@ jobs:
         run: cargo test --workspace
         env:
           SUBMILLI_FULL_TEST: 1
+
+      # Guards against an unexplained divergence from tsc: a typechecker change that
+      # alters a case's committed `.divergences`, or adds a divergence no `.triage`
+      # line explains, fails here rather than in the next nightly. The Test step
+      # already built this binary with the same features (`--workspace` keeps them
+      # unified), so this step only runs the suite, in about five seconds.
+      - name: TypeScript conformance
+        run: cargo test --workspace --test typescript -- --nocapture
+        env:
+          SUBMILLI_TEST_NIGHTLY_ONLY: 1
 
       # The shipped packages' own test files, run under each package's identity.
       # `cargo test` cannot cover this: the identity is stamped by the CLI at

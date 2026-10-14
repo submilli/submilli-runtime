@@ -73,7 +73,7 @@ On a machine with no registry credentials and a Kubernetes cluster whose CNI
 enforces NetworkPolicy, run:
 
 ```sh
-helm install submilli oci://ghcr.io/submilli/charts/submilli --version 0.4.1 --wait
+helm install submilli oci://ghcr.io/submilli/charts/submilli --version 0.4.2 --wait
 helm test submilli
 ```
 
