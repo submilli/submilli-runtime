@@ -5,14 +5,11 @@ slug: server/deploy-with-compose
 # The Compose ps output is from the earlier documented run; its image pin
 # was updated for 0.4.1. It could not be recaptured during release preparation
 # because the 0.4.1 image is published only with the release.
-# Turn on HTTPS was not run under Docker (no engine was available); the
-# SUBMILLI_TLS_* variables and --health-check over HTTPS were run with the
-# release binaries on main 51ce450b.
-# The application-token configuration was checked with the published 0.4.1
-# macOS binaries on 2026-10-14: the user token ran a local program and was denied
-# admin operations; the admin token could manage Blueprints. Missing and unknown
-# tokens were rejected. Container startup was not run because no Docker engine
-# was available.
+# The published 0.4.1 deployment passed Linux amd64 Docker CI on 2026-10-14:
+# https://github.com/submilli/submilli-runtime/actions/runs/38588647497
+# The check extracts this page's YAML and verifies health, admin/user roles,
+# application execution over the Docker network, store-key mounts, HTTPS and
+# application CA trust, and persistence across container recreation and down/up.
 sidebar:
   order: 6
 authorship:
