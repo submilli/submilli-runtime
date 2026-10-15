@@ -71,37 +71,51 @@ export class Client {
       });
     } catch (error) {
       if (error instanceof SignedOutError) throw error;
-      // Given up on by the page: the playground stops what the request started.
-      if (signal?.aborted) return { ok: false, kind: STOPPED, message: "stopped" };
-      return { ok: false, kind: "unreachable", message: UNREACHABLE };
+      return notAnswered(signal);
     }
     if (!response.ok) {
       const { code, message } = await errorBody(response);
       return { ok: false, kind: code, message };
     }
-    const answer = (await response.json()) as ActionAnswer<T>;
-    const error = answer.result.error;
+    let answer: ActionAnswer<T>;
+    try {
+      answer = (await response.json()) as ActionAnswer<T>;
+    } catch {
+      return notAnswered(signal);
+    }
+    const error = answer.result?.error;
     if (answer.exit !== 0 && error) return { ok: false, kind: error.kind, message: error.message };
-    if (answer.exit !== 0 && typeof (answer.result as { run?: unknown }).run !== "number") {
+    if (answer.exit !== 0 && typeof (answer.result as { run?: unknown } | null)?.run !== "number") {
       return { ok: false, kind: "failed", message: answer.text };
     }
     return { ok: true, result: answer.result, text: answer.text };
   }
 
   /** A raw request with the token attached, for the session feed's stream. */
-  async request(path: string, init: RequestInit): Promise<Response> {
+  async request(path: string, init: RequestInit, retried = false): Promise<Response> {
     const headers = new Headers(init.headers);
     const token = localStorage.getItem(SESSION_KEY);
     if (token) headers.set("authorization", `Bearer ${token}`);
     const fetchFn = this.options.fetch ?? globalThis.fetch;
     const response = await fetchFn(path, { ...init, headers });
     if (response.status === 401) {
-      localStorage.removeItem(SESSION_KEY);
+      // Signed in again while this request was out, here or in another tab: it is sent
+      // once more with the new token. A 401 comes before any route acts, so that's safe.
+      const now = localStorage.getItem(SESSION_KEY);
+      if (now !== null && now !== token && !retried) return this.request(path, init, true);
+      // A newer sign-in's token is left for the tab that made it.
+      if (now === token) localStorage.removeItem(SESSION_KEY);
       this.options.onSignedOut?.();
       throw new SignedOutError();
     }
     return response;
   }
+}
+
+/** No answer to act on: given up on by the page, which the playground takes as stopping what the request started, or the playground didn't answer. */
+function notAnswered(signal?: AbortSignal): { ok: false; kind: string; message: string } {
+  if (signal?.aborted) return { ok: false, kind: STOPPED, message: "stopped" };
+  return { ok: false, kind: "unreachable", message: UNREACHABLE };
 }
 
 async function errorBody(response: Response): Promise<{ code: string; message: string }> {

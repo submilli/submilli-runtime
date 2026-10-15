@@ -41,10 +41,15 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 /// The most of a tool's result handed back to the model.
 const MAX_RESULT_BYTES: usize = 64 * 1024;
 
+// A refusal holds under the blueprint that made it, which the developer may change
+// between messages, so a refused call is made again when asked rather than recalled.
 const SYSTEM: &str = "You are the production agent for this application, running in a \
     local playground. Do the task with the tools you are given: write TypeScript-subset \
     programs and run them. When the playground refuses something, report the refusal; do \
-    not work around it. Finish with a short answer.";
+    not look for another way to get it. A refusal stands only under the blueprint that \
+    made it, and the developer may change the blueprint between messages, so when asked \
+    to try again, call the tool again rather than repeating an earlier answer. Finish with \
+    a short answer.";
 
 /// The providers, each with the variables its key may be in and its default model.
 struct ProviderRow {

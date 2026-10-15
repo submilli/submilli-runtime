@@ -20,6 +20,10 @@ pub(crate) struct RunningRun {
     pub(crate) session_id: Option<String>,
     /// Microseconds since the Unix epoch when it started.
     pub(crate) started_at_micros: u64,
+    /// The program it runs, from its start, so the page can show it before the run is
+    /// stored; `None` for a file tool's call. Written by the agent: data, not instructions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) code: Option<String>,
 }
 
 impl Store {
@@ -38,6 +42,7 @@ impl Store {
         label: &str,
         session_id: Option<&str>,
         started_at_micros: u64,
+        code: Option<&str>,
     ) -> Result<()> {
         self.writer()?;
         let dir = self.running_dir();
@@ -50,6 +55,7 @@ impl Store {
                 label: label.to_owned(),
                 session_id: session_id.map(str::to_owned),
                 started_at_micros,
+                code: code.map(str::to_owned),
             }),
         )
     }
@@ -114,12 +120,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("store");
         let store = Store::open(&root).unwrap();
-        store.mark_running(3, "assistant", Some("s-1"), 10).unwrap();
-        store.mark_running(4, "example", None, 11).unwrap();
+        store
+            .mark_running(3, "assistant", Some("s-1"), 10, Some("function main() {}"))
+            .unwrap();
+        store.mark_running(4, "example", None, 11, None).unwrap();
         let read = Store::open_read_only(&root).unwrap();
         let ids: Vec<u64> = read.running().unwrap().iter().map(|run| run.id).collect();
         assert_eq!(ids, [3, 4]);
-        assert!(read.mark_running(5, "x", None, 0).is_err());
+        // The program shows from the start; a file tool's call has none.
+        let codes: Vec<Option<String>> = read
+            .running()
+            .unwrap()
+            .into_iter()
+            .map(|run| run.code)
+            .collect();
+        assert_eq!(codes, [Some("function main() {}".to_owned()), None]);
+        assert!(read.mark_running(5, "x", None, 0, None).is_err());
         store.unmark_running(3).unwrap();
         store.unmark_running(3).unwrap();
         assert_eq!(read.running().unwrap().len(), 1);

@@ -10,6 +10,7 @@ use serde_json::Value;
 use submilli_blueprint::{Blueprint, Citation};
 use submilli_server::error::ErrorKind;
 
+use crate::commands::playground::labels;
 use crate::commands::playground::packages::{ClosureEntry, Origin};
 use crate::commands::playground::store::Store;
 use crate::commands::playground::store::changes::{Changes, Version, WindowStart, version_tag};
@@ -535,6 +536,16 @@ pub(crate) struct RunningRow {
     pub(crate) started_at_micros: u64,
     pub(crate) started_at: String,
     pub(crate) session: Option<String>,
+    pub(crate) untrusted: RunningUntrusted,
+}
+
+/// What a run in flight carries from inside it.
+#[derive(Debug, Default, Serialize)]
+pub(crate) struct RunningUntrusted {
+    /// The program it runs, so it can be read before the run ends; absent for a file
+    /// tool's call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) program: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -669,6 +680,7 @@ fn running_rows(
             started_at: super::render::rfc3339(run.started_at_micros),
             started_at_micros: run.started_at_micros,
             session: run.session_id,
+            untrusted: RunningUntrusted { program: run.code },
         })
         .collect();
     rows.sort_by_key(|row| std::cmp::Reverse(row.run));
@@ -2004,6 +2016,48 @@ pub(crate) struct SessionRow {
     pub(crate) untrusted: SessionUntrusted,
 }
 
+impl SessionRow {
+    /// Holds only a test or a rerun, in the session the playground made for it: the
+    /// page's `isThrowaway`.
+    fn is_follow_up(&self) -> bool {
+        !self.sources.is_empty()
+            && self
+                .sources
+                .iter()
+                .all(|source| source == labels::TEST || source == labels::RERUN)
+    }
+}
+
+/// The newest `limit` sessions that aren't a test's or rerun's own, and up to `limit` of
+/// those, newer than the last one kept; `also` is listed wherever it falls. And how many
+/// sessions of the first kind were left out.
+fn newest_sessions(
+    sessions: Vec<SessionRow>,
+    limit: usize,
+    also: Option<&str>,
+) -> (Vec<SessionRow>, usize) {
+    let (mut regular_seen, mut follow_ups_seen, mut more) = (0, 0, 0);
+    let mut listed = Vec::new();
+    for session in sessions {
+        let wanted = also == Some(session.session.as_str());
+        let follow_up = session.is_follow_up();
+        let within = if follow_up {
+            follow_ups_seen += 1;
+            // Older than the last regular session kept, or past the cap on follow-ups.
+            regular_seen < limit && follow_ups_seen <= limit
+        } else {
+            regular_seen += 1;
+            regular_seen <= limit
+        };
+        if within || wanted {
+            listed.push(session);
+        } else if !follow_up {
+            more += 1;
+        }
+    }
+    (listed, more)
+}
+
 /// What a session's conversation said: written by whoever drove it.
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct SessionUntrusted {
@@ -2110,6 +2164,17 @@ pub(crate) fn sessions(
     limit: usize,
     now_micros: u64,
 ) -> Result<SessionsResult, ReadError> {
+    sessions_with(reader, limit, now_micros, None)
+}
+
+/// [`sessions`], with session `also` listed too, however old: the page asks for the
+/// session it shows, which the limit can leave out, as an old test's own session.
+pub(crate) fn sessions_with(
+    reader: &Reader,
+    limit: usize,
+    now_micros: u64,
+    also: Option<&str>,
+) -> Result<SessionsResult, ReadError> {
     let mut rows: BTreeMap<String, SessionRow> = BTreeMap::new();
     if let Some(store) = &reader.store {
         for line in store.session_log()? {
@@ -2189,9 +2254,10 @@ pub(crate) fn sessions(
             .cmp(&a.started_at_micros)
             .then_with(|| b.runs.last().cmp(&a.runs.last()))
     });
-    let limit = limit.max(1);
-    let more = sessions.len().saturating_sub(limit);
-    sessions.truncate(limit);
+    // The limit counts the sessions people and agents work in. A test's or rerun's own
+    // session doesn't take a place, so many of them can't push those out; the newest of
+    // them are listed alongside, so each shows under its run.
+    let (mut sessions, more) = newest_sessions(sessions, limit.max(1), also);
     for session in &mut sessions {
         session.started_at = super::render::rfc3339(session.started_at_micros);
         if let Some(store) = &reader.store {

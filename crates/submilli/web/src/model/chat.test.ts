@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { askBox, chatEmptyText, chatItems } from "./chat";
+import { askedFor } from "./format";
 import { logPane } from "./log";
 import { frame, readSession } from "./steps";
 import { chatSession, plainSession } from "./testdata";
@@ -21,6 +22,22 @@ describe("the chat while stepping", () => {
       expect(log.runningNote).toBe("Run 1, the agent’s 1st program, is running. It appears here when it ends.");
       expect(log.empty).toBeNull();
     }
+  });
+
+  it("says at a glance what a call asked for: its first value, named unless it reads on its own", () => {
+    expect(askedFor({ path: "/billing", recursive: true })).toBe("/billing");
+    expect(askedFor({ customerId: "cus_globex" })).toBe("customerId = cus_globex");
+    expect(askedFor({ limit: 5 })).toBe("limit = 5");
+    expect(askedFor({ query: "x".repeat(80) })).toBe("x".repeat(59) + "…");
+    expect(askedFor({})).toBe("");
+    expect(askedFor(undefined)).toBe("");
+  });
+
+  it("names the path a file tool's call asked for on its chip", () => {
+    const calls = chatSession();
+    calls.runs[1] = { ...calls.runs[1], entry: "mcp:submilli__files__list", untrusted: { contexts: { "1.1": { path: "/billing", recursive: true } } } };
+    const f = frame(calls, { ...INITIAL_UI, cursor: steps[5].key });
+    expect(chatItems(f).at(-1)).toMatchObject({ kind: "run", text: "Called files.list /billing · completed →", run: 1, hint: 'path = "/billing", recursive = true' });
   });
 
   it("puts the run's chip in once the run ends", () => {
@@ -67,7 +84,7 @@ describe("the chat at the latest event", () => {
 
   it("shows the agent's other tools with their friendly names", () => {
     const chat = chatItems(frame(plainSession(), INITIAL_UI));
-    expect(chat.find((c) => c.kind === "tool")).toEqual({ kind: "tool", text: "Searched packages · 2 kB back to the agent" });
+    expect(chat.find((c) => c.kind === "tool")).toEqual({ kind: "tool", text: "Searched packages · 2 kB answer" });
   });
 
   it("an open chat session takes a reply; a stepped-back or ended one doesn't", () => {

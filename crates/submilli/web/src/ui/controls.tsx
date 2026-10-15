@@ -1,6 +1,7 @@
 // Small controls the panes share.
-import { useId, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { useId, useMemo, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
+import type { ValueChange, ValuesNote } from "../model/format";
 import { parseMarkdown, type Span } from "../model/markdown";
 
 /**
@@ -85,9 +86,11 @@ export function Inline({ text }: { text: string }) {
 
 /** Markdown the agent wrote, drawn as text: see `parseMarkdown`, which never yields HTML. */
 export function Markdown({ text }: { text: string }) {
+  // The chat pane draws again on every event and keystroke; a message's text doesn't change.
+  const blocks = useMemo(() => parseMarkdown(text), [text]);
   return (
     <div className="pg-md">
-      {parseMarkdown(text).map((b, i) => {
+      {blocks.map((b, i) => {
         switch (b.kind) {
           case "paragraph":
             return <p key={i}>{spans(b.spans)}</p>;
@@ -158,4 +161,36 @@ export function Arrow() {
 
 export function cls(...names: (string | false | null | undefined)[]): string {
   return names.filter(Boolean).join(" ");
+}
+
+const changeText = (c: ValueChange) => c.name + " " + c.was + " → " + c.now;
+
+/** The first value that differs, and a "+N more" that opens the rest in place. */
+export function Values({ v }: { v: ValuesNote }) {
+  const [open, setOpen] = useState(false);
+  const [first, ...rest] = v.changes;
+  return (
+    <div className="pg-note">
+      <p>
+        {v.lead}
+        {changeText(first)}
+        {rest.length > 0 && (
+          <>
+            {" "}
+            <button className="pg-link pg-inline" aria-expanded={open} onClick={() => setOpen(!open)}>
+              {open ? "show less" : "(+" + rest.length + " more)"}
+            </button>
+          </>
+        )}
+        {v.tail}
+      </p>
+      {open && (
+        <ul className="pg-values">
+          {rest.map((c) => (
+            <li key={c.name}>{changeText(c)}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }

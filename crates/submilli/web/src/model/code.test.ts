@@ -113,6 +113,30 @@ describe("the code pane at the latest event", () => {
     );
   });
 
+  it("shows a run still going as soon as its program is read, ahead of the finished ones", () => {
+    const data = chatSession();
+    const last = data.events.at(-1)!;
+    const at = (last.position?.at_micros ?? 0) + 1;
+    data.events = [
+      ...data.events,
+      {
+        format: 1,
+        session_seq: last.session_seq + 1,
+        event_id: "started-9",
+        position: { at_micros: at, rank: 0 },
+        run: 9,
+        body: { event: { schema: 1, kind: "run-started", at_micros: at, label: "browser-chat", entry: "mcp" } },
+      } as unknown as (typeof data.events)[number],
+    ];
+    // Before its program is read, the last finished program still shows.
+    expect(codePane(frame(data, INITIAL_UI)).sub).toBe("program 4 · run 4");
+    data.running = { 9: "function main(): number {\n  return 1;\n}" };
+    const pane = codePane(frame(data, INITIAL_UI));
+    expect(pane.sub).toBe("program 5 · run 9 · running");
+    expect(pane.lines.length).toBe(3);
+    expect(pane.codeNote).toBe("Still running: its result shows in the log when it ends.");
+  });
+
   it("marks a picked decision's program line", () => {
     const pane = codePane(frame(chatSession(), { ...INITIAL_UI, sel: "d2.1", program: 2 }));
     expect(pane.sub).toBe("program 2 · run 2");

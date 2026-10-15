@@ -6,6 +6,9 @@ import { chatSession, withStoppedTests } from "./testdata";
 import { INITIAL_UI, type UiState } from "./ui";
 import type { PageData } from "../api/types";
 
+const DENIED_CHECK_REF =
+  "Submilli playground, check 2.1 (details - project: `billing-demo`, blueprint: `billing v1`, outcome: `denied`, call: `main → acme.com/charges.list`, see_with: `submilli playground explain 2.1`, draft_with: `submilli playground draft-rule 2.1`)";
+
 // Every run, check and follow-up open, as the page's Expand all leaves them.
 function allOpen(data: PageData): RunRow[] {
   const closed = logPane(frame(data, INITIAL_UI));
@@ -31,9 +34,9 @@ describe("the log's run rows", () => {
       ["Run 3 · the agent’s 3rd program", "Rejected", "bad"],
       ["Run 4 · the agent’s 4th program", "Completed", "ok"],
     ]);
-    expect(rows.map((r) => r.again.map((a) => a.cmd))).toEqual([
+    expect(rows.map((r) => r.again.map((a) => a.copy.text))).toEqual([
       ["submilli playground test 1", "submilli playground rerun 1"],
-      ["submilli playground draft-rule 2.1", "submilli playground test 2", "submilli playground rerun 2"],
+      [DENIED_CHECK_REF, "submilli playground test 2", "submilli playground rerun 2"],
       [],
       ["submilli playground test 4", "submilli playground rerun 4"],
     ]);
@@ -47,8 +50,12 @@ describe("the log's run rows", () => {
         what: "Change the blueprint first.",
         label: "Draft a rule for check 2.1",
         caution: false,
-        cmd: "submilli playground draft-rule 2.1",
-        copyTitle: "Copy the CLI command: submilli playground draft-rule 2.1",
+        copy: {
+          label: "Copy for assistant",
+          text: DENIED_CHECK_REF,
+          title: "Copies a line to paste into your coding assistant: " + DENIED_CHECK_REF,
+          what: "reference",
+        },
         note: "Shows a rule that allows exactly the call refused in check 2.1. Nothing changes until you save it. If the refusal is right, there’s nothing to fix.",
       },
       {
@@ -57,9 +64,8 @@ describe("the log's run rows", () => {
         what: "See whether this program gets through now.",
         label: "Test against blueprint v2",
         caution: false,
-        cmd: "submilli playground test 2",
-        copyTitle: "Copy the CLI command: submilli playground test 2",
-        note: "Nothing real happens: replies come from run 2’s recording.",
+        copy: { label: "Copy CLI command", text: "submilli playground test 2", title: "Copy the CLI command: submilli playground test 2", what: "command" },
+        note: "Nothing real happens: replies come from run 2’s recording, and it keeps run 2’s values.",
       },
       {
         action: { kind: "rerun", run: 2 },
@@ -67,8 +73,7 @@ describe("the log's run rows", () => {
         what: "Run it for real.",
         label: "Rerun for real…",
         caution: true,
-        cmd: "submilli playground rerun 2",
-        copyTitle: "Copy the CLI command: submilli playground rerun 2",
+        copy: { label: "Copy CLI command", text: "submilli playground rerun 2", title: "Copy the CLI command: submilli playground rerun 2", what: "command" },
         note: "Asks first. Uses the variables you’ve set now. A package change can’t lift a refusal; only the blueprint can.",
       },
     ]);
@@ -140,7 +145,8 @@ describe("the log's decision rows", () => {
     expect(row(rows, 2).decisions[0]).toMatchObject({
       id: "d2.1",
       ref: "2.1",
-      title: " · main → acme.com/charges.list",
+      title: " · main → acme.com/charges.list customerId = cus_globex",
+      hint: 'customerId = "cus_globex"',
       status: "Denied",
       tone: "bad",
       meta: "blueprint v1 · program line 4 · nothing fetched",
@@ -166,7 +172,7 @@ describe("the log's decision rows", () => {
       inspectLabel: "Blueprint v1, line 27",
       line: 4,
       next: ["submilli playground show 2", "submilli playground draft-rule 2.1"],
-      copyText: "Submilli playground, check 2.1 (details - project: `billing-demo`, blueprint: `billing v1`, outcome: `denied`, call: `main → acme.com/charges.list`, see_with: `submilli playground explain 2.1`)",
+      copyText: DENIED_CHECK_REF,
     });
   });
 
@@ -179,7 +185,8 @@ describe("the log's decision rows", () => {
       inspect: { version: 1, line: 27, label: "rule charges-for-signed-in-customer" },
     });
     expect(unnamed).toMatchObject({
-      title: " · @acme/billing → fs.read",
+      title: " · @acme/billing → fs.read /billing/charges.json",
+      hint: 'path = "/billing/charges.json"',
       decidedBy: "Allowed by rule 1 of @acme/billing, line 42.",
       meta: "blueprint v1 · program line 4 · 21.5 kB fetched",
       context: 'path = "/billing/charges.json"',
@@ -235,9 +242,31 @@ describe("the log's follow-up rows", () => {
     const data = chatSession();
     data.compares[7] = { ...data.compares[7], changes: data.compares[5].changes.filter((c) => c.kind === "newly-allowed") };
     data.runs[7] = { ...data.runs[7], blueprint_version: data.runs[1].blueprint_version, variables: { customerId: "cus_globex" } };
-    expect(row(allOpen(data), 1).follow[0].verdict).toBe(
-      "Check 2.1 is now allowed (rule globex-support, line 35). This rerun used other variables than run 1: customerId=cus_globex.",
-    );
+    const f7 = row(allOpen(data), 1).follow[0];
+    expect(f7.verdict).toBe("Check 2.1 is now allowed (rule globex-support, line 35).");
+    expect(f7.values).toEqual({
+      lead: "This rerun used other values than run 1: ",
+      changes: [{ name: "customerId", was: "cus_northwind", now: "cus_globex" }],
+      tail: ".",
+    });
+  });
+
+  it("say a test kept the run's values when the ones bound now differ, all of them, however many", () => {
+    const data = chatSession();
+    data.status = { ...data.status!, binding: { variables: { customerId: "cus_globex", region: "us", tier: "gold" }, secrets: [] } };
+    const f5 = row(allOpen(data), 2).follow[1];
+    expect(f5.values).toEqual({
+      lead: "This test kept run 2’s values; the ones bound now differ: ",
+      changes: [
+        { name: "customerId", was: "cus_northwind", now: "cus_globex" },
+        { name: "region", was: "not set", now: "us" },
+        { name: "tier", was: "not set", now: "gold" },
+      ],
+      tail: ". Rerun for real uses the bound ones.",
+    });
+    // Bound as the run was, nothing differs and nothing is said.
+    data.status = { ...data.status!, binding: { variables: { ...data.runs[2].variables }, secrets: [] } };
+    expect(row(allOpen(data), 2).follow[1].values).toBeNull();
   });
 
   it("say a rerun got the same result", () => {
@@ -356,16 +385,29 @@ describe("a run that was one of the agent's file tools", () => {
     const data = chatSession();
     data.runs[1] = { ...data.runs[1], entry: "mcp:list_files" };
     const rows = logPane(frame(data, INITIAL_UI)).rows;
-    expect(row(rows, 1).title).toBe("Run 1 · the agent’s list_files call");
+    expect(row(rows, 1).title).toBe("Run 1 · the agent’s list_files call customerId = cus_northwind");
     expect(row(rows, 2).title).toBe("Run 2 · the agent’s 1st program");
   });
 
-  it("offers only a rule for one the blueprint refused: it has no program to test or rerun", () => {
+  it("offers a rule and a recheck for a call the blueprint refused: it has no program to test or rerun", () => {
     const data = chatSession();
     data.runs[2] = { ...data.runs[2], entry: "mcp:list_files" };
     const denied = row(logPane(frame(data, INITIAL_UI)).rows, 2);
     expect(denied.thing).toBe("call");
-    expect(denied.again.map((a) => a.cmd)).toEqual(["submilli playground draft-rule 2.1"]);
+    expect(denied.again.map((a) => a.copy.text)).toEqual([DENIED_CHECK_REF, "submilli playground recheck 2"]);
+    expect(denied.again[1]).toMatchObject({ action: { kind: "recheck", run: 2 }, label: "Check against blueprint v2", note: "Nothing runs. To make the call again, ask the agent." });
+  });
+
+  it("names the path each call asked for, so two calls to one tool tell apart, and offers nothing for one that went through", () => {
+    const data = chatSession();
+    data.runs[1] = { ...data.runs[1], entry: "mcp:submilli__files__list", untrusted: { contexts: { "1.1": { path: "/", recursive: false } } } };
+    data.runs[2] = { ...data.runs[2], entry: "mcp:submilli__files__list", untrusted: { contexts: { "2.1": { path: "/billing", recursive: true } } } };
+    const rows = logPane(frame(data, INITIAL_UI)).rows;
+    expect(row(rows, 1).title).toBe("Run 1 · the agent’s files.list call /");
+    expect(row(rows, 2).title).toBe("Run 2 · the agent’s files.list call /billing");
+    expect(row(rows, 2).hint).toBe('path = "/billing", recursive = true');
+    expect(row(rows, 1).again).toEqual([]);
+    expect(row(rows, 2).again.map((a) => a.action.kind)).toEqual(["draft", "recheck"]);
   });
 });
 

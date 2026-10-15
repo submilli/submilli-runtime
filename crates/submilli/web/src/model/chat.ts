@@ -1,16 +1,17 @@
 // The chat pane: the conversation up to the cursor, with a line for each run.
-import { end, size } from "./format";
+import { askedFor, ctx, end, size, sourceRunOf } from "./format";
 import { actionBlock } from "./sessions";
-import { byAgent, fileTool, programNumber, type Frame } from "./steps";
+import { byAgent, callTarget, fileTool, programNumber, type Frame } from "./steps";
 
 export type ChatItem =
   | { kind: "message"; who: "You" | "Agent"; role: "user" | "agent"; text: string }
   /** One of the agent's other tools, such as a package search. */
-  | { kind: "tool"; text: string }
+  | { kind: "tool"; text: string; hint?: string }
   /** A program still running at this step: its run hasn't ended yet. */
   | { kind: "running"; text: string }
   /** A run's chip, which picks the run in the log. */
-  | { kind: "run"; text: string; run: number; selected: boolean }
+  /** `hint` is every field the call asked for, for hover text. */
+  | { kind: "run"; text: string; run: number; selected: boolean; hint?: string }
   /** A new session's first message, sent and not answered yet. */
   | { kind: "wait"; text: string }
   /** A message the agent couldn't answer, and why. */
@@ -19,6 +20,8 @@ export type ChatItem =
   | { kind: "stopped"; text: string; note: string };
 
 /** The agent's tools other than running a program, by the name they're called with. */
+const FILE_TOOLS = new Set(["list", "list_files", "read", "read_file"]);
+
 const TOOLS: Record<string, string> = {
   search: "Searched packages",
   docs: "Read package docs",
@@ -57,14 +60,24 @@ export function chatItems(f: Frame): ChatItem[] {
       const user = s.role === "user";
       items.push({ kind: "message", who: user ? "You" : "Agent", role: user ? "user" : "agent", text: s.text });
     } else if (s.kind === "tool") {
-      items.push({ kind: "tool", text: (TOOLS[s.tool] || s.tool) + " · " + size(s.bytes) + " back to the agent" });
+      // A file tool's own run names what it asked on its chip; the others say it here.
+      const asked = FILE_TOOLS.has(s.tool) ? "" : askedFor(s.args);
+      // A file tool's answer is its run's, which Returned to agent counts; a lookup's isn't
+      // the app's data, so it isn't said the same way.
+      const sent = FILE_TOOLS.has(s.tool) ? " back to the agent" : " answer";
+      const tool: ChatItem = { kind: "tool", text: (TOOLS[s.tool] || s.tool) + (asked ? " for " + asked : "") + " · " + size(s.bytes) + sent };
+      if (asked) tool.hint = ctx(s.args);
+      items.push(tool);
     } else if (!byAgent(f, s.run)) {
       // Your coding assistant's runs show in the log; the agent never saw them.
       continue;
     } else if (s.kind === "run") {
       const tool = fileTool(f, s.run);
-      const what = tool ? "Called " + tool : "Ran program " + programNumber(f, s.run);
-      items.push({ kind: "run", text: what + " · " + runWord(f, s.run) + " →", run: s.run, selected: picked === s.run });
+      const target = callTarget(f, s.run);
+      const what = tool ? "Called " + tool + (target.text ? " " + target.text : "") : "Ran program " + programNumber(f, s.run);
+      const chip: ChatItem = { kind: "run", text: what + " · " + runWord(f, s.run) + " →", run: s.run, selected: picked === s.run };
+      if (target.all) chip.hint = target.all;
+      items.push(chip);
     } else if (!f.ended.includes(s.run) && !running.has(s.run)) {
       running.add(s.run);
       items.push({ kind: "running", text: "Running program " + programNumber(f, s.run) + "…" });
@@ -86,7 +99,7 @@ export function followUpSession(f: Frame, knownSource: number | null = null): { 
   const run = f.info.runs[0] ?? f.running[0] ?? null;
   const show = run !== null ? f.data.runs[run] : undefined;
   // While it runs there is no record yet; the run it followed may be known from where it was started.
-  return { kind, run, source: (show ? show.rerun_of ?? show.test?.source_run : null) ?? knownSource };
+  return { kind, run, source: (show ? sourceRunOf(show) : null) ?? knownSource };
 }
 
 export function chatEmptyText(f: Frame, knownSource: number | null = null): string {
@@ -111,6 +124,8 @@ export interface AskBox {
   reason?: string;
   /** The agent is answering a message sent here: Send becomes Stop. */
   stop?: boolean;
+  /** It can't send yet, but the next message can be written in it meanwhile. */
+  typeAhead?: boolean;
   /** When there's no chat to send into: why, shown in the box's place, and whether New session is offered there. */
   none?: { text: string; offer: boolean; /** Back to the session the reader came from, by its short id. */ back?: string };
 }

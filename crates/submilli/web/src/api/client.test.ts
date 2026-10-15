@@ -46,6 +46,25 @@ test("a 401 from any route clears the token and reports the page signed out", as
   await expect(client.act("/api/cancel", { run: 1 })).rejects.toBeInstanceOf(SignedOutError);
 });
 
+test("a 401 for a token replaced meanwhile, by a sign-in in another tab, is sent again with the new one", async () => {
+  const { server, client, onSignedOut } = signedIn();
+  server.token = "signed-in-again";
+  server.handle = (call) => {
+    if (call.headers.get("authorization") === "Bearer tok-secret") localStorage.setItem(SESSION_KEY, "signed-in-again");
+    return undefined;
+  };
+  const status = await client.read<{ project: string }>("/api/status");
+  expect(status.project).toBe("/home/dev/billing-demo");
+  expect(localStorage.getItem(SESSION_KEY)).toBe("signed-in-again");
+  expect(onSignedOut).not.toHaveBeenCalled();
+});
+
+test("an action answered with no JSON is an outcome, not an error", async () => {
+  const { server, client } = signedIn();
+  server.handle = (call) => (call.url === "/api/test" ? new Response("", { status: 200 }) : undefined);
+  expect(await client.act("/api/test", { run: 2 })).toMatchObject({ ok: false, kind: "unreachable" });
+});
+
 test("a read that isn't found carries the route's code and message", async () => {
   const { client } = signedIn();
   const error = await client

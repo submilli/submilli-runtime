@@ -12,6 +12,13 @@ export interface RequestedRun {
 /** What the signed-out screen tells the developer to do. */
 export const SIGNED_OUT_LINE = "Run `submilli playground open` for a new link.";
 
+/** The same, for a link to a run: the command whose link opens that run. */
+export function signedOutLine(requested: RequestedRun | null): string {
+  if (!requested) return SIGNED_OUT_LINE;
+  const at = requested.decision === null ? String(requested.run) : requested.run + "." + requested.decision;
+  return "Run `submilli playground open " + at + "` for a new link to it.";
+}
+
 export function readLink(hash: string): { code: string | null; requested: RequestedRun | null } {
   const params = new URLSearchParams(hash.replace(/^#/, ""));
   const run = whole(params.get("run"));

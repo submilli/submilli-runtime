@@ -1245,6 +1245,22 @@ function main(): string {
             assert_eq!(second["variables"]["customerId"], "cus_northwind");
             assert_eq!(second["session"], session);
 
+            // Several open sessions are said once: one of them, and how many more.
+            let other = playground.expect(
+                0,
+                &["session", "start", "--var", "customerId=cus_northwind"],
+            );
+            let bound = playground.run(&["bind", "customerId=cus_initech"]);
+            assert!(bound.status.success(), "{}", stderr(&bound));
+            let said = stderr(&bound);
+            assert_eq!(said.matches("warning:").count(), 1, "{said}");
+            assert!(
+                said.contains("2 open sessions keep their own values"),
+                "{said}"
+            );
+            assert!(said.contains("(+1 more)"), "{said}");
+            playground.expect(0, &["session", "end", other["session"].as_str().unwrap()]);
+
             // Naming another value for the session is refused.
             let refused = playground.expect(
                 2,
@@ -3469,7 +3485,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
 
         #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
         #[test]
-        fn the_page_runs_test_rerun_and_cancel_and_reaches_no_admin_route() {
+        fn the_page_runs_test_rerun_recheck_and_cancel_and_reaches_no_admin_route() {
             let (port, _log) = origin();
             let playground = Playground::with_blueprint(HTTP_BLUEPRINT);
             let page = playground.start();
@@ -3503,6 +3519,20 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             assert_eq!(answer["result"]["source"], "rerun", "{answer}");
             assert_eq!(answer["result"]["rerun_of"], run, "{answer}");
 
+            // A recheck from the page decides the checks again and runs nothing.
+            let runs_before = playground.runs();
+            let (status, answer) = call(
+                &page,
+                "POST",
+                "/api/recheck",
+                Some(&browser),
+                Some(json!({ "run": run })),
+            );
+            assert_eq!(status, 200, "{answer}");
+            assert_eq!(answer["result"]["kind"], "recheck", "{answer}");
+            assert_eq!(answer["result"]["ran"], false, "{answer}");
+            assert_eq!(playground.runs(), runs_before);
+
             // A run in flight, cancelled from the page.
             let looping = playground.write(
                 "loop.ts",
@@ -3515,6 +3545,25 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                 .spawn()
                 .unwrap();
             let in_flight = playground.runs() as u64 + 1;
+            // While it runs, the run list carries its program, so the page shows it.
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                let (status, listed) = call(&page, "GET", "/api/runs", Some(&browser), None);
+                assert_eq!(status, 200, "{listed}");
+                let running = listed["running"]
+                    .as_array()
+                    .and_then(|rows| rows.iter().find(|row| row["run"] == in_flight).cloned());
+                if let Some(row) = running {
+                    let program = row["untrusted"]["program"].as_str().unwrap_or_default();
+                    assert!(program.contains("total += i % 3"), "{row}");
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "run {in_flight} never listed as running"
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
             let deadline = Instant::now() + Duration::from_secs(30);
             loop {
                 let (status, answer) = call(
@@ -3548,7 +3597,6 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                 ("POST", "/api/clear"),
                 ("POST", "/api/stop"),
                 ("POST", "/api/exec"),
-                ("POST", "/api/recheck"),
                 ("POST", "/api/sessions/start"),
                 ("POST", "/api/sessions/end"),
                 ("POST", "/api/login-codes"),

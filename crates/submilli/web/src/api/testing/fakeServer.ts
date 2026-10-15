@@ -133,6 +133,7 @@ export class FakeServer {
       if (path === "/api/rerun") return recorded("rerun.json");
       if (path === "/api/cancel") return recorded("cancel-not-in-flight.json");
       if (path === "/api/draft-rule") return recorded("draft-rule.json");
+      if (path === "/api/recheck") return recorded("recheck.json");
       if (path === "/api/agent") return recorded(b.session ? "agent-continue.json" : "agent-new.json");
     }
     return Response.json({ error: "not_found", message: `nothing at ${url}` }, { status: 404 });

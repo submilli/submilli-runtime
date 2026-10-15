@@ -7,6 +7,7 @@ import type {
   Changes,
   Compare,
   Draft,
+  Recheck,
   Explain,
   FeedSignal,
   PackageSource,
@@ -24,6 +25,9 @@ import { sourceKey } from "../api/types";
 import { Client, ReadError, SESSION_KEY, SignedOutError, UNREACHABLE, type ActionOutcome } from "../api/client";
 import { openFeed, type FeedState } from "../api/feed";
 import { SIGNED_OUT_LINE, exchangeCode, readLink, runHash, type RequestedRun } from "../api/login";
+import { sourceRunOf } from "../model/format";
+import { isThrowaway } from "../model/sessions";
+import { runsInFlight } from "../model/steps";
 
 export type TestMode = "recorded" | "reads-live" | "live";
 
@@ -35,17 +39,6 @@ export interface NewSessionSettings {
   max_output?: number;
   provider_settings?: Record<string, unknown>;
   variables: Record<string, string>;
-}
-
-/** The last action the page asked for, and how it went. */
-export interface ActionState {
-  name: "test" | "rerun" | "cancel" | "draft" | "chat";
-  run?: number;
-  decision?: string;
-  /** `failed` when the playground didn't answer at all. */
-  state: "pending" | "accepted" | "refused" | "failed";
-  /** The refusal, in the CLI's words. */
-  message: string | null;
 }
 
 export interface Snapshot {
@@ -74,7 +67,6 @@ export interface Snapshot {
   newSession: string | null;
   /** A chat the page sent and is still waiting on: a reply to `session`, or a new session's first message. */
   pendingChat: { message: string; session: string | null } | null;
-  action: ActionState | null;
   /** Package sources that couldn't be shown, by `sourceKey`, with the server's reason. */
   sourceErrors: Record<string, { code: string; message: string }>;
 }
@@ -95,12 +87,6 @@ export interface StoreOptions {
 
 export type PageStore = ReturnType<typeof createStore>;
 
-const THROWAWAY = new Set(["test", "rerun"]);
-
-/** A session that only holds a test or a rerun; the page shows those under their run. */
-export function isThrowaway(session: SessionSummary): boolean {
-  return session.sources.length > 0 && session.sources.every((s) => THROWAWAY.has(s));
-}
 
 const emptyData = (): PageData => ({
   status: null,
@@ -109,6 +95,7 @@ const emptyData = (): PageData => ({
   events: [],
   feedEnded: false,
   runs: {},
+  running: {},
   explains: {},
   compares: {},
   versions: {},
@@ -139,7 +126,6 @@ export function createStore(options: StoreOptions = {}) {
     feedError: null,
     newSession: null,
     pendingChat: null,
-    action: null,
     sourceErrors: {},
   };
   const listeners = new Set<() => void>();
@@ -168,6 +154,8 @@ export function createStore(options: StoreOptions = {}) {
   // Each session's tests and reruns as last listed, so a new one shows under its run.
   let followUps = new Map<string, number>();
   const runLoads = new Map<number, Promise<void>>();
+  /** The runs in flight whose program was asked for, so each is asked once. */
+  const askedRunning = new Set<number>();
   const loads = new Map<string, Promise<void>>();
 
   // ---- signing in ----
@@ -210,7 +198,8 @@ export function createStore(options: StoreOptions = {}) {
     try {
       [status, list] = await Promise.all([
         client.read<Status>("/api/status"),
-        client.read<SessionList>("/api/sessions"),
+        // The session this tab showed before a reload, listed however old it is.
+        readSessions(readShown()),
       ]);
     } catch (error) {
       if (!(error instanceof SignedOutError)) {
@@ -249,13 +238,31 @@ export function createStore(options: StoreOptions = {}) {
     await loadRun(run);
     const show = snap.data.runs[run];
     if (!show) return null;
-    const source = show.test?.source_run ?? show.rerun_of ?? null;
+    const source = sourceRunOf(show);
     if (source === null) return show.session;
     await loadRun(source);
     return snap.data.runs[source]?.session ?? show.session;
   };
 
   // ---- the session and its feed ----
+
+  /** The sessions, with session `also` among them however old it is: the one shown, by default. */
+  const readSessions = (also: string | null = snap.data.sessionId) =>
+    client.read<SessionList>(also ? "/api/sessions?session=" + encodeURIComponent(also) : "/api/sessions");
+
+  /** Session `id`'s summary, added to the list, when the list left it out. */
+  const unlistedSession = async (id: string, mine: number): Promise<SessionSummary | undefined> => {
+    let list: SessionList;
+    try {
+      list = await readSessions(id);
+    } catch {
+      return undefined;
+    }
+    if (mine !== generation) return undefined;
+    known.add(id);
+    setData({ sessions: list.sessions });
+    return list.sessions.find((s) => s.session === id);
+  };
 
   /**
    * Shows session `id` and follows its feed. Resolves once its runs are read and its feed
@@ -270,10 +277,13 @@ export function createStore(options: StoreOptions = {}) {
     // get one of their own.
     frameQueued = false;
     set({ feedError: null, noSessions: false, newSession: null, sessionLoading: true });
-    setData({ sessionId: id, events: [], feedEnded: false });
+    setData({ sessionId: id, events: [], feedEnded: false, running: {} });
+    askedRunning.clear();
     keepShown(id);
-    const summary = snap.data.sessions.find((s) => s.session === id);
-    const runs = Promise.all((summary?.runs ?? []).map((run) => loadRun(run)));
+    // One the list leaves out, as an old test's own session, is asked for by name.
+    const listed = snap.data.sessions.find((s) => s.session === id);
+    const summary = listed ? Promise.resolve(listed) : unlistedSession(id, mine);
+    const runs = summary.then((found) => Promise.all((found?.runs ?? []).map((run) => loadRun(run))));
     let answered: () => void = () => {};
     const feedAnswered = new Promise<void>((resolve) => (answered = resolve));
     feed = openFeed({
@@ -331,6 +341,26 @@ export function createStore(options: StoreOptions = {}) {
       for (const e of fresh) bySeq.set(e.session_seq, e);
       setData({ events: [...bySeq.values()].sort((a, b) => a.session_seq - b.session_seq) });
     }
+    void loadRunning();
+  };
+
+  // A run in flight is stored only when it ends; its program is read from the run list,
+  // which lists it from its start, so the code pane shows it while it runs. Asked once
+  // per run, in one read for every run that started since.
+  const loadRunning = async () => {
+    const session = snap.data.sessionId;
+    const fresh = runsInFlight(snap.data.events).filter((run) => !askedRunning.has(run) && !snap.data.runs[run]);
+    if (!session || !fresh.length) return;
+    for (const run of fresh) askedRunning.add(run);
+    try {
+      const list = await client.read<RunList>(`/api/runs?session=${encodeURIComponent(session)}&limit=1`);
+      if (snap.data.sessionId !== session) return;
+      const programs = { ...snap.data.running };
+      for (const row of list.running ?? []) if (row.untrusted?.program !== undefined) programs[row.run] = row.untrusted.program;
+      setData({ running: programs });
+    } catch {
+      // Not listed yet, or the playground is gone: its `run-finished` loads its record.
+    }
   };
 
   const signalled = (signal: FeedSignal) => {
@@ -383,12 +413,15 @@ export function createStore(options: StoreOptions = {}) {
   };
 
   const refreshSessions = async () => {
+    const asked = snap.data.sessionId;
     let list: SessionList;
     try {
-      list = await client.read<SessionList>("/api/sessions");
+      list = await readSessions(asked);
     } catch {
       return;
     }
+    // Read for a session no longer shown, it may leave out the one shown now.
+    if (snap.data.sessionId !== asked) return;
     setData({ sessions: list.sessions });
     const shown = snap.data.sessionId;
     const summary = list.sessions.find((s) => s.session === shown);
@@ -524,23 +557,14 @@ export function createStore(options: StoreOptions = {}) {
 
   // ---- actions ----
 
-  const act = async <T>(
-    action: Omit<ActionState, "state" | "message">,
-    path: string,
-    body: unknown,
-    signal?: AbortSignal,
-  ): Promise<ActionOutcome<T>> => {
-    set({ action: { ...action, state: "pending", message: null } });
-    let outcome: ActionOutcome<T>;
+  /** An action, with signing out as one more way it can be refused. */
+  const act = async <T>(path: string, body: unknown, signal?: AbortSignal): Promise<ActionOutcome<T>> => {
     try {
-      outcome = await client.act<T>(path, body, signal);
+      return await client.act<T>(path, body, signal);
     } catch (error) {
       if (!(error instanceof SignedOutError)) throw error;
-      outcome = { ok: false, kind: "signed-out", message: SIGNED_OUT_LINE };
+      return { ok: false, kind: "signed-out", message: SIGNED_OUT_LINE };
     }
-    const state = outcome.ok ? "accepted" : outcome.kind === "unreachable" ? "failed" : "refused";
-    set({ action: { ...action, state, message: outcome.ok ? null : outcome.message } });
-    return outcome;
   };
 
   /** After a test or rerun of `run`, its record lists the new follow-up; read it again. */
@@ -558,12 +582,12 @@ export function createStore(options: StoreOptions = {}) {
   };
 
   const test = async (run: number, mode?: TestMode) =>
-    followedUp(run, await act<Show>({ name: "test", run }, "/api/test", mode ? { run, mode } : { run }));
+    followedUp(run, await act<Show>("/api/test", mode ? { run, mode } : { run }));
 
   const rerun = async (run: number) =>
-    followedUp(run, await act<Show>({ name: "rerun", run }, "/api/rerun", { run }));
+    followedUp(run, await act<Show>("/api/rerun", { run }));
 
-  const cancel = (run: number) => act({ name: "cancel", run }, "/api/cancel", { run });
+  const cancel = (run: number) => act("/api/cancel", { run });
 
   /**
    * The run a test or rerun from the page started, while it's in flight: the newest
@@ -586,7 +610,10 @@ export function createStore(options: StoreOptions = {}) {
   };
 
   const draft = (decision: string) =>
-    act<Draft>({ name: "draft", decision }, "/api/draft-rule", { decision });
+    act<Draft>("/api/draft-rule", { decision });
+
+  /** Decides a run's checks again under the blueprint in force; nothing runs or is recorded. */
+  const recheck = (run: number) => act<Recheck>("/api/recheck", { run });
 
   /**
    * Saves a model key typed on the page in the local secret store (`key: null` removes
@@ -594,13 +621,7 @@ export function createStore(options: StoreOptions = {}) {
    * than the request.
    */
   const saveModelKey = async (provider: string, key: string | null): Promise<ActionOutcome<SavedKey>> => {
-    let outcome: ActionOutcome<SavedKey>;
-    try {
-      outcome = await client.act<SavedKey>("/api/model-key", { provider, key });
-    } catch (error) {
-      if (!(error instanceof SignedOutError)) throw error;
-      outcome = { ok: false, kind: "signed-out", message: SIGNED_OUT_LINE };
-    }
+    const outcome = await act<SavedKey>("/api/model-key", { provider, key });
     if (outcome.ok) await refreshStatus();
     return outcome;
   };
@@ -611,11 +632,6 @@ export function createStore(options: StoreOptions = {}) {
     event.returnValue = "";
   };
 
-  /**
-   * Sends a chat message: a reply to the shown session, or the first message of a new
-   * session with `settings`. The answer comes only after the agent's last reply, so a
-   * new session is looked for in the session list meanwhile and followed live.
-   */
   // The chat the page waits on, so Stop can give it up.
   let chatAbort: AbortController | null = null;
 
@@ -629,6 +645,11 @@ export function createStore(options: StoreOptions = {}) {
     for (const run of runs) void client.act("/api/cancel", { run }).catch(() => undefined);
   };
 
+  /**
+   * Sends a chat message: a reply to the shown session, or the first message of a new
+   * session with `settings`. The answer comes only after the agent's last reply, so a
+   * new session is looked for in the session list meanwhile and followed live.
+   */
   const chat = async (message: string, settings?: NewSessionSettings) => {
     const shown = snap.data.sessionId;
     const starting = settings !== undefined || shown === null;
@@ -653,7 +674,7 @@ export function createStore(options: StoreOptions = {}) {
           await new Promise((resolve) => setTimeout(resolve, pollMs));
           if (!polling) return;
           try {
-            adoptOwnChat(await client.read<SessionList>("/api/sessions"));
+            adoptOwnChat(await readSessions());
           } catch {
             // Try again on the next tick.
           }
@@ -661,7 +682,7 @@ export function createStore(options: StoreOptions = {}) {
       })();
     }
     try {
-      const outcome = await act<AgentResult>({ name: "chat" }, "/api/agent", body, abort.signal);
+      const outcome = await act<AgentResult>("/api/agent", body, abort.signal);
       if (starting) {
         polling = false;
         // A chat that failed after its session started still made the session; it is
@@ -671,7 +692,7 @@ export function createStore(options: StoreOptions = {}) {
           known.add(ownChat);
         } else if (awaitingChat) {
           try {
-            adoptOwnChat(await client.read<SessionList>("/api/sessions"));
+            adoptOwnChat(await readSessions());
           } catch {
             // Not listed; the page keeps the new session it was setting up.
           }
@@ -785,6 +806,7 @@ export function createStore(options: StoreOptions = {}) {
     cancel,
     followUpInFlight,
     draft,
+    recheck,
     saveModelKey,
     chat,
     stopChat,

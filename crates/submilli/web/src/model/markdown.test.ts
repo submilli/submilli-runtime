@@ -39,4 +39,24 @@ describe("the agent's Markdown", () => {
     expect(parseInline("customer_id_value and 2*3*4 and a * b")).toEqual([{ kind: "text", text: "customer_id_value and 2*3*4 and a * b" }]);
     expect(parseInline("an *important* word")).toEqual([{ kind: "text", text: "an " }, { kind: "em", children: [{ kind: "text", text: "important" }] }, { kind: "text", text: " word" }]);
   });
+
+  it("closes a heading's #s only after a space, and a fence only on a bare mark as long as its own", () => {
+    expect(parseMarkdown("## Using C#\n# Total ##")).toEqual([
+      { kind: "heading", spans: [{ kind: "text", text: "Using C#" }] },
+      { kind: "heading", spans: [{ kind: "text", text: "Total" }] },
+    ]);
+    expect(parseMarkdown("````md\n```js\nx\n```\n````\nafter")).toEqual([
+      { kind: "pre", text: "```js\nx\n```" },
+      { kind: "paragraph", spans: [{ kind: "text", text: "after" }] },
+    ]);
+  });
+
+  it("reads long, unclosed replies in time that grows with their length", () => {
+    const cases = ["# a" + " ".repeat(20_000) + "x", "**a ".repeat(25_000), "__a ".repeat(25_000), "x ** ".repeat(25_000)];
+    for (const reply of cases) {
+      const start = performance.now();
+      parseMarkdown(reply);
+      expect(performance.now() - start).toBeLessThan(500);
+    }
+  });
 });

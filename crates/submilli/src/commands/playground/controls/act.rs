@@ -746,7 +746,8 @@ impl Actions {
         warnings
     }
 
-    /// A warning for each open started session whose fixed values differ from `binding`.
+    /// A warning when open started sessions keep values that differ from `binding`: the
+    /// session and how to end it when there is one, else the first and how many more.
     async fn open_sessions_that_differ(&self, binding: &Binding) -> Vec<String> {
         let open = match self.logged_open_sessions() {
             Ok(open) => open,
@@ -757,7 +758,7 @@ impl Actions {
                 )];
             }
         };
-        let mut warnings = Vec::new();
+        let mut keeping: Vec<(String, String)> = Vec::new();
         for session in open {
             let Ok(Some(fixed)) = session_variables(&self.app, &session).await else {
                 continue;
@@ -771,16 +772,25 @@ impl Actions {
                 })
                 .collect();
             if !differ.is_empty() {
-                warnings.push(format!(
-                    "open session {} keeps {}; its runs do not change. End it with `submilli \
-                     playground session end {}` and start a new one to use the new values",
-                    clean(&session),
-                    differ.join(", "),
-                    clean(&session)
-                ));
+                keeping.push((clean(&session), differ.join(", ")));
             }
         }
-        warnings
+        match keeping.as_slice() {
+            [] => Vec::new(),
+            [(session, values)] => vec![format!(
+                "open session {session} keeps {values}; its runs do not change. End it with \
+                 `submilli playground session end {session}` and start a new one to use the new \
+                 values"
+            )],
+            [(session, values), rest @ ..] => vec![format!(
+                "{} open sessions keep their own values, such as {} with {values} (+{} more); \
+                 their runs do not change. New sessions use the new values; `submilli \
+                 playground sessions` lists the open ones",
+                rest.len() + 1,
+                session.get(..8).unwrap_or(session),
+                rest.len()
+            )],
+        }
     }
 
     /// The binding as `status` shows it: never a secret's value.
@@ -1306,7 +1316,8 @@ impl Actions {
             .take(3)
             .map(|change| Next::Explain(change.decision))
             .collect();
-        if !changes.is_empty() {
+        // A file tool's run recorded no program, so there is nothing to test.
+        if !changes.is_empty() && stored.recording.code.is_some() {
             suggestions.push(Next::Test(id));
         }
         suggestions.push(Next::Show(id));

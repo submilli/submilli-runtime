@@ -980,6 +980,27 @@ mod unix {
 
     #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
     #[test]
+    fn open_with_a_run_or_a_decision_signs_in_at_it() {
+        let project = Project::new();
+        project.start(&[]);
+        for (target, end) in [("60", "&run=60"), ("60.2", "&run=60&decision=2")] {
+            let output = project.run(&["open", target, "--json"]);
+            assert!(output.status.success(), "{target}: {}", stderr(&output));
+            let ready: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+            let link = ready["login_url"].as_str().unwrap();
+            assert!(link.contains("#login="), "{link}");
+            assert!(link.ends_with(end), "{link}");
+        }
+        for wrong in ["run", "60.", "60.x", "-1"] {
+            let output = project.run(&["open", wrong, "--json"]);
+            assert!(!output.status.success(), "{wrong}: {}", stdout(&output));
+            assert!(!stdout(&output).contains("#login="), "{wrong}");
+        }
+        assert!(project.stop().status.success());
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
     fn no_output_or_state_file_shows_the_admin_token() {
         let project = Project::new();
         let mut texts = Vec::new();
@@ -2004,5 +2025,66 @@ mod unix {
         let record = parse(&output);
         assert_eq!(record["attached"], true);
         assert_eq!(record["egress_grants"], json!([]));
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn restart_starts_a_new_playground_with_the_settings_of_the_one_it_stopped() {
+        let project = Project::new();
+        let first = project.start(&["--allow-localhost"]);
+
+        let output = project.run(&["restart", "--json"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let record = parse(&output);
+        assert_eq!(record["attached"], false);
+        assert_ne!(record["pid"], first["pid"]);
+        assert_eq!(record["egress_grants"], json!(["allow-localhost"]));
+        assert_eq!(record["blueprint"], first["blueprint"]);
+        let pid = u32::try_from(first["pid"].as_u64().unwrap()).unwrap();
+        wait_until(
+            "the first playground to exit",
+            Duration::from_secs(10),
+            || !pid_alive(pid),
+        );
+
+        // Settings given to the restart replace the stopped playground's.
+        let output = project.run(&["restart", "--json", "--allow-private"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(parse(&output)["egress_grants"], json!(["allow-private"]));
+
+        // With nothing running, a restart is a start. Its output isn't a terminal, so
+        // like every start here it opens no browser, and says the link is to open.
+        assert!(project.stop().status.success());
+        let output = project.run(&["restart"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(
+            stdout(&output).contains("not running"),
+            "{}",
+            stdout(&output)
+        );
+        assert!(
+            stdout(&output).contains("is running"),
+            "{}",
+            stdout(&output)
+        );
+        assert!(
+            stdout(&output).contains("open it within"),
+            "{}",
+            stdout(&output)
+        );
+        assert!(!project.state().join("open.html").exists());
+        for command in [["start", "--no-open"], ["open", "--no-open"]] {
+            let output = project.run(&command);
+            assert!(output.status.success(), "{}", stderr(&output));
+        }
+        let output = project.run(&["open"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(
+            stdout(&output).contains("open it within"),
+            "{}",
+            stdout(&output)
+        );
+        assert!(!project.state().join("open.html").exists());
+        assert!(project.stop().status.success());
     }
 }

@@ -1,7 +1,7 @@
 // The page's own lines: the waiting and failure states, the questions asked before a
 // live run, and what a finished action says. Everything else the page shows comes from
 // the wording in `../model`.
-import type { BlueprintRefusal, Draft, Gap } from "../api/types";
+import type { BlueprintRefusal, Draft, Gap, Recheck } from "../api/types";
 import type { Action } from "../model/log";
 import { boundVars, plural, short } from "../model/format";
 import type { Names } from "../model/refs";
@@ -21,8 +21,8 @@ export const SESSION_LOADING = "Loading this session…";
 export const NO_SESSIONS_CHAT = "Start a session with New session, or run `submilli playground chat` from the CLI. It shows here.";
 /** Why the ask box waits: the agent is answering, here or in another session (its short id). */
 export function answering(elsewhere: string | null): string {
-  if (!elsewhere) return "The agent is still answering your last message.";
-  return "The agent is still answering your last message, in " + (elsewhere === "new" ? "the session it started" : "session " + elsewhere.slice(0, 8)) + ".";
+  const where = elsewhere ? ", in " + (elsewhere === "new" ? "the session it started" : "session " + elsewhere.slice(0, 8)) : "";
+  return "The agent is still answering your last message" + where + ". You can write your next one meanwhile.";
 }
 
 /** A run a link asked for that isn't recorded here. */
@@ -112,7 +112,41 @@ export function confirmOf(action: Action, bound: Record<string, string> = {}): {
 export function commandOf(action: Action): string {
   if (action.kind === "draft") return "submilli playground draft-rule " + action.decision;
   if (action.kind === "rerun") return "submilli playground rerun " + action.run;
+  if (action.kind === "recheck") return "submilli playground recheck " + action.run;
   return "submilli playground test " + action.run + (action.mode ? " --" + action.mode : "");
+}
+
+const CHANGED: Record<Recheck["changes"][number]["change"], string> = {
+  "newly-allowed": "is allowed now",
+  "newly-denied": "is refused now",
+  "different-rule": "is decided by another rule now",
+};
+
+/** What a recheck found: the first check that changed, and how many more. */
+export function recheckSaid(result: Recheck): { head: string; body: string } {
+  const under = result.in_force ? "blueprint v" + result.in_force : "the blueprint in force";
+  const [first, ...rest] = result.changes;
+  const more = rest.length ? " (+" + rest.length + " more)" : "";
+  if (first) {
+    return { head: "Check " + first.decision + " " + CHANGED[first.change] + more + ", under " + under + ".", body: "Decided by " + first.now_by + ". Nothing ran: to make the call again, ask the agent." };
+  }
+  if (result.cant_tell.length) {
+    return { head: "Check " + result.cant_tell[0] + "’s recording is too cut to decide again.", body: "Nothing ran: to make the call again, ask the agent." };
+  }
+  return { head: "Nothing changes under " + under + ".", body: "Run " + result.run + "’s checks decide as they did. Nothing ran." };
+}
+
+/** Over a test's or rerun's own session, opened from its row: why the log holds only it. */
+export function followUpSessionNotice(kind: string, run: number, source: number | null): string {
+  return "You’re in run " + run + "’s own session, " + (source !== null ? "a " + kind + " of run " + source : "a " + kind) + " you started: the log shows only this run, and the agent never saw it.";
+}
+
+export function cancellingRun(run: number): string {
+  return "Cancelling run " + run + ": it ends as cancelled once its calls drain.";
+}
+
+export function runEnded(run: number, word: string): string {
+  return "Run " + run + " ended: " + word + ".";
 }
 
 export function followUpDone(source: number, run: number, word: string): string {

@@ -135,6 +135,11 @@ export function SessionsDialog(props: {
                       {v}
                     </div>
                   ))}
+                  {s.moreVars && (
+                    <div className="pg-muted pg-small" title={s.allVars.join("\n")}>
+                      {s.moreVars}
+                    </div>
+                  )}
                 </td>
                 <td className="nowrap">
                   {s.runs}
@@ -511,6 +516,8 @@ export interface Toast {
   cancelable?: boolean;
   /** What it says is running can be watched, in its own session. */
   watchable?: boolean;
+  /** Says this run is being cancelled, until it ends. */
+  cancelling?: number;
 }
 
 export function ToastView(props: { toast: Toast; onHold: () => void; onRelease: () => void; onDismiss: () => void; onCancel?: () => void; onWatch?: () => void }) {

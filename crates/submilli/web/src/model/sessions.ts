@@ -1,6 +1,6 @@
 // The session bar, the sessions dialog, the footer, and what stepping back turns off.
 import type { ChatSettings, SessionSummary } from "../api/types";
-import { agentLabel, capitalize, plural, providerSettings, settingsLabel, short, when } from "./format";
+import { agentLabel, capitalize, differing, plural, providerSettings, settingsLabel, short, when, type ValuesNote } from "./format";
 import { sessionRef } from "./refs";
 import type { Frame } from "./steps";
 
@@ -25,8 +25,38 @@ export function footer(f: Frame, waiting = false): string {
 }
 
 /** Tests and reruns each run in a throwaway session; those show under the run, not as sessions. */
-function throwaway(s: SessionSummary): boolean {
-  return s.sources.includes("test") || s.sources.includes("rerun");
+const THROWAWAY = new Set(["test", "rerun"]);
+
+/** A session that only holds a test or a rerun, as the playground counts them; the page shows those under their run. */
+/**
+ * When the session shown is open and keeps values that differ from the ones bound now:
+ * which differ. A session's values are fixed when it starts, so a new binding never
+ * reaches its messages; without this, a chat looks the same while it isn't.
+ */
+export function keptValues(f: Frame): ValuesNote | null {
+  // A new session not started yet shows over the last one, which isn't the one in view.
+  if (f.ui.mode !== "open") return null;
+  const s = f.data.sessions.find((x) => x.session === f.data.sessionId);
+  const bound = f.data.status?.binding.variables;
+  if (!s || !bound || s.open !== true || isThrowaway(s)) return null;
+  const changes = differing(s.variables, bound);
+  return changes.length
+    ? { lead: "This session keeps the values it started with; the ones bound now differ: ", changes, tail: ". Its messages still use its own." }
+    : null;
+}
+
+/**
+ * Where Back goes after opening a test's or rerun's own session `opening` from `shown`:
+ * the session shown, or, when that is itself such a session opened the same way
+ * (`current`), the one that opened it. Never `opening` itself, which Back could not leave.
+ */
+export function wayBack(current: { to: string; from: string | null } | null, shown: string | null, opening: string): string | null {
+  const back = current && shown === current.to ? current.from : shown;
+  return back === opening ? null : back;
+}
+
+export function isThrowaway(s: SessionSummary): boolean {
+  return s.sources.length > 0 && s.sources.every((source) => THROWAWAY.has(source));
 }
 
 /** Where a session came from, as the page names it: the page's own chat is the Browser. */
@@ -58,13 +88,25 @@ export interface SessionRow {
   source: string;
   agent: string;
   agentSettings: string;
+  /** The variables shown, as `name=value`: all of them, or two when there are more than three. */
   vars: string[];
+  /** "+2 more", with every variable in its title, or empty. */
+  moreVars: string;
+  allVars: string[];
   runs: string;
   /** How its runs ended, past completing: "denied", "1 rejected", "2 failed", "1 cancelled", as the log words them. */
   ends: { text: string; tone: "bad" | "quiet" }[];
   /** How many tests and reruns of its runs, as far as they're loaded. */
   follow: string;
 }
+
+/** Many values show as two and "+N more"; up to three show whole. */
+function withMore<T>(all: T[]): { vars: T[]; allVars: T[]; moreVars: string } {
+  const vars = all.length > 3 ? all.slice(0, 2) : all;
+  return { vars, allVars: all, moreVars: all.length > vars.length ? "+" + (all.length - vars.length) + " more" : "" };
+}
+
+const rowVars = (vars: Record<string, string>) => withMore(varsOf(vars).map((v) => v.full));
 
 /** The sessions dialog's rows: newest first, a new session not started yet at the top. */
 export function sessionRows(f: Frame): SessionRow[] {
@@ -83,13 +125,13 @@ export function sessionRows(f: Frame): SessionRow[] {
       source: "Browser",
       agent: agentLabel(fresh.agent),
       agentSettings: settingsLabel(fresh.settings),
-      vars: varsOf(fresh.variables).map((v) => v.full),
+      ...rowVars(fresh.variables),
       runs: "0 runs",
       ends: [],
       follow: "",
     });
   }
-  const listed = f.data.sessions.filter((s) => !throwaway(s)).sort((a, b) => b.started_at_micros - a.started_at_micros);
+  const listed = f.data.sessions.filter((s) => !isThrowaway(s)).sort((a, b) => b.started_at_micros - a.started_at_micros);
   for (const s of listed) {
     const current = f.ui.mode === "open" && s.session === f.data.sessionId;
     // A session's task is its first message.
@@ -109,7 +151,7 @@ export function sessionRows(f: Frame): SessionRow[] {
       source: sourceLabel(s),
       agent: agentLabel(s.model) || "—",
       agentSettings: settingsLabel(s.settings),
-      vars: varsOf(s.variables).map((v) => v.full),
+      ...rowVars(s.variables),
       runs: plural(s.runs.length, "run", "runs"),
       ends: [
         ...(s.denied ? [{ text: "denied", tone: "bad" as const }] : []),
@@ -155,10 +197,6 @@ function agentSettings(set: ChatSettings | undefined | null): { name: string; va
 /** The bar above the panes for the session shown, or `null` while a new one is set up. */
 export function sessionBar(f: Frame): SessionBar | null {
   const withSettings = (agent: string, settings: string) => agentLabel(agent) + (settings ? " · " + settings : "");
-  const fixed = (all: FixedVar[]) => {
-    const vars = all.length > 3 ? all.slice(0, 2) : all;
-    return { vars, allVars: all, moreVars: all.length > vars.length ? "+" + (all.length - vars.length) + " more" : "" };
-  };
   // Provider settings the bar can't show whole open the same dialog as the variables.
   const provider = (settings: { name: string; value: string }[]) => settings.filter((p) => p.name.startsWith("provider: "));
   const withAll = (bar: Omit<SessionBar, "settings" | "moreSettings">, settings: { name: string; value: string }[]): SessionBar => ({
@@ -171,7 +209,7 @@ export function sessionBar(f: Frame): SessionBar | null {
     return withAll({
       short: "new session",
       copyText: "",
-      ...fixed(varsOf(fresh.variables)),
+      ...withMore(varsOf(fresh.variables)),
       source: "Browser",
       agent: withSettings(fresh.agent, settingsLabel(fresh.settings)),
       started: "Set up " + when(fresh.started),
@@ -185,7 +223,7 @@ export function sessionBar(f: Frame): SessionBar | null {
   return withAll({
     short: short(s.session),
     copyText: sessionRef(f.names, s.session),
-    ...fixed(varsOf(s.variables)),
+    ...withMore(varsOf(s.variables)),
     source: sourceLabel(s),
     agent: s.model ? withSettings(s.model, settingsLabel(s.settings)) : "",
     started: "Started " + when(s.started_at),

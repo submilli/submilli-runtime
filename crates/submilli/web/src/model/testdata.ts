@@ -52,6 +52,7 @@ export function chatSession(): PageData {
     events: feed("feed-session-4.sse"),
     feedEnded: false,
     runs,
+    running: {},
     explains,
     compares,
     versions: { 1: v1, 2: v2 },

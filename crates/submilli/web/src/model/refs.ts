@@ -41,6 +41,7 @@ export function runRef(names: Names, r: Show): string {
   ]);
 }
 
+/** A check; a refused one also names the command that drafts a rule allowing it. */
 export function decisionRef(names: Names, r: Show, d: ShowDecision): string {
   const ref = d.refs[0];
   return line("check " + ref, [
@@ -49,6 +50,7 @@ export function decisionRef(names: Names, r: Show, d: ShowDecision): string {
     ["outcome", d.outcome === "deny" ? "denied" : "allowed"],
     ["call", d.caller + " → " + d.capability],
     ["see_with", "submilli playground explain " + ref],
+    ...(d.outcome === "deny" ? [["draft_with", "submilli playground draft-rule " + ref] as [string, string]] : []),
   ]);
 }
 

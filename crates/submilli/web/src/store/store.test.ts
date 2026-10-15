@@ -169,7 +169,7 @@ test("status is read again on run-idle, on a finished run, and when the window r
   const { store, started } = start(server, "");
   await started;
   await expect.poll(() => store.getSnapshot().data.events.length).toBe(43);
-  const count = (path: string) => server.requests().filter((r) => r === `GET ${path}`).length;
+  const count = (path: string) => server.requests().filter((r) => r.split("?")[0] === `GET ${path}`).length;
   // One at sign-in, then more for the finished runs and the run-idle; reads asked for
   // while one is under way become one more read after it.
   await expect.poll(() => count("/api/status")).toBeGreaterThan(1);
@@ -187,7 +187,7 @@ test("a different session starting shows a notice and doesn't switch", async () 
   signedIn(server);
   let reads = 0;
   server.handle = (call) => {
-    if (call.url !== "/api/sessions") return undefined;
+    if (call.url.split("?")[0] !== "/api/sessions") return undefined;
     reads += 1;
     // A throwaway test session doesn't count; another chat does.
     return Response.json(
@@ -208,7 +208,7 @@ test("a page-started chat is followed before its request returns, with no notice
   let agentSent = false;
   let answer: (r: Response) => void = () => {};
   server.handle = (call) => {
-    if (call.url === "/api/sessions") {
+    if (call.url.split("?")[0] === "/api/sessions") {
       return Response.json(agentSent ? sessionsWith(chatSession(8, ["browser-chat"])) : sessionsWith());
     }
     if (call.url === "/api/agent") {
@@ -291,12 +291,6 @@ test("a refused cancel is shown as a refusal with its message", async () => {
     kind: "not-in-flight",
     message: "run 1 already finished; there is nothing to cancel",
   });
-  expect(store.getSnapshot().action).toEqual({
-    name: "cancel",
-    run: 1,
-    state: "refused",
-    message: "run 1 already finished; there is nothing to cancel",
-  });
 });
 
 test("an accepted test is sent with its mode and loads the run it made", async () => {
@@ -307,7 +301,6 @@ test("an accepted test is sent with its mode and loads the run it made", async (
   const outcome = await store.test(2, "reads-live");
   expect(outcome.ok).toBe(true);
   expect(server.calls.find((c) => c.url === "/api/test")?.body).toEqual({ run: 2, mode: "reads-live" });
-  expect(store.getSnapshot().action).toMatchObject({ name: "test", run: 2, state: "accepted" });
   await expect.poll(() => store.getSnapshot().data.runs[6]?.run).toBe(6);
 });
 
@@ -512,4 +505,63 @@ test("a session opened while the last one had a flush waiting still shows its li
   await new Promise((r) => setTimeout(r, 10));
   runFrames();
   expect(s.getSnapshot().data.events.map((e) => e.session_seq)).toEqual([1]);
+});
+
+test("a run still going in the shown session has its program read from the run list, once", async () => {
+  const server = new FakeServer();
+  signedIn(server);
+  const started9 = {
+    format: 1,
+    session_seq: 999,
+    event_id: "started-9",
+    position: { at_micros: 1791898099000000, run: 9, rank: 0 },
+    run: 9,
+    body: { event: { schema: 1, event_id: "started-9", seq: 999, at_micros: 1791898099000000, session_id: SESSION(4), kind: "run-started", label: "chat", entry: "mcp" } },
+  };
+  const program = "function main(): number {\n  return 1;\n}";
+  const listing = `/api/runs?session=${encodeURIComponent(SESSION(4))}&limit=1`;
+  server.handle = (call) => {
+    if (call.url === `/api/sessions/${SESSION(4)}/events`)
+      return new Response(fixture("feed-session-4.sse").trimEnd() + "\n\nid: 999\nevent: event\ndata: " + JSON.stringify(started9) + "\n\n", { headers: { "content-type": "text/event-stream" } });
+    if (call.url === listing)
+      return Response.json({ runs: [], running: [{ run: 9, source: "chat", started_at_micros: 1, session: SESSION(4), untrusted: { program } }] });
+    return undefined;
+  };
+  const { store, started } = start(server, "", (cb) => setTimeout(cb, 0));
+  await started;
+  await expect.poll(() => store.getSnapshot().data.running[9]).toBe(program);
+  // The runs that finished were never asked about, and run 9 only once.
+  expect(server.requests().filter((r) => r === "GET " + listing)).toHaveLength(1);
+});
+
+test("a session the list leaves out, as an old rerun's own, is asked for by name when opened", async () => {
+  const server = new FakeServer();
+  signedIn(server);
+  const all = fixtureJson<SessionList>("sessions.json");
+  const rerun = all.sessions.find((s) => s.sources.includes("rerun"))!;
+  server.sessions = { ...all, sessions: all.sessions.filter((s) => s !== rerun) };
+  server.handle = (call) => (call.url === "/api/sessions?session=" + encodeURIComponent(rerun.session) ? Response.json(all) : undefined);
+  const { store, started } = start(server, "");
+  await started;
+  expect(store.getSnapshot().data.runs[7]).toBeUndefined();
+
+  await store.openSession(rerun.session);
+  expect(store.getSnapshot().data.sessions.some((s) => s.session === rerun.session)).toBe(true);
+  expect(store.getSnapshot().data.runs[7]?.run).toBe(7);
+  // Read again with the list, it stays listed while shown.
+  await store.refreshSessions();
+  expect(store.getSnapshot().data.sessions.some((s) => s.session === rerun.session)).toBe(true);
+});
+
+test("a reload comes back to the session it showed, though the list leaves it out", async () => {
+  const server = new FakeServer();
+  signedIn(server);
+  const all = fixtureJson<SessionList>("sessions.json");
+  const rerun = all.sessions.find((s) => s.sources.includes("rerun"))!;
+  server.sessions = { ...all, sessions: all.sessions.filter((s) => s !== rerun) };
+  server.handle = (call) => (call.url === "/api/sessions?session=" + encodeURIComponent(rerun.session) ? Response.json(all) : undefined);
+  sessionStorage.setItem("submilli-playground-shown-session", rerun.session);
+  const { store, started } = start(server, "");
+  await started;
+  expect(store.getSnapshot().data.sessionId).toBe(rerun.session);
 });

@@ -53,13 +53,18 @@ export function ChatPane(props: {
             case "tool":
             case "running":
               return (
-                <div className="pg-toolline" key={i}>
+                <div className="pg-toolline" title={m.kind === "tool" && m.hint ? "Asked for " + m.hint : undefined} key={i}>
                   {m.text}
                 </div>
               );
             case "run":
               return (
-                <button className={cls("pg-chip", m.selected && "selected")} title="Show this run in the log" key={i} onClick={() => props.onPick(m.run)}>
+                <button
+                  className={cls("pg-chip", m.selected && "selected")}
+                  title={(m.hint ? "Asked for " + m.hint + ". " : "") + "Show this run in the log"}
+                  key={i}
+                  onClick={() => props.onPick(m.run)}
+                >
                   {m.text}
                 </button>
               );
@@ -115,8 +120,8 @@ export function ChatPane(props: {
           ref={ask}
           rows={1}
           placeholder={box.placeholder}
-          readOnly={box.disabled}
-          aria-disabled={box.disabled || undefined}
+          readOnly={box.disabled && !box.typeAhead}
+          aria-disabled={(box.disabled && !box.typeAhead) || undefined}
           title={box.reason}
           value={props.text}
           onChange={(ev) => props.onText(ev.target.value)}

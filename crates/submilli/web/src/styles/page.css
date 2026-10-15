@@ -307,6 +307,8 @@ body {
 .pg-error .pg-src { white-space: pre; overflow-wrap: normal; }
 .pg-payload { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 320px; font: 12px/1.6 var(--font-mono); margin: 0 0 8px; background: var(--ink-900); border-radius: 4px; padding: 9px; }
 .pg-note { font-size: 13px; margin: 0 0 8px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.pg-note > p { margin: 0; }
+.pg-values { margin: 4px 0 0 16px; padding: 0; font: 12px/1.6 var(--font-mono); }
 .pg-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
 .pg-rule { padding: 2px 0 8px; font-size: 13px; }
 .pg-rule strong { font-weight: var(--fw-semibold); }

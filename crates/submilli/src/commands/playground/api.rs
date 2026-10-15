@@ -145,7 +145,7 @@ pub(crate) const ROUTES: &[Route] = &[
     Route {
         method: "POST",
         path: "/api/recheck",
-        group: Group::Admin,
+        group: Group::Viewer,
         command: Some("recheck"),
         handler: || post(recheck),
     },
@@ -808,6 +808,8 @@ async fn package_source(
 #[serde(default)]
 struct SessionsParams {
     limit: Option<usize>,
+    /// A session to list even when the limit leaves it out.
+    session: Option<String>,
 }
 
 async fn sessions(
@@ -820,7 +822,10 @@ async fn sessions(
     };
     let limit = params.limit.unwrap_or(20);
     let now = super::now_micros();
-    read_with(&state, move |reader| read::sessions(reader, limit, now)).await
+    read_with(&state, move |reader| {
+        read::sessions_with(reader, limit, now, params.session.as_deref())
+    })
+    .await
 }
 
 // ---- the event feed ------------------------------------------------------------------------
@@ -1215,7 +1220,7 @@ mod tests {
             ("POST", "/api/bind", Admin),
             ("POST", "/api/sessions/start", Admin),
             ("POST", "/api/sessions/end", Admin),
-            ("POST", "/api/recheck", Admin),
+            ("POST", "/api/recheck", Viewer),
             ("POST", "/api/test", Viewer),
             ("POST", "/api/rerun", Viewer),
             ("POST", "/api/clear", Admin),

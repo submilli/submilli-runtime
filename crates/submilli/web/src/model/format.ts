@@ -1,5 +1,10 @@
 // Small wordings the whole page shares: outcomes, sizes, times, the agent's name.
-import type { ChatSettings, Outcome } from "../api/types";
+import type { ChatSettings, Outcome, Show } from "../api/types";
+
+/** The run a test or rerun ran again, or null for a run of its own. */
+export function sourceRunOf(show: Show): number | null {
+  return show.test?.source_run ?? show.rerun_of ?? null;
+}
 
 /** A failed run's error kind, as the log words it: a program that didn't compile was rejected. */
 const ENDS: Record<string, string> = { compile_error: "rejected", runtime_error: "failed", permission_denied: "denied" };
@@ -66,6 +71,47 @@ export function ctx(context: Record<string, unknown> | undefined): string {
         .map((k) => k + " = " + JSON.stringify(context[k]))
         .join(", ")
     : "";
+}
+
+/** A value that differs between two sets of values: what it `was`, and is `now`. */
+export interface ValueChange {
+  name: string;
+  was: string;
+  now: string;
+}
+
+/**
+ * Which values differ, said as `lead`, the first change, its "+N more" that opens the
+ * rest, then `tail`. One line however many values a project binds.
+ */
+export interface ValuesNote {
+  lead: string;
+  changes: ValueChange[];
+  tail: string;
+}
+
+/** The values that differ between `before` and `after`, a name unset on one side shown as "not set". */
+export function differing(before: Record<string, string>, after: Record<string, string>): ValueChange[] {
+  const names = [...new Set([...Object.keys(before), ...Object.keys(after)])];
+  return names.filter((name) => before[name] !== after[name]).map((name) => ({ name, was: before[name] ?? "not set", now: after[name] ?? "not set" }));
+}
+
+// Fields whose value reads on its own; any other is named, as `customerId = cus_globex`.
+const SPEAKS_FOR_ITSELF = new Set(["path", "query", "package", "module", "name"]);
+
+/**
+ * The main thing a call asked for, to read at a glance: its first field's value, named
+ * unless it reads on its own. "" when it asked for nothing. Every field is in
+ * [`ctx`]'s words, for hover text and the opened check. The fields come from the agent
+ * or the program, and show only as text.
+ */
+export function askedFor(fields: Record<string, unknown> | undefined): string {
+  const key = fields ? Object.keys(fields)[0] : undefined;
+  if (!fields || key === undefined) return "";
+  const value = fields[key];
+  const text = typeof value === "string" ? value : JSON.stringify(value) ?? String(value);
+  const shown = text.length > 60 ? text.slice(0, 59) + "…" : text;
+  return SPEAKS_FOR_ITSELF.has(key) ? shown : key + " = " + shown;
 }
 
 export function short(id: string): string {

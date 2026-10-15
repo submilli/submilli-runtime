@@ -339,6 +339,38 @@ test("test from a refusal row starts a test run, which shows under its source ru
   await vi.waitFor(() => expect(rowHead("f5")).toHaveFocus());
 });
 
+test("a test that kept the run's values names the first one bound differently, and opens the rest in place", async () => {
+  const server = new FakeServer();
+  const bound = { ...fixtureJson<Record<string, unknown>>("status.json"), binding: { variables: { customerId: "cus_globex", region: "us", tier: "gold" }, secrets: [] } };
+  server.handle = (call) => (call.method === "GET" && call.url.split("?")[0] === "/api/status" ? json(bound) : undefined);
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.click(rowHead("r2"));
+  await user.click(within(row("r2")).getByText(/by you \(/));
+  await user.click(rowHead("f5"));
+  const f5 = row("f5");
+  expect(within(f5).getByText(/This test kept run 2’s values; the ones bound now differ: customerId cus_northwind → cus_globex/)).toBeInTheDocument();
+  expect(within(f5).queryByText("region not set → us")).not.toBeInTheDocument();
+  await user.click(within(f5).getByRole("button", { name: "(+2 more)" }));
+  expect(within(f5).getByText("region not set → us")).toBeInTheDocument();
+  expect(within(f5).getByText("tier not set → gold")).toBeInTheDocument();
+  await user.click(within(f5).getByRole("button", { name: "show less" }));
+  expect(within(f5).queryByText("region not set → us")).not.toBeInTheDocument();
+});
+
+test("an open session that keeps values the binding has since changed says so, and offers a new session", async () => {
+  const server = new FakeServer();
+  const bound = { ...fixtureJson<Record<string, unknown>>("status.json"), binding: { variables: { customerId: "cus_globex" }, secrets: [] } };
+  server.handle = (call) => (call.method === "GET" && call.url.split("?")[0] === "/api/status" ? json(bound) : undefined);
+  const { user } = await openPage(server);
+  await runsLoaded();
+  const note = await screen.findByText(/This session keeps the values it started with; the ones bound now differ: customerId cus_northwind → cus_globex\. Its messages still use its own\./);
+  await user.click(within(note.closest(".pg-callout") as HTMLElement).getByRole("button", { name: "Start a new session to use them" }));
+  expect(await screen.findByRole("button", { name: "Start session" })).toBeInTheDocument();
+  // The form is for a new session, which takes the bound values: the note was about the old one.
+  expect(screen.queryByText(/This session keeps the values it started with/)).not.toBeInTheDocument();
+});
+
 test("a rerun's row opens its own session to step through, and Back returns to the row", async () => {
   const { server, user } = await openPage();
   await runsLoaded();
@@ -354,9 +386,16 @@ test("a rerun's row opens its own session to step through, and Back returns to t
   // Opened at the rerun.
   expect(row("r7").className).toContain("selected");
 
-  await user.click(within(chat).getByRole("button", { name: "Back to session " + SESSION(4).slice(0, 8) }));
+  // The way back is said where the page's notices are, as well as in the chat.
+  const notice = screen.getByText("You’re in run 7’s own session, a rerun of run 1 you started: the log shows only this run, and the agent never saw it.");
+  expect(within(notice.closest(".pg-callout") as HTMLElement).getByRole("button", { name: "Back to session " + SESSION(4).slice(0, 8) })).toBeInTheDocument();
+  // The code is the agent's program, from a session this one isn't: it has no number here.
+  expect(within(screen.getAllByRole("region", { name: "Code" })[0]).getByText(/the agent’s program · run 1/)).toBeInTheDocument();
+
+  await user.click(within(notice.closest(".pg-callout") as HTMLElement).getByRole("button", { name: "Back to session " + SESSION(4).slice(0, 8) }));
   await expect.poll(() => document.getElementById("pgrow-f7")?.className ?? "").toContain("selected");
-  expect(within(chat).queryByRole("button", { name: /^Back to session/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^Back to session/ })).not.toBeInTheDocument();
+  expect(screen.queryByText(/own session, a rerun of run 1/)).not.toBeInTheDocument();
 });
 
 test("a refused action shows the server's message in the toast", async () => {
@@ -385,6 +424,21 @@ test("draft a rule shows the drafted rule, where it would go, and its copy lines
   await user.click(within(dialog).getByRole("button", { name: /Copy CLI command/ }));
   expect(await navigator.clipboard.readText()).toBe("submilli playground draft-rule 2.1 --write");
   expect(within(dialog).queryByRole("button", { name: /save/i })).not.toBeInTheDocument();
+});
+
+test("a refused file tool's call offers a recheck, which says what the blueprint in force decides and runs nothing", async () => {
+  const server = new FakeServer();
+  const asCall = { ...fixtureJson<Record<string, unknown>>("show-2.json"), entry: "mcp:submilli__files__list" };
+  server.handle = (call) => (call.method === "GET" && call.url.split("?")[0] === "/api/runs/2" ? json(asCall) : undefined);
+  const { user } = await openPage(server);
+  await screen.findByText("Run 2 · the agent’s files.list call customerId = cus_globex", {}, { timeout: 3000 });
+  await user.click(rowHead("r2"));
+  expect(within(row("r2")).queryByRole("button", { name: /Test against/ })).not.toBeInTheDocument();
+  await user.click(within(row("r2")).getByRole("button", { name: "Check against blueprint v2" }));
+  expect(posts(server).map((c) => [c.url, c.body])).toEqual([["/api/recheck", { run: 2 }]]);
+  const notice = (await screen.findByRole("status")).textContent;
+  expect(notice).toContain("Check 2.1 is allowed now, under blueprint v2.");
+  expect(notice).toContain("Nothing ran: to make the call again, ask the agent.");
 });
 
 test("Cancel on a running run's row ends it as cancelled once the server confirms", async () => {
@@ -421,7 +475,7 @@ test("New session with variables and a model starts a browser chat, shown in the
   const server = new FakeServer();
   let sent = false;
   server.handle = (call) => {
-    if (call.url === "/api/sessions") {
+    if (call.url.split("?")[0] === "/api/sessions") {
       const list = fixtureJson<SessionList>("sessions.json");
       if (sent) list.sessions.unshift({ ...list.sessions[3], session: SESSION(8), sources: ["browser-chat"], runs: [], run_count: 0 });
       return json(list);
@@ -463,7 +517,7 @@ test("New session starts with the latest chat session's agent and settings, Adva
   const chat = list.sessions[3];
   list.sessions[3] = { ...chat, model: "openai:gpt-6-luna", settings: { effort: "low", max_output: 2000, provider: { temperature: 0.2 } } };
   list.sessions.push({ ...chat, session: SESSION(9), started_at_micros: chat.started_at_micros - 1 });
-  server.handle = (call) => (call.url === "/api/sessions" ? json(list) : undefined);
+  server.handle = (call) => (call.url.split("?")[0] === "/api/sessions" ? json(list) : undefined);
   const { user } = await openPage(server);
   await runsLoaded();
   await user.click(screen.getByRole("button", { name: "New session" }));
@@ -806,11 +860,37 @@ test("Stop gives up the message the agent is answering, and says so", async () =
   expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
 });
 
+test("the next message can be written while the agent answers, and sends only once it's done", async () => {
+  const server = new FakeServer();
+  let answer: (r: Response) => void = () => {};
+  let asked = 0;
+  server.handle = (call) => {
+    if (call.url !== "/api/agent") return undefined;
+    asked++;
+    return new Promise<Response>((resolve) => (answer = resolve));
+  };
+  const { user } = await openPage(server);
+  await runsLoaded();
+  const ask = screen.getByRole("textbox", { name: "Message the agent" });
+  await user.type(ask, "First{Enter}");
+  await screen.findByRole("button", { name: "Stop" });
+  expect(ask).not.toHaveAttribute("readonly");
+  expect(screen.getByText(/You can write your next one meanwhile/)).toBeInTheDocument();
+  await user.type(ask, "Second{Enter}");
+  // Enter waits for the answer: the draft stays, and nothing more was sent.
+  expect(ask).toHaveValue("Second");
+  expect(asked).toBe(1);
+  // A failed answer doesn't put the first message back over the draft.
+  answer(json({ exit: 1, result: { error: { kind: "failure", message: "the provider timed out" } }, text: "" }));
+  expect(await screen.findByRole("alert")).toBeInTheDocument();
+  expect(ask).toHaveValue("Second");
+});
+
 test("Stop on a new session's first message leaves it in the session it started, not in the box", async () => {
   const server = new FakeServer();
   let sent = false;
   server.handle = (call) => {
-    if (call.url === "/api/sessions") {
+    if (call.url.split("?")[0] === "/api/sessions") {
       const list = fixtureJson<SessionList>("sessions.json");
       if (sent) list.sessions.unshift({ ...list.sessions[3], session: SESSION(8), sources: ["browser-chat"], runs: [], run_count: 0 });
       return json(list);

@@ -48,6 +48,13 @@ test("a refused session shows how to get a new link", async () => {
   expect(localStorage.getItem(SESSION_KEY)).toBeNull();
 });
 
+test("a run's link opened signed out names the command that opens that run", async () => {
+  const server = new FakeServer();
+  await show(server, "#run=60");
+  const line = await screen.findByText((_, el) => el?.tagName === "P" && !!el.textContent?.startsWith("Run submilli playground open 60"));
+  expect(line.querySelector("code")?.textContent).toBe("submilli playground open 60");
+});
+
 test("with no sessions yet, the page says so and offers New session", async () => {
   const server = new FakeServer();
   server.sessions = { sessions: [], more: 0 };

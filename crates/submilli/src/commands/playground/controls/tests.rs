@@ -1161,12 +1161,18 @@ fn runs_in_flight_are_listed_first_with_cancel_only_while_the_playground_runs() 
     let stored = fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]));
     fixture
         .store
-        .mark_running(stored + 1, "assistant", Some("s-9"), 1_700_000_000_000_000)
+        .mark_running(
+            stored + 1,
+            "assistant",
+            Some("s-9"),
+            1_700_000_000_000_000,
+            None,
+        )
         .unwrap();
     // A note for a run already stored is not listed twice.
     fixture
         .store
-        .mark_running(stored, "stand-in", None, 1_700_000_000_000_000)
+        .mark_running(stored, "stand-in", None, 1_700_000_000_000_000, None)
         .unwrap();
     let query = RunsQuery {
         limit: 5,
@@ -1205,12 +1211,105 @@ fn runs_in_flight_are_listed_first_with_cancel_only_while_the_playground_runs() 
 }
 
 #[test]
+fn tests_and_reruns_take_no_place_in_the_sessions_limit() {
+    let mut fixture = Fixture::new();
+    let at = |seconds: u64| Some(1_700_000_000_000_000 + seconds * 1_000_000);
+    let mut older = RunSpec::new(vec![charges_allowed(0, "cus_northwind")]);
+    older.session = Some("s-old".into());
+    older.started_at = at(1);
+    fixture.run(older);
+    let mut newer = RunSpec::new(vec![charges_allowed(0, "cus_northwind")]);
+    newer.started_at = at(2);
+    let source = fixture.run(newer);
+    for (n, label) in ["test", "rerun", "test"].into_iter().enumerate() {
+        let mut follow_up = RunSpec::new(vec![charges_allowed(0, "cus_northwind")]);
+        follow_up.label = label.into();
+        follow_up.session = Some(format!("s-follow-{n}"));
+        follow_up.test_of = (label == "test").then_some(source);
+        follow_up.started_at = at(3 + n as u64);
+        fixture.run(follow_up);
+    }
+    let (reader, _dir) = fixture.reader();
+
+    let listed = read::sessions(&reader, 1, 1_700_000_000_000_000).unwrap();
+    let ids: Vec<&str> = listed
+        .sessions
+        .iter()
+        .map(|row| row.session.as_str())
+        .collect();
+    assert_eq!(ids, ["s-follow-2", "s-1"]);
+    assert_eq!(
+        listed.more, 1,
+        "only the older session is counted as left out"
+    );
+
+    let listed = read::sessions(&reader, 2, 1_700_000_000_000_000).unwrap();
+    let ids: Vec<&str> = listed
+        .sessions
+        .iter()
+        .map(|row| row.session.as_str())
+        .collect();
+    assert_eq!(ids, ["s-follow-2", "s-follow-1", "s-1", "s-old"]);
+    assert_eq!(listed.more, 0);
+}
+
+#[test]
+fn tests_and_reruns_are_listed_up_to_the_limit_and_only_newer_than_the_last_session_kept() {
+    let mut fixture = Fixture::new();
+    let at = |seconds: u64| Some(1_700_000_000_000_000 + seconds * 1_000_000);
+    let follow_up = |fixture: &mut Fixture, session: &str, seconds: u64| {
+        let mut spec = RunSpec::new(vec![charges_allowed(0, "cus_northwind")]);
+        spec.label = "rerun".into();
+        spec.session = Some(session.into());
+        spec.started_at = at(seconds);
+        fixture.run(spec);
+    };
+    follow_up(&mut fixture, "s-older", 1);
+    let mut session = RunSpec::new(vec![charges_allowed(0, "cus_northwind")]);
+    session.started_at = at(2);
+    fixture.run(session);
+    for n in 0..3 {
+        follow_up(&mut fixture, &format!("s-newer-{n}"), 3 + n);
+    }
+    let (reader, _dir) = fixture.reader();
+
+    // One rerun of the three newer ones, and none older than the session kept.
+    let listed = read::sessions(&reader, 1, 1_700_000_000_000_000).unwrap();
+    let ids: Vec<&str> = listed
+        .sessions
+        .iter()
+        .map(|row| row.session.as_str())
+        .collect();
+    assert_eq!(ids, ["s-newer-2", "s-1"]);
+
+    // The session the page shows is listed however old it is.
+    let listed = read::sessions_with(&reader, 1, 1_700_000_000_000_000, Some("s-older")).unwrap();
+    assert!(listed.sessions.iter().any(|row| row.session == "s-older"));
+    // One the limit already lists takes its own place, not one more.
+    let listed = read::sessions_with(&reader, 1, 1_700_000_000_000_000, Some("s-1")).unwrap();
+    let ids: Vec<&str> = listed
+        .sessions
+        .iter()
+        .map(|row| row.session.as_str())
+        .collect();
+    assert_eq!(ids, ["s-newer-2", "s-1"]);
+    let listed = read::sessions_with(&reader, 1, 1_700_000_000_000_000, Some("s-none")).unwrap();
+    assert_eq!(listed.sessions.len(), 2);
+}
+
+#[test]
 fn a_session_whose_run_is_still_in_flight_is_listed_while_the_playground_runs() {
     let mut fixture = Fixture::new();
     let stored = fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]));
     fixture
         .store
-        .mark_running(stored + 1, "rerun", Some("s-rerun"), 1_700_000_000_000_000)
+        .mark_running(
+            stored + 1,
+            "rerun",
+            Some("s-rerun"),
+            1_700_000_000_000_000,
+            None,
+        )
         .unwrap();
     let (reader, _dir) = fixture.reader_with(
         Page {

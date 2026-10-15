@@ -18,8 +18,8 @@ export type Block =
 
 const BULLET = /^\s*[-*+]\s+(.*)$/;
 const NUMBERED = /^\s*(\d{1,9})[.)]\s+(.*)$/;
-const HEADING = /^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$/;
-const FENCE = /^\s{0,3}(```|~~~)/;
+const HEADING = /^\s{0,3}#{1,6}\s+(.*)$/;
+const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
 const TABLE = /^\s*\|.*\|\s*$/;
 
 export function parseMarkdown(text: string): Block[] {
@@ -36,7 +36,7 @@ export function parseMarkdown(text: string): Block[] {
     if (fence) {
       endPara();
       const body: string[] = [];
-      for (i++; i < lines.length && !lines[i].trimStart().startsWith(fence[1]); i++) body.push(lines[i]);
+      for (i++; i < lines.length && !closesFence(lines[i], fence[1]); i++) body.push(lines[i]);
       blocks.push({ kind: "pre", text: body.join("\n") });
       continue;
     }
@@ -50,7 +50,7 @@ export function parseMarkdown(text: string): Block[] {
     const heading = HEADING.exec(line);
     if (heading) {
       endPara();
-      blocks.push({ kind: "heading", spans: parseInline(heading[1]) });
+      blocks.push({ kind: "heading", spans: parseInline(headingText(heading[1])) });
       continue;
     }
     const bullet = BULLET.exec(line);
@@ -84,6 +84,20 @@ export function parseMarkdown(text: string): Block[] {
   return blocks;
 }
 
+/** A line of only the fence's mark, at least as long as the one that opened it. */
+function closesFence(line: string, opening: string): boolean {
+  const mark = line.trim();
+  return mark.length >= opening.length && mark === opening[0].repeat(mark.length);
+}
+
+/** A heading's words without the `#`s that may close it, which need a space before them: `C#` keeps its own. */
+function headingText(text: string): string {
+  const words = text.trimEnd();
+  let end = words.length;
+  while (end > 0 && words[end - 1] === "#") end--;
+  return end === 0 || /\s/.test(words[end - 1]) ? words.slice(0, end).trimEnd() : words;
+}
+
 /** Bold, italic, code and links in one line or paragraph; anything else is text as written. */
 export function parseInline(text: string): Span[] {
   const spans: Span[] = [];
@@ -92,6 +106,10 @@ export function parseInline(text: string): Span[] {
     if (plain) spans.push({ kind: "text", text: plain });
     plain = "";
   };
+  // Which of `**` and `__` started words and found no closer: none can close a later
+  // one either, so it isn't searched for again (a reply full of unclosed `**` would
+  // otherwise take time that grows with its length squared).
+  const unclosed = new Set<string>();
   let i = 0;
   while (i < text.length) {
     const rest = text.slice(i);
@@ -112,7 +130,10 @@ export function parseInline(text: string): Span[] {
       i += link[0].length;
       continue;
     }
-    const strong = /^(\*\*|__)(?=\S)([\s\S]*?\S)\1/.exec(rest);
+    const pair = rest.slice(0, 2);
+    const opens = (pair === "**" || pair === "__") && /\S/.test(rest.charAt(2));
+    const strong = opens && !unclosed.has(pair) ? /^(\*\*|__)([\s\S]*?\S)\1/.exec(rest) : null;
+    if (opens && !strong) unclosed.add(pair);
     if (strong) {
       flush();
       spans.push({ kind: "strong", children: parseInline(strong[2]) });

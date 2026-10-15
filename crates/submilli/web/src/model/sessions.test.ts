@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { askBox, chatEmptyText } from "./chat";
-import { actionBlock, footer, sessionBar, sessionRows } from "./sessions";
+import { actionBlock, footer, keptValues, sessionBar, sessionRows, wayBack } from "./sessions";
 import { frame } from "./steps";
 import { chatSession, plainSession } from "./testdata";
 import { INITIAL_UI } from "./ui";
@@ -38,6 +38,8 @@ describe("the sessions dialog", () => {
       agent: "Claude · claude-sonnet-5-5",
       agentSettings: "",
       vars: ["customerId=cus_northwind"],
+      allVars: ["customerId=cus_northwind"],
+      moreVars: "",
       runs: "4 runs",
       ends: [{ text: "denied", tone: "bad" }],
       follow: "3",
@@ -50,6 +52,14 @@ describe("the sessions dialog", () => {
     const fresh = { variables: { customerId: "cus_a" }, agent: "anthropic:claude-sonnet-5-5", settings: { max_output: 100 }, started: "2026-10-13T14:00:00Z", messages: [] };
     const rows = sessionRows(frame({ ...chatSession(), sessionId: null }, { ...INITIAL_UI, mode: "fresh", fresh }));
     expect(rows[0]).toMatchObject({ id: null, current: true, task: "No task yet", taskMuted: true, short: "not started", source: "Browser", agentSettings: "max output 100", vars: ["customerId=cus_a"], runs: "0 runs" });
+  });
+
+  it("shows two of many variables and how many more, as the session bar does", () => {
+    const variables = { a: "1", b: "2", c: "3", d: "4", e: "5" };
+    const fresh = { variables, agent: "anthropic:claude-sonnet-5-5", settings: {}, started: "2026-10-13T14:00:00Z", messages: [] };
+    const rows = sessionRows(frame({ ...chatSession(), sessionId: null }, { ...INITIAL_UI, mode: "fresh", fresh }));
+    expect(rows[0]).toMatchObject({ vars: ["a=1", "b=2"], moreVars: "+3 more" });
+    expect(rows[0].allVars).toHaveLength(5);
   });
 });
 
@@ -122,5 +132,51 @@ describe("a session started for the coding assistant", () => {
     expect(sessionBar(f)).toMatchObject({ state: "Open", live: true });
     expect(askBox(f)).toMatchObject({ disabled: true, none: { text: "No agent chats in this session.", offer: true } });
     expect(chatEmptyText(f)).toBe("No chat in this session: its runs came from your coding assistant or the CLI.");
+  });
+});
+
+describe("an open session whose values differ from the ones bound now", () => {
+  const bound = (variables: Record<string, string>) => {
+    const data = chatSession();
+    data.status = { ...data.status!, binding: { variables, secrets: [] } };
+    return data;
+  };
+
+  it("says it keeps its own: the first that differs, then the rest to open", () => {
+    expect(keptValues(frame(bound({ customerId: "cus_globex", region: "us" }), INITIAL_UI))).toEqual({
+      lead: "This session keeps the values it started with; the ones bound now differ: ",
+      changes: [
+        { name: "customerId", was: "cus_northwind", now: "cus_globex" },
+        { name: "region", was: "not set", now: "us" },
+      ],
+      tail: ". Its messages still use its own.",
+    });
+  });
+
+  it("says nothing when they match, or for a session that takes no more messages", () => {
+    expect(keptValues(frame(bound({ customerId: "cus_northwind" }), INITIAL_UI))).toBeNull();
+    const ended = bound({ customerId: "cus_globex" });
+    ended.sessions = ended.sessions.map((s) => (s.session === ended.sessionId ? { ...s, open: false } : s));
+    expect(keptValues(frame(ended, INITIAL_UI))).toBeNull();
+  });
+
+  it("says nothing over a new session that isn't started yet, nor while one is set up", () => {
+    const data = bound({ customerId: "cus_globex" });
+    expect(keptValues(frame(data, { ...INITIAL_UI, mode: "fresh" }))).toBeNull();
+    expect(keptValues(frame(data, { ...INITIAL_UI, mode: "setup" }))).toBeNull();
+  });
+});
+
+describe("the way back from a test's or rerun's own session", () => {
+  it("is the session it was opened from, kept when another is opened from inside it, and never itself", () => {
+    // Opened from the agent's session.
+    expect(wayBack(null, "agent", "rerun-1")).toBe("agent");
+    // Opened again from inside it, as Watch it pressed twice: still the agent's session.
+    expect(wayBack({ to: "rerun-1", from: "agent" }, "rerun-1", "rerun-1")).toBe("agent");
+    // Another rerun watched from inside the first: back to where it all started.
+    expect(wayBack({ to: "rerun-1", from: "agent" }, "rerun-1", "rerun-2")).toBe("agent");
+    // From somewhere else entirely, that place.
+    expect(wayBack({ to: "rerun-1", from: "agent" }, "other", "rerun-2")).toBe("other");
+    expect(wayBack(null, "rerun-1", "rerun-1")).toBeNull();
   });
 });

@@ -5,12 +5,14 @@
 // calls into the package (once, while the program stays on that line), then the package's
 // own line.
 import type { PackageLine, PageData, SessionEvent, SessionSummary, StoredEvent } from "../api/types";
+import { askedFor, ctx, sourceRunOf } from "./format";
 import { namesOf, type Names } from "./refs";
 import type { UiState } from "./ui";
 
 export type Step =
   | { kind: "chat"; key: string; role: "user" | "assistant"; text: string }
-  | { kind: "tool"; key: string; tool: string; bytes: number }
+  /** One of the agent's tools that made no run; `args`, once its turn is logged, are what it asked. */
+  | { kind: "tool"; key: string; tool: string; bytes: number; args?: Record<string, unknown> }
   /** A program line making a call; `into` when the call is made inside a package. */
   | { kind: "call"; key: string; run: number; index: number; into: boolean }
   /** The package's own line for a call made inside a package. */
@@ -103,7 +105,21 @@ export function readSession(events: StoredEvent[]): Session {
   // The program line each run's last call was made at, so a package's calls from one line
   // step into the package once.
   const lastLine: Record<number, number> = {};
+  // A file tool's run sends no size of its own: its tool call, logged after the run ends,
+  // says what went back to the agent.
+  let lastEnded: number | null = null;
+  // The tool steps still waiting for their turn's record of what each was asked.
+  const unasked: { step: Extract<Step, { kind: "tool" }>; tool: string }[] = [];
   for (const e of [...events].sort(comparePositions)) {
+    if ("chat-tools" in e.body) {
+      for (const call of e.body["chat-tools"].calls) {
+        const at = unasked.findIndex((u) => u.tool === call.name);
+        if (at < 0) continue;
+        if (call.arguments) unasked[at].step.args = call.arguments;
+        unasked.splice(at, 1);
+      }
+      continue;
+    }
     if ("chat" in e.body) {
       if (kept.has(e)) steps.push({ kind: "chat", key: "turn:" + e.body.chat.turn, role: e.body.chat.role, text: e.body.chat.text });
       continue;
@@ -112,8 +128,14 @@ export function readSession(events: StoredEvent[]): Session {
     if (!ev) continue;
     const key = "ev:" + e.event_id;
     const run = e.run;
-    if (ev.kind === "tool-call" && typeof ev.tool === "string" && !ev.tool.endsWith("__execute")) {
-      steps.push({ kind: "tool", key, tool: ev.tool.split("__").pop() || ev.tool, bytes: ev.result_bytes || 0 });
+    if (ev.kind === "tool-call" && typeof ev.tool === "string") {
+      if (!ev.tool.endsWith("__execute")) {
+        const step: Extract<Step, { kind: "tool" }> = { kind: "tool", key, tool: ev.tool.split("__").pop() || ev.tool, bytes: ev.result_bytes || 0 };
+        steps.push(step);
+        unasked.push({ step, tool: ev.tool });
+        if (lastEnded !== null && returned[lastEnded] === undefined) returned[lastEnded] = ev.result_bytes || 0;
+      }
+      lastEnded = null;
     }
     if (run === undefined) continue;
     if (ev.kind === "run-started" && typeof ev.label === "string") labels[run] = ev.label;
@@ -144,6 +166,7 @@ export function readSession(events: StoredEvent[]): Session {
     } else if (ev.kind === "run-finished") {
       finished[run] = typeof ev.error === "string" ? { error: ev.error } : {};
       steps.push({ kind: "run", key, run });
+      lastEnded = run;
     } else if (ev.kind === "returned") {
       returned[run] = ev.bytes || 0;
     }
@@ -288,7 +311,7 @@ export function followUpName(f: Frame, run: number): string | null {
   const show = f.data.runs[run];
   const source = show?.source ?? f.session.labels[run];
   if (source !== "test" && source !== "rerun") return null;
-  const of = show ? show.rerun_of ?? show.test?.source_run ?? null : null;
+  const of = show ? sourceRunOf(show) : null;
   return "your " + source + (of !== null && of !== undefined ? " of run " + of : "");
 }
 
@@ -304,6 +327,18 @@ export function fileTool(f: Frame, run: number): string | null {
   const entry = f.data.runs[run]?.entry;
   // As people read it: `submilli__files__list` is files.list.
   return entry && entry.startsWith("mcp:") ? entry.slice(4).replace(/^submilli__/, "").split("__").join(".") : null;
+}
+
+/**
+ * What a file tool's run asked for, from what its check saw: `text` at a glance, as
+ * "/billing", and `all` its fields, for hover text. Empty for a program, whose checks
+ * each say what they asked. It tells apart calls to one tool decided differently.
+ */
+export function callTarget(f: Frame, run: number): { text: string; all: string } {
+  if (!fileTool(f, run)) return { text: "", all: "" };
+  const contexts = f.data.runs[run]?.untrusted.contexts;
+  const first = contexts ? Object.values(contexts)[0] : undefined;
+  return { text: askedFor(first), all: ctx(first) };
 }
 
 /** A run's place among the agent's programs, from 1; 0 for a run that wasn't one. */

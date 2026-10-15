@@ -1,7 +1,7 @@
 // The code pane: which program or package source shows, which line is lit, and what the
 // step at the cursor did there.
 import { sourceKey, type Show } from "../api/types";
-import { capitalize, size } from "./format";
+import { capitalize, size, sourceRunOf } from "./format";
 import { programRef } from "./refs";
 import { selectedRun } from "./chat";
 import { byAgent, endedRuns, fileTool, followUpName, programNumber, type Call, type Frame } from "./steps";
@@ -10,7 +10,8 @@ import { byAgent, endedRuns, fileTool, followUpName, programNumber, type Call, t
 function programName(f: Frame, run: number): string {
   const tool = fileTool(f, run);
   if (tool) return "the agent’s " + tool + " call";
-  if (byAgent(f, run)) return "program " + programNumber(f, run);
+  // A run of another session, as a rerun's source is from inside the rerun's session, has no number here.
+  if (byAgent(f, run)) return programNumber(f, run) ? "program " + programNumber(f, run) : "the agent’s program";
   const followUp = followUpName(f, run);
   return followUp ? "the program of " + followUp : "your assistant’s program";
 }
@@ -39,7 +40,7 @@ export interface CodePane {
 /** The run whose program a test or rerun ran: the program is the source run's. */
 function sourceOf(f: Frame, run: number): number {
   const r = f.data.runs[run];
-  return (r && (r.test?.source_run || r.rerun_of)) || run;
+  return (r && sourceRunOf(r)) ?? run;
 }
 
 /**
@@ -93,8 +94,11 @@ export function codePane(f: Frame): CodePane {
 
   // While stepping, the code shows the program at the step, unless a run was picked since.
   const programs = endedRuns(f).map((r) => r.run);
+  // A run still going shows its program as soon as its start is read, ahead of the ones before it.
+  for (const n of f.running) if (data.running[n] !== undefined && !programs.includes(n)) programs.push(n);
   const atCall = f.atCall;
-  if (atCall) programs.push(atCall.run);
+  if (atCall && !programs.includes(atCall.run)) programs.push(atCall.run);
+  programs.sort((a, b) => a - b);
   const picked = selectedRun(ui.sel);
   let shown: number | null = ui.program ?? picked ?? (atCall ? atCall.run : null);
   if (shown !== null && !programs.includes(sourceOf(f, shown))) shown = null;
@@ -134,10 +138,21 @@ export function codePane(f: Frame): CodePane {
     }
   }
 
+  const inFlight = !codeRun && shown !== null ? data.running[shown] : undefined;
+  if (shown !== null && inFlight !== undefined) {
+    return {
+      ...blank,
+      sub: programName(f, shown) + " · run " + shown + " · running",
+      lines: linesOf(inFlight, active),
+      codeNote: "Still running: its result shows in the log when it ends.",
+      empty: null,
+      programRef: programRef(f.names, shown),
+    };
+  }
   if (!codeRun) {
-    // A program shows once its run's record is read, which is when the run ends.
+    // A run whose start hasn't been read yet: its program shows once it is.
     const running = atCall ? atCall.run : f.running.length ? f.running[f.running.length - 1] : null;
-    if (running !== null) return { ...blank, sub: "run " + running, lines: [], empty: "Run " + running + "’s program shows here once it ends." };
+    if (running !== null) return { ...blank, sub: "run " + running, lines: [], empty: "Run " + running + " is running; its program shows here as soon as it’s read, or when it ends." };
     // Stepping forward only helps a reader who is stepped back.
     const empty = f.stepping ? "No program yet at this point. Step forward (→) to reach the agent’s first program." : "The programs the agent sends appear here.";
     return { ...blank, sub: "", lines: [], empty };

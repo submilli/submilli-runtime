@@ -1,16 +1,17 @@
 // The log pane: a row per run, its permission checks, and the tests and reruns of it.
 import type { Explain, RuleRef, Show, ShowDecision } from "../api/types";
 import { bpRuleLine } from "./blueprint";
-import { boundVars, capitalize, ctx, duration, end, ordinal, plainBy, plural, size, tone, when, type Tone } from "./format";
+import { askedFor, boundVars, capitalize, ctx, differing, duration, end, ordinal, plainBy, plural, size, tone, when, type Tone, type ValuesNote } from "./format";
 import { decisionRef, forAsst, runRef } from "./refs";
 import { countWords, followUps } from "./summary";
-import { byAgent, endedRuns, fileTool, followUpName, programNumber, type Frame } from "./steps";
+import { byAgent, callTarget, endedRuns, fileTool, followUpName, programNumber, type Frame } from "./steps";
 import type { UiState } from "./ui";
 
-/** What a button runs: the page acts on it, and `cmd` is the same from the CLI. */
+/** What a button runs: the page acts on it, and `commandOf` gives the same from the CLI. */
 export type Action =
   | { kind: "draft"; decision: string }
   | { kind: "test"; run: number; mode?: "reads-live" | "live" }
+  | { kind: "recheck"; run: number }
   | { kind: "rerun"; run: number };
 
 /** One way to try a program again. */
@@ -21,8 +22,8 @@ export interface AgainOption {
   label: string;
   /** It runs something real, so it asks first and looks it. */
   caution: boolean;
-  cmd: string;
-  copyTitle: string;
+  /** What its copy button copies: a line for your coding assistant, or the same from the CLI. */
+  copy: { label: string; text: string; title: string; what: "reference" | "command" };
   note: string;
 }
 
@@ -45,6 +46,8 @@ export interface DecisionRow {
   selected: boolean;
   open: boolean;
   title: string;
+  /** Every field the check saw, for hover text. */
+  hint: string;
   status: string;
   tone: Tone;
   meta: string;
@@ -73,6 +76,8 @@ export interface FollowRow {
   tone: Tone;
   /** The answer first: did the change get the program past the refusal? */
   verdict: string;
+  /** Which values differ: a rerun's from the run's, or the bound ones from a test's; null when none do. */
+  values: ValuesNote | null;
   further: string;
   showFurther: boolean;
   what: string;
@@ -111,6 +116,8 @@ export interface RunRow {
   selected: boolean;
   open: boolean;
   title: string;
+  /** Every field a file tool's call asked for, for hover text; "" for a program. */
+  hint: string;
   status: string;
   tone: Tone;
   meta: string;
@@ -230,21 +237,37 @@ function againOptions(f: Frame, r: Show, word: string): AgainOption[] {
   if (word === "rejected") return [];
   const firstDenied = r.decisions.find((d) => d.outcome === "deny");
   const n = r.run;
-  const options: Omit<AgainOption, "copyTitle">[] = [];
+  const options: AgainOption[] = [];
   if (firstDenied) {
     const ref = firstDenied.refs[0];
+    // The refused check, not a ready answer: what to change is for you to tell your coding assistant.
+    const text = decisionRef(f.names, r, firstDenied);
     options.push({
       action: { kind: "draft", decision: ref },
       goal: "Should the agent be allowed this?",
       what: "Change the blueprint first.",
       label: "Draft a rule for check " + ref,
       caution: false,
-      cmd: "submilli playground draft-rule " + ref,
+      copy: { label: "Copy for assistant", text, title: forAsst(text), what: "reference" },
       note: "Shows a rule that allows exactly the call refused in check " + ref + ". Nothing changes until you save it. If the refusal is right, there’s nothing to fix.",
     });
   }
-  // A file tool's call has no program to test or rerun; the agent asks again itself.
-  if (what === "call") return options.map((o) => ({ ...o, copyTitle: "Copy the CLI command: " + o.cmd }));
+  // A file tool's call has no program to test or rerun: its checks are decided again,
+  // and the agent makes the call again itself.
+  if (what === "call") {
+    // A call that went through has nothing to check again: the agent got its answer.
+    if (!firstDenied) return options;
+    options.push({
+      action: { kind: "recheck", run: n },
+      goal: "Changed the blueprint?",
+      what: "See whether this call gets through now.",
+      label: f.inForce !== null ? "Check against blueprint v" + f.inForce : "Check against the blueprint in force",
+      caution: false,
+      copy: cliCopy("submilli playground recheck " + n),
+      note: "Nothing runs. To make the call again, ask the agent.",
+    });
+    return options;
+  }
   options.push(
     {
       action: { kind: "test", run: n },
@@ -252,8 +275,8 @@ function againOptions(f: Frame, r: Show, word: string): AgainOption[] {
       what: "See whether this " + what + " gets through now.",
       label: f.inForce !== null ? "Test against blueprint v" + f.inForce : "Test against the blueprint in force",
       caution: false,
-      cmd: "submilli playground test " + n,
-      note: "Nothing real happens: replies come from run " + n + "’s recording.",
+      copy: cliCopy("submilli playground test " + n),
+      note: "Nothing real happens: replies come from run " + n + "’s recording, and it keeps run " + n + "’s values.",
     },
     {
       action: { kind: "rerun", run: n },
@@ -261,11 +284,15 @@ function againOptions(f: Frame, r: Show, word: string): AgainOption[] {
       what: "Run it for real.",
       label: "Rerun for real…",
       caution: true,
-      cmd: "submilli playground rerun " + n,
+      copy: cliCopy("submilli playground rerun " + n),
       note: "Asks first. Uses the variables you’ve set now." + (firstDenied ? " A package change can’t lift a refusal; only the blueprint can." : ""),
     },
   );
-  return options.map((o) => ({ ...o, copyTitle: "Copy the CLI command: " + o.cmd }));
+  return options;
+}
+
+function cliCopy(cmd: string): AgainOption["copy"] {
+  return { label: "Copy CLI command", text: cmd, title: "Copy the CLI command: " + cmd, what: "command" };
 }
 
 function decisionRow(f: Frame, r: Show, d: ShowDecision): DecisionRow {
@@ -279,12 +306,15 @@ function decisionRow(f: Frame, r: Show, d: ShowDecision): DecisionRow {
   const bytes = calls.reduce((sum, c) => sum + (c.bytes || 0), 0);
   const spot = ruleSpot(f, r, d, ex);
   const copyText = decisionRef(f.names, r, d);
+  // A repeated check asked for one thing each time; its first time stands for them.
+  const asked = askedFor(r.untrusted.contexts?.[ref]);
   return {
     id,
     ref,
     selected: f.ui.sel === id,
     open: !!f.ui.open[id],
-    title: " · " + d.caller + " → " + d.capability + (d.refs.length > 1 ? " ×" + d.refs.length : ""),
+    title: " · " + d.caller + " → " + d.capability + (d.refs.length > 1 ? " ×" + d.refs.length : "") + (asked ? " " + asked : ""),
+    hint: ctx(r.untrusted.contexts?.[ref]),
     status: d.outcome === "deny" ? "Denied" : "Allowed",
     tone: d.outcome === "deny" ? "bad" : "ok",
     meta: "blueprint v" + r.blueprint_version + (lines.length ? " · " + programLines(lines) + " · " + (bytes ? size(bytes) + " fetched" : "nothing fetched") : ""),
@@ -333,7 +363,7 @@ function followRow(f: Frame, r: Show, fu: Show, again: AgainOption[], all: numbe
   const verdict = fixed
     ? byChange
       ? "Your change worked: " + allowed + "."
-      : capitalize(allowed) + "." + (byVars ? " This rerun used other variables than run " + r.run + ": " + boundVars(otherVars) + "." : "")
+      : capitalize(allowed) + "."
     : w === word && cmp && !cmp.changes.length
       ? "Same result as run " + r.run + (refused ? ": refused at the same check, so nothing changed that check." : ".")
       : "";
@@ -348,6 +378,13 @@ function followRow(f: Frame, r: Show, fu: Show, again: AgainOption[], all: numbe
   const fuError = uncut(w === "stopped" ? "" : fu.untrusted.error || "", !!f.ui.whole[n]);
   const fuResult = uncut(fu.untrusted.result || "", !!f.ui.whole[n]);
   const copyText = runRef(f.names, fu);
+  // A rerun takes the values bound when it ran; a test keeps the run's, whatever is bound now.
+  const changed = fu.rerun_of ? differing(r.variables, fu.variables) : differing(fu.variables, f.data.status?.binding.variables ?? fu.variables);
+  const values: ValuesNote | null = !changed.length
+    ? null
+    : fu.rerun_of
+      ? { lead: "This rerun used other values than run " + r.run + ": ", changes: changed, tail: "." }
+      : { lead: "This test kept run " + r.run + "’s values; the ones bound now differ: ", changes: changed, tail: ". Rerun for real uses the bound ones." };
   return {
     n,
     id,
@@ -359,6 +396,7 @@ function followRow(f: Frame, r: Show, fu: Show, again: AgainOption[], all: numbe
     status: w === "stopped" ? (fixed ? "Got past the refusal · stopped at a new call" : "Stopped · nothing sent") : capitalize(w),
     tone: tone(w),
     verdict,
+    values,
     further,
     showFurther: !!further && w !== "stopped",
     what: fu.rerun_of
@@ -416,14 +454,16 @@ function runRow(f: Frame, r: Show, i: number, runs: Show[]): RunRow {
   const err = uncut(r.untrusted.error || "", !!f.ui.whole[r.run]);
   const result = uncut(r.untrusted.result || "", !!f.ui.whole[r.run]);
   const copyText = runRef(f.names, r);
+  const target = callTarget(f, n);
   return {
     n,
+    hint: target.all,
     id,
     word,
     selected: f.ui.sel === id,
     open,
     thing: fileTool(f, n) ? "call" : "program",
-    title: "Run " + n + " · " + (!byAgent(f, n) ? followUpName(f, n) ?? "run by your assistant" : fileTool(f, n) ? "the agent’s " + fileTool(f, n) + " call" : "the agent’s " + ordinal(programNumber(f, n)) + " program"),
+    title: "Run " + n + " · " + (!byAgent(f, n) ? followUpName(f, n) ?? "run by your assistant" : fileTool(f, n) ? "the agent’s " + fileTool(f, n) + " call" + (target.text ? " " + target.text : "") : "the agent’s " + ordinal(programNumber(f, n)) + " program"),
     status: capitalize(word),
     tone: tone(word),
     meta:

@@ -56,6 +56,8 @@ pub(crate) struct HostOptions {
     /// Print the ready record once serving, as `--foreground` does; a detached
     /// child's output goes to its log, and the parent prints the record instead.
     pub(crate) print: Option<super::Output>,
+    /// Open the printed record's login link in the browser.
+    pub(crate) open: bool,
 }
 
 /// What the control listener reports about this instance. Built once at start.
@@ -431,7 +433,11 @@ async fn run(
         drop(options.start_lock);
         if let Some(output) = options.print {
             let code = auth.mint_login_code(Now::current())?;
-            ReadyRecord::new(&description, None, &code, false).print(output);
+            ReadyRecord::new(&description, None, &code, false).announce(
+                output,
+                options.open,
+                &state_dir,
+            );
         }
         submilli_server::serve_embedded(server, state, SHUTDOWN_GRACE, signals)
             .await

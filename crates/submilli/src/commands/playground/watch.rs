@@ -220,6 +220,9 @@ impl Applier {
     /// Before a run: applies a save the watcher has not reached yet, so the run uses
     /// the file as it is now. A file the last apply already read is left as it was.
     pub(crate) async fn catch_up(&self) {
+        // An apply that already read the file marks it seen before it logs the
+        // version, so wait for it to finish: the run then gets that version.
+        drop(self.turn.lock().await);
         let Ok(yaml) = std::fs::read_to_string(&self.path) else {
             return;
         };

@@ -4,7 +4,7 @@ import type { ReactNode, RefObject, UIEventHandler } from "react";
 
 import type { Action, AgainOption, DecisionRow, FollowRow, LogPane as Pane, RuleSpot, RunRow } from "../model/log";
 import { FILTERS, type Filter } from "../model/ui";
-import { Arrow, CancelButton, cls, Gated, press } from "./controls";
+import { Arrow, CancelButton, cls, Gated, press, Values } from "./controls";
 
 /** What the log asks of the page. */
 export interface LogActions {
@@ -76,8 +76,8 @@ function Again(props: { options: AgainOption[]; a: LogActions }) {
             <Gated className={cls("pg-btn", o.caution && "pg-caution")} blocked={props.a.blocked} onClick={() => props.a.act(o.action)}>
               {o.label}
             </Gated>
-            <button className="pg-copycmd" title={o.copyTitle} onClick={() => props.a.copy(o.cmd, "command")}>
-              <span aria-hidden="true">⧉</span> Copy CLI command
+            <button className="pg-copycmd" title={o.copy.title} onClick={() => props.a.copy(o.copy.text, o.copy.what)}>
+              <span aria-hidden="true">⧉</span> {o.copy.label}
             </button>
           </div>
           <small>{o.note}</small>
@@ -101,7 +101,7 @@ function Check({ d, run, a }: { d: DecisionRow; run: number; a: LogActions }) {
   return (
     <div className={cls("pg-event nested", d.selected && "selected")} id={"pgrow-" + d.id}>
       <Head open={d.open} onToggle={() => a.toggle(d.id)} status={d.status} tone={d.tone}>
-        <span className="pg-event-title">
+        <span className="pg-event-title" title={d.hint ? "Asked for " + d.hint : undefined}>
           <Arrow />
           Check <span className="pg-refnum">{d.ref}</span>
           {d.title}
@@ -180,6 +180,7 @@ function FollowUp({ f, a }: { f: FollowRow; a: LogActions }) {
       {f.open && (
         <div className="pg-event-detail">
           {f.verdict && <p className="pg-verdict">{f.verdict}</p>}
+          {f.values && <Values v={f.values} />}
           {f.showFurther && <p className="pg-note">{f.further}</p>}
           <p className="pg-note pg-muted">{f.what}</p>
           {f.changes.map((c, i) => (
@@ -261,7 +262,7 @@ function Run({ r, a }: { r: RunRow; a: LogActions }) {
   return (
     <article className={cls("pg-event", r.selected && "selected")} id={"pgrow-" + r.id}>
       <Head open={r.open} onToggle={() => a.toggle(r.id)} status={r.status} tone={r.tone}>
-        <span className="pg-event-title">
+        <span className="pg-event-title" title={r.hint ? "Asked for " + r.hint : undefined}>
           <Arrow />
           {r.title}
         </span>

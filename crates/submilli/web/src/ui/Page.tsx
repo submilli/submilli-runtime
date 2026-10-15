@@ -8,9 +8,9 @@ import { sourceKey } from "../api/types";
 import { packageRules, blueprintDialog } from "../model/blueprint";
 import { askBox, chatEmptyText, chatItems, noChat, runWord, type ChatItem } from "../model/chat";
 import { codePane } from "../model/code";
-import { capitalize, copyNotice, end, plainBy } from "../model/format";
+import { capitalize, copyNotice, end, plainBy, sourceRunOf } from "../model/format";
 import { expandAll, logPane, type Action, type RuleSpot } from "../model/log";
-import { actionBlock, footer, sessionBar, sessionRows } from "../model/sessions";
+import { actionBlock, footer, keptValues, sessionBar, sessionRows, wayBack } from "../model/sessions";
 import { checkSetup, initialSetup, INITIAL_SETUP, type SetupForm } from "../model/setup";
 import { AT_START, byAgent, frame, nextKey, playFrom, prevKey, runsInFlight } from "../model/steps";
 import { summary } from "../model/summary";
@@ -19,6 +19,7 @@ import type { NewSessionSettings, PageStore, Snapshot } from "../store/store";
 import { ChatPane } from "./ChatPane";
 import { CodePane } from "./CodePane";
 import { BlueprintView, Callout, ConfirmDialog, DraftDialog, MorePanel, PackagesDialog, SessionsDialog, ToastView, VarsDialog, type Toast } from "./Dialogs";
+import { Values } from "./controls";
 import { Header } from "./Header";
 import { LogPane, type LogActions } from "./LogPane";
 import { SessionBar } from "./SessionBar";
@@ -37,12 +38,16 @@ import {
   blueprintRefused,
   chatFailed,
   chatStopped,
+  cancellingRun,
   commandOf,
   confirmOf,
   draftRef,
   feedStopped,
   followUpDone,
+  followUpSessionNotice,
+  recheckSaid,
   gapNote,
+  runEnded,
   notInForce,
   runMissing,
 } from "./wording";
@@ -58,6 +63,9 @@ function typing(target: EventTarget | null): boolean {
   const field = target.closest("input, textarea, select, [contenteditable='true']");
   return !!field && !((field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) && field.readOnly);
 }
+
+/** `askingIn` for a new session not started yet, told apart by when it was set up; never a session id. */
+const freshBox = (started: string) => "#fresh " + started;
 
 export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
   const { data } = snap;
@@ -153,8 +161,23 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
   // Another session shown starts the reader over, at its latest event. One being set up
   // stays as it is: its Back now goes to the session shown.
   const shown = useRef(data.sessionId);
+  // The ask box the reader is at now: a new session's, or the shown session's. A message
+  // that failed goes back only into the box it was sent from.
+  const askingIn = useRef<string | null>(null);
+  askingIn.current = ui.mode === "fresh" && ui.fresh ? freshBox(ui.fresh.started) : ui.mode === "open" ? data.sessionId : null;
   // What to show in the next session opened, as when stepping through a rerun opens its session at the rerun.
   const showNext = useRef<Partial<UiState> | null>(null);
+  // A test's or rerun's own session, opened from its row: where the reader came from, so they can go back.
+  const [stepping, setStepping] = useState<{ to: string; from: string | null; run: number; source: number | null; kind: string } | null>(null);
+  // A run the link asked for is picked and opened once its session shows and its record is loaded.
+  const requestedDone = useRef<number | null>(null);
+  // The row the link picked; once the reader picks another, the link no longer says what's shown.
+  const linkSel = useRef<string | null>(null);
+  // The address stops naming a run, so a reload comes back to what's shown instead.
+  const forgetRunLink = () => {
+    if (snap.requested) store.clearRequested();
+    if (location.hash.startsWith("#run=")) history.replaceState(null, "", location.pathname + location.search);
+  };
   useEffect(() => {
     if (shown.current === data.sessionId) return;
     shown.current = data.sessionId;
@@ -171,27 +194,18 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
     if (!snap.requested || requestedDone.current === snap.requested.run) forgetRunLink();
   }, [data.sessionId]);
 
-  // A run the link asked for is picked and opened once its session shows and its record is loaded.
-  const requestedDone = useRef<number | null>(null);
-  // The row the link picked; once the reader picks another, the link no longer says what's shown.
-  const linkSel = useRef<string | null>(null);
   useEffect(() => {
     if (linkSel.current !== null && ui.sel !== null && ui.sel !== linkSel.current) {
       linkSel.current = null;
       forgetRunLink();
     }
   }, [ui.sel]);
-  // The address stops naming a run, so a reload comes back to what's shown instead.
-  const forgetRunLink = () => {
-    if (snap.requested) store.clearRequested();
-    if (location.hash.startsWith("#run=")) history.replaceState(null, "", location.pathname + location.search);
-  };
   useEffect(() => {
     const req = snap.requested;
     if (!req || requestedDone.current === req.run || snap.sessionLoading) return;
     const show = data.runs[req.run];
     if (!show) return;
-    const source = show.test?.source_run ?? show.rerun_of ?? null;
+    const source = sourceRunOf(show);
     const home = source !== null ? data.runs[source]?.session : show.session;
     if (!home || home !== data.sessionId) return;
     requestedDone.current = req.run;
@@ -313,6 +327,8 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
   // The playground's own words, as a sentence.
   const refused = (message: string) => showToast({ head: capitalize(message), auto: false });
 
+  // The test or rerun running now, for the Cancel on its notice.
+  const followUp = useRef<{ label: "test" | "rerun"; since: number; source: number } | null>(null);
   const act = async (action: Action, confirmed = false) => {
     if (blocked || busy.current) return;
     if (!confirmed && confirmOf(action)) {
@@ -328,6 +344,11 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
         setDraft(outcome.result);
         openDlg("draft");
         return;
+      }
+      if (action.kind === "recheck") {
+        const outcome = await store.recheck(action.run);
+        if (!outcome.ok) return refused(outcome.message);
+        return showToast({ ...recheckSaid(outcome.result), auto: false });
       }
       const startedIn = shown.current;
       showToast({ head: "Running:", body: commandOf(action), auto: false, cancelable: true, watchable: true });
@@ -361,14 +382,12 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
     if (action) void act(action, true);
   };
 
-  // A test's or rerun's own session, opened from its row: where the reader came from, so they can go back.
-  const [stepping, setStepping] = useState<{ to: string; from: string | null; run: number; source: number | null; kind: string } | null>(null);
   const stepThrough = async (session: string, run: number, kind?: "test" | "rerun", from?: number) => {
     const made = data.runs[run];
-    const source = made ? made.rerun_of ?? made.test?.source_run ?? null : from ?? null;
+    const source = made ? sourceRunOf(made) : from ?? null;
     // Listed first, so the session opens with its runs.
     await store.refreshSessions();
-    setStepping({ to: session, from: data.sessionId, run, source, kind: kind ?? (made?.rerun_of ? "rerun" : "test") });
+    setStepping({ to: session, from: wayBack(stepping, data.sessionId, session), run, source, kind: kind ?? (made?.rerun_of ? "rerun" : "test") });
     showNext.current = { sel: "r" + run, open: { ["r" + run]: true } };
     void store.openSession(session);
   };
@@ -381,8 +400,6 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
     void store.openSession(back.from);
   };
 
-  // The test or rerun running now, for the Cancel on its notice.
-  const followUp = useRef<{ label: "test" | "rerun"; since: number; source: number } | null>(null);
   // Opens the running test's or rerun's own session, to watch its calls as they come.
   const watchFollowUp = async () => {
     const going = followUp.current;
@@ -397,7 +414,7 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
     // Finished meanwhile: what it did shows as it ends.
     if (row === null || !followUp.current) return;
     const run = row.run;
-    showToast({ head: "Cancelling run " + run + ": it ends as cancelled once its calls drain.", auto: false });
+    showToast({ head: cancellingRun(run), auto: false, cancelling: run });
     const outcome = await store.cancel(run);
     if (!outcome.ok && followUp.current) refused(outcome.message);
   };
@@ -411,14 +428,14 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
       setCancelling(null);
       return refused(outcome.message);
     }
-    showToast({ head: "Cancelling run " + run + ": it ends as cancelled once its calls drain.", auto: true });
+    showToast({ head: cancellingRun(run), auto: true, cancelling: run });
   };
   useEffect(() => {
     if (cancelling === null || runsInFlight(data.events).includes(cancelling)) return;
     const run = cancelling;
     setCancelling(null);
     // The notice that it's cancelling gives way to how it ended.
-    if (toast && toast.head.startsWith("Cancelling run " + run + ":")) showToast({ head: "Run " + run + " ended: " + runWord(f, run) + ".", auto: true });
+    if (toast?.cancelling === run) showToast({ head: runEnded(run, runWord(f, run)), auto: true });
   }, [data.events, cancelling]);
 
   // ---- chat and new sessions
@@ -458,6 +475,9 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
     setTimeout(() => askInput.current?.focus(), 0);
   };
 
+  // Back in the box, unless the reader has started their next message there meanwhile.
+  const keepToSendAgain = (text: string) => setChatText((now) => (now.trim() ? now : text));
+
   const send = async () => {
     const text = chatText.trim();
     // One message at a time: a second while the first is unanswered would start another chat.
@@ -466,6 +486,7 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
     setFailure(null);
     const fresh = ui.mode === "fresh" ? ui.fresh : null;
     if (fresh) {
+      const sentFrom = freshBox(fresh.started);
       patch({ fresh: { ...fresh, messages: [...fresh.messages, text] } });
       const settings: NewSessionSettings = {
         model: fresh.agent,
@@ -481,8 +502,11 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
         const stopped = outcome.kind === STOPPED;
         setFailure({ session, message: outcome.message, started: session !== null, stopped });
         if (session === null) setUi((u) => (u.mode === "fresh" && u.fresh ? { ...u, fresh: { ...u.fresh, messages: u.fresh.messages.filter((m) => m !== text) } } : u));
-        // Kept to send again, unless it was stopped in the session it started, which has it.
-        if (!(stopped && session !== null)) setChatText(text);
+        // Kept to send again in the box it was sent from, or in the session it started,
+        // unless it was stopped there, which has it already.
+        const alreadyInSession = stopped && session !== null;
+        const atItsBox = askingIn.current === sentFrom || (session !== null && askingIn.current === session);
+        if (!alreadyInSession && atItsBox) keepToSendAgain(text);
         return;
       }
       // The answer can come before the session is listed; it is shown now either way.
@@ -495,7 +519,7 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
       setFailure({ session, message: outcome.message, started: true, stopped });
       // Kept for the reader to send again, in the session it was written for; a stopped
       // message is already in the session.
-      if (session === data.sessionId && !stopped) setChatText(text);
+      if (session === askingIn.current && !stopped) keepToSendAgain(text);
     }
   };
 
@@ -574,11 +598,11 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
   if (failure && failedHere && !f.stepping)
     chat.push(failure.stopped ? { kind: "stopped", ...chatStopped(failure.started) } : { kind: "failed", ...chatFailed(failure.message, failure.started) });
   const box = askBox(f);
-  const backTo = stepping && stepping.from && data.sessionId === stepping.to ? stepping.from.slice(0, 8) : "";
+  const backTo = stepping && stepping.from && stepping.from !== data.sessionId && data.sessionId === stepping.to ? stepping.from.slice(0, 8) : "";
   const askState = backTo && box.none ? { ...box, none: { ...box.none, back: backTo } } : snap.unreachable
     ? { ...box, disabled: true, primary: false, reason: UNREACHABLE.split(". ")[0] + "." }
     : snap.pendingChat && !box.disabled
-      ? { ...box, disabled: true, primary: false, reason: answering(waitingHere || ui.mode === "fresh" ? null : snap.pendingChat.session ?? "new"), stop: waitingHere || ui.mode === "fresh" }
+      ? { ...box, disabled: true, primary: false, reason: answering(waitingHere || ui.mode === "fresh" ? null : snap.pendingChat.session ?? "new"), stop: waitingHere || ui.mode === "fresh", typeAhead: true }
       : box;
   const pane = codePane(f);
   const srcKey = atPackage ? sourceKey(atPackage.package, atPackage.module) : null;
@@ -588,6 +612,7 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
   const gaps = ui.mode === "open" ? data.events.flatMap((e) => ("gap" in e.body ? [gapNote(e.run, e.body.gap)] : [])) : [];
   const rows = sessionRows(f);
   const refusedEdit = status.blueprint_status.refused;
+  const kept = keptValues(f);
   const bp = blueprintDialog(f);
   const versionInForce = f.inForce;
 
@@ -684,6 +709,22 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
       {snap.unreachable && <Callout text={UNREACHABLE} tone="bad" />}
       {refusedEdit && <Callout text={blueprintRefused(f.names.blueprint, refusedEdit, versionInForce)} tone="bad" />}
       {snap.feedError && <Callout text={feedStopped()} tone="bad" />}
+      {backTo && stepping && (
+        <Callout text={followUpSessionNotice(stepping.kind, stepping.run, stepping.source)}>
+          {/* A link, as the other notices' actions are: the chat holds the button. */}
+          <button className="pg-link" onClick={stepBack}>
+            Back to session {backTo}
+          </button>
+        </Callout>
+      )}
+      {kept && (
+        <div className="pg-callout" role="note">
+          <Values v={kept} />
+          <button className="pg-link" onClick={newSession}>
+            Start a new session to use them
+          </button>
+        </div>
+      )}
       {snap.requestedMissing !== null && (
         <Callout text={runMissing(snap.requestedMissing)}>
           <button className="pg-link" onClick={dismissNotice}>

@@ -92,6 +92,8 @@ export interface RunningRow {
   source: string;
   started_at_micros: number;
   session: string | null;
+  /** The program it runs, absent for a file tool's call: written by the agent. */
+  untrusted?: { program?: string };
 }
 
 export interface RunSummary {
@@ -243,6 +245,19 @@ export interface Draft {
   untrusted: { rule: string };
 }
 
+/** `POST /api/recheck`'s result: a run's checks decided again under the blueprint in force. Nothing runs. */
+export interface Recheck {
+  run: number;
+  /** The version the checks were decided under, when the change log says. */
+  in_force: string | null;
+  newly_allowed: number;
+  newly_denied: number;
+  different_rule: number;
+  /** Checks whose recording was too cut to decide again. */
+  cant_tell: string[];
+  changes: { decision: string; change: "newly-allowed" | "newly-denied" | "different-rule"; caller: string; capability: string; now_by: string }[];
+}
+
 /** `POST /api/agent`'s result. */
 export interface AgentResult {
   session: string;
@@ -364,6 +379,8 @@ export interface PageData {
   feedEnded: boolean;
   /** Runs by number: the session's own, and the tests and reruns of them. */
   runs: Record<number, Show>;
+  /** The programs of the shown session's runs still in flight, by number, until each run's record is read. */
+  running: Record<number, string>;
   /** Decisions by `<run>.<n>`. */
   explains: Record<string, Explain>;
   /** Compares of a follow-up against the run it followed, by the follow-up's number. */

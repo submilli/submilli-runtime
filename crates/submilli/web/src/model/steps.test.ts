@@ -83,6 +83,46 @@ describe("the step list", () => {
     ]);
     expect(returned).toEqual({ 1: 64, 2: 1061, 3: 361, 4: 103 });
   });
+
+  it("gives a file tool's run the size its tool call sent back, and a program's size to no later call", () => {
+    let seq = 0;
+    const at = (body: StoredEvent["body"], run?: number): StoredEvent =>
+      ({ format: 1, session_seq: ++seq, event_id: "e" + seq, position: { at_micros: seq, rank: 0 }, ...(run === undefined ? {} : { run }), body }) as StoredEvent;
+    const event = (fields: Record<string, unknown>) => ({ event: { schema: 1, at_micros: 0, ...fields } }) as unknown as StoredEvent["body"];
+    const { returned } = readSession([
+      // A program: its size comes with its own `returned` event, before its tool call.
+      at(event({ kind: "run-finished" }), 7),
+      at(event({ kind: "returned", bytes: 50 }), 7),
+      at(event({ kind: "tool-call", tool: "submilli__typescript__execute", result_bytes: 60 })),
+      // A file tool's call: its size is in the tool call logged after the run ends.
+      at(event({ kind: "run-finished", error: "permission_denied" }), 8),
+      at(event({ kind: "tool-call", tool: "submilli__files__list", result_bytes: 373 })),
+      // A file tool's call with no run in this session gives its size to none.
+      at(event({ kind: "tool-call", tool: "submilli__files__read", result_bytes: 9 })),
+    ]);
+    expect(returned).toEqual({ 7: 50, 8: 373 });
+  });
+
+  it("gives each of the agent's tools what it was asked, from its turn's record, in order", () => {
+    let seq = 0;
+    const at = (body: unknown): StoredEvent => ({ format: 1, session_seq: ++seq, event_id: "e" + seq, position: { at_micros: seq, rank: 0 }, body }) as unknown as StoredEvent;
+    const toolCall = (tool: string) => at({ event: { schema: 1, at_micros: 0, kind: "tool-call", tool, result_bytes: 10 } });
+    const { steps } = readSession([
+      toolCall("submilli__typescript__packages__search"),
+      toolCall("submilli__typescript__packages__search"),
+      at({
+        "chat-tools": {
+          turn: "t",
+          calls: [
+            { id: "a", name: "submilli__typescript__packages__search", arguments: { query: "charges" } },
+            { id: "b", name: "submilli__typescript__packages__search", arguments: { query: "refunds", limit: 5 } },
+          ],
+          results: [],
+        },
+      }),
+    ]);
+    expect(steps.map((s) => (s.kind === "tool" ? s.args : null))).toEqual([{ query: "charges" }, { query: "refunds", limit: 5 }]);
+  });
 });
 
 describe("the cursor", () => {
