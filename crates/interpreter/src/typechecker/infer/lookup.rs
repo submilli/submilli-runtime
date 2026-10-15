@@ -143,6 +143,11 @@ impl<'a> Inferer<'a> {
                 if array_view.is_some() {
                     sig = restrict_to_reads(sig, generics)?;
                 }
+                if recv_ty.is_readonly_array() {
+                    for param in &mut sig.params {
+                        param.ty = readonly_callback_receivers(&param.ty, &sym.mangled_name);
+                    }
+                }
                 let bindings: BTreeMap<String, Type> = generics.iter().cloned().zip(args).collect();
                 Some((sig, bindings, sym.mangled_name.clone(), *dispatch))
             }
@@ -748,6 +753,37 @@ fn readonly_callback_arrays(ty: &Type, generics: &[String]) -> Type {
                 .collect(),
         ),
         _ => ty.clone(),
+    }
+}
+
+/// `ty` with each callback parameter that receives the interface `mangled`
+/// itself made `readonly`: `ReadonlyMap#forEach` passes the map as a
+/// `ReadonlyMap`, as tsc declares it.
+fn readonly_callback_receivers(ty: &Type, mangled: &crate::MangledName) -> Type {
+    let Type::Function {
+        params,
+        optional,
+        ret,
+        predicate,
+        has_rest,
+    } = ty
+    else {
+        return ty.clone();
+    };
+    Type::Function {
+        optional: *optional,
+        params: params
+            .iter()
+            .map(|param| match param {
+                Type::InterfaceRef { mangled: own, .. } if own == mangled => {
+                    Type::Readonly(Box::new(param.clone()))
+                }
+                _ => param.clone(),
+            })
+            .collect(),
+        ret: ret.clone(),
+        predicate: predicate.clone(),
+        has_rest: *has_rest,
     }
 }
 

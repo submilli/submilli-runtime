@@ -269,7 +269,12 @@ fn write_node<'a>(
             push(frames, Frame::Type(inner, child))
         }
         Type::Readonly(inner) => {
-            out.push("readonly ")?;
+            // A readonly `Map` or `Set` is spelled `ReadonlyMap` / `ReadonlySet`.
+            out.push(if matches!(inner.as_ref(), Type::InterfaceRef { .. }) {
+                "Readonly"
+            } else {
+                "readonly "
+            })?;
             push(frames, Frame::Type(inner, child))
         }
         Type::Tuple(tuple) => {

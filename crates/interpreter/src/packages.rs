@@ -1846,6 +1846,9 @@ fn ts_type(ty: &Type) -> String {
                 .join(", ");
             format!("[{elements}]")
         }
+        Type::Readonly(inner) if matches!(inner.as_ref(), Type::InterfaceRef { .. }) => {
+            format!("Readonly{}", ts_type(inner))
+        }
         Type::Readonly(inner) => format!("readonly {}", ts_type(inner)),
         Type::Error => "never".to_string(),
         Type::Never => "never".to_string(),

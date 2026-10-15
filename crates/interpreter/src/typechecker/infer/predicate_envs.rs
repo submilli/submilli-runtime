@@ -521,8 +521,8 @@ impl<'a> Inferer<'a> {
         Ok((true_env, false_env))
     }
 
-    /// `xs.every(guard)` with a guard `(x) => x is S` narrows `xs` to `S[]`, as
-    /// tsc's `this is S[]` overload does.
+    /// `xs.every(guard)` with a guard `(x) => x is S` narrows `xs` to `S[]`, or
+    /// `readonly S[]` for a readonly `xs`, as tsc's `this is S[]` overloads do.
     fn every_guard_envs(
         &mut self,
         receiver: ExprId,
@@ -551,6 +551,17 @@ impl<'a> Inferer<'a> {
             return Ok(empty());
         }
         let asserted = Type::Array(Box::new(predicate.asserted_type));
+        let receiver_ty = &self
+            .typed_ast
+            .try_expr(receiver)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty;
+        // tsc's `ReadonlyArray#every` asserts `this is readonly S[]`.
+        let asserted = if receiver_ty.is_readonly_array() {
+            Type::Readonly(Box::new(asserted))
+        } else {
+            asserted
+        };
         let Some((mut true_env, mut false_env)) =
             self.narrow_path_to_asserted(receiver, &asserted)?
         else {
