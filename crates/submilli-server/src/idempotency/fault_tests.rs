@@ -158,6 +158,58 @@ impl UnitOfWork for FaultUnit {
     async fn remove_blueprint_grants(&mut self, blueprint: &str) -> Result<(), StoreError> {
         self.inner.remove_blueprint_grants(blueprint).await
     }
+    async fn session_is_active(&mut self, id: &str) -> Result<bool, StoreError> {
+        self.inner.session_is_active(id).await
+    }
+    async fn session_state_get(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<Option<Vec<u16>>, StoreError> {
+        self.inner.session_state_get(session_id, key).await
+    }
+    async fn session_state_has(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<bool, StoreError> {
+        self.inner.session_state_has(session_id, key).await
+    }
+    async fn session_state_usage(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<crate::application::unit_of_work::SessionStateUsage, StoreError> {
+        self.inner.session_state_usage(session_id, key).await
+    }
+    async fn session_state_put(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+        payload: &[u16],
+        size: crate::application::unit_of_work::SessionStateSize,
+    ) -> Result<(), StoreError> {
+        self.inner
+            .session_state_put(session_id, key, payload, size)
+            .await
+    }
+    async fn session_state_remove(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<bool, StoreError> {
+        self.inner.session_state_remove(session_id, key).await
+    }
+    async fn session_state_keys(
+        &mut self,
+        session_id: &str,
+        after: Option<&[u16]>,
+        max_keys: usize,
+    ) -> Result<crate::application::unit_of_work::SessionStateKeys, StoreError> {
+        self.inner
+            .session_state_keys(session_id, after, max_keys)
+            .await
+    }
     async fn commit(self: Box<Self>) -> Result<(), StoreError> {
         self.inner.commit().await?;
         if self.fault.pause_after_commit.swap(false, Ordering::SeqCst) {

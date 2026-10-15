@@ -217,15 +217,6 @@ pub struct Cli {
     #[arg(long, value_name = "KIBIBYTES")]
     max_execution_stack: Option<u64>,
 
-    /// Memory every live session's `submilli:session` state may hold *in total*,
-    /// in megabytes. Unlike `--max-execution-memory`, which bounds one execution,
-    /// this bounds the process against session count: reservations are taken
-    /// atomically, so a `set` that would push the server past this is refused
-    /// rather than evicting another session's state. [default: 1024]
-    /// Env: `$SUBMILLI_MAX_SESSION_STATE_MEMORY`, which outranks the config file.
-    #[arg(long, value_name = "MEGABYTES")]
-    max_session_state_memory: Option<u64>,
-
     /// Tokens every live execution's `submilli:llm` calls may spend *in total*.
     /// This is the ceiling on what the server can spend against the operator's
     /// provider credential: reservations cover the prompt plus the reserved

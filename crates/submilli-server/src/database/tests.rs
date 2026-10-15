@@ -673,6 +673,7 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
                 "runs",
                 "secrets",
                 "session_cleanup",
+                "session_kv",
                 "session_mcp",
                 "session_mcp_icon_sizes",
                 "session_mcp_icons",
@@ -692,7 +693,7 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
             })
             .await
             .unwrap();
-        assert_eq!(versions, [1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(versions, [1, 2, 3, 4, 5, 6, 7, 8]);
         database.close().await.unwrap();
     }
 }

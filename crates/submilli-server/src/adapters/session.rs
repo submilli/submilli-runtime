@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub(crate) mod credentials;
+pub(crate) mod kv;
 pub(crate) mod repository;
 pub(crate) mod sqlite;
 

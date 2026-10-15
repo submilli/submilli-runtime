@@ -52,8 +52,7 @@ use crate::session::{InMemorySessionStore, SessionStore};
 use crate::session_manager::{
     CapabilitySettings, DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS,
     DEFAULT_MAX_ALL_EXECUTIONS_TOKENS, DEFAULT_MAX_CONCURRENCY, DEFAULT_MAX_EMBEDDING_CONCURRENCY,
-    DEFAULT_TOTAL_SESSION_KV_BYTES, EmbeddingSettings, HttpClientFactory, LlmSettings,
-    SessionKvSettings, SessionManager,
+    EmbeddingSettings, HttpClientFactory, LlmSettings, SessionKvSettings, SessionManager,
 };
 use crate::session_store::DurableSessionStore;
 use submilli_shared::mcp::discovery::{DiscoveryAuth, DiscoveryError};
@@ -349,12 +348,7 @@ impl AppState {
                 http_client_factory,
                 Arc::clone(&session_store),
                 CapabilitySettings {
-                    session_kv: SessionKvSettings::new(
-                        config.session_kv_limits,
-                        config
-                            .max_session_state_memory
-                            .unwrap_or(DEFAULT_TOTAL_SESSION_KV_BYTES),
-                    ),
+                    session_kv: SessionKvSettings::new(config.session_kv_limits),
                     llm: LlmSettings::new(
                         config.llm_limits,
                         config

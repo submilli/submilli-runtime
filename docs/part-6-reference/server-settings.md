@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "6bf35b45e175818f05ddb24813b5faab3c5f397644e7f64f21fef27daa86b6c1"
+  contentHash: "aed75f2fe587c235f87f38399eb175b83014dec1139086b93f418d2f8a981003"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -58,7 +58,6 @@ flat names listed. A dash means the form doesn't exist.
 | `max_execution_time` | `--max-execution-time` | `SUBMILLI_MAX_EXECUTION_TIME` | seconds | `0`, no limit | Time one run may take. |
 | `max_execution_fuel` | `--max-execution-fuel` | `SUBMILLI_MAX_EXECUTION_FUEL` | count, at least 1 | `1T` | Fuel one run may burn. |
 | `max_execution_stack` | `--max-execution-stack` | `SUBMILLI_MAX_EXECUTION_STACK` | kibibytes, 1 to 16384 | `512` | Stack one run may use. |
-| `max_session_state_memory` | `--max-session-state-memory` | `SUBMILLI_MAX_SESSION_STATE_MEMORY` | megabytes, at least 1 | `1024` | `submilli:session` state across all sessions. |
 | `max_llm_tokens` | `--max-llm-tokens` | `SUBMILLI_MAX_LLM_TOKENS` | count, at least 1 | `20M` | Model tokens across all runs. |
 | `max_execution_llm_tokens` | `--max-execution-llm-tokens` | `SUBMILLI_MAX_EXECUTION_LLM_TOKENS` | count, at least 1 | `1M` | Model tokens one run may spend. |
 | `max_llm_concurrency` | `--max-llm-concurrency` | `SUBMILLI_MAX_LLM_CONCURRENCY` | prompts, at least 1 | `4` | Prompts of one `llm.batch` in flight at once. |
@@ -224,6 +223,12 @@ OAuth tokens of MCP logins, encrypted with a key. The key is base64 of 32 bytes,
 commands answer `no secret store is configured on this server`. A key that
 can't be read stops the server from starting. Values go in and never come
 back out through the API.
+
+The key also encrypts `submilli:session` state and seals `session.list`
+cursors. Without a key, session state is stored unencrypted and cursors stop
+working when the server restarts. After the key changes, state sealed with
+the old key can't be read: a `session.get` of it ends the run, while `has` and
+`list` still see it and `set` and `remove` still replace it.
 
 ## `volumes`
 
@@ -465,8 +470,6 @@ Options:
           Fuel one execution may burn, roughly one unit per Wasm instruction; a program that runs out ends with `fuel exhausted`. The backstop for a runaway loop when no execution time is set. [default: 1000000000000] Env: `$SUBMILLI_MAX_EXECUTION_FUEL`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1T or 10_000
       --max-execution-stack <KIBIBYTES>
           Wasm stack one execution may use, in kibibytes; deeper recursion ends with `call stack exhausted`. [default: 512] Env: `$SUBMILLI_MAX_EXECUTION_STACK`, which outranks the config file
-      --max-session-state-memory <MEGABYTES>
-          Memory every live session's `submilli:session` state may hold *in total*, in megabytes. Unlike `--max-execution-memory`, which bounds one execution, this bounds the process against session count: reservations are taken atomically, so a `set` that would push the server past this is refused rather than evicting another session's state. [default: 1024] Env: `$SUBMILLI_MAX_SESSION_STATE_MEMORY`, which outranks the config file
       --max-llm-tokens <TOKENS>
           Tokens every live execution's `submilli:llm` calls may spend *in total*. This is the ceiling on what the server can spend against the operator's provider credential: reservations cover the prompt plus the reserved output before dispatch, so a call that would push the server past this is refused rather than billed. [default: 20000000] Env: `$SUBMILLI_MAX_LLM_TOKENS`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 20M or 10_000
       --max-execution-llm-tokens <TOKENS>

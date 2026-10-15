@@ -4,6 +4,7 @@ pub(crate) mod create;
 pub(crate) mod error;
 pub(crate) mod execution;
 pub(crate) mod expire;
+pub(crate) mod kv;
 pub(crate) mod ports;
 pub(crate) mod queries;
 pub(crate) mod recover;

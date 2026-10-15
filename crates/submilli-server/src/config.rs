@@ -83,14 +83,6 @@ pub struct ServerConfig {
     /// count, key length, retained bytes per session). Defaults to
     /// [`SessionKvLimits::default`].
     pub session_kv_limits: SessionKvLimits,
-    /// Server-wide ceiling on retained `submilli:session` bytes summed across
-    /// every live session, reserved atomically so two sessions cannot both
-    /// claim the same headroom. `None` uses
-    /// [`crate::session_manager::DEFAULT_TOTAL_SESSION_KV_BYTES`]. Unlike the
-    /// per-session limits, this
-    /// bounds the *process*: it is the only aggregate memory knob the server
-    /// has, `max_store_bytes` being per-execute.
-    pub max_session_state_memory: Option<u64>,
     /// Per-execution bounds on `submilli:llm` (token ceiling, indeterminate-spend
     /// ceiling, default output cap, prompt count and size). Embedder-only, like
     /// [`Self::session_kv_limits`]: the aggregate below is the knob an operator

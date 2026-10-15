@@ -10,6 +10,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::adapters::sealing::Sealer;
 use crate::adapters::session::credentials::CredentialCodec;
+use crate::adapters::session::kv;
+use crate::application::unit_of_work::{SessionStateKeys, SessionStateSize, SessionStateUsage};
 use crate::application::unit_of_work::{UnitOfWork, UnitOfWorkFactory};
 use crate::blueprint::StoreError;
 use crate::database::{DatabaseError, ServerDatabase};
@@ -427,6 +429,98 @@ impl UnitOfWork for SqliteUnitOfWork {
             Box::pin(async move {
                 crate::adapters::mcp_grant::remove_for_blueprint(connection, &blueprint).await
             })
+        })
+        .await
+    }
+
+    async fn session_is_active(&mut self, id: &str) -> Result<bool, StoreError> {
+        let id = id.to_owned();
+        self.query_recoverable(move |connection| {
+            Box::pin(async move { kv::is_active(connection, &id).await })
+        })
+        .await
+    }
+
+    async fn session_state_get(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<Option<Vec<u16>>, StoreError> {
+        let (session_id, key, sealer) = (session_id.to_owned(), key.to_vec(), self.sealer.clone());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move { kv::get(connection, &sealer, &session_id, &key).await })
+        })
+        .await
+    }
+
+    async fn session_state_has(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<bool, StoreError> {
+        let (session_id, key) = (session_id.to_owned(), key.to_vec());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move { kv::has(connection, &session_id, &key).await })
+        })
+        .await
+    }
+
+    async fn session_state_usage(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<SessionStateUsage, StoreError> {
+        let (session_id, key) = (session_id.to_owned(), key.to_vec());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move { kv::usage(connection, &session_id, &key).await })
+        })
+        .await
+    }
+
+    async fn session_state_put(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+        payload: &[u16],
+        size: SessionStateSize,
+    ) -> Result<(), StoreError> {
+        let (session_id, key, payload, sealer) = (
+            session_id.to_owned(),
+            key.to_vec(),
+            payload.to_vec(),
+            self.sealer.clone(),
+        );
+        self.query_recoverable(move |connection| {
+            Box::pin(async move {
+                kv::put(connection, &sealer, &session_id, &key, &payload, size).await
+            })
+        })
+        .await
+    }
+
+    async fn session_state_remove(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<bool, StoreError> {
+        let (session_id, key) = (session_id.to_owned(), key.to_vec());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move { kv::remove(connection, &session_id, &key).await })
+        })
+        .await
+    }
+
+    async fn session_state_keys(
+        &mut self,
+        session_id: &str,
+        after: Option<&[u16]>,
+        max_keys: usize,
+    ) -> Result<SessionStateKeys, StoreError> {
+        let (session_id, after) = (session_id.to_owned(), after.map(<[u16]>::to_vec));
+        self.query_recoverable(move |connection| {
+            Box::pin(
+                async move { kv::keys(connection, &session_id, after.as_deref(), max_keys).await },
+            )
         })
         .await
     }

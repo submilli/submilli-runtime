@@ -30,9 +30,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use interpreter::runtime::{
-    Access as RtAccess, EmbeddingLimits, EmbeddingTokenBudget, ExecutionTokenBudget, HttpClient,
-    InMemorySessionKv, LlmLimits, MountError, MountSpec, SessionKvLimits, SessionKvStore,
-    SharedKvBudget, SharedTokenBudget, Vfs, VfsInfo, VfsMode as RtVfsMode,
+    Access as RtAccess, CursorKey, CursorKeys, EmbeddingLimits, EmbeddingTokenBudget,
+    ExecutionTokenBudget, HttpClient, LlmLimits, MountError, MountSpec, SessionKvLimits,
+    SessionKvStore, SharedTokenBudget, Vfs, VfsInfo, VfsMode as RtVfsMode,
 };
 use submilli_blueprint::{Blueprint, HarnessSecretBindings, VarBindings, VfsConfig};
 use uuid::Uuid;
@@ -68,15 +68,6 @@ pub enum ReaperStartError {
     #[error("reaper interval exceeds the representable timer deadline")]
     DeadlineOverflow,
 }
-
-/// Server-wide ceiling on retained `submilli:session` bytes across every live
-/// session. Deliberately generous — 64 sessions at the 16 MiB per-session cap,
-/// or thousands of realistically-sized ones — because the per-session limit is
-/// the bound an operator reasons about, and a tight aggregate would refuse
-/// writes for a reason no single program could see coming. It exists so a
-/// process cannot be pushed out of memory by session count alone; an operator
-/// sizing for many concurrent sessions raises it via `max_session_state_memory`.
-pub const DEFAULT_TOTAL_SESSION_KV_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// Server-wide ceiling on `submilli:llm` tokens across every live execution.
 /// Re-exported from the runtime rather than chosen again here, so the number an
@@ -123,6 +114,7 @@ pub struct SessionManager {
     database: Arc<crate::database::ServerDatabase>,
     repository: SessionPersistence,
     session_kv: SessionKvSettings,
+    cursor_keys: Option<Arc<CursorKeys>>,
     llm: LlmSettings,
     embedding: EmbeddingSettings,
     /// Runs that may suspend at an application tool call. A session with one
@@ -136,37 +128,26 @@ pub struct SessionManager {
 /// removes their files anyway.
 const RUN_DRAIN: Duration = Duration::from_secs(10);
 
-/// How a session's `submilli:session` store is built. Cloned into every session
-/// that allocates one, so the aggregate budget is shared across them all.
-#[derive(Clone)]
+/// How a session's `submilli:session` store is bounded. The state itself is in
+/// the database, so every limit is per session. Kept a struct beside
+/// [`LlmSettings`] and [`EmbeddingSettings`], which [`CapabilitySettings`]
+/// groups the same way.
+#[derive(Clone, Default)]
 pub struct SessionKvSettings {
     pub limits: SessionKvLimits,
-    /// Server-wide ceiling on retained session-KV bytes across live sessions.
-    /// Reserved compare-and-swap, so two sessions cannot both claim the same
-    /// headroom.
-    pub budget: SharedKvBudget,
-}
-
-impl Default for SessionKvSettings {
-    fn default() -> Self {
-        Self::new(SessionKvLimits::default(), DEFAULT_TOTAL_SESSION_KV_BYTES)
-    }
 }
 
 impl SessionKvSettings {
-    pub fn new(limits: SessionKvLimits, total_bytes: u64) -> Self {
-        Self {
-            limits,
-            budget: SharedKvBudget::new(total_bytes),
-        }
+    pub fn new(limits: SessionKvLimits) -> Self {
+        Self { limits }
     }
+}
 
-    fn build(&self) -> Arc<dyn SessionKvStore> {
-        Arc::new(InMemorySessionKv::with_shared_budget(
-            self.limits,
-            self.budget.clone(),
-        ))
-    }
+/// Cursor keys derived from the server's key. Replacing that key changes their
+/// id, so a cursor sealed before names a key the server no longer holds.
+fn derive_cursor_keys(cipher: &SecretCipher) -> Arc<CursorKeys> {
+    let (id, secret) = cipher.derive(b"submilli:session-list-cursor:v1");
+    Arc::new(CursorKeys::new(CursorKey::new(id, secret), Vec::new()))
 }
 
 /// How an execution's `submilli:llm` token budget is built. Cloned into every
@@ -283,6 +264,10 @@ impl SessionManager {
             embedding,
         } = capabilities;
         let session_root = volume_root.sessions_dir();
+        let cursor_keys = database
+            .ephemeral_cipher()
+            .as_deref()
+            .map(derive_cursor_keys);
         Self {
             audit: None,
             credentials: CredentialCodec::new(database.ephemeral_cipher()),
@@ -291,7 +276,7 @@ impl SessionManager {
                 session_root.clone(),
                 None,
             ),
-            resources: resources::SessionResources::new(http_client_factory, session_kv.clone()),
+            resources: resources::SessionResources::new(http_client_factory),
             reaper_started: AtomicBool::new(false),
             repository: SessionPersistence::new(store.clone(), session_root.clone()),
             session_root,
@@ -300,6 +285,7 @@ impl SessionManager {
             store,
             database,
             session_kv,
+            cursor_keys,
             llm,
             embedding,
             runs: Arc::new(RunRegistry::default()),
@@ -336,21 +322,30 @@ impl SessionManager {
         self.resources.http_client(session_id)
     }
 
-    /// The `submilli:session` store for `session_id`, built once and cached on
-    /// the session so every execute in it — REST or MCP — reads and writes one
-    /// set of entries, and no other session does.
-    ///
-    /// The cache entry is created on first access. One-shot execution closes
-    /// its session after the run, releasing cached resources and their budget.
+    /// The `submilli:session` store for `session_id`. The state is in the
+    /// database, so every execute in the session — REST or MCP, before a
+    /// restart or after — reads and writes one set of entries, and no other
+    /// session does. Closing the session deletes them.
     pub fn session_kv_for_execute(&self, session_id: &str) -> Arc<dyn SessionKvStore> {
-        self.resources.session_kv_for_execute(session_id)
+        Arc::new(crate::adapters::session_kv_store::DatabaseSessionKv::new(
+            self.unit_of_work.clone(),
+            session_id,
+            self.session_kv.limits,
+        ))
+    }
+
+    /// The keys `session.list` cursors are sealed with: derived from the
+    /// server's secret-store key, so a cursor handed out before a restart still
+    /// works after it. `None` without a key, which leaves cursors to the
+    /// runtime's per-process key.
+    pub fn cursor_keys(&self) -> Option<Arc<CursorKeys>> {
+        self.cursor_keys.clone()
     }
 
     /// A fresh `submilli:llm` token budget for one execution, sharing this
     /// server's aggregate ceiling.
     ///
-    /// Unlike [`Self::session_kv_for_execute`] this is deliberately *not* cached
-    /// on the session: the reservation releases on `Drop`, so a budget held by a
+    /// This is deliberately *not* cached on the session: the reservation releases on `Drop`, so a budget held by a
     /// session entry would keep every past execute's spend charged until the
     /// session ended — and the per-execution ceiling would silently become a
     /// per-session one. Every execute gets its own, and the aggregate is what
@@ -409,11 +404,6 @@ impl SessionManager {
         &self.llm.budget
     }
 
-    /// The server-wide session-KV budget, for operator-facing reporting.
-    pub fn session_kv_budget(&self) -> &SharedKvBudget {
-        &self.session_kv.budget
-    }
-
     pub fn with_cipher(mut self, cipher: Option<Arc<SecretCipher>>) -> Self {
         let cipher = cipher.or_else(|| self.database.ephemeral_cipher());
         self.unit_of_work = crate::adapters::unit_of_work::for_sessions(
@@ -421,6 +411,7 @@ impl SessionManager {
             self.session_root.clone(),
             cipher.clone(),
         );
+        self.cursor_keys = cipher.as_deref().map(derive_cursor_keys);
         self.credentials = CredentialCodec::new(cipher);
         self
     }
@@ -1213,6 +1204,7 @@ pub(crate) fn vfs_info(blueprint: &Blueprint) -> VfsInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use interpreter::runtime::SessionKvError;
     use std::time::UNIX_EPOCH;
 
     use crate::request_records::{Record as LedgerEntry, RequestRecords, code_fingerprint};
@@ -2470,10 +2462,10 @@ mod tests {
         s.encode_utf16().collect()
     }
 
-    /// One store per session, cached — so every execute in a session, by either
-    /// route, reads and writes the same entries.
+    /// Every execute in a session, by either route, reads and writes the same
+    /// entries, and no other session sees them.
     #[tokio::test]
-    async fn one_store_per_session_shared_across_calls() {
+    async fn one_state_per_session_shared_across_calls() {
         let (mgr, _root) = manager();
         let id = mgr
             .create(&none_bp(), Arc::new(VarBindings::new()), no_secrets())
@@ -2482,9 +2474,13 @@ mod tests {
 
         mgr.session_kv_for_execute(&id)
             .set(&key("k"), &key("\"v\""))
+            .await
             .expect("set");
         assert!(
-            mgr.session_kv_for_execute(&id).has(&key("k")).expect("has"),
+            mgr.session_kv_for_execute(&id)
+                .has(&key("k"))
+                .await
+                .expect("has"),
             "a later execute in the same session must see the write"
         );
 
@@ -2495,28 +2491,28 @@ mod tests {
         assert!(
             !mgr.session_kv_for_execute(&other)
                 .has(&key("k"))
+                .await
                 .expect("has"),
             "a different session must not see it"
         );
     }
 
     #[tokio::test]
-    async fn session_resources_are_cached_without_registration() {
+    async fn a_session_that_was_never_created_has_no_state() {
         let (mgr, _root) = manager();
-        let first = mgr.session_kv_for_execute("lazy");
-        first.set(&key("k"), &key("\"v\"")).expect("set");
-        let second = mgr.session_kv_for_execute("lazy");
-        assert!(Arc::ptr_eq(&first, &second));
-        assert!(second.has(&key("k")).expect("has"));
+        let error = mgr
+            .session_kv_for_execute("unknown")
+            .set(&key("k"), &key("\"v\""))
+            .await
+            .expect_err("no session to hold it");
         assert!(
-            !mgr.session_kv_for_execute("other")
-                .has(&key("k"))
-                .expect("has")
+            matches!(error, SessionKvError::SessionClosed { .. }),
+            "{error:?}"
         );
     }
 
     #[tokio::test]
-    async fn idle_expiry_drops_the_session_store() {
+    async fn idle_expiry_ends_the_session_state() {
         let (mgr, _root) = manager();
         let bp = Blueprint {
             name: "n".into(),
@@ -2530,35 +2526,56 @@ mod tests {
             .unwrap();
         mgr.session_kv_for_execute(&id)
             .set(&key("k"), &key("\"v\""))
+            .await
             .expect("set");
 
         assert_eq!(mgr.reap(way_later()).await.unwrap(), 1);
-        assert!(
-            !mgr.session_kv_for_execute(&id).has(&key("k")).expect("has"),
-            "a reaped session's state must not survive its entry"
-        );
+        assert_eq!(kv_rows(&mgr, &id).await, 0, "the expiry deleted them");
+        assert!(matches!(
+            mgr.session_kv_for_execute(&id).has(&key("k")).await,
+            Err(SessionKvError::SessionClosed { .. })
+        ));
     }
 
-    /// A handle a run is still holding keeps answering — an execution never sees
-    /// its store vanish mid-call — but the session id can no longer reach it, so
-    /// the state is unreachable rather than resurrectable.
+    /// A run still holding the store when its session closes cannot read the
+    /// state, and cannot write it back.
     #[tokio::test]
-    async fn a_handle_outliving_its_session_cannot_be_reached_again() {
+    async fn a_handle_outliving_its_session_cannot_restore_it() {
         let (mgr, _root) = manager();
         let id = mgr
             .create(&none_bp(), Arc::new(VarBindings::new()), no_secrets())
             .await
             .unwrap();
         let held = mgr.session_kv_for_execute(&id);
-        held.set(&key("k"), &key("\"v\"")).expect("set");
+        held.set(&key("k"), &key("\"v\"")).await.expect("set");
 
         assert!(mgr.wipe_now(&id).await.unwrap());
 
-        assert!(held.has(&key("k")).expect("has"), "the in-flight handle");
-        assert!(
-            !mgr.session_kv_for_execute(&id).has(&key("k")).expect("has"),
-            "the session id resolves to a fresh, empty store"
-        );
+        assert!(matches!(
+            held.has(&key("k")).await,
+            Err(SessionKvError::SessionClosed { .. })
+        ));
+        assert!(matches!(
+            held.set(&key("k2"), &key("\"v\"")).await,
+            Err(SessionKvError::SessionClosed { .. })
+        ));
+        assert_eq!(kv_rows(&mgr, &id).await, 0);
+    }
+
+    async fn kv_rows(mgr: &SessionManager, id: &str) -> i64 {
+        let id = id.to_owned();
+        mgr.database
+            .read(move |connection| {
+                Box::pin(async move {
+                    sqlx::query_scalar("SELECT COUNT(*) FROM session_kv WHERE session_id=?")
+                        .bind(id)
+                        .fetch_one(connection)
+                        .await
+                        .map_err(Into::into)
+                })
+            })
+            .await
+            .unwrap()
     }
 
     /// Every execution's budget reserves against *one* aggregate, so two live
@@ -2638,24 +2655,20 @@ mod tests {
         assert_eq!(settings.max_concurrency, 1);
     }
 
-    /// The aggregate budget is reserved atomically across sessions and released
-    /// when a session ends — not by evicting another session's entries.
+    /// Two managers over one database are two views of the same state: a write
+    /// through one is read through the other, and a close through one ends the
+    /// state the other's store reaches.
     #[tokio::test]
-    async fn reaper_releases_resources_closed_by_another_manager() {
+    async fn managers_over_one_database_share_session_state() {
         let root = tempfile::tempdir().unwrap();
         let store = mem_store();
-        let settings = SessionKvSettings::new(SessionKvLimits::default(), 128);
-        let budget = settings.budget.clone();
         let make_manager = || {
             SessionManager::new(
                 &test_root(root.path()),
                 Arc::default(),
                 no_http(),
                 store.clone(),
-                CapabilitySettings {
-                    session_kv: settings.clone(),
-                    ..CapabilitySettings::default()
-                },
+                CapabilitySettings::default(),
             )
         };
         let first = make_manager();
@@ -2664,67 +2677,72 @@ mod tests {
             .create(&none_bp(), Arc::default(), no_secrets())
             .await
             .unwrap();
-        second.start_execution(&id).await.unwrap();
         second
             .session_kv_for_execute(&id)
             .set(&key("k"), &key("\"v\""))
+            .await
             .unwrap();
-        assert!(budget.used() > 0);
+        assert_eq!(
+            first
+                .session_kv_for_execute(&id)
+                .get(&key("k"))
+                .await
+                .unwrap(),
+            Some(key("\"v\""))
+        );
         first.wipe_now(&id).await.unwrap();
-        assert!(store.pending_cleanup().await.unwrap().is_empty());
-        second.reap_now().await.unwrap();
-        assert_eq!(budget.used(), 0);
+        assert!(matches!(
+            second.session_kv_for_execute(&id).get(&key("k")).await,
+            Err(SessionKvError::SessionClosed { .. })
+        ));
     }
 
+    /// Writers through independent stores cannot both spend the same headroom:
+    /// the limit holds for the session's rows, not for what one store has seen.
     #[tokio::test]
-    async fn the_aggregate_budget_is_shared_and_released_on_teardown() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        // Room for exactly one entry of the size written below.
-        let settings = SessionKvSettings::new(SessionKvLimits::default(), 128);
-        let budget = settings.budget.clone();
-        let mgr = SessionManager::new(
-            &test_root(dir.path()),
-            Arc::default(),
-            no_http(),
-            mem_store(),
-            CapabilitySettings {
-                session_kv: settings,
-                ..CapabilitySettings::default()
-            },
-        );
-
-        let first = mgr
-            .create(&none_bp(), Arc::new(VarBindings::new()), no_secrets())
+    async fn concurrent_writers_cannot_overspend_the_session_limit() {
+        let root = tempfile::tempdir().unwrap();
+        let store = mem_store();
+        let one_entry = interpreter::runtime::entry_bytes(&key("k0"), &key("\"v\""));
+        let settings = SessionKvSettings::new(SessionKvLimits {
+            max_session_bytes: one_entry * 3,
+            ..SessionKvLimits::default()
+        });
+        let managers: Vec<_> = (0..4)
+            .map(|_| {
+                SessionManager::new(
+                    &test_root(root.path()),
+                    Arc::default(),
+                    no_http(),
+                    store.clone(),
+                    CapabilitySettings {
+                        session_kv: settings.clone(),
+                        ..CapabilitySettings::default()
+                    },
+                )
+            })
+            .collect();
+        let id = managers[0]
+            .create(&none_bp(), Arc::default(), no_secrets())
             .await
             .unwrap();
-        let second = mgr
-            .create(&none_bp(), Arc::new(VarBindings::new()), no_secrets())
-            .await
-            .unwrap();
-
-        mgr.session_kv_for_execute(&first)
-            .set(&key("k"), &key("\"v\""))
-            .expect("the first session fits");
-        assert!(budget.used() > 0);
-        mgr.session_kv_for_execute(&second)
-            .set(&key("k"), &key("\"v\""))
-            .expect_err("the second exceeds the shared budget");
+        let writes = managers.iter().enumerate().flat_map(|(m, mgr)| {
+            let id = id.clone();
+            (0..2).map(move |n| {
+                let kv = mgr.session_kv_for_execute(&id);
+                async move { kv.set(&key(&format!("{m}{n}")), &key("\"v\"")).await }
+            })
+        });
+        let outcomes = futures::future::join_all(writes).await;
+        let written = outcomes.iter().filter(|outcome| outcome.is_ok()).count();
+        assert_eq!(written, 3, "{outcomes:?}");
         assert!(
-            mgr.session_kv_for_execute(&first)
-                .has(&key("k"))
-                .expect("has"),
-            "an exhausted budget must never evict another session's entries"
+            outcomes.iter().all(|outcome| matches!(
+                outcome,
+                Ok(()) | Err(SessionKvError::LimitExceeded { .. })
+            ))
         );
-
-        assert!(mgr.wipe_now(&first).await.unwrap());
-        assert_eq!(
-            budget.used(),
-            0,
-            "ending a session must release its reservation"
-        );
-        mgr.session_kv_for_execute(&second)
-            .set(&key("k"), &key("\"v\""))
-            .expect("capacity released");
+        assert_eq!(kv_rows(&managers[0], &id).await, 3);
     }
 
     #[tokio::test]

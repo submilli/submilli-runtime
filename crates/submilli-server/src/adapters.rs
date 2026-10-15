@@ -7,5 +7,6 @@ pub(crate) mod sealing;
 pub(crate) mod secret;
 pub(crate) mod secret_store;
 pub(crate) mod session;
+pub(crate) mod session_kv_store;
 pub(crate) mod sql;
 pub(crate) mod unit_of_work;

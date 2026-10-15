@@ -1,9 +1,10 @@
 //! End-to-end tests for `submilli:session` bound to a server session.
 //!
-//! The claim under test is that one store handle reaches both execution routes
-//! and dies with the session: REST and MCP driven against the *same* session id
-//! see one store, two sessions on one blueprint see two, and every way a session
-//! ends takes the store with it.
+//! The claim under test is that one session's state reaches both execution
+//! routes, survives a restart, and dies with the session: REST and MCP driven
+//! against the *same* session id see one store, two sessions on one blueprint
+//! see two, a restarted server still holds it, and every way a session ends
+//! takes it away.
 
 #[path = "common/in_memory_config.rs"]
 mod in_memory_config;
@@ -25,15 +26,20 @@ const BLUEPRINT: &str = "kv";
 /// The server is deny-by-default, so the session capabilities must be granted
 /// before the storage behaviour under test is reached.
 fn allow_session() -> BTreeMap<String, Vec<PermissionRule>> {
-    let rules = ["session.read", "session.write", "session.remove"]
-        .into_iter()
-        .map(|cap| PermissionRule {
-            name: None,
-            capability: cap.into(),
-            filter: None,
-            action: Action::Allow,
-        })
-        .collect();
+    let rules = [
+        "session.read",
+        "session.write",
+        "session.remove",
+        "session.list",
+    ]
+    .into_iter()
+    .map(|cap| PermissionRule {
+        name: None,
+        capability: cap.into(),
+        filter: None,
+        action: Action::Allow,
+    })
+    .collect();
     BTreeMap::from([("main".to_string(), rules)])
 }
 
@@ -438,31 +444,40 @@ async fn blueprint_removal_clears_the_store() {
     );
 }
 
-/// Nothing in `SessionRecord` carries KV state, so a restart leaves it behind.
-/// Asserted through `boot`, which is the only path that rebuilds an entry from
-/// a record.
+fn persistent_config(
+    store_dir: &std::path::Path,
+    vfs_root: &std::path::Path,
+    cipher: Option<Arc<submilli_shared::secret_store::SecretCipher>>,
+) -> ServerConfig {
+    ServerConfig {
+        blueprints: Some(Arc::new(
+            InMemoryBlueprintStore::seed(vec![blueprint(
+                BLUEPRINT,
+                VfsConfig::PerSession {
+                    size_limit: None,
+                    mounts: Default::default(),
+                    cwd: None,
+                },
+            )])
+            .expect("seed blueprints"),
+        )),
+        volume_root: Some(vfs_root.to_path_buf()),
+        database_path: Some(store_dir.join("server.db")),
+        session_cipher: cipher,
+        ..in_memory_config::config()
+    }
+}
+
+/// Session state is in the database, so a restarted server finds it where the
+/// session left it.
 #[tokio::test]
-async fn a_restored_session_starts_with_an_empty_store() {
+async fn a_restored_session_keeps_its_values() {
     let store_dir = tempfile::tempdir().expect("session store dir");
     let vfs_root = tempfile::tempdir().expect("vfs root");
     let build = async || {
-        let config = ServerConfig {
-            blueprints: Some(Arc::new(
-                InMemoryBlueprintStore::seed(vec![blueprint(
-                    BLUEPRINT,
-                    VfsConfig::PerSession {
-                        size_limit: None,
-                        mounts: Default::default(),
-                        cwd: None,
-                    },
-                )])
-                .expect("seed blueprints"),
-            )),
-            volume_root: Some(vfs_root.path().to_path_buf()),
-            database_path: Some(store_dir.path().join("server.db")),
-            ..in_memory_config::config()
-        };
-        AppState::new(config).await.expect("AppState")
+        AppState::new(persistent_config(store_dir.path(), vfs_root.path(), None))
+            .await
+            .expect("AppState")
     };
 
     let first = Harness::over(build().await);
@@ -475,63 +490,61 @@ async fn a_restored_session_starts_with_an_empty_store() {
     restarted.state.boot().await.expect("boot");
 
     let read = restarted.rest(&session, GET).await;
-    assert_eq!(
-        ok(&read)["result"],
-        json!("MISSING"),
-        "session KV is memory-only, so a restored session starts empty"
-    );
+    assert_eq!(ok(&read)["result"], json!("v1"));
 }
 
-/// The aggregate budget bounds the *sum* across live sessions. The second
-/// session's write is refused rather than evicting the first session's entries,
-/// and the capacity comes back when a session ends.
+const FIRST_PAGE: &str = r#"import session from "submilli:session";
+function main(): string {
+    session.set("a", 1); session.set("b", 2); session.set("c", 3);
+    const page = session.list("", 1);
+    return page.nextCursor as string;
+}"#;
+
+fn next_page(cursor: &str) -> String {
+    format!(
+        r#"import session from "submilli:session";
+function main(): string {{
+    try {{
+        const page = session.list("", 1, "{cursor}");
+        return page.entries[0].key;
+    }} catch (e: TypeError) {{
+        return "REFUSED";
+    }}
+}}"#
+    )
+}
+
+/// A listing a client was paging through before a restart carries on after it:
+/// the cursor keys are derived from the server's key, not made up per process.
+/// A server restarted under another key no longer holds the one that sealed the
+/// cursor, and refuses it.
 #[tokio::test]
-async fn the_aggregate_budget_refuses_rather_than_evicting() {
-    // Room for one entry of this size, not two.
-    const BUDGET: u64 = 128;
-    let h = Harness::with_config(vec![blueprint(BLUEPRINT, VfsConfig::None)], |c| {
-        ServerConfig {
-            max_session_state_memory: Some(BUDGET),
-            ..c
-        }
-    });
+async fn a_list_cursor_survives_a_restart_under_the_same_key() {
+    let key = |byte| {
+        Some(Arc::new(
+            submilli_shared::secret_store::SecretCipher::from_key([byte; 32]),
+        ))
+    };
+    for (after_restart, expected) in [(key(3), "b"), (key(4), "REFUSED")] {
+        let store_dir = tempfile::tempdir().expect("session store dir");
+        let vfs_root = tempfile::tempdir().expect("vfs root");
+        let build = async |cipher| {
+            AppState::new(persistent_config(store_dir.path(), vfs_root.path(), cipher))
+                .await
+                .expect("AppState")
+        };
 
-    let first = h.create_session(BLUEPRINT).await;
-    let second = h.create_session(BLUEPRINT).await;
+        let first = Harness::over(build(key(3)).await);
+        let session = first.create_session(BLUEPRINT).await;
+        let page = first.rest(&session, FIRST_PAGE).await;
+        let cursor = ok(&page)["result"].as_str().expect("cursor").to_owned();
+        first.state.database().unwrap().close().await.unwrap();
 
-    ok(&h.rest(&first, SET).await);
-    let refused = h.rest(&second, SET).await;
-    assert!(
-        !refused["error"].is_null(),
-        "the second session must be refused: {refused}"
-    );
-    let message = refused["error"]["message"].as_str().unwrap_or_default();
-    assert!(
-        message.contains("server session-state budget"),
-        "the refusal must name the exhausted budget: {message}"
-    );
-    // Which budget it is decides what to do about it. This session's own data
-    // is not what filled the aggregate one, so a message that read like the
-    // per-session limit would send the caller to shrink data that cannot help.
-    assert!(
-        message.contains("max-session-state-memory"),
-        "the aggregate refusal must point at the operator's knob: {message}"
-    );
-
-    // Nothing was evicted to make room.
-    let still_there = h.rest(&first, GET).await;
-    assert_eq!(
-        ok(&still_there)["result"],
-        json!("v1"),
-        "an exhausted budget must never silently evict another session"
-    );
-
-    // Ending the first session releases its reservation for the second.
-    assert_eq!(
-        h.delete(&format!("/v1/sessions/{first}")).await,
-        StatusCode::NO_CONTENT
-    );
-    ok(&h.rest(&second, SET).await);
+        let restarted = Harness::over(build(after_restart).await);
+        restarted.state.boot().await.expect("boot");
+        let read = restarted.rest(&session, &next_page(&cursor)).await;
+        assert_eq!(ok(&read)["result"], json!(expected));
+    }
 }
 
 /// The no-provider refusal is what this wiring exists to prevent, and it is
@@ -592,39 +605,20 @@ async fn one_shot_executions_get_a_throwaway_store() {
 /// down*, not merely unreachable by a new id.
 ///
 /// `execute_core` registers every session it runs, so without an explicit
-/// teardown a one-shot's entry survives to the blueprint's `idle_timeout` — a
-/// day by default — holding its share of the server-wide session-state budget.
-/// A service using this route as its stateless entry point then ratchets that
-/// budget to the cap and every session's writes are refused, its own and other
-/// callers' alike.
+/// teardown a one-shot's session would survive to the blueprint's
+/// `idle_timeout` — a day by default — holding its state in the database.
 #[tokio::test]
-async fn a_one_shot_releases_its_budget_and_its_session_when_it_returns() {
-    // Room for exactly one entry of the size `SET` writes. A one-shot that held
-    // its reservation would exhaust this on the first call, so every later call
-    // — and the real session at the end — would be refused.
-    const BUDGET: u64 = 128;
-    let h = Harness::with_config(vec![blueprint(BLUEPRINT, VfsConfig::None)], |c| {
-        ServerConfig {
-            max_session_state_memory: Some(BUDGET),
-            ..c
-        }
-    });
-
+async fn a_one_shot_releases_its_session_when_it_returns() {
+    let h = Harness::new();
     for i in 0..8 {
         let run = h.one_shot(SET).await;
-        assert!(
-            run["error"].is_null(),
-            "one-shot {i} was refused, so an earlier one never released its bytes: {run}"
-        );
+        assert!(run["error"].is_null(), "one-shot {i} failed: {run}");
         assert_eq!(
             h.active_sessions().await,
             0,
             "one-shot {i} left its session registered"
         );
     }
-
-    // The budget the one-shots would otherwise have exhausted is intact, so a
-    // real session can still write — the failure an operator actually sees.
     let session = h.create_session(BLUEPRINT).await;
     ok(&h.rest(&session, SET).await);
     assert_eq!(ok(&h.rest(&session, GET).await)["result"], json!("v1"));

@@ -1,82 +1,51 @@
 //! Process-local handles; no authoritative session lifecycle state.
-use super::{HttpClientFactory, SessionKvSettings};
-use interpreter::runtime::{HttpClient, SessionKvStore};
+use super::HttpClientFactory;
+use interpreter::runtime::HttpClient;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-#[derive(Default)]
-struct SessionEntry {
-    http_client: Option<Arc<dyn HttpClient>>,
-    session_kv: Option<Arc<dyn SessionKvStore>>,
+struct State {
+    http_clients: HashMap<String, Arc<dyn HttpClient>>,
 }
 
-struct State {
-    sessions: HashMap<String, SessionEntry>,
-}
+/// At most this many sessions keep an HTTP client cached.
+const MAX_CACHED_HTTP_CLIENTS: usize = 256;
 
 pub(super) struct SessionResources {
     inner: Mutex<State>,
     http_client_factory: HttpClientFactory,
-    session_kv: SessionKvSettings,
 }
 impl SessionResources {
-    pub fn new(http_client_factory: HttpClientFactory, session_kv: SessionKvSettings) -> Self {
+    pub fn new(http_client_factory: HttpClientFactory) -> Self {
         Self {
             inner: Mutex::new(State {
-                sessions: HashMap::new(),
+                http_clients: HashMap::new(),
             }),
             http_client_factory,
-            session_kv,
         }
     }
     pub fn retain_active(&self, active_ids: &[String]) {
         let active: std::collections::HashSet<_> = active_ids.iter().map(String::as_str).collect();
         self.lock()
-            .sessions
+            .http_clients
             .retain(|id, _| active.contains(id.as_str()));
     }
     pub fn evict(&self, id: &str) {
-        self.lock().sessions.remove(id);
+        self.lock().http_clients.remove(id);
     }
     pub fn http_client(&self, session_id: &str) -> Arc<dyn HttpClient> {
         let mut state = self.lock();
         // Running requests retain their Arc even if its cache slot is reused.
-        if state
-            .sessions
-            .values()
-            .filter(|entry| entry.http_client.is_some())
-            .count()
-            >= 256
-            && state
-                .sessions
-                .get(session_id)
-                .is_none_or(|entry| entry.http_client.is_none())
-            && let Some((_, entry)) = state
-                .sessions
-                .iter_mut()
-                .find(|(id, entry)| id.as_str() != session_id && entry.http_client.is_some())
+        if state.http_clients.len() >= MAX_CACHED_HTTP_CLIENTS
+            && !state.http_clients.contains_key(session_id)
+            && let Some(other) = state.http_clients.keys().next().cloned()
         {
-            entry.http_client = None;
+            state.http_clients.remove(&other);
         }
         state
-            .sessions
-            .retain(|_, entry| entry.http_client.is_some() || entry.session_kv.is_some());
-        state
-            .sessions
+            .http_clients
             .entry(session_id.to_owned())
-            .or_default()
-            .http_client
-            .get_or_insert_with(|| (self.http_client_factory)())
-            .clone()
-    }
-
-    pub fn session_kv_for_execute(&self, session_id: &str) -> Arc<dyn SessionKvStore> {
-        self.lock()
-            .sessions
-            .entry(session_id.to_owned())
-            .or_default()
-            .session_kv
-            .get_or_insert_with(|| self.session_kv.build())
+            .or_insert_with(|| (self.http_client_factory)())
             .clone()
     }
 
@@ -99,23 +68,17 @@ mod tests {
     async fn http_clients_are_lazy_reused_and_evicted() {
         let created = Arc::new(AtomicUsize::new(0));
         let count = created.clone();
-        let resources = SessionResources::new(
-            Arc::new(move || {
-                count.fetch_add(1, Ordering::Relaxed);
-                Arc::new(interpreter::runtime::ReqwestHttpClient::new(Arc::default()))
-            }),
-            SessionKvSettings::default(),
-        );
-        let kv = resources.session_kv_for_execute("one");
+        let resources = SessionResources::new(Arc::new(move || {
+            count.fetch_add(1, Ordering::Relaxed);
+            Arc::new(interpreter::runtime::ReqwestHttpClient::new(Arc::default()))
+        }));
         assert_eq!(created.load(Ordering::Relaxed), 0);
         let first = resources.http_client("one");
         assert!(Arc::ptr_eq(&first, &resources.http_client("one")));
         assert!(!Arc::ptr_eq(&first, &resources.http_client("two")));
         assert_eq!(created.load(Ordering::Relaxed), 2);
-        assert!(Arc::ptr_eq(&kv, &resources.session_kv_for_execute("one")));
         resources.evict("one");
         assert!(!Arc::ptr_eq(&first, &resources.http_client("one")));
-        assert!(!Arc::ptr_eq(&kv, &resources.session_kv_for_execute("one")));
         assert_eq!(created.load(Ordering::Relaxed), 3);
     }
 }
