@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "aed75f2fe587c235f87f38399eb175b83014dec1139086b93f418d2f8a981003"
-  confirmedAt: "2026-10-05T17:36:35.000Z"
+  contentHash: "7e5f2f4dc79e748616c045c49f390d15ac57f39df5b351b1bd7e40a3aac4eff8"
+  confirmedAt: "2026-10-15T18:11:14.000Z"
 ---
 
 This page describes how `submilli-server` is configured. It covers every
@@ -62,6 +62,7 @@ flat names listed. A dash means the form doesn't exist.
 | `max_execution_llm_tokens` | `--max-execution-llm-tokens` | `SUBMILLI_MAX_EXECUTION_LLM_TOKENS` | count, at least 1 | `1M` | Model tokens one run may spend. |
 | `max_llm_concurrency` | `--max-llm-concurrency` | `SUBMILLI_MAX_LLM_CONCURRENCY` | prompts, at least 1 | `4` | Prompts of one `llm.batch` in flight at once. |
 | `max_suspended_runs` | `--max-suspended-runs` | `SUBMILLI_MAX_SUSPENDED_RUNS` | runs | `256` | Runs waiting on the harness at an [application tool](/docs/reference/http-api#application-tools) call at once, across the server. Each holds its program in memory. `0` turns application tool calls off. |
+| `max_last_run_size` | `--max-last-run-size` | `SUBMILLI_MAX_LAST_RUN_SIZE` | megabytes | `64` | The largest [last run](/docs/reference/http-api#get-v1sessionssession_idlast-run) a session keeps, as JSON. A larger one keeps only its size, and its last-run answers `413`. |
 | `idempotency_retention` | `--idempotency-retention` | `SUBMILLI_IDEMPOTENCY_RETENTION` | seconds | `86400` | How long a keyed execute's response is kept for replay after it completes. `0` keeps only the newest `idempotency_keep_last`. See [Idempotency](/docs/reference/http-api#idempotency). |
 | `idempotency_keep_last` | `--idempotency-keep-last` | `SUBMILLI_IDEMPOTENCY_KEEP_LAST` | responses | `3` | A session's newest keyed-execute responses kept for replay whatever their age. `0` keeps each only for `idempotency_retention`. |
 | `max_embedding_tokens` | `--max-embedding-tokens` | `SUBMILLI_MAX_EMBEDDING_TOKENS` | count, at least 1 | `50M` | Embedding tokens across all runs. Separate from the model-token budgets. |
@@ -196,6 +197,7 @@ mcp_allowed_hosts:
 | `package_store_dir` | Packages installed with `submilli server packages install`. | `$SUBMILLI_HOME/server/packages` |
 | `volume_dir` | `managed-local/<name>` for each `managed-local` volume, `sessions/<session id>` for the files of each session with a `per_session` filesystem, and `ephemeral/` with one directory per run of an `ephemeral` filesystem, deleted when the run ends. | `$SUBMILLI_HOME/server/volumes` |
 | `secret_store.dir` | The encrypted secret store. | `$SUBMILLI_HOME/server/secrets` |
+| `database_path` + `-last-runs` | Last runs over 64 KiB, one directory per session, deleted when the session ends. | `$SUBMILLI_HOME/server/db/submilli.db-last-runs` |
 
 The server creates each directory it needs, except a `volume_dir` you set,
 which must exist when the server starts. On a host where nothing can create it
@@ -478,6 +480,8 @@ Options:
           Prompts one `llm.batch` dispatches at once. Bounded deliberately: unbounded fan-out manufactures the rate-limit errors it then cannot honor a `retry-after` against. [default: 4] Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`, which outranks the config file
       --max-suspended-runs <RUNS>
           Runs that may wait on the harness at once, server-wide: each suspended at an application tool call (`@tools`), holding its program in memory. [default: 256] Env: `$SUBMILLI_MAX_SUSPENDED_RUNS`, which outranks the config file
+      --max-last-run-size <MEGABYTES>
+          The largest last run a session keeps, in megabytes of its `{result, console, error}` JSON. A larger run keeps only its size, and `GET /v1/sessions/{id}/last-run` answers `413`. [default: 64] Env: `$SUBMILLI_MAX_LAST_RUN_SIZE`, which outranks the config file
       --idempotency-retention <SECONDS>
           Seconds a keyed execute's response is kept for replay after it completes. Past that, the key still refuses to run again, with `idempotency_response_expired`. `0` keeps only the newest `--idempotency-keep-last`. [default: 86400] Env: `$SUBMILLI_IDEMPOTENCY_RETENTION`, which outranks the config file
       --idempotency-keep-last <RESPONSES>

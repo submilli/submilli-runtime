@@ -134,7 +134,7 @@ async fn rest_setup_failure_is_undispatched_and_same_key_can_execute_after_recov
     assert!(
         harness
             .state
-            .sessions()
+            .last_runs()
             .get(session)
             .await
             .unwrap()
@@ -155,12 +155,12 @@ async fn rest_setup_failure_is_undispatched_and_same_key_can_execute_after_recov
     assert_eq!(healthy["result"], "42", "{healthy}");
     let record = harness
         .state
-        .sessions()
+        .last_runs()
         .get(session)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(record.console.len(), 1);
+    assert_eq!(record.value()["console"].as_array().unwrap().len(), 1);
     assert!(matches!(
         harness
             .ledger
@@ -200,7 +200,7 @@ async fn one_shot_setup_failure_has_no_last_run_or_vfs_and_recovers() {
     assert!(
         harness
             .state
-            .sessions()
+            .last_runs()
             .get(session)
             .await
             .unwrap()
@@ -251,7 +251,7 @@ async fn mcp_setup_failure_is_internal_before_vfs_and_allows_follow_up() {
     assert!(
         harness
             .state
-            .sessions()
+            .last_runs()
             .get(session)
             .await
             .unwrap()
@@ -294,12 +294,14 @@ async fn mcp_setup_failure_is_internal_before_vfs_and_allows_follow_up() {
     assert_eq!(
         harness
             .state
-            .sessions()
+            .last_runs()
             .get(session)
             .await
             .unwrap()
             .unwrap()
-            .console
+            .value()["console"]
+            .as_array()
+            .unwrap()
             .len(),
         1
     );

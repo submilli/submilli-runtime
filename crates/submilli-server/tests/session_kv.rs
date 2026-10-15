@@ -624,8 +624,8 @@ async fn a_one_shot_releases_its_session_when_it_returns() {
     assert_eq!(ok(&h.rest(&session, GET).await)["result"], json!("v1"));
 }
 
-/// A transient session must not be resumable: its id coming back in the
-/// response is for reading the run's output, not for driving it again.
+/// A transient session must not be resumable, and its last run ends with it:
+/// the response already carried the run's whole output.
 #[tokio::test]
 async fn a_one_shot_session_id_cannot_be_executed_against() {
     let h = Harness::new();
@@ -647,7 +647,6 @@ async fn a_one_shot_session_id_cannot_be_executed_against() {
         "a one-shot session must be gone once its run returns: {body}"
     );
 
-    // The run's output is still readable, which is what the id is returned for.
     let (status, body) = h.get(&format!("/v1/sessions/{session_id}/last-run")).await;
-    assert_eq!(status, StatusCode::OK, "last-run must survive: {body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 }

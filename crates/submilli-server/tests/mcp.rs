@@ -26,9 +26,6 @@ use submilli_server::config::{VolumeSpec, VolumeTable};
 use submilli_server::{AppState, ServerConfig, app};
 use tower::ServiceExt;
 
-#[path = "common/last_run_store.rs"]
-mod last_run_store;
-
 const EPH: &str = "eph";
 const SESS: &str = "sess";
 const MCP: &str = "mcp-bp";
@@ -61,19 +58,11 @@ impl Harness {
     /// Build a harness over an arbitrary blueprint set (used by tests that point
     /// an `mcp:` server at a mock upstream on a dynamic port).
     fn from_blueprints(bps: Vec<Blueprint>) -> Self {
-        Self::from_blueprints_with_sessions(bps, None)
-    }
-
-    fn from_blueprints_with_sessions(
-        bps: Vec<Blueprint>,
-        sessions: Option<Arc<dyn submilli_server::session::SessionStore>>,
-    ) -> Self {
         let volume_root = tempfile::tempdir().expect("volume root");
         let volume_root_path = volume_root.path().to_path_buf();
         let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
-            sessions,
             volume_root: Some(volume_root_path.clone()),
             ..in_memory_config::config()
         };
@@ -1791,6 +1780,49 @@ async fn last_run_without_prior_execute_errors() {
 }
 
 #[tokio::test]
+async fn last_run_over_the_limit_is_a_tool_error_naming_both_sizes() {
+    let volume_root = tempfile::tempdir().expect("volume root");
+    let h = Harness {
+        state: AppState::new(ServerConfig {
+            blueprints: Some(Arc::new(
+                InMemoryBlueprintStore::seed(vec![Blueprint {
+                    name: EPH.into(),
+                    ..Default::default()
+                }])
+                .unwrap(),
+            )),
+            volume_root: Some(volume_root.path().to_path_buf()),
+            max_last_run_size: Some(64),
+            ..in_memory_config::config()
+        })
+        .await
+        .expect("AppState"),
+        session_root: volume_root.path().join("sessions"),
+        _owned_volume_root: Some(volume_root),
+        _package_store_root: None,
+    };
+    let session = h.handshake(EPH).await;
+    h.post(
+        EPH,
+        tools_call(2, r#"function main(): string { return "y".repeat(100); }"#),
+        Some(&session),
+    )
+    .await;
+    let (_, _, rpc) = h
+        .post(
+            EPH,
+            rpc_call(3, "submilli__typescript__last_run", json!({})),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(rpc["error"]["code"], -32600, "{rpc}");
+    assert_eq!(
+        rpc["error"]["message"],
+        "the last run's output (139 bytes) is over the retained limit (64 bytes)"
+    );
+}
+
+#[tokio::test]
 async fn packages_docs_host_module() {
     let h =
         Harness::from_blueprints(vec![submilli_blueprint::parse(
@@ -3315,19 +3347,34 @@ async fn execute_ids_cover_argument_validation_and_compile_errors() {
     }
 }
 
+/// Run one statement against the harness's database, to inject a storage fault.
+async fn sql(h: &Harness, statement: &'static str) {
+    h.state
+        .database()
+        .unwrap()
+        .transaction(move |connection| {
+            Box::pin(async move {
+                sqlx::query(statement).execute(connection).await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn last_run_recording_failure_preserves_execution_and_recovers() {
-    use std::sync::atomic::Ordering;
-    let store = Arc::new(last_run_store::FaultStore::default());
-    store.fail_writes.store(true, Ordering::SeqCst);
-    let h = Harness::from_blueprints_with_sessions(
-        vec![Blueprint {
-            name: EPH.into(),
-            ..Default::default()
-        }],
-        Some(store.clone()),
-    );
+    let h = Harness::from_blueprints(vec![Blueprint {
+        name: EPH.into(),
+        ..Default::default()
+    }]);
     let session = h.handshake(EPH).await;
+    sql(
+        &h,
+        "CREATE TRIGGER fail_last_run BEFORE INSERT ON last_runs \
+         BEGIN SELECT RAISE(FAIL, 'private backend detail'); END",
+    )
+    .await;
     let (_, _, success) = h
         .post(
             EPH,
@@ -3350,8 +3397,7 @@ async fn last_run_recording_failure_preserves_execution_and_recovers() {
             .contains("original failure")
     );
     assert!(!failed.to_string().contains("private backend detail"));
-    assert_eq!(store.writes.load(Ordering::SeqCst), 2);
-    store.fail_writes.store(false, Ordering::SeqCst);
+    sql(&h, "DROP TRIGGER fail_last_run").await;
     let (_, _, healthy) = h
         .post(
             EPH,
@@ -3372,43 +3418,34 @@ async fn last_run_recording_failure_preserves_execution_and_recovers() {
 
 #[tokio::test]
 async fn last_run_read_failure_is_internal_and_hides_backend_details() {
-    use std::sync::atomic::Ordering;
-    let store = Arc::new(last_run_store::FaultStore::default());
-    let h = Harness::from_blueprints_with_sessions(
-        vec![Blueprint {
-            name: EPH.into(),
-            ..Default::default()
-        }],
-        Some(store.clone()),
-    );
+    let h = Harness::from_blueprints(vec![Blueprint {
+        name: EPH.into(),
+        ..Default::default()
+    }]);
     let session = h.handshake(EPH).await;
-    store.fail_reads.store(true, Ordering::SeqCst);
-    for id in [2, 4] {
-        if id == 4 {
-            h.post(
-                EPH,
-                tools_call(3, "function main(): number { return 7; }"),
-                Some(&session),
-            )
-            .await;
-        }
-        let (status, _, response) = h
-            .post(
-                EPH,
-                rpc_call(id, "submilli__typescript__last_run", json!({})),
-                Some(&session),
-            )
-            .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(response["error"]["code"], -32603, "{response}");
-        assert_eq!(response["error"]["message"], "last-run storage unavailable");
-        assert!(!response.to_string().contains("private backend detail"));
-    }
-    store.fail_reads.store(false, Ordering::SeqCst);
+    h.post(
+        EPH,
+        tools_call(2, "function main(): number { return 7; }"),
+        Some(&session),
+    )
+    .await;
+    sql(&h, "ALTER TABLE last_runs RENAME TO private_backend_detail").await;
+    let (status, _, response) = h
+        .post(
+            EPH,
+            rpc_call(3, "submilli__typescript__last_run", json!({})),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response["error"]["code"], -32603, "{response}");
+    assert_eq!(response["error"]["message"], "last-run storage unavailable");
+    assert!(!response.to_string().contains("private_backend_detail"));
+    sql(&h, "ALTER TABLE private_backend_detail RENAME TO last_runs").await;
     let (_, _, stored) = h
         .post(
             EPH,
-            rpc_call(5, "submilli__typescript__last_run", json!({})),
+            rpc_call(4, "submilli__typescript__last_run", json!({})),
             Some(&session),
         )
         .await;

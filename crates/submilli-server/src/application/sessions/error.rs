@@ -6,6 +6,8 @@ use crate::domain::session::SessionRuleError;
 pub enum BootError {
     Sessions(StoreError),
     Idempotency(StoreError),
+    /// Leftover last-run files could not be removed.
+    LastRuns(StoreError),
     /// The pre-database secret-store directory could not be imported.
     Secrets(ImportFailure),
     /// Leftover `ephemeral` scratch could not be listed for removal.
@@ -20,6 +22,7 @@ impl std::fmt::Display for BootError {
         match self {
             Self::Sessions(_) => f.write_str("cannot enumerate persisted sessions"),
             Self::Idempotency(_) => f.write_str("cannot enumerate idempotency sessions"),
+            Self::LastRuns(_) => f.write_str("cannot sweep leftover last-run files"),
             Self::Secrets(_) => f.write_str("cannot import the secret-store directory"),
             Self::Scratch { path, .. } => write!(
                 f,
@@ -33,7 +36,7 @@ impl std::fmt::Display for BootError {
 impl std::error::Error for BootError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Sessions(error) | Self::Idempotency(error) => Some(error),
+            Self::Sessions(error) | Self::Idempotency(error) | Self::LastRuns(error) => Some(error),
             Self::Secrets(error) => Some(error),
             Self::Scratch { source, .. } => Some(source),
         }

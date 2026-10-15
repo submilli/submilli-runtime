@@ -120,8 +120,8 @@ pub(crate) async fn one_shot_with(
     // once the run returns. A caller that wants state across executes (a
     // persistent `per_session` VFS, reused variable bindings) uses the session
     // API instead — `POST /v1/sessions` then `POST /v1/sessions/{id}/execute`.
-    // The generated id is returned so the run's output stays readable via
-    // `GET /v1/sessions/{id}/last-run`.
+    // The session's last run ends with it, so the response carries the whole
+    // console itself.
     let session_id = Uuid::new_v4().to_string();
     let failed = |kind: ErrorKind, message: String| {
         (
@@ -223,7 +223,9 @@ pub(crate) async fn one_shot_with(
 
     // The one-shot path mints a fresh session per call, so a key would have
     // nothing durable to bind to: `dispatched` is irrelevant here and any
-    // `Idempotency-Key` header is ignored rather than rejected.
+    // `Idempotency-Key` header is ignored rather than rejected. Its last run
+    // would end with it, so it keeps none.
+    let records_last_run = false;
     let outcome = execute_core_with(
         state,
         ExecuteInputs {
@@ -243,16 +245,19 @@ pub(crate) async fn one_shot_with(
             tools: None,
         },
         test,
+        records_last_run,
     )
     .await;
     // A one-shot session must not outlive its run: retaining it would hold
-    // its share of the server-wide session-state budget until `idle_timeout`, a
-    // day by default. The last-run record lives in a separate store, so the
-    // teardown does not take it.
+    // its state and files until `idle_timeout`, a day by default.
     if let Err(error) = state.session_manager().wipe_now(&session_id).await {
         tracing::warn!(%error, "transient session cleanup failed");
     }
-    (session_id, outcome.response)
+    let mut response = outcome.response;
+    if let Some(last_run) = outcome.last_run {
+        response.console = last_run.console;
+    }
+    (session_id, response)
 }
 
 /// Already-resolved inputs to one execution, shared by the one-shot
@@ -329,6 +334,9 @@ pub(crate) enum VfsSource {
 pub(crate) struct ExecuteOutcome {
     pub response: ExecuteResponse,
     pub dispatched: bool,
+    /// The run's `{result, console, error}` with the full console, for the
+    /// session's last run. `None` when nothing reached the runner.
+    pub last_run: Option<LastRun>,
 }
 
 impl ExecuteOutcome {
@@ -336,13 +344,7 @@ impl ExecuteOutcome {
         Self {
             response,
             dispatched: false,
-        }
-    }
-
-    fn dispatched(response: ExecuteResponse) -> Self {
-        Self {
-            response,
-            dispatched: true,
+            last_run: None,
         }
     }
 }
@@ -351,14 +353,18 @@ impl ExecuteOutcome {
 /// to be cancelled, prepares and runs it, and reports to its recorder what the caller
 /// got. See [`prepare_and_run`] for the work itself.
 pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) -> ExecuteOutcome {
-    execute_core_with(state, inputs, None).await
+    let records_last_run = true;
+    execute_core_with(state, inputs, None, records_last_run).await
 }
 
-/// [`execute_core`] as a test run when `test` is given.
+/// [`execute_core`] as a test run when `test` is given. An unkeyed run's
+/// outcome becomes its session's last run when `records_last_run` is set; a
+/// keyed one leaves that to its caller's guard.
 async fn execute_core_with(
     state: &AppState,
     mut inputs: ExecuteInputs<'_>,
     test: Option<TestWorld>,
+    records_last_run: bool,
 ) -> ExecuteOutcome {
     let audit = inputs
         .audit
@@ -443,9 +449,14 @@ async fn execute_core_with(
         }
         _ => (None, None),
     };
+    // An MCP request with no session has nowhere to keep a last run.
+    let records_last_run = records_last_run && !inputs.session_id.is_empty();
     let outcome = prepare_and_run(state, inputs, recording.clone(), cancel_requested, test).await;
-    if let Some(guard) = unkeyed {
+    if let Some(mut guard) = unkeyed {
         if outcome.dispatched {
+            if records_last_run && let Some(last_run) = &outcome.last_run {
+                guard.set_last_run(last_run);
+            }
             guard.finish_unkeyed().await;
         } else {
             guard.release().await;
@@ -721,28 +732,18 @@ async fn prepare_and_run(
 
     let console_lines = split_console(&outcome.console_raw);
     let response = into_response(audit, session_id, &outcome, &console_lines);
-
-    // The success response omits console output; the session keeps the full
-    // capture so `/v1/last-run/{id}` can still return it. An MCP request with no
-    // session (one rmcp let through) has nowhere to keep it.
-    if !session_id.is_empty()
-        && let Err(error) = state
-            .sessions()
-            .record(
-                session_id,
-                LastRun {
-                    result: response.result.clone(),
-                    console: console_lines,
-                    error: response.error.clone(),
-                },
-            )
-            .await
-    {
-        // Execution already finished; losing its output would invite a retry of effects.
-        tracing::warn!(operation = "record", session = session_id, %error, "last-run storage failed");
+    // The success response omits console output; the session's last run keeps
+    // the full capture, written with the run's end.
+    let last_run = LastRun {
+        result: response.result.clone(),
+        console: console_lines,
+        error: response.error.clone(),
+    };
+    ExecuteOutcome {
+        response,
+        dispatched: true,
+        last_run: Some(last_run),
     }
-
-    ExecuteOutcome::dispatched(response)
 }
 
 /// What a run's world is built from: the run's own inputs, and the cancel signal its
@@ -1001,7 +1002,8 @@ fn into_response(
 
 /// Map a `RunOutcome` to the transport-agnostic `{ result, console, error }`
 /// triple shared by the REST handler and the MCP tool. Console output is
-/// suppressed on success (the full capture lives in the session's last-run).
+/// suppressed on success (the full capture lives in the session's last-run;
+/// a one-shot run, whose session ends with it, returns it instead).
 fn outcome_to_parts(
     outcome: &RunOutcome,
     console_lines: &[String],

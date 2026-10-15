@@ -48,7 +48,6 @@ use crate::idempotency::Coordinator;
 use crate::mcp::{
     BlueprintServiceCache, McpCatalog, discover_all, discover_selected, new_service_cache,
 };
-use crate::session::{InMemorySessionStore, SessionStore};
 use crate::session_manager::{
     CapabilitySettings, DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS,
     DEFAULT_MAX_ALL_EXECUTIONS_TOKENS, DEFAULT_MAX_CONCURRENCY, DEFAULT_MAX_EMBEDDING_CONCURRENCY,
@@ -108,7 +107,6 @@ struct AppStateInner {
     engine: Engine,
     base_linker: Linker<StoreData>,
     runtime: RuntimeConfig,
-    sessions: Arc<dyn SessionStore>,
     blueprints: Arc<dyn BlueprintStore>,
     unit_of_work: Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory>,
     secret_store: Option<Arc<dyn SecretStore>>,
@@ -318,9 +316,6 @@ impl AppState {
                 Arc::new(ReqwestHttpClient::new(Arc::clone(&policy))) as Arc<dyn HttpClient>
             })
         };
-        let sessions = config
-            .sessions
-            .unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
         let mcp_oauth_providers = Arc::new(config.mcp_oauth_providers);
         // Outbound HTTP for the OAuth handlers (discovery + code exchange), same
         // SSRF policy.
@@ -383,6 +378,11 @@ impl AppState {
                     .max_suspended_runs
                     .unwrap_or(crate::runs::DEFAULT_MAX_SUSPENDED_RUNS),
             )
+            .with_max_last_run_size(
+                config
+                    .max_last_run_size
+                    .unwrap_or(crate::session_manager::DEFAULT_MAX_LAST_RUN_BYTES),
+            )
             .with_audit(audit.clone()),
         );
 
@@ -393,7 +393,10 @@ impl AppState {
                 session_root: session_root.clone(),
                 cipher: config.session_cipher.clone(),
             });
-        let idempotency = Arc::new(Coordinator::new(unit_of_work.clone(), generation));
+        let idempotency = Arc::new(
+            Coordinator::new(unit_of_work.clone(), generation)
+                .with_last_runs(session_manager.last_runs().clone()),
+        );
 
         // An embedder's store holds both secrets and grants, as the CLI's does,
         // and keeps its own; otherwise both live in the database, sealed with
@@ -448,7 +451,6 @@ impl AppState {
                 engine,
                 base_linker,
                 runtime,
-                sessions,
                 blueprints,
                 unit_of_work,
                 secret_store,
@@ -510,6 +512,12 @@ impl AppState {
                 error.to_string(),
             ))
         })?;
+        // After recovery, which may forget last runs, and before any run can
+        // stage a spill file.
+        self.last_runs()
+            .sweep()
+            .await
+            .map_err(crate::session_manager::BootError::LastRuns)?;
         self.inner.session_manager.volume_registry().prepare();
         self.start_reaper();
         self.inner.booted.store(true, Ordering::Release);
@@ -687,8 +695,8 @@ impl AppState {
         &self.inner.runtime
     }
 
-    pub(crate) fn sessions(&self) -> &Arc<dyn SessionStore> {
-        &self.inner.sessions
+    pub(crate) fn last_runs(&self) -> &Arc<crate::adapters::session::last_run::LastRuns> {
+        self.inner.session_manager.last_runs()
     }
 
     /// The blueprint a run is decided under and its version tag, read together:

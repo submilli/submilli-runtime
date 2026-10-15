@@ -285,7 +285,7 @@ pub async fn execute(
     let finished = crate::handlers::runs::finished_body(&outcome.response);
     if let Some(guard) = guard {
         let outcome_recordable = true;
-        settle(guard, outcome.dispatched, &finished, outcome_recordable).await;
+        settle(guard, &outcome, &finished, outcome_recordable).await;
     }
     stored_body_response(&session_id, StatusCode::OK, finished.body)
 }
@@ -296,14 +296,17 @@ pub async fn execute(
 /// otherwise leave the key indeterminate by dropping the guard armed, since the
 /// program ran but what it did cannot be told.
 async fn settle(
-    guard: ReservationGuard,
-    dispatched: bool,
+    mut guard: ReservationGuard,
+    outcome: &execute::ExecuteOutcome,
     finished: &crate::handlers::runs::FinishedBody,
     outcome_recordable: bool,
 ) {
-    if !dispatched {
+    if !outcome.dispatched {
         guard.release().await;
     } else if finished.recordable && outcome_recordable {
+        if let Some(last_run) = &outcome.last_run {
+            guard.set_last_run(last_run);
+        }
         guard
             .complete(StatusCode::OK.as_u16(), finished.body.clone())
             .await;
@@ -526,7 +529,7 @@ impl Supervised {
             // A deleted session's keys are gone, and writing one back would
             // revive it. A run the server stopped did not end on its own.
             let outcome_recordable = self.entry.outcome_recordable();
-            settle(guard, outcome.dispatched, &finished, outcome_recordable).await;
+            settle(guard, &outcome, &finished, outcome_recordable).await;
         }
         self.entry.finish(Arc::from(finished.body));
         self.registry.retire(&self.entry);

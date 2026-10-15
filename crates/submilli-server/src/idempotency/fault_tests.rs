@@ -7,16 +7,16 @@ use crate::domain::session::Session;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Default)]
-struct CommitFault {
-    lose_ack: AtomicBool,
+pub(super) struct CommitFault {
+    pub(super) lose_ack: AtomicBool,
     fail_begin: AtomicBool,
     pause_after_commit: AtomicBool,
     committed: tokio::sync::Notify,
     release: tokio::sync::Notify,
 }
-struct FaultFactory {
-    inner: Arc<dyn UnitOfWorkFactory>,
-    fault: Arc<CommitFault>,
+pub(super) struct FaultFactory {
+    pub(super) inner: Arc<dyn UnitOfWorkFactory>,
+    pub(super) fault: Arc<CommitFault>,
 }
 struct FaultUnit {
     inner: Box<dyn UnitOfWork>,
@@ -210,6 +210,20 @@ impl UnitOfWork for FaultUnit {
             .session_state_keys(session_id, after, max_keys)
             .await
     }
+    async fn put_last_run(
+        &mut self,
+        session_id: &str,
+        run_id: &str,
+        completed_at: SystemTime,
+        staged: &crate::application::sessions::ports::StagedLastRun,
+    ) -> Result<Option<String>, StoreError> {
+        self.inner
+            .put_last_run(session_id, run_id, completed_at, staged)
+            .await
+    }
+    async fn remove_last_run(&mut self, session_id: &str) -> Result<Option<String>, StoreError> {
+        self.inner.remove_last_run(session_id).await
+    }
     async fn commit(self: Box<Self>) -> Result<(), StoreError> {
         self.inner.commit().await?;
         if self.fault.pause_after_commit.swap(false, Ordering::SeqCst) {
@@ -324,6 +338,7 @@ async fn waiter_deadline_does_not_authorize_another_execution() {
         tasks: TaskTracker::new(),
         waiter_timeout: Duration::from_millis(5),
         attached: AttachedRuns::default(),
+        last_runs: None,
     });
     let guard = proceed(first.reserve("session", "key", "code").await);
     assert!(matches!(
@@ -492,6 +507,7 @@ async fn database_contention_cannot_exceed_reservation_deadline() {
         tasks: TaskTracker::new(),
         waiter_timeout: Duration::from_millis(10),
         attached: AttachedRuns::default(),
+        last_runs: None,
     });
     let held = units.begin().await.unwrap();
     let result = tokio::time::timeout(

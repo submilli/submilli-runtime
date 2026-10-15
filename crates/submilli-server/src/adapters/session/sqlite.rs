@@ -326,9 +326,11 @@ pub(crate) async fn write_record(
         .ok_or_else(|| DatabaseError::Import("session revision exhausted".into()))?;
     records::write(connection, &record).await?;
     if record.status == SessionStatus::Closed {
-        // A session's state ends in the transaction that closes it, so no
-        // path that closes one can leave its values behind.
+        // A session's state and last run end in the transaction that closes
+        // it, so no path that closes one can leave them behind. The last run's
+        // file goes with the session's cleanup.
         super::kv::remove_all(connection, &record.session_id).await?;
+        crate::adapters::session::last_run::remove(connection, &record.session_id).await?;
     }
     Ok(())
 }

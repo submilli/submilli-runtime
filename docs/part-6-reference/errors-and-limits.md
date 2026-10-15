@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "48f41544e2a61a8caff4d529f53610f3446bd03e812b7c7d4962301806ff7211"
-  confirmedAt: "2026-10-09T15:40:52.000Z"
+  contentHash: "daea0dd367c0399df23d7e3a4b0152467636d92d78822142961c53957d52432f"
+  confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
 This page lists the limits on a program's run, the fixed limits inside the
@@ -42,6 +42,7 @@ gives all three forms and their precedence. A Blueprint can't raise them.
 | Embedding requests, one run | `max_execution_embedding_requests` | 1,000 | count, with suffixes | One run | `QuotaExceededError` | Yes |
 | Embedding requests in flight | `max_embedding_concurrency` | 4 | requests | One `embed` call | Further requests wait | — |
 | Runs waiting on the harness | `max_suspended_runs` | 256, `0` turns tool calls off | runs | All runs on the server | `QuotaExceededError` | Yes |
+| Last run kept | `max_last_run_size` | 64 | megabytes (1,048,576 bytes) | One session's last run | `GET /v1/sessions/{id}/last-run` answers `413` | — |
 | Named volume size | `size_limit` of an entry under `volumes` | none (required) | bytes, or a size such as `1GB` (binary units), or `unlimited` | The volume, across every session and Blueprint that uses it | `QuotaExceededError` | Yes |
 
 Fuel counts work, at about one unit per WebAssembly instruction of the program,
