@@ -58,6 +58,24 @@ fn workspace(root: &std::path::Path) -> Workspace {
 }
 
 #[test]
+fn directory_sync_uses_open_directory_after_rename() {
+    use cap_fs_ext::DirExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let original = root.path().join("original");
+    std::fs::create_dir(&original).unwrap();
+    let directory =
+        cap_std::fs::Dir::open_ambient_dir(&original, cap_std::ambient_authority()).unwrap();
+    directory.create_dir("child").unwrap();
+    let child = directory.open_dir_nofollow("child").unwrap();
+    std::fs::rename(&original, root.path().join("moved")).unwrap();
+    std::fs::write(&original, b"replacement is not a directory").unwrap();
+
+    paths::sync(&directory).unwrap();
+    paths::sync(&child).unwrap();
+}
+
+#[test]
 fn append_repairs_partial_range_on_the_original_inode() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("file"), b"before").unwrap();

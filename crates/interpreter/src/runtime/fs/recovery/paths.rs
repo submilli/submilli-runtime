@@ -110,7 +110,10 @@ pub(super) fn private_dir(parent: &Dir, name: &str, create: bool) -> Result<Dir,
 
 pub(super) fn sync(dir: &Dir) -> Result<(), RecoveryError> {
     checkpoint("before-directory-sync")?;
-    dir.try_clone()?.into_std_file().sync_all()?;
+    // A Dir may carry O_PATH on Linux, which cannot be fsynced. Open a
+    // readable handle relative to the held directory, preserving its identity
+    // even if its original path has been renamed or replaced.
+    dir.open(".")?.sync_all()?;
     checkpoint("directory-sync")?;
     Ok(())
 }
