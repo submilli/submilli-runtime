@@ -478,17 +478,20 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "union".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
                                 Type::prelude_interface(
                                     "Set".to_string(),
-                                    vec![Type::TypeVar("T".to_string())],
+                                    vec![Type::TypeVar("U".to_string())],
                                 ),
                             )],
                             ret: Type::prelude_interface(
                                 "Set".to_string(),
-                                vec![Type::TypeVar("T".to_string())],
+                                vec![Type::union(vec![
+                                    Type::TypeVar("T".to_string()),
+                                    Type::TypeVar("U".to_string()),
+                                ])],
                             ),
                             predicate: None,
                             doc: doc(
@@ -500,12 +503,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "intersection".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
                                 Type::prelude_interface(
                                     "Set".to_string(),
-                                    vec![Type::TypeVar("T".to_string())],
+                                    vec![Type::TypeVar("U".to_string())],
                                 ),
                             )],
                             ret: Type::prelude_interface(
@@ -522,12 +525,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "difference".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
                                 Type::prelude_interface(
                                     "Set".to_string(),
-                                    vec![Type::TypeVar("T".to_string())],
+                                    vec![Type::TypeVar("U".to_string())],
                                 ),
                             )],
                             ret: Type::prelude_interface(
@@ -544,17 +547,20 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "symmetricDifference".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
                                 Type::prelude_interface(
                                     "Set".to_string(),
-                                    vec![Type::TypeVar("T".to_string())],
+                                    vec![Type::TypeVar("U".to_string())],
                                 ),
                             )],
                             ret: Type::prelude_interface(
                                 "Set".to_string(),
-                                vec![Type::TypeVar("T".to_string())],
+                                vec![Type::union(vec![
+                                    Type::TypeVar("T".to_string()),
+                                    Type::TypeVar("U".to_string()),
+                                ])],
                             ),
                             predicate: None,
                             doc: doc(
@@ -566,12 +572,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "isSubsetOf".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
                                 Type::prelude_interface(
                                     "Set".to_string(),
-                                    vec![Type::TypeVar("T".to_string())],
+                                    vec![Type::TypeVar("U".to_string())],
                                 ),
                             )],
                             ret: Type::Boolean,
@@ -585,12 +591,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "isSupersetOf".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
                                 Type::prelude_interface(
                                     "Set".to_string(),
-                                    vec![Type::TypeVar("T".to_string())],
+                                    vec![Type::TypeVar("U".to_string())],
                                 ),
                             )],
                             ret: Type::Boolean,
@@ -604,12 +610,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "isDisjointFrom".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
                                 Type::prelude_interface(
                                     "Set".to_string(),
-                                    vec![Type::TypeVar("T".to_string())],
+                                    vec![Type::TypeVar("U".to_string())],
                                 ),
                             )],
                             ret: Type::Boolean,

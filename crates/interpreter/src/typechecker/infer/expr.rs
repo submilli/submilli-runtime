@@ -8266,7 +8266,47 @@ impl Inferer<'_> {
         if is_array {
             return self.narrow_by_callback_predicate(&method, call, span);
         }
+        if method == "intersection" {
+            return self.narrow_set_intersection(call);
+        }
         Ok(call)
+    }
+
+    /// `a.intersection(b)` holds only elements of both sets, so where `b`'s
+    /// element type is the narrower one the result has it. tsc types the result
+    /// `Set<T & U>`; this matches it whenever one element type contains the
+    /// other. Sets share one representation, so only the static type changes.
+    fn narrow_set_intersection(
+        &mut self,
+        (kind, ty): (TypedExprKind, Type),
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let set_element = |ty: &Type| match ty.peel() {
+            Type::InterfaceRef { mangled, args, .. }
+                if *mangled == crate::mangle::prelude("Set") && args.len() == 1 =>
+            {
+                Some(args[0].clone())
+            }
+            _ => None,
+        };
+        let TypedExprKind::MethodCall { args, .. } = &kind else {
+            return Ok((kind, ty));
+        };
+        let Some(&other) = args.first() else {
+            return Ok((kind, ty));
+        };
+        let other_ty = self
+            .typed_ast
+            .try_expr(other)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .clone();
+        let (Some(own), Some(theirs)) = (set_element(&ty), set_element(&other_ty)) else {
+            return Ok((kind, ty));
+        };
+        if own == theirs || !assignable(&theirs, &own, self.resolver()) {
+            return Ok((kind, ty));
+        }
+        Ok((kind, Type::prelude_interface("Set", vec![theirs])))
     }
 
     /// `u.name(args)` where `u` is a union of strings with arrays or tuples,
