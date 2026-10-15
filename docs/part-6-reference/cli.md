@@ -1864,33 +1864,34 @@ Usage: submilli playground [OPTIONS]
        submilli playground <COMMAND>
 
 Commands:
-  start       Start the playground in the background, or attach to the running one, print its ready record with a fresh login link, and open the link in your browser (the default)
-  status      Report whether the playground is running, where, and with what
-  open        Print a fresh single-use login link for the running playground, and open it in your browser
-  stop        Stop the running playground: drain its runs and end browser sessions
-  restart     Stop the running playground and start it again, with its blueprint and egress grants unless given here, and open a fresh login link. Browser sessions end, and bound secrets have to be bound again
-  init        Create a `submilli/` folder with a starter billing package, a blueprint that pins charges to the signed-in customer, and an example program. Writes nothing outside `submilli/`
-  runs        List stored runs, newest first. Works with the playground stopped
-  show        Show one run: its decisions, calls, and outcome
-  explain     Explain one decision: the rule that decided it (or the default) and every rule that nearly matched
-  compare     Compare two runs: only the decisions that changed
-  audit       Audit the runs since the last blueprint edit
-  changes     List the blueprint versions and what each changed
-  sessions    List sessions, newest first
-  exec        Run a program in the running playground, labeled `assistant` (or the scaffolded example, labeled `example`), under the binding or in a started session
-  bind        Set the variables and harness-secret development values new runs use, or print them. Variables are kept for the next start; secret values only in the running playground's memory
-  session     Start a session with its variables fixed, or end one
-  recheck     After a blueprint edit, see which of a run's decisions would change: re-resolves them under the blueprint in force. Runs nothing and records nothing
-  test        After a blueprint edit, see whether a recorded program gets through now: runs it again under the blueprint in force, with its calls answered from the recording. It stops at a call with nothing recorded
-  rerun       After a package edit, or to try other variables, run a recorded program again for real under the current binding, as a new run linked to its source
-  draft-rule  Draft a rule that allows exactly one refused call; `--write` puts it in the blueprint file. Works with the playground stopped
-  clear       Remove every stored run and its sessions' events, and start a new audit window. Run ids keep counting, and started sessions stay listed
-  cancel      Cancel a run in flight
-  watch       Follow a session's events as JSON lines until its last run finishes (`--follow`: until the session ends). Without a session, follows the most recent one. On a session already idle it prints the events so far and exits at once, so start it after the run it is to follow has started, or pass `--follow`
-  mcp         Serve the running playground's tools over stdio, for a coding assistant's stand-in subagent to launch. Uses the binding and the development secrets; its runs are labeled `stand-in`
-  chat        Chat with an agent using your own model key, the way a production agent runs: it uses the playground's tools and prints its answer. Each chat starts a session; send the next message in it with `--session`. The session stays open until it sits idle past the blueprint's idle timeout or `session end` ends it. The key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY) comes from the playground's environment, else the project's `.env`, else `submilli secret put <NAME>`; the model from `--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`
-  chat-hook   Copy a coding assistant's stand-in conversation to the running playground: a Claude Code hook reads the hook's JSON from stdin. Only the stand-in's own hooks post anything. Always exits 0 and prints nothing
-  help        Print this message or the help of the given subcommand(s)
+  start        Start the playground in the background, or attach to the running one, print its ready record with a fresh login link, and open the link in your browser (the default)
+  status       Report whether the playground is running, where, and with what
+  open         Print a fresh single-use login link for the running playground, and open it in your browser
+  stop         Stop the running playground: drain its runs and end browser sessions
+  restart      Stop the running playground and start it again, with its blueprint and egress grants unless given here, and open a fresh login link. Browser sessions end, and bound secrets have to be bound again
+  init         Create a `submilli/` folder with a starter billing package, a blueprint that pins charges to the signed-in customer, and an example program. Writes nothing outside `submilli/`
+  runs         List stored runs, newest first. Works with the playground stopped
+  show         Show one run: its decisions, calls, and outcome
+  explain      Explain one decision: the rule that decided it (or the default) and every rule that nearly matched
+  compare      Compare two runs: only the decisions that changed
+  audit        Audit the runs since the last blueprint edit
+  changes      List the blueprint versions and what each changed
+  sessions     List sessions, newest first
+  exec         Run a program in the running playground, labeled `assistant` (or the scaffolded example, labeled `example`), under the binding or in a started session
+  bind         Set the variables and harness-secret development values new runs use, or print them. Variables are kept for the next start; secret values only in the running playground's memory
+  session      Start a session with its variables fixed, or end one
+  recheck      After a blueprint edit, see which of a run's decisions would change: re-resolves them under the blueprint in force. Runs nothing and records nothing
+  test         After a blueprint edit, see whether a recorded program gets through now: runs it again under the blueprint in force, with its calls answered from the recording. It stops at a call with nothing recorded
+  rerun        After a package edit, or to try other variables, run a recorded program again for real under the current binding, as a new run linked to its source
+  draft-rule   Draft a rule that allows exactly one refused call; `--write` puts it in the blueprint file. Works with the playground stopped
+  clear        Remove every stored run and its sessions' events, and start a new audit window. Run ids keep counting, and started sessions stay listed
+  cancel       Cancel a run in flight
+  watch        Follow a session's events as JSON lines until its last run finishes (`--follow`: until the session ends). Without a session, follows the most recent one. On a session already idle it prints the events so far and exits at once, so start it after the run it is to follow has started, or pass `--follow`
+  claude-code  Set Claude Code up in this project to try tasks through the playground on your Claude subscription: writes the `submilli-standin` subagent, which has only the playground's tools, and adds the hooks that show its chat on the page to your own `.claude/settings.local.json`. Run it again to check; it changes only what's missing
+  mcp          Serve the running playground's tools over stdio, for a coding assistant's stand-in subagent to launch. Uses the binding and the development secrets; its runs are labeled `stand-in`
+  chat         Chat with an agent using your own model key, the way a production agent runs: it uses the playground's tools and prints its answer. Each chat starts a session; send the next message in it with `--session`. The session stays open until it sits idle past the blueprint's idle timeout or `session end` ends it. The key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY) comes from the playground's environment, else the project's `.env`, else `submilli secret put <NAME>`; the model from `--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`
+  chat-hook    Copy a coding assistant's stand-in conversation to the running playground: a Claude Code hook reads the hook's JSON from stdin. Only the stand-in's own hooks post anything. Always exits 0 and prints nothing
+  help         Print this message or the help of the given subcommand(s)
 
 Options:
       --json                Print the ready record as JSON
@@ -2280,6 +2281,19 @@ Options:
       --follow  Keep following after the session goes idle, until it ends or the playground stops
       --json    Accepted for symmetry; `watch` always prints JSON lines
   -h, --help    Print help
+```
+
+### `submilli playground claude-code`
+
+```text
+Set Claude Code up in this project to try tasks through the playground on your Claude subscription: writes the `submilli-standin` subagent, which has only the playground's tools, and adds the hooks that show its chat on the page to your own `.claude/settings.local.json`. Run it again to check; it changes only what's missing
+
+Usage: submilli playground claude-code [OPTIONS]
+
+Options:
+      --force  Replace a `submilli-standin` subagent file that differs from the playground's
+      --json   Print JSON
+  -h, --help   Print help
 ```
 
 ### `submilli playground mcp`

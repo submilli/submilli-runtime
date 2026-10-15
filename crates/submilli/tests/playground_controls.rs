@@ -1446,6 +1446,31 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                     .any(|tool| tool["name"] == "submilli__typescript__execute"),
                 "{tools}"
             );
+            // The stand-in `claude-code` writes may use exactly the tools the bridge offers.
+            let set_up = playground
+                .command(&["claude-code", "--json"])
+                .output()
+                .unwrap();
+            assert!(set_up.status.success(), "{}", stderr(&set_up));
+            let agent =
+                std::fs::read_to_string(playground.root.join(".claude/agents/submilli-standin.md"))
+                    .unwrap();
+            let mut granted: Vec<&str> = agent
+                .lines()
+                .find_map(|line| line.strip_prefix("tools: "))
+                .unwrap()
+                .split(", ")
+                .map(|tool| tool.strip_prefix("mcp__playground__").unwrap())
+                .collect();
+            let mut offered: Vec<&str> = tools["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap())
+                .collect();
+            granted.sort_unstable();
+            offered.sort_unstable();
+            assert_eq!(granted, offered);
             bridge.send(json!({
                 "jsonrpc": "2.0", "id": 3, "method": "tools/call",
                 "params": {
