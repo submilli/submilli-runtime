@@ -529,14 +529,20 @@ async fn chat(
         Err(refused) => return *refused,
     };
     let actions = Arc::clone(state.actions_arc());
+    let taking = Arc::clone(&actions);
     let accepted = tokio::task::spawn_blocking(move || {
-        actions
+        taking
             .chat
-            .accept(post, &actions.recorder, std::time::Instant::now())
+            .accept(post, &taking.recorder, std::time::Instant::now())
     })
     .await;
     match accepted {
-        Ok(logged) => Json(json!({ "logged": logged })).into_response(),
+        Ok(accepted) => {
+            if let Some(session) = &accepted.placed {
+                actions.log_stand_in_session(session).await;
+            }
+            Json(json!({ "logged": accepted.logged })).into_response()
+        }
         Err(error) => host::error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "chat_failed",

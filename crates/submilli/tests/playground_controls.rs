@@ -1434,6 +1434,14 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                 initialized["result"]["serverInfo"].is_object(),
                 "{initialized}"
             );
+            // The agent is told who the session serves, as an application would tell it.
+            let instructions = initialized["result"]["instructions"]
+                .as_str()
+                .unwrap_or_default();
+            assert!(
+                instructions.contains(r#"customerId = "cus_northwind""#),
+                "{initialized}"
+            );
             bridge.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
             bridge.send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
             let tools = bridge.reply();
@@ -1508,15 +1516,16 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                 .unwrap();
             assert!(bound.status.success(), "{}", stderr(&bound));
 
-            // The stand-in's call goes through the bridge, named as Claude Code names it.
+            // The stand-in's call goes through the bridge, named as Claude Code names it. It
+            // runs no program, so only its chat lists the session.
             let mut bridge = Bridge::start(&playground);
             bridge.initialize();
             bridge.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
             bridge.send(json!({
                 "jsonrpc": "2.0", "id": 2, "method": "tools/call",
                 "params": {
-                    "name": "submilli__typescript__execute",
-                    "arguments": { "code": "function main(): number { return 42; }" },
+                    "name": "submilli__typescript__builtins__list",
+                    "arguments": {},
                     "_meta": { "claudecode/toolUseId": "toolu_chat_test" }
                 }
             }));
@@ -1531,7 +1540,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                         "message": { "role": "user", "content": "Total the charges." } }),
                 json!({ "type": "assistant", "uuid": "a1", "message": { "role": "assistant",
                         "content": [{ "type": "tool_use", "id": "toolu_chat_test",
-                                      "name": "mcp__playground__submilli__typescript__execute",
+                                      "name": "mcp__playground__submilli__typescript__builtins__list",
                                       "input": {} }] } }),
                 json!({ "type": "assistant", "uuid": "a2", "message": { "role": "assistant",
                         "content": [{ "type": "text", "text": "The total is 42." }] } }),
@@ -1544,7 +1553,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                     "session_id": "cc-session",
                     "transcript_path": claude.join("cc-session.jsonl"),
                     "agent_id": "agent-x",
-                    "tool_name": "mcp__playground__submilli__typescript__execute",
+                    "tool_name": "mcp__playground__submilli__typescript__builtins__list",
                     "tool_use_id": "toolu_chat_test",
                 });
                 if let Some(agent_type) = agent_type {
@@ -1571,10 +1580,14 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             chat_hook(&hook(Some("submilli-standin")));
 
             let sessions = playground.expect(0, &["sessions"]);
-            let session = sessions["sessions"][0]["session"]
-                .as_str()
-                .unwrap()
-                .to_owned();
+            let listed = &sessions["sessions"][0];
+            assert_eq!(listed["run_count"], 0, "{sessions}");
+            assert_eq!(listed["sources"], json!(["stand-in"]), "{sessions}");
+            assert_eq!(
+                listed["variables"]["customerId"], "cus_northwind",
+                "{sessions}"
+            );
+            let session = listed["session"].as_str().unwrap().to_owned();
             let log = std::fs::read_to_string(
                 playground
                     .state()

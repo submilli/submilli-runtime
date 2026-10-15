@@ -569,6 +569,52 @@ test("Start session is blocked while a required variable is empty", async () => 
   expect(posts(server)).toEqual([]);
 });
 
+test("a Claude Code stand-in's session says, in place of the chat box, that its chat happens in Claude Code", async () => {
+  const server = new FakeServer();
+  server.handle = (call) => {
+    if (call.url.split("?")[0] !== "/api/sessions") return undefined;
+    const list = fixtureJson<SessionList>("sessions.json");
+    list.sessions.unshift({ ...list.sessions[3], session: SESSION(8), sources: ["stand-in"], model: undefined, open: null, runs: [], run_count: 0 });
+    return json(list);
+  };
+  await openPage(server);
+  const chat = within(screen.getByRole("region", { name: "Chat" }));
+  expect(await chat.findByText("You chat with this session’s stand-in in Claude Code.")).toBeInTheDocument();
+  expect(chat.getByRole("button", { name: "New session" })).toBeInTheDocument();
+  expect(chat.queryByRole("textbox")).not.toBeInTheDocument();
+});
+
+test("New session's way back sits in the top bar, beside Sessions, and leaves the form", async () => {
+  const { user } = await openPage();
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "New session" }));
+  const back = within(screen.getByRole("banner")).getByRole("button", { name: "← Back to the session you were viewing" });
+  await user.click(back);
+  expect(screen.queryByRole("button", { name: "Start session" })).not.toBeInTheDocument();
+  expect(within(screen.getByRole("banner")).queryByRole("button", { name: /Back to the session/ })).not.toBeInTheDocument();
+});
+
+test("Open it on a session that started while New session is open leaves the form and shows that session", async () => {
+  const server = new FakeServer();
+  let started = false;
+  server.handle = (call) => {
+    if (call.url.split("?")[0] !== "/api/sessions" || !started) return undefined;
+    const list = fixtureJson<SessionList>("sessions.json");
+    list.sessions.unshift({ ...list.sessions[3], session: SESSION(8), sources: ["stand-in"], runs: [], run_count: 0 });
+    return json(list);
+  };
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "New session" }));
+  // A stand-in starts on its task in Claude Code meanwhile.
+  started = true;
+  window.dispatchEvent(new Event("focus"));
+  await screen.findByText(/^Another session started while you were watching/, {}, { timeout: 3000 });
+  await user.click(screen.getByRole("button", { name: "Open it" }));
+  await expect.poll(() => screen.queryByRole("button", { name: "Start session" })).toBeNull();
+  await expect.poll(() => server.requests()).toContain(`GET /api/sessions/${SESSION(8)}/events`);
+});
+
 test("the blueprint dialog shows the version a decision used, its rule lit, and that it isn't the one in force", async () => {
   const { server, user } = await openPage();
   await runsLoaded();

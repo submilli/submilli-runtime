@@ -1887,7 +1887,7 @@ Commands:
   clear        Remove every stored run and its sessions' events, and start a new audit window. Run ids keep counting, and started sessions stay listed
   cancel       Cancel a run in flight
   watch        Follow a session's events as JSON lines until its last run finishes (`--follow`: until the session ends). Without a session, follows the most recent one. On a session already idle it prints the events so far and exits at once, so start it after the run it is to follow has started, or pass `--follow`
-  claude-code  Set Claude Code up in this project to try tasks through the playground on your Claude subscription: writes the `submilli-standin` subagent, which has only the playground's tools, and adds the hooks that show its chat on the page to your own `.claude/settings.local.json`. Run it again to check; it changes only what's missing
+  claude-code  Set Claude Code up in this project to try tasks through the playground on your Claude subscription: writes the `submilli-standin` subagent, which has only the playground's tools, and adds to your own `.claude/settings.local.json` the hooks that show its chat on the page and a rule that lets it use those tools without asking, so your blueprint decides its calls. Run it again to check; it changes only what's missing
   mcp          Serve the running playground's tools over stdio, for a coding assistant's stand-in subagent to launch. Uses the binding and the development secrets; its runs are labeled `stand-in`
   chat         Chat with an agent using your own model key, the way a production agent runs: it uses the playground's tools and prints its answer. Each chat starts a session; send the next message in it with `--session`. The session stays open until it sits idle past the blueprint's idle timeout or `session end` ends it. The key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY) comes from the playground's environment, else the project's `.env`, else `submilli secret put <NAME>`; the model from `--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`
   chat-hook    Copy a coding assistant's stand-in conversation to the running playground: a Claude Code hook reads the hook's JSON from stdin. Only the stand-in's own hooks post anything. Always exits 0 and prints nothing
@@ -2286,7 +2286,7 @@ Options:
 ### `submilli playground claude-code`
 
 ```text
-Set Claude Code up in this project to try tasks through the playground on your Claude subscription: writes the `submilli-standin` subagent, which has only the playground's tools, and adds the hooks that show its chat on the page to your own `.claude/settings.local.json`. Run it again to check; it changes only what's missing
+Set Claude Code up in this project to try tasks through the playground on your Claude subscription: writes the `submilli-standin` subagent, which has only the playground's tools, and adds to your own `.claude/settings.local.json` the hooks that show its chat on the page and a rule that lets it use those tools without asking, so your blueprint decides its calls. Run it again to check; it changes only what's missing
 
 Usage: submilli playground claude-code [OPTIONS]
 

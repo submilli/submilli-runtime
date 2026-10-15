@@ -997,6 +997,7 @@ impl Actions {
                         fixed_settings = settings;
                     }
                     SessionEntry::Ended { .. } => ended = true,
+                    SessionEntry::Chatted { .. } => {}
                 }
             }
             let log = store.read_events(Some(&id))?;
@@ -1015,14 +1016,15 @@ impl Actions {
                 ),
             ));
         };
-        let open = match session_variables(&self.app, session).await {
-            Ok(fixed) => fixed.is_some(),
+        let fixed_variables = match session_variables(&self.app, session).await {
+            Ok(fixed) => fixed,
             Err(error) => {
                 return Err(ActError::failure(format!(
                     "reading session {shown} failed: {error}"
                 )));
             }
         };
+        let open = fixed_variables.is_some();
         if ended || !open {
             return Err(ActError::usage(
                 "session-ended",
@@ -1093,6 +1095,7 @@ impl Actions {
             session: session.to_owned(),
             history: agent::history(logged.into_iter().map(|(_, entry)| entry)),
             said: numbered.len(),
+            variables: fixed_variables.unwrap_or_default(),
         };
         Ok((choice, settings, resume))
     }
@@ -1126,6 +1129,35 @@ impl Actions {
         if let Err(error) = logged {
             super::super::log::note(&format!(
                 "chat session {} was not listed, so it cannot be carried on: {error}",
+                clean(session)
+            ));
+        }
+    }
+
+    /// Lists session `session`, where a stand-in now chats, with the variables it holds.
+    /// Only noted when that fails: the chat is logged either way.
+    pub(crate) async fn log_stand_in_session(&self, session: &str) {
+        // A resumed stand-in can come back to a session already listed.
+        let listed = self
+            .store
+            .session_log()
+            .is_ok_and(|log| log.iter().any(|line| line.entry.session_id() == session));
+        if listed {
+            return;
+        }
+        let variables = session_variables(&self.app, session)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let logged = self.store.append_session(SessionEntry::Chatted {
+            session_id: session.to_owned(),
+            variables,
+            label: super::super::state::STAND_IN_TOKEN.to_owned(),
+        });
+        if let Err(error) = logged {
+            super::super::log::note(&format!(
+                "stand-in session {} was not listed: {error}",
                 clean(session)
             ));
         }
@@ -1249,6 +1281,7 @@ impl Actions {
             match line.entry {
                 SessionEntry::Started { session_id, .. } => open.push(session_id),
                 SessionEntry::Ended { session_id } => open.retain(|id| *id != session_id),
+                SessionEntry::Chatted { .. } => {}
             }
         }
         Ok(open)

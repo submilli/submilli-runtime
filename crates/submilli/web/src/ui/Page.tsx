@@ -382,6 +382,13 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
     if (action) void act(action, true);
   };
 
+  // Opens a session the reader picked. The New session form stays open while another
+  // session shows behind it, so picking one leaves the form first.
+  const openPicked = (id: string) => {
+    if (ui.mode === "setup") setUi((u) => ({ ...INITIAL_UI, focus: u.focus }));
+    void store.openSession(id);
+  };
+
   const stepThrough = async (session: string, run: number, kind?: "test" | "rerun", from?: number) => {
     const made = data.runs[run];
     const source = made ? sourceRunOf(made) : from ?? null;
@@ -677,6 +684,7 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
           void store.refreshSessions();
           openDlg("sessions");
         }}
+        onBack={ui.mode === "setup" && setupFrom ? goBack : null}
         onNewSession={newSession}
         onMore={() => patch({ more: !ui.more })}
       />
@@ -694,7 +702,6 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
           onForm={setForm}
           onStart={startSession}
           keys={{ save: store.saveModelKey, done: (notice) => showToast({ head: notice, auto: true }) }}
-          onBack={goBack}
           onCopy={() =>
             bar && bar.copyText
               ? void copy(bar.copyText, "reference")
@@ -734,7 +741,7 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
       )}
       {snap.newSession && (
         <Callout text={newSessionNotice(snap.newSession, data.sessions.find((s) => s.session === snap.newSession)?.untrusted?.task)}>
-          <button className="pg-link" onClick={() => snap.newSession && void store.openSession(snap.newSession)}>
+          <button className="pg-link" onClick={() => snap.newSession && openPicked(snap.newSession)}>
             Open it
           </button>
           <button className="pg-link" onClick={dismissNotice}>
@@ -828,7 +835,7 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
           onOpen={(id) => {
             closeDlg();
             if (id === data.sessionId) setUi((u) => ({ ...INITIAL_UI, focus: u.focus }));
-            else void store.openSession(id);
+            else openPicked(id);
           }}
           copy={(t, w) => void copy(t, w)}
         />

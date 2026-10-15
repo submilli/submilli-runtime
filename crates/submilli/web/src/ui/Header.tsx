@@ -16,6 +16,8 @@ export function Header(props: {
   onPackages: () => void;
   onFocus: () => void;
   onSessions: () => void;
+  /** Leaves New session for the session shown before it, when there was one. */
+  onBack: (() => void) | null;
   onNewSession: () => void;
   onMore: () => void;
 }) {
@@ -47,6 +49,11 @@ export function Header(props: {
         {props.focus && (
           <button className="pg-btn pg-exit-focus" onClick={props.onFocus}>
             Exit focus view
+          </button>
+        )}
+        {props.onBack && (
+          <button className="pg-btn" onClick={props.onBack}>
+            ← Back to the session you were viewing
           </button>
         )}
         <button className="pg-btn" onClick={props.onSessions}>

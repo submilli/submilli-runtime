@@ -32,7 +32,6 @@ export function SessionBar(props: {
   onStart: () => void;
   /** Saves a model key typed in the form's key dialog, and says what it did. */
   keys: KeyActions;
-  onBack: () => void;
   onCopy: () => void;
   onAllVars: () => void;
   onCancel: (run: number) => void;
@@ -89,14 +88,7 @@ export function SessionBar(props: {
       )}
       {props.setup && (
         <>
-          {props.canGoBack && (
-            <>
-              <button className="pg-btn" onClick={props.onBack}>
-                ← Back to the session you were viewing
-              </button>
-              <span className="pg-muted pg-small">Nothing is started until you press Start session.</span>
-            </>
-          )}
+          {props.canGoBack && <span className="pg-muted pg-small">Nothing is started until you press Start session.</span>}
           <Setup status={props.status} form={props.form} onForm={props.onForm} onStart={props.onStart} copy={props.copy} keys={props.keys} />
         </>
       )}

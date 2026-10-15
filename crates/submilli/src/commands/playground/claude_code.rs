@@ -7,7 +7,10 @@
 //! - the hooks that copy the stand-in's conversation to the page
 //!   (`submilli playground chat-hook`), in `.claude/settings.local.json`: the
 //!   developer's own settings, which Claude Code keeps out of git, so a teammate
-//!   without `submilli` never runs them.
+//!   without `submilli` never runs them;
+//! - in the same file, a rule that allows the stand-in's playground tools, so Claude
+//!   Code's own checks (auto mode's among them) let its calls through to the
+//!   playground, where the blueprint decides them.
 //!
 //! Running it again changes nothing that is already in place. A stand-in file that
 //! differs from this one is left alone unless `--force` replaces it; settings that
@@ -28,6 +31,9 @@ pub(crate) const SETTINGS_FILE: &str = ".claude/settings.local.json";
 
 /// What each hook runs.
 pub(crate) const HOOK_COMMAND: &str = "submilli playground chat-hook";
+
+/// Allows every tool of the stand-in's `playground` server.
+pub(crate) const ALLOW_RULE: &str = "mcp__playground__*";
 
 /// The hook events `chat-hook` posts for: each of the stand-in's tool calls, and its stop.
 const HOOK_EVENTS: [&str; 4] = [
@@ -109,8 +115,8 @@ pub(crate) fn plan_agent(existing: Option<&str>, force: bool) -> (Option<String>
 }
 
 /// The settings' new text, if it changes, and what that is: every hook event gets an
-/// entry that runs [`HOOK_COMMAND`] unless one already does. Settings that aren't a
-/// JSON object are refused.
+/// entry that runs [`HOOK_COMMAND`] unless one already does, and `permissions.allow`
+/// gets [`ALLOW_RULE`] unless it has it. Settings that aren't a JSON object are refused.
 pub(crate) fn plan_settings(existing: Option<&str>) -> Result<(Option<String>, Outcome), String> {
     let mut settings = match existing {
         None => Map::new(),
@@ -143,6 +149,18 @@ pub(crate) fn plan_settings(existing: Option<&str>) -> Result<(Option<String>, O
             }));
             added = true;
         }
+    }
+    let permissions = settings.entry("permissions").or_insert_with(|| json!({}));
+    let Some(permissions) = permissions.as_object_mut() else {
+        return Err("its `permissions` isn't a JSON object".to_owned());
+    };
+    let allow = permissions.entry("allow").or_insert_with(|| json!([]));
+    let Some(allow) = allow.as_array_mut() else {
+        return Err("its `permissions.allow` isn't a list".to_owned());
+    };
+    if !allow.iter().any(|rule| rule == ALLOW_RULE) {
+        allow.push(json!(ALLOW_RULE));
+        added = true;
     }
     if !added {
         return Ok((None, Outcome::Unchanged));
@@ -256,6 +274,10 @@ mod tests {
         let pre = settings["hooks"]["PreToolUse"].as_array().unwrap();
         assert_eq!(pre.len(), 2);
         assert_eq!(pre[0]["hooks"][0]["command"], "mine");
+        assert_eq!(
+            settings["permissions"]["allow"],
+            json!(["Bash(ls)", ALLOW_RULE])
+        );
         for event in HOOK_EVENTS {
             assert_eq!(
                 settings["hooks"][event].as_array().unwrap().last().unwrap()["hooks"][0]["command"],
@@ -281,6 +303,10 @@ mod tests {
             (
                 r#"{"hooks":{"PreToolUse":{}}}"#,
                 "`hooks.PreToolUse` isn't a list",
+            ),
+            (
+                r#"{"permissions":{"allow":"all"}}"#,
+                "`permissions.allow` isn't a list",
             ),
         ] {
             let why = plan_settings(Some(text)).unwrap_err();

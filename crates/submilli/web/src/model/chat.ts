@@ -142,6 +142,8 @@ export function askBox(f: Frame): AskBox {
   if (f.ui.mode === "setup") return noChat("Start the session above to chat.", false);
   const fu = followUpSession(f);
   if (fu) return noChat("A " + fu.kind + " takes no messages.", false);
+  // Its conversation is in Claude Code, not here.
+  if (f.info?.sources.includes("stand-in") && !f.info.model) return noChat("You chat with this session’s stand-in in Claude Code.", true);
   const open = !!(f.info && f.info.model && f.info.open);
   const blocked = actionBlock(f);
   if (open && blocked) return { placeholder: "Reply in this session…", disabled: true, primary: false, reason: blocked };

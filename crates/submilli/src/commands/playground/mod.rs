@@ -158,8 +158,10 @@ pub enum PlaygroundCmd {
     Watch(WatchArgs),
     /// Set Claude Code up in this project to try tasks through the playground on your
     /// Claude subscription: writes the `submilli-standin` subagent, which has only the
-    /// playground's tools, and adds the hooks that show its chat on the page to your own
-    /// `.claude/settings.local.json`. Run it again to check; it changes only what's missing.
+    /// playground's tools, and adds to your own `.claude/settings.local.json` the hooks
+    /// that show its chat on the page and a rule that lets it use those tools without
+    /// asking, so your blueprint decides its calls. Run it again to check; it changes
+    /// only what's missing.
     ClaudeCode(ClaudeCodeArgs),
     /// Serve the running playground's tools over stdio, for a coding assistant's
     /// stand-in subagent to launch. Uses the binding and the development secrets; its
@@ -890,6 +892,27 @@ fn secret_value(name: &str) -> Result<String, String> {
     })
 }
 
+/// What an agent is told about its session's variables, as an application tells its
+/// agent who it serves: the values the blueprint's checks compare against. Never a
+/// secret. `None` when there are none.
+#[cfg(unix)]
+pub(crate) fn variables_note(
+    variables: &std::collections::BTreeMap<String, String>,
+) -> Option<String> {
+    if variables.is_empty() {
+        return None;
+    }
+    let values: Vec<String> = variables
+        .iter()
+        .map(|(name, value)| format!("{name} = {}", serde_json::Value::from(value.as_str())))
+        .collect();
+    Some(format!(
+        "The application set this session's variables for the user it serves: {}. Use \
+         these values where a call needs them.",
+        values.join(", ")
+    ))
+}
+
 /// `text` cut to at most `max` bytes at a character boundary, and whether it was cut.
 pub(crate) fn within_bytes(text: &str, max: usize) -> (&str, bool) {
     if text.len() <= max {
@@ -1529,7 +1552,7 @@ mod unix {
                 }
             );
             println!(
-                "Chat hooks: {}",
+                "Chat hooks, and permission for its playground tools: {}",
                 match settings_outcome {
                     Outcome::Written | Outcome::Updated => format!("added to {settings}"),
                     Outcome::Unchanged | Outcome::Kept => format!("in place in {settings}"),

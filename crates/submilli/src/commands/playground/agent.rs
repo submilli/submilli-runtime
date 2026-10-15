@@ -51,6 +51,14 @@ const SYSTEM: &str = "You are the production agent for this application, running
     to try again, call the tool again rather than repeating an earlier answer. Finish with \
     a short answer.";
 
+/// [`SYSTEM`], and what the session's variables are.
+fn system_prompt(variables: &BTreeMap<String, String>) -> String {
+    match super::variables_note(variables) {
+        Some(note) => format!("{SYSTEM} {note}"),
+        None => SYSTEM.to_owned(),
+    }
+}
+
 /// The providers, each with the variables its key may be in and its default model.
 struct ProviderRow {
     name: &'static str,
@@ -357,7 +365,7 @@ pub(crate) fn check_settings(choice: &Choice, settings: &Settings) -> Result<(),
             "the provider settings are {size} bytes; the most taken is {MAX_PROVIDER_SETTINGS_BYTES}"
         ));
     }
-    request(choice, "", &[], &[], settings).map(|_| ())
+    request(choice, "", &[], &[], settings, SYSTEM).map(|_| ())
 }
 
 /// The request for the conversation's next turn under `settings`: the effort's fields,
@@ -369,12 +377,13 @@ fn request(
     turns: &[Turn],
     tools: &[ToolSpec],
     settings: &Settings,
+    system: &str,
 ) -> Result<submilli_shared::llm::wire::WireRequest, String> {
     let mut request = build_tool_request(&ToolRequest {
         kind: choice.kind,
         base_url: &choice.base_url,
         model: &choice.model,
-        system: SYSTEM,
+        system,
         turns,
         tools,
         max_tokens: settings.max_output.unwrap_or(MAX_OUTPUT_TOKENS),
@@ -484,6 +493,8 @@ pub(crate) struct Resume {
     pub(crate) history: Vec<Turn>,
     /// How many messages the session's log holds, so new ones are numbered after them.
     pub(crate) said: usize,
+    /// The variables the session was started with.
+    pub(crate) variables: BTreeMap<String, String>,
 }
 
 /// One entry of a session's chat log, as [`history`] reads it.
@@ -691,6 +702,12 @@ fn converse(
     };
     log.say(0, ChatRole::User, task, false);
     let mut turns = with_task(history, task);
+    // Told who the session serves, as the application would tell its agent.
+    let variables = setup
+        .resume
+        .as_ref()
+        .map_or(setup.variables, |resume| &resume.variables);
+    let system = system_prompt(variables);
     let mut tool_calls = 0;
     let mut said = 0;
     let mut last_text = None;
@@ -700,7 +717,7 @@ fn converse(
             text,
             calls,
             finish,
-        } = ask(&setup.choice, key, &turns, &tools, setup.settings)?;
+        } = ask(&setup.choice, key, &turns, &tools, setup.settings, &system)?;
         if let Some(text) = &text {
             said += 1;
             log.say(
@@ -942,8 +959,9 @@ fn ask(
     turns: &[Turn],
     tools: &[ToolSpec],
     settings: &Settings,
+    system: &str,
 ) -> Result<Reply, String> {
-    let request = request(choice, key, turns, tools, settings)?;
+    let request = request(choice, key, turns, tools, settings, system)?;
     // No redirects: a redirect would carry the key's header to wherever it points.
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .max_redirects(0)
@@ -1098,6 +1116,18 @@ mod tests {
         assert_eq!(chosen.provider, "google");
         assert_eq!(chosen.model, "gemini-3.8-flash");
         assert_eq!(chosen.key_variable, "GEMINI_API_KEY");
+    }
+
+    #[test]
+    fn the_model_is_told_the_session_s_variables() {
+        let variables = BTreeMap::from([("customerId".to_owned(), "cus_northwind".to_owned())]);
+        let system = system_prompt(&variables);
+        assert!(system.starts_with(SYSTEM), "{system}");
+        assert!(
+            system.contains(r#"customerId = "cus_northwind""#),
+            "{system}"
+        );
+        assert_eq!(system_prompt(&BTreeMap::new()), SYSTEM);
     }
 
     #[test]
@@ -1331,7 +1361,9 @@ mod tests {
             Some(8000),
             json!({ "temperature": 0.2, "reasoning": { "summary": "auto" } }),
         );
-        let body = request(&openai, "o", &[], &[], &asked).unwrap().body;
+        let body = request(&openai, "o", &[], &[], &asked, SYSTEM)
+            .unwrap()
+            .body;
         assert_eq!(
             body["reasoning"],
             json!({ "effort": "high", "summary": "auto" })
@@ -1371,6 +1403,7 @@ mod tests {
             &[],
             &[],
             &settings(None, Some(1234), json!({ "top_k": 5 })),
+            SYSTEM,
         )
         .unwrap()
         .body;

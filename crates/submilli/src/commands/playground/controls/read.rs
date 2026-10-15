@@ -2200,6 +2200,18 @@ pub(crate) fn sessions_with(
                     session.settings = settings;
                 }
                 SessionEntry::Ended { .. } => session.open = Some(false),
+                SessionEntry::Chatted {
+                    variables, label, ..
+                } => {
+                    session.started_at_micros = session.started_at_micros.min(line.at_micros);
+                    session.last_active_micros = session.last_active_micros.max(line.at_micros);
+                    if session.variables.is_empty() {
+                        session.variables = variables;
+                    }
+                    if !session.sources.contains(&label) {
+                        session.sources.push(label);
+                    }
+                }
             }
         }
     }

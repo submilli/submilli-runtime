@@ -40,6 +40,8 @@ pub(crate) fn execute() -> Result<ExitCode> {
     for mut message in messages(std::io::stdin().lock(), &out) {
         if message["method"] == "initialize" {
             with_variables(&mut message, &variables);
+            relay_initialize(&connection, &out, &message);
+            continue;
         }
         // A request other than `initialize` may wait on a run, so it is relayed on its own
         // thread: a cancellation or another request is not held up behind it. The session
@@ -177,16 +179,57 @@ fn parsed(line: &[u8]) -> Line {
     Line::Message(message)
 }
 
+/// Relays `initialize`, telling the agent in the server's instructions which variables
+/// the session holds, as an application tells its agent who it serves.
+fn relay_initialize(connection: &McpHttp, out: &Output, message: &Value) {
+    let sent: BTreeMap<String, String> = message["params"]["_meta"]["variables"]
+        .as_object()
+        .map(|variables| {
+            variables
+                .iter()
+                .filter_map(|(name, value)| Some((name.clone(), value.as_str()?.to_owned())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let note = super::variables_note(&sent);
+    relay_with(connection, out, message, &|reply| {
+        if let Some(note) = &note {
+            told(reply, note);
+        }
+    });
+}
+
+/// Adds `note` to an `initialize` result's instructions.
+fn told(reply: &mut Value, note: &str) {
+    let Some(result) = reply.get_mut("result").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let instructions = match result.get("instructions").and_then(Value::as_str) {
+        Some(given) if !given.trim().is_empty() => format!("{given}\n\n{note}"),
+        _ => note.to_owned(),
+    };
+    result.insert("instructions".to_owned(), json!(instructions));
+}
+
 /// Sends `message` and writes each reply. A request whose reply never came is answered
 /// with why, so the client is never left waiting.
 fn relay(connection: &McpHttp, out: &Output, message: &Value) {
+    relay_with(connection, out, message, &|_| {});
+}
+
+/// [`relay`], with `adjust` applied to the request's answer before it is written.
+fn relay_with(connection: &McpHttp, out: &Output, message: &Value, adjust: &dyn Fn(&mut Value)) {
     let id = message
         .get("id")
         .filter(|_| message.get("method").is_some());
     let mut answered = false;
-    let sent = connection.send(message, |reply| {
-        answered |=
+    let sent = connection.send(message, |mut reply| {
+        let answer =
             id.is_some_and(|id| reply.get("id") == Some(id) && reply.get("method").is_none());
+        if answer {
+            adjust(&mut reply);
+        }
+        answered |= answer;
         out.write(&reply);
     });
     let Some(id) = id else {
@@ -298,6 +341,26 @@ fn stop_on_signal(connection: &Arc<McpHttp>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_session_s_variables_are_added_to_the_server_s_instructions() {
+        let variables = BTreeMap::from([("customerId".to_owned(), r#"cus_"x""#.to_owned())]);
+        let note = crate::commands::playground::variables_note(&variables).unwrap();
+        assert!(note.contains(r#"customerId = "cus_\"x\"""#), "{note}");
+        let mut given = json!({ "id": 1, "result": { "instructions": "Use the tools." } });
+        told(&mut given, &note);
+        assert_eq!(
+            given["result"]["instructions"],
+            format!("Use the tools.\n\n{note}")
+        );
+        let mut bare = json!({ "id": 1, "result": {} });
+        told(&mut bare, &note);
+        assert_eq!(bare["result"]["instructions"], note);
+        let mut failed = json!({ "id": 1, "error": { "code": 1, "message": "no" } });
+        told(&mut failed, &note);
+        assert!(failed.get("result").is_none());
+        assert!(crate::commands::playground::variables_note(&BTreeMap::new()).is_none());
+    }
 
     #[test]
     fn variables_go_in_initialize_meta_without_replacing_what_the_client_sent() {
