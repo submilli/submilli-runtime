@@ -1,6 +1,15 @@
 {
   "films": [
     {
+      "id": "support-demo",
+      "title": "Submilli in action",
+      "status": "published",
+      "description": "Follow a support agent from an allowed replacement to a blocked rush delivery, then change its Blueprint to permit the same code.",
+      "canonicalPath": "/docs/videos/",
+      "embedUrl": "https://submilli-videos.onrender.com/embed/support-demo/",
+      "language": "en"
+    },
+    {
       "id": "code-execution-introduction",
       "title": "Why agents execute code",
       "description": "Follow a failed-payment investigation from sequential tool calls to a program that returns a focused report.",
