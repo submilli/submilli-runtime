@@ -80,7 +80,6 @@ const EXCLUDED_DIRECTORIES = new Map([
   ["types/import", "`import()` types"],
   ["types/intersection", "intersection types"],
   ["types/mapped", "mapped types"],
-  ["types/nonPrimitive", "the `object` type"],
   ["types/objectTypeLiteral/constructSignatures", "construct signatures"],
   ["types/objectTypeLiteral/indexSignatures", "index signatures"],
   ["types/thisType", "`this` types"],

@@ -1,0 +1,92 @@
+=== nonPrimitiveInFunction.ts ===
+function takeObject(o: object): void {}
+>takeObject : (o: object) => void
+>           : ^^^^^^^^^^^^^^^^^^^
+>o : object
+>  : ^^^^^^
+
+function returnObject(): object {
+>returnObject : () => object
+>             : ^^^^^^^^^^^^
+
+    return {};
+>{} : {}
+>   : ^^
+
+}
+
+let nonPrimitive: object = {};
+>nonPrimitive : object
+>             : ^^^^^^
+>{} : {}
+>   : ^^
+
+let primitive: boolean = null as unknown as (boolean);
+>primitive : boolean
+>          : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+takeObject(nonPrimitive);
+>takeObject(nonPrimitive) : void
+>                         : ^^^^
+>takeObject : (o: object) => void
+>           : ^^^^^^^^^^^^^^^^^^^
+>nonPrimitive : object
+>             : ^^^^^^
+
+nonPrimitive = returnObject();
+>nonPrimitive = returnObject() : object
+>                              : ^^^^^^
+>nonPrimitive : object
+>             : ^^^^^^
+>returnObject() : object
+>               : ^^^^^^
+>returnObject : () => object
+>             : ^^^^^^^^^^^^
+
+
+takeObject(primitive); // expect error
+>takeObject(primitive) : void
+>                      : ^^^^
+>takeObject : (o: object) => void
+>           : ^^^^^^^^^^^^^^^^^^^
+>primitive : boolean
+>          : ^^^^^^^
+
+primitive = returnObject(); // expect error
+>primitive = returnObject() : object
+>                           : ^^^^^^
+>primitive : boolean
+>          : ^^^^^^^
+>returnObject() : object
+>               : ^^^^^^
+>returnObject : () => object
+>             : ^^^^^^^^^^^^
+
+
+function returnError(): object {
+>returnError : () => object
+>            : ^^^^^^^^^^^^
+
+    let ret = 123;
+>ret : number
+>    : ^^^^^^
+>123 : 123
+>    : ^^^
+
+    return ret; // expect error
+>ret : number
+>    : ^^^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

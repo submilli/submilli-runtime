@@ -1,0 +1,47 @@
+=== nonPrimitiveAccessProperty.ts ===
+let a: object = {};
+>a : object
+>  : ^^^^^^
+>{} : {}
+>   : ^^
+
+a.toString();
+>a.toString() : string
+>             : ^^^^^^
+>a.toString : () => string
+>           : ^^^^^^^^^^^^
+>a : object
+>  : ^^^^^^
+>toString : () => string
+>         : ^^^^^^^^^^^^
+
+a.nonExist(); // error
+>a.nonExist() : any
+>             : ^^^
+>a.nonExist : any
+>           : ^^^
+>a : object
+>  : ^^^^^^
+>nonExist : any
+>         : ^^^
+
+
+let { destructuring } = a; // error
+>destructuring : any
+>              : ^^^
+>a : object
+>  : ^^^^^^
+
+let { ...rest } = a; // ok
+>rest : {}
+>     : ^^
+>a : object
+>  : ^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+
