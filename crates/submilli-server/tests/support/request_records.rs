@@ -102,7 +102,17 @@ impl RequestRecords {
                         }),
                         "reserved" => RequestState::Reserved,
                         "expired" => RequestState::Expired,
-                        _ => RequestState::Indeterminate,
+                        "running" => RequestState::Running,
+                        "blocked" => RequestState::Blocked,
+                        "cancelled" => RequestState::Cancelled,
+                        "aborted" => RequestState::Aborted,
+                        "finished" => RequestState::Finished,
+                        "indeterminate" => RequestState::Indeterminate,
+                        state => {
+                            return Err(DatabaseError::Import(format!(
+                                "invalid run state: {state}"
+                            )));
+                        }
                     };
                     Ok(Some(Record {
                         session_id: session,

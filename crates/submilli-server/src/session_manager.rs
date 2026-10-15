@@ -1503,7 +1503,7 @@ mod tests {
         ))
     }
 
-    fn reserved(session_id: &str, key: &str) -> LedgerEntry {
+    fn indeterminate_run(session_id: &str, key: &str) -> LedgerEntry {
         LedgerEntry::indeterminate(session_id, key, code_fingerprint("main"))
     }
 
@@ -1522,7 +1522,7 @@ mod tests {
         )
     }
 
-    /// A manager plus a handle on the ledger it purges, for the cleanup tests.
+    /// A manager plus its retained run records, for the cleanup tests.
     fn manager_with_ledger() -> (SessionManager, tempfile::TempDir, Arc<RequestRecords>) {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = mem_store();
@@ -1805,15 +1805,24 @@ mod tests {
         mgr.bind("s1", &per_session(HOUR), Arc::default(), no_secrets())
             .await
             .unwrap();
-        let mut request = IdempotentRequest::reserve(
+        let completed_at = SystemTime::now() - Duration::from_secs(1);
+        let request = IdempotentRequest::reserve(
             "s1".into(),
             "k".into(),
             "f".into(),
             "r".into(),
             "g".into(),
-            SystemTime::now(),
+            completed_at,
         )
         .unwrap();
+        let mut unit = mgr.unit_of_work.begin().await.unwrap();
+        unit.save_run(request).await.unwrap();
+        unit.commit().await.unwrap();
+        crate::application::sessions::runs::claim_run(mgr.unit_of_work.as_ref(), "r", "g")
+            .await
+            .unwrap();
+        let mut unit = mgr.unit_of_work.begin().await.unwrap();
+        let mut request = unit.get_run("r").await.unwrap().unwrap();
         request
             .complete(
                 "r",
@@ -1821,10 +1830,9 @@ mod tests {
                     status: 200,
                     body: "bytes".into(),
                 },
-                SystemTime::now() - Duration::from_secs(1),
+                completed_at,
             )
             .unwrap();
-        let mut unit = mgr.unit_of_work.begin().await.unwrap();
         unit.save_run(request).await.unwrap();
         unit.commit().await.unwrap();
 
@@ -2008,7 +2016,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wipe_now_purges_the_session_ledger() {
+    async fn wipe_now_preserves_indeterminate_run_evidence() {
         let (mgr, _root, ledger) = manager_with_ledger();
         let id = mgr
             .create(
@@ -2018,14 +2026,18 @@ mod tests {
             )
             .await
             .unwrap();
-        ledger.put(reserved(&id, "k")).await.unwrap();
+        ledger.put(indeterminate_run(&id, "k")).await.unwrap();
 
         assert!(mgr.wipe_now(&id).await.unwrap());
-        assert_eq!(ledger.load(&id, "k").await.unwrap(), None);
+        assert!(!mgr.contains(&id).await.unwrap());
+        assert_eq!(
+            ledger.load(&id, "k").await.unwrap(),
+            Some(indeterminate_run(&id, "k"))
+        );
     }
 
     #[tokio::test]
-    async fn reap_purges_the_session_ledger() {
+    async fn reap_preserves_indeterminate_run_evidence() {
         let (mgr, _root, ledger) = manager_with_ledger();
         let id = mgr
             .create(
@@ -2035,10 +2047,14 @@ mod tests {
             )
             .await
             .unwrap();
-        ledger.put(reserved(&id, "k")).await.unwrap();
+        ledger.put(indeterminate_run(&id, "k")).await.unwrap();
 
         assert_eq!(mgr.reap(way_later()).await.unwrap(), 1);
-        assert_eq!(ledger.load(&id, "k").await.unwrap(), None);
+        assert!(!mgr.contains(&id).await.unwrap());
+        assert_eq!(
+            ledger.load(&id, "k").await.unwrap(),
+            Some(indeterminate_run(&id, "k"))
+        );
     }
 
     #[tokio::test]
@@ -2060,7 +2076,10 @@ mod tests {
             })
             .await
             .unwrap();
-        ledger.put(reserved("vanished", "k")).await.unwrap();
+        ledger
+            .put(indeterminate_run("vanished", "k"))
+            .await
+            .unwrap();
 
         let mgr = SessionManager::new(
             root.path().to_path_buf(),
@@ -2092,7 +2111,7 @@ mod tests {
             CapabilitySettings::default(),
         );
         mgr.ensure("sid", &bp).await.unwrap();
-        ledger.put(reserved("sid", "k")).await.unwrap();
+        ledger.put(indeterminate_run("sid", "k")).await.unwrap();
 
         let restarted = SessionManager::new(
             root.path().to_path_buf(),
