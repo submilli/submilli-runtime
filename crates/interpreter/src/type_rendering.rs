@@ -258,10 +258,12 @@ fn write_node<'a>(
             )
         }
         Type::Array(inner) => {
-            let parens = matches!(
-                inner.as_ref(),
-                Type::Union(_) | Type::Function { .. } | Type::Readonly(_) | Type::Refined { .. }
-            );
+            let parens = match inner.as_ref() {
+                // `ReadonlyMap<K, V>[]` needs no parentheses.
+                Type::Readonly(element) => !matches!(element.as_ref(), Type::InterfaceRef { .. }),
+                Type::Union(_) | Type::Function { .. } | Type::Refined { .. } => true,
+                _ => false,
+            };
             if parens {
                 out.push("(")?;
             }

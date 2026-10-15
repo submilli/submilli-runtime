@@ -21,6 +21,7 @@ function main(): void {
   const view: ReadonlySet<number> = s;
   s.add(3);
   assert(view.size === 3 && view.union(new Set([4])).size === 4);
+  assert(new Set([0]).union(view).size === 4 && new Set([1, 9]).isSupersetOf(view) === false);
   const empty: ReadonlyMap<string, boolean> = new Map();
   assert(empty.size === 0);
   const none: readonly number[] = Array.of();

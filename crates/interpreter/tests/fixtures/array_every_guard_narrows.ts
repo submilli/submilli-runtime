@@ -21,4 +21,8 @@ function main(): void {
     const ns: number[] = either;
     assert(ns.length === 2);
   }
+  const pair: [string, string] = ["a", "b"];
+  if (pair.every(isString)) {
+    assert(pair.join("") === "ab");
+  }
 }

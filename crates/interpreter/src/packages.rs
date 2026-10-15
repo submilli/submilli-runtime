@@ -1876,6 +1876,7 @@ fn ts_named_type(name: &str, args: &[Type]) -> String {
 
 fn ts_type_array_element(ty: &Type) -> String {
     match ty {
+        Type::Readonly(inner) if matches!(inner.as_ref(), Type::InterfaceRef { .. }) => ts_type(ty),
         Type::Function { .. } | Type::Union(_) | Type::Readonly(_) => format!("({})", ts_type(ty)),
         _ => ts_type(ty),
     }

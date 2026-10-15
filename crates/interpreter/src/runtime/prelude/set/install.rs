@@ -262,7 +262,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
     let iter = |ty: Type| Type::prelude_interface("Iterator".to_string(), vec![ty]);
     let set = || Param::new("set", set_ty());
     let value = || Param::new("value", t());
-    let other = || Param::new("other", set_ty());
+    let other = || Param::new("other", Type::Readonly(Box::new(set_ty())));
     let m = |defs: &mut PackageDeclaration, name: &str, params: Vec<Param>, ret: Type| {
         declare_method(defs, name, method_key(name), params, ret);
     };
@@ -499,10 +499,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
-                                Type::prelude_interface(
+                                Type::Readonly(Box::new(Type::prelude_interface(
                                     "Set".to_string(),
                                     vec![Type::TypeVar("U".to_string())],
-                                ),
+                                ))),
                             )],
                             ret: Type::prelude_interface(
                                 "Set".to_string(),
@@ -524,10 +524,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
-                                Type::prelude_interface(
+                                Type::Readonly(Box::new(Type::prelude_interface(
                                     "Set".to_string(),
                                     vec![Type::TypeVar("U".to_string())],
-                                ),
+                                ))),
                             )],
                             ret: Type::prelude_interface(
                                 "Set".to_string(),
@@ -546,10 +546,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
-                                Type::prelude_interface(
+                                Type::Readonly(Box::new(Type::prelude_interface(
                                     "Set".to_string(),
                                     vec![Type::TypeVar("U".to_string())],
-                                ),
+                                ))),
                             )],
                             ret: Type::prelude_interface(
                                 "Set".to_string(),
@@ -568,10 +568,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
-                                Type::prelude_interface(
+                                Type::Readonly(Box::new(Type::prelude_interface(
                                     "Set".to_string(),
                                     vec![Type::TypeVar("U".to_string())],
-                                ),
+                                ))),
                             )],
                             ret: Type::prelude_interface(
                                 "Set".to_string(),
@@ -593,10 +593,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
-                                Type::prelude_interface(
+                                Type::Readonly(Box::new(Type::prelude_interface(
                                     "Set".to_string(),
                                     vec![Type::TypeVar("U".to_string())],
-                                ),
+                                ))),
                             )],
                             ret: Type::Boolean,
                             predicate: None,
@@ -612,10 +612,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
-                                Type::prelude_interface(
+                                Type::Readonly(Box::new(Type::prelude_interface(
                                     "Set".to_string(),
                                     vec![Type::TypeVar("U".to_string())],
-                                ),
+                                ))),
                             )],
                             ret: Type::Boolean,
                             predicate: None,
@@ -631,10 +631,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
-                                Type::prelude_interface(
+                                Type::Readonly(Box::new(Type::prelude_interface(
                                     "Set".to_string(),
                                     vec![Type::TypeVar("U".to_string())],
-                                ),
+                                ))),
                             )],
                             ret: Type::Boolean,
                             predicate: None,

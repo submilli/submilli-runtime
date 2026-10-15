@@ -151,7 +151,8 @@ pub(super) async fn set(
 
 /// A write through a structural view of a built-in value: the properties the
 /// prelude declares writable go to their host setters, and any other write
-/// throws JavaScript's `TypeError` for a read-only property.
+/// throws a `TypeError`. JavaScript throws the same for a read-only property
+/// (`size`) but would add a new one; a built-in here has no room for it.
 fn set_builtin_property(
     caller: &mut Caller<'_, StoreData>,
     object: &Val,
@@ -176,7 +177,7 @@ fn set_builtin_property(
         super::super::regex::set_last_index(caller, object, index)
     } else {
         Err(crate::runtime::host::type_error(format!(
-            "Cannot assign to read only property '{name}' of object"
+            "Cannot set property '{name}' of a built-in value"
         )))
     };
     result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
