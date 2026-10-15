@@ -11,8 +11,9 @@
 //! payload `FuncType` is built from the canonical intrinsic `$Error` struct type.
 //!
 //! `$Error` is class-shaped (see `codegen/intrinsics.rs`): the four
-//! `$ObjectShape` header slots plus a mutable identity ID, with `cause` at payload slot 0,
-//! `message` at slot 1 and `name` at slot 2: the declared fields in name order. Construction is host-only — guests call the imported
+//! `$ObjectShape` header slots plus a mutable identity ID, with `cause` at
+//! payload slot 0, `message` at slot 1 and `name` at slot 2: the declared
+//! fields in name order. Construction is host-only — guests call the imported
 //! constructor; a user subclass's `super(...)` calls the self-first ctor-init.
 //!
 //! `RangeError`, `TypeError`, `SyntaxError`, `URIError`, and `ReferenceError`
@@ -36,7 +37,8 @@ use super::vtable::{as_struct, read_string_units};
 use crate::runtime::StoreData;
 use crate::runtime::fuel::host_func_async;
 use crate::runtime::host::{
-    fatal_host_error, register_host_fn, write_submilli_string, write_submilli_string_struct_units,
+    fatal_host_error, register_host_fn, register_host_fn_async, write_submilli_string,
+    write_submilli_string_struct_units,
 };
 use crate::runtime::intrinsic_types::IntrinsicTypes;
 
@@ -559,7 +561,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     // The allocating constructors declare the concrete `(ref $Error)` /
     // `(ref $Subclass)` results — import checking is by exact canonical
     // type, and consumers derive the concrete class type for each.
-    register_host_fn(
+    register_host_fn_async(
         linker,
         MODULE_NAME,
         class_key(BuiltinErrorClass::Error, "constructor"),
@@ -570,16 +572,18 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         true,
         |caller, params, results| {
-            *abi_result(results, 0)? =
-                construct_with_arguments(caller, BuiltinErrorClass::Error, params)?;
-            Ok(())
+            Box::pin(async move {
+                *abi_result(results, 0)? =
+                    construct_with_arguments(caller, BuiltinErrorClass::Error, params).await?;
+                Ok(())
+            })
         },
     )?;
 
     let (_, subclass_ty) = build_error_subclass_types(&engine, &intr)?;
     let subclass_ref = ValType::Ref(RefType::new(false, HeapType::ConcreteStruct(subclass_ty)));
     for class in BuiltinErrorClass::SUBCLASSES {
-        register_host_fn(
+        register_host_fn_async(
             linker,
             MODULE_NAME,
             class_key(class, "constructor"),
@@ -590,8 +594,11 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ),
             true,
             move |caller, params, results| {
-                *abi_result(results, 0)? = construct_with_arguments(caller, class, params)?;
-                Ok(())
+                Box::pin(async move {
+                    *abi_result(results, 0)? =
+                        construct_with_arguments(caller, class, params).await?;
+                    Ok(())
+                })
             },
         )?;
     }
@@ -612,23 +619,27 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     ] {
         let mut init_params = vec![object_ref.clone()];
         init_params.extend(ctor_params(class, &string_ref, &nullable_object));
-        register_host_fn(
+        register_host_fn_async(
             linker,
             MODULE_NAME,
             class_key(class, "constructor_init"),
             FuncType::new(&engine, init_params, []),
             true,
             move |caller, params, _results| {
-                let payload = payload_array(caller, abi_arg(params, 0)?, "Error#constructor_init")?;
-                let (message, cause, own) = constructor_arguments(caller, class, &params[1..])?;
-                payload.set(&mut *caller, CAUSE_SLOT, cause)?;
-                payload.set(&mut *caller, MESSAGE_SLOT, message)?;
-                let name = name_string(caller, class)?;
-                payload.set(&mut *caller, NAME_SLOT, name)?;
-                for (i, own) in own.iter().enumerate() {
-                    payload.set(&mut *caller, OWN_SLOT_BASE + i as u32, *own)?;
-                }
-                Ok(())
+                Box::pin(async move {
+                    let payload =
+                        payload_array(caller, abi_arg(params, 0)?, "Error#constructor_init")?;
+                    let (message, cause, own) =
+                        constructor_arguments(caller, class, &params[1..]).await?;
+                    payload.set(&mut *caller, CAUSE_SLOT, cause)?;
+                    payload.set(&mut *caller, MESSAGE_SLOT, message)?;
+                    let name = name_string(caller, class)?;
+                    payload.set(&mut *caller, NAME_SLOT, name)?;
+                    for (i, own) in own.iter().enumerate() {
+                        payload.set(&mut *caller, OWN_SLOT_BASE + i as u32, *own)?;
+                    }
+                    Ok(())
+                })
             },
         )?;
     }
@@ -664,7 +675,7 @@ fn ctor_params(class: BuiltinErrorClass, string: &ValType, options: &ValType) ->
 
 /// Split a constructor's arguments into its message, its `cause` (the
 /// options' `cause`, or `undefined`), and its own fields.
-fn constructor_arguments<'a>(
+async fn constructor_arguments<'a>(
     caller: &mut Caller<'_, StoreData>,
     class: BuiltinErrorClass,
     args: &'a [Val],
@@ -681,29 +692,24 @@ fn constructor_arguments<'a>(
             "Error construction expected one options argument",
         ));
     };
-    Ok((*message, cause_option(caller, options)?, &[]))
+    Ok((*message, cause_option(caller, options).await?, &[]))
 }
 
 /// `options.cause`, or `undefined` when the options or their `cause` are
-/// absent.
-fn cause_option(caller: &mut Caller<'_, StoreData>, options: &Val) -> wasmtime::Result<Val> {
+/// absent. A getter runs, as JavaScript reads the option.
+async fn cause_option(caller: &mut Caller<'_, StoreData>, options: &Val) -> wasmtime::Result<Val> {
     if super::undefined::is_nullish(caller, options)? {
         return super::undefined::value(caller);
     }
-    for (name, value) in super::vtable::read_object_entries(caller, options, "ErrorOptions")? {
-        if name.iter().copied().eq("cause".encode_utf16()) {
-            return Ok(value);
-        }
-    }
-    super::undefined::value(caller)
+    super::object::read_property(caller, options, "cause").await
 }
 
-fn construct_with_arguments(
+async fn construct_with_arguments(
     caller: &mut Caller<'_, StoreData>,
     class: BuiltinErrorClass,
     args: &[Val],
 ) -> wasmtime::Result<Val> {
-    let (message, cause, own) = constructor_arguments(caller, class, args)?;
+    let (message, cause, own) = constructor_arguments(caller, class, args).await?;
     let error = construct_struct(caller, class, &message, cause, own)?;
     Ok(Val::AnyRef(Some(error.to_anyref())))
 }

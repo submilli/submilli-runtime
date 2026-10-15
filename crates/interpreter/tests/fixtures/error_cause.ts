@@ -8,6 +8,11 @@ class AppError extends Error {
     this.code = code;
   }
 }
+class GetterOptions {
+  get cause(): unknown {
+    return "from getter";
+  }
+}
 class Quiet extends Error {
   constructor(message?: string) {
     super(message);
@@ -33,4 +38,5 @@ function main(): void {
   const missing: string | undefined = undefined;
   assert(new Error(missing).message === "" && new URIError(undefined, {}).message === "");
   assert(new Quiet().message === "" && new Quiet("q").message === "q");
+  assert(new Error("g", new GetterOptions()).cause === "from getter");
 }

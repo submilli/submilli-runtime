@@ -591,6 +591,17 @@ fn inserted_field_name(caller: &mut Caller<'_, StoreData>, name: &Val) -> wasmti
     )))
 }
 
+/// `object[name]` as JavaScript reads it: a data field, a getter's result, or
+/// `undefined` when the object has neither.
+pub(crate) async fn read_property(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    name: &str,
+) -> wasmtime::Result<Val> {
+    let key = crate::runtime::host::write_submilli_string_struct(caller, name)?;
+    dynamic::get(caller, object, &Val::AnyRef(Some(key.to_anyref()))).await
+}
+
 pub(crate) fn field_was_inserted(
     caller: &mut Caller<'_, StoreData>,
     name: &Val,
