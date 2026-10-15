@@ -184,11 +184,13 @@ fn emit_expr_value(
             })?;
             emitter.instruction(Instruction::LocalGet(this));
             let ctor_abi = ctx.symbols.class_ctor_abi(parent).map(<[ValType]>::to_vec);
-            emit_args_into_slots(emitter, ctx, args, ctor_abi.as_deref())?;
             let init = ctx
                 .symbols
                 .class_ctor_init_func_idx(parent)
                 .ok_or_else(|| crate::codegen::internal_failure("parent ctor init fn allocated"))?;
+            // A host parent's declared defaults replace an `undefined` argument.
+            let defaults = ctx.symbols.host_call_defaults(init, args.len()).to_vec();
+            emit_args_into_slots_with_defaults(emitter, ctx, args, ctor_abi.as_deref(), &defaults)?;
             emitter.instruction(Instruction::Call(init));
             // Own field initializers / parameter-property copies run right after
             // the parent is initialized, before the rest of the constructor body.
@@ -6111,6 +6113,7 @@ fn emit_intrinsic_call(
                 .ok_or_else(|| {
                     crate::codegen::internal_failure("Error#constructor exported from prelude")
                 })?;
+            crate::codegen::throw::emit_no_error_options(emitter);
             emitter.instruction(Instruction::Call(ctor_idx));
             crate::codegen::throw::emit_error_throw(emitter, ctx);
             emitter.emit_end();

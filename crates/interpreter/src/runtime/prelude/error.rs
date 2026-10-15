@@ -11,8 +11,8 @@
 //! payload `FuncType` is built from the canonical intrinsic `$Error` struct type.
 //!
 //! `$Error` is class-shaped (see `codegen/intrinsics.rs`): the four
-//! `$ObjectShape` header slots plus a mutable identity ID, with `message` at payload slot 0
-//! and `name` at slot 1. Construction is host-only — guests call the imported
+//! `$ObjectShape` header slots plus a mutable identity ID, with `cause` at payload slot 0,
+//! `message` at slot 1 and `name` at slot 2: the declared fields in name order. Construction is host-only — guests call the imported
 //! constructor; a user subclass's `super(...)` calls the self-first ctor-init.
 //!
 //! `RangeError`, `TypeError`, `SyntaxError`, `URIError`, and `ReferenceError`
@@ -40,11 +40,15 @@ use crate::runtime::host::{
 };
 use crate::runtime::intrinsic_types::IntrinsicTypes;
 
-const MESSAGE_SLOT: u32 = 0;
-const NAME_SLOT: u32 = 1;
+/// The payload slots of the fields every error has, in the name order that
+/// fixes a class's payload layout.
+pub(crate) const CAUSE_SLOT: u32 = 0;
+pub(crate) const MESSAGE_SLOT: u32 = 1;
+pub(crate) const NAME_SLOT: u32 = 2;
 /// First payload slot for a subclass's own fields, after the inherited
-/// `message`/`name`.
-const OWN_SLOT_BASE: u32 = 2;
+/// `cause`/`message`/`name`.
+pub(crate) const OWN_SLOT_BASE: u32 = 3;
+const ERROR_FIELDS: [&str; 3] = ["cause", "message", "name"];
 
 /// The host-implemented error classes. Selects the vtable singleton, struct
 /// type, and `name` field text when the host constructs or throws an error.
@@ -87,7 +91,7 @@ impl BuiltinErrorClass {
         }
     }
 
-    /// Own data fields beyond the inherited `message`/`name`, in payload-slot
+    /// Own data fields beyond the inherited `cause`/`message`/`name`, in payload-slot
     /// order — which must match the consumer's reconstruction: parent fields
     /// first, then own fields in `BTreeMap` (name) order. The constructor's
     /// trailing params follow the same order.
@@ -103,6 +107,13 @@ impl BuiltinErrorClass {
             | Self::Timeout => &[],
             Self::PermissionDenied => &["caller", "capability", "reason"],
         }
+    }
+
+    /// Whether the constructor takes `ErrorOptions` after the message, as the
+    /// standard classes do. `PermissionDeniedError`'s trailing parameters are
+    /// its own fields.
+    fn takes_options(self) -> bool {
+        self != Self::PermissionDenied
     }
 
     fn vtable(self, handles: &crate::runtime::host::HostAbiHandles) -> Global {
@@ -313,8 +324,8 @@ pub(crate) fn install_store_bound(
                 Val::AnyRef(Some(names.to_anyref())),
             )
         };
-    let field_names = field_names_global(store, &["message", "name"])?;
-    let mut pd_names = vec!["message", "name"];
+    let field_names = field_names_global(store, &ERROR_FIELDS)?;
+    let mut pd_names = ERROR_FIELDS.to_vec();
     pd_names.extend(BuiltinErrorClass::PermissionDenied.own_fields());
     let permission_denied_field_names = field_names_global(store, &pd_names)?;
 
@@ -552,11 +563,15 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         class_key(BuiltinErrorClass::Error, "constructor"),
-        FuncType::new(&engine, [string_ref.clone()], [error_ref.clone()]),
+        FuncType::new(
+            &engine,
+            ctor_params(BuiltinErrorClass::Error, &string_ref, &nullable_object),
+            [error_ref.clone()],
+        ),
         true,
         |caller, params, results| {
             *abi_result(results, 0)? =
-                construct(caller, BuiltinErrorClass::Error, abi_arg(params, 0)?, &[])?;
+                construct_with_arguments(caller, BuiltinErrorClass::Error, params)?;
             Ok(())
         },
     )?;
@@ -564,16 +579,18 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let (_, subclass_ty) = build_error_subclass_types(&engine, &intr)?;
     let subclass_ref = ValType::Ref(RefType::new(false, HeapType::ConcreteStruct(subclass_ty)));
     for class in BuiltinErrorClass::SUBCLASSES {
-        let ctor_params = vec![string_ref.clone(); 1 + class.own_fields().len()];
         register_host_fn(
             linker,
             MODULE_NAME,
             class_key(class, "constructor"),
-            FuncType::new(&engine, ctor_params, [subclass_ref.clone()]),
+            FuncType::new(
+                &engine,
+                ctor_params(class, &string_ref, &nullable_object),
+                [subclass_ref.clone()],
+            ),
             true,
             move |caller, params, results| {
-                *abi_result(results, 0)? =
-                    construct(caller, class, abi_arg(params, 0)?, &params[1..])?;
+                *abi_result(results, 0)? = construct_with_arguments(caller, class, params)?;
                 Ok(())
             },
         )?;
@@ -594,7 +611,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         BuiltinErrorClass::Timeout,
     ] {
         let mut init_params = vec![object_ref.clone()];
-        init_params.extend(vec![string_ref.clone(); 1 + class.own_fields().len()]);
+        init_params.extend(ctor_params(class, &string_ref, &nullable_object));
         register_host_fn(
             linker,
             MODULE_NAME,
@@ -603,10 +620,12 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             true,
             move |caller, params, _results| {
                 let payload = payload_array(caller, abi_arg(params, 0)?, "Error#constructor_init")?;
-                payload.set(&mut *caller, MESSAGE_SLOT, *abi_arg(params, 1)?)?;
+                let (message, cause, own) = constructor_arguments(caller, class, &params[1..])?;
+                payload.set(&mut *caller, CAUSE_SLOT, cause)?;
+                payload.set(&mut *caller, MESSAGE_SLOT, message)?;
                 let name = name_string(caller, class)?;
                 payload.set(&mut *caller, NAME_SLOT, name)?;
-                for (i, own) in params[2..].iter().enumerate() {
+                for (i, own) in own.iter().enumerate() {
                     payload.set(&mut *caller, OWN_SLOT_BASE + i as u32, *own)?;
                 }
                 Ok(())
@@ -631,6 +650,64 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     Ok(())
 }
 
+/// A constructor's Wasm parameters: the message, then either the options or
+/// the class's own fields.
+fn ctor_params(class: BuiltinErrorClass, string: &ValType, options: &ValType) -> Vec<ValType> {
+    let mut params = vec![string.clone()];
+    if class.takes_options() {
+        params.push(options.clone());
+    } else {
+        params.extend(vec![string.clone(); class.own_fields().len()]);
+    }
+    params
+}
+
+/// Split a constructor's arguments into its message, its `cause` (the
+/// options' `cause`, or `undefined`), and its own fields.
+fn constructor_arguments<'a>(
+    caller: &mut Caller<'_, StoreData>,
+    class: BuiltinErrorClass,
+    args: &'a [Val],
+) -> wasmtime::Result<(Val, Val, &'a [Val])> {
+    let (message, rest) = args
+        .split_first()
+        .ok_or_else(|| fatal_host_error("Error construction is missing its message"))?;
+    if !class.takes_options() {
+        let cause = super::undefined::value(caller)?;
+        return Ok((*message, cause, rest));
+    }
+    let [options] = rest else {
+        return Err(fatal_host_error(
+            "Error construction expected one options argument",
+        ));
+    };
+    Ok((*message, cause_option(caller, options)?, &[]))
+}
+
+/// `options.cause`, or `undefined` when the options or their `cause` are
+/// absent.
+fn cause_option(caller: &mut Caller<'_, StoreData>, options: &Val) -> wasmtime::Result<Val> {
+    if super::undefined::is_nullish(caller, options)? {
+        return super::undefined::value(caller);
+    }
+    for (name, value) in super::vtable::read_object_entries(caller, options, "ErrorOptions")? {
+        if name.iter().copied().eq("cause".encode_utf16()) {
+            return Ok(value);
+        }
+    }
+    super::undefined::value(caller)
+}
+
+fn construct_with_arguments(
+    caller: &mut Caller<'_, StoreData>,
+    class: BuiltinErrorClass,
+    args: &[Val],
+) -> wasmtime::Result<Val> {
+    let (message, cause, own) = constructor_arguments(caller, class, args)?;
+    let error = construct_struct(caller, class, &message, cause, own)?;
+    Ok(Val::AnyRef(Some(error.to_anyref())))
+}
+
 /// Errors compare by identity regardless of mutable payload fields.
 /// Generated Error subclass hooks use the same reference comparison.
 fn error_equals(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<bool> {
@@ -641,9 +718,9 @@ fn error_equals(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime:
     Rooted::ref_eq(&*caller, a, b)
 }
 
-/// Which of an Error instance's inherited `message`/`name` slots are not own
-/// enumerable properties, so `Object.keys` and JSON leave them out, as
-/// JavaScript does: `message` never is, and `name` is one only when the
+/// Which of an Error instance's inherited `cause`/`message`/`name` slots are
+/// not own enumerable properties, so `Object.keys` and JSON leave them out, as
+/// JavaScript does: `cause` and `message` never are, and `name` is one only when the
 /// instance assigned it. An assigned `name` can't be told from the one the
 /// constructor stored, so a `name` equal to a built-in error class's is taken
 /// as the constructor's. Likewise a subclass that redeclares `message` as a
@@ -674,7 +751,7 @@ pub(crate) struct ErrorHiddenSlots {
 
 impl ErrorHiddenSlots {
     pub(crate) fn hides(&self, slot: u32) -> bool {
-        slot == MESSAGE_SLOT || (self.hides_name && slot == NAME_SLOT)
+        slot == CAUSE_SLOT || slot == MESSAGE_SLOT || (self.hides_name && slot == NAME_SLOT)
     }
 }
 
@@ -736,7 +813,6 @@ pub(crate) fn construct_from_message(
     message: &str,
     own_fields: &[&str],
 ) -> wasmtime::Result<Rooted<StructRef>> {
-    validate_own_field_count(class, own_fields.len())?;
     let message_units: Vec<u16> = message.encode_utf16().collect();
     let message = write_submilli_string_struct_units(&mut *caller, &message_units)?;
     let mut vals = Vec::with_capacity(own_fields.len());
@@ -745,10 +821,12 @@ pub(crate) fn construct_from_message(
         let st = write_submilli_string_struct_units(&mut *caller, &units)?;
         vals.push(Val::AnyRef(Some(st.to_anyref())));
     }
+    let cause = super::undefined::value(caller)?;
     construct_struct(
         caller,
         class,
         &Val::AnyRef(Some(message.to_anyref())),
+        cause,
         &vals,
     )
 }
@@ -764,31 +842,22 @@ fn validate_own_field_count(class: BuiltinErrorClass, actual: usize) -> wasmtime
     Ok(())
 }
 
-/// Allocate an instance of `class` with `message`, the class's `name`, and its
-/// own fields in payload-slot order. The concrete struct type matters: a typed
-/// catch arm `ref.cast`s to the annotation class after the brand walk matches,
-/// so a subclass must be allocated as `$Subclass`, not
+/// Allocate an instance of `class` with `cause`, `message`, the class's
+/// `name`, and its own fields in payload-slot order. The concrete struct type
+/// matters: a typed catch arm `ref.cast`s to the annotation class after the
+/// brand walk matches, so a subclass must be allocated as `$Subclass`, not
 /// `$Error`-with-a-subclass-vtable.
-fn construct(
-    caller: &mut Caller<'_, StoreData>,
-    class: BuiltinErrorClass,
-    message: &Val,
-    own_fields: &[Val],
-) -> wasmtime::Result<Val> {
-    let error = construct_struct(caller, class, message, own_fields)?;
-    Ok(Val::AnyRef(Some(error.to_anyref())))
-}
-
-/// [`construct`], keeping the generation-stamped handle that `to_anyref` drops.
 fn construct_struct(
     caller: &mut Caller<'_, StoreData>,
     class: BuiltinErrorClass,
     message: &Val,
+    cause: Val,
     own_fields: &[Val],
 ) -> wasmtime::Result<Rooted<StructRef>> {
+    validate_own_field_count(class, own_fields.len())?;
     let handles = abi(caller)?;
     let name = name_string(caller, class)?;
-    let mut payload_vals = vec![*message, name];
+    let mut payload_vals = vec![cause, *message, name];
     payload_vals.extend_from_slice(own_fields);
     let pre = ArrayRefPre::new(&mut *caller, handles.object_fields_type.clone());
     let payload = ArrayRef::new_fixed(&mut *caller, &pre, &payload_vals)?;
@@ -862,6 +931,19 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 generics: Vec::new(),
                 fields: BTreeMap::from([
                     (
+                        "cause".to_string(),
+                        crate::FieldSig {
+                            ty: Type::Unknown,
+                            visibility: crate::Visibility::Public,
+                            readonly: false,
+                            optional: true,
+                            method: false,
+                            doc: doc(
+                                "/** The error that led to this one, passed as `new Error(message, { cause })`; `undefined` when none was. */",
+                            ),
+                        },
+                    ),
+                    (
                         "message".to_string(),
                         crate::FieldSig {
                             ty: Type::String,
@@ -892,7 +974,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
-                constructor: vec![optional_message_param()],
+                constructor: message_and_options_params(),
                 constructor_visibility: crate::Visibility::Public,
                 statics: BTreeMap::from([(
                     "isError".to_string(),
@@ -924,6 +1006,34 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
     );
 
     defs.types.insert(
+        "ErrorOptions".to_string(),
+        TypeSymbol {
+            name: "ErrorOptions".to_string(),
+            mangled_name: crate::mangle::prelude("ErrorOptions"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: TypeKind::Interface {
+                index: None,
+                generics: Vec::new(),
+                methods: BTreeMap::new(),
+                properties: BTreeMap::from([(
+                    "cause".to_string(),
+                    crate::PropertySig {
+                        ty: Type::Unknown,
+                        readonly: false,
+                        intrinsic: false,
+                        optional: true,
+                        doc: doc("/** The error that led to the new one, stored as its `cause`. */"),
+                    },
+                )]),
+                dispatch: crate::Dispatch::VTable,
+                doc: doc(
+                    "/** Options for an error constructor, as in `new Error(message, { cause })`. */",
+                ),
+            },
+        },
+    );
+
+    defs.types.insert(
         "RangeError".to_string(),
         TypeSymbol {
             name: "RangeError".to_string(),
@@ -931,13 +1041,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Class {
                 generics: Vec::new(),
-                // No own fields — `message`/`name` are inherited from `Error`.
+                // No own fields — `cause`/`message`/`name` are inherited from `Error`.
                 fields: BTreeMap::new(),
                 narrowing_checks: BTreeMap::new(),
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
-                constructor: vec![optional_message_param()],
+                constructor: message_and_options_params(),
                 constructor_visibility: crate::Visibility::Public,
                 statics: BTreeMap::new(),
                 static_visibility: BTreeMap::new(),
@@ -959,13 +1069,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Class {
                 generics: Vec::new(),
-                // No own fields — `message`/`name` are inherited from `Error`.
+                // No own fields — `cause`/`message`/`name` are inherited from `Error`.
                 fields: BTreeMap::new(),
                 narrowing_checks: BTreeMap::new(),
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
-                constructor: vec![optional_message_param()],
+                constructor: message_and_options_params(),
                 constructor_visibility: crate::Visibility::Public,
                 statics: BTreeMap::new(),
                 static_visibility: BTreeMap::new(),
@@ -987,13 +1097,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Class {
                 generics: Vec::new(),
-                // No own fields — `message`/`name` are inherited from `Error`.
+                // No own fields — `cause`/`message`/`name` are inherited from `Error`.
                 fields: BTreeMap::new(),
                 narrowing_checks: BTreeMap::new(),
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
-                constructor: vec![optional_message_param()],
+                constructor: message_and_options_params(),
                 constructor_visibility: crate::Visibility::Public,
                 statics: BTreeMap::new(),
                 static_visibility: BTreeMap::new(),
@@ -1015,13 +1125,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Class {
                 generics: Vec::new(),
-                // No own fields — `message`/`name` are inherited from `Error`.
+                // No own fields — `cause`/`message`/`name` are inherited from `Error`.
                 fields: BTreeMap::new(),
                 narrowing_checks: BTreeMap::new(),
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
-                constructor: vec![optional_message_param()],
+                constructor: message_and_options_params(),
                 constructor_visibility: crate::Visibility::Public,
                 statics: BTreeMap::new(),
                 static_visibility: BTreeMap::new(),
@@ -1043,7 +1153,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Class {
                 generics: Vec::new(),
-                // Own fields beyond the inherited `message`/`name`. BTreeMap
+                // Own fields beyond the inherited `cause`/`message`/`name`. BTreeMap
                 // (name) order fixes the payload slots — keep
                 // `BuiltinErrorClass::PermissionDenied.own_fields()` in sync.
                 fields: BTreeMap::from([
@@ -1116,13 +1226,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Class {
                 generics: Vec::new(),
-                // No own fields — `message`/`name` are inherited from `Error`.
+                // No own fields — `cause`/`message`/`name` are inherited from `Error`.
                 fields: BTreeMap::new(),
                 narrowing_checks: BTreeMap::new(),
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
-                constructor: vec![optional_message_param()],
+                constructor: message_and_options_params(),
                 constructor_visibility: crate::Visibility::Public,
                 statics: BTreeMap::new(),
                 static_visibility: BTreeMap::new(),
@@ -1144,13 +1254,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Class {
                 generics: Vec::new(),
-                // No own fields — `message`/`name` are inherited from `Error`.
+                // No own fields — `cause`/`message`/`name` are inherited from `Error`.
                 fields: BTreeMap::new(),
                 narrowing_checks: BTreeMap::new(),
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
-                constructor: vec![optional_message_param()],
+                constructor: message_and_options_params(),
                 constructor_visibility: crate::Visibility::Public,
                 statics: BTreeMap::new(),
                 static_visibility: BTreeMap::new(),
@@ -1172,13 +1282,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Class {
                 generics: Vec::new(),
-                // No own fields — `message`/`name` are inherited from `Error`.
+                // No own fields — `cause`/`message`/`name` are inherited from `Error`.
                 fields: BTreeMap::new(),
                 narrowing_checks: BTreeMap::new(),
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
-                constructor: vec![optional_message_param()],
+                constructor: message_and_options_params(),
                 constructor_visibility: crate::Visibility::Public,
                 statics: BTreeMap::new(),
                 static_visibility: BTreeMap::new(),
@@ -1191,6 +1301,21 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             },
         },
     );
+}
+
+/// The standard error constructor's `(message?, options?)`.
+fn message_and_options_params() -> Vec<crate::Param> {
+    vec![
+        optional_message_param(),
+        crate::Param::with_default(
+            "options",
+            crate::Type::union(vec![
+                crate::Type::prelude_interface("ErrorOptions".to_string(), Vec::new()),
+                crate::Type::Undefined,
+            ]),
+            crate::DefaultValue::Undefined,
+        ),
+    ]
 }
 
 /// `message` defaults to `""`, as JS's error constructors do: `new Error()` has an

@@ -30,10 +30,10 @@ use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
 pub const MODULE_NAME: &str = "submilli:test";
 
-/// `name` sits at object-fields payload slot 1 of the class-shaped `$Error`
-/// (`message` at slot 0) — see `runtime/prelude/error.rs`.
+/// The class-shaped `$Error`'s object-fields payload, whose `NAME_SLOT` holds
+/// `name` — see `runtime/prelude/error.rs`.
 const ERROR_FIELDS: usize = 2;
-const NAME_SLOT: u32 = 1;
+use crate::runtime::prelude::error::NAME_SLOT;
 
 pub fn package_declaration() -> PackageDeclaration {
     let mut defs = PackageDeclaration::with_package(MODULE_NAME);

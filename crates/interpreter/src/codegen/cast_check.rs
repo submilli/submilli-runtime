@@ -1952,6 +1952,7 @@ fn emit_type_error_from_message_checked(
         .ok_or_else(|| {
             crate::codegen::internal_failure("TypeError#constructor imported from prelude")
         })?;
+    crate::codegen::throw::emit_no_error_options(emitter);
     emitter.instruction(Instruction::Call(new_idx));
 
     // Constructor returns (ref null $Object); the throw helper narrows to

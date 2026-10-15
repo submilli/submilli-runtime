@@ -114,14 +114,14 @@ fn read_thrown_error_text(store: &mut Store<StoreData>, exn: Rooted<ExnRef>) -> 
         return None;
     };
     let error = error_ref.unwrap_struct(&mut *store).ok()?;
-    // $Error is class-shaped: field 2 is the object-fields payload array,
-    // with message at slot 0 and name at slot 1.
+    // $Error is class-shaped: field 2 is the object-fields payload array.
     let Val::AnyRef(Some(payload_ref)) = error.field(&mut *store, 2).ok()? else {
         return None;
     };
     let payload = payload_ref.unwrap_array(&mut *store).ok()?;
-    let message_field = payload.get(&mut *store, 0).ok()?;
-    let name_field = payload.get(&mut *store, 1).ok()?;
+    use super::prelude::error::{MESSAGE_SLOT, NAME_SLOT};
+    let message_field = payload.get(&mut *store, MESSAGE_SLOT).ok()?;
+    let name_field = payload.get(&mut *store, NAME_SLOT).ok()?;
     let name = read_string_value(store, name_field)?;
     let message = read_string_value(store, message_field)?;
     let header = if name.is_empty() {
@@ -141,7 +141,7 @@ const MAX_ERROR_FIELD_CHARS: usize = 120;
 /// Renders an error subclass's own data fields (`  fields: code = "x", …`).
 ///
 /// The class layout puts field names in slot 1 and values in slot 2, data
-/// fields first (message at 0, name at 1) with method closures after them —
+/// fields first (the inherited `cause`, `message` and `name`) with method closures after them —
 /// and the data/method boundary is not recoverable from the struct. Rendering
 /// only values whose vtable matches a host primitive singleton skips closures
 /// and nested objects for free. Any shape surprise degrades to `None` (the
@@ -173,7 +173,7 @@ fn read_error_fields_line(
         .min(payload.len(&mut *store).ok()?);
     let mut parts: Vec<String> = Vec::new();
     let mut truncated = false;
-    for i in 2..len {
+    for i in super::prelude::error::OWN_SLOT_BASE..len {
         if parts.len() == MAX_ERROR_FIELDS {
             truncated = true;
             break;
@@ -627,7 +627,7 @@ mod tests {
                 .expect("a top-level throw should render a backtrace");
         assert!(
             rendered.starts_with(
-                "error: Error: boom\n  at <top level> (script.subm:2:32)  [thrown here]\n"
+                "error: Error: boom\n  at <top level> (script.subm:2:22)  [thrown here]\n"
             ),
             "{rendered}"
         );
