@@ -151,6 +151,25 @@ jobs:
       - name: Conformance
         run: scripts/docker-conformance.sh "${{ steps.ref.outputs.image }}"
 
+      # What Render needs to open a shell for a non-root user (see the
+      # Dockerfile's `render` stage): the image runs as uid 65532, which has a
+      # login shell, its own ~/.ssh with mode 0700 and the password `*` rather
+      # than the `!` sshd refuses. A login shell also gets SUBMILLI_HOME.
+      - name: Shell access
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+        run: |
+          docker run --rm --entrypoint /bin/sh "$IMAGE" -c '
+            set -e
+            test "$(id -u)" = 65532
+            test "$(getent passwd 65532 | cut -d: -f7)" = /bin/bash
+            test "$(stat -c "%a %u" "$HOME/.ssh")" = "700 65532"
+            test "$(env -i HOME="$HOME" bash -lc "echo \$SUBMILLI_HOME")" = /var/lib/submilli
+          '
+          docker run --rm --user 0 --entrypoint /bin/sh "$IMAGE" -c '
+            test "$(getent shadow "$(getent passwd 65532 | cut -d: -f1)" | cut -d: -f2)" = "*"
+          '
+
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
