@@ -191,7 +191,7 @@ A homogeneous array of `T`.
 
 | Member | Description |
 | --- | --- |
-| `readonly length: number` | The number of elements in the array. |
+| `length: number` | The number of elements in the array. Writing a smaller length removes the elements past it, as in JavaScript; writing a larger one throws a `RangeError`, since arrays have no holes. |
 | `at(index: number): T \| undefined` | Returns the element at `index`, or `undefined` if out of range. |
 | `concat(...items: (T \| readonly T[])[]): T[]` | Returns a new array containing this array's elements followed by each of `items`, in order. An array item contributes its elements; any other item is appended as one element. |
 | `copyWithin(target: number, start?: number, end?: number): T[]` | Copies the slots `[start, end)` to `target`, in place (overlap-safe), and returns the array. |

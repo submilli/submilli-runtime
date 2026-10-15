@@ -346,6 +346,26 @@ fn push(
     Ok(length)
 }
 
+/// `xs.length = value`: truncates in place. JavaScript would also grow the
+/// array with holes, which Submilli arrays cannot hold, so growth throws.
+pub(super) fn set_length(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    value: f64,
+) -> wasmtime::Result<()> {
+    if !(value >= 0.0 && value.fract() == 0.0 && value <= f64::from(u32::MAX)) {
+        return Err(crate::runtime::host::range_error("Invalid array length"));
+    }
+    let mut storage = ArrayStorage::read(caller, receiver)?;
+    if value > f64::from(storage.len) {
+        return Err(crate::runtime::host::range_error(format!(
+            "Cannot grow an array by writing length {value}; its length is {}",
+            storage.len
+        )));
+    }
+    storage.resize(caller, value as usize, Val::null_any_ref())
+}
+
 /// `pop()`: the last element, removed in place; `undefined` when empty.
 fn pop(caller: &mut Caller<'_, StoreData>, receiver: &Val) -> wasmtime::Result<Val> {
     let popped = ArrayStorage::read(caller, receiver)?.pop(caller)?;

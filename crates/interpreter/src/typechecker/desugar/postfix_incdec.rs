@@ -56,10 +56,9 @@ pub(super) fn run(ctx: &mut DesugarCtx) -> Result<(), crate::compiler_error::Com
                 continue;
             }
             // A prelude property is read and written through host functions
-            // (`RegExp.lastIndex`), which only the expression form dispatches.
+            // (`RegExp.lastIndex`, `Array.length`), which only the expression form dispatches.
             if matches!(&target, PostfixTarget::Field { receiver, .. }
-                if matches!(ctx.ta.try_expr(*receiver).map_err(crate::typechecker::arena_failure)?.ty.peel(),
-                    Type::InterfaceRef { package, .. } if package.as_str() == crate::mangle::PRELUDE_PACKAGE))
+                if is_prelude_property_receiver(&ctx.ta.try_expr(*receiver).map_err(crate::typechecker::arena_failure)?.ty))
             {
                 continue;
             }
@@ -67,6 +66,14 @@ pub(super) fn run(ctx: &mut DesugarCtx) -> Result<(), crate::compiler_error::Com
         }
     }
     Ok(())
+}
+
+fn is_prelude_property_receiver(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Array(_) => true,
+        Type::InterfaceRef { package, .. } => package.as_str() == crate::mangle::PRELUDE_PACKAGE,
+        _ => false,
+    }
 }
 
 fn lower(

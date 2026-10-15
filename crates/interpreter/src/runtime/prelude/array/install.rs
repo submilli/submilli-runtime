@@ -236,6 +236,16 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     register_host_fn(
         linker,
         MODULE_NAME,
+        method_key(&crate::mangle::property_setter("length")),
+        ft(vec![array.clone(), num.clone()], Vec::new()),
+        true,
+        |caller, params, _results| {
+            super::set_length(caller, abi_arg(params, 0)?, f64v(abi_arg(params, 1)?))
+        },
+    )?;
+    register_host_fn(
+        linker,
+        MODULE_NAME,
         method_key("shift"),
         ft(vec![array.clone()], vec![elem.clone()]),
         true,
@@ -893,6 +903,12 @@ pub fn declare(defs: &mut PackageDeclaration) {
         Type::Number,
     );
     m(defs, "pop", vec![arr()], t_or_undefined());
+    m(
+        defs,
+        &crate::mangle::property_setter("length"),
+        vec![arr(), Param::new("value", Type::Number)],
+        Type::Void,
+    );
     m(defs, "shift", vec![arr()], t_or_undefined());
     m(
         defs,
@@ -1850,10 +1866,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     "length".to_string(),
                     PropertySig {
                         ty: Type::Number,
-                        readonly: true,
+                        readonly: false,
                         intrinsic: true,
                         optional: false,
-                        doc: doc("/** The number of elements in the array. */"),
+                        doc: doc("/** The number of elements in the array. Writing a smaller length removes the elements past it, as in JavaScript; writing a larger one throws a `RangeError`, since arrays have no holes. */"),
                     },
                 )]),
                 dispatch: Dispatch::Direct,

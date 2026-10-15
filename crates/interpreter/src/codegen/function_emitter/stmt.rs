@@ -485,10 +485,8 @@ fn emit_assign_field(
 /// The host setter a prelude interface declares for a writable property it
 /// implements (`RegExp#lastIndex`), which takes the receiver and the value.
 fn host_property_setter(ctx: &CodegenCtx, receiver_ty: &Type, name: &Ident) -> Option<u32> {
-    let Type::InterfaceRef { mangled, .. } = receiver_ty.lowered() else {
-        return None;
-    };
-    let key = crate::mangle::extend(mangled, &crate::mangle::property_setter(&name.name));
+    let iface = crate::codegen::host_property_iface(receiver_ty)?;
+    let key = crate::mangle::extend(&iface, &crate::mangle::property_setter(&name.name));
     ctx.symbols.func_idx(&key)
 }
 

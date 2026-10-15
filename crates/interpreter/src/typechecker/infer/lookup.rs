@@ -240,6 +240,7 @@ impl<'a> Inferer<'a> {
         crate::MangledName,
         crate::Dispatch,
     )> {
+        let original_recv_ty = recv_ty;
         let array_view = recv_ty.array_like_union_view();
         let recv_ty = array_view.as_ref().unwrap_or(recv_ty);
         let (mangled, _package, interface_name, args) = recv_ty.interface_routing()?;
@@ -253,7 +254,12 @@ impl<'a> Inferer<'a> {
         else {
             return None;
         };
-        let sig = properties.get(name)?.clone();
+        let mut sig = properties.get(name)?.clone();
+        // `Array#length` is writable, but as in tsc not through a readonly
+        // array, and a tuple's length is fixed.
+        if mangled == crate::mangle::prelude("Array") && fixed_length_array(original_recv_ty) {
+            sig.readonly = true;
+        }
         let bindings: BTreeMap<String, Type> = generics.iter().cloned().zip(args).collect();
         Some((sig, bindings, sym.mangled_name.clone(), *dispatch))
     }
@@ -773,6 +779,17 @@ fn generic_flows_in(ty: &Type, generics: &[String]) -> bool {
         Type::Alias { args, ty, .. } => {
             args.iter().any(|arg| generic_flows_in(arg, generics)) || generic_flows_in(ty, generics)
         }
+        _ => false,
+    }
+}
+
+/// A readonly array or a tuple, or a union with one among its members.
+fn fixed_length_array(ty: &Type) -> bool {
+    if ty.is_readonly_array() || matches!(ty.peel(), Type::Tuple(_)) {
+        return true;
+    }
+    match ty.peel() {
+        Type::Union(members) => members.iter().any(fixed_length_array),
         _ => false,
     }
 }

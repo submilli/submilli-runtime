@@ -756,9 +756,9 @@ impl CodegenAnalysis {
                     .map_err(crate::codegen::arena_failure)?;
                 // A prelude interface's host setter, if it declares one; an
                 // unused name imports nothing.
-                if let Type::InterfaceRef { mangled, .. } = receiver_ty.lowered() {
+                if let Some(iface) = crate::codegen::host_property_iface(receiver_ty) {
                     self.dependency_usage.note_member(crate::mangle::extend(
-                        mangled,
+                        &iface,
                         &crate::mangle::property_setter(&name.name),
                     ));
                 }
@@ -1167,11 +1167,11 @@ impl CodegenAnalysis {
                         .map_err(crate::codegen::arena_failure)?;
                     self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Get);
                     self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Set);
-                    if let Type::InterfaceRef { mangled, .. } = receiver_ty.lowered() {
+                    if let Some(iface) = crate::codegen::host_property_iface(receiver_ty) {
                         self.dependency_usage
-                            .note_member(crate::mangle::extend(mangled, &name.name));
+                            .note_member(crate::mangle::extend(&iface, &name.name));
                         self.dependency_usage.note_member(crate::mangle::extend(
-                            mangled,
+                            &iface,
                             &crate::mangle::property_setter(&name.name),
                         ));
                     }

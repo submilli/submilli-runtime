@@ -6688,3 +6688,16 @@ function main(): void {
         );
     }
 }
+
+/// The prelude interface whose host setter a write to `receiver_ty`'s property
+/// may call (`RegExp#@set:lastIndex`, `Array#@set:length`).
+pub(crate) fn host_property_iface(receiver_ty: &Type) -> Option<crate::MangledName> {
+    match receiver_ty.lowered() {
+        Type::InterfaceRef { mangled, .. } => Some(mangled.clone()),
+        Type::Array(_) => Some(crate::mangle::prelude("Array")),
+        _ if receiver_ty.array_like_union_element().is_some() => {
+            Some(crate::mangle::prelude("Array"))
+        }
+        _ => None,
+    }
+}

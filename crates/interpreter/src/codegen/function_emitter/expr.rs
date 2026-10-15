@@ -1933,7 +1933,7 @@ fn emit_postfix_unary(
                 )?;
                 return Ok(());
             }
-            if let Some((getter, setter)) = host_property_accessors(ctx, &receiver_ty, name) {
+            if let Some((getter, setter)) = host_property_accessors(ctx, &receiver_ty, name)? {
                 emit_host_property_postfix(
                     emitter,
                     ctx,
@@ -1981,22 +1981,37 @@ fn emit_postfix_unary(
     Ok(())
 }
 
+/// How a writable prelude property with a host setter is read.
+enum HostPropertyGetter {
+    Func(u32),
+    /// `Array#length`, read inline from the array struct.
+    InlineLength(u32),
+}
+
 /// The getter and setter of a writable prelude interface property backed by
-/// host functions (`RegExp.lastIndex`).
+/// host functions (`RegExp.lastIndex`, `Array.length`).
 fn host_property_accessors(
     ctx: &CodegenCtx,
     receiver_ty: &Type,
     name: &Ident,
-) -> Option<(u32, u32)> {
-    let Type::InterfaceRef { mangled, .. } = receiver_ty.lowered() else {
-        return None;
+) -> Result<Option<(HostPropertyGetter, u32)>, crate::compiler_error::CompilerFailure> {
+    let Some(iface) = crate::codegen::host_property_iface(receiver_ty) else {
+        return Ok(None);
     };
-    let setter_key = crate::mangle::extend(mangled, &crate::mangle::property_setter(&name.name));
-    let setter = ctx.symbols.func_idx(&setter_key)?;
+    let setter_key = crate::mangle::extend(&iface, &crate::mangle::property_setter(&name.name));
+    let Some(setter) = ctx.symbols.func_idx(&setter_key) else {
+        return Ok(None);
+    };
+    if let Some(struct_idx) = inline_length_struct_idx(ctx, &iface, &name.name)? {
+        return Ok(Some((HostPropertyGetter::InlineLength(struct_idx), setter)));
+    }
     let getter = ctx
         .symbols
-        .func_idx(&crate::mangle::extend(mangled, &name.name))?;
-    Some((getter, setter))
+        .func_idx(&crate::mangle::extend(&iface, &name.name))
+        .ok_or_else(|| {
+            crate::codegen::internal_failure("host property getter recorded beside its setter")
+        })?;
+    Ok(Some((HostPropertyGetter::Func(getter), setter)))
 }
 
 fn emit_host_property_postfix(
@@ -2004,7 +2019,7 @@ fn emit_host_property_postfix(
     ctx: &CodegenCtx,
     receiver: ExprId,
     receiver_ty: &Type,
-    (getter, setter): (u32, u32),
+    (getter, setter): (HostPropertyGetter, u32),
     op: crate::PostfixOp,
     target_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
@@ -2018,7 +2033,14 @@ fn emit_host_property_postfix(
     emitter.instruction(Instruction::RefAsNonNull);
     emitter.instruction(Instruction::LocalGet(recv));
     emitter.instruction(Instruction::RefAsNonNull);
-    emitter.instruction(Instruction::Call(getter));
+    match getter {
+        HostPropertyGetter::Func(getter) => {
+            emitter.instruction(Instruction::Call(getter));
+        }
+        HostPropertyGetter::InlineLength(struct_idx) => {
+            emit_inline_length(emitter, ctx, struct_idx);
+        }
+    }
     emitter.instruction(Instruction::LocalTee(old));
     emit_postfix_delta(emitter, ctx, op, &Type::Number);
     emitter.instruction(Instruction::Call(setter));
