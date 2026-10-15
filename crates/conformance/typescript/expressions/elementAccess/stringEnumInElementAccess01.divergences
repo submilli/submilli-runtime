@@ -1,4 +1,1 @@
-types: 9 of 22 tsc entries compared, 0 differ
-
-errors:
-line 17: ours: objects can only be indexed by a string literal or a finite union of their keys (tsc accepts)
+types: 10 of 22 tsc entries compared, 0 differ
