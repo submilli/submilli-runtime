@@ -61,8 +61,23 @@ for (const [id, slug, heading] of [['helps', 'why', 'what-submilli-is'], ['using
   if (heading) assert.ok(page.indexOf(`id="${heading}"`) < page.indexOf(`data-video-id="${id}"`));
 }
 const libraryPage = await readFile(new URL('docs/videos/index.html', directory), 'utf8');
+// Component-rendered headings must be present in both server-rendered menus.
+for (const tag of ['starlight-toc', 'mobile-starlight-toc']) {
+  const navigation = libraryPage.match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`))?.[1];
+  assert.ok(navigation, `${tag}: video navigation exists`);
+  assert.deepEqual(
+    [...navigation.matchAll(/href="#(video-[^"]+)"/g)].map((match) => match[1]),
+    films.map((film) => `video-${film.id}-title`),
+    `${tag}: every published video appears once in series order`,
+  );
+  const whyNavigation = whyPage.match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`))?.[1];
+  assert.ok(whyNavigation && !whyNavigation.includes('href="#video-'), `${tag}: other pages keep their own navigation`);
+}
+const libraryContent = libraryPage.match(/<div[^>]*class="[^"]*sl-markdown-content[^>]*>([\s\S]*?)<\/main>/)?.[1];
+assert.ok(libraryContent && !libraryContent.includes('Videos about code execution'), 'library has no repeated introduction');
 let previousPosition = -1;
 for (const film of films) {
+  assert.equal([...libraryPage.matchAll(new RegExp(`<h2\\b[^>]*id="video-${film.id}-title"`, 'g'))].length, 1, `${film.id}: one navigable heading`);
   const position = libraryPage.indexOf(`data-video-id="${film.id}"`);
   assert.ok(position > previousPosition, `${film.id} preserves series order`);
   assert.ok(libraryPage.includes(film.embedUrl));

@@ -26,6 +26,7 @@ export default defineConfig({
     // Standalone embeds are noindex duplicates of the canonical video pages.
     sitemap({ filter: (page) => !new URL(page).pathname.startsWith("/docs/videos/embed/") }),
     starlight({
+      routeMiddleware: "./src/video-route-data.ts",
       title: "Submilli",
       description:
         "The runtime for the code your agent writes — under rules you set.",
