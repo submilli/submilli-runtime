@@ -3288,6 +3288,14 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                 "{}",
                 stderr(&bound)
             );
+            // Kept by a later bind of another value, and still said.
+            let again = playground.run(&["bind", "customerId=cus_acme"]);
+            assert!(again.status.success(), "{}", stderr(&again));
+            assert!(
+                stderr(&again).contains("TYPO is not declared by the blueprint"),
+                "{}",
+                stderr(&again)
+            );
         }
 
         #[test]

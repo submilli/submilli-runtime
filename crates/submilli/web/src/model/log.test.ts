@@ -80,6 +80,12 @@ describe("the log's run rows", () => {
     expect(row(rows, 1).again[1].note).toBe("Asks first. Uses the variables you’ve set now.");
   });
 
+  it("says nothing went back to the agent for a run that was cancelled", () => {
+    const data = chatSession();
+    data.runs[2] = { ...data.runs[2], outcome: { kind: "cancelled" } };
+    expect(row(allOpen(data), 2).meta).toBe("Oct 13, 13:26 UTC · 46 ms · blueprint v1");
+  });
+
   it("offers nothing for a program that never compiled", () => {
     expect(row(rows, 3).againNote).toBe("This program didn’t compile, so running it again gives the same error. The agent’s next program is run 4.");
     expect(row(rows, 1).againNote).toBe("");

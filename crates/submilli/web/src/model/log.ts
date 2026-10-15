@@ -468,7 +468,7 @@ function runRow(f: Frame, r: Show, i: number, runs: Show[]): RunRow {
     tone: tone(word),
     meta:
       when(r.started_at) + " · " + duration(r.wall_ms) + " · blueprint v" + r.blueprint_version +
-      (!byAgent(f, n) ? "" : word === "completed" ? " · returned to agent " + size(returned || 0) : " · error sent to agent" + (returned ? ", " + size(returned) : "")),
+      (!byAgent(f, n) || word === "cancelled" ? "" : word === "completed" ? " · returned to agent " + size(returned || 0) : " · error sent to agent" + (returned ? ", " + size(returned) : "")),
     preview: !open && err.text ? err.text.split("\n")[0] : "",
     error: err.text,
     result: result.text,

@@ -676,12 +676,7 @@ impl Actions {
 
     /// The binding, after applying `request` when one is given.
     pub(crate) async fn bind(&self, request: Option<BindRequest>) -> Answer {
-        let bound = request.as_ref().map(|request| {
-            (
-                request.variables.keys().cloned().collect::<Vec<_>>(),
-                request.secrets.keys().cloned().collect::<Vec<_>>(),
-            )
-        });
+        let binds = request.is_some();
         let (binding, saved) = {
             let mut binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
             let mut saved = Ok(());
@@ -696,8 +691,11 @@ impl Actions {
             (binding.clone(), saved)
         };
         let mut warnings = Vec::new();
-        if let Some((variables, secrets)) = &bound {
-            warnings.extend(self.undeclared_in_binding(variables, secrets).await);
+        if binds {
+            // Every bound name, not only this bind's: one kept from before is left out too.
+            let variables: Vec<String> = binding.variables.keys().cloned().collect();
+            let secrets: Vec<String> = binding.secrets.keys().cloned().collect();
+            warnings.extend(self.undeclared_in_binding(&variables, &secrets).await);
             warnings.extend(self.open_sessions_that_differ(&binding).await);
         }
         if let Err(error) = saved {
