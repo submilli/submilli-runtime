@@ -102,7 +102,7 @@ function main(): void {
 #[test]
 fn b2_method_arity_mismatch_lifts_method_signature() {
     insta::assert_snapshot!(render_inside_main(
-        "  let xs: number[] = [1, 2, 3];\n  xs.push();"
+        "  let xs: number[] = [1, 2, 3];\n  xs.includes();"
     ));
 }
 
@@ -335,9 +335,9 @@ function main(): void {
 }
 
 #[test]
-fn prelude_doc_surfaces_in_array_push_lift() {
+fn prelude_doc_surfaces_in_array_index_of_lift() {
     insta::assert_snapshot!(render_inside_main(
-        "  let xs: number[] = [1, 2, 3];\n  xs.push();"
+        "  let xs: number[] = [1, 2, 3];\n  xs.indexOf();"
     ));
 }
 
