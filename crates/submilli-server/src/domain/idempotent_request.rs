@@ -164,7 +164,6 @@ mod tests {
                 state,
                 completed_at,
                 super::super::run::RunIdentity {
-                    origin_node: "node".into(),
                     admission_order: 1,
                     ..Default::default()
                 },

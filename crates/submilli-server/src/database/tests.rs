@@ -669,7 +669,6 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
                 "_sqlx_migrations",
                 "blueprint_revisions",
                 "blueprints",
-                "execution_node",
                 "mcp_grants",
                 "runs",
                 "secrets",
@@ -677,7 +676,6 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
                 "session_mcp",
                 "session_mcp_icon_sizes",
                 "session_mcp_icons",
-                "session_run_sequences",
                 "session_variables",
                 "sessions"
             ]
@@ -857,7 +855,7 @@ async fn run_migration_preserves_v6_tombstones_identity_and_exact_bytes_across_r
         .run_direct(None, &mut connection, false)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO sessions(session_id,record_version,status,blueprint_name,idle_timeout_ms,last_activity_unix_ms,root_vfs_type) VALUES ('s',1,'active','test',0,0,'none')")
+    sqlx::query("INSERT INTO sessions(session_id,record_version,status,blueprint_name,idle_timeout_ms,last_activity_unix_ms,root_vfs_type) VALUES ('s',1,'active','test',0,0,'none'),('empty',1,'active','test',0,0,'none')")
         .execute(&mut connection).await.unwrap();
     let bodies: [&[u8]; 4] = [
         b"{ \"execution_id\": \"public-id\", \"result\": \"ok\" }\n",
@@ -876,15 +874,11 @@ async fn run_migration_preserves_v6_tombstones_identity_and_exact_bytes_across_r
         .execute(&mut connection).await.unwrap();
     connection.close().await.unwrap();
 
-    let mut prior_node = None;
     for _ in 0..2 {
         let database = ServerDatabase::open(&path).await.unwrap();
-        let node: String = database
+        database
             .read(|connection| {
                 Box::pin(async move {
-                    let node: String = sqlx::query_scalar("SELECT node_id FROM execution_node")
-                        .fetch_one(&mut *connection)
-                        .await?;
                     let rows = sqlx::query("SELECT * FROM runs ORDER BY admission_order")
                         .fetch_all(&mut *connection)
                         .await?;
@@ -905,7 +899,6 @@ async fn run_migration_preserves_v6_tombstones_identity_and_exact_bytes_across_r
                             format!("reservation-{index}")
                         );
                         assert_eq!(row.get::<i64, _>("admission_order"), index as i64 + 1);
-                        assert_eq!(row.get::<String, _>("origin_node"), node);
                         assert_eq!(row.get::<String, _>("owner_generation"), "old-startup");
                         assert_eq!(row.get::<String, _>("recovery_mode"), "unrecorded");
                         assert_eq!(row.get::<i64, _>("history_position"), 0);
@@ -937,26 +930,28 @@ async fn run_migration_preserves_v6_tombstones_identity_and_exact_bytes_across_r
                     assert_eq!(rows[5].get::<String, _>("reason"), "legacy_without_history");
                     assert_eq!(rows[5].get::<Option<i64>, _>("completed_at_unix_ms"), None);
                     let last_order: i64 = sqlx::query_scalar(
-                        "SELECT last_order FROM session_run_sequences WHERE session_id='s'",
+                        "SELECT last_run_order FROM sessions WHERE session_id='s'",
                     )
                     .fetch_one(&mut *connection)
                     .await?;
                     assert_eq!(last_order, 6);
+                    let empty_order: i64 = sqlx::query_scalar(
+                        "SELECT last_run_order FROM sessions WHERE session_id='empty'",
+                    )
+                    .fetch_one(&mut *connection)
+                    .await?;
+                    assert_eq!(empty_order, 0);
                     let old_tables: i64 = sqlx::query_scalar(
                         "SELECT count(*) FROM sqlite_master WHERE name='idempotent_requests'",
                     )
                     .fetch_one(connection)
                     .await?;
                     assert_eq!(old_tables, 0);
-                    Ok(node)
+                    Ok(())
                 })
             })
             .await
             .unwrap();
-        if let Some(prior_node) = &prior_node {
-            assert_eq!(&node, prior_node);
-        }
-        prior_node = Some(node);
         database.close().await.unwrap();
     }
 }

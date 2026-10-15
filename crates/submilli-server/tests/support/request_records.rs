@@ -73,10 +73,9 @@ impl RequestRecords {
             let time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis() as i64;
             let completed = completed.then_some(time);
             let identity = uuid::Uuid::new_v4().to_string();
-            let node: String = sqlx::query_scalar("SELECT node_id FROM execution_node").fetch_one(&mut *connection).await?;
-            let order: i64 = sqlx::query_scalar("INSERT INTO session_run_sequences(session_id,last_order) VALUES (?,1) ON CONFLICT(session_id) DO UPDATE SET last_order=last_order+1 RETURNING last_order").bind(&record.session_id).fetch_one(&mut *connection).await?;
-            sqlx::query("INSERT INTO runs(run_id,origin_node,admission_order,session_id,request_key,fingerprint,reservation_id,owner_generation,created_at_unix_ms,state,completed_at_unix_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
-                .bind(&identity).bind(node).bind(order)
+            let order: i64 = sqlx::query_scalar("UPDATE sessions SET last_run_order=last_run_order+1 WHERE session_id=? AND last_run_order<9223372036854775807 RETURNING last_run_order").bind(&record.session_id).fetch_one(&mut *connection).await?;
+            sqlx::query("INSERT INTO runs(run_id,admission_order,session_id,request_key,fingerprint,reservation_id,owner_generation,created_at_unix_ms,state,completed_at_unix_ms) VALUES (?,?,?,?,?,?,?,?,?,?)")
+                .bind(&identity).bind(order)
                 .bind(record.session_id).bind(record.key).bind(record.fingerprint).bind(identity).bind(owner_generation).bind(time).bind(state).bind(completed).execute(connection).await?;
             Ok(())
         })).await

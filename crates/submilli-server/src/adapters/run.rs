@@ -35,13 +35,9 @@ pub(crate) async fn save(
     mut request: Run,
 ) -> Result<(), DatabaseError> {
     if request.identity().admission_order == 0 {
-        let node: String =
-            sqlx::query_scalar("SELECT node_id FROM execution_node WHERE singleton=1")
-                .fetch_one(&mut *connection)
-                .await?;
-        let order: i64 = sqlx::query_scalar("INSERT INTO session_run_sequences(session_id,last_order) VALUES (?,1) ON CONFLICT(session_id) DO UPDATE SET last_order=last_order+1 WHERE last_order<9223372036854775807 RETURNING last_order")
+        let order: i64 = sqlx::query_scalar("UPDATE sessions SET last_run_order=last_run_order+1 WHERE session_id=? AND last_run_order<9223372036854775807 RETURNING last_run_order")
             .bind(request.session_id()).fetch_one(&mut *connection).await?;
-        request.assign_admission(node, order).map_err(invalid)?;
+        request.assign_admission(order).map_err(invalid)?;
     }
     let created = to_unix_ms(request.created_at())?;
     let completed = request.completed_at().map(to_unix_ms).transpose()?;
@@ -60,11 +56,11 @@ pub(crate) async fn save(
         ),
         RequestState::Expired => ("expired", None, None),
     };
-    let result = sqlx::query("INSERT INTO runs(run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,origin_node,owner_generation,attempt,revision,admission_order,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET request_key=excluded.request_key,state=excluded.state,reason=excluded.reason,attempt=excluded.attempt,revision=excluded.revision,response_status=excluded.response_status,response_body=excluded.response_body,completed_at_unix_ms=excluded.completed_at_unix_ms WHERE runs.revision=excluded.revision-1 AND runs.owner_generation=excluded.owner_generation")
+    let result = sqlx::query("INSERT INTO runs(run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET request_key=excluded.request_key,state=excluded.state,reason=excluded.reason,attempt=excluded.attempt,revision=excluded.revision,response_status=excluded.response_status,response_body=excluded.response_body,completed_at_unix_ms=excluded.completed_at_unix_ms WHERE runs.revision=excluded.revision-1 AND runs.owner_generation=excluded.owner_generation")
         .bind(request.reservation_id()).bind(request.reservation_id())
         .bind(&request.identity().execution_id).bind(request.session_id()).bind(request.optional_key())
         .bind(request.fingerprint()).bind(&request.identity().principal).bind(&request.identity().entry)
-        .bind(&request.identity().origin_node).bind(request.owner_generation()).bind(request.attempt())
+        .bind(request.owner_generation()).bind(request.attempt())
         .bind(request.revision()).bind(request.identity().admission_order).bind(created).bind(state)
         .bind(reason(request.state())).bind(status).bind(body).bind(completed).execute(connection).await?;
     if result.rows_affected() != 1 {
@@ -164,7 +160,6 @@ fn decode(row: SqliteRow) -> Result<Run, DatabaseError> {
             execution_id: row.try_get("execution_id")?,
             principal: row.try_get("principal")?,
             entry: row.try_get("entry_point")?,
-            origin_node: row.try_get("origin_node")?,
             admission_order: row.try_get("admission_order")?,
         },
         row.try_get("revision")?,

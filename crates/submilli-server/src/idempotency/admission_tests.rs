@@ -25,7 +25,6 @@ async fn unkeyed_invocations_have_distinct_ordered_identity_and_no_response_body
     assert_eq!(a.state(), &RequestState::Finished);
     assert_eq!(b.state(), &RequestState::Finished);
     assert_ne!(a.identity().admission_order, b.identity().admission_order);
-    assert_eq!(a.identity().origin_node, b.identity().origin_node);
     assert_eq!(a.identity().principal.as_deref(), Some("alice"));
     assert_eq!(a.identity().execution_id.as_deref(), Some("run-a"));
     assert_eq!(a.attempt(), 1);
@@ -175,4 +174,156 @@ fn process_exit_preserves_unkeyed_run_without_inventing_replay() {
         assert!(coordinator.claim("crashed").await.is_err());
         database.close().await.unwrap();
     });
+}
+
+#[tokio::test]
+async fn saving_a_session_cannot_reset_its_run_order() {
+    let (_, units, coordinator) = fixture().await;
+    let session = units
+        .begin()
+        .await
+        .unwrap()
+        .get_session("session")
+        .await
+        .unwrap()
+        .unwrap();
+    let first = proceed(
+        coordinator
+            .prepare("session", None, "code", "first", None, "mcp")
+            .await,
+    );
+    first.release().await;
+    let mut unit = units.begin().await.unwrap();
+    unit.save_session(session).await.unwrap();
+    unit.commit().await.unwrap();
+    let second = proceed(
+        coordinator
+            .prepare("session", None, "code", "second", None, "mcp")
+            .await,
+    );
+    second.release().await;
+    let mut unit = units.begin().await.unwrap();
+    assert_eq!(
+        unit.get_run("first")
+            .await
+            .unwrap()
+            .unwrap()
+            .identity()
+            .admission_order,
+        1
+    );
+    assert_eq!(
+        unit.get_run("second")
+            .await
+            .unwrap()
+            .unwrap()
+            .identity()
+            .admission_order,
+        2
+    );
+}
+
+#[tokio::test]
+async fn failed_run_insertion_rolls_back_the_session_counter() {
+    let (database, units, coordinator) = fixture().await;
+    database.transaction(|connection| Box::pin(async move {
+        sqlx::query("CREATE TRIGGER reject_run BEFORE INSERT ON runs BEGIN SELECT RAISE(FAIL, 'injected'); END")
+            .execute(connection).await?;
+        Ok(())
+    })).await.unwrap();
+    assert!(matches!(
+        coordinator
+            .prepare("session", None, "code", "failed", None, "mcp")
+            .await,
+        Reservation::Refused(_)
+    ));
+    database
+        .transaction(|connection| {
+            Box::pin(async move {
+                let order: i64 = sqlx::query_scalar(
+                    "SELECT last_run_order FROM sessions WHERE session_id='session'",
+                )
+                .fetch_one(&mut *connection)
+                .await?;
+                assert_eq!(order, 0);
+                sqlx::query("DROP TRIGGER reject_run")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+    let healthy = proceed(
+        coordinator
+            .prepare("session", None, "code", "healthy", None, "mcp")
+            .await,
+    );
+    healthy.release().await;
+    let mut unit = units.begin().await.unwrap();
+    assert!(unit.get_run("failed").await.unwrap().is_none());
+    assert_eq!(
+        unit.get_run("healthy")
+            .await
+            .unwrap()
+            .unwrap()
+            .identity()
+            .admission_order,
+        1
+    );
+}
+
+#[tokio::test]
+async fn exhausted_run_order_refuses_admission_without_overflow() {
+    let (database, units, coordinator) = fixture().await;
+    database
+        .transaction(|connection| {
+            Box::pin(async move {
+                sqlx::query("UPDATE sessions SET last_run_order=? WHERE session_id='session'")
+                    .bind(i64::MAX - 1)
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+    let last = proceed(
+        coordinator
+            .prepare("session", None, "code", "last", None, "mcp")
+            .await,
+    );
+    last.release().await;
+    assert!(matches!(
+        coordinator
+            .prepare("session", None, "code", "overflow", None, "mcp")
+            .await,
+        Reservation::Refused(_)
+    ));
+    let mut unit = units.begin().await.unwrap();
+    assert_eq!(
+        unit.get_run("last")
+            .await
+            .unwrap()
+            .unwrap()
+            .identity()
+            .admission_order,
+        i64::MAX
+    );
+    assert!(unit.get_run("overflow").await.unwrap().is_none());
+    drop(unit);
+    database
+        .read(|connection| {
+            Box::pin(async move {
+                let order: i64 = sqlx::query_scalar(
+                    "SELECT last_run_order FROM sessions WHERE session_id='session'",
+                )
+                .fetch_one(connection)
+                .await?;
+                assert_eq!(order, i64::MAX);
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
 }

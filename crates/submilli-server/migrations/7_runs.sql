@@ -1,14 +1,6 @@
--- The logical node belongs to the store, not to a process or hostname.
-CREATE TABLE execution_node (
-    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
-    node_id TEXT NOT NULL UNIQUE
-);
-INSERT INTO execution_node VALUES (1, lower(hex(randomblob(16))));
-
-CREATE TABLE session_run_sequences (
-    session_id TEXT PRIMARY KEY,
-    last_order INTEGER NOT NULL CHECK(last_order > 0)
-);
+-- Allocate run order on the owning session, in the run admission transaction.
+ALTER TABLE sessions ADD COLUMN last_run_order INTEGER NOT NULL DEFAULT 0
+    CHECK(last_run_order >= 0);
 
 -- No cascading session deletion: closing a session cannot erase evidence of
 -- work that may have executed. Payload/history retention is managed separately.
@@ -22,7 +14,6 @@ CREATE TABLE runs (
     fingerprint_version INTEGER NOT NULL DEFAULT 1 CHECK(fingerprint_version = 1),
     principal TEXT,
     entry_point TEXT NOT NULL DEFAULT 'legacy',
-    origin_node TEXT NOT NULL,
     owner_generation TEXT NOT NULL,
     attempt INTEGER NOT NULL DEFAULT 0 CHECK(attempt >= 0),
     revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
@@ -43,18 +34,20 @@ CREATE TABLE runs (
     CHECK(state != 'finished' OR request_key IS NULL),
     CHECK(state != 'aborted' OR request_key IS NULL)
 );
-INSERT INTO runs(run_id,reservation_id,execution_id,session_id,request_key,fingerprint,origin_node,owner_generation,admission_order,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms)
+INSERT INTO runs(run_id,reservation_id,execution_id,session_id,request_key,fingerprint,owner_generation,admission_order,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms)
 SELECT reservation_id,reservation_id,
        CASE WHEN json_valid(CAST(response_body AS TEXT)) THEN
            CASE WHEN json_type(CAST(response_body AS TEXT),'$.execution_id')='text'
                 THEN json_extract(CAST(response_body AS TEXT),'$.execution_id') END END,
-       session_id,request_key,fingerprint,(SELECT node_id FROM execution_node),owner_generation,
+       session_id,request_key,fingerprint,owner_generation,
        row_number() OVER (PARTITION BY session_id ORDER BY created_at_unix_ms,reservation_id),
        created_at_unix_ms,CASE WHEN state='reserved' THEN 'indeterminate' ELSE state END,
        CASE WHEN state IN ('reserved','indeterminate') THEN 'legacy_without_history' END,
        response_status,response_body,completed_at_unix_ms
 FROM idempotent_requests;
-INSERT INTO session_run_sequences SELECT session_id,MAX(admission_order) FROM runs GROUP BY session_id;
+UPDATE sessions SET last_run_order = COALESCE(
+    (SELECT MAX(admission_order) FROM runs WHERE runs.session_id = sessions.session_id), 0
+);
 DROP TABLE idempotent_requests;
 CREATE INDEX runs_by_completion ON runs(state,completed_at_unix_ms);
 CREATE INDEX runs_by_startup ON runs(owner_generation,state);

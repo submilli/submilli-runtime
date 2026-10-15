@@ -31,7 +31,7 @@ an idempotency key. Each unkeyed submission creates a distinct run.
 | Admit, Dispatch, CommitBarrier | Conditional claim before `runner::run`; repeated claim rejected and lost claim acknowledgement reconciled. |
 | Release, KeyReserved | `abort_preparation` releases only a never-claimed key; release after claim becomes indeterminate. |
 | Complete, NoStaleWrites | Revision/startup-guarded SQL writes; closure fences pending completion. |
-| AdmissionUnique, OrderUnique | Scoped unique key and order constraints, transactionally allocated session counters. |
+| AdmissionUnique, OrderUnique | Scoped unique key and order constraints, `sessions.last_run_order` incremented in the same transaction as run insertion. |
 | Crash, Recover | Real child-process exit and database reopen; no synthetic replay history. |
 | Expire | Existing response TTL/newest-three policy removes bytes, retaining key and terminal evidence. |
 
@@ -60,7 +60,12 @@ Imported unfinished reservations become indeterminate immediately. Legacy
 execution IDs are extracted only when present as strings in valid JSON;
 otherwise they remain absent. The old reservation ID remains the stable primary
 identity for imported records. New executions use their execution ID throughout.
-A store-local node ID survives restart and preparation order is never recycled.
+The exclusive SQLite store is the implicit single node; no node identity is
+stored. Startup generations still distinguish process incarnations. Each session
+retains its `last_run_order` counter across restart and ordinary session saves.
+Migration initializes it from the maximum imported run order, or zero for a
+session without runs. Closed sessions remain in storage, so their counters stay
+with them; normal execution does not delete and recreate a session identity.
 The old table is removed, so there is only one admission authority.
 
 Unkeyed completions retain metadata without adding response payload storage.

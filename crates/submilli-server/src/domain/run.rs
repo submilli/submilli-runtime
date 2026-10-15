@@ -25,7 +25,6 @@ pub struct RunIdentity {
     pub execution_id: Option<String>,
     pub principal: Option<String>,
     pub entry: String,
-    pub origin_node: String,
     pub admission_order: i64,
 }
 
@@ -83,11 +82,7 @@ impl Run {
         if let Some(key) = &key {
             Self::validate_key(key)?;
         }
-        if identity.origin_node.is_empty()
-            || identity.admission_order <= 0
-            || revision < 0
-            || attempt < 0
-        {
+        if identity.admission_order <= 0 || revision < 0 || attempt < 0 {
             return Err(RequestError::InvalidTransition);
         }
         let has_completed = matches!(
@@ -184,11 +179,10 @@ impl Run {
         })
     }
 
-    pub fn assign_admission(&mut self, node: String, order: i64) -> Result<(), RequestError> {
-        if self.revision != 0 || order <= 0 || node.is_empty() {
+    pub fn assign_admission(&mut self, order: i64) -> Result<(), RequestError> {
+        if self.revision != 0 || order <= 0 {
             return Err(RequestError::InvalidTransition);
         }
-        self.identity.origin_node = node;
         self.identity.admission_order = order;
         Ok(())
     }
