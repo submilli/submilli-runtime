@@ -6,7 +6,7 @@ import registry from '../src/data/videos.json' with { type: 'json' };
 import { readChapters } from '../src/lib/agent-docs.ts';
 
 test('the independent series has stable embeds and book destinations', async () => {
-  assert.deepEqual(films.map((film) => film.id), ['code-execution-introduction', 'challenges', 'helps', 'packages', 'blueprints', 'using', 'works']);
+  assert.deepEqual(films.map((film) => film.id), ['support-demo', 'code-execution-introduction', 'challenges', 'helps', 'packages', 'blueprints', 'using', 'works']);
   assert.deepEqual(films.map((film) => film.id), registry.films.filter((film) => film.status === 'published').map((film) => film.id));
   for (const film of films) {
     assert.equal(film.status, 'published');
@@ -14,6 +14,9 @@ test('the independent series has stable embeds and book destinations', async () 
     assert.ok(!/releases|\.mp4|\.vtt|publishedVersion|sha256/.test(JSON.stringify(film)));
     assert.ok(film.canonicalPath?.startsWith('/docs/'));
   }
+  const demo = films.find((film) => film.id === 'support-demo');
+  assert.equal(demo?.canonicalPath, '/docs/videos/');
+  assert.equal(demo?.embedUrl, 'https://submilli-videos.onrender.com/embed/support-demo/');
   const packages = films.find((film) => film.id === 'packages');
   assert.equal(packages?.canonicalPath, '/docs/packages/');
   assert.equal(packages?.embedUrl, 'https://submilli-videos.onrender.com/embed/packages/');
