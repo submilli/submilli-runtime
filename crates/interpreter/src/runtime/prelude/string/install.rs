@@ -386,7 +386,10 @@ pub fn declare(defs: &mut PackageDeclaration) {
     m(
         defs,
         "concat",
-        vec![s(), Param::new("strings", Type::Array(Box::new(Type::String)))],
+        vec![
+            s(),
+            Param::new("strings", Type::Array(Box::new(Type::String))),
+        ],
         Type::String,
     );
     m(
@@ -1183,8 +1186,8 @@ impl StringAbi {
         others: &Val,
     ) -> wasmtime::Result<Val> {
         let receiver = self.payload(caller, receiver, "concat")?;
-        let others = crate::runtime::array_storage::ArrayStorage::read(caller, others)?
-            .snapshot(caller)?;
+        let others =
+            crate::runtime::array_storage::ArrayStorage::read(caller, others)?.snapshot(caller)?;
         let mut runs = Vec::with_capacity(others.len() + 1);
         let mut total = receiver.len;
         runs.push(receiver.whole());

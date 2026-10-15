@@ -242,9 +242,9 @@ pub fn declare(defs: &mut PackageDeclaration) {
         vec![Param::new(
             "entries",
             Type::union(vec![
-                Type::Readonly(Box::new(Type::Array(Box::new(Type::Readonly(
-                    Box::new(entry()),
-                ))))),
+                Type::Readonly(Box::new(Type::Array(Box::new(Type::Readonly(Box::new(
+                    entry(),
+                )))))),
                 Type::prelude_interface("Iterable".to_string(), vec![entry()]),
                 Type::prelude_interface("Iterator".to_string(), vec![entry()]),
                 Type::Null,

@@ -805,15 +805,33 @@ fn array_step(
 }
 
 pub fn values(caller: &mut Caller<'_, StoreData>, array: &Val) -> wasmtime::Result<Val> {
-    make_index_iterator(caller, IteratorSource::Array, *array, IterKind::Values, array_step)
+    make_index_iterator(
+        caller,
+        IteratorSource::Array,
+        *array,
+        IterKind::Values,
+        array_step,
+    )
 }
 
 fn keys(caller: &mut Caller<'_, StoreData>, array: &Val) -> wasmtime::Result<Val> {
-    make_index_iterator(caller, IteratorSource::Array, *array, IterKind::Keys, array_step)
+    make_index_iterator(
+        caller,
+        IteratorSource::Array,
+        *array,
+        IterKind::Keys,
+        array_step,
+    )
 }
 
 fn entries(caller: &mut Caller<'_, StoreData>, array: &Val) -> wasmtime::Result<Val> {
-    make_index_iterator(caller, IteratorSource::Array, *array, IterKind::Entries, array_step)
+    make_index_iterator(
+        caller,
+        IteratorSource::Array,
+        *array,
+        IterKind::Entries,
+        array_step,
+    )
 }
 
 // ---------------------------------------------------------------------------
