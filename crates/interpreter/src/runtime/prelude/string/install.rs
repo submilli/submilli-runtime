@@ -386,7 +386,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
     m(
         defs,
         "concat",
-        vec![s(), Param::new("other", Type::String)],
+        vec![s(), Param::new("strings", Type::Array(Box::new(Type::String)))],
         Type::String,
     );
     m(
@@ -808,24 +808,28 @@ fn reg_window_predicate(
     )
 }
 
-/// `String#concat`; the `+` operator registers the same operation as
-/// `string_concat`.
+/// `String#concat(...strings)`; the `+` operator registers the two-string
+/// operation as `string_concat`.
 fn reg_concat(
     linker: &mut Linker<StoreData>,
     engine: &wasmtime::Engine,
     abi: &StringAbi,
 ) -> wasmtime::Result<()> {
     let s = abi.value_type();
+    let array = ValType::Ref(RefType::new(
+        false,
+        HeapType::ConcreteStruct(crate::runtime::host::intrinsic_array_type(engine)?),
+    ));
     let abi = abi.clone();
     register_host_fn(
         linker,
         MODULE_NAME,
         method_key("concat"),
-        FuncType::new(engine, [s.clone(), s.clone()], [s]),
+        FuncType::new(engine, [s.clone(), array.clone()], [s]),
         true,
         move |caller, params, results| {
             *abi_result(results, 0)? =
-                abi.concat(caller, abi_arg(params, 0)?, abi_arg(params, 1)?, "concat")?;
+                abi.concat_all(caller, abi_arg(params, 0)?, abi_arg(params, 1)?)?;
             Ok(())
         },
     )
@@ -1170,6 +1174,29 @@ impl StringAbi {
         self.build(caller, a.vtable, &[a.whole(), b.whole()])
     }
 
+    /// `String#concat`: the receiver followed by each string in `others`, an
+    /// `$Array` of the rest arguments.
+    fn concat_all(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        receiver: &Val,
+        others: &Val,
+    ) -> wasmtime::Result<Val> {
+        let receiver = self.payload(caller, receiver, "concat")?;
+        let others = crate::runtime::array_storage::ArrayStorage::read(caller, others)?
+            .snapshot(caller)?;
+        let mut runs = Vec::with_capacity(others.len() + 1);
+        let mut total = receiver.len;
+        runs.push(receiver.whole());
+        for other in &others {
+            let other = self.payload(caller, other, "concat")?;
+            total = concat_length(total, other.len)?;
+            runs.push(other.whole());
+        }
+        fuel::charge(&mut *caller, fuel::COPY, total as u64)?;
+        self.build(caller, receiver.vtable, &runs)
+    }
+
     /// Builds a string from `runs` directly in a new GC array (see [`gc_text`]).
     fn build(
         &self,
@@ -1415,11 +1442,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             optional: false,
                             generics: Vec::new(),
-                            params: vec![Param::new("other", Type::String)],
+                            params: vec![Param::rest(
+                                "strings",
+                                Type::Array(Box::new(Type::String)),
+                            )],
                             ret: Type::String,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns a new string with `other` appended.\n * The receiver is not modified.\n * @param other String to append.\n */",
+                                "/**\n * Returns a new string with each of `strings` appended, in order.\n * The receiver is not modified.\n * @param strings Zero or more strings to append.\n */",
                             ),
                         },
                     ),

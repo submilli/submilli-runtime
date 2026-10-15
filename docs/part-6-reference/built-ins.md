@@ -501,7 +501,7 @@ The UTF-16 string type.
 | `charAt(index: number): string` | Returns the UTF-16 code unit at `index` as a single-character string. |
 | `charCodeAt(index: number): number` | Returns the UTF-16 code unit at `index` as an integer (0..65535), or `NaN` if out of range. |
 | `codePointAt(index: number): number \| undefined` | Returns the Unicode code point starting at `index`, decoding surrogate pairs into values up to 0x10FFFF. |
-| `concat(other: string): string` | Returns a new string with `other` appended. |
+| `concat(...strings: string[]): string` | Returns a new string with each of `strings` appended, in order. |
 | `endsWith(search: string, endPosition?: number): boolean` | Returns `true` if the substring ending at `endPosition` ends with `search`. |
 | `equals(other: string): boolean` | Returns `true` when both strings have identical code units. |
 | `includes(search: string, fromIndex?: number): boolean` | Returns `true` if `search` occurs at or after `fromIndex`. |
