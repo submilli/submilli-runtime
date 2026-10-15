@@ -247,61 +247,42 @@ impl UnitOfWork for SqliteUnitOfWork {
         .await
     }
 
-    async fn get_request(
+    async fn get_run(&mut self, id: &str) -> Result<Option<crate::domain::run::Run>, StoreError> {
+        let id = id.to_owned();
+        self.query(move |connection| {
+            Box::pin(async move { crate::adapters::run::get_run(connection, &id).await })
+        })
+        .await
+    }
+    async fn run_for_key(
         &mut self,
         session_id: &str,
         key: &str,
-    ) -> Result<Option<crate::domain::idempotent_request::IdempotentRequest>, StoreError> {
+    ) -> Result<Option<crate::domain::run::Run>, StoreError> {
         let session_id = session_id.to_owned();
         let key = key.to_owned();
         self.query(move |connection| {
-            Box::pin(async move {
-                crate::adapters::idempotency::get(connection, &session_id, &key).await
-            })
+            Box::pin(async move { crate::adapters::run::get(connection, &session_id, &key).await })
         })
         .await
     }
-    async fn save_request(
+    async fn save_run(&mut self, request: crate::domain::run::Run) -> Result<(), StoreError> {
+        self.query(move |connection| Box::pin(crate::adapters::run::save(connection, request)))
+            .await
+    }
+    async fn active_session_runs(
         &mut self,
-        request: crate::domain::idempotent_request::IdempotentRequest,
-    ) -> Result<(), StoreError> {
+        session_id: &str,
+    ) -> Result<Vec<crate::domain::run::Run>, StoreError> {
+        let id = session_id.to_owned();
         self.query(move |connection| {
-            Box::pin(crate::adapters::idempotency::save(connection, request))
+            Box::pin(async move { crate::adapters::run::active_for_session(connection, &id).await })
         })
         .await
     }
-    async fn remove_request(&mut self, session_id: &str, key: &str) -> Result<(), StoreError> {
-        let session_id = session_id.to_owned();
-        let key = key.to_owned();
-        self.query(move |connection| {
-            Box::pin(async move {
-                sqlx::query("DELETE FROM idempotent_requests WHERE session_id=? AND request_key=?")
-                    .bind(session_id)
-                    .bind(key)
-                    .execute(connection)
-                    .await?;
-                Ok(())
-            })
-        })
-        .await
-    }
-    async fn remove_session_requests(&mut self, session_id: &str) -> Result<(), StoreError> {
-        let session_id = session_id.to_owned();
-        self.query(move |connection| {
-            Box::pin(async move {
-                sqlx::query("DELETE FROM idempotent_requests WHERE session_id=?")
-                    .bind(session_id)
-                    .execute(connection)
-                    .await?;
-                Ok(())
-            })
-        })
-        .await
-    }
-    async fn unfinished_requests(
-        &mut self,
-    ) -> Result<Vec<crate::domain::idempotent_request::IdempotentRequest>, StoreError> {
-        self.query(|connection| Box::pin(crate::adapters::idempotency::unfinished(connection)))
+
+    async fn unfinished_runs(&mut self) -> Result<Vec<crate::domain::run::Run>, StoreError> {
+        self.query(|connection| Box::pin(crate::adapters::run::unfinished(connection)))
             .await
     }
     async fn sessions_with_responses_to_expire(
@@ -310,11 +291,9 @@ impl UnitOfWork for SqliteUnitOfWork {
         kept: usize,
     ) -> Result<Vec<String>, StoreError> {
         self.query(move |connection| {
-            Box::pin(
-                crate::adapters::idempotency::sessions_with_responses_to_expire(
-                    connection, cutoff, kept,
-                ),
-            )
+            Box::pin(crate::adapters::run::sessions_with_responses_to_expire(
+                connection, cutoff, kept,
+            ))
         })
         .await
     }
@@ -325,7 +304,7 @@ impl UnitOfWork for SqliteUnitOfWork {
         let session_id = session_id.to_owned();
         self.query(move |connection| {
             Box::pin(async move {
-                crate::adapters::idempotency::completed_responses(connection, &session_id).await
+                crate::adapters::run::completed_responses(connection, &session_id).await
             })
         })
         .await
@@ -338,7 +317,7 @@ impl UnitOfWork for SqliteUnitOfWork {
         let session_id = session_id.to_owned();
         self.query(move |connection| {
             Box::pin(async move {
-                crate::adapters::idempotency::expire_responses(connection, &session_id, &keys).await
+                crate::adapters::run::expire_responses(connection, &session_id, &keys).await
             })
         })
         .await

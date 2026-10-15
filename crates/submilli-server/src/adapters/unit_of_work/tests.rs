@@ -383,7 +383,7 @@ async fn dropping_a_unit_discards_writes_and_releases_the_database() {
 }
 
 #[tokio::test]
-async fn blueprint_removal_cleanup_purges_only_its_sessions_ledgers() {
+async fn blueprint_removal_closes_only_its_sessions_and_retains_run_evidence() {
     let fixture = Fixture::new().await;
     let yaml = "name: other\ndefault: deny\n";
     fixture
@@ -413,13 +413,42 @@ async fn blueprint_removal_cleanup_purges_only_its_sessions_ledgers() {
 
     assert!(fixture.state.remove_blueprint("test").await.unwrap());
     for id in ["one", "two"] {
-        assert!(fixture.ledger.load(id, "key").await.unwrap().is_none());
+        assert_eq!(
+            fixture.sessions.load(id).await.unwrap().unwrap().status,
+            SessionStatus::Closed
+        );
+        assert_eq!(
+            fixture.ledger.load(id, "key").await.unwrap(),
+            Some(LedgerEntry::indeterminate(
+                id,
+                "key",
+                code_fingerprint("main")
+            ))
+        );
     }
     fixture.state.session_manager().reap_now().await.unwrap();
     for id in ["one", "two"] {
-        assert!(fixture.ledger.load(id, "key").await.unwrap().is_none());
+        assert_eq!(
+            fixture.sessions.load(id).await.unwrap().unwrap().status,
+            SessionStatus::Closed
+        );
+        assert_eq!(
+            fixture.ledger.load(id, "key").await.unwrap(),
+            Some(LedgerEntry::indeterminate(
+                id,
+                "key",
+                code_fingerprint("main")
+            ))
+        );
     }
-    assert!(fixture.ledger.load("other", "key").await.unwrap().is_some());
+    assert_eq!(
+        fixture.ledger.load("other", "key").await.unwrap(),
+        Some(LedgerEntry::indeterminate(
+            "other",
+            "key",
+            code_fingerprint("main")
+        ))
+    );
     assert_eq!(
         fixture
             .sessions

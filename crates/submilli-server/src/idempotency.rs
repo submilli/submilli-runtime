@@ -1,7 +1,6 @@
 //! HTTP-facing coordination; the application and database decide ownership.
-use crate::application::idempotency::{
-    RecoverRequests, RequestDisposition, RequestFailure, RequestResolution, ReserveRequest,
-    ResolveRequest,
+use crate::application::sessions::runs::{
+    PrepareRun, RecoverRuns, ResolveRun, RunDisposition, RunFailure, RunResolution,
 };
 use crate::application::unit_of_work::UnitOfWorkFactory;
 pub use crate::domain::idempotent_request::RecordedOutcome;
@@ -134,8 +133,8 @@ impl Coordinator {
         }
     }
 
-    pub async fn recover(&self) -> Result<(), RequestFailure> {
-        RecoverRequests::new(self.units.as_ref())
+    pub async fn recover(&self) -> Result<(), RunFailure> {
+        RecoverRuns::new(self.units.as_ref())
             .execute(&self.generation)
             .await
     }
@@ -145,23 +144,46 @@ impl Coordinator {
         self.tasks.wait().await;
     }
 
+    #[cfg(test)]
     pub async fn reserve(self: &Arc<Self>, session: &str, key: &str, code: &str) -> Reservation {
-        if IdempotentRequest::validate_key(key).is_err() {
-            return Reservation::Refused(Refusal::InvalidKey(
-                "Idempotency-Key must contain between 1 and 120 bytes",
-            ));
-        }
-        let fingerprint = format!("{:x}", Sha256::digest(code.as_bytes()));
         let mut identity = [0u8; 16];
         if let Err(error) = getrandom::getrandom(&mut identity) {
             return Reservation::Refused(Refusal::Unavailable(error.to_string()));
         }
-        let Ok(request) = IdempotentRequest::reserve(
+        self.prepare(
+            session,
+            Some(key),
+            code,
+            &uuid::Uuid::from_bytes(identity).to_string(),
+            None,
+            "http_session",
+        )
+        .await
+    }
+
+    pub async fn prepare(
+        self: &Arc<Self>,
+        session: &str,
+        key: Option<&str>,
+        code: &str,
+        run_id: &str,
+        principal: Option<&str>,
+        entry: &str,
+    ) -> Reservation {
+        let fingerprint = format!("{:x}", Sha256::digest(code.as_bytes()));
+        let identity = crate::domain::run::RunIdentity {
+            execution_id: Some(run_id.to_owned()),
+            principal: principal.map(str::to_owned),
+            entry: entry.to_owned(),
+            ..Default::default()
+        };
+        let Ok(request) = IdempotentRequest::prepare(
             session.to_owned(),
-            key.to_owned(),
+            key.map(str::to_owned),
             fingerprint,
-            uuid::Uuid::from_bytes(identity).to_string(),
+            run_id.to_owned(),
             self.generation.clone(),
+            identity,
             SystemTime::now(),
         ) else {
             return Reservation::Refused(Refusal::InvalidKey("invalid idempotency key"));
@@ -173,7 +195,7 @@ impl Coordinator {
         let mut waiting_for = None;
         loop {
             let reserve = async {
-                ReserveRequest::new(self.units.as_ref())
+                PrepareRun::new(self.units.as_ref())
                     .execute(request.clone())
                     .await
             };
@@ -189,8 +211,8 @@ impl Coordinator {
                 }
             };
             match disposition {
-                Ok(RequestDisposition::Proceed) => return Reservation::Proceed(guard),
-                Ok(RequestDisposition::Wait(id)) => {
+                Ok(RunDisposition::Proceed) => return Reservation::Proceed(guard),
+                Ok(RunDisposition::Wait(id)) => {
                     // A run that may wait on the harness for minutes is answered
                     // with its current state rather than waited for.
                     if let Some(run_id) = self.attached_run(&id) {
@@ -198,14 +220,14 @@ impl Coordinator {
                     }
                     waiting_for = Some(id);
                 }
-                Ok(RequestDisposition::Completed(outcome)) => return Reservation::Replay(outcome),
-                Err(RequestFailure::Rule(RequestError::Conflict)) => {
+                Ok(RunDisposition::Completed(outcome)) => return Reservation::Replay(outcome),
+                Err(RunFailure::Rule(RequestError::Conflict)) => {
                     return Reservation::Refused(Refusal::Conflict);
                 }
-                Err(RequestFailure::Indeterminate) => {
+                Err(RunFailure::Indeterminate) => {
                     return Reservation::Refused(Refusal::Indeterminate);
                 }
-                Err(RequestFailure::Expired) => {
+                Err(RunFailure::Expired) => {
                     return Reservation::Refused(Refusal::Expired);
                 }
                 Err(error) => {
@@ -223,6 +245,11 @@ impl Coordinator {
         }
     }
 
+    pub async fn claim(&self, run_id: &str) -> Result<(), RunFailure> {
+        crate::application::sessions::runs::claim_run(self.units.as_ref(), run_id, &self.generation)
+            .await
+    }
+
     fn attached_run(&self, reservation_id: &str) -> Option<String> {
         lock_attached(&self.attached).get(reservation_id).cloned()
     }
@@ -233,8 +260,8 @@ impl Coordinator {
         let reservation_id = request.reservation_id().to_owned();
         let units = self.units.clone();
         self.tasks.spawn(async move {
-            let resolution = receiver.await.unwrap_or(RequestResolution::Indeterminate);
-            let resolver = ResolveRequest::new(units.clone());
+            let resolution = receiver.await.unwrap_or(RunResolution::Indeterminate);
+            let resolver = ResolveRun::new(units.clone());
             let first = resolver.execute(&request, &resolution).await;
             if first.is_ok() {
                 let _ = finished.send(());
@@ -251,8 +278,8 @@ impl Coordinator {
             // Preserve evidence when storage recovers, without withholding the
             // original caller's result. Startup recovery covers process termination.
             let fallback = match resolution {
-                RequestResolution::Undispatched => RequestResolution::Undispatched,
-                _ => RequestResolution::Indeterminate,
+                RunResolution::Undispatched => RunResolution::Undispatched,
+                _ => RunResolution::Indeterminate,
             };
             loop {
                 match resolver.execute(&request, &fallback).await {
@@ -279,9 +306,8 @@ fn lock_attached(
     attached.lock().expect("attached runs poisoned")
 }
 
-fn database_has_closed(error: &RequestFailure) -> bool {
-    let RequestFailure::Store(crate::application::error::StoreError::Database(source)) = error
-    else {
+fn database_has_closed(error: &RunFailure) -> bool {
+    let RunFailure::Store(crate::application::error::StoreError::Database(source)) = error else {
         return false;
     };
     matches!(
@@ -293,7 +319,7 @@ fn database_has_closed(error: &RequestFailure) -> bool {
 }
 
 pub struct ReservationGuard {
-    sender: Option<oneshot::Sender<RequestResolution>>,
+    sender: Option<oneshot::Sender<RunResolution>>,
     completion: Option<oneshot::Receiver<()>>,
     reservation_id: String,
     attached: AttachedRuns,
@@ -306,16 +332,16 @@ impl ReservationGuard {
     }
 
     pub async fn complete(self, status: u16, body: String) {
-        self.resolve(RequestResolution::Completed(RecordedOutcome {
-            status,
-            body,
-        }))
-        .await;
+        self.resolve(RunResolution::Completed(RecordedOutcome { status, body }))
+            .await;
+    }
+    pub async fn finish_unkeyed(self) {
+        self.resolve(RunResolution::Finished).await;
     }
     pub async fn release(self) {
-        self.resolve(RequestResolution::Undispatched).await;
+        self.resolve(RunResolution::Undispatched).await;
     }
-    async fn resolve(mut self, resolution: RequestResolution) {
+    async fn resolve(mut self, resolution: RunResolution) {
         self.detach();
         if let Some(sender) = self.sender.take() {
             let _ = sender.send(resolution);
@@ -357,7 +383,7 @@ mod tests {
         session: &str,
         key: &str,
     ) -> Result<Option<IdempotentRequest>, crate::application::error::StoreError> {
-        units.begin().await?.get_request(session, key).await
+        units.begin().await?.run_for_key(session, key).await
     }
 
     pub(super) async fn fixture() -> (
@@ -430,7 +456,7 @@ mod tests {
 
     #[tokio::test]
     async fn responses_past_retention_become_tombstones_that_still_refuse_to_run() {
-        use crate::application::idempotency::ExpireResponses;
+        use crate::application::sessions::runs::ExpireResponses;
         use crate::domain::idempotent_request::{RequestState, ResponseRetention};
         let (_, units, coordinator) = fixture().await;
         drop(proceed(coordinator.reserve("session", "k0", "code").await));
@@ -499,7 +525,7 @@ mod tests {
 
     #[tokio::test]
     async fn each_session_due_expires_in_its_own_unit_and_the_counts_add_up() {
-        use crate::application::idempotency::ExpireResponses;
+        use crate::application::sessions::runs::ExpireResponses;
         use crate::domain::idempotent_request::{RequestState, ResponseRetention};
         let (_, units, coordinator) = fixture().await;
         let mut unit = units.begin().await.unwrap();
@@ -629,14 +655,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn closure_removes_requests_atomically_and_completion_cannot_resurrect_them() {
+    async fn closure_fences_runs_atomically_and_completion_cannot_resurrect_them() {
         let (_, units, coordinator) = fixture().await;
         let guard = proceed(coordinator.reserve("session", "key", "code").await);
         let mut unit = units.begin().await.unwrap();
         let mut session = unit.get_session("session").await.unwrap().unwrap();
         session.close(crate::domain::session::ClosedReason::Deleted);
         unit.save_session(session).await.unwrap();
-        unit.remove_session_requests("session").await.unwrap();
+        crate::application::sessions::runs::cancel_session_runs(unit.as_mut(), "session")
+            .await
+            .unwrap();
         drop(unit);
         assert!(
             read_request(units.as_ref(), "session", "key")
@@ -654,7 +682,7 @@ mod tests {
             read_request(units.as_ref(), "session", "key")
                 .await
                 .unwrap()
-                .is_none()
+                .is_some_and(|run| run.state() == &RequestState::Cancelled)
         );
         assert!(matches!(
             coordinator.reserve("session", "key", "code").await,
@@ -667,7 +695,7 @@ mod tests {
         let (database, _, coordinator) = fixture().await;
         let guard = proceed(coordinator.reserve("session", "key", "code").await);
         database.transaction(|connection| Box::pin(async move {
-            sqlx::query("CREATE TRIGGER reject_completion BEFORE UPDATE ON idempotent_requests WHEN NEW.state='completed' BEGIN SELECT RAISE(FAIL, 'injected'); END").execute(connection).await?;
+            sqlx::query("CREATE TRIGGER reject_completion BEFORE UPDATE ON runs WHEN NEW.state='completed' BEGIN SELECT RAISE(FAIL, 'injected'); END").execute(connection).await?;
             Ok(())
         })).await.unwrap();
         guard
@@ -682,3 +710,6 @@ mod tests {
 
 #[cfg(test)]
 mod fault_tests;
+
+#[cfg(test)]
+mod admission_tests;

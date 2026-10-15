@@ -222,6 +222,14 @@ pub async fn execute(
             "execution_id": crate::audit::execution_id(), "error": "invalid_request", "message": error.body_text()
         }))).into_response(),
     };
+    let audit = crate::audit::execution().unwrap_or_else(|| {
+        crate::audit::ExecutionAudit::new(
+            state.audit().clone(),
+            "unauthenticated",
+            "http",
+            Some(&session_id),
+        )
+    });
     let bound = match bound_for_run(
         &state,
         &session_id,
@@ -250,13 +258,16 @@ pub async fn execute(
     };
     let guard = match &key {
         None => None,
-        Some(key) => match reserve(&state, &session_id, key, &req.code).await {
+        Some(key) => match reserve(&state, &session_id, key, &req.code, &audit).await {
             Reserved::Run(guard) => Some(guard),
             Reserved::Answered(response) => return response,
         },
     };
     if let Some(tools) = tools {
-        return run_detached(&state, session_id, bound, req.code, key, guard, tools).await;
+        return run_detached(
+            &state, session_id, bound, req.code, key, guard, tools, audit,
+        )
+        .await;
     }
 
     let outcome = run(
@@ -265,7 +276,7 @@ pub async fn execute(
         bound,
         &req.code,
         key.as_deref(),
-        crate::audit::execution(),
+        Some(audit),
         None,
     )
     .await;
@@ -311,11 +322,28 @@ enum Reserved {
 }
 
 /// Reserve `key` for a run, or answer the request without one.
-async fn reserve(state: &AppState, session_id: &str, key: &str, code: &str) -> Reserved {
+async fn reserve(
+    state: &AppState,
+    session_id: &str,
+    key: &str,
+    code: &str,
+    audit: &crate::audit::ExecutionAudit,
+) -> Reserved {
     // A run that is still going may have finished by the time it is looked up;
     // its outcome is then recorded, and a second look finds it.
     for _ in 0..2 {
-        match state.idempotency().reserve(session_id, key, code).await {
+        match state
+            .idempotency()
+            .prepare(
+                session_id,
+                Some(key),
+                code,
+                &audit.id,
+                Some(&audit.principal),
+                "session",
+            )
+            .await
+        {
             Reservation::Proceed(guard) => return Reserved::Run(guard),
             Reservation::Refused(refusal) => {
                 return Reserved::Answered(refusal_response(session_id, &refusal));
@@ -394,6 +422,7 @@ async fn session_tools(
 /// tool call, or finished. Everything that follows a run (its audit record, its
 /// last-run, its idempotency outcome) happens in that task, exactly once,
 /// whoever is listening.
+#[allow(clippy::too_many_arguments)]
 async fn run_detached(
     state: &AppState,
     session_id: String,
@@ -402,6 +431,7 @@ async fn run_detached(
     key: Option<String>,
     guard: Option<ReservationGuard>,
     tools: SessionTools,
+    audit: Arc<crate::audit::ExecutionAudit>,
 ) -> axum::response::Response {
     let shutdown = state.graceful_shutdown();
     let Some(admitted) = shutdown.admit() else {
@@ -410,16 +440,6 @@ async fn run_detached(
         }
         return (StatusCode::SERVICE_UNAVAILABLE, "server is shutting down").into_response();
     };
-    // The run's id is its execution id, so it needs an audit to name it even
-    // where the request carries none.
-    let audit = crate::audit::execution().unwrap_or_else(|| {
-        crate::audit::ExecutionAudit::new(
-            state.audit().clone(),
-            "unauthenticated",
-            "http",
-            Some(&session_id),
-        )
-    });
     let registry = Arc::clone(state.session_manager().runs());
     let (cancel, cancelled) = tokio::sync::oneshot::channel();
     let entry = registry.insert(&audit.id, &session_id, cancel);

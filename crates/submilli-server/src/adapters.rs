@@ -1,8 +1,8 @@
 //! Infrastructure implementations of application ports.
 pub(crate) mod blueprint;
-pub(crate) mod idempotency;
 pub(crate) mod mcp_grant;
 pub(crate) mod mcp_grant_store;
+pub(crate) mod run;
 pub(crate) mod sealing;
 pub(crate) mod secret;
 pub(crate) mod secret_store;
