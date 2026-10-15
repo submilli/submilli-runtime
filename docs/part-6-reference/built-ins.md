@@ -116,7 +116,7 @@ These globals are in scope and are not in the `submilli builtins` catalog.
 | `Symbol` | None |
 | `Proxy`, `Reflect` | None |
 | Prototype reflection: `Object.getPrototypeOf`, `Object.defineProperty`, `obj.hasOwnProperty`, `.prototype` | `Object.hasOwn(obj, key)` or `key in obj` for presence |
-| `Object.assign`, `Object.freeze` | Object spread `{ ...a, ...b }`, and `readonly` types |
+| `Object.freeze` | `readonly` types |
 | `WeakMap`, `WeakSet` | `Map`, `Set` |
 | `Promise`, `queueMicrotask`, `setTimeout`, `setInterval` | None. Calls are synchronous |
 | Typed arrays other than `Uint8Array`, `ArrayBuffer`, `DataView` | `Uint8Array` |
