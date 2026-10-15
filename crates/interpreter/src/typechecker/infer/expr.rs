@@ -10082,6 +10082,15 @@ impl Inferer<'_> {
             let kind_clone = entry.kind.clone();
             let prev_span = entry.declaration_span;
             let mangled = entry.mangled_name.clone();
+            if self.imported_values.contains(&target.name) {
+                self.report_import_write(&target, prev_span);
+                let target = crate::PostfixTarget::Global {
+                    name: target,
+                    mangled,
+                    target_ty: Type::Error,
+                };
+                return Ok((TypedExprKind::PostfixUnary { op, target }, Type::Error));
+            }
             match kind_clone {
                 ValueKind::Let { ty, .. } => {
                     self.postfix_on_global(op, op_symbol, target, mangled, ty, span)?

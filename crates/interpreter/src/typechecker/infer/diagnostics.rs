@@ -212,6 +212,20 @@ impl<'a> Inferer<'a> {
         );
     }
 
+    /// Report a write to an imported binding. An import is a read-only view of
+    /// the exporter's binding, in ES modules and in TypeScript.
+    pub(super) fn report_import_write(&mut self, target: &crate::Ident, import_span: Span) {
+        self.error_with_help_and_notes(
+            target.span,
+            format!("cannot assign to `{}` because it is an import", target.name),
+            vec![
+                "assign it in the module that declares it, for example in a function that module exports"
+                    .to_string(),
+            ],
+            vec![(import_span, "imported here".to_string())],
+        );
+    }
+
     /// Report a write to a block-scoped binding that cannot be reassigned: a
     /// `const`, or a nested function, which is immutable as in TypeScript.
     pub(super) fn report_const_local_write(
