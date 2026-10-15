@@ -19,6 +19,7 @@ use cap_std::fs::{Dir, File, Metadata, OpenOptions, ReadDir};
 use crate::runtime::Vfs;
 use crate::runtime::vfs::{Access, Mount, Placement};
 
+pub mod recovery;
 pub(crate) mod removal;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -376,7 +377,7 @@ impl ContentPath {
 /// A file's device and inode, which outlive any one name: how a writer checks that
 /// a path still names the file it created, and how the size limit keys the files
 /// programs hold open.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct FileIdentity {
     dev: u64,
     ino: u64,
@@ -765,6 +766,7 @@ pub fn resolve_content(
     vfs.dir().ok_or(ContainError::Disabled)?;
     let rel = relative(cwd, guest_path)?;
     let (dir, rel, placement) = vfs.locate(&rel).ok_or(ContainError::Disabled)?;
+    check_recovery_access(vfs, &dir, &rel)?;
     Ok(ContentPath::new(dir, rel, placement))
 }
 
@@ -781,6 +783,7 @@ pub fn resolve_link(vfs: &Vfs, cwd: &str, guest_path: &str) -> Result<LinkPath, 
     vfs.dir().ok_or(ContainError::Disabled)?;
     let rel = relative(cwd, guest_path)?;
     let (root, rel, placement) = vfs.locate(&rel).ok_or(ContainError::Disabled)?;
+    check_recovery_access(vfs, &root, &rel)?;
     let Some(name) = rel.file_name() else {
         let name = OsString::from(".");
         let guard = ContentPath::new(Arc::clone(&root), PathBuf::from(&name), placement);
@@ -868,6 +871,47 @@ pub(crate) fn protected_metadata(path: &Path) -> bool {
                 .eq_ignore_ascii_case(".git")
             || name.to_ascii_lowercase().starts_with(".git-submilli-")
     })
+}
+
+pub(crate) fn private_recovery_path(path: &Path) -> bool {
+    path.components().any(|part| {
+        part.as_os_str()
+            .to_string_lossy()
+            .trim_end_matches([' ', '.'])
+            .eq_ignore_ascii_case(recovery::PRIVATE)
+    })
+}
+
+fn check_recovery_access(vfs: &Vfs, root: &Dir, path: &Path) -> Result<(), ContainError> {
+    if private_recovery_path(path) {
+        return Err(ContainError::Io(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "private filesystem recovery state",
+        )));
+    }
+    if !vfs.recovery_protected() {
+        return Ok(());
+    }
+    // Ordinary paths have already been lexically checked. Durable roots also
+    // reject aliases to their private artifacts. The exclusive-writer contract
+    // excludes a link swap between resolution and the synchronous host action.
+    for ancestor in path.ancestors() {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        match root.canonicalize(ancestor) {
+            Ok(real) if private_recovery_path(&real) => {
+                return Err(ContainError::Io(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "private filesystem recovery alias",
+                )));
+            }
+            Ok(_) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
 }
 
 /// Refuse a repository at the root-relative `path` that would overlap a mount:

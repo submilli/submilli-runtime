@@ -1476,6 +1476,8 @@ The new formulas should replace these ad-hoc units with rated classes rather tha
 
 ### `submilli:fs` — operations
 
+Durable workspace path protection adds `SCAN(p) + SYSCALL(d)` at the fs gate before resolving aliases into private recovery state. Directory traversal already charges entries that it skips, including recovery directories. The async filesystem recovery adapter is below the host ABI; its caller admits work before effects and settles publication work before returning a durable result.
+
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
 | `submilli:fs#maxReadSize` | Returns a number from store data (`stdlib/fs/mod.rs:210`) | `CALL` | before | |

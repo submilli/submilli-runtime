@@ -2,7 +2,8 @@
 
 This is SUB-1815's independently deliverable **immutable-object slice**, supplying
 the proposed storage protocol for SUB-1846. It contains executable TLA+ and
-bounded TLC checks, not a Rust object store. Mutable filesystem operations
+bounded TLC checks. The [local implementation mapping](IMPLEMENTATION.md) describes
+SUB-1846's separate Rust adapter and crash tests. Mutable filesystem operations
 (write/writer-close, append, move, remove and mkdir), resource reconstruction and
 their idempotent-effect protocol remain unfinished parts of SUB-1815.
 

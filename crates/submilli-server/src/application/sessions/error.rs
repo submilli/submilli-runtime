@@ -4,6 +4,7 @@ use crate::domain::session::SessionRuleError;
 
 #[derive(Debug)]
 pub enum BootError {
+    Objects(crate::application::durable_objects::ObjectStoreError),
     Sessions(StoreError),
     Idempotency(StoreError),
     /// Leftover last-run files could not be removed.
@@ -20,6 +21,7 @@ pub enum BootError {
 impl std::fmt::Display for BootError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Objects(_) => f.write_str("cannot recover durable object storage"),
             Self::Sessions(_) => f.write_str("cannot enumerate persisted sessions"),
             Self::Idempotency(_) => f.write_str("cannot enumerate idempotency sessions"),
             Self::LastRuns(_) => f.write_str("cannot sweep leftover last-run files"),
@@ -36,6 +38,7 @@ impl std::fmt::Display for BootError {
 impl std::error::Error for BootError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Objects(error) => Some(error),
             Self::Sessions(error) | Self::Idempotency(error) | Self::LastRuns(error) => Some(error),
             Self::Secrets(error) => Some(error),
             Self::Scratch { source, .. } => Some(source),

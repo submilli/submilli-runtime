@@ -1,0 +1,18 @@
+{
+  "module": "DirectoryRecovery",
+  "constants": {"Operation": "mkdir", "MaxCrashes": 1, "Fault": "none", "Witness": ""},
+  "invariants": ["TypeOK", "ReceiptDurable", "NewerUntouched", "NoUncertainError", "ReturnAfterReceipt"],
+  "properties": [],
+  "cases": [
+    {"name": "mkdir", "kind": "safety"},
+    {"name": "rmdir", "kind": "safety", "constants": {"Operation": "rmdir"}},
+    {"name": "mkdir-progress", "kind": "liveness", "specification": "LiveSpec", "properties": ["Progress"]},
+    {"name": "rmdir-progress", "kind": "liveness", "specification": "LiveSpec", "properties": ["Progress"], "constants": {"Operation": "rmdir"}},
+    {"name": "negative-early-receipt", "kind": "negative", "invariant": "ReceiptDurable", "constants": {"Fault": "early-receipt"}},
+    {"name": "negative-stale-retry", "kind": "negative", "invariant": "NewerUntouched", "constants": {"Fault": "retry-completed"}},
+    {"name": "negative-uncertain-error", "kind": "negative", "invariant": "NoUncertainError", "constants": {"Fault": "early-error"}},
+    {"name": "witness-publication-gap", "kind": "witness", "invariant": "NeverWitness", "constants": {"Witness": "gap"}},
+    {"name": "witness-lost-ack", "kind": "witness", "invariant": "NeverWitness", "constants": {"Witness": "lost-ack"}},
+    {"name": "witness-path-reuse", "kind": "witness", "invariant": "NeverWitness"}
+  ]
+}

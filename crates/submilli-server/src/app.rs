@@ -109,6 +109,7 @@ struct AppStateInner {
     runtime: RuntimeConfig,
     blueprints: Arc<dyn BlueprintStore>,
     unit_of_work: Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory>,
+    durable_objects: Option<crate::objects::DurableObjects>,
     secret_store: Option<Arc<dyn SecretStore>>,
     /// A pre-database secret-store directory startup imports.
     legacy_secrets: Option<LegacySecrets>,
@@ -242,6 +243,15 @@ impl AppState {
         embedding_dispatch_factory: EmbeddingDispatchFactory,
     ) -> Result<Self> {
         let database = config.resolve_database().await?;
+        if config.durable_objects.is_some() && database.is_ephemeral() {
+            anyhow::bail!("durable object storage requires a persistent SQLite database");
+        }
+        if config.durable_objects.is_some() {
+            crate::config::validate_volumes(
+                &config.volumes,
+                &crate::config::ServerDirectories::from_config(&config),
+            )?;
+        }
         // An embedder's own store keeps its secrets; only the database imports.
         let legacy_secrets_present = match (&config.secret_store_dir, &config.secret_store) {
             (Some(directory), None) => {
@@ -397,6 +407,23 @@ impl AppState {
             Coordinator::new(unit_of_work.clone(), generation)
                 .with_last_runs(session_manager.last_runs().clone()),
         );
+        let durable_objects = match config.durable_objects {
+            Some(objects) => {
+                let cipher = config
+                    .session_cipher
+                    .clone()
+                    .context("durable object storage requires the secret-store encryption key")?;
+                Some(
+                    crate::objects::DurableObjects::with_units(
+                        objects,
+                        unit_of_work.clone(),
+                        cipher,
+                    )
+                    .await?,
+                )
+            }
+            None => None,
+        };
 
         // An embedder's store holds both secrets and grants, as the CLI's does,
         // and keeps its own; otherwise both live in the database, sealed with
@@ -453,6 +480,7 @@ impl AppState {
                 runtime,
                 blueprints,
                 unit_of_work,
+                durable_objects,
                 secret_store,
                 legacy_secrets,
                 oauth_tokens,
@@ -505,6 +533,12 @@ impl AppState {
         if self.inner.booted.load(Ordering::Acquire) {
             return Ok(());
         }
+        if let Some(objects) = &self.inner.durable_objects {
+            objects
+                .recover()
+                .await
+                .map_err(crate::session_manager::BootError::Objects)?;
+        }
         self.inner.session_manager.boot().await?;
         self.import_legacy_secrets().await?;
         self.inner.idempotency.recover().await.map_err(|error| {
@@ -522,6 +556,11 @@ impl AppState {
         self.start_reaper();
         self.inner.booted.store(true, Ordering::Release);
         Ok(())
+    }
+
+    /// Shared immutable payload storage, when explicitly configured.
+    pub fn durable_objects(&self) -> Option<&crate::objects::DurableObjects> {
+        self.inner.durable_objects.as_ref()
     }
 
     /// Bring a pre-database secret-store directory into the database, once,

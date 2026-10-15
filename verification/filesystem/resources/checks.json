@@ -1,0 +1,17 @@
+{
+  "module": "ResourceRecovery",
+  "constants": {"MaxCrashes": 1, "Fault": "none", "Witness": "restore"},
+  "invariants": ["TypeOK", "Retained", "SameResource", "SameCursor", "RecordedRead"],
+  "properties": [],
+  "cases": [
+    {"name": "resource-recovery", "kind": "safety"},
+    {"name": "resource-progress", "kind": "liveness", "specification": "LiveSpec", "properties": ["Progress"]},
+    {"name": "negative-unsynced-pin", "kind": "negative", "invariant": "Retained", "constants": {"Fault": "unsynced-pin"}},
+    {"name": "negative-path-restoration", "kind": "negative", "invariant": "SameResource", "constants": {"Fault": "restore-path"}},
+    {"name": "negative-cursor-reset", "kind": "negative", "invariant": "SameCursor", "constants": {"Fault": "restore-zero"}},
+    {"name": "negative-fresh-read", "kind": "negative", "invariant": "RecordedRead", "constants": {"Fault": "fresh-replay"}},
+    {"name": "negative-early-collection", "kind": "negative", "invariant": "Retained", "constants": {"Fault": "early-collection"}},
+    {"name": "witness-restore-after-replacement", "kind": "witness", "invariant": "NeverWitness"},
+    {"name": "witness-cleanup-after-drain", "kind": "witness", "invariant": "NeverWitness", "constants": {"Witness": "cleanup"}}
+  ]
+}

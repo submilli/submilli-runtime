@@ -66,6 +66,13 @@ impl DiskQuota {
         self.used.load(Ordering::Acquire)
     }
 
+    /// A retained workspace keeps every live inode under a private name. Its
+    /// exclusive writer may reconcile measured physical usage after recovery,
+    /// including partial writes whose SQL receipt has not committed yet.
+    pub(crate) fn reconcile_retained(&self, bytes: u64) {
+        self.used.store(bytes, Ordering::Release);
+    }
+
     pub fn is_unmeasured(&self) -> bool {
         self.unmeasured
     }

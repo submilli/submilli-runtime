@@ -1517,8 +1517,31 @@ fn gate(
     capability: &str,
     context: serde_json::Value,
 ) -> wasmtime::Result<Option<CallTicket>> {
+    let private_path_work = if caller.data().vfs.recovery_protected() {
+        context
+            .as_object()
+            .into_iter()
+            .flat_map(|object| object.iter())
+            .filter(|(key, _)| {
+                matches!(
+                    key.as_str(),
+                    "path" | "from" | "to" | "source" | "destination"
+                )
+            })
+            .filter_map(|(_, value)| value.as_str())
+            .fold((0u64, 0u64), |(bytes, depth), path| {
+                (
+                    bytes.saturating_add(path.len() as u64),
+                    depth.saturating_add(path.split('/').count() as u64),
+                )
+            })
+    } else {
+        (0, 0)
+    };
     let ticket = check_security_call(&mut *caller, capability, context)?;
     fuel::charge(&mut *caller, fuel::SYSCALL, 1)?;
+    fuel::charge(&mut *caller, fuel::SCAN, private_path_work.0)?;
+    fuel::charge(&mut *caller, fuel::SYSCALL, private_path_work.1)?;
     Ok(ticket)
 }
 
@@ -1856,6 +1879,9 @@ fn copy_bounded(
         };
         let entry = entry.map_err(|e| contain_trap(run.op, run.pair, &ContainError::from(e)))?;
         let name = entry.file_name();
+        if crate::runtime::fs::private_recovery_path(std::path::Path::new(&name)) {
+            continue;
+        }
         let from = frame.from.child(Arc::clone(&frame.from_dir), name.clone());
         let to = frame.to.child(Arc::clone(&frame.to_dir), name);
         if let Some(child) = copy_entry(&from, &to, run, work, frames.len())? {
