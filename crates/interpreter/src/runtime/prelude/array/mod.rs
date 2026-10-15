@@ -243,8 +243,14 @@ fn concat(
     mut acc: Vec<Val>,
     others: &Val,
 ) -> wasmtime::Result<Vec<Val>> {
-    for sub in read_array(caller, others, "Array#concat")? {
-        acc.extend(read_array(caller, &sub, "Array#concat")?);
+    // As in JS, an array argument contributes its elements and anything else
+    // is appended as one element.
+    for item in read_array(caller, others, "Array#concat")? {
+        if is_array(caller, &item)? {
+            acc.extend(read_array(caller, &item, "Array#concat")?);
+        } else {
+            acc.push(item);
+        }
     }
     Ok(acc)
 }
@@ -327,8 +333,17 @@ async fn join(
 // Mutators (snapshot transforms preserve receiver identity)
 // ---------------------------------------------------------------------------
 
-fn push(caller: &mut Caller<'_, StoreData>, receiver: &Val, elem: Val) -> wasmtime::Result<f64> {
-    crate::runtime::array_storage::ArrayStorage::read(caller, receiver)?.push(caller, elem)
+fn push(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    items: Vec<Val>,
+) -> wasmtime::Result<f64> {
+    let mut storage = ArrayStorage::read(caller, receiver)?;
+    let mut length = f64::from(storage.len);
+    for item in items {
+        length = storage.push(caller, item)?;
+    }
+    Ok(length)
 }
 
 /// `pop()`: the last element, removed in place; `undefined` when empty.

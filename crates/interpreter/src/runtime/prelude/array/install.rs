@@ -213,21 +213,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         method_key("push"),
-        ft(vec![array.clone(), elem.clone()], vec![num.clone()]),
+        ft(vec![array.clone(), array.clone()], vec![num.clone()]),
         true,
         |caller, params, results| {
-            let [receiver, element] = params else {
-                return Err(crate::runtime::host::fatal_host_error(
-                    "invalid Array#push arguments",
-                ));
-            };
-            let [result] = results else {
-                return Err(crate::runtime::host::fatal_host_error(
-                    "invalid Array#push result slot",
-                ));
-            };
-            let n = super::push(caller, receiver, *element)?;
-            *result = Val::F64(n.to_bits());
+            let items = super::read_array(caller, abi_arg(params, 1)?, "Array#push")?;
+            let n = super::push(caller, abi_arg(params, 0)?, items)?;
+            *abi_result(results, 0)? = Val::F64(n.to_bits());
             Ok(())
         },
     )?;
@@ -861,8 +852,11 @@ pub fn declare(defs: &mut PackageDeclaration) {
         vec![
             arr(),
             Param::new(
-                "others",
-                Type::Array(Box::new(Type::Readonly(Box::new(arr_ty())))),
+                "items",
+                Type::Array(Box::new(Type::union(vec![
+                    t(),
+                    Type::Readonly(Box::new(arr_ty())),
+                ]))),
             ),
         ],
         arr_ty(),
@@ -892,7 +886,12 @@ pub fn declare(defs: &mut PackageDeclaration) {
         Type::Boolean,
     );
 
-    m(defs, "push", vec![arr(), elem()], Type::Number);
+    m(
+        defs,
+        "push",
+        vec![arr(), Param::new("items", arr_ty())],
+        Type::Number,
+    );
     m(defs, "pop", vec![arr()], t_or_undefined());
     m(defs, "shift", vec![arr()], t_or_undefined());
     m(
@@ -1166,11 +1165,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             optional: false,
                             generics: Vec::new(),
-                            params: vec![Param::new("elem", Type::TypeVar("T".to_string()))],
+                            params: vec![Param::rest(
+                                "items",
+                                Type::Array(Box::new(Type::TypeVar("T".to_string()))),
+                            )],
                             ret: Type::Number,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Appends `elem` to the end of the array.\n * @param elem The value to add.\n * @returns The new length of the array.\n */",
+                                "/**\n * Appends `items` to the end of the array, in argument order.\n * @param items Zero or more elements to add.\n * @returns The new length of the array.\n */",
                             ),
                         },
                     ),
@@ -1420,23 +1422,22 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             optional: false,
                             generics: Vec::new(),
-                            // → variadic concat —
-                            // `concat(...others: T[][]): T[]`. The
-                            // wrapper sees a single `$Array` carrying
-                            // the trailing arrays; the body sums each
-                            // input's length and one `array.copy`s
-                            // them all into a fresh combined raw
-                            // array.
+                            // `concat(...items: (T | readonly T[])[]): T[]`,
+                            // tsc's `ConcatArray` overload. The wrapper sees one
+                            // `$Array` carrying the trailing arguments.
                             params: vec![Param::rest(
-                                "others",
-                                Type::Array(Box::new(Type::Readonly(Box::new(Type::Array(
-                                    Box::new(Type::TypeVar("T".to_string())),
-                                ))))),
+                                "items",
+                                Type::Array(Box::new(Type::union(vec![
+                                    Type::TypeVar("T".to_string()),
+                                    Type::Readonly(Box::new(Type::Array(Box::new(
+                                        Type::TypeVar("T".to_string()),
+                                    )))),
+                                ]))),
                             )],
                             ret: Type::Array(Box::new(Type::TypeVar("T".to_string()))),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns a new array containing this array's elements followed by every element of each `others` array, in order.\n * Neither this array nor any input is modified.\n * @param others Zero or more arrays whose elements are appended.\n */",
+                                "/**\n * Returns a new array containing this array's elements followed by each of `items`, in order. An array item contributes its elements; any other item is appended as one element.\n * Neither this array nor any input is modified.\n * @param items Zero or more elements or arrays to append.\n */",
                             ),
                         },
                     ),

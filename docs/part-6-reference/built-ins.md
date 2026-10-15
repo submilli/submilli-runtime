@@ -193,7 +193,7 @@ A homogeneous array of `T`.
 | --- | --- |
 | `readonly length: number` | The number of elements in the array. |
 | `at(index: number): T \| undefined` | Returns the element at `index`, or `undefined` if out of range. |
-| `concat(...others: (readonly T[])[]): T[]` | Returns a new array containing this array's elements followed by every element of each `others` array, in order. |
+| `concat(...items: (T \| readonly T[])[]): T[]` | Returns a new array containing this array's elements followed by each of `items`, in order. An array item contributes its elements; any other item is appended as one element. |
 | `copyWithin(target: number, start?: number, end?: number): T[]` | Copies the slots `[start, end)` to `target`, in place (overlap-safe), and returns the array. |
 | `entries(): Iterator<[number, T]>` | Returns a live `Iterator<[number, T]>` of index/element pairs. |
 | `every(predicate: (arg0: T, arg1: number, arg2: T[]) => unknown): boolean` | Returns `true` if `predicate` returned a truthy value for every element. |
@@ -213,7 +213,7 @@ A homogeneous array of `T`.
 | `lastIndexOf(elem: T, fromIndex?: number): number` | Returns the index of the last element equal to `elem`, or `-1`. |
 | `map<U>(callback: (arg0: T, arg1: number, arg2: T[]) => U): U[]` | Returns a new array produced by applying `callback` to each element. |
 | `pop(): T \| undefined` | Removes the last element and returns it, or `undefined` if the array is empty. |
-| `push(elem: T): number` | Appends `elem` to the end of the array. |
+| `push(...items: T[]): number` | Appends `items` to the end of the array, in argument order, and returns the new length. |
 | `reduce<U>(callback: (arg0: U, arg1: T, arg2: number, arg3: T[]) => U, initial: U): U` | Reduces the array to a single value. |
 | `reduceRight<U>(callback: (arg0: U, arg1: T, arg2: number, arg3: T[]) => U, initial: U): U` | Reduces the array right-to-left. |
 | `reverse(): T[]` | Reverses the array in place and returns it. |
