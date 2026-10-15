@@ -13659,8 +13659,13 @@ fn merge_spread_field_type(
     let Some(earlier) = earlier.filter(|_| field.optional) else {
         return field;
     };
+    // Without `exactOptionalPropertyTypes`, `a?: T` and `a?: T | undefined`
+    // are one type, so the spread adds `T` either way, as in TypeScript.
     crate::ObjectField {
-        ty: Type::union(vec![earlier.ty, field.ty]),
+        ty: Type::union(vec![
+            earlier.ty,
+            super::param_defaults::without_undefined(&field.ty),
+        ]),
         optional: earlier.optional,
         readonly: false,
         method: false,
