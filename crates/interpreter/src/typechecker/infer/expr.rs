@@ -254,7 +254,7 @@ fn excess_field_fix_help(
 /// Array methods that mutate the receiver. Rejected on tuple-typed and `readonly`
 /// receivers: tuples are fixed-length, so mutation would break their arity and
 /// per-position types, and a `readonly` array only permits reading.
-fn is_mutating_array_method(name: &str) -> bool {
+pub(super) fn is_mutating_array_method(name: &str) -> bool {
     matches!(
         name,
         "push"
@@ -269,8 +269,12 @@ fn is_mutating_array_method(name: &str) -> bool {
     )
 }
 
-/// `"Map"` or `"Set"` for a `ReadonlyMap` or `ReadonlySet` receiver.
+/// `"Map"` or `"Set"` for a `ReadonlyMap` or `ReadonlySet` receiver, or a
+/// union with one as a member.
 fn readonly_collection(ty: &Type) -> Option<&'static str> {
+    if let Type::Union(members) = ty.peel() {
+        return members.iter().find_map(readonly_collection);
+    }
     if !ty.is_readonly_array() {
         return None;
     }
@@ -8293,6 +8297,7 @@ impl Inferer<'_> {
         }
         let is_array = matches!(recv_ty.peel(), Type::Array(_));
         let method = name.name.clone();
+        let is_set = iface_mangled == crate::mangle::prelude("Set");
         let call = self.infer_generic_method_call(
             typed_receiver,
             iface_mangled,
@@ -8304,13 +8309,81 @@ impl Inferer<'_> {
             expected,
             span,
         )?;
+        if method == "concat"
+            && let Type::Array(element) = call.1.peel()
+        {
+            self.reject_concat_arrays_as_elements(&call.0, element)?;
+        }
         if is_array {
             return self.narrow_by_callback_predicate(&method, call, span);
         }
-        if method == "intersection" {
+        if is_set && method == "intersection" {
             return self.narrow_set_intersection(call);
         }
         Ok(call)
+    }
+
+    /// `concat` spreads every array argument, as JavaScript does, so an array
+    /// may not stand for one element even where the element type is itself an
+    /// array: `rows.concat([1, 2])` on `number[][]` appends `1` and `2`. tsc
+    /// accepts that call through its `T` arm; Submilli reports it, since the
+    /// result would hold numbers typed as arrays.
+    fn reject_concat_arrays_as_elements(
+        &mut self,
+        call: &TypedExprKind,
+        element: &Type,
+    ) -> Result<(), CompilerFailure> {
+        let TypedExprKind::MethodCall { args, .. } = call else {
+            return Ok(());
+        };
+        let Some(&packed) = args.last() else {
+            return Ok(());
+        };
+        let TypedExprKind::ArrayLiteral { elements, .. } = &self
+            .typed_ast
+            .try_expr(packed)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        else {
+            return Ok(());
+        };
+        let spread_target = Type::Readonly(Box::new(Type::Array(Box::new(element.clone()))));
+        for item in elements.clone() {
+            let (id, spread) = match item {
+                crate::TypedArrayElement::Value(id) => (id, false),
+                crate::TypedArrayElement::Spread(id) => (id, true),
+            };
+            let typed = self
+                .typed_ast
+                .try_expr(id)
+                .map_err(crate::typechecker::arena_failure)?;
+            let span = typed.span;
+            let arg_ty = match (spread, typed.ty.peel()) {
+                (false, ty) => ty.clone(),
+                (true, Type::Array(inner)) => inner.as_ref().clone(),
+                (true, _) => continue,
+            };
+            let members = match arg_ty.peel() {
+                Type::Union(members) => members.clone(),
+                _ => vec![arg_ty.clone()],
+            };
+            let spreads_wrongly = members.iter().any(|member| {
+                matches!(member.peel(), Type::Array(_) | Type::Tuple(_))
+                    && !super::assignable::assignable(member, &spread_target, self.resolver())
+            });
+            if spreads_wrongly {
+                self.error_with_help(
+                    span,
+                    format!("`concat` spreads `{arg_ty}` into elements of type `{element}`"),
+                    vec![
+                        "`concat` appends an array argument's elements, not the array; \
+                         wrap it to append it as one element: `concat([value])`"
+                            .to_string(),
+                    ],
+                );
+            }
+        }
+        Ok(())
     }
 
     /// `a.intersection(b)` holds only elements of both sets, so where `b`'s
