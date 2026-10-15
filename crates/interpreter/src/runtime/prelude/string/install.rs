@@ -14,7 +14,8 @@ use super::transforms::{TrimEnds, to_lower_case, to_upper_case, trim_range};
 use super::{
     RangeError, Str, at_index, cmp, code_point, concat_length, ends_with_window, from_char_code,
     from_code_point, includes, index_of, is_well_formed, last_index_of, normalize, pad_length,
-    repeat_length, slice_range, starts_with_window, substring_range, to_well_formed, unit_index,
+    repeat_length, slice_range, starts_with_window, substr_range, substring_range, to_well_formed,
+    unit_index,
 };
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
@@ -54,6 +55,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 
     reg_range_to_str(linker, &engine, &abi, "slice", slice_range)?;
     reg_range_to_str(linker, &engine, &abi, "substring", substring_range)?;
+    reg_range_to_str(linker, &engine, &abi, "substr", substr_range)?;
 
     reg_str_str_num_to_num(linker, &engine, &abi, "indexOf", index_of)?;
     reg_str_str_num_to_num(linker, &engine, &abi, "lastIndexOf", last_index_of)?;
@@ -80,6 +82,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     reg_trim(linker, &engine, &abi, "trim", TrimEnds::Both)?;
     reg_trim(linker, &engine, &abi, "trimStart", TrimEnds::Start)?;
     reg_trim(linker, &engine, &abi, "trimEnd", TrimEnds::End)?;
+    reg_trim(linker, &engine, &abi, "trimLeft", TrimEnds::Start)?;
+    reg_trim(linker, &engine, &abi, "trimRight", TrimEnds::End)?;
     reg_str_str_to_str_fallible(linker, &engine, &abi, "normalize", normalize)?;
 
     reg_repeat(linker, &engine, &abi)?;
@@ -335,6 +339,16 @@ pub fn declare(defs: &mut PackageDeclaration) {
     );
     m(
         defs,
+        "substr",
+        vec![
+            s(),
+            Param::new("start", Type::Number),
+            Param::new("length", Type::Number),
+        ],
+        Type::String,
+    );
+    m(
+        defs,
         "indexOf",
         vec![
             s(),
@@ -419,6 +433,8 @@ pub fn declare(defs: &mut PackageDeclaration) {
     m(defs, "trim", vec![s()], Type::String);
     m(defs, "trimStart", vec![s()], Type::String);
     m(defs, "trimEnd", vec![s()], Type::String);
+    m(defs, "trimLeft", vec![s()], Type::String);
+    m(defs, "trimRight", vec![s()], Type::String);
     m(
         defs,
         "normalize",
@@ -1599,6 +1615,26 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         },
                     ),
                     (
+                        "substr".to_string(),
+                        MethodSig {
+                            optional: false,
+                            generics: Vec::new(),
+                            params: vec![
+                                Param::new("start", Type::Number),
+                                Param::with_default(
+                                    "length",
+                                    Type::Number,
+                                    crate::DefaultValue::Number(f64::INFINITY),
+                                ),
+                            ],
+                            ret: Type::String,
+                            predicate: None,
+                            doc: doc(
+                                "/**\n * Returns `length` code units starting at `start`; a negative `start` counts from the end. Deprecated in JavaScript in favour of `slice`.\n * @param start First index to copy.\n * @param length How many code units to copy. Defaults to the rest of the string.\n */",
+                            ),
+                        },
+                    ),
+                    (
                         "substring".to_string(),
                         MethodSig {
                             optional: false,
@@ -1824,6 +1860,32 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             predicate: None,
                             doc: doc(
                                 "/**\n * Returns a new string with Unicode whitespace removed from the start.\n */",
+                            ),
+                        },
+                    ),
+                    (
+                        "trimLeft".to_string(),
+                        MethodSig {
+                            optional: false,
+                            generics: Vec::new(),
+                            params: Vec::new(),
+                            ret: Type::String,
+                            predicate: None,
+                            doc: doc(
+                                "/**\n * The older name of `trimStart`: returns a new string with Unicode whitespace removed from the start.\n */",
+                            ),
+                        },
+                    ),
+                    (
+                        "trimRight".to_string(),
+                        MethodSig {
+                            optional: false,
+                            generics: Vec::new(),
+                            params: Vec::new(),
+                            ret: Type::String,
+                            predicate: None,
+                            doc: doc(
+                                "/**\n * The older name of `trimEnd`: returns a new string with Unicode whitespace removed from the end.\n */",
                             ),
                         },
                     ),
