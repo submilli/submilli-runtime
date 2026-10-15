@@ -868,6 +868,20 @@ fn assignable_rec(
         (Type::Null | Type::Undefined | Type::Void, _) if expected.is_empty_object() => false,
         (Type::GenericParam { .. }, _) if expected.is_empty_object() => false,
         (_, _) if expected.is_empty_object() => true,
+        // `object` holds every value but the primitives, `null` and `undefined`.
+        (_, Type::NonPrimitive) => matches!(
+            actual,
+            Type::NonPrimitive
+                | Type::Object { .. }
+                | Type::Array(_)
+                | Type::Tuple(_)
+                | Type::Readonly(_)
+                | Type::InterfaceRef { .. }
+                | Type::ClassRef { .. }
+                | Type::Function { .. }
+                | Type::Uint8Array
+        ),
+        (Type::NonPrimitive, _) => false,
         (_, Type::Object { .. } | Type::InterfaceRef { .. } | Type::ClassRef { .. })
             if types.strict_subtype && is_primitive(actual) =>
         {

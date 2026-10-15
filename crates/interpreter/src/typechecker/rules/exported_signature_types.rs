@@ -319,6 +319,7 @@ fn collect_signature_named_types(
         | Type::Undefined
         | Type::Void
         | Type::Unknown
+        | Type::NonPrimitive
         | Type::Error
         | Type::Never
         | Type::TypeVar(_)

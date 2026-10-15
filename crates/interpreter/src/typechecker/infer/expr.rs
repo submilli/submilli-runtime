@@ -1650,7 +1650,7 @@ impl Inferer<'_> {
         }
         let (typed_rhs, rhs_ty) = self.infer_expr(rhs, None)?;
         let receiver_ok = match rhs_ty.peel() {
-            Type::Unknown | Type::Error => true,
+            Type::Unknown | Type::NonPrimitive | Type::Error => true,
             ty if Self::is_field_bearing(ty) => true,
             // A union discriminated by field presence is the reason `in` exists;
             // its members are as often named (interfaces, classes) as inline.
@@ -6470,6 +6470,8 @@ impl Inferer<'_> {
                 .map(|index| *index.value);
             let fields = match alternative {
                 Type::Object { fields, .. } => fields,
+                // Like `{}`, `object` names no field to copy.
+                Type::NonPrimitive => ObjectFields::new(),
                 // A spread copies nothing from a value that is always falsy, as
                 // `c && { a: 1 }` is when `c` is false, or from `null` or
                 // `undefined`, when
@@ -6625,7 +6627,7 @@ impl Inferer<'_> {
         self.collect_spread_alternatives(typed_source, source_ty, &mut alternatives)?;
         Ok(!alternatives.is_empty()
             && alternatives.iter().all(|alternative| {
-                matches!(alternative.peel(), Type::Object { .. })
+                matches!(alternative.peel(), Type::Object { .. } | Type::NonPrimitive)
                     || self.resolver().index_signature(alternative).is_some()
             }))
     }
@@ -12655,7 +12657,8 @@ fn unsupported_cast_target_reason(
         | Type::Void
         | Type::Uint8Array
         | Type::Function { .. }
-        | Type::Unknown => None,
+        | Type::Unknown
+        | Type::NonPrimitive => None,
         Type::BigIntLiteral(_) => Some(
             "bigint literal types aren't supported as `as` targets — cast to `bigint` \
              and compare the value",
@@ -13548,7 +13551,12 @@ fn reads_object_fields(ty: &Type) -> bool {
 /// A `toString` call would throw on the nullish ones.
 fn interpolates_at_run_time(ty: &Type) -> bool {
     match ty.peel() {
-        Type::Null | Type::Unknown | Type::TypeVar(_) | Type::GenericParam { .. } => true,
+        // `object` may hold a closure, which has no vtable `toString`.
+        Type::Null
+        | Type::Unknown
+        | Type::NonPrimitive
+        | Type::TypeVar(_)
+        | Type::GenericParam { .. } => true,
         Type::Union(members) => members.iter().any(|member| {
             matches!(member.peel(), Type::Undefined | Type::Void)
                 || interpolates_at_run_time(member)
@@ -13588,6 +13596,7 @@ fn has_to_string(ty: &Type) -> bool {
             | Type::TypeVar(_)
             | Type::GenericParam { .. }
             | Type::Unknown
+            | Type::NonPrimitive
             | Type::Error
     )
 }

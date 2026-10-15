@@ -966,7 +966,10 @@ fn emit_string_index_with_receiver_on_stack(
     emit_index_number(
         emitter,
         ctx,
-        &ctx.ta.try_expr(index).map_err(crate::codegen::arena_failure)?.ty,
+        &ctx.ta
+            .try_expr(index)
+            .map_err(crate::codegen::arena_failure)?
+            .ty,
     )?;
     let index_local = emitter.add_anonymous_local(ValType::F64)?;
     emitter.instruction(Instruction::LocalSet(index_local));
@@ -5025,33 +5028,7 @@ fn emit_typeof_tag(
                     .ty,
             )?;
             emitter.instruction(Instruction::LocalSet(scratch));
-
-            // Stated as the complement of the primitive tags rather than a list
-            // of object-like types: every runtime value is an `$Object`
-            // subtype, so a positive list silently answers "not an object" for
-            // any struct nobody remembered to add. The exclusions below are
-            // exhaustive by construction — they are the `$Object` subtypes that
-            // carry a primitive tag of their own.
-            let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
-                crate::codegen::internal_failure("intrinsics declared by codegen entry")
-            })?;
-            emitter.instruction(Instruction::LocalGet(scratch));
-            emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
-                intrinsics.object,
-            )));
-            for primitive in [
-                intrinsics.string,
-                intrinsics.boxed_number,
-                intrinsics.boxed_boolean,
-                intrinsics.bigint,
-                intrinsics.closure,
-                intrinsics.undefined,
-            ] {
-                emitter.instruction(Instruction::LocalGet(scratch));
-                emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(primitive)));
-                emitter.instruction(Instruction::I32Eqz);
-                emitter.instruction(Instruction::I32And);
-            }
+            emit_is_non_primitive(emitter, ctx, scratch, Closures::AreNotObjects)?;
             if nullable {
                 // JS quirk: `typeof null === "object"`. Only OR in
                 // the null check when the source's Wasm type admits
@@ -5063,6 +5040,55 @@ fn emit_typeof_tag(
             }
         }
     };
+    Ok(())
+}
+
+/// Whether a closure passes [`emit_is_non_primitive`]: it does for the
+/// `object` type, but `typeof` tags it `"function"`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Closures {
+    AreObjects,
+    AreNotObjects,
+}
+
+/// Test whether the value in `local` is an object rather than `null`,
+/// `undefined` or a primitive, leaving an `i32` on the stack.
+///
+/// Stated as the complement of the primitive tags rather than a list of
+/// object-like types: every runtime value is an `$Object` subtype, so a
+/// positive list silently answers "not an object" for any struct nobody
+/// remembered to add. The exclusions below are exhaustive by construction —
+/// they are the `$Object` subtypes that carry a primitive tag of their own.
+pub(crate) fn emit_is_non_primitive(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    local: u32,
+    closures: Closures,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
+    emitter.instruction(Instruction::LocalGet(local));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        intrinsics.object,
+    )));
+    let mut excluded = vec![
+        intrinsics.string,
+        intrinsics.boxed_number,
+        intrinsics.boxed_boolean,
+        intrinsics.bigint,
+        intrinsics.undefined,
+    ];
+    if closures == Closures::AreNotObjects {
+        excluded.push(intrinsics.closure);
+    }
+    for primitive in excluded {
+        emitter.instruction(Instruction::LocalGet(local));
+        emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(primitive)));
+        emitter.instruction(Instruction::I32Eqz);
+        emitter.instruction(Instruction::I32And);
+    }
     Ok(())
 }
 

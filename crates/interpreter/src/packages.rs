@@ -1749,6 +1749,7 @@ fn ts_type(ty: &Type) -> String {
         Type::Undefined => "undefined".to_string(),
         Type::Void => "void".to_string(),
         Type::Unknown => "unknown".to_string(),
+        Type::NonPrimitive => "object".to_string(),
         Type::Function {
             params,
             ret,

@@ -150,6 +150,7 @@ impl<'a> ShapeCollector<'a> {
             | Type::Void
             | Type::Never
             | Type::Unknown
+            | Type::NonPrimitive
             | Type::Error
             | Type::TypeVar(_)
             | Type::GenericParam { .. }

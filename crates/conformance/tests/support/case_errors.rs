@@ -107,7 +107,6 @@ const LIBRARY_TYPES: &[&str] = &[
     "Symbol",
     "TemplateStringsArray",
     "Window",
-    "object",
     "symbol",
 ];
 

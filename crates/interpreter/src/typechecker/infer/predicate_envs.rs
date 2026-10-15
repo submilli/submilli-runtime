@@ -759,14 +759,6 @@ impl<'a> Inferer<'a> {
         // less that value, once proven otherwise: a call or an alias may have
         // written it since, and codegen would trust a `never`. Only a field
         // that can't hold anything else is `never`.
-        // `typeof x === "object"` leaves an `unknown` `x` an object or `null`,
-        // which Submilli spells `unknown` for want of an `object` type; ruling
-        // out a nullish value then leaves it `unknown`, not `{}`, so `in` and
-        // field tests still apply.
-        let tested_object = matches!(path_ty.peel(), Type::Unknown)
-            && self
-                .lookup_narrowed_view(&path)
-                .is_some_and(|view| view.facts.contains(narrowing::TypeFacts::IS_OBJECT));
         let strip_compared = |ty: &Type| {
             if compares_undefined {
                 narrowing::strip_undefined(ty)
@@ -774,11 +766,7 @@ impl<'a> Inferer<'a> {
                 narrowing::strip_null(ty)
             }
         };
-        let stripped = if tested_object {
-            path_ty.clone()
-        } else {
-            strip_compared(&path_ty)
-        };
+        let stripped = strip_compared(&path_ty);
         let unequal_ty = if narrowing::is_ruled_out(&stripped) && !self.rules_out_to_never(&path) {
             self.declared_path_ty(&path)
                 .map(|declared| strip_compared(&declared))
