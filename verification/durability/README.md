@@ -212,7 +212,11 @@ marks older unfinished reservations indeterminate; it does not replay programs.
 | ExpireResponse, legacy initialization | SUB-1322 preserves SUB-708 retention and legacy indeterminate keys. | Expiry never enables another execution; absent legacy manifests are never synthesized. |
 
 Filesystem bytes, namespace changes and fsync are not modeled as atomic SQLite
-effects here; SUB-1815 owns that protocol. Atomic database-local effects such as
+effects here; SUB-1815 owns that protocol. Its independently runnable
+[immutable-object publication model](../objects/README.md) checks the storage
+contract for large payloads and captured downloads. Mutable workspace operations
+and a formal composition with this execution model remain separate work.
+Atomic database-local effects such as
 KV need the same event/sequence transaction contract, but their concrete mutation
 semantics and schema remain implementation work in SUB-989/SUB-1322.
 
