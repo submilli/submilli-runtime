@@ -375,7 +375,7 @@ Constructor object for `Object` — the enumeration statics (`keys`/`values`/`en
 | --- | --- |
 | `entries(obj: unknown): [string, unknown][]` | Returns `[name, value]` pairs in canonical sorted key order. |
 | `hasOwn(obj: unknown, key: string): boolean` | Returns `true` when `obj` has a field named `key`: an omitted optional field answers `false`, one holding `undefined` answers `true`. |
-| `is(a?: unknown, b?: unknown): boolean` | SameValue comparison: like `===` but `Object.is(NaN, NaN)` is `true` and `Object.is(0, -0)` is `false`. |
+| `is(a: unknown, b: unknown): boolean` | SameValue comparison: like `===` but `Object.is(NaN, NaN)` is `true` and `Object.is(0, -0)` is `false`. |
 | `keys(obj: unknown): string[]` | Returns the object's field names in canonical sorted order (the same order JSON output uses). |
 | `values(obj: unknown): unknown[]` | Returns the object's field values, aligned with `Object.keys` order. |
 

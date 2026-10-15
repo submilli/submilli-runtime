@@ -1010,8 +1010,8 @@ pub fn declare(defs: &mut PackageDeclaration) {
         "is",
         ctor_key("is"),
         vec![
-            Param::with_default("a", Type::Unknown, crate::DefaultValue::Undefined),
-            Param::with_default("b", Type::Unknown, crate::DefaultValue::Undefined),
+            Param::new("a", Type::Unknown),
+            Param::new("b", Type::Unknown),
         ],
         Type::Boolean,
     );
@@ -1232,8 +1232,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             optional: false,
                             generics: Vec::new(),
                             params: vec![
-                                Param::with_default("a", Type::Unknown, crate::DefaultValue::Undefined),
-                                Param::with_default("b", Type::Unknown, crate::DefaultValue::Undefined),
+                                Param::new("a", Type::Unknown),
+                                Param::new("b", Type::Unknown),
                             ],
                             ret: Type::Boolean,
                             predicate: None,
