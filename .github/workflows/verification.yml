@@ -1,0 +1,37 @@
+name: Protocol verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  durable-execution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Check verification runner
+        run: python3 -m unittest discover -s verification/tests -p 'test_*.py'
+      - name: Check safety, progress, negative variants and reachable crash paths
+        run: python3 verification/check.py --output "$RUNNER_TEMP/durability-model"
+      - name: Preserve model-checking evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: durability-model
+          path: ${{ runner.temp }}/durability-model
+          if-no-files-found: ignore
+          retention-days: 14
