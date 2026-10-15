@@ -5,9 +5,9 @@ and provider. Do not introduce Submilli's own agent-server as a harness.
 
 Choose just the relevant guide:
 
-- [Deep Agents](deepagents.md)
+- [Deep Agents](deepagents.md): in Python, the `langchain-submilli` middleware
 - [Vercel AI SDK](vercel.md)
-- [LangChain / LangGraph](langchain.md)
+- [LangChain / LangGraph](langchain.md): `create_agent` takes the same middleware
 - [Mastra](mastra.md)
 - [OpenAI Agents SDK](https://submilli.ai/docs/tutorials/connect-openai-agents)
 - [Claude Agent SDK](https://submilli.ai/docs/tutorials/connect-claude-agent-sdk)
@@ -78,6 +78,12 @@ API docs/types before generating code; do not upgrade the whole application
 to match an example. Install only the missing integration dependencies using
 the project's package manager. Include imports, configuration, a runnable
 entrypoint, error handling, and a bounded loop when implementing an agent.
+
+A Python LangChain v1 or Deep Agents agent connects with `langchain-submilli`
+instead of MCP. It builds the same tools on the HTTP API, binds variables from the
+run's context, and keeps one session per thread, so the endpoint, header and
+session rules below are handled for it. The identity, audit and test rules
+still apply. See [Deep Agents](deepagents.md).
 
 The MCP endpoint is `http://127.0.0.1:8128/mcp/<blueprint-name>` using Streamable
 HTTP. Load tools from that endpoint; preserve their names, schemas, and full
