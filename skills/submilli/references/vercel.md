@@ -60,7 +60,7 @@ export async function answerForRequest(request: Request, customerId: string): Pr
   try {
     const tools = await client.tools();
     const result = await generateText({
-      model: openai("gpt-4o-mini"),
+      model: openai("gpt-5.5"),
       tools, // Preserve every discovered name, schema, and description.
       prompt: "Answer the user's request using the governed customer tools: " +
         (await request.text()),
@@ -142,7 +142,7 @@ export async function handleStream(request: Request, customerId: string): Promis
   try {
     const tools = await client.tools();
     const result = streamText({
-      model: openai("gpt-4o-mini"),
+      model: openai("gpt-5.5"),
       tools,
       prompt: await request.text(),
       stopWhen: stepCountIs(8),

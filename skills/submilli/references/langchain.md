@@ -48,7 +48,7 @@ def customer_binding(context: Context | None) -> dict[str, str]:
 # Server and token come from SUBMILLI_SERVER and SUBMILLI_SERVER_TOKEN.
 submilli = SubmilliMiddleware(blueprint="support-read", variables=customer_binding)
 agent = create_agent(
-    model="openai:gpt-4o-mini",
+    model="openai:gpt-5.5",
     middleware=[submilli],
     checkpointer=InMemorySaver(),
     context_schema=Context,
@@ -144,7 +144,7 @@ async def main() -> None:
         async with client.session("submilli") as session:
             tools = await load_mcp_tools(session)
             agent = create_agent(
-                model=ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0),
+                model=ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-5.5")),
                 tools=tools,
                 system_prompt="Use the supplied Submilli tools for business data. Never use raw HTTP or shell.",
             )

@@ -56,7 +56,7 @@ submilli = SubmilliMiddleware(
 
 # Built once and shared: each run brings its customer in its context.
 agent = create_deep_agent(
-    model=ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0),
+    model=ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-5.5")),
     system_prompt="Use the Submilli tools for business data; never bypass them with shell, HTTP, or SDK calls.",
     middleware=[submilli],
     checkpointer=InMemorySaver(),
@@ -172,7 +172,7 @@ async def main() -> None:
     }})
     async with client.session("submilli") as session:
         tools = await load_mcp_tools(session)
-        model = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0)
+        model = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-5.5"))
         agent = create_deep_agent(
             model=model, tools=tools,
             system_prompt="Use supplied Submilli tools for business data; never bypass them with shell, HTTP, or SDK calls.",
@@ -239,7 +239,7 @@ async function main(): Promise<void> {
   try {
     const tools = await client.getTools("submilli");
     console.log("MCP tools:", tools.map((tool) => tool.name));
-    const model = new ChatOpenAI({ model: process.env.OPENAI_MODEL ?? "gpt-4o-mini", temperature: 0 });
+    const model = new ChatOpenAI({ model: process.env.OPENAI_MODEL ?? "gpt-5.5" });
     const agent = await createDeepAgent({
       model, tools,
       systemPrompt: "Use supplied Submilli tools for business data; never bypass them with shell, HTTP, or SDK calls.",
