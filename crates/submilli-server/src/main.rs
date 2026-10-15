@@ -98,18 +98,10 @@ pub struct Cli {
     /// scratch (`ephemeral/`). Mount on durable storage: named volumes and
     /// session files outlive restarts. A path set here must already exist. The
     /// server never creates it, so a missing mount fails startup.
-    /// [default: ~/.submilli/server/volumes, created on first use]
+    /// [default: ~/.submilli/server/volumes, created at startup]
     /// Env: `$SUBMILLI_VOLUME_DIR`.
     #[arg(long)]
     volume_dir: Option<PathBuf>,
-
-    /// Removed, and refused with a pointer to `--volume-dir`.
-    #[arg(long, hide = true)]
-    vfs_session_dir: Option<PathBuf>,
-
-    /// Removed, and refused with a pointer to `--volume-dir`.
-    #[arg(long, hide = true)]
-    vfs_ephemeral_dir: Option<PathBuf>,
 
     /// Directory of a secret store from before secrets and MCP OAuth grants
     /// were kept in the database (one sealed file per secret). When it exists,

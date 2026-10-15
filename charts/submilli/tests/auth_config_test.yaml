@@ -234,7 +234,7 @@ tests:
       # chart leaves it at its default.
       - notMatchRegex:
           path: data["server.yaml"]
-          pattern: "(?m)^(vfs_ephemeral_dir|vfs_session_dir|volume_dir):"
+          pattern: "(?m)^volume_dir:"
       # A bare integer: the server rejects "50Mi" for this setting.
       - matchRegex:
           path: data["server.yaml"]
@@ -324,23 +324,16 @@ tests:
       - failedTemplate:
           errorPattern: "config.github_token_file is owned by the chart"
 
-  - it: refuses the directory settings the server no longer reads
+  - it: refuses the volume root in config
     template: statefulset.yaml
     set:
       config:
-        vfs_ephemeral_dir: /scratch
+        volume_dir: /var/lib/submilli/vols
     asserts:
+      # A configured root must exist before the server starts, and nothing
+      # creates one on a fresh claim.
       - failedTemplate:
-          errorPattern: "config.vfs_ephemeral_dir was removed: ephemeral scratch lives under volume_dir"
-
-  - it: refuses the removed session directory setting
-    template: statefulset.yaml
-    set:
-      config:
-        vfs_session_dir: /sessions
-    asserts:
-      - failedTemplate:
-          errorPattern: "config.vfs_session_dir was removed: session workspaces live under volume_dir"
+          errorPattern: "config.volume_dir is owned by the chart: it stays on the state volume"
 
   - it: passes config through for settings the chart has no value for
     template: configmap-config.yaml

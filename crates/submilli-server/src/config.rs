@@ -59,7 +59,7 @@ pub struct ServerConfig {
     /// [`VolumeRoot`]). Mount it on **durable** storage (a PersistentVolume): a
     /// named volume outlives sessions, and a client that reconnects with the
     /// same session id after a restart finds its files intact. `None` uses
-    /// [`default_volume_root`], created on first use. A path given here must
+    /// [`default_volume_root`], created at startup. A path given here must
     /// already exist, so a missing mount fails startup instead of being
     /// replaced by an empty local directory.
     pub volume_root: Option<PathBuf>,
@@ -252,13 +252,13 @@ pub fn default_blueprint_dir() -> PathBuf {
     default_server_root().join("blueprints")
 }
 
-/// Default root of the server's VFS directories: `<server root>/volumes`.
+/// Default root of the server's VFS directories: `<server root>/volumes`,
+/// created at startup.
 pub fn default_volume_root() -> PathBuf {
     default_server_root().join("volumes")
 }
 
-/// Where the server's VFS directories live, and whether the server may create
-/// that directory:
+/// Where the server's VFS directories live:
 ///
 /// ```text
 /// <root>/managed-local/<volume name>
@@ -270,25 +270,16 @@ pub fn default_volume_root() -> PathBuf {
 /// can pause and resume elsewhere, their files are where another worker can
 /// reach them.
 ///
-/// A root the operator configured is a mount the server must not stand in for:
-/// it has to exist at startup, and after startup nothing recreates it or the
-/// three directories under it, so a mount that disappears fails the work that
-/// needs it rather than filling an empty local directory at the mountpoint. The
-/// default root is local and is created on first use.
+/// [`Self::prepare`] runs once at startup and is the only place the root and
+/// its three directories are created. After it nothing recreates them, so a
+/// mount that disappears fails the work that needs it rather than filling an
+/// empty local directory at the mountpoint. A root the operator configured is
+/// a mount the server must not stand in for, so it must already exist.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeRoot {
     path: PathBuf,
-    missing_dirs: MissingDirs,
-}
-
-/// What to do when a directory a workspace is created in is missing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MissingDirs {
-    /// Create it, as for the default root, which is local disk.
-    Create,
-    /// Fail, as for a configured root, where a missing directory means a
-    /// missing mount.
-    Refuse,
+    /// Whether the operator named this root, rather than it being the default.
+    configured: bool,
 }
 
 impl VolumeRoot {
@@ -304,26 +295,20 @@ impl VolumeRoot {
     pub fn configured(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
-            missing_dirs: MissingDirs::Refuse,
+            configured: true,
         }
     }
 
-    /// A root the server creates when it is first needed.
+    /// A root the server creates at startup.
     pub fn default_root(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
-            missing_dirs: MissingDirs::Create,
+            configured: false,
         }
     }
 
     pub fn path(&self) -> &Path {
         &self.path
-    }
-
-    /// Whether the root and the directories under it may be created when
-    /// missing. Only the default root's may.
-    pub fn missing_dirs(&self) -> MissingDirs {
-        self.missing_dirs
     }
 
     /// Where `managed-local` volumes live, one directory per volume name.
@@ -341,19 +326,18 @@ impl VolumeRoot {
         self.path.join("ephemeral")
     }
 
-    /// Check a configured root at startup: it must be an existing directory, and
-    /// `managed-local/`, `sessions/` and `ephemeral/` are created beneath it
-    /// when missing, but never the root itself. A default root is left to be
-    /// created on first use, so a server that never stores a workspace never
-    /// touches the disk.
+    /// Make the root ready at startup. A configured root must be an existing
+    /// directory; the default one is created. Then `managed-local/`,
+    /// `sessions/` and `ephemeral/` are created beneath it when missing.
     pub fn prepare(&self) -> Result<(), VolumeRootError> {
-        if self.missing_dirs == MissingDirs::Create {
-            return Ok(());
-        }
         let unusable = |source: std::io::Error| VolumeRootError::Root {
             path: self.path.clone(),
+            configured: self.configured,
             source,
         };
+        if !self.configured {
+            std::fs::create_dir_all(&self.path).map_err(unusable)?;
+        }
         let meta = std::fs::metadata(&self.path).map_err(unusable)?;
         if !meta.is_dir() {
             return Err(unusable(std::io::Error::other("it is not a directory")));
@@ -372,17 +356,11 @@ impl VolumeRoot {
 
 /// Create `dir`, one managed volume's or session's directory directly under
 /// `managed-local/` or `sessions/`, owner-only on Unix, unless a plain
-/// directory is already there. With [`MissingDirs::Create`] the directories
-/// above it are created too; with [`MissingDirs::Refuse`] a missing parent
-/// fails, which is how a configured [`VolumeRoot`] that lost its mount stays
-/// lost. A link at `dir` is refused: the directory is opened with the server's
-/// full authority, so a link swapped in would aim it anywhere.
-pub(crate) fn create_owned_dir(dir: &Path, missing_dirs: MissingDirs) -> std::io::Result<()> {
-    if missing_dirs == MissingDirs::Create
-        && let Some(parent) = dir.parent()
-    {
-        std::fs::create_dir_all(parent)?;
-    }
+/// directory is already there. The parent is never created: after
+/// [`VolumeRoot::prepare`] a missing one means a lost mount. A link at `dir` is
+/// refused: the directory is opened with the server's full authority, so a link
+/// swapped in would aim it anywhere.
+pub(crate) fn create_owned_dir(dir: &Path) -> std::io::Result<()> {
     create_plain_dir(dir, true)
 }
 
@@ -421,12 +399,14 @@ fn require_plain_dir(meta: &std::fs::Metadata) -> std::io::Result<()> {
     ))
 }
 
-/// Why a configured volume root could not be used at startup.
+/// Why the volume root could not be made ready at startup.
 #[derive(Debug)]
 pub enum VolumeRootError {
-    /// The root itself is missing or not a directory.
+    /// The root itself is missing, not a directory, or could not be created.
     Root {
         path: PathBuf,
+        /// Whether the operator configured it, so it must exist already.
+        configured: bool,
         source: std::io::Error,
     },
     /// One of the three directories under it could not be created or is not a
@@ -440,11 +420,25 @@ pub enum VolumeRootError {
 impl fmt::Display for VolumeRootError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            VolumeRootError::Root { path, source } => write!(
+            VolumeRootError::Root {
+                path,
+                configured: true,
+                source,
+            } => write!(
                 f,
                 "the volume root {} is not usable ({source}). Mount it or create it, then \
                  restart. The server never creates a configured `volume_dir`, so a missing \
                  mount is not replaced by an empty local directory",
+                path.display(),
+            ),
+            VolumeRootError::Root {
+                path,
+                configured: false,
+                source,
+            } => write!(
+                f,
+                "the default volume root {} could not be created ({source}). Make its \
+                 parent writable, or set `volume_dir` to an existing directory",
                 path.display(),
             ),
             VolumeRootError::Subdirectory { path, source } => write!(
@@ -1466,24 +1460,26 @@ mod tests {
     }
 
     #[test]
-    fn the_default_root_is_left_for_first_use() {
+    fn the_default_root_is_created_with_its_directories() {
         let parent = tempfile::tempdir().unwrap();
-        let root = parent.path().join("volumes");
+        let root = parent.path().join("server/volumes");
         let volume_root = VolumeRoot::default_root(&root);
         volume_root.prepare().unwrap();
-        assert!(!root.exists());
-        assert_eq!(volume_root.missing_dirs(), MissingDirs::Create);
+        for dir in [
+            volume_root.managed_dir(),
+            volume_root.sessions_dir(),
+            volume_root.ephemeral_dir(),
+        ] {
+            assert!(dir.is_dir(), "{}", dir.display());
+        }
     }
 
     #[test]
     fn a_workspace_under_a_lost_parent_is_not_recreated() {
         let root = tempfile::tempdir().unwrap();
         let sessions = root.path().join("sessions");
-        let err = create_owned_dir(&sessions.join("s1"), MissingDirs::Refuse)
-            .expect_err("a missing parent must fail");
+        let err = create_owned_dir(&sessions.join("s1")).expect_err("a missing parent must fail");
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         assert!(!sessions.exists());
-        create_owned_dir(&sessions.join("s1"), MissingDirs::Create).unwrap();
-        assert!(sessions.join("s1").is_dir());
     }
 }

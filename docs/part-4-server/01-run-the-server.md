@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "412135498e2d042edd142c46c5b7bce13d73158d393dfc4d2b100cef9ff9c1c7"
+  contentHash: "92fb17d561d4628a563ae7ed4ee1cdf532021d3232af78a590f6db366dc8b7cd"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -50,8 +50,8 @@ ts=2026-10-03T17:05:10.750Z level=info stream=log target=submilli_server::auth m
 ts=2026-10-03T17:05:10.758Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128 protocol=http
 ```
 
-Apart from the API token, everything the server needs it creates on
-first use. The `submilli server` commands read the API token from the
+Apart from the API token, everything the server needs it creates at
+startup or on first use. The `submilli server` commands read the API token from the
 same variable, so in this shell they need no further setup:
 
 ```sh

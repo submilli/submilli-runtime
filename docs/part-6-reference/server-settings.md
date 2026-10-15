@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a06288523c74d345e015e7efee215d63be8233c6e2afa4750b960c22dd78a9a1"
+  contentHash: "bebba7c17317fcecde070e13299b9546651b786780de3f8a1ae10e1074708ca2"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -432,7 +432,7 @@ Options:
       --database-path <PATH>
           Server SQLite database file. The parent directory is created at boot. [default: ~/.submilli/server/db/submilli.db] Env: `$SUBMILLI_DATABASE_PATH`
       --volume-dir <VOLUME_DIR>
-          Durable root for `managed-local` named volumes (`managed-local/<name>`), `per_session` workspaces (`sessions/<session id>`) and `ephemeral` scratch (`ephemeral/`). Mount on durable storage: named volumes and session files outlive restarts. A path set here must already exist. The server never creates it, so a missing mount fails startup. [default: ~/.submilli/server/volumes, created on first use] Env: `$SUBMILLI_VOLUME_DIR`
+          Durable root for `managed-local` named volumes (`managed-local/<name>`), `per_session` workspaces (`sessions/<session id>`) and `ephemeral` scratch (`ephemeral/`). Mount on durable storage: named volumes and session files outlive restarts. A path set here must already exist. The server never creates it, so a missing mount fails startup. [default: ~/.submilli/server/volumes, created at startup] Env: `$SUBMILLI_VOLUME_DIR`
       --secret-store-dir <SECRET_STORE_DIR>
           Directory of a secret store from before secrets and MCP OAuth grants were kept in the database (one sealed file per secret). When it exists, startup imports it with the secret-store key and moves it to `archive/secrets` beside it. Not the CLI's store at ~/.submilli/secrets, which `submilli secret put` and `mcp authenticate` fill and `submilli run` reads. [default: ~/.submilli/server/secrets] Env: `$SUBMILLI_SECRET_STORE_DIR`
       --package-store-dir <PACKAGE_STORE_DIR>

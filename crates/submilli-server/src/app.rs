@@ -328,9 +328,8 @@ impl AppState {
         let oauth_http =
             Arc::new(ReqwestHttpClient::new(Arc::clone(&policy))) as Arc<dyn HttpClient>;
 
-        // A configured volume root must already be there, and gets its
-        // directories now; the default one is created on first use, so a server
-        // that never stores a workspace never touches the disk for it.
+        // The only place the volume root and its directories are created: a
+        // configured root must already be there, the default one is made now.
         let volume_root = crate::config::VolumeRoot::from_config(config.volume_root);
         volume_root.prepare()?;
         let session_root = volume_root.sessions_dir();
@@ -342,8 +341,7 @@ impl AppState {
         ));
         let session_manager = Arc::new(
             SessionManager::new(
-                session_root.clone(),
-                Some(volume_root.ephemeral_dir()),
+                &volume_root,
                 Arc::new(crate::volumes::VolumeRegistry::in_root(
                     config.volumes,
                     &volume_root,
@@ -378,7 +376,6 @@ impl AppState {
                 },
             )
             .with_cipher(config.session_cipher.clone())
-            .with_missing_dirs(volume_root.missing_dirs())
             .with_response_retention(ResponseRetention {
                 ttl: config
                     .idempotency_retention

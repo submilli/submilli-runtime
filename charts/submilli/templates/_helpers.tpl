@@ -164,7 +164,8 @@ deterministic: `toYaml` sorts map keys, and nothing random may be added here.
 Refused rather than merged. Each of these either also sizes something in the
 pod spec (the memory limit, the termination grace, a mount path), so a second
 source for it would let the two drift apart, or is outranked by the environment
-and would do nothing.
+and would do nothing. `volume_dir` is the exception: the chart keeps the volume
+root on the state volume, and a configured one would not exist on a fresh claim.
 */ -}}
 {{- $owned := dict
       "tls" "set tls.enabled and tls.existingSecret instead, which also mount the certificate and key"
@@ -174,23 +175,11 @@ and would do nothing.
       "shutdown_grace" "set server.shutdownGrace instead; terminationGracePeriodSeconds is derived from it"
       "allow_unauthenticated" "set auth.enabled=false instead"
       "github_token_file" "set githubToken.existingSecret and githubToken.key instead, which also mount the token"
+      "volume_dir" "it stays on the state volume, under server/volumes, where the server creates it"
     -}}
 {{- range $key, $instead := $owned -}}
 {{-   if hasKey $extra $key -}}
 {{-     fail (printf "config.%s is owned by the chart: %s" $key $instead) -}}
-{{-   end -}}
-{{- end -}}
-{{- /*
-Settings the server no longer reads and refuses at boot; refused here too, so
-the mistake shows at install rather than as a crash-looping pod.
-*/ -}}
-{{- $removed := dict
-      "vfs_session_dir" "session workspaces live under volume_dir, in its sessions/ directory"
-      "vfs_ephemeral_dir" "ephemeral scratch lives under volume_dir, in its ephemeral/ directory"
-    -}}
-{{- range $key, $instead := $removed -}}
-{{-   if hasKey $extra $key -}}
-{{-     fail (printf "config.%s was removed: %s" $key $instead) -}}
 {{-   end -}}
 {{- end -}}
 {{- if hasKey $extra "secret_store" -}}

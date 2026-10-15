@@ -175,10 +175,9 @@ Every directory a program's filesystem uses sits under one volume root,
 `server/volumes/` on this claim: `managed-local/<name>` for `managed-local`
 named volumes, `sessions/<session id>` for `per_session` files, and
 `ephemeral/` for scratch. Named volumes are declared under `config.volumes` (see
-`values.yaml`) and need nothing else. A custom `config.volume_dir` must sit on
-durable storage and must already exist when the server starts: the server never
-creates a configured root, so a missing mount fails startup instead of being
-replaced by an empty directory.
+`values.yaml`) and need nothing else. `config.volume_dir` is refused: a
+configured root must already exist when the server starts, and nothing creates
+one on a fresh claim.
 A `local-path` volume names a directory inside the container, which you mount
 yourself, for example from a Secret or ConfigMap through `secrets:`.
 
@@ -339,11 +338,11 @@ config:
     allow_ip: ["10.0.12.7"]
 ```
 
-Keys the chart sets from its own values (`bind`, `port`, `max_execution_memory`,
-`shutdown_grace`, `secret_store.key_file`, `allow_unauthenticated`,
-`github_token_file`) are refused there, with a message naming the value to use.
-So are `vfs_session_dir` and `vfs_ephemeral_dir`, which the server no longer
-reads. Entries under
+Keys the chart sets from its own values (`tls`, `bind`, `port`,
+`max_execution_memory`, `shutdown_grace`, `secret_store.key_file`,
+`allow_unauthenticated`, `github_token_file`) are refused there, with a message
+naming the value to use. `volume_dir` is refused too, since the chart keeps the
+volume root on the claim. Entries under
 `config.api_tokens` are added after the chart's two, each with a `token_file`
 that a `secrets:` mount provides. `extraEnv` still overrides the file,
 because the server ranks a `SUBMILLI_*` variable above it.

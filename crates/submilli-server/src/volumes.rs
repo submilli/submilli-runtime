@@ -19,8 +19,8 @@ use interpreter::runtime::{DiskQuota, measure_host_dir};
 use tokio::sync::OnceCell;
 
 use crate::config::{
-    Access, MissingDirs, SizeLimit, VolumeKind, VolumeRoot, VolumeSpec, VolumeTable,
-    create_owned_dir, is_managed_name,
+    Access, SizeLimit, VolumeKind, VolumeRoot, VolumeSpec, VolumeTable, create_owned_dir,
+    is_managed_name,
 };
 use crate::session_manager::SessionError;
 
@@ -32,12 +32,9 @@ pub struct VolumeRegistry {
     /// panic interrupted such an addition or withdrawal; AGENTS.md permits the
     /// poisoned-lock panic rather than reading a table that may be half-updated.
     table: RwLock<VolumeTable>,
+    /// The volume root's `managed-local/`, created at startup and never again:
+    /// a missing one means its mount is gone.
     managed_root: PathBuf,
-    /// Whether a missing `managed_root` is created along with a volume's
-    /// directory. Refused under a configured [`VolumeRoot`], whose
-    /// `managed-local/` is created at startup and must not be recreated if its
-    /// mount disappears.
-    missing_dirs: MissingDirs,
     /// One cell per volume with a byte limit, so concurrent first users
     /// measure it once and share the result. Grows with the table, under the
     /// same poisoning rule.
@@ -148,16 +145,13 @@ fn check_new_managed(table: &VolumeTable, volume: &str) -> Result<(), DeclareErr
 impl VolumeRegistry {
     /// The volumes of `table`, with `managed-local` ones stored under `root`.
     pub fn in_root(table: VolumeTable, root: &VolumeRoot) -> Self {
-        Self::build(table, root.managed_dir(), root.missing_dirs())
+        Self::new(table, root.managed_dir())
     }
 
     /// The volumes of `table`, with `managed-local` ones stored directly under
-    /// `managed_root`, which is created when missing.
+    /// `managed_root`. Nothing here creates `managed_root`; a registry with no
+    /// `managed-local` volume never touches it.
     pub fn new(table: VolumeTable, managed_root: PathBuf) -> Self {
-        Self::build(table, managed_root, MissingDirs::Create)
-    }
-
-    fn build(table: VolumeTable, managed_root: PathBuf, missing_dirs: MissingDirs) -> Self {
         let quotas = table
             .iter()
             .filter(|(_, spec)| matches!(spec.size_limit, SizeLimit::Bytes(_)))
@@ -166,7 +160,6 @@ impl VolumeRegistry {
         Self {
             table: RwLock::new(table),
             managed_root,
-            missing_dirs,
             quotas: RwLock::new(quotas),
             usage_offsets: BTreeMap::new(),
         }
@@ -184,8 +177,8 @@ impl VolumeRegistry {
         }
         check_new_managed(&table, volume)?;
         // A directory a volume of another case left behind, from an earlier run.
-        // No managed root yet holds no directory to collide with; any other failure
-        // to list it surfaces when the volume is first used.
+        // A root that cannot be listed is a lost mount, which fails the volume
+        // when it is used; there is nothing here to compare against.
         let Ok(entries) = std::fs::read_dir(&self.managed_root) else {
             return Ok(());
         };
@@ -313,7 +306,7 @@ impl VolumeRegistry {
         };
         let host = self.host_of(volume, &spec.kind)?;
         if spec.kind == VolumeKind::ManagedLocal {
-            create_owned_dir(&host, self.missing_dirs).map_err(|err| {
+            create_owned_dir(&host).map_err(|err| {
                 tracing::error!(
                     volume,
                     path = %host.display(),
@@ -403,7 +396,7 @@ impl VolumeRegistry {
             let Ok(dir) = self.host_of(name, &spec.kind) else {
                 continue;
             };
-            if let Err(err) = create_owned_dir(&dir, self.missing_dirs) {
+            if let Err(err) = create_owned_dir(&dir) {
                 tracing::warn!(
                     volume = name.as_str(),
                     path = %dir.display(),
@@ -442,7 +435,9 @@ mod tests {
     use crate::config::VolumeSpec;
     use std::path::Path;
 
+    /// A registry over `root/volumes`, created as startup would.
     fn registry(root: &Path, table: VolumeTable) -> VolumeRegistry {
+        std::fs::create_dir_all(root.join("volumes")).unwrap();
         VolumeRegistry::new(table, root.join("volumes"))
     }
 
