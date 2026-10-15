@@ -22,6 +22,10 @@ They could try to add it as a safeguard to the prompt, but due to the nature of 
 [![Docs](https://img.shields.io/badge/docs-submilli.ai-informational)](https://submilli.ai/docs/)
 [![Discord](https://img.shields.io/discord/1553732232928165958?label=discord)](https://discord.gg/VphpukeGGj)
 
+## Demo
+
+![A support agent creates a replacement with $18 shipping. A $42 replacement is blocked until the developer raises the Blueprint limit from $25 to $50.](.github/assets/submilli-demo.gif)
+
 ---
 
 Code mode and programmatic tool calling started a movement toward agents
