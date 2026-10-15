@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "bada7ac4985b88398d831871e64ee4afd462ae4d3a7fd8c877a0e8bd6b196d04"
+  contentHash: "6bf35b45e175818f05ddb24813b5faab3c5f397644e7f64f21fef27daa86b6c1"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -200,12 +200,12 @@ mcp_allowed_hosts:
 
 The server creates each directory it needs, except a `volume_dir` you set,
 which must exist when the server starts. On a host where nothing can create it
-first, `--create-volume-dir` lets the server create it, so use it only for a
+first, `--create-volume-dir` lets the server create it. Use it only for a
 directory on a disk that is always mounted by then. The volume root's
 `managed-local/`, `sessions/` and `ephemeral/` directories are created at
-startup and never while the server runs. A disk that isn't mounted stops the
-server, or the work that needs it, instead of filling an empty directory in its
-place. The server also reads the CLI's Package store, `$SUBMILLI_HOME/packages`,
+startup and never while the server runs. Without the flag, a disk that isn't
+mounted stops the server, or the work that needs it, instead of filling an
+empty directory in its place. The server also reads the CLI's Package store, `$SUBMILLI_HOME/packages`,
 as a read-only fallback.
 
 ## `secret_store`

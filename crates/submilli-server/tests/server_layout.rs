@@ -61,15 +61,20 @@ fn an_explicitly_configured_directory_is_imported_then_archived() {
 fn a_missing_configured_volume_dir_fails_startup() {
     let home = tempfile::tempdir().expect("temp home");
     let volumes = home.path().join("disk/volumes");
-    let status = server_command(
+    // Port 0: startup fails before the server binds.
+    let output = server_command(
         home.path(),
-        free_port(),
+        0,
         1,
         &[("SUBMILLI_VOLUME_DIR", volumes.to_str().unwrap())],
     )
-    .status()
+    .stderr(std::process::Stdio::piped())
+    .output()
     .expect("run server");
-    assert!(!status.success());
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains(volumes.to_str().unwrap()), "{error}");
+    assert!(error.contains("--create-volume-dir"), "{error}");
     assert!(!volumes.exists());
 }
 

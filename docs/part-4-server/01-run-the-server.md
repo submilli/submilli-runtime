@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "59ea9fb7ce72603434028e25b2cb9423bd72be5d792cd6f6bf2231e4e5ac7d9b"
+  contentHash: "bd4e5d3bacc1a2b38c0637c2a1af507c67d81d936d3fb43b023d2b0fd4772a39"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -210,7 +210,8 @@ secret_store:
 A `volume_dir` you name must exist before the server starts. Without it
 the server refuses to start, rather than create an empty directory where
 the disk should be mounted. On a host where you can't create it first, start
-the server with `--create-volume-dir`.
+the server with `--create-volume-dir`, but only if that disk is always mounted
+by then.
 
 ```sh
 submilli-server --config server.yaml

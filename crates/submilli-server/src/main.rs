@@ -418,7 +418,8 @@ fn main() -> Result<()> {
 }
 
 /// `--create-volume-dir`: create a configured volume root that is missing,
-/// before startup checks that it exists. The default root needs nothing here,
+/// before startup checks that it exists. Called once logging is up, so the
+/// warning is recorded. The default root needs nothing here,
 /// since startup creates it anyway.
 fn create_missing_volume_root(config: &submilli_server::ServerConfig) -> Result<()> {
     if let Some(dir) = &config.volume_root
