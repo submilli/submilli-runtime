@@ -229,3 +229,10 @@ callbacks, extra-fuel grants and changed-code replay are separate work.
 
 TLC command-line behavior and checking limitations are documented in the
 [official TLC guide](https://docs.tlapl.us/using:tlc:start).
+
+### Admission implementation
+
+SUB-1836 adds run-backed preparation and compatibility admission for every
+server program entry point. The [admission mapping](../admission/README.md)
+describes its separate bounded model, migration, optional-key behavior and the
+remaining gates before the complete recovery protocol can be enabled.

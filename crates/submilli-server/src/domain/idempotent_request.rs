@@ -10,6 +10,12 @@ pub struct RecordedOutcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RequestState {
     Reserved,
+    Running,
+    Blocked,
+    Cancelled,
+    Aborted,
+    /// An unkeyed execution completed; no HTTP replay body is retained.
+    Finished,
     Completed(RecordedOutcome),
     Indeterminate,
     /// Completed, but its response is no longer kept: the request must not run
@@ -18,148 +24,8 @@ pub enum RequestState {
     Expired,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IdempotentRequest {
-    session_id: String,
-    key: String,
-    fingerprint: String,
-    reservation_id: String,
-    owner_generation: String,
-    created_at: SystemTime,
-    /// Set exactly when the request is completed or expired.
-    completed_at: Option<SystemTime>,
-    state: RequestState,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum RequestError {
-    #[error("Idempotency-Key must contain between 1 and 120 bytes")]
-    InvalidKey,
-    #[error("this idempotency key was already used with different code")]
-    Conflict,
-    #[error("the request is no longer owned by this reservation")]
-    ReservationMismatch,
-    #[error("the completion time does not match the request's state")]
-    CompletionTimeMismatch,
-}
-
-impl IdempotentRequest {
-    pub fn reserve(
-        session_id: String,
-        key: String,
-        fingerprint: String,
-        reservation_id: String,
-        owner_generation: String,
-        created_at: SystemTime,
-    ) -> Result<Self, RequestError> {
-        Self::validate_key(&key)?;
-        Ok(Self {
-            session_id,
-            key,
-            fingerprint,
-            reservation_id,
-            owner_generation,
-            created_at,
-            completed_at: None,
-            state: RequestState::Reserved,
-        })
-    }
-
-    /// Rebuild a request from storage. A request has a completion time exactly
-    /// when it is completed or expired.
-    #[allow(clippy::too_many_arguments)]
-    pub fn restore(
-        session_id: String,
-        key: String,
-        fingerprint: String,
-        reservation_id: String,
-        owner_generation: String,
-        created_at: SystemTime,
-        state: RequestState,
-        completed_at: Option<SystemTime>,
-    ) -> Result<Self, RequestError> {
-        Self::validate_key(&key)?;
-        let has_completed = matches!(state, RequestState::Completed(_) | RequestState::Expired);
-        if has_completed != completed_at.is_some() {
-            return Err(RequestError::CompletionTimeMismatch);
-        }
-        Ok(Self {
-            session_id,
-            key,
-            fingerprint,
-            reservation_id,
-            owner_generation,
-            created_at,
-            completed_at,
-            state,
-        })
-    }
-
-    pub fn validate_key(key: &str) -> Result<(), RequestError> {
-        if key.is_empty() || key.len() > 120 {
-            return Err(RequestError::InvalidKey);
-        }
-        Ok(())
-    }
-
-    pub fn verify_fingerprint(&self, fingerprint: &str) -> Result<(), RequestError> {
-        if self.fingerprint != fingerprint {
-            return Err(RequestError::Conflict);
-        }
-        Ok(())
-    }
-
-    pub fn complete(
-        &mut self,
-        reservation_id: &str,
-        outcome: RecordedOutcome,
-        completed_at: SystemTime,
-    ) -> Result<(), RequestError> {
-        self.require_reservation(reservation_id)?;
-        self.state = RequestState::Completed(outcome);
-        self.completed_at = Some(completed_at);
-        Ok(())
-    }
-
-    pub fn mark_indeterminate(&mut self, reservation_id: &str) -> Result<(), RequestError> {
-        self.require_reservation(reservation_id)?;
-        self.state = RequestState::Indeterminate;
-        Ok(())
-    }
-
-    pub fn require_reservation(&self, reservation_id: &str) -> Result<(), RequestError> {
-        if self.reservation_id != reservation_id || self.state != RequestState::Reserved {
-            return Err(RequestError::ReservationMismatch);
-        }
-        Ok(())
-    }
-
-    pub fn session_id(&self) -> &str {
-        &self.session_id
-    }
-    pub fn key(&self) -> &str {
-        &self.key
-    }
-    pub fn fingerprint(&self) -> &str {
-        &self.fingerprint
-    }
-    pub fn reservation_id(&self) -> &str {
-        &self.reservation_id
-    }
-    pub fn owner_generation(&self) -> &str {
-        &self.owner_generation
-    }
-    pub fn created_at(&self) -> SystemTime {
-        self.created_at
-    }
-    /// When the request completed; `None` until it does.
-    pub fn completed_at(&self) -> Option<SystemTime> {
-        self.completed_at
-    }
-    pub fn state(&self) -> &RequestState {
-        &self.state
-    }
-}
+// Compatibility names for existing HTTP callers; the run is the only aggregate.
+pub use super::run::{RequestError, Run as IdempotentRequest};
 
 /// A completed response, without its body.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -290,13 +156,19 @@ mod tests {
         let restore = |state, completed_at| {
             IdempotentRequest::restore(
                 "s".into(),
-                "k".into(),
+                Some("k".into()),
                 "f".into(),
                 "r".into(),
                 "g".into(),
                 at(0),
                 state,
                 completed_at,
+                super::super::run::RunIdentity {
+                    admission_order: 1,
+                    ..Default::default()
+                },
+                0,
+                0,
             )
         };
         assert!(restore(RequestState::Expired, Some(at(1))).is_ok());

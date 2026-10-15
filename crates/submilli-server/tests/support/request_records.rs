@@ -72,8 +72,11 @@ impl RequestRecords {
         self.database.transaction(move |connection| Box::pin(async move {
             let time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis() as i64;
             let completed = completed.then_some(time);
-            sqlx::query("INSERT INTO idempotent_requests(session_id,request_key,fingerprint,reservation_id,owner_generation,created_at_unix_ms,state,completed_at_unix_ms) VALUES (?,?,?,?,?,?,?,?)")
-                .bind(record.session_id).bind(record.key).bind(record.fingerprint).bind(uuid::Uuid::new_v4().to_string()).bind(owner_generation).bind(time).bind(state).bind(completed).execute(connection).await?;
+            let identity = uuid::Uuid::new_v4().to_string();
+            let order: i64 = sqlx::query_scalar("UPDATE sessions SET last_run_order=last_run_order+1 WHERE session_id=? AND last_run_order<9223372036854775807 RETURNING last_run_order").bind(&record.session_id).fetch_one(&mut *connection).await?;
+            sqlx::query("INSERT INTO runs(run_id,admission_order,session_id,request_key,fingerprint,reservation_id,owner_generation,created_at_unix_ms,state,completed_at_unix_ms) VALUES (?,?,?,?,?,?,?,?,?,?)")
+                .bind(&identity).bind(order)
+                .bind(record.session_id).bind(record.key).bind(record.fingerprint).bind(identity).bind(owner_generation).bind(time).bind(state).bind(completed).execute(connection).await?;
             Ok(())
         })).await
     }
@@ -83,13 +86,12 @@ impl RequestRecords {
         self.database
             .transaction(move |connection| {
                 Box::pin(async move {
-                    let Some(row) = sqlx::query(
-                        "SELECT * FROM idempotent_requests WHERE session_id=? AND request_key=?",
-                    )
-                    .bind(&session)
-                    .bind(&key)
-                    .fetch_optional(connection)
-                    .await?
+                    let Some(row) =
+                        sqlx::query("SELECT * FROM runs WHERE session_id=? AND request_key=?")
+                            .bind(&session)
+                            .bind(&key)
+                            .fetch_optional(connection)
+                            .await?
                     else {
                         return Ok(None);
                     };
@@ -100,7 +102,17 @@ impl RequestRecords {
                         }),
                         "reserved" => RequestState::Reserved,
                         "expired" => RequestState::Expired,
-                        _ => RequestState::Indeterminate,
+                        "running" => RequestState::Running,
+                        "blocked" => RequestState::Blocked,
+                        "cancelled" => RequestState::Cancelled,
+                        "aborted" => RequestState::Aborted,
+                        "finished" => RequestState::Finished,
+                        "indeterminate" => RequestState::Indeterminate,
+                        state => {
+                            return Err(DatabaseError::Import(format!(
+                                "invalid run state: {state}"
+                            )));
+                        }
                     };
                     Ok(Some(Record {
                         session_id: session,
@@ -117,11 +129,9 @@ impl RequestRecords {
         self.database
             .transaction(|connection| {
                 Box::pin(async move {
-                    Ok(
-                        sqlx::query_scalar("SELECT DISTINCT session_id FROM idempotent_requests")
-                            .fetch_all(connection)
-                            .await?,
-                    )
+                    Ok(sqlx::query_scalar("SELECT DISTINCT session_id FROM runs")
+                        .fetch_all(connection)
+                        .await?)
                 })
             })
             .await
