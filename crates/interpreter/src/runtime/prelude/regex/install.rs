@@ -76,6 +76,30 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
+    register_host_fn(
+        linker,
+        m,
+        ctor_key("escape"),
+        ft(vec![string.clone()], vec![string.clone()]),
+        true,
+        |caller, params, results| {
+            let units = crate::runtime::prelude::vtable::read_string_units(
+                &mut *caller,
+                abi_arg(params, 0)?,
+                "RegExp.escape",
+            )?;
+            crate::runtime::fuel::charge(
+                &mut *caller,
+                crate::runtime::fuel::SCAN,
+                units.len() as u64,
+            )?;
+            let escaped = super::escape_units(&units);
+            let st = crate::runtime::host::write_submilli_string_struct_units(caller, &escaped)?;
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
+            Ok(())
+        },
+    )?;
+
     // --- RegExp instance methods & getters (receiver: $Object) ------------
     register_host_fn(
         linker,
@@ -285,6 +309,13 @@ pub fn declare(defs: &mut PackageDeclaration) {
     let re_self = || Param::new("self", regexp());
     let match_self = || Param::new("self", regexp_match());
 
+    declare_method(
+        defs,
+        "escape",
+        ctor_key("escape"),
+        vec![Param::new("string", Type::String)],
+        Type::String,
+    );
     // RegExpConstructor#new(source, flags) -> RegExp
     declare_method(
         defs,
@@ -634,6 +665,18 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([(
+                    "escape".to_string(),
+                    MethodSig {
+                        optional: false,
+                        generics: Vec::new(),
+                        params: vec![Param::new("string", Type::String)],
+                        ret: Type::String,
+                        predicate: None,
+                        doc: doc(
+                            "/**\n * Returns `string` with every character that has a meaning in a pattern escaped, so `new RegExp(RegExp.escape(s))` matches `s` literally.\n * @param string The text to escape.\n */",
+                        ),
+                    },
+                ), (
                     "new".to_string(),
                     MethodSig {
                         optional: false,

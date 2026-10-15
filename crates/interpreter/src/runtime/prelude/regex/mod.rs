@@ -476,6 +476,70 @@ pub(super) fn last_index_setter(
     st.set_field(&mut *caller, 2, Val::I32(value))
 }
 
+/// `RegExp.escape(s)` (ES2025): `s` with every character that has a meaning
+/// in a pattern escaped, so the result matches `s` literally. A leading
+/// letter or digit is escaped too, so the result can follow `\0` or `\c`.
+pub(super) fn escape_units(input: &[u16]) -> Vec<u16> {
+    let mut out = Vec::with_capacity(input.len());
+    for (index, c) in char::decode_utf16(input.iter().copied()).enumerate() {
+        let push = |out: &mut Vec<u16>, text: &str| out.extend(text.encode_utf16());
+        match c {
+            Err(lone) => push(&mut out, &format!("\\u{:04x}", lone.unpaired_surrogate())),
+            Ok(c) if index == 0 && c.is_ascii_alphanumeric() => {
+                push(&mut out, &format!("\\x{:02x}", u32::from(c)));
+            }
+            Ok(c) => push(&mut out, &escape_char(c)),
+        }
+    }
+    out
+}
+
+fn escape_char(c: char) -> String {
+    const SYNTAX: &str = "^$\\.*+?()[]{}|/";
+    const OTHER_PUNCTUATORS: &str = ",-=<>#&!%:;@~'`\"";
+    if SYNTAX.contains(c) {
+        return format!("\\{c}");
+    }
+    let control = match c {
+        '\t' => Some('t'),
+        '\n' => Some('n'),
+        '\u{b}' => Some('v'),
+        '\u{c}' => Some('f'),
+        '\r' => Some('r'),
+        _ => None,
+    };
+    if let Some(letter) = control {
+        return format!("\\{letter}");
+    }
+    if !(OTHER_PUNCTUATORS.contains(c) || is_js_whitespace_or_line_terminator(c)) {
+        return c.to_string();
+    }
+    if u32::from(c) <= 0xFF {
+        return format!("\\x{:02x}", u32::from(c));
+    }
+    let mut units = [0u16; 2];
+    c.encode_utf16(&mut units)
+        .iter()
+        .map(|unit| format!("\\u{unit:04x}"))
+        .collect()
+}
+
+/// ECMAScript `WhiteSpace` or `LineTerminator`: the Zs category plus TAB, VT,
+/// FF, ZWNBSP, LF, CR, LS and PS.
+fn is_js_whitespace_or_line_terminator(c: char) -> bool {
+    matches!(
+        c,
+        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200a}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}'
+                | '\u{feff}'
+    )
+}
+
 /// A boolean flag getter — `flag_mask & bitset != 0`.
 pub(super) fn flag(
     caller: &mut Caller<'_, StoreData>,
