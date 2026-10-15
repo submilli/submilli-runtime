@@ -93,24 +93,12 @@ pub struct Cli {
     #[arg(long, value_name = "PATH")]
     database_path: Option<PathBuf>,
 
-    /// Durable root for `per_session` VFS directories. Mount on a
-    /// PersistentVolume so a session's files survive a server restart.
-    /// [default: ~/.submilli/server/vfs/sessions]
-    /// Env: `$SUBMILLI_VFS_SESSION_DIR`.
-    #[arg(long)]
-    vfs_session_dir: Option<PathBuf>,
-
-    /// Root for `ephemeral` scratch directories. Defaults to the OS temp dir;
-    /// point it at volatile storage (tmpfs / `emptyDir`) to keep them off the
-    /// durable volume.
-    /// Env: `$SUBMILLI_VFS_EPHEMERAL_DIR`.
-    #[arg(long)]
-    vfs_ephemeral_dir: Option<PathBuf>,
-
-    /// Root for `managed-local` named volumes, one directory per volume name.
-    /// Mount on durable storage: named volumes outlive sessions and restarts.
-    /// The server creates a volume's directory on first use and never deletes
-    /// it. [default: ~/.submilli/server/volumes]
+    /// Durable root for `managed-local` named volumes (`managed-local/<name>`),
+    /// `per_session` workspaces (`sessions/<session id>`) and `ephemeral`
+    /// scratch (`ephemeral/`). Mount on durable storage: named volumes and
+    /// session files outlive restarts. A path set here must already exist. The
+    /// server never creates it, so a missing mount fails startup.
+    /// [default: ~/.submilli/server/volumes, created at startup]
     /// Env: `$SUBMILLI_VOLUME_DIR`.
     #[arg(long)]
     volume_dir: Option<PathBuf>,

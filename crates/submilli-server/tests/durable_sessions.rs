@@ -37,7 +37,7 @@ async fn open(root: &Path, with_key: bool) -> (Router, Arc<ServerDatabase>) {
     let state = AppState::new(ServerConfig {
         database: Some(database.clone()),
         blueprints: Some(blueprints),
-        session_storage_root: Some(root.join("workspaces")),
+        volume_root: Some(root.to_path_buf()),
         session_cipher: cipher,
         ..Default::default()
     })
@@ -252,7 +252,7 @@ async fn mcp_delete_checks_host_and_closes_the_persisted_session() {
             .status(),
         StatusCode::FORBIDDEN
     );
-    let store = SqliteSessionStore::new(database.clone(), None, root.path().join("workspaces"));
+    let store = SqliteSessionStore::new(database.clone(), None, root.path().join("sessions"));
     assert!(store.load(&id).await.unwrap().unwrap().status == SessionStatus::Active);
     assert_eq!(
         router
@@ -313,7 +313,7 @@ async fn failed_mcp_restore_preserves_session_for_rebinding() {
         .unwrap();
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     }
-    let store = SqliteSessionStore::new(database.clone(), None, root.path().join("workspaces"));
+    let store = SqliteSessionStore::new(database.clone(), None, root.path().join("sessions"));
     let record = store.load(&id).await.unwrap().unwrap();
     assert!(record.status == SessionStatus::Active);
     assert!(record.root_vfs_path.unwrap().is_dir());

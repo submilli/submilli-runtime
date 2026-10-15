@@ -30,8 +30,8 @@ RUN mkdir -p /state
 # `static` rather than `cc`: the binaries are static musl and load no glibc.
 # Not `scratch`: sentry and rmcp pull rustls-native-certs -> openssl-probe, which
 # reads /etc/ssl/certs at runtime, and jiff reads /usr/share/zoneinfo for named
-# time zones. This base ships both, plus a mode-1777 /tmp the ephemeral VFS root
-# defaults to, and an /etc/passwd entry for uid 65532.
+# time zones. This base ships both, plus a mode-1777 /tmp and an /etc/passwd
+# entry for uid 65532.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS runtime
 
 ARG TARGETARCH
@@ -56,15 +56,11 @@ COPY dist/${TARGETARCH}/ /usr/local/bin/
 # image release.
 COPY --from=scaffold --chown=65532:65532 /state /var/lib/submilli
 
-# Relocates five of the six state directories via `default_data_root()`; the
-# server keeps them under `$SUBMILLI_HOME/server/` — blueprints, sessions,
-# vfs/sessions, secrets, packages — beside the CLI's own packages/ and secrets/.
-# A volume from a release that kept them directly under $SUBMILLI_HOME is moved
-# into that shape on the first boot, except packages/: it stays at the top level
-# as the read-only fallback the server searches after its own store. The sixth,
-# the ephemeral VFS root, is a separate setting that defaults to the system temp
-# dir; left alone it grows the container's writable layer instead of the volume.
-# Mount /tmp as a tmpfs (see compose.yaml) or set SUBMILLI_VFS_EPHEMERAL_DIR.
+# Relocates every state directory via `default_data_root()`; the server keeps
+# them under `$SUBMILLI_HOME/server/` — blueprints, sessions, secrets, packages,
+# the database, and volumes/ (named volumes, session files, and ephemeral
+# scratch) — beside the CLI's own packages/ and secrets/. The top-level
+# packages/ is the read-only fallback the server searches after its own store.
 ENV SUBMILLI_HOME=/var/lib/submilli \
     HOST=0.0.0.0 \
     TZ=Etc/UTC \

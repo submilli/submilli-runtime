@@ -244,6 +244,7 @@ async fn startup_selects_memory_file_and_explicit_blueprint_stores() {
 
     let directory = tempfile::tempdir().unwrap();
     let config = ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
         blueprint_dir: Some(directory.path().join("blueprints")),
         ..Default::default()
     };
@@ -257,6 +258,7 @@ async fn startup_selects_memory_file_and_explicit_blueprint_stores() {
 
     let explicit: Arc<dyn BlueprintStore> = Arc::new(InMemoryBlueprintStore::default());
     let config = ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
         blueprints: Some(Arc::clone(&explicit)),
         blueprint_dir: Some(directory.path().join("unused")),
         ..Default::default()
@@ -284,6 +286,7 @@ async fn startup_migrates_sqlite_before_constructing_application_state() {
                 .unwrap(),
         );
         let mut config = ServerConfig {
+            volume_root: Some(tempfile::tempdir().unwrap().keep()),
             database: Some(Arc::clone(&database)),
             blueprint_dir: Some(source.clone()),
             ..Default::default()
@@ -305,6 +308,7 @@ async fn sqlite_startup_does_not_create_legacy_blueprint_directory() {
     for _ in 0..3 {
         let database = Arc::new(crate::database::ServerDatabase::open(&path).await.unwrap());
         let mut config = ServerConfig {
+            volume_root: Some(tempfile::tempdir().unwrap().keep()),
             database: Some(Arc::clone(&database)),
             blueprint_dir: Some(source.clone()),
             ..Default::default()
@@ -326,6 +330,7 @@ async fn supplied_sqlite_blueprints_keep_their_database_owner() {
             .unwrap(),
     );
     let config = ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
         blueprints: Some(Arc::new(crate::blueprint::SqliteBlueprintStore::new(
             database.clone(),
             None,

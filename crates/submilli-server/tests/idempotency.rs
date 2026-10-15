@@ -375,7 +375,7 @@ async fn an_unbound_harness_secret_is_reported_before_the_key_is_considered() {
     const NEEDS_SECRET: &str = "name: needs-secret\ndefault: deny\nvfs: none\nsecrets:\n  TOKEN:\n    harness:\n      required: true\n";
 
     let ledger: Arc<RequestRecords> = Arc::new(RequestRecords::ephemeral());
-    let session_root = tempfile::tempdir().expect("session root");
+    let volume_root = tempfile::tempdir().expect("volume root");
     let build = async || {
         AppState::new(ServerConfig {
             blueprints: Some(Arc::new(
@@ -385,7 +385,7 @@ async fn an_unbound_harness_secret_is_reported_before_the_key_is_considered() {
                 .expect("seed blueprints"),
             )),
             database: Some(ledger.database.clone()),
-            session_storage_root: Some(session_root.path().to_owned()),
+            volume_root: Some(volume_root.path().to_owned()),
             ..in_memory_config::config()
         })
         .await

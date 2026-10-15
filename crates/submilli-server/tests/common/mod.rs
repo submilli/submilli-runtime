@@ -39,8 +39,8 @@ pub fn spawn_server(
         .env_remove("SUBMILLI_CONFIG")
         .env_remove("SUBMILLI_BLUEPRINT_DIR")
         .env_remove("SUBMILLI_SESSION_STORE_DIR")
-        .env_remove("SUBMILLI_VFS_SESSION_DIR")
-        .env_remove("SUBMILLI_VFS_EPHEMERAL_DIR")
+        // The server sweeps scratch and orphan session directories under it.
+        .env_remove("SUBMILLI_VOLUME_DIR")
         .env_remove("SUBMILLI_SECRET_STORE_DIR")
         .env_remove("SUBMILLI_PACKAGE_STORE_DIR")
         .env_remove("SUBMILLI_SECRET_STORE_KEY_ENV")

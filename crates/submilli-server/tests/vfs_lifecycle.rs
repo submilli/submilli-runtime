@@ -58,7 +58,7 @@ impl Harness {
         );
         let config = ServerConfig {
             blueprints: Some(blueprints),
-            session_storage_root: Some(vfs_root.path().to_path_buf()),
+            volume_root: Some(vfs_root.path().to_path_buf()),
             volumes,
             ..in_memory_config::config()
         };
@@ -263,7 +263,7 @@ fn restartable_state(vfs_root: &Path, store_dir: &Path) -> AppState {
     );
     let config = ServerConfig {
         blueprints: Some(blueprints),
-        session_storage_root: Some(vfs_root.to_path_buf()),
+        volume_root: Some(vfs_root.to_path_buf()),
         database_path: Some(store_dir.join("server.db")),
         ..in_memory_config::config()
     };
@@ -347,7 +347,7 @@ async fn restart_sweeps_orphan_session_dir() {
     let vfs_root = tempfile::tempdir().expect("vfs root");
     let store_dir = tempfile::tempdir().expect("session store");
     // A leftover per_session dir whose session was never persisted.
-    let orphan = vfs_root.path().join("ghost-session");
+    let orphan = vfs_root.path().join("sessions/ghost-session");
     std::fs::create_dir_all(&orphan).unwrap();
 
     let state = restartable_state(vfs_root.path(), store_dir.path());

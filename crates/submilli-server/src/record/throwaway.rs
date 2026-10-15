@@ -970,14 +970,19 @@ mod tests {
             crate::blueprint::SqliteBlueprintStore::new(database.clone(), None).add(blueprint()),
         )
         .unwrap();
+        let volume_root = crate::config::VolumeRoot::default_root(root);
+        volume_root.prepare().unwrap();
         SessionManager::new(
-            root.to_path_buf(),
-            None,
-            Arc::new(VolumeRegistry::new(volumes, root.join("managed"))),
+            &volume_root,
+            Arc::new(VolumeRegistry::in_root(volumes, &volume_root)),
             Arc::new(|| -> Arc<dyn interpreter::stdlib::http::HttpClient> {
                 panic!("no HTTP in this test")
             }),
-            Arc::new(SqliteSessionStore::new(database, None, root.to_path_buf())),
+            Arc::new(SqliteSessionStore::new(
+                database,
+                None,
+                volume_root.sessions_dir(),
+            )),
             CapabilitySettings::default(),
         )
     }
@@ -1680,7 +1685,7 @@ mod tests {
             &blueprint,
             &VarBindings::new(),
             copy.session_root.as_deref(),
-            None,
+            manager.ephemeral_root(),
             &copy.volumes,
         );
         assert!(vfs.is_ok());
@@ -1696,7 +1701,7 @@ mod tests {
             &blueprint,
             &VarBindings::new(),
             missing.session_root.as_deref(),
-            None,
+            manager.ephemeral_root(),
             &missing.volumes,
         );
         assert!(vfs.is_err(), "the read-only mount's directory is missing");
@@ -1765,7 +1770,7 @@ mod tests {
             &blueprint,
             &user_bindings("dave"),
             copy.session_root.as_deref(),
-            None,
+            manager.ephemeral_root(),
             &copy.volumes,
         );
         assert!(vfs.is_ok());

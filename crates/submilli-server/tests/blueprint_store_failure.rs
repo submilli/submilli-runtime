@@ -140,7 +140,7 @@ impl Harness {
         let store = Arc::new(ControlledStore::new());
         let state = futures::executor::block_on(AppState::new(ServerConfig {
             blueprints: Some(store.clone()),
-            session_storage_root: Some(root.path().into()),
+            volume_root: Some(root.path().into()),
             ..in_memory_config::config()
         }))
         .unwrap();

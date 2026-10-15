@@ -213,15 +213,9 @@ impl StateDir {
         self.root.join("server").join("sessions")
     }
 
-    pub(crate) fn session_vfs_dir(&self) -> PathBuf {
-        self.root.join("vfs").join("sessions")
-    }
-
-    pub(crate) fn ephemeral_vfs_dir(&self) -> PathBuf {
-        self.root.join("vfs").join("ephemeral")
-    }
-
-    pub(crate) fn volumes_dir(&self) -> PathBuf {
+    /// The server's volume root: managed volumes, session workspaces and
+    /// ephemeral scratch.
+    pub(crate) fn volume_root(&self) -> PathBuf {
         self.root.join("volumes")
     }
 
@@ -257,9 +251,7 @@ impl StateDir {
             self.root.clone(),
             self.root.join("tokens"),
             self.root.join("server"),
-            self.root.join("vfs"),
-            self.ephemeral_vfs_dir(),
-            self.volumes_dir(),
+            self.volume_root(),
         ] {
             owned_private_dir(&dir)?;
         }

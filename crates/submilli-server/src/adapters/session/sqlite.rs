@@ -572,7 +572,7 @@ mod tests {
         let store = SqliteSessionStore::new(
             database.clone(),
             Some(source),
-            root.path().join("workspaces"),
+            root.path().join("volumes/sessions"),
         );
         store.initialize().await.unwrap();
         for (id, mode) in [
@@ -592,7 +592,8 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let store = SqliteSessionStore::new(database.clone(), None, root.path().join("workspaces"));
+        let store =
+            SqliteSessionStore::new(database.clone(), None, root.path().join("volumes/sessions"));
         let loaded = store.load("named").await.unwrap().unwrap();
         assert_eq!(loaded.root_vfs_type, RootVfsType::Named);
         assert_eq!(loaded.root_vfs_path, Some(named_path));
@@ -611,7 +612,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let database = database(root.path()).await;
         let source = root.path().join("sessions");
-        let folder = root.path().join("workspaces/orphan");
+        let folder = root.path().join("volumes/sessions/orphan");
         fs::create_dir_all(&folder).unwrap();
         let legacy = FileDurableSessionStore::new(source.clone()).unwrap();
         legacy
@@ -624,7 +625,7 @@ mod tests {
         let store = Arc::new(SqliteSessionStore::new(
             database.clone(),
             Some(source.clone()),
-            root.path().join("workspaces"),
+            root.path().join("volumes/sessions"),
         ));
         store.initialize().await.unwrap();
         assert!(store.load("orphan").await.unwrap().is_none());
@@ -640,7 +641,7 @@ mod tests {
         let store = Arc::new(SqliteSessionStore::new(
             database.clone(),
             Some(source),
-            root.path().join("workspaces"),
+            root.path().join("volumes/sessions"),
         ));
         manager(root.path(), store.clone()).boot().await.unwrap();
         assert!(!folder.exists());
@@ -653,7 +654,8 @@ mod tests {
     async fn explicit_named_root_requires_a_path() {
         let root = tempfile::tempdir().unwrap();
         let database = database(root.path()).await;
-        let store = SqliteSessionStore::new(database.clone(), None, root.path().join("workspaces"));
+        let store =
+            SqliteSessionStore::new(database.clone(), None, root.path().join("volumes/sessions"));
         let mut invalid = record("invalid");
         invalid.root_vfs_type = RootVfsType::Named;
         assert!(
@@ -667,7 +669,8 @@ mod tests {
     async fn revisions_reject_stale_writes_and_retired_resurrection() {
         let root = tempfile::tempdir().unwrap();
         let database = database(root.path()).await;
-        let store = SqliteSessionStore::new(database.clone(), None, root.path().join("workspaces"));
+        let store =
+            SqliteSessionStore::new(database.clone(), None, root.path().join("volumes/sessions"));
         store.put(record("one")).await.unwrap();
         let old = store.load("one").await.unwrap().unwrap();
         let mut current = old.clone();
@@ -688,7 +691,7 @@ mod tests {
         let store = Arc::new(SqliteSessionStore::new(
             database.clone(),
             None,
-            root.path().join("workspaces"),
+            root.path().join("volumes/sessions"),
         ));
         let sessions = manager(root.path(), store.clone());
         store.put(record("deleted")).await.unwrap();
@@ -716,7 +719,8 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let store = SqliteSessionStore::new(database.clone(), None, root.path().join("workspaces"));
+        let store =
+            SqliteSessionStore::new(database.clone(), None, root.path().join("volumes/sessions"));
         assert_eq!(
             store.load("deleted").await.unwrap().unwrap().closed_reason,
             Some(ClosedReason::Deleted)
@@ -741,9 +745,10 @@ mod tests {
     async fn independent_stores_share_committed_bindings() {
         let root = tempfile::tempdir().unwrap();
         let database = database(root.path()).await;
-        let first = SqliteSessionStore::new(database.clone(), None, root.path().join("workspaces"));
+        let first =
+            SqliteSessionStore::new(database.clone(), None, root.path().join("volumes/sessions"));
         let second =
-            SqliteSessionStore::new(database.clone(), None, root.path().join("workspaces"));
+            SqliteSessionStore::new(database.clone(), None, root.path().join("volumes/sessions"));
         first.put(record("one")).await.unwrap();
         let mut updated = second.load("one").await.unwrap().unwrap();
         updated.variables.insert("tenant".into(), "two".into());
@@ -776,7 +781,7 @@ mod tests {
         let store = SqliteSessionStore::new(
             database.clone(),
             Some(source.clone()),
-            root.path().join("workspaces"),
+            root.path().join("volumes/sessions"),
         );
         assert!(store.initialize().await.is_err());
         assert!(store.load("one").await.unwrap().unwrap().cleanup_pending);
@@ -803,7 +808,7 @@ mod tests {
         let store = SqliteSessionStore::new(
             database.clone(),
             Some(source.clone()),
-            root.path().join("workspaces"),
+            root.path().join("volumes/sessions"),
         );
         assert!(store.initialize().await.is_err());
         assert!(path.exists());
@@ -840,7 +845,7 @@ mod tests {
         let store = SqliteSessionStore::new(
             database.clone(),
             Some(relative),
-            root.path().join("workspaces"),
+            root.path().join("volumes/sessions"),
         );
         store.initialize().await.unwrap();
         store.initialize().await.unwrap();
@@ -868,7 +873,7 @@ mod tests {
         let store = SqliteSessionStore::new(
             database.clone(),
             Some(source.clone()),
-            root.path().join("workspaces"),
+            root.path().join("volumes/sessions"),
         );
         assert!(store.initialize().await.is_err());
         let mut updated = store.load("one").await.unwrap().unwrap();
@@ -897,7 +902,7 @@ mod tests {
         let store = SqliteSessionStore::new(
             database.clone(),
             Some(source.clone()),
-            root.path().join("workspaces"),
+            root.path().join("volumes/sessions"),
         );
         store.initialize().await.unwrap();
         store.initialize().await.unwrap();
@@ -942,7 +947,8 @@ mod tests {
     async fn relational_rows_preserve_mcp_and_replace_variables_atomically() {
         let root = tempfile::tempdir().unwrap();
         let database = database(root.path()).await;
-        let store = SqliteSessionStore::new(database.clone(), None, root.path().join("workspaces"));
+        let store =
+            SqliteSessionStore::new(database.clone(), None, root.path().join("volumes/sessions"));
         let mut original = record("one");
         original.variables.insert("old".into(), "value".into());
         original.sealed_bindings = Some(vec![1, 2, 3]);
@@ -1010,7 +1016,7 @@ mod tests {
         let store = SqliteSessionStore::new(
             database.clone(),
             Some(source.clone()),
-            root.path().join("workspaces"),
+            root.path().join("volumes/sessions"),
         );
         assert!(store.initialize().await.is_err());
         assert!(store.load_all().await.unwrap().is_empty());
@@ -1021,9 +1027,10 @@ mod tests {
         root: &Path,
         store: Arc<SqliteSessionStore>,
     ) -> crate::session_manager::SessionManager {
+        let volume_root = crate::config::VolumeRoot::default_root(root.join("volumes"));
+        volume_root.prepare().unwrap();
         crate::session_manager::SessionManager::new(
-            root.join("workspaces"),
-            None,
+            &volume_root,
             Arc::default(),
             Arc::new(|| panic!("test does not use HTTP")),
             store,
@@ -1038,7 +1045,7 @@ mod tests {
         let store = Arc::new(SqliteSessionStore::new(
             database.clone(),
             None,
-            root.path().join("workspaces"),
+            root.path().join("volumes/sessions"),
         ));
         let manager = manager(root.path(), store.clone());
         let mut initial = record("one");
@@ -1073,7 +1080,7 @@ mod tests {
         let store = Arc::new(SqliteSessionStore::new(
             database.clone(),
             None,
-            root.path().join("workspaces"),
+            root.path().join("volumes/sessions"),
         ));
         let first = manager(root.path(), store.clone()).with_cipher(Some(cipher.clone()));
         let second = manager(root.path(), store.clone()).with_cipher(Some(cipher));

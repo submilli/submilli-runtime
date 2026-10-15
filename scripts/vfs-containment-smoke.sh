@@ -48,7 +48,7 @@ api_tokens:
   - { name: smoke-user, role: user, token_file: $V/user-token }
 blueprint_dir: ${2:-$V/home/blueprints}
 session_store_dir: $V/home/sessions
-vfs_session_dir: $V/home/vfs/sessions
+volume_dir: $V/home/volumes
 package_store_dir: $V/home/packages
 secret_store:
   dir: $V/home/secrets
@@ -129,7 +129,7 @@ permissions:
 '
 
 # ---------------------------------------------------------------- fixtures
-mkdir -p "$V/home" "$V/volumes/work" "$V/outside" "$V/elsewhere"
+mkdir -p "$V/home/volumes" "$V/volumes/work" "$V/outside" "$V/elsewhere"
 W="$V/volumes/work"
 echo -n OUTSIDE-SECRET > "$V/outside/secret.txt"
 mkdir -p "$W/sub" "$W/pkgs/a" "$W/pkgs/b"
