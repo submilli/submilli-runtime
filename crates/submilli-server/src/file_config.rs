@@ -1477,6 +1477,7 @@ mod tests {
             session_store_dir: None,
             database_path: None,
             volume_dir: None,
+            create_volume_dir: false,
             secret_store_dir: None,
             package_store_dir: None,
             secret_store_key_env: None,

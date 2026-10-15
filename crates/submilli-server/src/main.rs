@@ -97,11 +97,23 @@ pub struct Cli {
     /// `per_session` workspaces (`sessions/<session id>`) and `ephemeral`
     /// scratch (`ephemeral/`). Mount on durable storage: named volumes and
     /// session files outlive restarts. A path set here must already exist. The
-    /// server never creates it, so a missing mount fails startup.
+    /// server does not create it unless given `--create-volume-dir`, so a
+    /// missing mount fails startup.
     /// [default: ~/.submilli/server/volumes, created at startup]
     /// Env: `$SUBMILLI_VOLUME_DIR`.
     #[arg(long)]
     volume_dir: Option<PathBuf>,
+
+    /// Create the volume directory (from `--volume-dir`, `$SUBMILLI_VOLUME_DIR`
+    /// or `volume_dir`) when it is missing, instead of failing startup. For a
+    /// host where nothing else can create the directory before the server
+    /// starts. Only use it when the directory is on durable storage that is
+    /// always mounted when the server starts: otherwise named volumes and
+    /// session files go to a fresh empty directory in its place. Does nothing
+    /// when no volume directory is set, since the server creates its default
+    /// one anyway. No config-file key or environment variable.
+    #[arg(long)]
+    create_volume_dir: bool,
 
     /// Directory of a secret store from before secrets and MCP OAuth grants
     /// were kept in the database (one sealed file per secret). When it exists,
@@ -319,6 +331,8 @@ fn main() -> Result<()> {
         return health_check(&cli);
     }
 
+    // Read before `resolve` takes the flags: no config field carries it.
+    let create_volume_dir = cli.create_volume_dir;
     let mut resolved = file_config::resolve(cli)?;
 
     // Init before the async runtime starts so the guard binds the Sentry hub for
@@ -362,6 +376,10 @@ fn main() -> Result<()> {
         );
     }
 
+    if create_volume_dir {
+        create_missing_volume_root(&resolved.config)?;
+    }
+
     let runtime = submilli_server::runtime(&resolved.config)?;
     let audit = submilli_server::audit::AuditLog::new(
         resolved.config.audit.clone(),
@@ -397,6 +415,20 @@ fn main() -> Result<()> {
     // preceding it — the drop is what would otherwise wait indefinitely.
     runtime.shutdown_timeout(RUNTIME_TEARDOWN_BUDGET);
     result.and_then(|()| reopen_result.map_err(Into::into))
+}
+
+/// `--create-volume-dir`: create a configured volume root that is missing,
+/// before startup checks that it exists. The default root needs nothing here,
+/// since startup creates it anyway.
+fn create_missing_volume_root(config: &submilli_server::ServerConfig) -> Result<()> {
+    if let Some(dir) = &config.volume_root
+        && !dir.exists()
+    {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("cannot create the volume root {}", dir.display()))?;
+        tracing::warn!(path = %dir.display(), "created the missing volume root");
+    }
+    Ok(())
 }
 
 /// `GET /healthz` against the address this process's configuration resolves

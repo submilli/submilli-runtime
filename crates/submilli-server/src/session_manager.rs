@@ -739,15 +739,22 @@ impl SessionManager {
         if let Some(folder) = task.folder {
             validate_session_id(id)?;
             let root = self.session_root.join(id);
-            if folder != root {
-                return Err(SessionError::Io(
-                    "session workspace ownership mismatch".into(),
-                ));
-            }
-            match std::fs::remove_dir_all(root) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(SessionError::Io(error.to_string())),
+            if folder == root {
+                match std::fs::remove_dir_all(root) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(SessionError::Io(error.to_string())),
+                }
+            } else {
+                // A folder recorded anywhere else was made under an earlier
+                // layout (`server/vfs/sessions/` before the volume root) or an
+                // earlier `volume_dir`. It is not this server's to delete, and
+                // refusing would fail every boot, so it stays for the operator.
+                tracing::warn!(
+                    session_id = id,
+                    folder = %folder.display(),
+                    "session workspace is not this session's directory under the volume root; left in place"
+                );
             }
         }
         self.store.complete_cleanup(id).await?;
@@ -2728,6 +2735,47 @@ mod tests {
         manager.database.close().await.unwrap();
         assert!(manager.boot().await.is_err());
         assert!(orphan.exists());
+    }
+
+    /// A workspace recorded under the layout before the volume root, or under
+    /// an earlier `volume_dir`, neither blocks boot nor is deleted.
+    #[tokio::test]
+    async fn boot_completes_cleanup_of_a_folder_outside_the_volume_root() {
+        let store_dir = tempfile::tempdir().expect("store dir");
+        let root = tempfile::tempdir().expect("volume root");
+        let elsewhere = tempfile::tempdir().expect("old layout");
+        let folder = elsewhere.path().join("vfs/sessions/old");
+        std::fs::create_dir_all(&folder).unwrap();
+        let store = file_store(store_dir.path());
+        store
+            .put(SessionRecord {
+                session_id: "old".into(),
+                blueprint_name: "p".into(),
+                status: SessionStatus::Closed,
+                closed_reason: Some(ClosedReason::Deleted),
+                root_vfs_type: crate::session_store::RootVfsType::PerSession,
+                ..SessionRecord::default()
+            })
+            .await
+            .unwrap();
+        store
+            .schedule_cleanup(crate::session_store::SessionCleanup {
+                session_id: "old".into(),
+                folder: Some(folder.clone()),
+            })
+            .await
+            .unwrap();
+
+        let mgr = SessionManager::new(
+            &test_root(root.path()),
+            Arc::default(),
+            no_http(),
+            store.clone(),
+            CapabilitySettings::default(),
+        );
+        mgr.boot().await.expect("boot");
+        assert!(store.pending_cleanup().await.unwrap().is_empty());
+        assert!(folder.exists(), "a folder outside the root is not ours");
     }
 
     fn ephemeral_bp() -> Blueprint {

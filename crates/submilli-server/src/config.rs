@@ -427,8 +427,9 @@ impl fmt::Display for VolumeRootError {
             } => write!(
                 f,
                 "the volume root {} is not usable ({source}). Mount it or create it, then \
-                 restart. The server never creates a configured `volume_dir`, so a missing \
-                 mount is not replaced by an empty local directory",
+                 restart. The server creates a configured `volume_dir` only when started \
+                 with `--create-volume-dir`, so a missing mount is not replaced by an \
+                 empty local directory",
                 path.display(),
             ),
             VolumeRootError::Root {
