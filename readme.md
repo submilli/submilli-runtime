@@ -92,6 +92,9 @@ production, use [Docker Compose](https://submilli.ai/docs/server/deploy-with-com
 the [Helm chart](https://submilli.ai/docs/server/deploy-on-kubernetes), or
 [systemd](https://submilli.ai/docs/server/deploy-on-linux).
 
+For repeatable installations, [pin and verify a release](https://submilli.ai/docs/install/#pin-and-verify-a-release)
+instead of resolving the latest release each time.
+
 ## Connect your agent
 
 Submilli keeps your harness. Your agent gets tools to run programs, over MCP

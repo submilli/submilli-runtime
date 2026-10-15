@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: "ai-assisted"
   confirmed: true
-  contentHash: "1a0ac76acad8ea36b2fe29c550e16c25ebfcd778b7f4324b760a3ad219bb412b"
+  contentHash: "5a29571300f8b7ac41c6f5ad34fa62f7c71d8c0259153e069ff0b8c259ecb250"
   confirmedAt: "2026-10-06T10:02:34.830065+00:00"
 ---
 
@@ -27,7 +27,11 @@ node --version
 ```
 
 Keep the same terminal open for the commands in this chapter. The first example
-uses fixed local data and needs no model key. For Windows, use a WSL terminal.
+uses fixed local data and needs no model key. On Windows, run the full tutorial
+inside a WSL terminal and install the Linux binaries there with the macOS and
+Linux command from [Install](/docs/install). The native PowerShell installer
+also supports Windows CLI and server installations, but the commands in this
+tutorial use Bash or Zsh and Linux paths.
 
 You need the Submilli CLI and the server from [install](/docs/install):
 
