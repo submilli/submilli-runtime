@@ -24,7 +24,9 @@ They could try to add it as a safeguard to the prompt, but due to the nature of 
 
 ## Demo
 
-![A support agent creates a replacement with $18 shipping. A $42 replacement is blocked until the developer raises the Blueprint limit from $25 to $50.](.github/assets/submilli-demo.gif)
+https://github.com/user-attachments/assets/e601c541-400b-4ac1-ad96-23dc0b0e6f90
+
+A support agent creates a replacement with $18 shipping. A $42 replacement is blocked until the developer raises the Blueprint limit from $25 to $50.
 
 ---
 
