@@ -31,7 +31,7 @@ use crate::runtime::fs::{FileIdentity, dir_identity};
 /// Which blueprint VFS mode this directory backs. Kept independent of the
 /// `submilli-blueprint` enum so the interpreter doesn't depend on that crate;
 /// the server maps one onto the other.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum VfsMode {
     None,
     Ephemeral,
@@ -40,7 +40,7 @@ pub enum VfsMode {
 }
 
 /// Whether guest code may change what a volume holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Access {
     ReadOnly,
     ReadWrite,
@@ -71,6 +71,7 @@ pub struct Vfs {
     /// The named volume backing the root, under [`VfsMode::Named`].
     volume: Option<Arc<str>>,
     mounts: Arc<[Mount]>,
+    recovery_protected: bool,
 }
 
 /// A named volume grafted at a guest path below the root.
@@ -117,6 +118,10 @@ impl Mount {
 
     pub(crate) fn dir(&self) -> &Arc<Dir> {
         &self.dir
+    }
+
+    pub(crate) fn host(&self) -> &Path {
+        &self.host
     }
 
     pub(crate) fn placeholders(&self) -> &[Placeholder] {
@@ -293,6 +298,8 @@ pub const MAX_MOUNTS: usize = 16;
 /// The name prefix of every directory [`Vfs::tempdir`] and [`Vfs::tempdir_in`]
 /// create, so a host can recognise its leftover scratch.
 pub const TEMPDIR_PREFIX: &str = "submilli-vfs-";
+/// Retained by SQL run ownership, never by TempDir or the scratch boot sweep.
+pub const RETAINED_PREFIX: &str = "submilli-vfs-run-";
 
 impl Vfs {
     /// A VFS that backs no directory. Every `submilli:fs.*` call traps; only
@@ -307,6 +314,7 @@ impl Vfs {
             access: Access::ReadWrite,
             volume: None,
             mounts: Arc::from([]),
+            recovery_protected: false,
             cwd: Arc::from("/"),
             ancestors: Arc::from([]),
         }
@@ -325,6 +333,7 @@ impl Vfs {
         }
         let dir = open_root(&root)?;
         let identity = dir_identity(&dir, Path::new("."), &dir.dir_metadata()?)?;
+        let recovery_protected = dir.try_exists(crate::runtime::fs::recovery::PRIVATE)?;
         Ok(Self {
             root,
             mode,
@@ -334,6 +343,7 @@ impl Vfs {
             access: Access::ReadWrite,
             volume: None,
             mounts: Arc::from([]),
+            recovery_protected,
             cwd: Arc::from("/"),
             ancestors: Arc::from([identity]),
         })
@@ -372,6 +382,7 @@ impl Vfs {
             access: Access::ReadWrite,
             volume: None,
             mounts: Arc::from([]),
+            recovery_protected: false,
             cwd: Arc::from("/"),
             ancestors: Arc::from([identity]),
         })
@@ -395,6 +406,21 @@ impl Vfs {
 
     pub fn mode(&self) -> VfsMode {
         self.mode
+    }
+
+    /// Disposable scratch cannot back a logical durable run: its last VFS
+    /// owner deletes the directory, including after interpreter teardown.
+    pub fn is_disposable(&self) -> bool {
+        self._owned.is_some()
+    }
+
+    pub(crate) fn protect_recovery(mut self) -> Self {
+        self.recovery_protected = true;
+        self
+    }
+
+    pub(crate) fn recovery_protected(&self) -> bool {
+        self.recovery_protected
     }
 
     /// Enforce `limit` bytes on the files this VFS holds, starting from what the
@@ -495,6 +521,9 @@ impl Vfs {
             spec.access,
         )
         .map_err(MountError::Io)?;
+        self.recovery_protected |= dir
+            .try_exists(crate::runtime::fs::recovery::PRIVATE)
+            .map_err(MountError::Io)?;
         let mount = Mount {
             guest: Arc::from(spec.guest_path.as_str()),
             rel,
@@ -630,6 +659,23 @@ impl Vfs {
                 target.open_dir()?;
             }
             Err(error) => return Err(error),
+        }
+        self.cwd = Arc::from(cwd);
+        Ok(self)
+    }
+
+    /// Recovery restores the logical path even when an earlier effect removed
+    /// its directory. Recreating it here would be an unjournaled mutation.
+    pub(crate) fn with_retained_cwd(
+        mut self,
+        cwd: &str,
+    ) -> Result<Self, crate::runtime::fs::ContainError> {
+        use crate::runtime::fs::{ContainError, guest_normalize};
+        if !cwd.starts_with('/') || cwd.len() > 4096 || guest_normalize("/", cwd)? != cwd {
+            return Err(ContainError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "retained cwd must be an absolute normalized guest path",
+            )));
         }
         self.cwd = Arc::from(cwd);
         Ok(self)

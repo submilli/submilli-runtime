@@ -139,6 +139,79 @@ impl SqliteUnitOfWork {
 
 #[async_trait::async_trait]
 impl UnitOfWork for SqliteUnitOfWork {
+    async fn session_has_retained_workspace(&mut self, session: &str) -> Result<bool, StoreError> {
+        let session = session.to_owned();
+        self.query(move |connection| Box::pin(async move {
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM durable_workspaces WHERE session_id=? AND state != 'gone')")
+                .bind(session).fetch_one(connection).await.map_err(DatabaseError::Sql)
+        })).await
+    }
+    async fn object_store_identity(
+        &mut self,
+    ) -> Result<Option<crate::domain::durable_object::ObjectStoreIdentity>, StoreError> {
+        self.query_recoverable(|connection| {
+            Box::pin(crate::adapters::durable_objects::store_identity(connection))
+        })
+        .await
+    }
+    async fn identify_object_store(
+        &mut self,
+        identity: crate::domain::durable_object::ObjectStoreIdentity,
+    ) -> Result<(), StoreError> {
+        self.query_recoverable(move |connection| {
+            Box::pin(crate::adapters::durable_objects::identify_store(
+                connection, identity,
+            ))
+        })
+        .await
+    }
+    async fn get_object(
+        &mut self,
+        id: &crate::domain::durable_object::ObjectId,
+    ) -> Result<Option<crate::domain::durable_object::DurableObject>, StoreError> {
+        let id = id.clone();
+        let sealer = self.sealer.clone();
+        self.query_recoverable(move |connection| {
+            Box::pin(async move {
+                crate::adapters::durable_objects::get(connection, &id, &sealer).await
+            })
+        })
+        .await
+    }
+    async fn save_object(
+        &mut self,
+        object: crate::domain::durable_object::DurableObject,
+    ) -> Result<(), StoreError> {
+        let sealer = self.sealer.clone();
+        self.query_recoverable(move |connection| {
+            Box::pin(async move {
+                crate::adapters::durable_objects::save(connection, object, &sealer).await
+            })
+        })
+        .await
+    }
+    async fn objects_after(
+        &mut self,
+        after: Option<crate::domain::durable_object::ObjectId>,
+        limit: u32,
+    ) -> Result<Vec<crate::domain::durable_object::DurableObject>, StoreError> {
+        let sealer = self.sealer.clone();
+        self.query_recoverable(move |connection| {
+            Box::pin(async move {
+                crate::adapters::durable_objects::list(connection, after, limit, &sealer).await
+            })
+        })
+        .await
+    }
+    async fn object_usage(&mut self, owner: &str) -> Result<(u64, u64), StoreError> {
+        let owner = owner.to_owned();
+        self.query_recoverable(move |connection| {
+            Box::pin(
+                async move { crate::adapters::durable_objects::usage(connection, &owner).await },
+            )
+        })
+        .await
+    }
     async fn blueprint_exists(&mut self, name: &str) -> Result<bool, StoreError> {
         let name = name.to_owned();
         self.query(move |connection| {

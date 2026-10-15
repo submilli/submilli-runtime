@@ -1,0 +1,184 @@
+{
+  "module": "NamespaceRecovery",
+  "constants": {
+    "Operation": "move",
+    "MaxCrashes": 1,
+    "CrashMode": "power",
+    "Fault": "none",
+    "Witness": ""
+  },
+  "invariants": [
+    "TypeOK",
+    "ReceiptDurable",
+    "OriginalRecoverable",
+    "EvidenceRetained",
+    "NewerPathsUntouched",
+    "SuccessAfterReceipt"
+  ],
+  "properties": [],
+  "cases": [
+    {
+      "name": "move-power-loss",
+      "kind": "safety"
+    },
+    {
+      "name": "remove-power-loss",
+      "kind": "safety",
+      "constants": {
+        "Operation": "remove"
+      }
+    },
+    {
+      "name": "replace-power-loss",
+      "kind": "safety",
+      "constants": {
+        "Operation": "replace"
+      }
+    },
+    {
+      "name": "move-process-crash",
+      "kind": "safety",
+      "constants": {
+        "CrashMode": "process"
+      }
+    },
+    {
+      "name": "replace-process-crash",
+      "kind": "safety",
+      "constants": {
+        "CrashMode": "process",
+        "Operation": "replace"
+      }
+    },
+    {
+      "name": "move-progress",
+      "kind": "liveness",
+      "specification": "LiveSpec",
+      "properties": [
+        "Progress"
+      ]
+    },
+    {
+      "name": "remove-progress",
+      "kind": "liveness",
+      "specification": "LiveSpec",
+      "properties": [
+        "Progress"
+      ],
+      "constants": {
+        "Operation": "remove"
+      }
+    },
+    {
+      "name": "replace-progress",
+      "kind": "liveness",
+      "specification": "LiveSpec",
+      "properties": [
+        "Progress"
+      ],
+      "constants": {
+        "Operation": "replace"
+      }
+    },
+    {
+      "name": "negative-unsynced-backup",
+      "kind": "negative",
+      "invariant": "OriginalRecoverable",
+      "constants": {
+        "Fault": "no-backup-sync",
+        "Operation": "remove"
+      }
+    },
+    {
+      "name": "negative-unsynced-candidate",
+      "kind": "negative",
+      "invariant": "ReceiptDurable",
+      "constants": {
+        "Operation": "replace",
+        "Fault": "no-file-sync"
+      }
+    },
+    {
+      "name": "negative-unsynced-directory",
+      "kind": "negative",
+      "invariant": "ReceiptDurable",
+      "constants": {
+        "Fault": "no-directory-sync"
+      }
+    },
+    {
+      "name": "negative-early-cleanup",
+      "kind": "negative",
+      "invariant": "EvidenceRetained",
+      "constants": {
+        "Fault": "early-cleanup"
+      }
+    },
+    {
+      "name": "negative-retry-reused-path",
+      "kind": "negative",
+      "invariant": "NewerPathsUntouched",
+      "constants": {
+        "Fault": "path-retry"
+      }
+    },
+    {
+      "name": "witness-partial-namespace",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "partial-namespace"
+      }
+    },
+    {
+      "name": "witness-process-crash-between-move-steps",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "CrashMode": "process",
+        "Witness": "partial-namespace"
+      }
+    },
+    {
+      "name": "witness-published-before-receipt",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "published-no-receipt"
+      }
+    },
+    {
+      "name": "witness-lost-receipt-ack",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "lost-receipt-ack"
+      }
+    },
+    {
+      "name": "witness-path-reuse",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "path-reuse"
+      }
+    },
+    {
+      "name": "move-repeated-power-loss",
+      "kind": "safety",
+      "suite": "extended",
+      "constants": {
+        "MaxCrashes": 2
+      }
+    },
+    {
+      "name": "replace-repeated-power-loss",
+      "kind": "safety",
+      "suite": "extended",
+      "constants": {
+        "MaxCrashes": 2,
+        "Operation": "replace"
+      }
+    }
+  ]
+}

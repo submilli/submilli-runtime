@@ -416,6 +416,9 @@ impl ContainedWalk {
     /// should enter. `None` for an entry whose type cannot be determined at all.
     fn visit(&mut self, entry: DirEntry) -> Option<WalkEntry> {
         let raw_name = entry.file_name();
+        if crate::runtime::fs::private_recovery_path(std::path::Path::new(&raw_name)) {
+            return None;
+        }
         // `file_type` can fail where the directory entry carries no type; the entry's
         // own metadata is the fallback before giving up on it.
         let ft = entry

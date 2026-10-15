@@ -31,6 +31,16 @@ jobs:
         run: python3 verification/check.py --model admission --output "$RUNNER_TEMP/admission-model"
       - name: Check immutable object publication, recovery and collection
         run: python3 verification/check.py --model objects --output "$RUNNER_TEMP/objects-model"
+      - name: Check fixed-offset append recovery
+        run: python3 verification/check.py --model filesystem --output "$RUNNER_TEMP/filesystem-model"
+      - name: Check regular-file namespace recovery
+        run: python3 verification/check.py --model filesystem/namespace --output "$RUNNER_TEMP/namespace-model"
+      - name: Check directory recovery
+        run: python3 verification/check.py --model filesystem/directories --output "$RUNNER_TEMP/directories-model"
+      - name: Check retained resources
+        run: python3 verification/check.py --model filesystem/resources --output "$RUNNER_TEMP/resources-model"
+      - name: Check compound and prepared Git publication
+        run: python3 verification/check.py --model filesystem/sequences --output "$RUNNER_TEMP/sequences-model"
       - name: Preserve model-checking evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -40,5 +50,10 @@ jobs:
             ${{ runner.temp }}/durability-model
             ${{ runner.temp }}/admission-model
             ${{ runner.temp }}/objects-model
+            ${{ runner.temp }}/filesystem-model
+            ${{ runner.temp }}/namespace-model
+            ${{ runner.temp }}/directories-model
+            ${{ runner.temp }}/resources-model
+            ${{ runner.temp }}/sequences-model
           if-no-files-found: ignore
           retention-days: 14

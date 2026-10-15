@@ -1,0 +1,30 @@
+{
+  "module": "AppendRecovery",
+  "constants": {
+    "MaxCrashes": 1,
+    "CrashMode": "power",
+    "Fault": "none",
+    "Witness": ""
+  },
+  "invariants": [
+    "TypeOK", "ReceiptIsDurable", "AppendExactlyOnce", "NewPathUntouched",
+    "ReplayReadStable", "RecoveryEvidenceRetained", "SuccessAfterReceipt",
+    "OriginalPrefixPreserved"
+  ],
+  "properties": [],
+  "cases": [
+    {"name": "append-power-loss", "kind": "safety"},
+    {"name": "append-process-crash", "kind": "safety", "constants": {"CrashMode": "process"}},
+    {"name": "append-progress", "kind": "liveness", "specification": "LiveSpec", "properties": ["Progress"]},
+    {"name": "negative-fresh-append-offset", "kind": "negative", "invariant": "AppendExactlyOnce", "constants": {"Fault": "fresh-offset"}},
+    {"name": "negative-early-receipt", "kind": "negative", "invariant": "ReceiptIsDurable", "constants": {"Fault": "early-receipt"}},
+    {"name": "negative-retry-reused-path", "kind": "negative", "invariant": "NewPathUntouched", "constants": {"Fault": "path-retry"}},
+    {"name": "negative-early-cleanup", "kind": "negative", "invariant": "RecoveryEvidenceRetained", "constants": {"Fault": "early-cleanup"}},
+    {"name": "negative-fresh-replay-read", "kind": "negative", "invariant": "ReplayReadStable", "constants": {"Fault": "fresh-read"}},
+    {"name": "witness-partial-retry", "kind": "witness", "invariant": "NeverWitness", "constants": {"Witness": "partial-retry"}},
+    {"name": "witness-synced-before-receipt", "kind": "witness", "invariant": "NeverWitness", "constants": {"Witness": "synced-no-receipt"}},
+    {"name": "witness-lost-receipt-ack", "kind": "witness", "invariant": "NeverWitness", "constants": {"Witness": "lost-receipt-ack"}},
+    {"name": "witness-path-reuse", "kind": "witness", "invariant": "NeverWitness", "constants": {"Witness": "reuse-replay"}},
+    {"name": "append-repeated-power-loss", "kind": "safety", "suite": "extended", "constants": {"MaxCrashes": 2}, "timeout_seconds": 180}
+  ]
+}

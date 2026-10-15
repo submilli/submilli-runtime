@@ -5477,6 +5477,7 @@ dependencies = [
  "similar",
  "submilli-wasm",
  "tempfile",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-rustls",
  "unicode-ident",

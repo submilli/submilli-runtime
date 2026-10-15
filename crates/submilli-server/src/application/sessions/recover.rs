@@ -41,6 +41,14 @@ impl<'a> RecoverSessions<'a> {
         let mut active = HashSet::new();
         for mut session in sessions {
             let id = session.id().as_str().to_owned();
+            if unit
+                .session_has_retained_workspace(&id)
+                .await
+                .map_err(BootError::Sessions)?
+            {
+                active.insert(id);
+                continue;
+            }
             if session.status() == SessionStatus::Active {
                 events.push((
                     id.clone(),
