@@ -23,9 +23,10 @@ pub(crate) mod engine;
 pub(crate) mod input;
 mod install;
 mod output;
+mod replace_callback;
 
-pub(crate) use install::declare_types;
 pub use install::{declare, install};
+pub(crate) use install::{declare_types, replacement_type};
 
 use wasmtime::{ArrayRef, ArrayRefPre, Caller, ExternRef, Rooted, StructRef, StructRefPre, Val};
 
@@ -752,6 +753,29 @@ pub(super) fn string_replace(
     let st = as_struct(caller, abi_arg(params, 1)?, "String#replace(regex)")?;
     let all = flag_bits(caller, &st)? & FlagSet::G.bits() as i32 != 0;
     replace_regex(caller, params, &st, all, "String#replace(replacement)")
+}
+
+/// `String#replace` or `replaceAll` whose replacement may be a function.
+pub(super) async fn string_replace_any(
+    caller: &mut Caller<'_, StoreData>,
+    params: &[Val],
+    all: bool,
+) -> wasmtime::Result<Val> {
+    if arg_is_string(caller, abi_arg(params, 2)?)? {
+        return if all {
+            string_replace_all(caller, params)
+        } else {
+            string_replace(caller, params)
+        };
+    }
+    replace_callback::replace_with_callback(
+        caller,
+        abi_arg(params, 0)?,
+        abi_arg(params, 1)?,
+        abi_arg(params, 2)?,
+        all,
+    )
+    .await
 }
 
 /// `String#replaceAll(search, replacement)` — always all occurrences (the regex

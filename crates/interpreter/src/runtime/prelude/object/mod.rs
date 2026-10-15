@@ -442,6 +442,20 @@ fn copy_field_name(
 
 /// Append without replacing the receiver, so every alias sees the new slot.
 /// Existing indices (including class payload and guard slots) stay unchanged.
+/// A fresh object with `fields` (name, value) in order, for host code that
+/// hands JavaScript an object (`replace`'s named groups).
+pub(crate) fn object_from_fields(
+    caller: &mut Caller<'_, StoreData>,
+    fields: &[(Val, Val)],
+) -> wasmtime::Result<Val> {
+    let empty = Val::null_any_ref();
+    let object = spread(caller, &empty, &empty, &empty, &empty)?;
+    for (name, value) in fields {
+        insert_field(caller, &object, name, value)?;
+    }
+    Ok(object)
+}
+
 fn insert_field(
     caller: &mut Caller<'_, StoreData>,
     obj: &Val,

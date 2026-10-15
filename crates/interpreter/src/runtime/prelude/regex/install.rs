@@ -55,6 +55,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.object.clone()),
     ));
     let string = ref_to(intrinsic_string_type(&engine)?);
+    // `string | function`: a mixed union of non-null members lowers to `(ref $Object)`.
+    let replacement = ValType::Ref(RefType::new(
+        false,
+        HeapType::ConcreteStruct(intr.object.clone()),
+    ));
     let array = ref_to(intrinsic_array_type(&engine)?);
     let num = ValType::F64;
     let boolean = ValType::I32;
@@ -254,32 +259,36 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Ok(())
         },
     )?;
-    register_host_fn(
+    register_host_fn_async(
         linker,
         m,
         string_key("replace"),
         ft(
-            vec![string.clone(), obj.clone(), string.clone()],
+            vec![string.clone(), obj.clone(), replacement.clone()],
             vec![string.clone()],
         ),
         true,
         |caller, params, results| {
-            *abi_result(results, 0)? = super::string_replace(caller, params)?;
-            Ok(())
+            Box::pin(async move {
+                *abi_result(results, 0)? = super::string_replace_any(caller, params, false).await?;
+                Ok(())
+            })
         },
     )?;
-    register_host_fn(
+    register_host_fn_async(
         linker,
         m,
         string_key("replaceAll"),
         ft(
-            vec![string.clone(), obj.clone(), string.clone()],
+            vec![string.clone(), obj.clone(), replacement.clone()],
             vec![string.clone()],
         ),
         true,
         |caller, params, results| {
-            *abi_result(results, 0)? = super::string_replace_all(caller, params)?;
-            Ok(())
+            Box::pin(async move {
+                *abi_result(results, 0)? = super::string_replace_any(caller, params, true).await?;
+                Ok(())
+            })
         },
     )?;
     register_host_fn(
@@ -440,7 +449,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
             vec![
                 s(),
                 Param::new("search", string_or_regexp()),
-                Param::new("replacement", Type::String),
+                Param::new("replacement", replacement_type()),
             ],
             Type::String,
         );
@@ -713,4 +722,27 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             },
         },
     );
+}
+
+/// How many arguments a replacer function can take: the match, then up to
+/// five captures with the offset and input after them.
+const REPLACER_ARITY: usize = 8;
+
+/// `replace`'s and `replaceAll`'s replacement: a template string, or a
+/// function of the match. tsc's lib types it `(substring: string, ...args:
+/// any[]) => string`; a fixed-arity function can't stand for a rest one here,
+/// so the arguments after the match are optional `unknown`s instead.
+pub(crate) fn replacement_type() -> Type {
+    let mut params = vec![Type::String];
+    params.resize(REPLACER_ARITY, Type::Unknown);
+    Type::union(vec![
+        Type::String,
+        Type::Function {
+            params,
+            optional: REPLACER_ARITY - 1,
+            ret: Box::new(Type::String),
+            predicate: None,
+            has_rest: false,
+        },
+    ])
 }
