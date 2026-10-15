@@ -462,6 +462,15 @@ fn emit_assign_field(
     }
     let recv = emitter.add_anonymous_local(ctx.symbols.value_type(&receiver_ty)?)?;
     emitter.instruction(Instruction::LocalSet(recv));
+    if let Some(setter) = host_property_setter(ctx, &receiver_ty, name) {
+        // The setter's Direct wrapper takes a non-null receiver, as a method's does.
+        emitter.instruction(Instruction::LocalGet(recv));
+        emitter.instruction(Instruction::RefAsNonNull);
+        emit_expr(emitter, ctx, value)?;
+        emitter.instruction(Instruction::Call(setter));
+        emitter.end_single_evaluations(mark)?;
+        return Ok(());
+    }
     match receiver_ty.lowered() {
         // Class instance: nominal receiver, array-backed object payload.
         Type::ClassRef { mangled, .. } => {
@@ -471,6 +480,16 @@ fn emit_assign_field(
     }
     emitter.end_single_evaluations(mark)?;
     Ok(())
+}
+
+/// The host setter a prelude interface declares for a writable property it
+/// implements (`RegExp#lastIndex`), which takes the receiver and the value.
+fn host_property_setter(ctx: &CodegenCtx, receiver_ty: &Type, name: &Ident) -> Option<u32> {
+    let Type::InterfaceRef { mangled, .. } = receiver_ty.lowered() else {
+        return None;
+    };
+    let key = crate::mangle::extend(mangled, &crate::mangle::property_setter(&name.name));
+    ctx.symbols.func_idx(&key)
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -1933,6 +1933,18 @@ fn emit_postfix_unary(
                 )?;
                 return Ok(());
             }
+            if let Some((getter, setter)) = host_property_accessors(ctx, &receiver_ty, name) {
+                emit_host_property_postfix(
+                    emitter,
+                    ctx,
+                    *receiver,
+                    &receiver_ty,
+                    (getter, setter),
+                    op,
+                    target_ty,
+                )?;
+                return Ok(());
+            }
             // Mirror AssignField + FieldAccess's vtable-dispatched calls.
             let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
                 crate::codegen::internal_failure("intrinsics declared by codegen entry")
@@ -1966,6 +1978,54 @@ fn emit_postfix_unary(
             emit_index_postfix(emitter, ctx, *receiver, *index, op)?;
         }
     };
+    Ok(())
+}
+
+/// The getter and setter of a writable prelude interface property backed by
+/// host functions (`RegExp.lastIndex`).
+fn host_property_accessors(
+    ctx: &CodegenCtx,
+    receiver_ty: &Type,
+    name: &Ident,
+) -> Option<(u32, u32)> {
+    let Type::InterfaceRef { mangled, .. } = receiver_ty.lowered() else {
+        return None;
+    };
+    let setter_key = crate::mangle::extend(mangled, &crate::mangle::property_setter(&name.name));
+    let setter = ctx.symbols.func_idx(&setter_key)?;
+    let getter = ctx
+        .symbols
+        .func_idx(&crate::mangle::extend(mangled, &name.name))?;
+    Some((getter, setter))
+}
+
+fn emit_host_property_postfix(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    receiver: ExprId,
+    receiver_ty: &Type,
+    (getter, setter): (u32, u32),
+    op: crate::PostfixOp,
+    target_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    // The host accessors trade `f64`; a widened target boxes the old value.
+    let recv = emitter.add_anonymous_local(ctx.symbols.value_type(receiver_ty)?)?;
+    let old = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Number)?)?;
+    emit_receiver(emitter, ctx, receiver)?;
+    emitter.instruction(Instruction::LocalSet(recv));
+    // Setter receiver first, then the updated value computed from the getter.
+    emitter.instruction(Instruction::LocalGet(recv));
+    emitter.instruction(Instruction::RefAsNonNull);
+    emitter.instruction(Instruction::LocalGet(recv));
+    emitter.instruction(Instruction::RefAsNonNull);
+    emitter.instruction(Instruction::Call(getter));
+    emitter.instruction(Instruction::LocalTee(old));
+    emit_postfix_delta(emitter, ctx, op, &Type::Number);
+    emitter.instruction(Instruction::Call(setter));
+    emitter.instruction(Instruction::LocalGet(old));
+    if target_ty != &Type::Number {
+        cast::emit_box(emitter, ctx, &Type::Number)?;
+    }
     Ok(())
 }
 

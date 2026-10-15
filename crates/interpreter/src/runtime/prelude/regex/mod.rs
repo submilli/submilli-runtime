@@ -453,7 +453,27 @@ pub(super) fn last_index_getter(
     params: &[Val],
 ) -> wasmtime::Result<f64> {
     let st = as_struct(caller, abi_arg(params, 0)?, "RegExp#lastIndex")?;
-    Ok(last_index(caller, &st)? as f64)
+    match st.field(&mut *caller, 2)? {
+        Val::I32(v) => Ok(f64::from(v)),
+        other => wasmtime::bail!("RegExp: lastIndex is {other:?}, not i32"),
+    }
+}
+
+/// `re.lastIndex = value`. The slot holds an integer: the value is truncated
+/// toward zero (NaN is 0) and saturates at the `i32` range, which only
+/// changes what a fractional or out-of-range write reads back; matching
+/// clamps a negative index to 0 and fails past the end either way.
+pub(super) fn last_index_setter(
+    caller: &mut Caller<'_, StoreData>,
+    params: &[Val],
+) -> wasmtime::Result<()> {
+    let st = as_struct(caller, abi_arg(params, 0)?, "RegExp#lastIndex")?;
+    let Val::F64(bits) = *abi_arg(params, 1)? else {
+        wasmtime::bail!("RegExp#lastIndex: value is not f64");
+    };
+    // `as` truncates toward zero, saturates, and maps NaN to 0.
+    let value = f64::from_bits(bits) as i32;
+    st.set_field(&mut *caller, 2, Val::I32(value))
 }
 
 /// A boolean flag getter — `flag_mask & bitset != 0`.

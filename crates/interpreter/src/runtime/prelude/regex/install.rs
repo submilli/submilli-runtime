@@ -124,6 +124,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Ok(())
         },
     )?;
+    register_host_fn(
+        linker,
+        m,
+        regex_key(&crate::mangle::property_setter("lastIndex")),
+        ft(vec![obj.clone(), num.clone()], Vec::new()),
+        true,
+        |caller, params, _results| super::last_index_setter(caller, params),
+    )?;
     for (name, mask) in FLAG_GETTERS {
         register_host_fn(
             linker,
@@ -318,6 +326,14 @@ pub fn declare(defs: &mut PackageDeclaration) {
         vec![re_self()],
         Type::Number,
     );
+    let set_last_index = crate::mangle::property_setter("lastIndex");
+    declare_method(
+        defs,
+        &set_last_index,
+        regex_key(&set_last_index),
+        vec![re_self(), Param::new("value", Type::Number)],
+        Type::Void,
+    );
     for (name, _) in FLAG_GETTERS {
         declare_method(defs, name, regex_key(name), vec![re_self()], Type::Boolean);
     }
@@ -424,7 +440,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
     let regex_string_prop_doc =
         "/** The original JS-source pattern (without the leading/trailing `/`). */";
     let regex_flags_doc = "/** The flag string in source order — any subset of `gimsuy`. */";
-    let regex_last_index_doc = "/** Read-only in v1 — the wrapper writes it back internally on `g`/`y` matches. Writable from user code lands in a follow-up. */";
+    let regex_last_index_doc = "/** Where the next `g` or `y` match starts; matching advances it, and a failed match resets it to 0. Writable, as in JavaScript; it holds an integer, so a fractional write reads back truncated. */";
     let regex_global_doc = "/** `true` if the regex was constructed with the `g` flag. */";
     let regex_ignore_case_doc =
         "/** `true` if the regex was constructed with the `i` flag (case-insensitive matching). */";
@@ -504,7 +520,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "lastIndex".to_string(),
                         PropertySig {
                             ty: Type::Number,
-                            readonly: true,
+                            readonly: false,
                             intrinsic: false,
                             optional: false,
                             doc: doc(regex_last_index_doc),

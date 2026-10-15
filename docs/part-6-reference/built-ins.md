@@ -434,7 +434,7 @@ Compiled regular expression.
 | `readonly flags: string` | The flag string in source order — any subset of `gimsuy`. |
 | `readonly global: boolean` | `true` if the regex was constructed with the `g` flag. |
 | `readonly ignoreCase: boolean` | `true` if the regex was constructed with the `i` flag (case-insensitive matching). |
-| `readonly lastIndex: number` | Read-only in v1 — the wrapper writes it back internally on `g`/`y` matches. |
+| `lastIndex: number` | Where the next `g` or `y` match starts; matching advances it, and a failed match resets it to 0. Writable, as in JavaScript; it holds an integer, so a fractional write reads back truncated. |
 | `readonly multiline: boolean` | `true` if the regex was constructed with the `m` flag (`^` / `$` match line boundaries). |
 | `readonly source: string` | The original JS-source pattern (without the leading/trailing `/`). |
 | `readonly sticky: boolean` | `true` if the regex was constructed with the `y` flag (sticky / anchored at `lastIndex`). |

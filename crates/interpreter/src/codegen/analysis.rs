@@ -751,13 +751,19 @@ impl CodegenAnalysis {
                 self.visit_type_at(target_ty, stmt.span)?;
             }
             TypedStmtKind::AssignField { receiver, name, .. } => {
+                let receiver_ty = ta
+                    .source_type(*receiver)
+                    .map_err(crate::codegen::arena_failure)?;
+                // A prelude interface's host setter, if it declares one; an
+                // unused name imports nothing.
+                if let Type::InterfaceRef { mangled, .. } = receiver_ty.lowered() {
+                    self.dependency_usage.note_member(crate::mangle::extend(
+                        mangled,
+                        &crate::mangle::property_setter(&name.name),
+                    ));
+                }
                 self.extra_field_names.push(name.name.clone());
-                self.note_shaped_property_access(
-                    ta.source_type(*receiver)
-                        .map_err(crate::codegen::arena_failure)?,
-                    &name.name,
-                    AccessorKind::Set,
-                );
+                self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Set);
             }
             TypedStmtKind::AssignIndex {
                 receiver, elem_ty, ..
@@ -1161,6 +1167,14 @@ impl CodegenAnalysis {
                         .map_err(crate::codegen::arena_failure)?;
                     self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Get);
                     self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Set);
+                    if let Type::InterfaceRef { mangled, .. } = receiver_ty.lowered() {
+                        self.dependency_usage
+                            .note_member(crate::mangle::extend(mangled, &name.name));
+                        self.dependency_usage.note_member(crate::mangle::extend(
+                            mangled,
+                            &crate::mangle::property_setter(&name.name),
+                        ));
+                    }
                 }
                 PostfixTarget::Index { elem_ty, .. } => {
                     self.note_postfix_target(elem_ty)?;
