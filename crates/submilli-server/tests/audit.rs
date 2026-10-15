@@ -26,6 +26,7 @@ fn configured(path: std::path::PathBuf, allows: Allows, policy: &str) -> AppStat
         InMemoryBlueprintStore::seed([submilli_blueprint::parse(policy).unwrap()]).unwrap(),
     );
     futures::executor::block_on(AppState::new(ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
         blueprints: Some(blueprints),
         audit,
         ..Default::default()
@@ -43,6 +44,7 @@ fn configured_with_package(
         InMemoryBlueprintStore::seed([submilli_blueprint::parse(policy).unwrap()]).unwrap(),
     );
     futures::executor::block_on(AppState::new(ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
         blueprints: Some(blueprints),
         package_store_root: Some(package_store_root),
         audit: AuditConfig {
@@ -330,6 +332,7 @@ async fn auth_refusals_have_safe_metadata_and_never_the_token() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("audit.log");
     let config = ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
         blueprints: Some(Arc::new(InMemoryBlueprintStore::default())),
         auth: AuthConfig::Tokens(vec![ApiToken::new("harness", Role::User, TOKEN).unwrap()]),
         audit: AuditConfig {
@@ -453,6 +456,7 @@ async fn shared_output_records_remain_whole_under_concurrent_runs() {
     let audit = AuditLog::new(AuditConfig::default(), Some(output.clone()));
     let blueprint = submilli_blueprint::parse("name: test\ndefault: allow\n").unwrap();
     let state = AppState::new(ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
         audit_log: Some(audit),
         blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]).unwrap())),
         ..Default::default()
@@ -498,6 +502,7 @@ async fn invariant_egress_and_quota_decisions_log_only_their_check_context() {
         submilli_blueprint::SecretSource::Harness(Default::default()),
     );
     let state = AppState::new(ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
         audit: AuditConfig {
             file: Some(path.clone()),
             ..Default::default()

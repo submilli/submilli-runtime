@@ -335,7 +335,7 @@ impl VolumeRoot {
             configured: self.configured,
             source,
         };
-        if !self.configured {
+        if !self.configured && !self.path.exists() {
             std::fs::create_dir_all(&self.path).map_err(unusable)?;
         }
         let meta = std::fs::metadata(&self.path).map_err(unusable)?;
@@ -437,8 +437,9 @@ impl fmt::Display for VolumeRootError {
                 source,
             } => write!(
                 f,
-                "the default volume root {} could not be created ({source}). Make its \
-                 parent writable, or set `volume_dir` to an existing directory",
+                "the default volume root {} is not usable ({source}). Make sure it is a \
+                 directory the server can create and write, or set `volume_dir` to an \
+                 existing directory",
                 path.display(),
             ),
             VolumeRootError::Subdirectory { path, source } => write!(
@@ -1376,6 +1377,7 @@ fn resolve_links(path: &Path) -> PathBuf {
 #[cfg(test)]
 pub(crate) fn test_config() -> ServerConfig {
     ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
         blueprints: Some(Arc::new(crate::blueprint::InMemoryBlueprintStore::default())),
         ..Default::default()
     }
@@ -1472,6 +1474,17 @@ mod tests {
         ] {
             assert!(dir.is_dir(), "{}", dir.display());
         }
+    }
+
+    #[test]
+    fn a_file_at_the_default_root_is_refused() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("volumes");
+        std::fs::write(&root, b"x").unwrap();
+        let err = VolumeRoot::default_root(&root)
+            .prepare()
+            .expect_err("a file is no root");
+        assert!(err.to_string().contains("not a directory"), "{err}");
     }
 
     #[test]

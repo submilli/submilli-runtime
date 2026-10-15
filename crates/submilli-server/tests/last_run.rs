@@ -38,6 +38,10 @@ fn router_with_config(config: ServerConfig) -> Router {
     );
     let config = ServerConfig {
         blueprints: Some(blueprints),
+        volume_root: config
+            .volume_root
+            .clone()
+            .or_else(|| Some(tempfile::tempdir().unwrap().keep())),
         ..config
     };
     app(futures::executor::block_on(AppState::new(config)).expect("build AppState"))
@@ -280,6 +284,7 @@ async fn recording_failure_settles_idempotency_without_reexecuting() {
     let ledger = Arc::new(RequestRecords::ephemeral());
     let blueprint = submilli_blueprint::parse("name: test\ndefault: allow\n").unwrap();
     let router = app(AppState::new(ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
         sessions: Some(store.clone()),
         database: Some(ledger.database.clone()),
         blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]).unwrap())),

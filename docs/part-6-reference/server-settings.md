@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "bebba7c17317fcecde070e13299b9546651b786780de3f8a1ae10e1074708ca2"
+  contentHash: "5187c6f69963edb6a2516867611acbc6448f586e81ad8ad7e73d4137eb9be1d3"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -197,12 +197,13 @@ mcp_allowed_hosts:
 | `volume_dir` | `managed-local/<name>` for each `managed-local` volume, `sessions/<session id>` for the files of each session with a `per_session` filesystem, and `ephemeral/` with one directory per run of an `ephemeral` filesystem, deleted when the run ends. | `$SUBMILLI_HOME/server/volumes` |
 | `secret_store.dir` | The encrypted secret store. | `$SUBMILLI_HOME/server/secrets` |
 
-The server creates each directory it needs, except a `volume_dir` you set. That
-one must exist when the server starts, and the server never recreates it or
-its `managed-local/`, `sessions/` and `ephemeral/` directories. A disk that
-isn't mounted stops the server instead of filling an empty directory in its
-place. The server also reads the CLI's Package store, `$SUBMILLI_HOME/packages`,
-as a read-only fallback.
+The server creates each directory it needs, except a `volume_dir` you set,
+which must exist when the server starts. The volume root's `managed-local/`,
+`sessions/` and `ephemeral/` directories are created at startup and never while
+the server runs. A disk that isn't mounted stops the server, or the work that
+needs it, instead of filling an empty directory in its place. The server also
+reads the CLI's Package store, `$SUBMILLI_HOME/packages`, as a read-only
+fallback.
 
 ## `secret_store`
 
