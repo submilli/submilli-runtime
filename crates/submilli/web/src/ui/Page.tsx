@@ -482,8 +482,8 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
     setTimeout(() => askInput.current?.focus(), 0);
   };
 
-  // Back in the box, unless the reader has started their next message there meanwhile.
-  const keepToSendAgain = (text: string) => setChatText((now) => (now.trim() ? now : text));
+  // Back in the box, above the next message if the reader has started one there meanwhile.
+  const keepToSendAgain = (text: string) => setChatText((now) => (now.trim() ? `${text}\n\n${now}` : text));
 
   const send = async () => {
     const text = chatText.trim();

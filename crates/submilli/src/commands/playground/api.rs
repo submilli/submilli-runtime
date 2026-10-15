@@ -529,11 +529,12 @@ async fn chat(
         Err(refused) => return *refused,
     };
     let actions = Arc::clone(state.actions_arc());
-    let taking = Arc::clone(&actions);
+    // Moved to the intake's thread; `actions` stays to log where the chat went.
+    let for_intake = Arc::clone(&actions);
     let accepted = tokio::task::spawn_blocking(move || {
-        taking
+        for_intake
             .chat
-            .accept(post, &taking.recorder, std::time::Instant::now())
+            .accept(post, &for_intake.recorder, std::time::Instant::now())
     })
     .await;
     match accepted {

@@ -43,11 +43,9 @@ pub(crate) fn execute() -> Result<ExitCode> {
             relay_initialize(&connection, &out, &message);
             continue;
         }
-        // A request other than `initialize` may wait on a run, so it is relayed on its own
-        // thread: a cancellation or another request is not held up behind it. The session
-        // is set up first, in order, before anything else is sent.
-        let in_order = message["method"] == "initialize" || message.get("id").is_none();
-        if in_order {
+        // A request may wait on a run, so it is relayed on its own thread: a cancellation
+        // or another request is not held up behind it. A notification goes in order.
+        if message.get("id").is_none() {
             relay(&connection, &out, &message);
         } else {
             let connection = Arc::clone(&connection);
@@ -194,13 +192,13 @@ fn relay_initialize(connection: &McpHttp, out: &Output, message: &Value) {
     let note = super::variables_note(&sent);
     relay_with(connection, out, message, &|reply| {
         if let Some(note) = &note {
-            told(reply, note);
+            add_to_instructions(reply, note);
         }
     });
 }
 
 /// Adds `note` to an `initialize` result's instructions.
-fn told(reply: &mut Value, note: &str) {
+fn add_to_instructions(reply: &mut Value, note: &str) {
     let Some(result) = reply.get_mut("result").and_then(Value::as_object_mut) else {
         return;
     };
@@ -348,16 +346,16 @@ mod tests {
         let note = crate::commands::playground::variables_note(&variables).unwrap();
         assert!(note.contains(r#"customerId = "cus_\"x\"""#), "{note}");
         let mut given = json!({ "id": 1, "result": { "instructions": "Use the tools." } });
-        told(&mut given, &note);
+        add_to_instructions(&mut given, &note);
         assert_eq!(
             given["result"]["instructions"],
             format!("Use the tools.\n\n{note}")
         );
         let mut bare = json!({ "id": 1, "result": {} });
-        told(&mut bare, &note);
+        add_to_instructions(&mut bare, &note);
         assert_eq!(bare["result"]["instructions"], note);
         let mut failed = json!({ "id": 1, "error": { "code": 1, "message": "no" } });
-        told(&mut failed, &note);
+        add_to_instructions(&mut failed, &note);
         assert!(failed.get("result").is_none());
         assert!(crate::commands::playground::variables_note(&BTreeMap::new()).is_none());
     }

@@ -19,7 +19,7 @@ export type ChatItem =
   /** A message whose answer was stopped from the page. */
   | { kind: "stopped"; text: string; note: string };
 
-/** The agent's tools other than running a program, by the name they're called with. */
+/** The agent's file tools, by the name they're called with. */
 const FILE_TOOLS = new Set(["list", "list_files", "read", "read_file"]);
 
 const TOOLS: Record<string, string> = {

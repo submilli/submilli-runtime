@@ -354,6 +354,15 @@ impl StandInChat {
             })
     }
 
+    /// Forgets the session it chatted in, keeping its turns there as earlier ones: its
+    /// chat is held until a call says where it goes on.
+    fn restart_after_resume(&mut self) {
+        let logged = std::mem::take(&mut self.logged);
+        self.earlier.extend(logged.into_keys());
+        self.session = None;
+        self.complete = false;
+    }
+
     fn hold(&mut self, position: Position, message: Message) {
         if self.held.iter().any(|(_, held)| held.turn == message.turn) {
             return;
@@ -379,33 +388,9 @@ pub(crate) struct Accepted {
 
 impl ChatIntake {
     /// Takes one post.
-    pub(crate) fn accept(&self, post: ChatPost, recorder: &Recorder, now: Instant) -> Accepted {
-        let mut placed = None;
-        let logged = self.take(post, recorder, now, &mut placed);
-        Accepted { logged, placed }
-    }
-
-    fn take(
-        &self,
-        mut post: ChatPost,
-        recorder: &Recorder,
-        now: Instant,
-        placed: &mut Option<String>,
-    ) -> usize {
+    pub(crate) fn accept(&self, mut post: ChatPost, recorder: &Recorder, now: Instant) -> Accepted {
         let at = Position::at(super::now_micros());
-        post.messages.truncate(MAX_MESSAGES);
-        for message in &mut post.messages {
-            let (text, cut) = super::within_bytes(&message.text, MAX_MESSAGE_BYTES);
-            if cut {
-                message.text = text.to_owned();
-                message.truncated = true;
-            }
-            // Kept as the hook keeps it, whoever posted: only on an answer, and capped.
-            message.model = match message.role {
-                ChatRole::Assistant => message.model.as_deref().and_then(model_name),
-                _ => None,
-            };
-        }
+        within_limits(&mut post);
         let found = self.session_for(&post, recorder, now);
         // Read before the lock too: the log may be long.
         let first_events = match (&found, post.complete) {
@@ -419,21 +404,18 @@ impl ChatIntake {
             make_room(&mut stand_ins);
         }
         if !stand_ins.contains_key(&post.agent) && stand_ins.len() >= MAX_AGENTS {
-            return 0;
+            return Accepted::default();
         }
         let stand_in = stand_ins
             .entry(post.agent.clone())
             .or_insert_with(|| StandInChat::new(now));
         stand_in.last_seen = now;
         if stand_in.resumed_by(&post) {
-            // Held until a call says where it goes on.
-            let logged = std::mem::take(&mut stand_in.logged);
-            stand_in.earlier.extend(logged.into_keys());
-            stand_in.session = None;
-            stand_in.complete = false;
+            stand_in.restart_after_resume();
         }
         post.messages
             .retain(|message| !stand_in.earlier.contains(&message.turn));
+        let mut placed = None;
         if stand_in.session.is_none() {
             stand_in.session = found.clone();
             placed.clone_from(&found);
@@ -446,7 +428,7 @@ impl ChatIntake {
             for message in post.messages {
                 stand_in.hold(at, message);
             }
-            return 0;
+            return Accepted { logged: 0, placed };
         };
         let mut logged = 0;
         for (position, message) in std::mem::take(&mut stand_in.held) {
@@ -465,7 +447,7 @@ impl ChatIntake {
                 logged += log_live(stand_in, recorder, &session, &post.agent, at, message);
             }
         }
-        logged
+        Accepted { logged, placed }
     }
 
     /// The session `post`'s stand-in is known to chat in, else the one its latest tool
@@ -492,6 +474,23 @@ impl ChatIntake {
     }
 }
 
+/// Caps `post` to what the intake keeps: so many messages, each so long, and a model
+/// name only on an answer, as the hook keeps it, whoever posted.
+fn within_limits(post: &mut ChatPost) {
+    post.messages.truncate(MAX_MESSAGES);
+    for message in &mut post.messages {
+        let (text, cut) = super::within_bytes(&message.text, MAX_MESSAGE_BYTES);
+        if cut {
+            message.text = text.to_owned();
+            message.truncated = true;
+        }
+        message.model = match message.role {
+            ChatRole::Assistant => message.model.as_deref().and_then(model_name),
+            _ => None,
+        };
+    }
+}
+
 /// Forgets the stand-in heard from longest ago among those whose conversation is
 /// complete and logged, if any: a full intake makes room for a new one.
 fn make_room(stand_ins: &mut HashMap<String, StandInChat>) {
@@ -506,9 +505,14 @@ fn make_room(stand_ins: &mut HashMap<String, StandInChat>) {
 }
 
 /// Forgets stand-ins not heard from for [`HELD_FOR`]: held chat that never found its
-/// session is dropped.
+/// session is dropped. A finished stand-in is kept, as it holds only which turns it
+/// logged: resumed later, those stay in the session they were said in. [`make_room`]
+/// forgets those.
 fn prune(stand_ins: &mut HashMap<String, StandInChat>, now: Instant) {
-    stand_ins.retain(|_, stand_in| now.saturating_duration_since(stand_in.last_seen) < HELD_FOR);
+    stand_ins.retain(|_, stand_in| {
+        (stand_in.complete && stand_in.held.is_empty())
+            || now.saturating_duration_since(stand_in.last_seen) < HELD_FOR
+    });
 }
 
 fn log_live(
@@ -559,7 +563,13 @@ fn log_complete(
             EventBody::ChatReplaced(ChatReplaced { turns }),
         );
     }
-    let mut logged = HashMap::new();
+    // A live message the copy lacks stays logged where it was.
+    let mut logged: HashMap<String, Position> = stand_in
+        .logged
+        .iter()
+        .filter(|(turn, _)| !copied.contains(turn.as_str()))
+        .map(|(turn, position)| (turn.clone(), *position))
+        .collect();
     for message in &post.messages {
         // After the last call, a message is placed now, as the copy arrives at the
         // stand-in's stop. Before a call the session has no event of, it keeps where it

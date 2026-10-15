@@ -1,5 +1,5 @@
 //! `submilli playground claude-code`: sets Claude Code up in a project to try tasks
-//! through the playground, on the developer's Claude subscription. It writes two things:
+//! through the playground, on the developer's Claude subscription. It writes two files:
 //!
 //! - the stand-in subagent, `.claude/agents/submilli-standin.md`, which has only the
 //!   playground's tools (through `submilli playground mcp`), so it acts as the
@@ -127,6 +127,25 @@ pub(crate) fn plan_settings(existing: Option<&str>) -> Result<(Option<String>, O
             Err(error) => return Err(format!("it isn't valid JSON ({error})")),
         },
     };
+    let added_hooks = add_hooks(&mut settings)?;
+    let added_rule = add_allow_rule(&mut settings)?;
+    if !added_hooks && !added_rule {
+        return Ok((None, Outcome::Unchanged));
+    }
+    let text = serde_json::to_string_pretty(&Value::Object(settings))
+        .expect("a JSON map with string keys always serializes")
+        + "\n";
+    let outcome = if existing.is_some() {
+        Outcome::Updated
+    } else {
+        Outcome::Written
+    };
+    Ok((Some(text), outcome))
+}
+
+/// Gives every hook event an entry that runs [`HOOK_COMMAND`], unless one already does.
+/// Whether any was added.
+fn add_hooks(settings: &mut Map<String, Value>) -> Result<bool, String> {
     let hooks = settings.entry("hooks").or_insert_with(|| json!({}));
     let Some(hooks) = hooks.as_object_mut() else {
         return Err("its `hooks` isn't a JSON object".to_owned());
@@ -150,6 +169,11 @@ pub(crate) fn plan_settings(existing: Option<&str>) -> Result<(Option<String>, O
             added = true;
         }
     }
+    Ok(added)
+}
+
+/// Adds [`ALLOW_RULE`] to `permissions.allow`, unless it's there. Whether it was added.
+fn add_allow_rule(settings: &mut Map<String, Value>) -> Result<bool, String> {
     let permissions = settings.entry("permissions").or_insert_with(|| json!({}));
     let Some(permissions) = permissions.as_object_mut() else {
         return Err("its `permissions` isn't a JSON object".to_owned());
@@ -158,20 +182,11 @@ pub(crate) fn plan_settings(existing: Option<&str>) -> Result<(Option<String>, O
     let Some(allow) = allow.as_array_mut() else {
         return Err("its `permissions.allow` isn't a list".to_owned());
     };
-    if !allow.iter().any(|rule| rule == ALLOW_RULE) {
-        allow.push(json!(ALLOW_RULE));
-        added = true;
+    if allow.iter().any(|rule| rule == ALLOW_RULE) {
+        return Ok(false);
     }
-    if !added {
-        return Ok((None, Outcome::Unchanged));
-    }
-    let text = serde_json::to_string_pretty(&Value::Object(settings)).expect("JSON value") + "\n";
-    let outcome = if existing.is_some() {
-        Outcome::Updated
-    } else {
-        Outcome::Written
-    };
-    Ok((Some(text), outcome))
+    allow.push(json!(ALLOW_RULE));
+    Ok(true)
 }
 
 /// What a setup did, for the report.
@@ -182,18 +197,19 @@ pub(crate) struct Setup {
 }
 
 /// Sets Claude Code up under `root`. Nothing is written when the settings can't be read
-/// as settings: the stand-in alone would show no chat on the page.
+/// as settings: the stand-in alone would show no chat on the page. The settings go first
+/// for the same reason; hooks without the stand-in do nothing.
 pub(crate) fn set_up(root: &Path, force: bool) -> Result<Setup, String> {
     let agent_path = root.join(AGENT_FILE);
     let settings_path = root.join(SETTINGS_FILE);
     let (settings_text, settings_outcome) = plan_settings(read(&settings_path)?.as_deref())
         .map_err(|why| format!("{} wasn't changed: {why}", settings_path.display()))?;
     let (agent_text, agent_outcome) = plan_agent(read(&agent_path)?.as_deref(), force);
-    if let Some(text) = agent_text {
-        write(&agent_path, &text)?;
-    }
     if let Some(text) = settings_text {
         write(&settings_path, &text)?;
+    }
+    if let Some(text) = agent_text {
+        write(&agent_path, &text)?;
     }
     Ok(Setup {
         agent: (agent_path, agent_outcome),
@@ -209,18 +225,32 @@ fn read(path: &Path) -> Result<Option<String>, String> {
     }
 }
 
-/// Writes `text` to `path` whole or not at all, readable as any project file is.
+/// Writes `text` to `path` whole or not at all. A file already there keeps its mode, and
+/// a link to one is followed, so a settings file kept elsewhere stays where it is; a new
+/// file is readable as any project file is.
 fn write(path: &Path, text: &str) -> Result<(), String> {
     let failed = |error: io::Error| format!("writing {}: {error}", path.display());
-    let dir = path.parent().expect("a file under the project root");
+    let (target, mode) = match fs::canonicalize(path) {
+        Ok(target) => {
+            let mode = fs::metadata(&target).map_err(failed)?.permissions().mode();
+            (target, mode & 0o7777)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => (path.to_owned(), 0o644),
+        Err(error) => return Err(failed(error)),
+    };
+    let dir = target
+        .parent()
+        .expect("the project root joined with a file path has a parent");
     fs::create_dir_all(dir).map_err(failed)?;
     let staged = tempfile::Builder::new()
         .prefix(super::fsx::STAGED_PREFIX)
-        .permissions(fs::Permissions::from_mode(0o644))
+        .permissions(fs::Permissions::from_mode(mode))
         .tempfile_in(dir)
         .map_err(failed)?;
     fs::write(staged.path(), text).map_err(failed)?;
-    staged.persist(path).map_err(|error| failed(error.error))?;
+    staged
+        .persist(&target)
+        .map_err(|error| failed(error.error))?;
     Ok(())
 }
 
@@ -350,5 +380,23 @@ mod tests {
             (again.agent.1, again.settings.1),
             (Outcome::Unchanged, Outcome::Unchanged)
         );
+    }
+
+    #[test]
+    fn settings_kept_elsewhere_stay_there_with_their_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("dotfiles-settings.json");
+        fs::write(&elsewhere, "{}").unwrap();
+        fs::set_permissions(&elsewhere, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.path().join(SETTINGS_FILE)).unwrap();
+
+        set_up(dir.path(), false).unwrap();
+
+        let link = fs::symlink_metadata(dir.path().join(SETTINGS_FILE)).unwrap();
+        assert!(link.file_type().is_symlink());
+        assert!(fs::read_to_string(&elsewhere).unwrap().contains(ALLOW_RULE));
+        let mode = fs::metadata(&elsewhere).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 }

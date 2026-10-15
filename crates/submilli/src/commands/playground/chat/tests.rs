@@ -601,6 +601,51 @@ fn a_resumed_stand_in_goes_on_in_the_session_its_next_call_runs_in() {
 }
 
 #[test]
+fn a_stand_in_resumed_after_a_long_silence_keeps_its_old_turns_where_they_were() {
+    let mut world = World::new();
+    let start = Instant::now();
+    world.call("sess-1", "toolu_1");
+    let first = vec![says("t1", "Northwind?"), says("t2", "Two charges.")];
+    world.post_at(
+        ChatPost {
+            agent: "agent-1".into(),
+            calls: vec!["toolu_1".into()],
+            messages: first.clone(),
+            complete: true,
+        },
+        start,
+    );
+
+    let later = start + HELD_FOR + Duration::from_secs(1);
+    let mut again = first;
+    again.push(says("t3", "Globex?"));
+    world.post_at(live("agent-1", "toolu_2", again.clone()), later);
+    world.call("sess-2", "toolu_2");
+    world.post_at(live("agent-1", "toolu_2", again), later);
+
+    assert_eq!(texts(&world.log("sess-1")), ["Northwind?", "Two charges."]);
+    assert_eq!(texts(&world.log("sess-2")), ["Globex?"]);
+}
+
+#[test]
+fn a_late_copy_of_a_message_cut_from_the_complete_one_is_not_a_resume() {
+    let mut world = World::new();
+    world.call("sess-1", "toolu_1");
+    let messages = vec![says("t1", "task"), says("t2", "middle"), says("t3", "end")];
+    world.post(live("agent-1", "toolu_1", messages.clone()));
+    world.post(ChatPost {
+        agent: "agent-1".into(),
+        calls: vec!["toolu_1".into()],
+        messages: vec![says("t1", "task"), says("t3", "end")],
+        complete: true,
+    });
+    assert_eq!(world.post(live("agent-1", "toolu_1", messages)), 0);
+    let mut kept = texts(&world.log("sess-1"));
+    kept.sort();
+    assert_eq!(kept, ["end", "middle", "task"]);
+}
+
+#[test]
 fn a_late_copy_after_the_stop_is_not_a_resume() {
     let mut world = World::new();
     world.call("sess-1", "toolu_1");

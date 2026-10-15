@@ -1510,67 +1510,88 @@ mod unix {
                 return Ok(ExitCode::from(1));
             }
         };
-        let (agent, agent_outcome) = &setup.agent;
-        let (settings, settings_outcome) = &setup.settings;
-        let kept = *agent_outcome == Outcome::Kept;
-        let changed = [*agent_outcome, *settings_outcome]
-            .iter()
-            .any(|outcome| matches!(outcome, Outcome::Written | Outcome::Updated));
-        let ask = format!(
-            "Use the {} agent to <your task>.",
-            super::chat::STAND_IN_AGENT
-        );
+        // A stand-in that differs was kept: it isn't the playground's, so not ready.
+        let ready = setup.agent.1 != Outcome::Kept;
         if args.json {
             println!(
                 "{}",
                 json!({
                     "project": root,
-                    "agent": { "path": agent, "outcome": agent_outcome.word() },
-                    "hooks": { "path": settings, "outcome": settings_outcome.word() },
-                    "ready": !kept,
+                    "agent": { "path": setup.agent.0, "outcome": setup.agent.1.word() },
+                    "hooks": { "path": setup.settings.0, "outcome": setup.settings.1.word() },
+                    "ready": ready,
                 })
             );
         } else {
-            let relative = |path: &std::path::Path| {
-                path.strip_prefix(&root)
-                    .unwrap_or(path)
-                    .display()
-                    .to_string()
-            };
-            let agent = relative(agent);
-            let settings = relative(settings);
-            println!(
-                "Stand-in subagent: {}",
-                match agent_outcome {
-                    Outcome::Written => format!("wrote {agent}"),
-                    Outcome::Updated => format!("replaced {agent}"),
-                    Outcome::Unchanged => format!("{agent} is in place"),
-                    Outcome::Kept => format!(
-                        "{agent} is different from the playground's, so it was left alone; \
-                         --force replaces it"
-                    ),
-                }
-            );
-            println!(
-                "Chat hooks, and permission for its playground tools: {}",
-                match settings_outcome {
-                    Outcome::Written | Outcome::Updated => format!("added to {settings}"),
-                    Outcome::Unchanged | Outcome::Kept => format!("in place in {settings}"),
-                }
-            );
-            if !kept {
-                println!(
-                    "Start `claude` in this folder, signed in with your Claude subscription, and \
-                     ask: \"{ask}\" Its session shows on the playground page.{}",
-                    if changed {
-                        " If Claude Code is already running here, restart it first."
-                    } else {
-                        ""
-                    }
-                );
-            }
+            print_claude_code_report(&setup, &root, &cwd);
         }
-        Ok(ExitCode::from(if kept { 1 } else { 0 }))
+        Ok(ExitCode::from(if ready { 0 } else { 1 }))
+    }
+
+    /// What `claude-code` did, in sentences, with paths under the project root, and how
+    /// to start: in the project root, named when it isn't the folder the command ran in.
+    fn print_claude_code_report(
+        setup: &super::claude_code::Setup,
+        root: &std::path::Path,
+        cwd: &std::path::Path,
+    ) {
+        use super::claude_code::Outcome;
+        let relative = |path: &std::path::Path| {
+            path.strip_prefix(root)
+                .unwrap_or(path)
+                .display()
+                .to_string()
+        };
+        let (agent, agent_outcome) = (relative(&setup.agent.0), setup.agent.1);
+        let (settings, settings_outcome) = (relative(&setup.settings.0), setup.settings.1);
+        println!("Stand-in subagent: {}", agent_line(agent_outcome, &agent));
+        println!(
+            "Chat hooks, and permission for its playground tools: {}",
+            settings_line(settings_outcome, &settings)
+        );
+        if agent_outcome == Outcome::Kept {
+            return;
+        }
+        let folder = if cwd == root {
+            "in this folder".to_owned()
+        } else {
+            format!("in {}", root.display())
+        };
+        let changed = [agent_outcome, settings_outcome]
+            .iter()
+            .any(|outcome| matches!(outcome, Outcome::Written | Outcome::Updated));
+        let restart = if changed {
+            " If Claude Code is already running there, restart it first."
+        } else {
+            ""
+        };
+        println!(
+            "Start `claude` {folder}, signed in with your Claude subscription, and ask: \
+             \"Use the {} agent to <your task>.\" Its session shows on the playground page.\
+             {restart}",
+            super::chat::STAND_IN_AGENT
+        );
+    }
+
+    fn agent_line(outcome: super::claude_code::Outcome, agent: &str) -> String {
+        use super::claude_code::Outcome;
+        match outcome {
+            Outcome::Written => format!("wrote {agent}"),
+            Outcome::Updated => format!("replaced {agent}"),
+            Outcome::Unchanged => format!("{agent} is in place"),
+            Outcome::Kept => format!(
+                "{agent} is different from the playground's, so it was left alone; \
+                 --force replaces it"
+            ),
+        }
+    }
+
+    fn settings_line(outcome: super::claude_code::Outcome, settings: &str) -> String {
+        use super::claude_code::Outcome;
+        match outcome {
+            Outcome::Written | Outcome::Updated => format!("added to {settings}"),
+            Outcome::Unchanged | Outcome::Kept => format!("in place in {settings}"),
+        }
     }
 
     pub(super) fn init(output: Output) -> Result<ExitCode> {

@@ -27,7 +27,6 @@ export function footer(f: Frame, waiting = false): string {
 /** Tests and reruns each run in a throwaway session; those show under the run, not as sessions. */
 const THROWAWAY = new Set(["test", "rerun"]);
 
-/** A session that only holds a test or a rerun, as the playground counts them; the page shows those under their run. */
 /**
  * When the session shown is open and keeps values that differ from the ones bound now:
  * which differ. A session's values are fixed when it starts, so a new binding never
@@ -55,6 +54,7 @@ export function wayBack(current: { to: string; from: string | null } | null, sho
   return back === opening ? null : back;
 }
 
+/** A session that only holds a test or a rerun, as the playground counts them; the page shows those under their run. */
 export function isThrowaway(s: SessionSummary): boolean {
   return s.sources.length > 0 && s.sources.every((source) => THROWAWAY.has(source));
 }

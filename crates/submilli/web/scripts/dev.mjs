@@ -18,8 +18,8 @@ const project = args.find((arg) => !FLAGS.includes(arg));
 // the page against the playground already running, on its old build.
 const unknown = args.filter((arg) => arg !== project && !FLAGS.includes(arg));
 if (!project || project.startsWith("-") || unknown.length) {
-  const said = !project || project.startsWith("-") ? "Give the folder of a playground project" : "Not an option here: " + unknown.join(" ");
-  console.error(said + "\nUsage: " + USAGE);
+  const problem = !project || project.startsWith("-") ? "Give the folder of a playground project" : "Not an option here: " + unknown.join(" ");
+  console.error(problem + "\nUsage: " + USAGE);
   process.exit(2);
 }
 // This repo's build, so the playground commands match the page being worked on.

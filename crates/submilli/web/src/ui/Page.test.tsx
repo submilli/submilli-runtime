@@ -928,10 +928,10 @@ test("the next message can be written while the agent answers, and sends only on
   // Enter waits for the answer: the draft stays, and nothing more was sent.
   expect(ask).toHaveValue("Second");
   expect(asked).toBe(1);
-  // A failed answer doesn't put the first message back over the draft.
+  // A failed answer puts the first message back above the draft, not over it.
   answer(json({ exit: 1, result: { error: { kind: "failure", message: "the provider timed out" } }, text: "" }));
   expect(await screen.findByRole("alert")).toBeInTheDocument();
-  expect(ask).toHaveValue("Second");
+  expect(ask).toHaveValue("First\n\nSecond");
 });
 
 test("Stop on a new session's first message leaves it in the session it started, not in the box", async () => {
