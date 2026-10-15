@@ -25,15 +25,15 @@ use crate::runtime::StoreData;
 use crate::runtime::host::{read_string_arg, register_host_fn, register_host_fn_async};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::closure;
+use crate::runtime::prelude::error::NAME_SLOT;
 use crate::runtime::prelude::iterator::{as_struct, void_closure_type};
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
 pub const MODULE_NAME: &str = "submilli:test";
 
-/// The class-shaped `$Error`'s object-fields payload, whose `NAME_SLOT` holds
-/// `name` — see `runtime/prelude/error.rs`.
-const ERROR_FIELDS: usize = 2;
-use crate::runtime::prelude::error::NAME_SLOT;
+/// The class-shaped `$Error`'s struct field holding its object-fields payload,
+/// whose `NAME_SLOT` holds `name` — see `runtime/prelude/error.rs`.
+const PAYLOAD_FIELD: usize = 2;
 
 pub fn package_declaration() -> PackageDeclaration {
     let mut defs = PackageDeclaration::with_package(MODULE_NAME);
@@ -197,7 +197,7 @@ fn take_thrown_error(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val
 /// Read the caught error's `name` from the object-fields payload.
 fn error_name(caller: &mut Caller<'_, StoreData>, error: &Val) -> wasmtime::Result<String> {
     let st = as_struct(caller, error, "expectException (caught error)")?;
-    let fields = match st.field(&mut *caller, ERROR_FIELDS)? {
+    let fields = match st.field(&mut *caller, PAYLOAD_FIELD)? {
         Val::AnyRef(Some(any)) => any.unwrap_array(&mut *caller)?,
         other => {
             return Err(wasmtime::Error::msg(format!(

@@ -1,6 +1,7 @@
 // SUB-1825: a function's `length` counts its parameters before the first
-// defaulted or rest one, and a function keeps it when it flows into a wider
-// function type.
+// optional, defaulted or rest one, and a function keeps it when it flows into
+// a wider function type. JavaScript counts an optional `b?`, since TypeScript
+// erases the `?`; Submilli stops at it (SUB-1829), so no case here uses one.
 function add(a: number, b: number): number {
   return a + b;
 }

@@ -12,65 +12,9 @@ pub(super) async fn group_by(
     source: &Val,
     callback: &Val,
 ) -> wasmtime::Result<Val> {
-    let callback = closure::read_callback(caller, callback, "Object.groupBy callback")?;
-    let kept_iterator = KeptValue::new(caller)?;
-    let kept_next = KeptValue::new(caller)?;
-    let kept_result = KeptValue::new(caller)?;
-    let kept_value = KeptValue::new(caller)?;
-    let kept_key = KeptValue::new(caller)?;
-    let kept_name = KeptValue::new(caller)?;
-    let kept_output = KeptValue::new(caller)?;
-    let iterator = open_iterator(caller, source, true).await?;
-    kept_iterator.set(caller, iterator)?;
-    let next = property(caller, &iterator, "next").await?;
-    kept_next.set(caller, next)?;
-    let next = closure::read(caller, &next, "Object.groupBy iterator")?;
     let empty = Val::null_any_ref();
     let output = super::spread(caller, &empty, &empty, &empty, &empty)?;
-    kept_output.set(caller, output)?;
-    let mut index = 0_u64;
-    loop {
-        fuel::charge(&mut *caller, fuel::ELEM, 1)?;
-        let result = next.call_with_receiver(caller, iterator, &[]).await?;
-        kept_result.set(caller, result)?;
-        let done = property(caller, &result, "done").await?;
-        if super::super::value::truthy(caller, &done)? {
-            order_integer_keys(caller, &output)?;
-            return Ok(output);
-        }
-        let value = property(caller, &result, "value").await?;
-        kept_value.set(caller, value)?;
-        let grouped = async {
-            if index >= 9_007_199_254_740_991 {
-                return Err(crate::runtime::host::type_error(
-                    "Object.groupBy iteration limit exceeded",
-                ));
-            }
-            let position = Val::AnyRef(Some(
-                write_boxed_number_struct(caller, index as f64)?.to_anyref(),
-            ));
-            let key = callback.call_dynamic(caller, &[value, position]).await?;
-            kept_key.set(caller, key)?;
-            let name = property_key(caller, &key).await?;
-            kept_name.set(caller, name)?;
-            let group = super::dynamic::get(caller, &output, &name).await?;
-            if undefined::is_undefined(caller, &group)? {
-                let group = Val::AnyRef(Some(
-                    write_submilli_array_struct(caller, &[value])?.to_anyref(),
-                ));
-                super::insert_field(caller, &output, &name, &group)
-            } else {
-                ArrayStorage::read(caller, &group)?
-                    .push(caller, value)
-                    .map(|_| ())
-            }
-        }
-        .await;
-        if let Err(error) = grouped {
-            return Err(close_after_failure(caller, &iterator, error).await);
-        }
-        index += 1;
-    }
+    group_into(caller, source, callback, Groups::Object, output).await
 }
 
 /// `Map.groupBy(items, keySelector)`: like `Object.groupBy`, but the groups
@@ -80,20 +24,79 @@ pub(crate) async fn map_group_by(
     source: &Val,
     callback: &Val,
 ) -> wasmtime::Result<Val> {
-    let callback = closure::read_callback(caller, callback, "Map.groupBy callback")?;
+    let output = crate::runtime::prelude::map::build_empty(caller)?;
+    group_into(caller, source, callback, Groups::Map, output).await
+}
+
+/// Where a groupBy collects its groups.
+#[derive(Clone, Copy)]
+enum Groups {
+    /// `Object.groupBy`: an object whose property names are the keys.
+    Object,
+    /// `Map.groupBy`: a `Map` keyed by the callback's results themselves.
+    Map,
+}
+
+impl Groups {
+    fn label(self) -> &'static str {
+        match self {
+            Groups::Object => "Object.groupBy",
+            Groups::Map => "Map.groupBy",
+        }
+    }
+
+    /// The group `key` names in `output`, or `undefined` when it has none yet.
+    async fn get(
+        self,
+        caller: &mut Caller<'_, StoreData>,
+        output: &Val,
+        key: &Val,
+    ) -> wasmtime::Result<Val> {
+        match self {
+            Groups::Object => super::dynamic::get(caller, output, key).await,
+            Groups::Map => crate::runtime::prelude::map::get(caller, output, key).await,
+        }
+    }
+
+    async fn insert(
+        self,
+        caller: &mut Caller<'_, StoreData>,
+        output: &Val,
+        key: &Val,
+        group: &Val,
+    ) -> wasmtime::Result<()> {
+        match self {
+            Groups::Object => super::insert_field(caller, output, key, group),
+            Groups::Map => crate::runtime::prelude::map::set(caller, output, key, group)
+                .await
+                .map(|_| ()),
+        }
+    }
+}
+
+/// Run `callback` over `source`'s elements and append each to the group its
+/// result names in `output`, closing the iterator if a step fails.
+async fn group_into(
+    caller: &mut Caller<'_, StoreData>,
+    source: &Val,
+    callback: &Val,
+    groups: Groups,
+    output: Val,
+) -> wasmtime::Result<Val> {
+    let label = groups.label();
+    let callback = closure::read_callback(caller, callback, label)?;
     let kept_iterator = KeptValue::new(caller)?;
     let kept_next = KeptValue::new(caller)?;
     let kept_result = KeptValue::new(caller)?;
     let kept_value = KeptValue::new(caller)?;
     let kept_key = KeptValue::new(caller)?;
     let kept_output = KeptValue::new(caller)?;
+    kept_output.set(caller, output)?;
     let iterator = open_iterator(caller, source, true).await?;
     kept_iterator.set(caller, iterator)?;
     let next = property(caller, &iterator, "next").await?;
     kept_next.set(caller, next)?;
-    let next = closure::read(caller, &next, "Map.groupBy iterator")?;
-    let output = crate::runtime::prelude::map::build_empty(caller)?;
-    kept_output.set(caller, output)?;
+    let next = closure::read(caller, &next, label)?;
     let mut index = 0_u64;
     loop {
         fuel::charge(&mut *caller, fuel::ELEM, 1)?;
@@ -101,24 +104,33 @@ pub(crate) async fn map_group_by(
         kept_result.set(caller, result)?;
         let done = property(caller, &result, "done").await?;
         if super::super::value::truthy(caller, &done)? {
+            if matches!(groups, Groups::Object) {
+                order_integer_keys(caller, &output)?;
+            }
             return Ok(output);
         }
         let value = property(caller, &result, "value").await?;
         kept_value.set(caller, value)?;
         let grouped = async {
+            if index >= 9_007_199_254_740_991 {
+                return Err(crate::runtime::host::type_error(format!(
+                    "{label} iteration limit exceeded"
+                )));
+            }
             let position = Val::AnyRef(Some(
                 write_boxed_number_struct(caller, index as f64)?.to_anyref(),
             ));
-            let key = callback.call_dynamic(caller, &[value, position]).await?;
+            let mut key = callback.call_dynamic(caller, &[value, position]).await?;
+            if matches!(groups, Groups::Object) {
+                key = property_key(caller, &key).await?;
+            }
             kept_key.set(caller, key)?;
-            let group = crate::runtime::prelude::map::get(caller, &output, &key).await?;
+            let group = groups.get(caller, &output, &key).await?;
             if undefined::is_undefined(caller, &group)? {
                 let group = Val::AnyRef(Some(
                     write_submilli_array_struct(caller, &[value])?.to_anyref(),
                 ));
-                crate::runtime::prelude::map::set(caller, &output, &key, &group)
-                    .await
-                    .map(|_| ())
+                groups.insert(caller, &output, &key, &group).await
             } else {
                 ArrayStorage::read(caller, &group)?
                     .push(caller, value)
