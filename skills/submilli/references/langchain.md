@@ -3,15 +3,96 @@
 Read [harnesses](harnesses.md) first. Submilli is the execution boundary; keep
 the application's model loop, authentication, and framework. Use the
 versions the application already has; for a new project install the current
-releases. The examples below were verified on 2026-09-17 with
-`langchain 1.4.1`, `langgraph 1.2.11` and `langchain-mcp-adapters 0.3.2`; if
-an import or signature differs, the installed version's official API wins
-over this text.
+releases. If an import or signature differs, the installed version's official
+API wins over this text.
 
+For a LangChain v1 agent (`create_agent`, or Deep Agents' `create_deep_agent`),
+connect with `langchain-submilli`'s `SubmilliMiddleware`, below. Use MCP
+through `langchain-mcp-adapters` for an application that already loads
+Submilli that way, and for a hand-built LangGraph graph, which takes no agent
+middleware.
+
+## LangChain agent with langchain-submilli
+
+Verified on 2026-10-15 with `langchain-submilli 0.1.0`, `langchain 1.4.6` and
+submilli-server 0.4.1. The middleware needs submilli-server 0.4.1 or later and
+Python 3.11 or later, and is async only (`ainvoke`, `astream`). Its README is
+the API reference: [langchain-submilli](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#readme).
+
+```sh
+python3 -m pip install langchain-submilli langchain-openai
+```
+
+```python
+import asyncio
+import re
+from typing import TypedDict
+
+from langchain.agents import create_agent
+from langchain_submilli import SubmilliMiddleware
+from langgraph.checkpoint.memory import InMemorySaver
+
+
+class Context(TypedDict):
+    customer_id: str
+
+
+def customer_binding(context: Context | None) -> dict[str, str]:
+    # The run's context comes from the authenticated request, never from chat.
+    value = (context or {}).get("customer_id", "")
+    if not re.fullmatch(r"cus_[A-Za-z0-9_-]+", value):
+        raise ValueError("the run's context has no valid customer_id")
+    return {"customerId": value}
+
+
+# Server and token come from SUBMILLI_SERVER and SUBMILLI_SERVER_TOKEN.
+submilli = SubmilliMiddleware(blueprint="support-read", variables=customer_binding)
+agent = create_agent(
+    model="openai:gpt-4o-mini",
+    middleware=[submilli],
+    checkpointer=InMemorySaver(),
+    context_schema=Context,
+)
+
+
+async def main() -> None:
+    customer_id = "cus_northwind"  # demo only: take it from the signed-in session
+    config = {"configurable": {"thread_id": f"customer:{customer_id}"}}
+    try:
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": "Read my balance."}]},
+            config,
+            context=Context(customer_id=customer_id),
+        )
+        print(result["messages"][-1].text)
+    finally:
+        await submilli.aclose_thread(agent, config)  # the conversation is over
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+The agent is built once and shared; each run brings its identity in its
+context, and the model never sees it. The model gets six tools,
+`submilli__typescript__execute`, `__last_run`, `__packages__search`,
+`__packages__docs`, `__builtins__list` and `__builtins__docs`. The first
+execute in a thread opens a server session bound to that run's variables and
+stores its id in the agent's state, so the checkpointer is what keeps one
+session, and its files, across the thread's turns and across a resume. A run
+whose variables differ from the thread's session raises
+`SubmilliSessionMismatchError`. Each execute is sent with an `Idempotency-Key`,
+so a retried call replays. [Deep Agents](deepagents.md) has the full rules and
+a scripted-model check; they apply to `create_agent` unchanged, except that it
+has no file tools of its own to hide and no `task` tool, so the model is
+offered the six Submilli tools alone.
+
+## Alternative: LangChain agent over MCP
+
+The examples in this section and the next were verified on 2026-09-17 with
+`langchain 1.4.1`, `langgraph 1.2.11` and `langchain-mcp-adapters 0.3.2`.
 The official integration guide is [LangChain MCP](https://docs.langchain.com/oss/python/langchain/mcp).
 The official persistence guide is [LangGraph memory](https://docs.langchain.com/oss/python/langgraph/add-memory).
-
-## LangChain agent
 
 Install the framework and adapter into the application's environment:
 
@@ -94,9 +175,11 @@ and `await client.close()`; see the [official TypeScript MCP integration](https:
 for the version-specific example. Keep the trusted header in the server-side
 constructor, beside `Authorization`, and close the client in `finally`.
 
-## LangGraph checkpoint and resume
+## LangGraph checkpoint and resume over MCP
 
-LangGraph's `thread_id` identifies a conversation checkpoint. It is not a
+With the middleware, a resumed thread finds its session id in the checkpoint
+and needs nothing below. A hand-built graph over MCP does. LangGraph's
+`thread_id` identifies a conversation checkpoint. It is not a
 Submilli session ID and it is not a customer ID. Live MCP sessions, clients,
 model credentials, and trusted identity values should not be serialized into
 graph state. On resume, load the authorized customer from application state,
@@ -195,9 +278,10 @@ The production graph should use a persistent checkpointer (for example
 lookup remains an application concern in either case. Keep the graph loop
 bounded with an explicit stop condition and a suitable `recursion_limit`.
 
-## Deterministic verification
+## Deterministic verification over MCP
 
-Before a live model run, script the model and keep everything else real: the
+For the middleware, use the scripted-model checks in [Deep Agents](deepagents.md).
+Over MCP, before a live model run, script the model and keep everything else real: the
 `langchain-mcp-adapters` Streamable HTTP session, tool discovery, execution,
 and the local Submilli server from [harnesses](harnesses.md). A plain graph
 node that returns an `AIMessage` with one `tool_calls` entry for
