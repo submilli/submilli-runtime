@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "eccd8cbd52abff9b9205cc84f14e46463a9522240e460074d3d120650e4fa6b0"
+  contentHash: "3f93e7fa984b2784ad0ed0f6b094286125bf0d7737530e7de6cd32132e03b744"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -21,7 +21,7 @@ harness](/docs/tutorials/connect-a-harness), with
 Python 3.11 or later, and a key from your model provider for the
 conversation. The agent file names Claude. For Google or OpenAI, the
 `model` argument takes `google_genai:gemini-3.8-flash` or
-`openai:gpt-4o-mini` instead, with that provider's LangChain Package
+`openai:gpt-5.5` instead, with that provider's LangChain Package
 installed and its key in the environment.
 
 ## Start the project
