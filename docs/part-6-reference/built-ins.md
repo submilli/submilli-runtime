@@ -103,7 +103,7 @@ These globals are in scope and are not in the `submilli builtins` catalog.
 | `parseInt(string, radix = 10)` | Parses an integer prefix, or returns `NaN` when there are no digits |
 | `parseFloat(string)` | Parses a decimal number, or returns `NaN` when the text is not one |
 | `isNaN(value)`, `isFinite(value)` | Number tests |
-| `encodeURIComponent(uri)`, `encodeURI(uri)` | Percent-encoding. Throws `URIError` on a lone surrogate |
+| `encodeURIComponent(uri)`, `encodeURI(uri)` | Percent-encoding. `encodeURIComponent` also takes a number or boolean, converted as `String(value)` does. Throws `URIError` on a lone surrogate |
 | `decodeURIComponent(uri)`, `decodeURI(uri)` | Percent-decoding. Throws `URIError` (`"URI malformed"`) on an invalid escape |
 | `NaN`, `Infinity` | Number constants |
 

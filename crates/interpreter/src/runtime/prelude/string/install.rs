@@ -1241,7 +1241,7 @@ impl StringAbi {
 /// `String(value)`: null renders `"null"`, as ECMAScript's ToString does; a
 /// bigint renders its decimal text; anything else re-enters its vtable
 /// `toString` slot.
-async fn string_ctor_call(
+pub(crate) async fn string_ctor_call(
     caller: &mut Caller<'_, StoreData>,
     value: &Val,
 ) -> wasmtime::Result<Val> {

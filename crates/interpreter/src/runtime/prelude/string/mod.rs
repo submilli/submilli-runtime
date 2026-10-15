@@ -13,8 +13,8 @@ mod install;
 pub(crate) mod search;
 mod transforms;
 
-pub(crate) use install::declare_types;
 pub use install::{declare, install};
+pub(crate) use install::{declare_types, string_ctor_call};
 
 use unicode_normalization::UnicodeNormalization;
 
