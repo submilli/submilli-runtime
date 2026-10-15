@@ -17,7 +17,7 @@
 //! aren't a JSON object are never touched.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write as _};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -226,8 +226,9 @@ fn read(path: &Path) -> Result<Option<String>, String> {
 }
 
 /// Writes `text` to `path` whole or not at all. A file already there keeps its mode, and
-/// a link to one is followed, so a settings file kept elsewhere stays where it is; a new
-/// file is readable as any project file is.
+/// a link to one is followed, so a settings file kept elsewhere stays where it is; a link
+/// to nothing is refused rather than replaced. A new file is readable as any project
+/// file is.
 fn write(path: &Path, text: &str) -> Result<(), String> {
     let failed = |error: io::Error| format!("writing {}: {error}", path.display());
     let (target, mode) = match fs::canonicalize(path) {
@@ -235,19 +236,28 @@ fn write(path: &Path, text: &str) -> Result<(), String> {
             let mode = fs::metadata(&target).map_err(failed)?.permissions().mode();
             (target, mode & 0o7777)
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => (path.to_owned(), 0o644),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+                return Err(format!(
+                    "{} links to a file that isn't there; create it, or remove the link",
+                    path.display()
+                ));
+            }
+            (path.to_owned(), 0o644)
+        }
         Err(error) => return Err(failed(error)),
     };
     let dir = target
         .parent()
         .expect("the project root joined with a file path has a parent");
     fs::create_dir_all(dir).map_err(failed)?;
-    let staged = tempfile::Builder::new()
+    let mut staged = tempfile::Builder::new()
         .prefix(super::fsx::STAGED_PREFIX)
-        .permissions(fs::Permissions::from_mode(mode))
         .tempfile_in(dir)
         .map_err(failed)?;
-    fs::write(staged.path(), text).map_err(failed)?;
+    staged.write_all(text.as_bytes()).map_err(failed)?;
+    // Set after writing, so a read-only mode is kept too, and set outright, past the umask.
+    fs::set_permissions(staged.path(), fs::Permissions::from_mode(mode)).map_err(failed)?;
     staged
         .persist(&target)
         .map_err(|error| failed(error.error))?;
@@ -398,5 +408,39 @@ mod tests {
         assert!(fs::read_to_string(&elsewhere).unwrap().contains(ALLOW_RULE));
         let mode = fs::metadata(&elsewhere).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn a_read_only_settings_file_is_updated_and_stays_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dir.path().join(SETTINGS_FILE);
+        fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        fs::write(&settings, "{}").unwrap();
+        fs::set_permissions(&settings, fs::Permissions::from_mode(0o444)).unwrap();
+
+        set_up(dir.path(), false).unwrap();
+
+        assert!(fs::read_to_string(&settings).unwrap().contains(ALLOW_RULE));
+        let mode = fs::metadata(&settings).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o444);
+    }
+
+    #[test]
+    fn a_link_to_nothing_is_refused_and_left_as_it_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dir.path().join(SETTINGS_FILE);
+        fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("not-yet.json"), &settings).unwrap();
+
+        let why = set_up(dir.path(), false).unwrap_err();
+
+        assert!(why.contains("links to a file that isn't there"), "{why}");
+        assert!(
+            fs::symlink_metadata(&settings)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(!dir.path().join(AGENT_FILE).exists());
     }
 }

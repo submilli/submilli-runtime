@@ -1510,15 +1510,17 @@ mod unix {
                 return Ok(ExitCode::from(1));
             }
         };
+        let (agent, agent_outcome) = &setup.agent;
+        let (settings, settings_outcome) = &setup.settings;
         // A stand-in that differs was kept: it isn't the playground's, so not ready.
-        let ready = setup.agent.1 != Outcome::Kept;
+        let ready = *agent_outcome != Outcome::Kept;
         if args.json {
             println!(
                 "{}",
                 json!({
                     "project": root,
-                    "agent": { "path": setup.agent.0, "outcome": setup.agent.1.word() },
-                    "hooks": { "path": setup.settings.0, "outcome": setup.settings.1.word() },
+                    "agent": { "path": agent, "outcome": agent_outcome.word() },
+                    "hooks": { "path": settings, "outcome": settings_outcome.word() },
                     "ready": ready,
                 })
             );

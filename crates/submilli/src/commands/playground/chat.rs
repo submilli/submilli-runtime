@@ -354,6 +354,13 @@ impl StandInChat {
             })
     }
 
+    /// Whether all it holds is which turns it logged: its conversation is complete, or it
+    /// was resumed after one was. Forgetting such a stand-in would move those turns into
+    /// the next session it chats in, so only a full intake does.
+    fn only_remembers(&self) -> bool {
+        self.held.is_empty() && (self.complete || !self.earlier.is_empty())
+    }
+
     /// Forgets the session it chatted in, keeping its turns there as earlier ones: its
     /// chat is held until a call says where it goes on.
     fn restart_after_resume(&mut self) {
@@ -491,12 +498,12 @@ fn within_limits(post: &mut ChatPost) {
     }
 }
 
-/// Forgets the stand-in heard from longest ago among those whose conversation is
-/// complete and logged, if any: a full intake makes room for a new one.
+/// Forgets the stand-in heard from longest ago among those that only remember what they
+/// logged, if any: a full intake makes room for a new one.
 fn make_room(stand_ins: &mut HashMap<String, StandInChat>) {
     let done = stand_ins
         .iter()
-        .filter(|(_, stand_in)| stand_in.complete && stand_in.held.is_empty())
+        .filter(|(_, stand_in)| stand_in.only_remembers())
         .min_by_key(|(_, stand_in)| stand_in.last_seen)
         .map(|(agent, _)| agent.clone());
     if let Some(agent) = done {
@@ -504,14 +511,18 @@ fn make_room(stand_ins: &mut HashMap<String, StandInChat>) {
     }
 }
 
-/// Forgets stand-ins not heard from for [`HELD_FOR`]: held chat that never found its
-/// session is dropped. A finished stand-in is kept, as it holds only which turns it
-/// logged: resumed later, those stay in the session they were said in. [`make_room`]
-/// forgets those.
+/// Drops the chat held by stand-ins not heard from for [`HELD_FOR`], as it never found
+/// its session, and forgets those stand-ins unless they [remember](StandInChat::only_remembers)
+/// turns they logged: resumed later, those stay in the session they were said in.
+/// [`make_room`] forgets those.
 fn prune(stand_ins: &mut HashMap<String, StandInChat>, now: Instant) {
     stand_ins.retain(|_, stand_in| {
-        (stand_in.complete && stand_in.held.is_empty())
-            || now.saturating_duration_since(stand_in.last_seen) < HELD_FOR
+        if now.saturating_duration_since(stand_in.last_seen) < HELD_FOR {
+            return true;
+        }
+        stand_in.held.clear();
+        stand_in.held_bytes = 0;
+        stand_in.only_remembers()
     });
 }
 

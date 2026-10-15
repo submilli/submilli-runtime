@@ -628,6 +628,34 @@ fn a_stand_in_resumed_after_a_long_silence_keeps_its_old_turns_where_they_were()
 }
 
 #[test]
+fn a_resumed_stand_in_whose_first_call_takes_long_keeps_its_old_turns_where_they_were() {
+    let mut world = World::new();
+    let start = Instant::now();
+    world.call("sess-1", "toolu_1");
+    let first = vec![says("t1", "Northwind?"), says("t2", "Two charges.")];
+    world.post_at(
+        ChatPost {
+            agent: "agent-1".into(),
+            calls: vec!["toolu_1".into()],
+            messages: first.clone(),
+            complete: true,
+        },
+        start,
+    );
+
+    // Resumed; its next call waits on a run past the time held chat is kept.
+    let mut again = first;
+    again.push(says("t3", "Globex?"));
+    world.post_at(live("agent-1", "toolu_2", again.clone()), start);
+    world.call("sess-2", "toolu_2");
+    let later = start + HELD_FOR + Duration::from_secs(1);
+    world.post_at(live("agent-1", "toolu_2", again), later);
+
+    assert_eq!(texts(&world.log("sess-1")), ["Northwind?", "Two charges."]);
+    assert_eq!(texts(&world.log("sess-2")), ["Globex?"]);
+}
+
+#[test]
 fn a_late_copy_of_a_message_cut_from_the_complete_one_is_not_a_resume() {
     let mut world = World::new();
     world.call("sess-1", "toolu_1");
