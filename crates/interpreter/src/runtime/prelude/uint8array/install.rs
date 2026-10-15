@@ -918,9 +918,10 @@ pub fn declare(defs: &mut PackageDeclaration) {
         defs,
         "new",
         ctor_key("new"),
-        vec![Param::new(
+        vec![Param::with_default(
             "values",
             Type::Union(vec![Type::Array(Box::new(Type::Number)), Type::Number]),
+            crate::DefaultValue::Number(0.0),
         )],
         u8_ret.clone(),
     );
@@ -1554,17 +1555,18 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             optional: false,
                             generics: Vec::new(),
-                            params: vec![Param::new(
+                            params: vec![Param::with_default(
                                 "values",
                                 Type::Union(vec![
                                     Type::Array(Box::new(Type::Number)),
                                     Type::Number,
                                 ]),
+                                crate::DefaultValue::Number(0.0),
                             )],
                             ret: Type::Uint8Array,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Build a new `Uint8Array`. Given an array, truncates each element and reduces it modulo 256, as JavaScript does, so `-1` is 255. Given a number, allocates that many zero bytes (the same as `Uint8Array.alloc`, including its `RangeError` on a negative or too-large length).\n * @param values Numeric values to copy into the new array, or the length to allocate.\n */",
+                                "/**\n * Build a new `Uint8Array`. Given an array, truncates each element and reduces it modulo 256, as JavaScript does, so `-1` is 255. Given a number, allocates that many zero bytes (the same as `Uint8Array.alloc`, including its `RangeError` on a negative or too-large length). With no argument, the array is empty.\n * @param values Numeric values to copy into the new array, or the length to allocate. Defaults to `0`.\n */",
                             ),
                         },
                     ),
