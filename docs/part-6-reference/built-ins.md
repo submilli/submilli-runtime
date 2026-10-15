@@ -193,9 +193,9 @@ A homogeneous array of `T`.
 
 | Member | Description |
 | --- | --- |
-| `length: number` | The number of elements in the array. Writing a smaller length removes the elements past it, as in JavaScript; writing a larger one throws a `RangeError`, since arrays have no holes. |
+| `length: number` | The number of elements in the array. |
 | `at(index: number): T \| undefined` | Returns the element at `index`, or `undefined` if out of range. |
-| `concat(...items: (T \| readonly T[])[]): T[]` | Returns a new array containing this array's elements followed by each of `items`, in order. An array item contributes its elements; any other item is appended as one element. |
+| `concat(...items: (readonly T[] \| T)[]): T[]` | Returns a new array containing this array's elements followed by each of `items`, in order. |
 | `copyWithin(target: number, start?: number, end?: number): T[]` | Copies the slots `[start, end)` to `target`, in place (overlap-safe), and returns the array. |
 | `entries(): Iterator<[number, T]>` | Returns a live `Iterator<[number, T]>` of index/element pairs. |
 | `every(predicate: (arg0: T, arg1: number, arg2: T[]) => unknown): boolean` | Returns `true` if `predicate` returned a truthy value for every element. |
@@ -215,7 +215,7 @@ A homogeneous array of `T`.
 | `lastIndexOf(elem: T, fromIndex?: number): number` | Returns the index of the last element equal to `elem`, or `-1`. |
 | `map<U>(callback: (arg0: T, arg1: number, arg2: T[]) => U): U[]` | Returns a new array produced by applying `callback` to each element. |
 | `pop(): T \| undefined` | Removes the last element and returns it, or `undefined` if the array is empty. |
-| `push(...items: T[]): number` | Appends `items` to the end of the array, in argument order, and returns the new length. |
+| `push(...items: T[]): number` | Appends `items` to the end of the array, in argument order. |
 | `reduce<U>(callback: (arg0: U, arg1: T, arg2: number, arg3: T[]) => U, initial: U): U` | Reduces the array to a single value. |
 | `reduceRight<U>(callback: (arg0: U, arg1: T, arg2: number, arg3: T[]) => U, initial: U): U` | Reduces the array right-to-left. |
 | `reverse(): T[]` | Reverses the array in place and returns it. |
@@ -277,6 +277,18 @@ The boolean type — `true` or `false`.
 | `toJson(): string` | Returns `"true"` or `"false"` — same as `toString` (booleans are JSON-native). |
 | `toString(): string` | Returns `"true"` or `"false"`. |
 
+| Constant | Description |
+| --- | --- |
+| `Boolean: BooleanConstructor` |  |
+
+### `BooleanConstructor`
+
+Constructor object for `boolean`.
+
+| Member | Description |
+| --- | --- |
+| `(value?: unknown): boolean` | Convert any value to a boolean by its truthiness: `false`, `0`, `NaN`, `""`, `0n`, `null` and `undefined` are `false`; everything else is `true`. |
+
 ## `Error`
 
 The built-in error class.
@@ -284,9 +296,18 @@ The built-in error class.
 | Member | Description |
 | --- | --- |
 | `static isError(value?: unknown): boolean` | Returns `true` when `value` is an `Error` instance (including subclasses). |
+| `cause?: unknown` | The error that led to this one, passed as `new Error(message, { cause })`; `undefined` when none was. |
 | `message: string` | The human-readable message passed to `new Error(message)`. |
 | `name: string` | The error class name. |
-| `constructor(message?: string)` |  |
+| `constructor(message?: string, options?: ErrorOptions)` |  |
+
+## `ErrorOptions`
+
+Options for an error constructor, as in `new Error(message, { cause })`.
+
+| Member | Description |
+| --- | --- |
+| `cause?: unknown` | The error that led to the new one, stored as its `cause`. |
 
 ## `Map`
 
@@ -316,7 +337,8 @@ Constructor object for `Map`.
 
 | Member | Description |
 | --- | --- |
-| `new <K, V>(entries?: readonly [K, V][] \| Iterable<[K, V]> \| Iterator<[K, V]> \| null): Map<K, V>` | Construct a `Map<K, V>`, optionally from an iterable of `[K, V]` entries: `new Map([["a", 1]])`. |
+| `groupBy<K, T>(items: readonly T[] \| Iterable<T> \| Iterator<T>, keySelector: (arg0: T, arg1: number) => K): Map<K, T[]>` | Groups iterable elements by the callback's result: a `Map` from each key to the elements it was returned for, in first-seen order. |
+| `new <K, V>(entries?: readonly (readonly [K, V])[] \| Iterable<[K, V]> \| Iterator<[K, V]> \| null): Map<K, V>` | Construct a `Map<K, V>`, optionally from an iterable of `[K, V]` entries: `new Map([["a", 1]])`. |
 
 ## `Number`
 
@@ -371,11 +393,14 @@ Universal base type for every object shape.
 
 ### `ObjectConstructor`
 
-Constructor object for `Object` — the enumeration statics (`keys`/`values`/`entries`/`hasOwn`) and `is`.
+Constructor object for `Object` — the enumeration statics (`keys`/`values`/`entries`/`hasOwn`), `assign`, `fromEntries`, `groupBy` and `is`.
 
 | Member | Description |
 | --- | --- |
+| `assign<T>(target: T, ...sources: unknown[]): T` | Copies own enumerable values from sources to the original target, in source order. |
 | `entries(obj: unknown): [string, unknown][]` | Returns `[name, value]` pairs in canonical sorted key order. |
+| `fromEntries<T>(entries: readonly (readonly [number \| string, T])[] \| Iterable<readonly [number \| string, T]> \| Iterator<readonly [number \| string, T]>): { [key: string]: T }` | Creates a string-keyed object from entry pairs. |
+| `groupBy<K, T>(items: readonly T[] \| Iterable<T> \| Iterator<T>, keySelector: (arg0: T, arg1: number) => K): { [key: string]: T[] }` | Groups iterable elements by the callback's property key. |
 | `hasOwn(obj: unknown, key: string): boolean` | Returns `true` when `obj` has a field named `key`: an omitted optional field answers `false`, one holding `undefined` answers `true`. |
 | `is(a: unknown, b: unknown): boolean` | SameValue comparison: like `===` but `Object.is(NaN, NaN)` is `true` and `Object.is(0, -0)` is `false`. |
 | `keys(obj: unknown): string[]` | Returns the object's field names in canonical sorted order (the same order JSON output uses). |
@@ -398,7 +423,7 @@ A budget refusal (`extends Error`): filesystem space, model tokens, or session s
 
 | Member | Description |
 | --- | --- |
-| `constructor(message?: string)` |  |
+| `constructor(message?: string, options?: ErrorOptions)` |  |
 
 ## `RangeError`
 
@@ -406,7 +431,27 @@ The built-in range-error class (`extends Error`, `name` = `"RangeError"`).
 
 | Member | Description |
 | --- | --- |
-| `constructor(message?: string)` |  |
+| `constructor(message?: string, options?: ErrorOptions)` |  |
+
+## `ReadonlyMap`
+
+### `ReadonlyMap`
+
+A `Map` that can only be read: `get`, `has`, `size`, `forEach` and iteration, but not `set`, `delete` or `clear`.
+
+```typescript
+type ReadonlyMap<K, V> = readonly Map<K, V>;
+```
+
+## `ReadonlySet`
+
+### `ReadonlySet`
+
+A `Set` that can only be read: `has`, `size`, `forEach`, iteration and the set algebra, but not `add`, `delete` or `clear`.
+
+```typescript
+type ReadonlySet<T> = readonly Set<T>;
+```
 
 ## `Record`
 
@@ -424,7 +469,7 @@ The built-in reference-error class (`extends Error`, `name` = `"ReferenceError"`
 
 | Member | Description |
 | --- | --- |
-| `constructor(message: string)` |  |
+| `constructor(message?: string, options?: ErrorOptions)` |  |
 
 ## `RegExp`
 
@@ -436,7 +481,7 @@ Compiled regular expression.
 | `readonly flags: string` | The flag string in source order — any subset of `gimsuy`. |
 | `readonly global: boolean` | `true` if the regex was constructed with the `g` flag. |
 | `readonly ignoreCase: boolean` | `true` if the regex was constructed with the `i` flag (case-insensitive matching). |
-| `lastIndex: number` | Where the next `g` or `y` match starts; matching advances it, and a failed match resets it to 0. Writable, as in JavaScript; it holds an integer, so a fractional write reads back truncated. |
+| `lastIndex: number` | Where the next `g` or `y` match starts; matching advances it, and a failed match resets it to 0. |
 | `readonly multiline: boolean` | `true` if the regex was constructed with the `m` flag (`^` / `$` match line boundaries). |
 | `readonly source: string` | The original JS-source pattern (without the leading/trailing `/`). |
 | `readonly sticky: boolean` | `true` if the regex was constructed with the `y` flag (sticky / anchored at `lastIndex`). |
@@ -454,6 +499,7 @@ Constructor object for `RegExp`.
 
 | Member | Description |
 | --- | --- |
+| `escape(string: string): string` | Returns `string` with every character that has a meaning in a pattern escaped, so `new RegExp(RegExp.escape(s))` matches `s` literally. |
 | `new (source: string, flags?: string): RegExp` | Construct a new `RegExp` from `source` and `flags`. |
 
 ## `Set`
@@ -466,18 +512,18 @@ A hash-backed unique-value collection.
 | `add(value: T): Set<T>` | Adds `value` to the set. |
 | `clear(): void` | Removes every element. |
 | `delete(value: T): boolean` | Removes `value` from the set. |
-| `difference(other: Set<T>): Set<T>` | Returns a new set with this set's elements that are not in `other`. |
+| `difference<U>(other: Set<U>): Set<T>` | Returns a new set with this set's elements that are not in `other`. |
 | `entries(): Iterator<[T, T]>` | Returns a lazy `Iterator<[T, T]>` of `[value, value]` pairs (the element repeats, mirroring `Map#entries`). |
 | `forEach(callback: (arg0: T, arg1: T, arg2: Set<T>) => void): void` | Calls `callback(value, value, set)` once for each element in insertion order, including elements the callback adds. |
 | `has(value: T): boolean` | Returns `true` when `value` is present. |
-| `intersection(other: Set<T>): Set<T>` | Returns a new set with the elements present in both this set and `other`. |
-| `isDisjointFrom(other: Set<T>): boolean` | Returns `true` when this set and `other` share no elements. |
-| `isSubsetOf(other: Set<T>): boolean` | Returns `true` when every element of this set is in `other`. |
-| `isSupersetOf(other: Set<T>): boolean` | Returns `true` when every element of `other` is in this set. |
+| `intersection<U>(other: Set<U>): Set<T>` | Returns a new set with the elements present in both this set and `other`. |
+| `isDisjointFrom<U>(other: Set<U>): boolean` | Returns `true` when this set and `other` share no elements. |
+| `isSubsetOf<U>(other: Set<U>): boolean` | Returns `true` when every element of this set is in `other`. |
+| `isSupersetOf<U>(other: Set<U>): boolean` | Returns `true` when every element of `other` is in this set. |
 | `iterator(): Iterator<T>` | Returns a fresh `Iterator<T>` over the elements in insertion order. |
 | `keys(): Iterator<T>` | Alias of `values()` — sets have no separate keys. |
-| `symmetricDifference(other: Set<T>): Set<T>` | Returns a new set with the elements in exactly one of this set and `other` (the overlap is dropped). |
-| `union(other: Set<T>): Set<T>` | Returns a new set with every element of this set and `other`. |
+| `symmetricDifference<U>(other: Set<U>): Set<T \| U>` | Returns a new set with the elements in exactly one of this set and `other` (the overlap is dropped). |
+| `union<U>(other: Set<U>): Set<T \| U>` | Returns a new set with every element of this set and `other`. |
 | `values(): Iterator<T>` | Returns a fresh array of every element in insertion order. |
 
 | Constant | Description |
@@ -512,18 +558,19 @@ The UTF-16 string type.
 | `iterator(): Iterator<string>` | Returns an `Iterator<string>` of CODE POINTS — surrogate pairs arrive as one two-unit string. |
 | `lastIndexOf(search: string, fromIndex?: number): number` | Returns the index of the last occurrence of `search` at or before `fromIndex`, or `-1` if none. |
 | `localeCompare(other: string): number` | Compares this string with `other` in UTF-16 code-unit order. |
-| `match(re: RegExp): RegExpMatch \| null` | Find the next match of `re` in this string. |
+| `match(re: string \| RegExp): RegExpMatch \| null` | Find the next match of `re` in this string. |
 | `matchAll(re: RegExp): RegExpMatch[]` | Find every non-overlapping match of `re` in this string. |
 | `normalize(form?: string): string` | Returns a new string in the specified Unicode normalization form. |
 | `padEnd(targetLength: number, padString?: string): string` | Pads this string with `padString` on the right until the result reaches `targetLength` code units. |
 | `padStart(targetLength: number, padString?: string): string` | Pads this string with `padString` on the left until the result reaches `targetLength` code units. |
 | `repeat(count: number): string` | Returns a new string containing `count` copies of this string concatenated. |
-| `replace(search: string \| RegExp, replacement: string): string` | Replace the first match of `search` with `replacement`. |
-| `replaceAll(search: string \| RegExp, replacement: string): string` | Replace every non-overlapping match of `search` with `replacement`. |
-| `search(re: RegExp): number` | Index of the first match of `re` in this string, or `-1` if no match. |
+| `replace(search: string \| RegExp, replacement: string \| ((arg0: string, arg1?: unknown, arg2?: unknown, arg3?: unknown, arg4?: unknown, arg5?: unknown, arg6?: unknown, arg7?: unknown) => string)): string` | Replace the first match of `search` with `replacement`. |
+| `replaceAll(search: string \| RegExp, replacement: string \| ((arg0: string, arg1?: unknown, arg2?: unknown, arg3?: unknown, arg4?: unknown, arg5?: unknown, arg6?: unknown, arg7?: unknown) => string)): string` | Replace every non-overlapping match of `search` with `replacement`. |
+| `search(re: string \| RegExp): number` | Index of the first match of `re` in this string, or `-1` if no match. |
 | `slice(start?: number, end?: number): string` | Returns a new string containing the code units from `start` (inclusive) to `end` (exclusive). |
 | `split(separator: string \| RegExp, limit?: number): string[]` | Split this string into pieces by matches of `separator`. |
 | `startsWith(search: string, position?: number): boolean` | Returns `true` if the substring starting at `position` begins with `search`. |
+| `substr(start: number, length?: number): string` | Returns `length` code units starting at `start`; a negative `start` counts from the end. |
 | `substring(start?: number, end?: number): string` | Like `slice`, but negative values clamp to `0`, and `start` and `end` are swapped when `start > end`. |
 | `toJson(): string` | Returns this string wrapped in `"…"` with JSON escapes applied (`\"`, `\\`, `\b`, `\f`, `\n`, `\r`, `\t`, and `\u00XX` for control codepoints). |
 | `toLowerCase(): string` | Returns a new string with every character converted to its Unicode lowercase form. |
@@ -532,6 +579,8 @@ The UTF-16 string type.
 | `toWellFormed(): string` | Returns a copy with every lone surrogate replaced by U+FFFD (`�`); well-formed strings come back unchanged. |
 | `trim(): string` | Returns a new string with Unicode whitespace removed from both ends. |
 | `trimEnd(): string` | Returns a new string with Unicode whitespace removed from the end. |
+| `trimLeft(): string` | The older name of `trimStart`: returns a new string with Unicode whitespace removed from the start. |
+| `trimRight(): string` | The older name of `trimEnd`: returns a new string with Unicode whitespace removed from the end. |
 | `trimStart(): string` | Returns a new string with Unicode whitespace removed from the start. |
 
 | Constant | Description |
@@ -554,7 +603,7 @@ The built-in syntax-error class (`extends Error`, `name` = `"SyntaxError"`).
 
 | Member | Description |
 | --- | --- |
-| `constructor(message?: string)` |  |
+| `constructor(message?: string, options?: ErrorOptions)` |  |
 
 ## `TextDecoder`
 
@@ -602,7 +651,7 @@ A wait outside the program ran out of time (`extends Error`): an application too
 
 | Member | Description |
 | --- | --- |
-| `constructor(message?: string)` |  |
+| `constructor(message?: string, options?: ErrorOptions)` |  |
 
 ## `TypeError`
 
@@ -610,7 +659,7 @@ The built-in type-error class (`extends Error`, `name` = `"TypeError"`).
 
 | Member | Description |
 | --- | --- |
-| `constructor(message?: string)` |  |
+| `constructor(message?: string, options?: ErrorOptions)` |  |
 
 ## `URIError`
 
@@ -618,7 +667,7 @@ The built-in URI-error class (`extends Error`, `name` = `"URIError"`).
 
 | Member | Description |
 | --- | --- |
-| `constructor(message: string)` |  |
+| `constructor(message?: string, options?: ErrorOptions)` |  |
 
 ## `Uint8Array`
 
@@ -626,10 +675,12 @@ Packed byte array.
 
 | Member | Description |
 | --- | --- |
+| `readonly BYTES_PER_ELEMENT: number` | The size in bytes of each element: always `1`. |
 | `readonly byteLength: number` | Equivalent to `length`. |
 | `readonly length: number` | The number of bytes in this array. |
 | `at(index: number): number \| undefined` | Returns the byte at `index`, or `undefined` if out of range. |
 | `copyWithin(target: number, start?: number, end?: number): Uint8Array` | Copies `bytes[start..end)` to `bytes[target..]` in place. |
+| `entries(): Iterator<[number, number]>` | Returns a live `Iterator<[number, number]>` of index/byte pairs. |
 | `equals(other: Uint8Array): boolean` | Byte-by-byte equality with `other`. |
 | `every(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => unknown): boolean` | Returns `true` iff `predicate(byte, index, array)` returns a truthy value for every byte. |
 | `fill(value: number, start?: number, end?: number): Uint8Array` | Converts `value` to a byte and writes it to every position in `[start, end)`. |
@@ -641,7 +692,9 @@ Packed byte array.
 | `forEach(callback: (arg0: number, arg1: number, arg2: Uint8Array) => void): void` | Invokes `callback(byte, index, array)` for every byte in order. |
 | `includes(target: number, fromIndex?: number): boolean` | Returns `true` if `target` appears at or after `fromIndex`. |
 | `indexOf(target: number, fromIndex?: number): number` | Returns the first index of `target`, or `-1`. |
+| `iterator(): Iterator<number>` | Returns a live `Iterator<number>` of the bytes, which `for-of` and spread use. |
 | `join(separator?: string): string` | Returns this array's bytes formatted in decimal and concatenated with `separator` between adjacent pairs. |
+| `keys(): Iterator<number>` | Returns a live `Iterator<number>` of the indices. |
 | `lastIndexOf(target: number, fromIndex?: number): number` | Returns the last index of `target`, or `-1`. |
 | `map(callback: (arg0: number, arg1: number, arg2: Uint8Array) => number): Uint8Array` | Returns a new `Uint8Array` with each `callback(this[i], i, this)` result converted to a byte. |
 | `reduce<U>(callback: (arg0: U, arg1: number, arg2: number, arg3: Uint8Array) => U, initial: U): U` | Folds bytes left-to-right with `callback(acc, byte, index, array)`. |
@@ -658,6 +711,7 @@ Packed byte array.
 | `toReversed(): Uint8Array` | Returns a fresh copy with bytes reversed. |
 | `toSorted(compareFn?: (arg0: number, arg1: number) => number): Uint8Array` | Returns a fresh copy sorted via `compareFn`. |
 | `toString(): string` | Returns this array's bytes joined as a comma-separated decimal string — e.g. `Uint8Array.new([1, 2, 3]).toString() === "1,2,3"`. |
+| `values(): Iterator<number>` | Returns a live `Iterator<number>` of the bytes; writes during iteration are seen. |
 | `with(index: number, value: number): Uint8Array` | Returns a clone of this array with `value` converted to a byte and written at `index`. |
 
 | Constant | Description |
@@ -670,12 +724,13 @@ Constructor object for `Uint8Array`.
 
 | Member | Description |
 | --- | --- |
+| `readonly BYTES_PER_ELEMENT: number` | The size in bytes of each element: always `1`. |
 | `alloc(n: number): Uint8Array` | Allocate a zero-filled `Uint8Array` of length `n`. |
 | `fromArray(values: number[]): Uint8Array` | Build a new `Uint8Array` from `values` — canonical name for `Uint8Array.new(values)`. |
 | `fromBase64(s: string, options?: Base64Options): Uint8Array` | Decode `s` as base64; `options.alphabet` picks standard vs URL-safe. |
 | `fromBytes(other: Uint8Array): Uint8Array` | Returns a deep copy of `other`. |
 | `fromHex(s: string): Uint8Array` | Decode `s` as a hex string. |
-| `new (values: number[] \| number): Uint8Array` | Build a new `Uint8Array`. |
+| `new (values?: number \| number[]): Uint8Array` | Build a new `Uint8Array`. |
 | `of(...values: number[]): Uint8Array` | Build a `Uint8Array` from the supplied byte values — `Uint8Array.of(1, 2, 3)`. |
 
 ## `JSON`
