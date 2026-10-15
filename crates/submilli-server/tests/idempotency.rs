@@ -701,3 +701,32 @@ async fn a_fingerprint_mismatch_against_an_indeterminate_entry_is_a_conflict() {
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(as_json(&body)["error"], json!("idempotency_conflict"));
 }
+
+// --- expired responses ------------------------------------------------------
+
+#[tokio::test]
+async fn an_expired_response_is_refused_without_running_and_different_code_still_conflicts() {
+    let (router, ledger) = router_with_ledger().await;
+    let session = open_session(&router).await;
+    let code = "function main(): number { return 1; }";
+    ledger
+        .put(LedgerEntry::expired(&session, "k1", code_fingerprint(code)))
+        .await
+        .unwrap();
+
+    let (status, body) = execute(&router, &session, code, Some("k1")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        as_json(&body)["error"],
+        json!("idempotency_response_expired")
+    );
+    assert_eq!(
+        ledger.load(&session, "k1").await.unwrap().unwrap().state,
+        submilli_server::domain::idempotent_request::RequestState::Expired,
+        "the tombstone stays and nothing ran"
+    );
+
+    let (status, body) = execute(&router, &session, "function main(): void {}", Some("k1")).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(as_json(&body)["error"], json!("idempotency_conflict"));
+}

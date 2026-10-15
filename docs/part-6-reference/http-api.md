@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "006bcaf04f962711d529c418a2482381019bb08cc92e610b0ce3519878bbd2d1"
+  contentHash: "b6a82e554c447906a269b4c7474cfa411bf51d8e1dc948cb89ba70bb91ed6347"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -162,7 +162,12 @@ lists the secrets to send to
 With an `Idempotency-Key`, the server records the outcome of the run under
 the pair of session and key, on disk next to the session store. A later
 request with the same key and the same `code` replays the recorded status and
-body without running anything. The record lasts as long as the session.
+body without running anything.
+
+A recorded body is kept for 24 hours (`idempotency_retention`), and the
+session's three newest are kept whatever their age (`idempotency_keep_last`).
+Past both, the body is dropped and the key stays: it still refuses to run the
+code again. The record of the key lasts as long as the session.
 
 | Situation | Status | `error` |
 | --- | --- | --- |
@@ -172,6 +177,7 @@ body without running anything. The record lasts as long as the session.
 | Same key, same code, the run may wait on application tools | `200` | The run's next settled state: `suspended` with its pending call, or `finished` |
 | Same key, different code | `409` | `idempotency_conflict` |
 | Same key, an earlier request never recorded an outcome (the server stopped mid-run) | `409` | `idempotency_incomplete` |
+| Same key, same code, the recorded body is no longer kept | `409` | `idempotency_response_expired` |
 | Same key, the wait for the running request ran out | `503` | `idempotency_in_progress` |
 | The ledger could not be read or written | `503` | `idempotency_unavailable` |
 | Key empty, over 120 bytes, not printable ASCII, or sent twice | `400` | `idempotency_key_invalid` |

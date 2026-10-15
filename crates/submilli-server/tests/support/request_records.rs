@@ -31,6 +31,16 @@ impl Record {
             state: RequestState::Indeterminate,
         }
     }
+
+    #[allow(dead_code)] // Used by the response-expiry integration test.
+    pub fn expired(session: &str, key: &str, fingerprint: String) -> Self {
+        Self {
+            session_id: session.into(),
+            key: key.into(),
+            fingerprint,
+            state: RequestState::Expired,
+        }
+    }
 }
 pub fn code_fingerprint(code: &str) -> String {
     format!("{:x}", Sha256::digest(code.as_bytes()))
@@ -54,15 +64,16 @@ impl RequestRecords {
         ))
     }
     pub async fn put(&self, record: Record) -> Result<(), DatabaseError> {
-        assert_eq!(
-            record.state,
-            RequestState::Indeterminate,
-            "fixture seeds abandoned requests only"
-        );
+        let (state, completed, owner_generation) = match record.state {
+            RequestState::Indeterminate => ("indeterminate", false, "previous-server"),
+            RequestState::Expired => ("expired", true, "this-server"),
+            _ => panic!("fixture seeds abandoned or expired requests only"),
+        };
         self.database.transaction(move |connection| Box::pin(async move {
             let time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis() as i64;
-            sqlx::query("INSERT INTO idempotent_requests(session_id,request_key,fingerprint,reservation_id,owner_generation,created_at_unix_ms,state) VALUES (?,?,?,?,?,?, 'indeterminate')")
-                .bind(record.session_id).bind(record.key).bind(record.fingerprint).bind(uuid::Uuid::new_v4().to_string()).bind("previous-server").bind(time).execute(connection).await?;
+            let completed = completed.then_some(time);
+            sqlx::query("INSERT INTO idempotent_requests(session_id,request_key,fingerprint,reservation_id,owner_generation,created_at_unix_ms,state,completed_at_unix_ms) VALUES (?,?,?,?,?,?,?,?)")
+                .bind(record.session_id).bind(record.key).bind(record.fingerprint).bind(uuid::Uuid::new_v4().to_string()).bind(owner_generation).bind(time).bind(state).bind(completed).execute(connection).await?;
             Ok(())
         })).await
     }
@@ -88,6 +99,7 @@ impl RequestRecords {
                             body: String::from_utf8(row.try_get("response_body")?).unwrap(),
                         }),
                         "reserved" => RequestState::Reserved,
+                        "expired" => RequestState::Expired,
                         _ => RequestState::Indeterminate,
                     };
                     Ok(Some(Record {

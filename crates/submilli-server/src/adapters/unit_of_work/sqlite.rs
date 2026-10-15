@@ -304,6 +304,45 @@ impl UnitOfWork for SqliteUnitOfWork {
         self.query(|connection| Box::pin(crate::adapters::idempotency::unfinished(connection)))
             .await
     }
+    async fn sessions_with_responses_to_expire(
+        &mut self,
+        cutoff: SystemTime,
+        kept: usize,
+    ) -> Result<Vec<String>, StoreError> {
+        self.query(move |connection| {
+            Box::pin(
+                crate::adapters::idempotency::sessions_with_responses_to_expire(
+                    connection, cutoff, kept,
+                ),
+            )
+        })
+        .await
+    }
+    async fn completed_responses(
+        &mut self,
+        session_id: &str,
+    ) -> Result<Vec<crate::domain::idempotent_request::CompletedResponse>, StoreError> {
+        let session_id = session_id.to_owned();
+        self.query(move |connection| {
+            Box::pin(async move {
+                crate::adapters::idempotency::completed_responses(connection, &session_id).await
+            })
+        })
+        .await
+    }
+    async fn expire_responses(
+        &mut self,
+        session_id: &str,
+        keys: Vec<String>,
+    ) -> Result<u64, StoreError> {
+        let session_id = session_id.to_owned();
+        self.query(move |connection| {
+            Box::pin(async move {
+                crate::adapters::idempotency::expire_responses(connection, &session_id, &keys).await
+            })
+        })
+        .await
+    }
 
     async fn get_secret(&mut self, name: &SecretName) -> Result<Option<Secret>, StoreError> {
         let (name, sealer) = (name.clone(), self.sealer.clone());
