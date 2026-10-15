@@ -317,6 +317,24 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         Dispatch, MethodSig, Param, PropertySig, Span, Type, TypeKind, TypeSymbol, ValueKind,
         ValueSymbol,
     };
+    // `ReadonlyMap` is `Map` seen through `readonly`: the typechecker rejects
+    // the mutating methods, and the value is the same `Map` at runtime.
+    defs.types.insert(
+        "ReadonlyMap".to_string(),
+        TypeSymbol {
+            name: "ReadonlyMap".to_string(),
+            mangled_name: crate::mangle::prelude("ReadonlyMap"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: TypeKind::Alias {
+                generics: vec!["K".to_string(), "V".to_string()],
+                ty: Type::Readonly(Box::new(Type::prelude_interface(
+                    "Map".to_string(),
+                    vec![Type::TypeVar("K".to_string()), Type::TypeVar("V".to_string())],
+                ))),
+                doc: doc("/** A `Map` that can only be read: `get`, `has`, `size`, `forEach` and iteration, but not `set`, `delete` or `clear`. Every `Map<K, V>` is a `ReadonlyMap<K, V>`. */"),
+            },
+        },
+    );
     use std::collections::BTreeMap;
     defs.types.insert(
         "Map".to_string(),

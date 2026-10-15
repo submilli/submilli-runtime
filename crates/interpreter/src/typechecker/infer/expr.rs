@@ -269,6 +269,22 @@ fn is_mutating_array_method(name: &str) -> bool {
     )
 }
 
+/// `"Map"` or `"Set"` for a `ReadonlyMap` or `ReadonlySet` receiver.
+fn readonly_collection(ty: &Type) -> Option<&'static str> {
+    if !ty.is_readonly_array() {
+        return None;
+    }
+    match ty.peel() {
+        Type::InterfaceRef { mangled, .. } if *mangled == crate::mangle::prelude("Map") => {
+            Some("Map")
+        }
+        Type::InterfaceRef { mangled, .. } if *mangled == crate::mangle::prelude("Set") => {
+            Some("Set")
+        }
+        _ => None,
+    }
+}
+
 /// The copying counterpart of a mutating array method, where the prelude has one.
 fn non_mutating_alternative(name: &str) -> Option<&'static str> {
     match name {
@@ -2113,6 +2129,19 @@ impl Inferer<'_> {
     /// whether it reported, in which case the caller poisons the call.
     fn reject_unsupported_array_call(&mut self, recv_ty: &Type, name: &crate::Ident) -> bool {
         if self.reject_array_like_union_call(recv_ty, name) {
+            return true;
+        }
+        if let Some(collection) = readonly_collection(recv_ty)
+            && matches!(name.name.as_str(), "set" | "add" | "delete" | "clear")
+        {
+            self.error_with_help(
+                name.span,
+                format!("cannot call `{}` on `{}`", name.name, recv_ty),
+                vec![format!(
+                    "`{}` mutates the {collection}, and a `Readonly{collection}` only permits reading",
+                    name.name
+                )],
+            );
             return true;
         }
         if !is_mutating_array_method(&name.name) {

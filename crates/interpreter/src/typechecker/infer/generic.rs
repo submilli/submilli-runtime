@@ -931,7 +931,7 @@ impl Inferer<'_> {
         errors_before_args: usize,
     ) {
         if let Some(want) = expected.filter(|want| !pins_type_parameters(want)) {
-            let _ = sub.unify(ret, want, self.resolver());
+            let _ = sub.unify(ret, &writable_view_for(ret, want), self.resolver());
         }
         if self.error_count() > errors_before_args
             && let Err(exceeded) = bind_remaining(sub, generics, Type::Error, &self.type_limits)
@@ -968,6 +968,7 @@ impl Inferer<'_> {
     /// A mismatch is reported later, where the call's result is checked
     /// against the expected type.
     fn bind_from_expected_type(&self, sub: &mut TypeParamSubstitution, ret: &Type, want: &Type) {
+        let want = &writable_view_for(ret, want);
         // A result with several bare type parameters (`A | B`) can't say which
         // of them takes which part of `want`: tsc gives each the whole of it,
         // where pairing members would bind `A` to one literal of a `Mode`.
@@ -3958,5 +3959,20 @@ mod tests {
                 .any(|d| d.message.contains("expected 1+ argument(s), got 0")),
             "expected arity diagnostic with '+' form, got: {diags:?}",
         );
+    }
+}
+
+/// `want` without a top-level `readonly` when the call returns a fresh
+/// mutable collection (`Array.of()`, `new Set()`), which a `readonly` slot
+/// accepts: unifying the two as they stand fails on the dropped `readonly`.
+/// A bare type parameter result keeps `want` whole, so it binds as readonly.
+fn writable_view_for(ret: &Type, want: &Type) -> Type {
+    match want.peel_preserving_readonly() {
+        Type::Readonly(inner)
+            if !ret.is_readonly_array() && !matches!(ret.peel(), Type::TypeVar(_)) =>
+        {
+            (**inner).clone()
+        }
+        _ => want.clone(),
     }
 }

@@ -328,6 +328,24 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         Dispatch, MethodSig, Param, PropertySig, Span, Type, TypeKind, TypeSymbol, ValueKind,
         ValueSymbol,
     };
+    // `ReadonlySet` is `Set` seen through `readonly`: the typechecker rejects
+    // the mutating methods, and the value is the same `Set` at runtime.
+    defs.types.insert(
+        "ReadonlySet".to_string(),
+        TypeSymbol {
+            name: "ReadonlySet".to_string(),
+            mangled_name: crate::mangle::prelude("ReadonlySet"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: TypeKind::Alias {
+                generics: vec!["T".to_string()],
+                ty: Type::Readonly(Box::new(Type::prelude_interface(
+                    "Set".to_string(),
+                    vec![Type::TypeVar("T".to_string())],
+                ))),
+                doc: doc("/** A `Set` that can only be read: `has`, `size`, `forEach`, iteration and the set algebra, but not `add`, `delete` or `clear`. Every `Set<T>` is a `ReadonlySet<T>`. */"),
+            },
+        },
+    );
     use std::collections::BTreeMap;
     defs.types.insert(
         "Set".to_string(),

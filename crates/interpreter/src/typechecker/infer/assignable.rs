@@ -1358,13 +1358,21 @@ fn args_relate_covariantly(
             .all(|(actual, expected)| assignable_rec(actual, expected, types, seen))
 }
 
-/// Whether `actual` is a `readonly` array or tuple and `expected` a mutable one.
-/// The element types still decide assignability everywhere else: `readonly` is
-/// shallow and otherwise covariant, like the array it wraps.
+/// Whether `actual` is a `readonly` array or tuple, or a `ReadonlyMap` or
+/// `ReadonlySet`, and `expected` a mutable one. The element types still decide
+/// assignability everywhere else: `readonly` is shallow and otherwise
+/// covariant, like the collection it wraps.
 pub(crate) fn drops_readonly(actual: &Type, expected: &Type) -> bool {
     actual.is_readonly_array()
         && !expected.is_readonly_array()
-        && matches!(expected.peel(), Type::Array(_) | Type::Tuple(_))
+        && match expected.peel() {
+            Type::Array(_) | Type::Tuple(_) => true,
+            Type::InterfaceRef { mangled, .. } => {
+                *mangled == crate::mangle::prelude("Map")
+                    || *mangled == crate::mangle::prelude("Set")
+            }
+            _ => false,
+        }
 }
 
 fn same_alias_instance(left: &Type, right: &Type) -> bool {
