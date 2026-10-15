@@ -1,0 +1,49 @@
+WEBVTT
+
+1
+00:00:00.000 --> 00:00:06.233
+You’re building a support agent for an online store, and decided to use Submilli for code execution.
+
+2
+00:00:06.233 --> 00:00:12.333
+First, you expose the Capabilities you want the code to have access to, in the form of Packages.
+
+3
+00:00:12.333 --> 00:00:21.033
+You create an orders Package. Inside it, there’s a create replacement Capability that takes parameters, including the shipping cost.
+
+4
+00:00:21.033 --> 00:00:34.567
+Then you define a Blueprint: which Capabilities you want this agent’s code to have access to, and under what criteria. In our case, you allow replacements, as long as shipping cost is below twenty-five dollars.
+
+5
+00:00:34.567 --> 00:00:40.400
+You launch the agent, and a support ticket arrives: the customer needs a replacement by Friday.
+
+6
+00:00:40.400 --> 00:00:44.467
+The agent code calls your Package with eighteen-dollar shipping cost.
+
+7
+00:00:44.467 --> 00:00:50.000
+The Package checks the Blueprint. The check passes. The replacement is created.
+
+8
+00:00:50.000 --> 00:00:55.667
+The next ticket needs delivery tomorrow, so the agent selects forty-two-dollar rush shipping.
+
+9
+00:00:55.667 --> 00:00:59.767
+That exceeds the limit. Submilli blocks the replacement.
+
+10
+00:00:59.767 --> 00:01:03.767
+You edit the Blueprint, raising the shipping limit to fifty dollars.
+
+11
+00:01:03.767 --> 00:01:07.767
+Retry the same code. The replacement is now allowed.
+
+12
+00:01:07.767 --> 00:01:12.867
+Your Blueprint sets the permissions. Submilli enforces them.

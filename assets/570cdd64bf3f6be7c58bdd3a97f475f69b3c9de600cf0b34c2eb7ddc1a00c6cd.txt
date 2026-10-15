@@ -1,0 +1,23 @@
+You’re building a support agent for an online store, and decided to use Submilli for code execution.
+
+First, you expose the Capabilities you want the code to have access to, in the form of Packages.
+
+You create an orders Package. Inside it, there’s a create replacement Capability that takes parameters, including the shipping cost.
+
+Then you define a Blueprint: which Capabilities you want this agent’s code to have access to, and under what criteria. In our case, you allow replacements, as long as shipping cost is below twenty-five dollars.
+
+You launch the agent, and a support ticket arrives: the customer needs a replacement by Friday.
+
+The agent code calls your Package with eighteen-dollar shipping cost.
+
+The Package checks the Blueprint. The check passes. The replacement is created.
+
+The next ticket needs delivery tomorrow, so the agent selects forty-two-dollar rush shipping.
+
+That exceeds the limit. Submilli blocks the replacement.
+
+You edit the Blueprint, raising the shipping limit to fifty dollars.
+
+Retry the same code. The replacement is now allowed.
+
+Your Blueprint sets the permissions. Submilli enforces them.

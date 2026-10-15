@@ -1,0 +1,11 @@
+{
+  "film": "support-demo",
+  "videoId": "support-demo",
+  "releaseId": "801f3edee13ac4343983465b6918016872052c3146b5e33b345732071d12587e",
+  "fingerprint": "98680786b8032726f3bca446d1c6ad23cdbd5ba790a21e289629364375f93d27",
+  "durationSeconds": 72.86666666666666,
+  "media": "/assets/801f3edee13ac4343983465b6918016872052c3146b5e33b345732071d12587e.mp4",
+  "captions": "/assets/7e043ecaf9ceda41efadb28d93c21ebb7b2fac6dfa0c0d57e42f546c5896d134.vtt",
+  "transcript": "/assets/570cdd64bf3f6be7c58bdd3a97f475f69b3c9de600cf0b34c2eb7ddc1a00c6cd.txt",
+  "publishedAt": "2026-10-15T11:35:06.261785+00:00"
+}
