@@ -6701,3 +6701,15 @@ pub(crate) fn host_property_iface(receiver_ty: &Type) -> Option<crate::MangledNa
         _ => None,
     }
 }
+
+/// Whether a field access on `receiver_ty` may meet a value with no object
+/// payload: a built-in seen through a structural view or `unknown`.
+pub(crate) fn may_hold_builtin_value(receiver_ty: &Type) -> bool {
+    match receiver_ty.lowered() {
+        Type::InterfaceRef { .. } | Type::Unknown => true,
+        Type::Union(members) => members
+            .iter()
+            .any(|member| !matches!(member.lowered(), Type::Object { .. })),
+        _ => false,
+    }
+}

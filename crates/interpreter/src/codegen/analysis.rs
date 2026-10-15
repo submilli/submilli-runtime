@@ -762,6 +762,9 @@ impl CodegenAnalysis {
                         &crate::mangle::property_setter(&name.name),
                     ));
                 }
+                if crate::codegen::may_hold_builtin_value(receiver_ty) {
+                    self.note_record_helpers();
+                }
                 self.extra_field_names.push(name.name.clone());
                 self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Set);
             }

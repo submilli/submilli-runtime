@@ -348,7 +348,7 @@ fn push(
 
 /// `xs.length = value`: truncates in place. JavaScript would also grow the
 /// array with holes, which Submilli arrays cannot hold, so growth throws.
-pub(super) fn set_length(
+pub(crate) fn set_length(
     caller: &mut Caller<'_, StoreData>,
     receiver: &Val,
     value: f64,

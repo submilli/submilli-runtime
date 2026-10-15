@@ -2975,14 +2975,7 @@ fn coerce_field_receiver_to_object_shape(
     receiver_ty: &Type,
     object_shape: u32,
 ) {
-    let universal = match receiver_ty.lowered() {
-        Type::InterfaceRef { .. } | Type::Unknown => true,
-        Type::Union(members) => members
-            .iter()
-            .any(|m| !matches!(m.lowered(), Type::Object { .. })),
-        _ => false,
-    };
-    if universal {
+    if crate::codegen::may_hold_builtin_value(receiver_ty) {
         emitter.instruction(Instruction::RefAsNonNull);
         emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
             object_shape,

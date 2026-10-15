@@ -563,11 +563,58 @@ fn emit_object_field_store(
         .intrinsic_type_indices()
         .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?
         .object_shape;
+    let builtin = crate::codegen::may_hold_builtin_value(receiver_ty);
+    if builtin {
+        emitter.instruction(Instruction::LocalGet(recv));
+        emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+            object_shape,
+        )));
+        emitter.emit_if(BlockType::Empty);
+    }
     emitter.instruction(Instruction::LocalGet(recv));
     let rcv_local = stash_receiver_as_object_shape(emitter, receiver_ty, object_shape)?;
     // Accessor-aware: a data field writes its slot; an accessor property
     // invokes its `set <prop>` method closure.
     emit_object_property_write(emitter, ctx, rcv_local, name, value)?;
+    if builtin {
+        emitter.emit_else();
+        emit_builtin_field_store(emitter, ctx, recv, name, value)?;
+        emitter.emit_end();
+    }
+    Ok(())
+}
+
+/// A structural view may hold a built-in value (an array behind
+/// `{ length: number }`), which has no object payload: the host writes it
+/// through the property's setter, or throws as JavaScript does for a
+/// read-only property.
+fn emit_builtin_field_store(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    recv: u32,
+    name: &Ident,
+    value: ExprId,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let key = ctx
+        .symbols
+        .field_name_string_global_idx(&name.name)
+        .ok_or_else(|| crate::codegen::internal_failure("written field name interned"))?;
+    let set_field = ctx
+        .symbols
+        .prelude_func_idx("ObjectConstructor##setField")
+        .ok_or_else(|| crate::codegen::internal_failure("dynamic write imported"))?;
+    emitter.instruction(Instruction::LocalGet(recv));
+    emitter.instruction(Instruction::GlobalGet(key));
+    emit_expr(emitter, ctx, value)?;
+    cast::emit_box(
+        emitter,
+        ctx,
+        &ctx.ta
+            .try_expr(value)
+            .map_err(crate::codegen::arena_failure)?
+            .ty,
+    )?;
+    emitter.instruction(Instruction::Call(set_field));
     Ok(())
 }
 

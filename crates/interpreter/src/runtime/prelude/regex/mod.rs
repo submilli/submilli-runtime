@@ -468,13 +468,22 @@ pub(super) fn last_index_setter(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
 ) -> wasmtime::Result<()> {
-    let st = as_struct(caller, abi_arg(params, 0)?, "RegExp#lastIndex")?;
     let Val::F64(bits) = *abi_arg(params, 1)? else {
         wasmtime::bail!("RegExp#lastIndex: value is not f64");
     };
+    set_last_index(caller, abi_arg(params, 0)?, f64::from_bits(bits))
+}
+
+/// `re.lastIndex = value`, for the host setter and for a write through a
+/// structural view of the regex.
+pub(crate) fn set_last_index(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    value: f64,
+) -> wasmtime::Result<()> {
+    let st = as_struct(caller, receiver, "RegExp#lastIndex")?;
     // `as` truncates toward zero, saturates, and maps NaN to 0.
-    let value = f64::from_bits(bits) as i32;
-    st.set_field(&mut *caller, 2, Val::I32(value))
+    st.set_field(&mut *caller, 2, Val::I32(value as i32))
 }
 
 /// `RegExp.escape(s)` (ES2025): `s` with every character that has a meaning
