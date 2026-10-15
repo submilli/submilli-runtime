@@ -242,7 +242,9 @@ pub fn declare(defs: &mut PackageDeclaration) {
         vec![Param::new(
             "entries",
             Type::union(vec![
-                Type::Readonly(Box::new(Type::Array(Box::new(entry())))),
+                Type::Readonly(Box::new(Type::Array(Box::new(Type::Readonly(
+                    Box::new(entry()),
+                ))))),
                 Type::prelude_interface("Iterable".to_string(), vec![entry()]),
                 Type::prelude_interface("Iterator".to_string(), vec![entry()]),
                 Type::Null,
@@ -472,10 +474,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         params: vec![Param::with_default(
                             "entries",
                             Type::union(vec![
-                                Type::Readonly(Box::new(Type::Array(Box::new(Type::Tuple(vec![
-                                    Type::TypeVar("K".to_string()),
-                                    Type::TypeVar("V".to_string()),
-                                ].into()))))),
+                                Type::Readonly(Box::new(Type::Array(Box::new(Type::Readonly(
+                                    Box::new(Type::Tuple(vec![
+                                        Type::TypeVar("K".to_string()),
+                                        Type::TypeVar("V".to_string()),
+                                    ].into())),
+                                ))))),
                                 Type::prelude_interface(
                                     "Iterable".to_string(),
                                     vec![Type::Tuple(vec![
