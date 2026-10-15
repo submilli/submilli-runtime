@@ -1302,7 +1302,9 @@ fn global_functions() -> PackageDeclaration {
 
 fn render_ts_compiler_globals(out: &mut String, defs: &PackageDeclaration) {
     if !defs.types.contains_key("Function") {
-        out.push_str("interface Function {}\n\n");
+        out.push_str(
+            "interface Function {\n  /** The parameters before the first optional, defaulted or rest one. */\n  readonly length: number;\n}\n\n",
+        );
     }
     out.push_str("interface CallableFunction extends Function {}\n\n");
     out.push_str("interface NewableFunction extends Function {}\n\n");
@@ -3497,7 +3499,7 @@ mod tests {
         assert!(docs.contains(
             "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string | undefined;"
         ));
-        assert!(docs.contains("interface Function {}"));
+        assert!(docs.contains("interface Function {\n  /** The parameters before the first optional, defaulted or rest one. */\n  readonly length: number;\n}"));
         assert!(docs.contains("interface IArguments {}"));
         assert!(docs.contains("declare class Error {"));
         assert!(docs.contains("static isError(value?: unknown): value is Error;"));

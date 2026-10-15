@@ -8016,6 +8016,18 @@ impl Inferer<'_> {
                 length_ty,
             ));
         }
+        // A function's `length` without a `Function` interface: the spec has
+        // no `Function` type, and `length` is the one property it reads.
+        if name.name == "length" && matches!(receiver_ty.peel(), Type::Function { .. }) {
+            return Ok((
+                TypedExprKind::InterfacePropertyAccess {
+                    receiver: typed_receiver,
+                    iface: crate::mangle::prelude("Function"),
+                    name,
+                },
+                Type::Number,
+            ));
+        }
         // interface-property dispatch lands here BEFORE the
         // user-object field path. `lookup_interface_property` returns `None`
         // for `Object` so user-object reads aren't shadowed by a hypothetical

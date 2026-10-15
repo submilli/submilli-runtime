@@ -107,6 +107,7 @@ These globals are in scope and are not in the `submilli builtins` catalog.
 | `encodeURIComponent(uri)`, `encodeURI(uri)` | Percent-encoding. `encodeURIComponent` also takes a number or boolean, converted as `String(value)` does. Throws `URIError` on a lone surrogate |
 | `decodeURIComponent(uri)`, `decodeURI(uri)` | Percent-decoding. Throws `URIError` (`"URI malformed"`) on an invalid escape |
 | `NaN`, `Infinity` | Number constants |
+| `fn.length` | A function's parameters before the first optional, defaulted or rest one. A function keeps its length when assigned to a wider function type |
 
 ## Not available
 
