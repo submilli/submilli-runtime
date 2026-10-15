@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "5187c6f69963edb6a2516867611acbc6448f586e81ad8ad7e73d4137eb9be1d3"
+  contentHash: "6bf35b45e175818f05ddb24813b5faab3c5f397644e7f64f21fef27daa86b6c1"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -46,6 +46,7 @@ flat names listed. A dash means the form doesn't exist.
 | `session_store_dir` | `--session-store-dir` | `SUBMILLI_SESSION_STORE_DIR` | path | `$SUBMILLI_HOME/server/sessions` | Session lifecycle records. |
 | `package_store_dir` | `--package-store-dir` | `SUBMILLI_PACKAGE_STORE_DIR` | path | `$SUBMILLI_HOME/server/packages` | Installed Packages. |
 | `volume_dir` | `--volume-dir` | `SUBMILLI_VOLUME_DIR` | path | `$SUBMILLI_HOME/server/volumes` | `managed-local` volumes, `per_session` files and `ephemeral` scratch. See [Directories](#directories). |
+| — | `--create-volume-dir` | — | boolean | `false` | Create a missing `volume_dir` at startup. See [Directories](#directories). |
 | `secret_store.dir` | `--secret-store-dir` | `SUBMILLI_SECRET_STORE_DIR` | path | `$SUBMILLI_HOME/server/secrets` | The encrypted secret store. See [`secret_store`](#secret_store). |
 | `secret_store.key_file` | `--secret-store-key-file` | `SUBMILLI_SECRET_STORE_KEY_FILE` | path | none | File holding the store's key. |
 | `secret_store.key_env` | `--secret-store-key-env` | `SUBMILLI_SECRET_STORE_KEY_ENV` | variable name | `SUBMILLI_SECRET_KEY` | Variable holding the store's key. |
@@ -198,12 +199,14 @@ mcp_allowed_hosts:
 | `secret_store.dir` | The encrypted secret store. | `$SUBMILLI_HOME/server/secrets` |
 
 The server creates each directory it needs, except a `volume_dir` you set,
-which must exist when the server starts. The volume root's `managed-local/`,
-`sessions/` and `ephemeral/` directories are created at startup and never while
-the server runs. A disk that isn't mounted stops the server, or the work that
-needs it, instead of filling an empty directory in its place. The server also
-reads the CLI's Package store, `$SUBMILLI_HOME/packages`, as a read-only
-fallback.
+which must exist when the server starts. On a host where nothing can create it
+first, `--create-volume-dir` lets the server create it. Use it only for a
+directory on a disk that is always mounted by then. The volume root's
+`managed-local/`, `sessions/` and `ephemeral/` directories are created at
+startup and never while the server runs. Without the flag, a disk that isn't
+mounted stops the server, or the work that needs it, instead of filling an
+empty directory in its place. The server also reads the CLI's Package store, `$SUBMILLI_HOME/packages`,
+as a read-only fallback.
 
 ## `secret_store`
 
@@ -433,7 +436,9 @@ Options:
       --database-path <PATH>
           Server SQLite database file. The parent directory is created at boot. [default: ~/.submilli/server/db/submilli.db] Env: `$SUBMILLI_DATABASE_PATH`
       --volume-dir <VOLUME_DIR>
-          Durable root for `managed-local` named volumes (`managed-local/<name>`), `per_session` workspaces (`sessions/<session id>`) and `ephemeral` scratch (`ephemeral/`). Mount on durable storage: named volumes and session files outlive restarts. A path set here must already exist. The server never creates it, so a missing mount fails startup. [default: ~/.submilli/server/volumes, created at startup] Env: `$SUBMILLI_VOLUME_DIR`
+          Durable root for `managed-local` named volumes (`managed-local/<name>`), `per_session` workspaces (`sessions/<session id>`) and `ephemeral` scratch (`ephemeral/`). Mount on durable storage: named volumes and session files outlive restarts. A path set here must already exist. The server does not create it unless given `--create-volume-dir`, so a missing mount fails startup. [default: ~/.submilli/server/volumes, created at startup] Env: `$SUBMILLI_VOLUME_DIR`
+      --create-volume-dir
+          Create the volume directory (from `--volume-dir`, `$SUBMILLI_VOLUME_DIR` or `volume_dir`) when it is missing, instead of failing startup. For a host where nothing else can create the directory before the server starts. Only use it when the directory is on durable storage that is always mounted when the server starts: otherwise named volumes and session files go to a fresh empty directory in its place. Does nothing when no volume directory is set, since the server creates its default one anyway. No config-file key or environment variable
       --secret-store-dir <SECRET_STORE_DIR>
           Directory of a secret store from before secrets and MCP OAuth grants were kept in the database (one sealed file per secret). When it exists, startup imports it with the secret-store key and moves it to `archive/secrets` beside it. Not the CLI's store at ~/.submilli/secrets, which `submilli secret put` and `mcp authenticate` fill and `submilli run` reads. [default: ~/.submilli/server/secrets] Env: `$SUBMILLI_SECRET_STORE_DIR`
       --package-store-dir <PACKAGE_STORE_DIR>

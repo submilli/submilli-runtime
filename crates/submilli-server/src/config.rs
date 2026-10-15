@@ -424,13 +424,23 @@ impl fmt::Display for VolumeRootError {
                 path,
                 configured: true,
                 source,
-            } => write!(
-                f,
-                "the volume root {} is not usable ({source}). Mount it or create it, then \
-                 restart. The server never creates a configured `volume_dir`, so a missing \
-                 mount is not replaced by an empty local directory",
-                path.display(),
-            ),
+            } => {
+                write!(
+                    f,
+                    "the volume root {} is not usable ({source}). Mount it or create it, \
+                     then restart. The server does not create a configured `volume_dir`, so \
+                     a missing mount is not replaced by an empty local directory",
+                    path.display(),
+                )?;
+                // The one failure `submilli-server --create-volume-dir` fixes.
+                if source.kind() == std::io::ErrorKind::NotFound {
+                    f.write_str(
+                        ". If nothing else can create it, start `submilli-server` with \
+                         `--create-volume-dir`",
+                    )?;
+                }
+                Ok(())
+            }
             VolumeRootError::Root {
                 path,
                 configured: false,
