@@ -332,6 +332,7 @@ mod tests {
                 "BigInt",
                 "BigIntConstructor",
                 "Boolean",
+                "BooleanConstructor",
                 "Console",
                 "Error",
                 "Iterable",
