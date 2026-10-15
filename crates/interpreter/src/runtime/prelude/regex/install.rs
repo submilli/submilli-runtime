@@ -415,14 +415,14 @@ pub fn declare(defs: &mut PackageDeclaration) {
         defs,
         "match",
         string_key("match"),
-        vec![s(), re()],
+        vec![s(), Param::new("re", string_or_regexp())],
         match_or_null(),
     );
     declare_method(
         defs,
         "search",
         string_key("search"),
-        vec![s(), re()],
+        vec![s(), Param::new("re", string_or_regexp())],
         Type::Number,
     );
     declare_method(

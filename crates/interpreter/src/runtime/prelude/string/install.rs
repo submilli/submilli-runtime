@@ -1930,7 +1930,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Vec::new(),
                             params: vec![Param::new(
                                 "re",
-                                Type::prelude_interface("RegExp".to_string(), Vec::new()),
+                                Type::Union(vec![
+                                    Type::String,
+                                    Type::prelude_interface("RegExp".to_string(), Vec::new()),
+                                ]),
                             )],
                             ret: Type::Union(vec![
                                 Type::prelude_interface("RegExpMatch".to_string(), Vec::new()),
@@ -1938,7 +1941,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ]),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Find the next match of `re` in this string. Equivalent to `re.exec(this)` (v1; the `g`-flag array shape is a follow-up).\n * @param re The pattern to search for.\n */",
+                                "/**\n * Find the next match of `re` in this string. Equivalent to `re.exec(this)` (v1; the `g`-flag array shape is a follow-up).\n * @param re The pattern to search for; a string is compiled as a pattern, as `new RegExp(re)` does.\n */",
                             ),
                         },
                     ),
@@ -1949,12 +1952,15 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Vec::new(),
                             params: vec![Param::new(
                                 "re",
-                                Type::prelude_interface("RegExp".to_string(), Vec::new()),
+                                Type::Union(vec![
+                                    Type::String,
+                                    Type::prelude_interface("RegExp".to_string(), Vec::new()),
+                                ]),
                             )],
                             ret: Type::Number,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Index of the first match of `re` in this string, or `-1` if no match.\n * @param re The pattern to search for.\n */",
+                                "/**\n * Index of the first match of `re` in this string, or `-1` if no match.\n * @param re The pattern to search for; a string is compiled as a pattern, as `new RegExp(re)` does.\n */",
                             ),
                         },
                     ),

@@ -662,11 +662,28 @@ pub(super) fn string_match(
         .try_into()
         .map_err(|_| wasmtime::Error::msg("string_match: invalid argument count"))?;
     let input = input::read(caller, abi_arg(params, 0)?)?;
-    let st = as_struct(caller, abi_arg(params, 1)?, "String#match(regex)")?;
+    let st = pattern_arg(caller, abi_arg(params, 1)?, "String#match(regex)")?;
     match exec_at(caller, &st, &input, 0)? {
         Some(s) => build_match_box(caller, &input, abi_arg(params, 0)?, &s),
         None => Ok(Val::null_any_ref()),
     }
+}
+
+/// The regex `match` or `search` runs: a string argument is compiled as a
+/// pattern with no flags, as JavaScript's `new RegExp(s)` does.
+fn pattern_arg(
+    caller: &mut Caller<'_, StoreData>,
+    arg: &Val,
+    name: &str,
+) -> wasmtime::Result<Rooted<StructRef>> {
+    if !arg_is_string(caller, arg)? {
+        return as_struct(caller, arg, name);
+    }
+    let no_flags = Val::AnyRef(Some(
+        crate::runtime::host::write_submilli_string_struct(caller, "")?.to_anyref(),
+    ));
+    let regex = construct(caller, arg, &no_flags)?;
+    as_struct(caller, &regex, name)
 }
 
 /// `String#search(re)` — index of the first match, or `-1`.
@@ -675,7 +692,7 @@ pub(super) fn string_search(
     params: &[Val],
 ) -> wasmtime::Result<f64> {
     let input = input::read(caller, abi_arg(params, 0)?)?;
-    let st = as_struct(caller, abi_arg(params, 1)?, "String#search(regex)")?;
+    let st = pattern_arg(caller, abi_arg(params, 1)?, "String#search(regex)")?;
     Ok(match find_at(caller, &st, &input, 0)? {
         Some((start, _)) => start as f64,
         None => -1.0,
