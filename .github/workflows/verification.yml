@@ -29,6 +29,8 @@ jobs:
         run: python3 verification/check.py --output "$RUNNER_TEMP/durability-model"
       - name: Check run preparation and admission
         run: python3 verification/check.py --model admission --output "$RUNNER_TEMP/admission-model"
+      - name: Check immutable object publication, recovery and collection
+        run: python3 verification/check.py --model objects --output "$RUNNER_TEMP/objects-model"
       - name: Preserve model-checking evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -37,5 +39,6 @@ jobs:
           path: |
             ${{ runner.temp }}/durability-model
             ${{ runner.temp }}/admission-model
+            ${{ runner.temp }}/objects-model
           if-no-files-found: ignore
           retention-days: 14
