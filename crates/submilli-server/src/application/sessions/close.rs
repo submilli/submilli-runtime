@@ -23,7 +23,11 @@ impl<'a> CloseSession<'a> {
         if !session.close(reason) {
             return Ok(false);
         }
-        unit.remove_session_requests(session.id().as_str()).await?;
+        crate::application::sessions::runs::cancel_session_runs(
+            unit.as_mut(),
+            session.id().as_str(),
+        )
+        .await?;
         unit.save_session(session).await?;
         unit.commit().await?;
         self.audit.record(id, super::ports::SessionEvent::Deleted);

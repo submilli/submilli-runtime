@@ -3432,3 +3432,25 @@ async fn oversized_diagnostic_is_abbreviated_and_next_request_succeeds() {
     assert_eq!(output(&healthy)["result"], "2");
     assert!(output(&healthy)["error"].is_null());
 }
+
+#[tokio::test]
+async fn unkeyed_mcp_programs_persist_distinct_run_identities() {
+    let h = Harness::new();
+    let session = h.handshake(EPH).await;
+    for request in 1..=2 {
+        let (status, _, rpc) = h.post(EPH, tools_call(request, SUM), Some(&session)).await;
+        assert_eq!(status, StatusCode::OK, "{rpc}");
+        assert_eq!(output(&rpc)["result"], json!("2"), "{rpc}");
+    }
+    let database = h.state.database().unwrap();
+    let rows: Vec<(String,String,String,Option<String>)> = database.transaction(move |connection| Box::pin(async move {
+        Ok(sqlx::query_as("SELECT run_id,state,entry_point,request_key FROM runs WHERE session_id=? ORDER BY admission_order")
+            .bind(session).fetch_all(connection).await?)
+    })).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_ne!(rows[0].0, rows[1].0);
+    assert!(
+        rows.iter()
+            .all(|r| r.1 == "finished" && r.2 == "mcp" && r.3.is_none())
+    );
+}

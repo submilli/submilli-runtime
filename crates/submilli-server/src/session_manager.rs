@@ -779,7 +779,7 @@ impl SessionManager {
     /// Drop the keyed-execute responses past their retention, leaving tombstones
     /// that still refuse to run the request again. Returns how many expired.
     async fn expire_responses(&self, now: SystemTime) -> Result<u64, SessionError> {
-        Ok(crate::application::idempotency::ExpireResponses::new(
+        Ok(crate::application::sessions::runs::ExpireResponses::new(
             self.unit_of_work.as_ref(),
             self.response_retention,
         )
@@ -1825,13 +1825,13 @@ mod tests {
             )
             .unwrap();
         let mut unit = mgr.unit_of_work.begin().await.unwrap();
-        unit.save_request(request).await.unwrap();
+        unit.save_run(request).await.unwrap();
         unit.commit().await.unwrap();
 
         assert_eq!(mgr.reap_now().await.unwrap(), 0, "the session stays");
         let mut unit = mgr.unit_of_work.begin().await.unwrap();
         assert_eq!(
-            unit.get_request("s1", "k").await.unwrap().unwrap().state(),
+            unit.run_for_key("s1", "k").await.unwrap().unwrap().state(),
             &RequestState::Expired
         );
     }

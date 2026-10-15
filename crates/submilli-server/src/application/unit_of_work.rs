@@ -26,20 +26,18 @@ pub(crate) trait UnitOfWork: Send {
     async fn save_session(&mut self, session: Session) -> Result<(), StoreError>;
     async fn blueprint_exists(&mut self, name: &str) -> Result<bool, StoreError>;
     async fn remove_blueprint(&mut self, name: &str) -> Result<bool, StoreError>;
-    async fn get_request(
+    async fn get_run(&mut self, id: &str) -> Result<Option<crate::domain::run::Run>, StoreError>;
+    async fn run_for_key(
         &mut self,
         session_id: &str,
         key: &str,
-    ) -> Result<Option<crate::domain::idempotent_request::IdempotentRequest>, StoreError>;
-    async fn save_request(
+    ) -> Result<Option<crate::domain::run::Run>, StoreError>;
+    async fn save_run(&mut self, request: crate::domain::run::Run) -> Result<(), StoreError>;
+    async fn active_session_runs(
         &mut self,
-        request: crate::domain::idempotent_request::IdempotentRequest,
-    ) -> Result<(), StoreError>;
-    async fn remove_request(&mut self, session_id: &str, key: &str) -> Result<(), StoreError>;
-    async fn remove_session_requests(&mut self, session_id: &str) -> Result<(), StoreError>;
-    async fn unfinished_requests(
-        &mut self,
-    ) -> Result<Vec<crate::domain::idempotent_request::IdempotentRequest>, StoreError>;
+        session_id: &str,
+    ) -> Result<Vec<crate::domain::run::Run>, StoreError>;
+    async fn unfinished_runs(&mut self) -> Result<Vec<crate::domain::run::Run>, StoreError>;
     /// The sessions holding more than `kept` completed responses, at least one
     /// of them completed at or before `cutoff`.
     async fn sessions_with_responses_to_expire(

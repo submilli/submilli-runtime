@@ -360,6 +360,51 @@ async fn execute_core_with(
     mut inputs: ExecuteInputs<'_>,
     test: Option<TestWorld>,
 ) -> ExecuteOutcome {
+    let audit = inputs
+        .audit
+        .get_or_insert_with(|| {
+            crate::audit::ExecutionAudit::new(
+                state.audit().clone(),
+                "unauthenticated",
+                "program",
+                Some(inputs.session_id),
+            )
+        })
+        .clone();
+    let unkeyed = if inputs.idempotency_key.is_none() {
+        let entry = match &inputs.run_entry {
+            RunEntry::Mcp => "mcp",
+            RunEntry::Http => "http",
+            RunEntry::Session => "session",
+            RunEntry::Program => "program",
+            RunEntry::Test => "test",
+            RunEntry::McpFileTool { .. } => "mcp_file_tool",
+        };
+        match state
+            .idempotency()
+            .prepare(
+                inputs.session_id,
+                None,
+                inputs.code,
+                &audit.id,
+                Some(&audit.principal),
+                entry,
+            )
+            .await
+        {
+            crate::idempotency::Reservation::Proceed(guard) => Some(guard),
+            _ => {
+                return ExecuteOutcome::undispatched(failure_response(
+                    Some(&audit),
+                    inputs.session_id,
+                    ErrorKind::RuntimeError,
+                    "run admission unavailable".into(),
+                ));
+            }
+        }
+    } else {
+        None
+    };
     let run_cancel = inputs.tools.as_mut().and_then(|tools| tools.cancel.take());
     let recording = crate::record::Recording::start_tapped(
         state,
@@ -372,6 +417,9 @@ async fn execute_core_with(
         && recording.is_none()
     {
         test.tap().declined();
+        if let Some(guard) = unkeyed {
+            guard.release().await;
+        }
         return ExecuteOutcome::undispatched(failure_response(
             inputs.audit.as_deref(),
             inputs.session_id,
@@ -396,6 +444,13 @@ async fn execute_core_with(
         _ => (None, None),
     };
     let outcome = prepare_and_run(state, inputs, recording.clone(), cancel_requested, test).await;
+    if let Some(guard) = unkeyed {
+        if outcome.dispatched {
+            guard.finish_unkeyed().await;
+        } else {
+            guard.release().await;
+        }
+    }
     if let Some(recording) = &recording {
         match (&outcome.response.error, outcome.dispatched) {
             // The runner finishes a dispatched run itself; one that never got there is
@@ -636,6 +691,11 @@ async fn prepare_and_run(
             Ok(packages) => packages,
             Err(err) => return fail(ErrorKind::PackageResolution, err.to_string()),
         };
+    // This commit is the admission barrier. A failure before it permits only a
+    // proven preparation release; after it, a lost run remains indeterminate.
+    if let Err(error) = state.idempotency().claim(&execution_id_of(audit)).await {
+        return fail(ErrorKind::RuntimeError, error.to_string());
+    }
     let outcome = runner::run(
         code,
         parsed,
