@@ -8298,6 +8298,7 @@ impl Inferer<'_> {
         let is_array = matches!(recv_ty.peel(), Type::Array(_));
         let method = name.name.clone();
         let is_set = iface_mangled == crate::mangle::prelude("Set");
+        let is_array_iface = iface_mangled == crate::mangle::prelude("Array");
         let call = self.infer_generic_method_call(
             typed_receiver,
             iface_mangled,
@@ -8309,7 +8310,8 @@ impl Inferer<'_> {
             expected,
             span,
         )?;
-        if method == "concat"
+        if is_array_iface
+            && method == "concat"
             && let Type::Array(element) = call.1.peel()
         {
             self.reject_concat_arrays_as_elements(&call.0, element)?;
@@ -8359,7 +8361,7 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?;
             let span = typed.span;
             let arg_ty = match (spread, typed.ty.peel()) {
-                (false, ty) => ty.clone(),
+                (false, _) => typed.ty.peel_preserving_readonly().clone(),
                 (true, Type::Array(inner)) => inner.as_ref().clone(),
                 (true, _) => continue,
             };

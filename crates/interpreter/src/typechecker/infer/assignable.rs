@@ -1437,10 +1437,6 @@ pub(crate) fn expand_alias_ref(ty: &Type, types: TypeResolver) -> Type {
     }
 }
 
-/// TS-style structural interface satisfaction: every member the expected
-/// interface declares exists on the actual type's interface form (via
-/// [`Type::interface_routing`]) with an assignable type. The nominal fast
-/// path stays first; this is the fallback that makes interfaces structural.
 /// Whether `actual` is a `readonly` array, `ReadonlyMap` or `ReadonlySet` and
 /// `expected` an interface that requires one of the mutating methods the
 /// readonly view leaves out, as tsc reports.
@@ -1466,6 +1462,10 @@ fn is_mutating_member(name: &str) -> bool {
         || matches!(name, "set" | "add" | "delete" | "clear")
 }
 
+/// TS-style structural interface satisfaction: every member the expected
+/// interface declares exists on the actual type's interface form (via
+/// [`Type::interface_routing`]) with an assignable type. The nominal fast
+/// path stays first; this is the fallback that makes interfaces structural.
 fn satisfies_structurally(
     actual: &Type,
     expected: &Type,
