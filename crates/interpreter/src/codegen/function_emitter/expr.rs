@@ -928,6 +928,9 @@ fn emit_index_access(
     } else if recv_ty.lowered() == &Type::Uint8Array {
         emit_expr(emitter, ctx, *receiver)?;
         emit_uint8_index_with_receiver_on_stack(emitter, ctx, *index)?;
+    } else if recv_ty.is_string_shaped() {
+        emit_expr(emitter, ctx, *receiver)?;
+        emit_string_index_with_receiver_on_stack(emitter, ctx, *index)?;
     } else {
         emit_expr(emitter, ctx, *receiver)?;
         emit_bounds_checked_index_with_receiver_on_stack(
@@ -939,6 +942,43 @@ fn emit_index_access(
         )?;
     }
 
+    Ok(())
+}
+
+/// `s[index]`, with `s` on the stack: the host helper reads the code unit,
+/// throwing `RangeError` out of range as an array read does.
+fn emit_string_index_with_receiver_on_stack(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    index: ExprId,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let Some(helper) = ctx.require(
+        ctx.symbols.prelude_func_idx("string_index"),
+        "string index helper imported",
+    ) else {
+        return Ok(());
+    };
+    // A chain step's receiver may sit on the stack in a wider slot, such as
+    // `string | undefined`'s, so it is cast to `$string` after the index runs.
+    let receiver = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
+    emitter.instruction(Instruction::LocalSet(receiver));
+    emit_expr(emitter, ctx, index)?;
+    emit_index_number(
+        emitter,
+        ctx,
+        &ctx.ta.try_expr(index).map_err(crate::codegen::arena_failure)?.ty,
+    )?;
+    let index_local = emitter.add_anonymous_local(ValType::F64)?;
+    emitter.instruction(Instruction::LocalSet(index_local));
+    emitter.instruction(Instruction::LocalGet(receiver));
+    crate::codegen::cast_check::emit_operation_cast_on_stack(
+        emitter,
+        ctx,
+        &Type::Unknown,
+        &Type::String,
+    )?;
+    emitter.instruction(Instruction::LocalGet(index_local));
+    emitter.instruction(Instruction::Call(helper));
     Ok(())
 }
 
@@ -3027,6 +3067,8 @@ fn emit_chain_access(
                 cast::emit_coerce_to_slot(emitter, ctx, check_ty, result_ty)?;
             } else if receiver_ty.lowered() == &Type::Uint8Array {
                 emit_uint8_index_with_receiver_on_stack(emitter, ctx, *idx)?;
+            } else if receiver_ty.is_string_shaped() {
+                emit_string_index_with_receiver_on_stack(emitter, ctx, *idx)?;
             } else {
                 let source_ty = match receiver_ty.lowered() {
                     Type::Array(element) => element.as_ref(),

@@ -14,7 +14,8 @@ use super::transforms::{TrimEnds, to_lower_case, to_upper_case, trim_range};
 use super::{
     RangeError, Str, at_index, cmp, code_point, concat_length, ends_with_window, from_char_code,
     from_code_point, includes, index_of, is_well_formed, last_index_of, normalize, pad_length,
-    repeat_length, slice_range, starts_with_window, substring_range, to_well_formed, unit_index,
+    repeat_length, slice_range, starts_with_window, string_index_unit, substring_range,
+    to_well_formed, unit_index,
 };
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
@@ -48,6 +49,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     // Accessors read the few units they need straight from the payload
     // instead of copying the whole string.
     reg_unit_to_str(linker, &engine, &abi, "charAt", unit_index)?;
+    reg_string_index(linker, &engine, &abi)?;
     reg_unit_to_str_or_undefined(linker, &engine, &abi, "at", at_index)?;
     reg_char_code_at(linker, &engine, &abi)?;
     reg_code_point_at(linker, &engine, &abi)?;
@@ -499,6 +501,13 @@ pub fn declare(defs: &mut PackageDeclaration) {
         two_strings(),
         Type::Boolean,
     );
+    declare_method(
+        defs,
+        "string_index",
+        crate::mangle::prelude("string_index"),
+        vec![Param::anon(Type::String), Param::anon(Type::Number)],
+        Type::String,
+    );
 }
 
 /// `(string, f64) -> string`: `charAt`. `pick` names the unit for the index,
@@ -526,6 +535,36 @@ fn reg_unit_to_str(
                 .transpose()?;
             let out = Str::from_units(unit.map_or_else(Vec::new, |unit| vec![unit]));
             *abi_result(results, 0)? = abi.write(caller, recv.vtable, &out)?;
+            Ok(())
+        },
+    )
+}
+
+/// `(string, f64) -> string`: `s[index]`. Out of range throws the `RangeError`
+/// an array read throws, rather than JavaScript's `undefined`, which the
+/// `string` it is typed as can't hold.
+fn reg_string_index(
+    linker: &mut Linker<StoreData>,
+    engine: &wasmtime::Engine,
+    abi: &StringAbi,
+) -> wasmtime::Result<()> {
+    let s = abi.value_type();
+    let abi = abi.clone();
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        crate::mangle::prelude("string_index"),
+        FuncType::new(engine, [s.clone(), ValType::F64], [s]),
+        true,
+        move |caller, params, results| {
+            let recv = abi.payload(caller, abi_arg(params, 0)?, "string_index")?;
+            let arg = number(abi_arg(params, 1)?, "string_index")?;
+            let Some(index) = string_index_unit(recv.len, arg) else {
+                return Err(range_error(crate::codegen::bounds::INDEX_OOB_MESSAGE));
+            };
+            let unit = read_code_unit(&mut *caller, recv.array, index)?;
+            *abi_result(results, 0)? =
+                abi.write(caller, recv.vtable, &Str::from_units(vec![unit]))?;
             Ok(())
         },
     )
@@ -1335,6 +1374,21 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 ret: Type::Number,
                 type_predicate: None,
                 doc: doc("/** Internal: UTF-16 code-unit length. */"),
+            },
+        },
+    );
+    defs.values.insert(
+        "string_index".to_string(),
+        ValueSymbol {
+            name: "string_index".to_string(),
+            mangled_name: crate::mangle::prelude("string_index"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: ValueKind::Function {
+                generics: Vec::new(),
+                params: vec![Param::anon(Type::String), Param::anon(Type::Number)],
+                ret: Type::String,
+                type_predicate: None,
+                doc: doc("/** Internal: `s[index]`, throwing `RangeError` out of range. */"),
             },
         },
     );

@@ -8549,6 +8549,8 @@ impl Inferer<'_> {
             // "invalid assignment target"), so no separate check
             // needed here.
             Type::Uint8Array => Type::Number,
+            // A code unit, as in TypeScript; out of range throws as an array read does.
+            _ if pattern_origin.is_none() && receiver_ty.is_string_shaped() => Type::String,
             Type::Error => Type::Error,
             // indexing into un-narrowed `unknown` is rejected.
             Type::Unknown => {
@@ -11105,6 +11107,7 @@ impl Inferer<'_> {
                     }
                     Type::Error => Type::Error,
                     Type::Unknown => Type::Unknown,
+                    _ if receiver_ty.is_string_shaped() => Type::String,
                     other => {
                         self.error(
                             span,
