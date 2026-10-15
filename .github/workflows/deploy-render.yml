@@ -28,12 +28,18 @@ name: Deploy to Render
 #
 # To retry a failed deploy, use "Re-run failed jobs" on the newest run only: a
 # re-run keeps the head checks it already passed.
+#
+# "Run workflow" on main deploys main's head without waiting for CI, for a fix
+# that cannot wait. The image still passes the smoke, conformance and shell
+# checks below; only the test suites are skipped. Run from any other branch, it
+# stops at the gate.
 
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -43,7 +49,7 @@ env:
   CARGO_TERM_COLOR: always
   TARGET: x86_64-unknown-linux-musl
   PACKAGE: ${{ github.event.repository.name }}-dev
-  SHA: ${{ github.event.workflow_run.head_sha }}
+  SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
   gate:
@@ -51,9 +57,11 @@ jobs:
     # `branches: [main]` matches a fork's pull request from its own `main` too, so
     # also require a push to this repository.
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository
+      )
     runs-on: ubuntu-latest
     outputs:
       current: ${{ steps.head.outputs.current }}
