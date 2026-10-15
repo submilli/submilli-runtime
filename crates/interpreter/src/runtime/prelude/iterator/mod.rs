@@ -625,7 +625,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         let mut fields = std::collections::BTreeMap::new();
         fields.insert(
             "done".to_string(),
-            crate::ObjectField::required(Type::Boolean),
+            crate::ObjectField::required(Type::BooleanLiteral(false)),
         );
         fields.insert(
             "value".to_string(),
@@ -660,7 +660,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         );
         fields.insert(
             "done".to_string(),
-            crate::ObjectField::required(Type::Boolean),
+            crate::ObjectField::required(Type::BooleanLiteral(true)),
         );
         Type::Object {
             index: None,
