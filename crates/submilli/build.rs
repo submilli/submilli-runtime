@@ -23,7 +23,7 @@ fn main() -> io::Result<()> {
         file_table(&skill_dir, "include_str")?,
     )?;
 
-    // Built by `npm run build` in `web/` and committed; CI checks it matches a fresh build.
+    // Built by `npm run build` in `playground-web/` and committed; CI checks it matches a fresh build.
     let page_dir = manifest_dir
         .join("src/commands/playground/web/dist")
         .canonicalize()?;
