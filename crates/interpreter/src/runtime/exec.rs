@@ -119,9 +119,12 @@ fn read_thrown_error_text(store: &mut Store<StoreData>, exn: Rooted<ExnRef>) -> 
         return None;
     };
     let payload = payload_ref.unwrap_array(&mut *store).ok()?;
-    use super::prelude::error::{MESSAGE_SLOT, NAME_SLOT};
-    let message_field = payload.get(&mut *store, MESSAGE_SLOT).ok()?;
-    let name_field = payload.get(&mut *store, NAME_SLOT).ok()?;
+    let message_field = payload
+        .get(&mut *store, super::prelude::error::MESSAGE_SLOT)
+        .ok()?;
+    let name_field = payload
+        .get(&mut *store, super::prelude::error::NAME_SLOT)
+        .ok()?;
     let name = read_string_value(store, name_field)?;
     let message = read_string_value(store, message_field)?;
     let header = if name.is_empty() {

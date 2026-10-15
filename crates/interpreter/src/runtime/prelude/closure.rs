@@ -384,6 +384,43 @@ fn bind_receiver(
     )))
 }
 
+/// `fn.length` reads the function an adapter wraps, so a function keeps its
+/// length when it flows into a wider function type.
+pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    let engine = linker.engine().clone();
+    let object = ValType::Ref(RefType::new(
+        true,
+        HeapType::ConcreteStruct(build_intrinsic_types(&engine)?.object),
+    ));
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        length_key(),
+        FuncType::new(&engine, [object], [ValType::F64]),
+        /* deterministic = */ true,
+        |caller, params, results| -> wasmtime::Result<()> {
+            let function = read_callback(caller, abi_arg(params, 0)?, "Function#length")?;
+            let length = function.length(caller)?;
+            *abi_result(results, 0)? = Val::F64((length as f64).to_bits());
+            Ok(())
+        },
+    )
+}
+
+fn length_key() -> crate::MangledName {
+    crate::mangle::extend(&crate::mangle::prelude("Function"), "length")
+}
+
+pub(super) fn declare(defs: &mut PackageDeclaration) {
+    super::declare_method(
+        defs,
+        "length",
+        length_key(),
+        vec![Param::new("fn", Type::Unknown)],
+        Type::Number,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,41 +562,4 @@ mod tests {
         store.set_fuel(100000).unwrap();
         callback.call_async(&mut store, &[], &mut []).await.unwrap();
     }
-}
-
-/// `fn.length` reads the function an adapter wraps, so a function keeps its
-/// length when it flows into a wider function type.
-pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-    let engine = linker.engine().clone();
-    let object = ValType::Ref(RefType::new(
-        true,
-        HeapType::ConcreteStruct(build_intrinsic_types(&engine)?.object),
-    ));
-    register_host_fn(
-        linker,
-        MODULE_NAME,
-        length_key(),
-        FuncType::new(&engine, [object], [ValType::F64]),
-        /* deterministic = */ true,
-        |caller, params, results| -> wasmtime::Result<()> {
-            let function = read_callback(caller, abi_arg(params, 0)?, "Function#length")?;
-            let length = function.length(caller)?;
-            *abi_result(results, 0)? = Val::F64((length as f64).to_bits());
-            Ok(())
-        },
-    )
-}
-
-fn length_key() -> crate::MangledName {
-    crate::mangle::extend(&crate::mangle::prelude("Function"), "length")
-}
-
-pub(super) fn declare(defs: &mut PackageDeclaration) {
-    super::declare_method(
-        defs,
-        "length",
-        length_key(),
-        vec![Param::new("fn", Type::Unknown)],
-        Type::Number,
-    );
 }

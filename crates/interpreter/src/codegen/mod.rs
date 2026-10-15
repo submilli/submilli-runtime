@@ -2255,6 +2255,31 @@ fn arena_failure(error: crate::arena::ArenaError) -> CompilerFailure {
     error.into_compiler_failure(CompilerStage::Codegen)
 }
 
+/// The prelude interface whose host setter a write to `receiver_ty`'s property
+/// may call (`RegExp#@set:lastIndex`, `Array#@set:length`).
+pub(crate) fn host_property_iface(receiver_ty: &Type) -> Option<crate::MangledName> {
+    match receiver_ty.lowered() {
+        Type::InterfaceRef { mangled, .. } => Some(mangled.clone()),
+        Type::Array(_) => Some(crate::mangle::prelude("Array")),
+        _ if receiver_ty.array_like_union_element().is_some() => {
+            Some(crate::mangle::prelude("Array"))
+        }
+        _ => None,
+    }
+}
+
+/// Whether a field access on `receiver_ty` may meet a value with no object
+/// payload: a built-in seen through a structural view or `unknown`.
+pub(crate) fn may_hold_builtin_value(receiver_ty: &Type) -> bool {
+    match receiver_ty.lowered() {
+        Type::InterfaceRef { .. } | Type::Unknown => true,
+        Type::Union(members) => members
+            .iter()
+            .any(|member| !matches!(member.lowered(), Type::Object { .. })),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::{SymbolTable, ValueSymbol, codegen, codegen_with_type_info};
@@ -6686,30 +6711,5 @@ function main(): void {
             Instruction::Nop,
             emit_statement,
         );
-    }
-}
-
-/// The prelude interface whose host setter a write to `receiver_ty`'s property
-/// may call (`RegExp#@set:lastIndex`, `Array#@set:length`).
-pub(crate) fn host_property_iface(receiver_ty: &Type) -> Option<crate::MangledName> {
-    match receiver_ty.lowered() {
-        Type::InterfaceRef { mangled, .. } => Some(mangled.clone()),
-        Type::Array(_) => Some(crate::mangle::prelude("Array")),
-        _ if receiver_ty.array_like_union_element().is_some() => {
-            Some(crate::mangle::prelude("Array"))
-        }
-        _ => None,
-    }
-}
-
-/// Whether a field access on `receiver_ty` may meet a value with no object
-/// payload: a built-in seen through a structural view or `unknown`.
-pub(crate) fn may_hold_builtin_value(receiver_ty: &Type) -> bool {
-    match receiver_ty.lowered() {
-        Type::InterfaceRef { .. } | Type::Unknown => true,
-        Type::Union(members) => members
-            .iter()
-            .any(|member| !matches!(member.lowered(), Type::Object { .. })),
-        _ => false,
     }
 }

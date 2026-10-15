@@ -14,6 +14,7 @@ use crate::runtime::host::{register_host_fn, register_host_fn_async};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::{MODULE_NAME, closure, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
+use std::collections::BTreeMap;
 
 /// The dispatch key codegen looks up for `Map#<method>`.
 fn method_key(method: &str) -> MangledName {
@@ -335,7 +336,6 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             },
         },
     );
-    use std::collections::BTreeMap;
     defs.types.insert(
         "Map".to_string(),
         TypeSymbol {

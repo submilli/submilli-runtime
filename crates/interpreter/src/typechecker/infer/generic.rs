@@ -3183,6 +3183,21 @@ fn admits_undefined(ty: &Type) -> bool {
     }
 }
 
+/// `want` without a top-level `readonly` when the call returns a fresh
+/// mutable collection (`Array.of()`, `new Set()`), which a `readonly` slot
+/// accepts: unifying the two as they stand fails on the dropped `readonly`.
+/// A bare type parameter result keeps `want` whole, so it binds as readonly.
+fn writable_view_for(ret: &Type, want: &Type) -> Type {
+    match want.peel_preserving_readonly() {
+        Type::Readonly(inner)
+            if !ret.is_readonly_array() && !matches!(ret.peel(), Type::TypeVar(_)) =>
+        {
+            (**inner).clone()
+        }
+        _ => want.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3959,20 +3974,5 @@ mod tests {
                 .any(|d| d.message.contains("expected 1+ argument(s), got 0")),
             "expected arity diagnostic with '+' form, got: {diags:?}",
         );
-    }
-}
-
-/// `want` without a top-level `readonly` when the call returns a fresh
-/// mutable collection (`Array.of()`, `new Set()`), which a `readonly` slot
-/// accepts: unifying the two as they stand fails on the dropped `readonly`.
-/// A bare type parameter result keeps `want` whole, so it binds as readonly.
-fn writable_view_for(ret: &Type, want: &Type) -> Type {
-    match want.peel_preserving_readonly() {
-        Type::Readonly(inner)
-            if !ret.is_readonly_array() && !matches!(ret.peel(), Type::TypeVar(_)) =>
-        {
-            (**inner).clone()
-        }
-        _ => want.clone(),
     }
 }
