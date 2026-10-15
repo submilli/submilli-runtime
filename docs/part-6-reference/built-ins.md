@@ -49,6 +49,7 @@ Namespaces: JSON, Math, Temporal
 | `ReferenceError` | Error class | Reading or writing a module variable, static field, or parameter before its declaration or initialization has run |
 | `PermissionDeniedError` | Error class | A denied capability, with fields `caller`, `capability`, `reason` ([Permissions](/docs/reference/permissions)) |
 | `QuotaExceededError` | Error class | A budget refusal: filesystem space, model tokens, or session state ([Errors and limits](/docs/reference/errors-and-limits)) |
+| `TimeoutError` | Error class | A wait outside the program ran out of time: an application tool the harness did not answer within the blueprint's `tool_call_timeout` |
 | `JSON` | Namespace | `JSON.parse`, returning `unknown`, and `JSON.stringify` |
 | `Math` | Namespace | Constants and functions, including `Math.random()` |
 | `Temporal` | Namespace | Dates, times, time zones, and durations |

@@ -1268,9 +1268,36 @@ pub fn render_lib_submilli_d_ts() -> String {
     let mut out = String::new();
     render_ts_declarations(&mut out, &defs, "", "declare ", &parent);
     render_ts_compiler_globals(&mut out, &defs);
+    render_ts_declarations(&mut out, &global_functions(), "", "declare ", &|_| None);
     let json = json_package_declaration();
     render_ts_declarations(&mut out, &json, "", "declare ", &|_| None);
     out.trim_end().to_string()
+}
+
+/// The global functions declared outside the prelude's type surface: the URI
+/// functions with the prelude's host ABI, and `parseInt`/`parseFloat` in the
+/// number host module.
+fn global_functions() -> PackageDeclaration {
+    const NAMES: [&str; 6] = [
+        "parseInt",
+        "parseFloat",
+        "encodeURIComponent",
+        "encodeURI",
+        "decodeURIComponent",
+        "decodeURI",
+    ];
+    let mut globals = PackageDeclaration::with_package(crate::mangle::PRELUDE_PACKAGE);
+    let sources = crate::runtime::host_package_declarations()
+        .into_iter()
+        .chain([crate::runtime::prelude::package_declaration()]);
+    for source in sources {
+        for symbol in source.values.into_values() {
+            if NAMES.contains(&symbol.name.as_str()) {
+                globals.values.insert(symbol.name.clone(), symbol);
+            }
+        }
+    }
+    globals
 }
 
 fn render_ts_compiler_globals(out: &mut String, defs: &PackageDeclaration) {
@@ -3349,6 +3376,26 @@ mod tests {
         let docs = render_packages_d_ts(&[&package], &[]);
 
         assert!(docs.contains("  export class BillingError {"), "{docs}");
+    }
+
+    #[test]
+    fn global_functions_are_in_the_editor_declarations() {
+        let lib = render_lib_submilli_d_ts();
+        for function in [
+            "parseInt(",
+            "parseFloat(",
+            "encodeURIComponent(",
+            "encodeURI(",
+            "decodeURIComponent(",
+            "decodeURI(",
+            "isNaN(",
+            "isFinite(",
+        ] {
+            assert!(
+                lib.contains(&format!("declare function {function}")),
+                "{function}"
+            );
+        }
     }
 
     #[test]
