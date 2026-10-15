@@ -324,7 +324,13 @@ pub(crate) async fn write_record(
         .revision
         .checked_add(1)
         .ok_or_else(|| DatabaseError::Import("session revision exhausted".into()))?;
-    records::write(connection, &record).await
+    records::write(connection, &record).await?;
+    if record.status == SessionStatus::Closed {
+        // A session's state ends in the transaction that closes it, so no
+        // path that closes one can leave its values behind.
+        super::kv::remove_all(connection, &record.session_id).await?;
+    }
+    Ok(())
 }
 
 async fn import_files(

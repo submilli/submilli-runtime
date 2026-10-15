@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "4286a65c3578d11de730c26a60cc7acaac29fe860ddbb123744401615e91aea9"
+  contentHash: "4f5b2b4a6f42e700d9690d1c94076fc0d20283a7edb0e95845685992dc81f6d7"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -233,7 +233,8 @@ that limit covers all sessions and Blueprints using it.
 
 Files are one way for a program to leave something for the next.
 `submilli:session` is the other. It is a key-value store that lasts the
-session, kept in memory, and checked against a type when read:
+session, kept in the server's database, and checked against a type when
+read:
 
 ```sh
 submilli docs submilli:session
@@ -359,8 +360,9 @@ reviewed 3, next up cus_initech
 The second program found what the first saved. Files behave the same
 here, and `note.ts` run twice in this session returns both lines with no
 `--vfs`. Without `--session`, `run-code` opens a fresh session for each
-run, and the second program would find nothing. Close the session when the
-conversation ends:
+run, and the second program would find nothing. The state survives a
+server restart. Closing the session deletes it, so close the session when
+the conversation ends:
 
 ```sh
 submilli server session close "$SESSION"

@@ -78,8 +78,9 @@ pub use prelude::temporal::shared::TEMPORAL_MODULE_NAME;
 pub use secrets::{NoopSecretProvider, SecretProvider};
 pub use security::{AllowAllCheck, AuditDecision, CheckOutcome, SecurityCheck};
 pub use session_kv::{
-    InMemorySessionKv, SessionKvEntry, SessionKvError, SessionKvLimitKind, SessionKvLimits,
-    SessionKvPage, SessionKvStore, SharedKvBudget,
+    CURSOR_KEY_ID_LEN, CursorKey, CursorKeys, InMemorySessionKv, SessionKvEntry, SessionKvError,
+    SessionKvFuture, SessionKvLimitKind, SessionKvLimits, SessionKvPage, SessionKvStore,
+    SessionKvUsage, entry_bytes, render_key, value_bytes,
 };
 pub use skills::{SKILLS_MODULE_NAME, Skill, SkillError, SkillInfo, SkillProvider};
 pub use tools::{
@@ -175,6 +176,9 @@ pub struct StoreData {
     /// becoming per-execution scratch state that no later `execute` can read —
     /// the guest surface reports that as a configuration error.
     pub session_kv: Option<Arc<dyn SessionKvStore>>,
+    /// The keys `session.list` cursors are sealed with. `None` seals them with a
+    /// per-process key, so they stop working when the process restarts.
+    pub cursor_keys: Option<Arc<CursorKeys>>,
     /// The harness `submilli:agents` runs sub-agents through, present only when
     /// the embedder wires one. `None` makes every call a catchable
     /// [`AgentCallError::NotConfigured`].
@@ -301,6 +305,7 @@ impl StoreData {
             embedding_provider: None,
             embedding_budget: None,
             session_kv: None,
+            cursor_keys: None,
             agent_provider: None,
             skill_provider: None,
             metrics: Arc::new(metrics::NoopMetricsSink),

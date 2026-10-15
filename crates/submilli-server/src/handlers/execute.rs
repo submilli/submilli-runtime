@@ -678,6 +678,7 @@ async fn prepare_and_run(
         mcp_transport,
         tool_provider: run_tools.as_ref().map(|tools| Arc::clone(&tools.provider)),
         session_kv,
+        cursor_keys: manager.cursor_keys(),
         llm_provider,
         llm_budget: Some(llm_budget),
         embedding_provider,

@@ -543,6 +543,7 @@ impl From<crate::database::DatabaseError> for crate::application::error::StoreEr
             crate::database::DatabaseError::RevisionExhausted { name } => {
                 Self::RevisionExhausted { name }
             }
+            crate::database::DatabaseError::Busy => Self::Busy,
             error => Self::Database(Box::new(error)),
         }
     }

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "bd4e5d3bacc1a2b38c0637c2a1af507c67d81d936d3fb43b023d2b0fd4772a39"
+  contentHash: "fdc6e3889bb848def8b1fb21b2cb854983efe3827e2f5094060e139292c120d0"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -264,6 +264,12 @@ Stored secret 'billing_api_key'
 `delete` removes one. Nothing reads a value back over the API. The server
 decrypts the value inside its process when a Package calls `secrets.get`,
 and the value never leaves that process.
+
+The same key encrypts the sessions' `submilli:session` state and seals
+the cursors `session.list` returns, so a listing can continue after a
+restart. Keep the key. A server started with another key, or with none,
+can't read the state sealed with the old one, and a program that reads it
+ends with an error.
 
 A credential that belongs to the session, such as a customer's API token,
 is a `harness:` secret. The application supplies it when it opens the

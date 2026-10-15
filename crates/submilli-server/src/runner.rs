@@ -13,10 +13,10 @@ use std::time::Instant;
 use interpreter::diagnostics::{self, Severity};
 use interpreter::runtime::limits::ExecutionUsage;
 use interpreter::runtime::{
-    AuthProxy, DecisionLog, EmbeddingProvider, EmbeddingTokenBudget, ExecutionTokenBudget,
-    HttpClient, LinkedPackageModule, LlmProvider, McpTransport, RuntimeConfig, SecretProvider,
-    SecurityCheck, SessionKvStore, StoreData, ToolProvider, Vfs, VfsInfo,
-    install_package_modules_async, install_runtime_store_bound, install_tenant_limits,
+    AuthProxy, CursorKeys, DecisionLog, EmbeddingProvider, EmbeddingTokenBudget,
+    ExecutionTokenBudget, HttpClient, LinkedPackageModule, LlmProvider, McpTransport,
+    RuntimeConfig, SecretProvider, SecurityCheck, SessionKvStore, StoreData, ToolProvider, Vfs,
+    VfsInfo, install_package_modules_async, install_runtime_store_bound, install_tenant_limits,
     is_memory_exhausted,
 };
 use interpreter::{
@@ -98,6 +98,9 @@ pub struct HostServices {
     pub tool_provider: Option<Arc<dyn ToolProvider>>,
     /// `submilli:session` storage for the session this run belongs to.
     pub session_kv: Arc<dyn SessionKvStore>,
+    /// What `session.list` cursors are sealed with. `None` leaves them to the
+    /// runtime's per-process key.
+    pub cursor_keys: Option<Arc<CursorKeys>>,
     /// Outbound `submilli:llm` dispatch. `None` when no operator dispatch is
     /// installed, which is the catchable configuration error a script sees —
     /// deliberately not an internal failure, because a program running against a
@@ -351,6 +354,7 @@ async fn run_inner(
     data.mcp_transport = Some(services.mcp_transport);
     data.tool_provider = services.tool_provider;
     data.session_kv = Some(services.session_kv);
+    data.cursor_keys = services.cursor_keys;
     data.llm_provider = services.llm_provider;
     data.llm_budget = services.llm_budget;
     data.embedding_provider = services.embedding_provider;
@@ -1148,6 +1152,7 @@ mod tests {
             mcp_transport: Arc::new(UnusedMcp),
             tool_provider: None,
             session_kv: Arc::new(InMemorySessionKv::default()),
+            cursor_keys: None,
             llm_provider: None,
             llm_budget: None,
             embedding_provider: None,

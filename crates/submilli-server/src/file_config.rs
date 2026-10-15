@@ -90,10 +90,6 @@ pub struct FileConfig {
     pub max_execution_fuel: Option<u64>,
     /// Kibibytes of Wasm stack one execution may use.
     pub max_execution_stack: Option<u64>,
-    /// Megabytes of `submilli:session` state every live session may hold in
-    /// total. Bounds the process against session count, where
-    /// `max_execution_memory` bounds a single execution.
-    pub max_session_state_memory: Option<u64>,
     /// Tokens every live execution's `submilli:llm` calls may spend in total.
     /// Bounds the process against the operator's provider credential, where
     /// `max_execution_llm_tokens` bounds a single run.
@@ -266,7 +262,6 @@ pub(crate) struct EnvConfig {
     max_execution_time: Option<String>,
     max_execution_fuel: Option<String>,
     max_execution_stack: Option<String>,
-    max_session_state_memory: Option<String>,
     max_llm_tokens: Option<String>,
     max_execution_llm_tokens: Option<String>,
     max_llm_concurrency: Option<String>,
@@ -359,7 +354,6 @@ impl EnvConfig {
             max_execution_time: var("SUBMILLI_MAX_EXECUTION_TIME"),
             max_execution_fuel: var("SUBMILLI_MAX_EXECUTION_FUEL"),
             max_execution_stack: var("SUBMILLI_MAX_EXECUTION_STACK"),
-            max_session_state_memory: var("SUBMILLI_MAX_SESSION_STATE_MEMORY"),
             max_llm_tokens: var("SUBMILLI_MAX_LLM_TOKENS"),
             max_execution_llm_tokens: var("SUBMILLI_MAX_EXECUTION_LLM_TOKENS"),
             max_llm_concurrency: var("SUBMILLI_MAX_LLM_CONCURRENCY"),
@@ -499,7 +493,6 @@ fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
     max_execution_time(cli, file, env)?;
     max_execution_fuel(cli, file, env)?;
     max_execution_stack(cli, file, env)?;
-    max_session_state_memory(cli, file, env)?;
     max_llm_tokens(cli, file, env)?;
     max_execution_llm_tokens(cli, file, env)?;
     max_llm_concurrency(cli, file, env)?;
@@ -770,28 +763,6 @@ fn max_execution_stack(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<
         .ok_or_else(|| anyhow::anyhow!("max execution stack of {kib} KiB is too large"))
 }
 
-/// `None` leaves [`ServerConfig::max_session_state_memory`] unset, so the
-/// manager's own default applies — the same shape every other optional path
-/// takes, rather than baking the default in twice.
-fn max_session_state_memory(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Option<u64>> {
-    let env_mb = parse_env(
-        "SUBMILLI_MAX_SESSION_STATE_MEMORY",
-        "a whole number of megabytes",
-        env.max_session_state_memory.as_ref(),
-    )?;
-    let Some(mb) = explicit(
-        cli.max_session_state_memory,
-        env_mb,
-        file.max_session_state_memory,
-    ) else {
-        return Ok(None);
-    };
-    if mb == 0 {
-        anyhow::bail!("max session state memory must be at least 1 MB, got 0");
-    }
-    Ok(Some(mb.saturating_mul(1024 * 1024)))
-}
-
 /// `None` leaves [`ServerConfig::max_llm_tokens`] unset, so the session
 /// manager's own default applies rather than being baked in twice.
 ///
@@ -1024,7 +995,6 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         max_wasm_stack: max_execution_stack(&cli, &file, &env)?,
         ..RuntimeConfig::default()
     };
-    let max_session_state_memory = max_session_state_memory(&cli, &file, &env)?;
     let max_llm_tokens = max_llm_tokens(&cli, &file, &env)?;
     let max_llm_concurrency = max_llm_concurrency(&cli, &file, &env)?;
     let max_suspended_runs = max_suspended_runs(&cli, &file, &env)?;
@@ -1098,7 +1068,6 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         session_cipher,
         mcp_allowed_hosts,
         mcp_oauth_providers,
-        max_session_state_memory,
         llm_limits,
         max_llm_tokens,
         max_llm_concurrency,
@@ -1458,11 +1427,7 @@ mod tests {
             let file = serde_yml::from_str(&format!("{field}: 0K")).unwrap();
             assert!(preflight(&empty_cli(), &file, &EnvConfig::default()).is_err());
         }
-        for field in [
-            "max_execution_memory",
-            "max_execution_stack",
-            "max_session_state_memory",
-        ] {
+        for field in ["max_execution_memory", "max_execution_stack"] {
             assert!(serde_yml::from_str::<FileConfig>(&format!("{field}: 1K")).is_err());
         }
     }
@@ -1491,7 +1456,6 @@ mod tests {
             max_execution_time: None,
             max_execution_fuel: None,
             max_execution_stack: None,
-            max_session_state_memory: None,
             max_llm_tokens: None,
             max_execution_llm_tokens: None,
             max_llm_concurrency: None,
@@ -2829,44 +2793,6 @@ network:
         assert!(max_execution_stack(&empty_cli(), &huge, &no_env).is_err());
     }
 
-    /// The same ladder, but unset stays `None` so the session manager's own
-    /// default applies rather than being duplicated here.
-    #[test]
-    fn max_session_state_memory_walks_the_ladder() {
-        const MB: u64 = 1024 * 1024;
-        let file = || FileConfig {
-            max_session_state_memory: Some(300),
-            ..FileConfig::default()
-        };
-        let with_flag = Cli {
-            max_session_state_memory: Some(400),
-            ..empty_cli()
-        };
-        let env = || env_from(&[("SUBMILLI_MAX_SESSION_STATE_MEMORY", "200")]);
-
-        for (cli, file, env, expected, tier) in [
-            (with_flag, file(), env(), Some(400 * MB), "the flag"),
-            (empty_cli(), file(), env(), Some(200 * MB), "the env var"),
-            (
-                empty_cli(),
-                file(),
-                EnvConfig::default(),
-                Some(300 * MB),
-                "the config file",
-            ),
-            (
-                empty_cli(),
-                FileConfig::default(),
-                EnvConfig::default(),
-                None,
-                "unset",
-            ),
-        ] {
-            let bytes = max_session_state_memory(&cli, &file, &env).unwrap();
-            assert_eq!(bytes, expected, "{tier} should have won");
-        }
-    }
-
     /// The aggregate LLM ceiling walks the same rungs, in tokens rather than
     /// megabytes — no unit conversion, so the number an operator writes is the
     /// number the refusal names.
@@ -3159,15 +3085,6 @@ network:
                 || max_embedding_concurrency(&cli, &file, &env).is_err();
             assert!(failed, "${name}=0 should have failed boot");
         }
-    }
-
-    #[test]
-    fn zero_session_state_memory_is_rejected() {
-        let env = env_from(&[("SUBMILLI_MAX_SESSION_STATE_MEMORY", "0")]);
-        assert!(
-            max_session_state_memory(&empty_cli(), &FileConfig::default(), &env).is_err(),
-            "zero would refuse every session write, not mean unlimited"
-        );
     }
 
     #[test]

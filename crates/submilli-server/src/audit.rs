@@ -162,7 +162,7 @@ pub(crate) fn settings_hash(
     use crate::config::{default_package_store_dir, default_volume_root};
     use crate::session_manager::{
         DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS, DEFAULT_MAX_ALL_EXECUTIONS_TOKENS,
-        DEFAULT_MAX_CONCURRENCY, DEFAULT_MAX_EMBEDDING_CONCURRENCY, DEFAULT_TOTAL_SESSION_KV_BYTES,
+        DEFAULT_MAX_CONCURRENCY, DEFAULT_MAX_EMBEDDING_CONCURRENCY,
     };
     let oauth: Vec<_> = config.mcp_oauth_providers.iter().map(|provider| json!({
         "host": provider.match_host, "client_id": provider.client_id, "scopes": provider.scopes,
@@ -186,7 +186,6 @@ pub(crate) fn settings_hash(
         "oauth": oauth, "github_token_file": config.github_token_file.as_deref().map(path_hash),
         "session_kv_limits": format!("{:?}", config.session_kv_limits),
         "llm_limits": format!("{:?}", config.llm_limits),
-        "max_session_state_memory": config.max_session_state_memory.unwrap_or(DEFAULT_TOTAL_SESSION_KV_BYTES),
         "max_llm_tokens": config.max_llm_tokens.unwrap_or(DEFAULT_MAX_ALL_EXECUTIONS_TOKENS),
         "max_llm_concurrency": config.max_llm_concurrency.unwrap_or(DEFAULT_MAX_CONCURRENCY),
         "embedding_limits": format!("{:?}", config.embedding_limits),
@@ -1110,8 +1109,6 @@ mod tests {
             Some(crate::session_manager::DEFAULT_MAX_EMBEDDING_CONCURRENCY);
         config.max_embedding_tokens =
             Some(crate::session_manager::DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS);
-        config.max_session_state_memory =
-            Some(crate::session_manager::DEFAULT_TOTAL_SESSION_KV_BYTES);
         config.volume_root = Some(crate::config::default_volume_root());
         assert_eq!(settings_hash(&config, addr, grace).unwrap(), hash);
         config.volumes.insert(
