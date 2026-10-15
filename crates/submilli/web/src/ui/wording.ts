@@ -149,8 +149,13 @@ export function runEnded(run: number, word: string): string {
   return "Run " + run + " ended: " + word + ".";
 }
 
-export function followUpDone(source: number, run: number, word: string): string {
-  return "Run " + run + " " + word + ". It’s under run " + source + ", in Reruns by you.";
+/**
+ * How a test or rerun the reader started ended, and where it shows. A test names the
+ * blueprint version it was checked against, so it never reads like the last rerun.
+ */
+export function followUpDone(kind: "test" | "rerun", source: number, run: number, word: string, version: string): string {
+  const what = kind === "test" ? "Test of run " + source + " against blueprint v" + version : "Rerun of run " + source;
+  return what + " " + word + ": run " + run + ". It’s under run " + source + ", in Reruns by you.";
 }
 
 /** Where a drafted rule would go, from the draft's own answer. */

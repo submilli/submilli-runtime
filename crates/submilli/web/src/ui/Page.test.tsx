@@ -335,6 +335,8 @@ test("test from a refusal row starts a test run, which shows under its source ru
   expect(await within(row("r2")).findByText("Reruns by you (1)")).toBeInTheDocument();
   expect(within(row("f5")).getByText("· Test of blueprint v2")).toBeInTheDocument();
   expect(within(row("f5")).getByText("Completed")).toBeInTheDocument();
+  // The notice says it was a test, so it doesn't read as the last rerun's.
+  expect(screen.getByText("Test of run 2 against blueprint v2 completed: run 5. It’s under run 2, in Reruns by you.")).toBeInTheDocument();
   // Focus moves from the pressed button on to the new row.
   await vi.waitFor(() => expect(rowHead("f5")).toHaveFocus());
 });
@@ -552,7 +554,7 @@ test("a rerun running from the page can be cancelled from its notice", async () 
   await user.click(within(notice).getByRole("button", { name: "Cancel" }));
   await expect.poll(() => posts(server).map((c) => [c.url, c.body])).toContainEqual(["/api/cancel", { run: 8 }]);
   // The rerun ends, cancelled, and says so as any other.
-  expect(await screen.findByText(/^Run 8 cancelled\. It’s under run 2/)).toBeInTheDocument();
+  expect(await screen.findByText(/^Rerun of run 2 cancelled: run 8\. It’s under run 2/)).toBeInTheDocument();
 });
 
 test("Start session is blocked while a required variable is empty", async () => {

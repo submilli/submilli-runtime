@@ -361,7 +361,7 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
       const made: Show = outcome.result;
       const source = action.run;
       // Watched in its own session meanwhile: the reader is there, so only the notice says how it ended.
-      if (shown.current !== startedIn) return showToast({ head: followUpDone(source, made.run, end(made.outcome)), auto: true });
+      if (shown.current !== startedIn) return showToast({ head: followUpDone(action.kind, source, made.run, end(made.outcome), made.blueprint_version), auto: true });
       // The new run shows under the run it followed, opened so it can be seen.
       focusRow.current = "f" + made.run;
       patch((u) => ({
@@ -369,7 +369,7 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
         open: { ...u.open, ["r" + source]: true, ["f" + made.run]: true },
         followOpen: { ...u.followOpen, [source]: true },
       }));
-      showToast({ head: followUpDone(source, made.run, end(made.outcome)), auto: true });
+      showToast({ head: followUpDone(action.kind, source, made.run, end(made.outcome), made.blueprint_version), auto: true });
     } finally {
       busy.current = false;
     }
