@@ -2,7 +2,7 @@
 
 Read [harnesses](harnesses.md) first. Deep Agents is the model loop and orchestration layer; Submilli is the typed, policy checked execution boundary. Keep the application's provider, authentication, and framework choices.
 
-In Python, connect with `langchain-submilli`: its `SubmilliMiddleware` adds Submilli's tools to `create_deep_agent` (or LangChain's `create_agent`) and runs every program on submilli-server over the HTTP API. Use the [MCP route](#alternative-mcp-with-langchain-mcp-adapters) only for an application that already loads Submilli through `langchain-mcp-adapters`, and for Deep Agents in TypeScript, which has no middleware package.
+In Python, connect with `langchain-submilli`: its `SubmilliMiddleware` adds Submilli's tools to `create_deep_agent` (or LangChain's `create_agent`) and runs every program on submilli-server over the HTTP API. Use the MCP route ("Alternative: MCP with langchain-mcp-adapters", below) only for an application that already loads Submilli through `langchain-mcp-adapters`, and for Deep Agents in TypeScript, which has no middleware package.
 
 ## Before writing the harness
 
