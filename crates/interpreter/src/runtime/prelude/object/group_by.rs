@@ -73,6 +73,66 @@ pub(super) async fn group_by(
     }
 }
 
+/// `Map.groupBy(items, keySelector)`: like `Object.groupBy`, but the groups
+/// are keyed by the callback's result itself in a `Map`, in first-seen order.
+pub(crate) async fn map_group_by(
+    caller: &mut Caller<'_, StoreData>,
+    source: &Val,
+    callback: &Val,
+) -> wasmtime::Result<Val> {
+    let callback = closure::read_callback(caller, callback, "Map.groupBy callback")?;
+    let kept_iterator = KeptValue::new(caller)?;
+    let kept_next = KeptValue::new(caller)?;
+    let kept_result = KeptValue::new(caller)?;
+    let kept_value = KeptValue::new(caller)?;
+    let kept_key = KeptValue::new(caller)?;
+    let kept_output = KeptValue::new(caller)?;
+    let iterator = open_iterator(caller, source, true).await?;
+    kept_iterator.set(caller, iterator)?;
+    let next = property(caller, &iterator, "next").await?;
+    kept_next.set(caller, next)?;
+    let next = closure::read(caller, &next, "Map.groupBy iterator")?;
+    let output = crate::runtime::prelude::map::build_empty(caller)?;
+    kept_output.set(caller, output)?;
+    let mut index = 0_u64;
+    loop {
+        fuel::charge(&mut *caller, fuel::ELEM, 1)?;
+        let result = next.call_with_receiver(caller, iterator, &[]).await?;
+        kept_result.set(caller, result)?;
+        let done = property(caller, &result, "done").await?;
+        if super::super::value::truthy(caller, &done)? {
+            return Ok(output);
+        }
+        let value = property(caller, &result, "value").await?;
+        kept_value.set(caller, value)?;
+        let grouped = async {
+            let position = Val::AnyRef(Some(
+                write_boxed_number_struct(caller, index as f64)?.to_anyref(),
+            ));
+            let key = callback.call_dynamic(caller, &[value, position]).await?;
+            kept_key.set(caller, key)?;
+            let group = crate::runtime::prelude::map::get(caller, &output, &key).await?;
+            if undefined::is_undefined(caller, &group)? {
+                let group = Val::AnyRef(Some(
+                    write_submilli_array_struct(caller, &[value])?.to_anyref(),
+                ));
+                crate::runtime::prelude::map::set(caller, &output, &key, &group)
+                    .await
+                    .map(|_| ())
+            } else {
+                ArrayStorage::read(caller, &group)?
+                    .push(caller, value)
+                    .map(|_| ())
+            }
+        }
+        .await;
+        if let Err(error) = grouped {
+            return Err(close_after_failure(caller, &iterator, error).await);
+        }
+        index += 1;
+    }
+}
+
 /// GroupBy publishes integer-index names first, then other names in encounter
 /// order. The object is still private, so its backing can be reordered once.
 fn order_integer_keys(caller: &mut Caller<'_, StoreData>, object: &Val) -> wasmtime::Result<()> {

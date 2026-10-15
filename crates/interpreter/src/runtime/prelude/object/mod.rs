@@ -11,6 +11,7 @@ mod assign;
 mod dynamic;
 mod from_entries;
 mod group_by;
+pub(crate) use group_by::map_group_by;
 mod index;
 mod static_value;
 

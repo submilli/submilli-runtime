@@ -187,6 +187,24 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             })
         },
     )?;
+    register_host_fn_async(
+        linker,
+        MODULE_NAME,
+        ctor_key("groupBy"),
+        ft(vec![obj.clone(), obj.clone()], vec![obj.clone()]),
+        true,
+        |caller, params, results| {
+            Box::pin(async move {
+                *abi_result(results, 0)? = crate::runtime::prelude::object::map_group_by(
+                    caller,
+                    abi_arg(params, 0)?,
+                    abi_arg(params, 1)?,
+                )
+                .await?;
+                Ok(())
+            })
+        },
+    )?;
     Ok(())
 }
 
@@ -253,6 +271,41 @@ pub fn declare(defs: &mut PackageDeclaration) {
         )],
         map_ty(),
     );
+    declare_method(
+        defs,
+        "groupBy",
+        ctor_key("groupBy"),
+        vec![
+            Param::new("items", Type::Unknown),
+            Param::new("keySelector", Type::Unknown),
+        ],
+        Type::prelude_interface("Map".to_string(), vec![Type::Unknown, Type::Unknown]),
+    );
+}
+
+/// `Map.groupBy`'s parameters, as tsc's lib declares them.
+fn group_by_params() -> Vec<Param> {
+    let element = Type::TypeVar("T".into());
+    vec![
+        Param::new(
+            "items",
+            Type::union(vec![
+                Type::Readonly(Box::new(Type::Array(Box::new(element.clone())))),
+                Type::prelude_interface("Iterable", vec![element.clone()]),
+                Type::prelude_interface("Iterator", vec![element.clone()]),
+            ]),
+        ),
+        Param::new(
+            "keySelector",
+            Type::Function {
+                params: vec![element, Type::Number],
+                optional: 0,
+                ret: Box::new(Type::TypeVar("K".into())),
+                predicate: None,
+                has_rest: false,
+            },
+        ),
+    ]
 }
 
 /// The type/interface surface this module implements — its slice of the
@@ -467,6 +520,21 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([(
+                    "groupBy".to_string(),
+                    MethodSig {
+                        optional: false,
+                        generics: vec!["K".to_string(), "T".to_string()],
+                        params: group_by_params(),
+                        ret: Type::prelude_interface("Map".to_string(), vec![
+                            Type::TypeVar("K".to_string()),
+                            Type::Array(Box::new(Type::TypeVar("T".to_string()))),
+                        ]),
+                        predicate: None,
+                        doc: doc(
+                            "/** Groups iterable elements by the callback's result: a `Map` from each key to the elements it was returned for, in first-seen order. The callback receives the element and its index. */",
+                        ),
+                    },
+                ), (
                     "new".to_string(),
                     MethodSig {
                         optional: false,
