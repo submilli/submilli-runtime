@@ -27,7 +27,7 @@ use crate::runtime::host::{host_boxed_number_vtable, write_submilli_array_struct
 use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::prelude::closure::Closure;
 use crate::runtime::prelude::collection::both_nan;
-use crate::runtime::prelude::iterator::{IterKind, make_index_iterator};
+use crate::runtime::prelude::iterator::{IterKind, IteratorSource, make_index_iterator};
 use crate::runtime::prelude::keep::{KeptValue, KeptValues, keep_all};
 use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_string_units};
 
@@ -805,15 +805,15 @@ fn array_step(
 }
 
 pub fn values(caller: &mut Caller<'_, StoreData>, array: &Val) -> wasmtime::Result<Val> {
-    make_index_iterator(caller, *array, IterKind::Values, array_step)
+    make_index_iterator(caller, IteratorSource::Array, *array, IterKind::Values, array_step)
 }
 
 fn keys(caller: &mut Caller<'_, StoreData>, array: &Val) -> wasmtime::Result<Val> {
-    make_index_iterator(caller, *array, IterKind::Keys, array_step)
+    make_index_iterator(caller, IteratorSource::Array, *array, IterKind::Keys, array_step)
 }
 
 fn entries(caller: &mut Caller<'_, StoreData>, array: &Val) -> wasmtime::Result<Val> {
-    make_index_iterator(caller, *array, IterKind::Entries, array_step)
+    make_index_iterator(caller, IteratorSource::Array, *array, IterKind::Entries, array_step)
 }
 
 // ---------------------------------------------------------------------------
@@ -891,6 +891,8 @@ pub(super) async fn from(
         &super::set::set_backing_struct(caller.engine(), &intr)?,
     )? {
         super::set::values(caller, src)?
+    } else if is_a(caller, src, &intr.uint8_array)? {
+        super::uint8array::values(caller, src)?
     } else if let Some(iter_method) = object_field(caller, src, "iterator")? {
         let c = closure::read(caller, &iter_method, "Array.from iterable")?;
         c.call_with_receiver(caller, *src, &[]).await?

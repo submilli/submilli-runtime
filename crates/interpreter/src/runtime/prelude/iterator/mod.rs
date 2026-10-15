@@ -392,6 +392,7 @@ pub(crate) enum IteratorSource {
     Map,
     Set,
     String,
+    Bytes,
 }
 
 pub(crate) fn shared_next(
@@ -409,6 +410,7 @@ pub(crate) fn shared_next(
         IteratorSource::Map => 3,
         IteratorSource::Set => 6,
         IteratorSource::String => 9,
+        IteratorSource::Bytes => 10,
     };
     let kind = match kind {
         IterKind::Keys => 0,
@@ -460,6 +462,7 @@ type IndexStep = fn(&mut Caller<'_, StoreData>, &Val, i32) -> wasmtime::Result<O
 /// advances the position, and wraps the result with [`iter_yield`]/[`iter_done`].
 pub(crate) fn make_index_iterator(
     caller: &mut Caller<'_, StoreData>,
+    source: IteratorSource,
     payload: Val,
     kind: IterKind,
     step: IndexStep,
@@ -469,7 +472,7 @@ pub(crate) fn make_index_iterator(
     let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
     let next = shared_next(
         caller,
-        IteratorSource::Array,
+        source,
         kind,
         next_ty,
         move |caller, params, results| index_step(caller, params, results, kind, step),

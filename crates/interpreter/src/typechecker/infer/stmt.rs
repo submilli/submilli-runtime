@@ -3753,6 +3753,8 @@ impl Inferer<'_> {
             // Strings, literal ones included, iterate by code point through
             // `String#iterator`.
             ty if ty.is_string_shaped() => Some((Type::String, crate::ForOfKind::Iterable)),
+            // Bytes iterate through `Uint8Array#iterator`.
+            Type::Uint8Array => Some((Type::Number, crate::ForOfKind::Iterable)),
             // A union of arrays and tuples is one `$Array` at runtime too. It
             // follows the string arm, which takes unions of string literals.
             Type::Union(_) => {

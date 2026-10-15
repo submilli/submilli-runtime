@@ -110,6 +110,24 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Ok(())
         },
     )?;
+    for (name, kind) in [
+        ("keys", super::IterKind::Keys),
+        ("values", super::IterKind::Values),
+        ("iterator", super::IterKind::Values),
+        ("entries", super::IterKind::Entries),
+    ] {
+        register_host_fn(
+            linker,
+            MODULE_NAME,
+            method_key(name),
+            ft(vec![uint8.clone()], vec![obj.clone()]),
+            true,
+            move |caller, params, results| {
+                *abi_result(results, 0)? = super::iterate(caller, abi_arg(params, 0)?, kind)?;
+                Ok(())
+            },
+        )?;
+    }
     for name in ["slice", "subarray"] {
         register_host_fn(
             linker,
@@ -769,6 +787,16 @@ pub fn declare(defs: &mut PackageDeclaration) {
         vec![u8a(), n("index")],
         Type::Union(vec![Type::Number, Type::Undefined]),
     );
+    let iter = |ty: Type| Type::prelude_interface("Iterator".to_string(), vec![ty]);
+    m(defs, "keys", vec![u8a()], iter(Type::Number));
+    m(defs, "values", vec![u8a()], iter(Type::Number));
+    m(defs, "iterator", vec![u8a()], iter(Type::Number));
+    m(
+        defs,
+        "entries",
+        vec![u8a()],
+        iter(Type::Tuple(vec![Type::Number, Type::Number].into())),
+    );
     for name in ["slice", "subarray"] {
         m(
             defs,
@@ -1226,6 +1254,50 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::TypeVar("U".to_string()),
                             predicate: None,
                             doc: doc("/** Folds bytes right-to-left with `callback(acc, byte, index, array)`. */"),
+                        },
+                    ),
+                    (
+                        "keys".to_string(),
+                        MethodSig {
+                            optional: false,
+                            generics: Vec::new(),
+                            params: Vec::new(),
+                            ret: Type::prelude_interface("Iterator".to_string(), vec![Type::Number]),
+                            predicate: None,
+                            doc: doc("/** Returns a live `Iterator<number>` of the indices. */"),
+                        },
+                    ),
+                    (
+                        "values".to_string(),
+                        MethodSig {
+                            optional: false,
+                            generics: Vec::new(),
+                            params: Vec::new(),
+                            ret: Type::prelude_interface("Iterator".to_string(), vec![Type::Number]),
+                            predicate: None,
+                            doc: doc("/** Returns a live `Iterator<number>` of the bytes; writes during iteration are seen. */"),
+                        },
+                    ),
+                    (
+                        "iterator".to_string(),
+                        MethodSig {
+                            optional: false,
+                            generics: Vec::new(),
+                            params: Vec::new(),
+                            ret: Type::prelude_interface("Iterator".to_string(), vec![Type::Number]),
+                            predicate: None,
+                            doc: doc("/** Returns a live `Iterator<number>` of the bytes, which `for-of` and spread use. */"),
+                        },
+                    ),
+                    (
+                        "entries".to_string(),
+                        MethodSig {
+                            optional: false,
+                            generics: Vec::new(),
+                            params: Vec::new(),
+                            ret: Type::prelude_interface("Iterator".to_string(), vec![Type::Tuple(vec![Type::Number, Type::Number].into())]),
+                            predicate: None,
+                            doc: doc("/** Returns a live `Iterator<[number, number]>` of index/byte pairs. */"),
                         },
                     ),
                     (
