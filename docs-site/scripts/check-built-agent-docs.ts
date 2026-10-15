@@ -65,6 +65,7 @@ const libraryPage = await readFile(new URL('docs/videos/index.html', directory),
 for (const tag of ['starlight-toc', 'mobile-starlight-toc']) {
   const navigation = libraryPage.match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`))?.[1];
   assert.ok(navigation, `${tag}: video navigation exists`);
+  assert.ok(!navigation.includes('href="#_top"'), `${tag}: no artificial overview entry`);
   assert.deepEqual(
     [...navigation.matchAll(/href="#(video-[^"]+)"/g)].map((match) => match[1]),
     films.map((film) => `video-${film.id}-title`),

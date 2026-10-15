@@ -10,6 +10,7 @@ export const onRequest = defineRouteMiddleware(({ url, locals }) => {
   const headings = films.map((film) => ({ depth: 2, slug: videoHeadingId(film), text: film.title }));
   route.headings.push(...headings);
   if (route.toc && route.toc.minHeadingLevel <= 2 && route.toc.maxHeadingLevel >= 2) {
-    route.toc.items.push(...headings.map((heading) => ({ ...heading, children: [] })));
+    // This collection has no overview section, only the individual videos.
+    route.toc.items = headings.map((heading) => ({ ...heading, children: [] }));
   }
 });
