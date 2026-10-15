@@ -170,7 +170,6 @@ and would do nothing.
       "tls" "set tls.enabled and tls.existingSecret instead, which also mount the certificate and key"
       "bind" "set server.bind instead"
       "port" "set server.port instead; it also drives the container port, the Services, and the NetworkPolicy"
-      "vfs_ephemeral_dir" "the chart fixes it at /tmp, the only writable path outside the state volume"
       "max_execution_memory" "set execution.maxMemoryMB instead; the pod's memory limit is derived from it"
       "shutdown_grace" "set server.shutdownGrace instead; terminationGracePeriodSeconds is derived from it"
       "allow_unauthenticated" "set auth.enabled=false instead"
@@ -179,6 +178,19 @@ and would do nothing.
 {{- range $key, $instead := $owned -}}
 {{-   if hasKey $extra $key -}}
 {{-     fail (printf "config.%s is owned by the chart: %s" $key $instead) -}}
+{{-   end -}}
+{{- end -}}
+{{- /*
+Settings the server no longer reads and refuses at boot; refused here too, so
+the mistake shows at install rather than as a crash-looping pod.
+*/ -}}
+{{- $removed := dict
+      "vfs_session_dir" "session workspaces live under volume_dir, in its sessions/ directory"
+      "vfs_ephemeral_dir" "ephemeral scratch lives under volume_dir, in its ephemeral/ directory"
+    -}}
+{{- range $key, $instead := $removed -}}
+{{-   if hasKey $extra $key -}}
+{{-     fail (printf "config.%s was removed: %s" $key $instead) -}}
 {{-   end -}}
 {{- end -}}
 {{- if hasKey $extra "secret_store" -}}
@@ -202,15 +214,6 @@ and would do nothing.
 {{-   end -}}
 {{-   $_ := set $config "tls" (dict "cert_file" "/etc/submilli/tls/server.crt" "key_file" "/etc/submilli/tls/server.key") -}}
 {{- end -}}
-{{- /*
-SUBMILLI_HOME relocates five of the server's six state directories (kept under
-its server/ subdirectory; an older volume is moved into that shape on the first
-boot). The ephemeral VFS root is the sixth and still defaults to the OS temp
-dir, so under readOnlyRootFilesystem it must be pointed at a writable volume.
-Omitting this breaks /v1/execute — the product — while /healthz stays green,
-which is why the chart's own test exercises execute rather than health alone.
-*/ -}}
-{{- $_ := set $config "vfs_ephemeral_dir" "/tmp" -}}
 {{- if .Values.secretStore.enabled -}}
 {{- /*
 A file, never an env var holding the key itself: environment is readable

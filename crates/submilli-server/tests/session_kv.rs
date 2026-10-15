@@ -78,7 +78,7 @@ impl Harness {
             blueprints: Some(Arc::new(
                 InMemoryBlueprintStore::seed(blueprints).expect("seed blueprints"),
             )),
-            session_storage_root: Some(vfs_root.path().to_path_buf()),
+            volume_root: Some(vfs_root.path().to_path_buf()),
             ..in_memory_config::config()
         };
         Self {
@@ -458,7 +458,7 @@ async fn a_restored_session_starts_with_an_empty_store() {
                 )])
                 .expect("seed blueprints"),
             )),
-            session_storage_root: Some(vfs_root.path().to_path_buf()),
+            volume_root: Some(vfs_root.path().to_path_buf()),
             database_path: Some(store_dir.path().join("server.db")),
             ..in_memory_config::config()
         };

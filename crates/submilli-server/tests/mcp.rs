@@ -51,8 +51,9 @@ fn allow_fs() -> BTreeMap<String, Vec<PermissionRule>> {
 
 struct Harness {
     state: AppState,
+    /// The volume root's `sessions/`, where `per_session` workspaces live.
     session_root: std::path::PathBuf,
-    _owned_session_root: Option<tempfile::TempDir>,
+    _owned_volume_root: Option<tempfile::TempDir>,
     _package_store_root: Option<tempfile::TempDir>,
 }
 
@@ -67,19 +68,19 @@ impl Harness {
         bps: Vec<Blueprint>,
         sessions: Option<Arc<dyn submilli_server::session::SessionStore>>,
     ) -> Self {
-        let session_root = tempfile::tempdir().expect("session root");
-        let session_root_path = session_root.path().to_path_buf();
+        let volume_root = tempfile::tempdir().expect("volume root");
+        let volume_root_path = volume_root.path().to_path_buf();
         let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
             sessions,
-            session_storage_root: Some(session_root_path.clone()),
+            volume_root: Some(volume_root_path.clone()),
             ..in_memory_config::config()
         };
         Self {
             state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
-            session_root: session_root_path,
-            _owned_session_root: Some(session_root),
+            session_root: volume_root_path.join("sessions"),
+            _owned_volume_root: Some(volume_root),
             _package_store_root: None,
         }
     }
@@ -89,19 +90,19 @@ impl Harness {
         bps: Vec<Blueprint>,
         recorder: Arc<dyn submilli_server::record::RunRecorderFactory>,
     ) -> Self {
-        let session_root = tempfile::tempdir().expect("session root");
-        let session_root_path = session_root.path().to_path_buf();
+        let volume_root = tempfile::tempdir().expect("volume root");
+        let volume_root_path = volume_root.path().to_path_buf();
         let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
-            session_storage_root: Some(session_root_path.clone()),
+            volume_root: Some(volume_root_path.clone()),
             run_recorder: Some(recorder),
             ..in_memory_config::config()
         };
         Self {
             state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
-            session_root: session_root_path,
-            _owned_session_root: Some(session_root),
+            session_root: volume_root_path.join("sessions"),
+            _owned_volume_root: Some(volume_root),
             _package_store_root: None,
         }
     }
@@ -109,39 +110,39 @@ impl Harness {
     /// Like [`Harness::from_blueprints`] but with a declared volume table, for
     /// the sessionless mount route.
     fn from_blueprints_with_volumes(bps: Vec<Blueprint>, volumes: VolumeTable) -> Self {
-        let session_root = tempfile::tempdir().expect("session root");
-        let session_root_path = session_root.path().to_path_buf();
+        let volume_root = tempfile::tempdir().expect("volume root");
+        let volume_root_path = volume_root.path().to_path_buf();
         let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
-            session_storage_root: Some(session_root_path.clone()),
+            volume_root: Some(volume_root_path.clone()),
             volumes,
             ..in_memory_config::config()
         };
         Self {
             state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
-            session_root: session_root_path,
-            _owned_session_root: Some(session_root),
+            session_root: volume_root_path.join("sessions"),
+            _owned_volume_root: Some(volume_root),
             _package_store_root: None,
         }
     }
 
     fn from_blueprints_with_session_paths(
         bps: Vec<Blueprint>,
-        session_root: std::path::PathBuf,
+        volume_root: std::path::PathBuf,
         session_store_dir: std::path::PathBuf,
     ) -> Self {
         let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
-            session_storage_root: Some(session_root.clone()),
+            volume_root: Some(volume_root.clone()),
             database_path: Some(session_store_dir.join("server.db")),
             ..in_memory_config::config()
         };
         Self {
             state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
-            session_root,
-            _owned_session_root: None,
+            session_root: volume_root.join("sessions"),
+            _owned_volume_root: None,
             _package_store_root: None,
         }
     }
@@ -150,26 +151,26 @@ impl Harness {
         bps: Vec<Blueprint>,
         package_store_root: tempfile::TempDir,
     ) -> Self {
-        let session_root = tempfile::tempdir().expect("session root");
-        let session_root_path = session_root.path().to_path_buf();
+        let volume_root = tempfile::tempdir().expect("volume root");
+        let volume_root_path = volume_root.path().to_path_buf();
         let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
-            session_storage_root: Some(session_root_path.clone()),
+            volume_root: Some(volume_root_path.clone()),
             package_store_root: Some(package_store_root.path().to_path_buf()),
             ..in_memory_config::config()
         };
         Self {
             state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
-            session_root: session_root_path,
-            _owned_session_root: Some(session_root),
+            session_root: volume_root_path.join("sessions"),
+            _owned_volume_root: Some(volume_root),
             _package_store_root: Some(package_store_root),
         }
     }
 
     fn new() -> Self {
-        let session_root = tempfile::tempdir().expect("session root");
-        let session_root_path = session_root.path().to_path_buf();
+        let volume_root = tempfile::tempdir().expect("volume root");
+        let volume_root_path = volume_root.path().to_path_buf();
         let blueprints = Arc::new(
             InMemoryBlueprintStore::seed([
                 Blueprint {
@@ -216,13 +217,13 @@ impl Harness {
         );
         let config = ServerConfig {
             blueprints: Some(blueprints),
-            session_storage_root: Some(session_root_path.clone()),
+            volume_root: Some(volume_root_path.clone()),
             ..in_memory_config::config()
         };
         Self {
             state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
-            session_root: session_root_path,
-            _owned_session_root: Some(session_root),
+            session_root: volume_root_path.join("sessions"),
+            _owned_volume_root: Some(volume_root),
             _package_store_root: None,
         }
     }
@@ -1721,7 +1722,7 @@ async fn delete_persisted_mcp_session_before_restore() {
         restarted.delete(SESS, &session).await,
         StatusCode::NO_CONTENT
     );
-    assert!(!session_root.path().join(&session).exists());
+    assert!(!session_root.path().join("sessions").join(&session).exists());
     assert_eq!(
         restarted.delete(SESS, &session).await,
         StatusCode::NOT_FOUND

@@ -36,9 +36,8 @@ use ipnet::IpNet;
 use serde::Deserialize;
 use submilli_server::config::{
     OAuthProvider, ServerDirectories, VolumeTable, default_blueprint_dir,
-    default_cli_package_store_dir, default_database_path, default_managed_volume_root,
-    default_package_store_dir, default_secret_store_dir, default_session_storage_root,
-    default_session_store_dir, validate_volumes,
+    default_cli_package_store_dir, default_database_path, default_package_store_dir,
+    default_secret_store_dir, default_session_store_dir, default_volume_root, validate_volumes,
 };
 use submilli_server::{
     ApiToken, AuthConfig, DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, KeySource,
@@ -75,9 +74,15 @@ pub struct FileConfig {
     pub blueprint_dir: Option<PathBuf>,
     pub session_store_dir: Option<PathBuf>,
     pub database_path: Option<PathBuf>,
-    pub vfs_session_dir: Option<PathBuf>,
-    pub vfs_ephemeral_dir: Option<PathBuf>,
-    /// Root for `managed-local` volumes; see `--volume-dir`.
+    /// Removed: session workspaces live under `volume_dir`. Read only so that
+    /// [`refuse_removed_settings`] can say so rather than serde's generic
+    /// unknown-field error.
+    #[serde(rename = "vfs_session_dir")]
+    removed_vfs_session_dir: Option<serde::de::IgnoredAny>,
+    /// Removed: ephemeral scratch lives under `volume_dir`, as above.
+    #[serde(rename = "vfs_ephemeral_dir")]
+    removed_vfs_ephemeral_dir: Option<serde::de::IgnoredAny>,
+    /// Root of the server's VFS directories; see `--volume-dir`.
     pub volume_dir: Option<PathBuf>,
     pub package_store_dir: Option<PathBuf>,
     /// Seconds. `deny_unknown_fields` means omitting this would turn a
@@ -283,8 +288,10 @@ pub(crate) struct EnvConfig {
     blueprint_dir: Option<PathBuf>,
     session_store_dir: Option<PathBuf>,
     database_path: Option<PathBuf>,
-    vfs_session_dir: Option<PathBuf>,
-    vfs_ephemeral_dir: Option<PathBuf>,
+    /// Whether the removed `SUBMILLI_VFS_SESSION_DIR` is set.
+    removed_vfs_session_dir: bool,
+    /// Whether the removed `SUBMILLI_VFS_EPHEMERAL_DIR` is set.
+    removed_vfs_ephemeral_dir: bool,
     volume_dir: Option<PathBuf>,
     secret_store_dir: Option<PathBuf>,
     package_store_dir: Option<PathBuf>,
@@ -378,8 +385,8 @@ impl EnvConfig {
             blueprint_dir: path("SUBMILLI_BLUEPRINT_DIR"),
             session_store_dir: path("SUBMILLI_SESSION_STORE_DIR"),
             database_path: path("SUBMILLI_DATABASE_PATH"),
-            vfs_session_dir: path("SUBMILLI_VFS_SESSION_DIR"),
-            vfs_ephemeral_dir: path("SUBMILLI_VFS_EPHEMERAL_DIR"),
+            removed_vfs_session_dir: var("SUBMILLI_VFS_SESSION_DIR").is_some(),
+            removed_vfs_ephemeral_dir: var("SUBMILLI_VFS_EPHEMERAL_DIR").is_some(),
             volume_dir: path("SUBMILLI_VOLUME_DIR"),
             secret_store_dir: path("SUBMILLI_SECRET_STORE_DIR"),
             package_store_dir: path("SUBMILLI_PACKAGE_STORE_DIR"),
@@ -496,6 +503,7 @@ pub(crate) fn resolve(cli: Cli) -> Result<Resolved> {
 
 /// The settings this boot can refuse without touching any state directory.
 fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
+    refuse_removed_settings(cli, file, env)?;
     bind_addr(cli, file, env)?;
     if let Some((cert, key)) = tls_files(cli, file, env)? {
         submilli_server::tls::load(&cert, &key)?;
@@ -526,6 +534,70 @@ fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
     }
     validate_volumes(&file.volumes, &guarded_directories(cli, file, env))?;
     Ok(())
+}
+
+/// Refuse a setting this server no longer reads, naming what replaced it, so an
+/// old config cannot quietly put data somewhere new.
+fn refuse_removed_settings(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
+    let removed = [
+        RemovedSetting {
+            in_cli: cli.vfs_session_dir.is_some(),
+            in_file: file.removed_vfs_session_dir.is_some(),
+            in_env: env.removed_vfs_session_dir,
+            key: "vfs_session_dir",
+            contents: "session workspaces",
+            subdirectory: "sessions/",
+        },
+        RemovedSetting {
+            in_cli: cli.vfs_ephemeral_dir.is_some(),
+            in_file: file.removed_vfs_ephemeral_dir.is_some(),
+            in_env: env.removed_vfs_ephemeral_dir,
+            key: "vfs_ephemeral_dir",
+            contents: "ephemeral scratch directories",
+            subdirectory: "ephemeral/",
+        },
+    ];
+    for setting in removed {
+        let Some(source) = setting.source() else {
+            continue;
+        };
+        anyhow::bail!(
+            "{source} is no longer read: {contents} now live under `volume_dir`, in its \
+             `{subdirectory}` directory. Remove it, and set `volume_dir` (`--volume-dir`, \
+             $SUBMILLI_VOLUME_DIR) to the durable directory instead",
+            contents = setting.contents,
+            subdirectory = setting.subdirectory,
+        );
+    }
+    Ok(())
+}
+
+/// A directory setting folded into `volume_dir`, and where this boot set it.
+struct RemovedSetting {
+    in_cli: bool,
+    in_file: bool,
+    in_env: bool,
+    /// The config-file key; the flag and variable are spelled from it.
+    key: &'static str,
+    /// What the setting held, as the refusal names it.
+    contents: &'static str,
+    /// Where that now lives under `volume_dir`.
+    subdirectory: &'static str,
+}
+
+impl RemovedSetting {
+    /// How the refusal names the setting, in the first place it was set.
+    fn source(&self) -> Option<String> {
+        if self.in_cli {
+            Some(format!("`--{}`", self.key.replace('_', "-")))
+        } else if self.in_env {
+            Some(format!("$SUBMILLI_{}", self.key.to_ascii_uppercase()))
+        } else if self.in_file {
+            Some(format!("the config file's `{}`", self.key))
+        } else {
+            None
+        }
+    }
 }
 
 /// Every directory the volume check guards, with defaults applied, resolved
@@ -567,14 +639,6 @@ fn guarded_directories(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> ServerD
             env.tls_key_file.clone(),
             file.tls.key_file.clone(),
         ),
-        session_storage_root: Some(
-            explicit(
-                cli.vfs_session_dir.clone(),
-                env.vfs_session_dir.clone(),
-                file.vfs_session_dir.clone(),
-            )
-            .unwrap_or_else(default_session_storage_root),
-        ),
         session_store_dir: Some(
             explicit(
                 cli.session_store_dir.clone(),
@@ -591,18 +655,13 @@ fn guarded_directories(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> ServerD
             )
             .unwrap_or_else(default_database_path),
         ),
-        ephemeral_storage_root: explicit(
-            cli.vfs_ephemeral_dir.clone(),
-            env.vfs_ephemeral_dir.clone(),
-            file.vfs_ephemeral_dir.clone(),
-        ),
-        managed_volume_root: Some(
+        volume_root: Some(
             explicit(
                 cli.volume_dir.clone(),
                 env.volume_dir.clone(),
                 file.volume_dir.clone(),
             )
-            .unwrap_or_else(default_managed_volume_root),
+            .unwrap_or_else(default_volume_root),
         ),
         // The path the config was read from, so a volume cannot be declared
         // over the file that declares volumes. Resolution consumes the file and
@@ -1026,6 +1085,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
     // Borrow for the address, policy, and store before the `.or()` chains below
     // move fields out.
     let addr = bind_addr(&cli, &file, &env)?;
+    refuse_removed_settings(&cli, &file, &env)?;
     validate_volumes(&file.volumes, &guarded_directories(&cli, &file, &env))?;
     let network_policy = resolve_network_policy(&cli, &file, &env)?;
     let auth = resolve_auth(&cli, &file, &env)?;
@@ -1067,12 +1127,6 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
 
     let blueprint_dir = explicit(cli.blueprint_dir, env.blueprint_dir, file.blueprint_dir)
         .unwrap_or_else(default_blueprint_dir);
-    let session_storage_root = explicit(
-        cli.vfs_session_dir,
-        env.vfs_session_dir,
-        file.vfs_session_dir,
-    )
-    .unwrap_or_else(default_session_storage_root);
     let session_store_dir = explicit(
         cli.session_store_dir,
         env.session_store_dir,
@@ -1081,18 +1135,14 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
     .unwrap_or_else(default_session_store_dir);
     let database_path = explicit(cli.database_path, env.database_path, file.database_path)
         .unwrap_or_else(default_database_path);
-    let ephemeral_storage_root = explicit(
-        cli.vfs_ephemeral_dir,
-        env.vfs_ephemeral_dir,
-        file.vfs_ephemeral_dir,
-    );
     let package_store_root = explicit(
         cli.package_store_dir,
         env.package_store_dir,
         file.package_store_dir,
     );
-    let managed_volume_root = explicit(cli.volume_dir, env.volume_dir, file.volume_dir)
-        .unwrap_or_else(default_managed_volume_root);
+    // Left `None` when unset: the default root is created on first use, while
+    // one the operator names must already exist.
+    let volume_root = explicit(cli.volume_dir, env.volume_dir, file.volume_dir);
 
     let mcp_oauth_providers = file
         .mcp_oauth
@@ -1117,8 +1167,6 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         blueprint_dir: Some(blueprint_dir),
         session_store_dir: Some(session_store_dir),
         database_path: Some(database_path),
-        session_storage_root: Some(session_storage_root),
-        ephemeral_storage_root,
         package_store_root,
         // The CLI's store is always readable as a fallback; there is no knob for
         // it because a locally published package resolving on the dev server is
@@ -1141,7 +1189,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         max_embedding_tokens,
         max_embedding_concurrency,
         volumes: file.volumes,
-        managed_volume_root: Some(managed_volume_root),
+        volume_root,
         github_token_file: file.github_token_file,
         ..ServerConfig::default()
     };
@@ -1508,9 +1556,9 @@ mod tests {
             blueprint_dir: None,
             session_store_dir: None,
             database_path: None,
+            volume_dir: None,
             vfs_session_dir: None,
             vfs_ephemeral_dir: None,
-            volume_dir: None,
             secret_store_dir: None,
             package_store_dir: None,
             secret_store_key_env: None,
@@ -1594,8 +1642,7 @@ mod tests {
 bind: 0.0.0.0
 port: 9000
 blueprint_dir: /data/blueprints
-vfs_session_dir: /data/sessions
-vfs_ephemeral_dir: /tmp/submilli
+volume_dir: /data/volumes
 network:
   allow_localhost: true
   allow_private: false
@@ -1607,8 +1654,7 @@ network:
         assert_eq!(cfg.bind, Some("0.0.0.0".parse().unwrap()));
         assert_eq!(cfg.port, Some(9000));
         assert_eq!(cfg.blueprint_dir, Some("/data/blueprints".into()));
-        assert_eq!(cfg.vfs_session_dir, Some("/data/sessions".into()));
-        assert_eq!(cfg.vfs_ephemeral_dir, Some("/tmp/submilli".into()));
+        assert_eq!(cfg.volume_dir, Some("/data/volumes".into()));
         assert_eq!(cfg.network.allow_localhost, Some(true));
         assert_eq!(cfg.network.allow_private, Some(false));
         assert_eq!(cfg.network.allow_ip, vec!["10.0.0.0/24", "1.2.3.4"]);
@@ -1683,11 +1729,9 @@ network:
             github_token_file: Some(root.join("github/token")),
             tls_key_file: Some(root.join("tls/key.pem")),
             tls_cert_file: Some(root.join("tls/cert.pem")),
-            session_storage_root: Some(root.join("vfs/sessions")),
             session_store_dir: Some(root.join("sessions")),
             database_path: Some(root.join("db/submilli.db")),
-            ephemeral_storage_root: Some(root.join("scratch")),
-            managed_volume_root: Some(root.join("volumes")),
+            volume_root: Some(root.join("volumes")),
             config_file: Some(root.join("etc/submilli.yaml")),
         }
     }
@@ -1714,11 +1758,9 @@ network:
             secret_store_key_file,
             api_token_files,
             github_token_file,
-            session_storage_root,
             session_store_dir,
             database_path,
-            ephemeral_storage_root,
-            managed_volume_root,
+            volume_root,
             config_file,
             tls_key_file,
             tls_cert_file,
@@ -1732,11 +1774,9 @@ network:
             (github_token_file, "GitHub token file"),
             (tls_key_file, "TLS private key"),
             (tls_cert_file, "TLS certificate file"),
-            (session_storage_root, "per-session VFS root"),
             (session_store_dir, "durable session store"),
             (database_path, "server database"),
-            (ephemeral_storage_root, "ephemeral storage root"),
-            (managed_volume_root, "managed volume root"),
+            (volume_root, "volume root"),
             (config_file, "server config file"),
         ]
         .into_iter()
@@ -1823,27 +1863,24 @@ network:
     }
 
     #[test]
-    fn a_volume_inside_the_per_session_root_is_refused_for_data_loss() {
+    fn a_volume_inside_the_volume_root_is_refused_for_data_loss() {
         let root = tempfile::tempdir().unwrap();
         let msg = refusal(
             "work",
-            root.path().join("vfs/sessions/work"),
+            root.path().join("volumes/sessions/work"),
             &dirs_under(root.path()),
         );
-        assert!(msg.contains("per-session VFS root"), "got {msg}");
+        assert!(msg.contains("volume root"), "got {msg}");
         assert!(msg.contains("is inside"), "got {msg}");
         assert!(msg.contains("orphan reconciliation"), "got {msg}");
     }
 
     #[test]
     fn a_volume_inside_the_os_temp_dir_is_accepted() {
-        // The ephemeral root defaults to the OS temp dir, and containment there
-        // runs the other way — a volume under it is fine.
+        // The OS temp dir holds nothing of the server's, so a volume under it
+        // is fine.
         let inside = tempfile::tempdir().unwrap();
-        let dirs = ServerDirectories {
-            ephemeral_storage_root: None,
-            ..dirs_under(&std::env::temp_dir().join("submilli-volume-test-owned"))
-        };
+        let dirs = dirs_under(&std::env::temp_dir().join("submilli-volume-test-owned"));
         validate_volumes(
             &local_table([("work".to_string(), inside.path().to_path_buf())]),
             &dirs,
@@ -1937,9 +1974,8 @@ network:
         let root = tempfile::tempdir().unwrap();
         let config = ServerConfig {
             blueprint_dir: Some(root.path().join("blueprints")),
-            session_storage_root: Some(root.path().join("vfs/sessions")),
+            volume_root: Some(root.path().join("volumes")),
             package_store_root: Some(root.path().join("packages")),
-            ephemeral_storage_root: Some(root.path().join("scratch")),
             volumes: local_table([("work".to_string(), root.path().to_path_buf())]),
             ..ServerConfig::default()
         };
@@ -2079,7 +2115,7 @@ network:
     }
 
     #[test]
-    fn the_managed_volume_root_comes_from_flag_env_or_file() {
+    fn the_volume_root_comes_from_flag_env_or_file() {
         let file = FileConfig {
             volume_dir: Some("/file/volumes".into()),
             ..FileConfig::default()
@@ -2093,7 +2129,7 @@ network:
             ..empty_cli()
         };
         let root = |cli: &Cli, env: &EnvConfig, file: &FileConfig| {
-            guarded_directories(cli, file, env).managed_volume_root
+            guarded_directories(cli, file, env).volume_root
         };
         assert_eq!(root(&cli, &env, &file), Some(PathBuf::from("/cli/volumes")));
         assert_eq!(
@@ -2106,10 +2142,16 @@ network:
         );
         assert_eq!(
             root(&empty_cli(), &EnvConfig::default(), &FileConfig::default()),
-            Some(default_managed_volume_root())
+            Some(default_volume_root())
         );
         let parsed: FileConfig = serde_yml::from_str("volume_dir: /data/volumes\n").unwrap();
         assert_eq!(parsed.volume_dir, Some("/data/volumes".into()));
+        // A root that was set reaches the server as one it must not create; the
+        // default stays unset, to be created on first use.
+        let (_, config) = merge(empty_cli(), file, EnvConfig::default()).unwrap();
+        assert_eq!(config.volume_root, Some(PathBuf::from("/file/volumes")));
+        let (_, config) = merge(empty_cli(), FileConfig::default(), EnvConfig::default()).unwrap();
+        assert_eq!(config.volume_root, None);
     }
 
     #[test]
@@ -2137,40 +2179,37 @@ network:
     }
 
     #[test]
-    fn the_managed_volume_root_must_clear_every_server_owned_directory() {
+    fn the_volume_root_must_clear_every_server_owned_directory() {
         let root = tempfile::tempdir().unwrap();
-        let managed = VolumeTable::from([(
-            "memory".to_string(),
-            VolumeSpec::managed(SizeLimit::Unlimited),
-        )]);
+        // Checked with no volume declared too: sessions and scratch live there.
         for (inside, expected) in [
-            ("vfs/sessions/volumes", "per-session VFS root"),
+            ("sessions/volumes", "durable session store"),
             ("blueprints/volumes", "blueprint store"),
             ("secrets", "secret store"),
+            // The state root itself contains every directory; the first row wins.
+            ("", "secret store"),
         ] {
             let dirs = ServerDirectories {
-                managed_volume_root: Some(root.path().join(inside)),
+                volume_root: Some(root.path().join(inside)),
                 ..dirs_under(root.path())
             };
-            let err = validate_volumes(&managed, &dirs).expect_err(inside);
+            let err = validate_volumes(&VolumeTable::new(), &dirs).expect_err(inside);
             let msg = err.to_string();
-            assert!(msg.contains("managed volume root"), "{inside}: {msg}");
+            assert!(msg.contains("the volume root"), "{inside}: {msg}");
             assert!(msg.contains(expected), "{inside}: {msg}");
         }
-        // Unused, the root is not checked: no managed volume lives there.
-        let dirs = ServerDirectories {
-            managed_volume_root: Some(root.path().join("secrets")),
-            ..dirs_under(root.path())
-        };
-        validate_volumes(&VolumeTable::new(), &dirs).expect("no managed volume declared");
     }
 
     #[test]
-    fn a_local_path_volume_may_not_overlap_the_managed_root() {
+    fn a_local_path_volume_may_not_overlap_the_volume_root() {
         let root = tempfile::tempdir().unwrap();
         let dirs = dirs_under(root.path());
-        let msg = refusal("work", root.path().join("volumes/memory"), &dirs);
-        assert!(msg.contains("managed volume root"), "{msg}");
+        let msg = refusal(
+            "work",
+            root.path().join("volumes/managed-local/memory"),
+            &dirs,
+        );
+        assert!(msg.contains("volume root"), "{msg}");
         assert!(msg.contains("is inside"), "{msg}");
     }
 
@@ -2178,7 +2217,7 @@ network:
     fn a_managed_volume_and_a_local_path_at_its_directory_are_refused() {
         let root = tempfile::tempdir().unwrap();
         let dirs = ServerDirectories {
-            managed_volume_root: Some(root.path().join("managed")),
+            volume_root: Some(root.path().join("volumes")),
             ..ServerDirectories::default()
         };
         let err = validate_volumes(
@@ -2193,13 +2232,61 @@ network:
                 ),
                 (
                     "inner".to_string(),
-                    VolumeSpec::local_path(root.path().join("managed/memory/sub")),
+                    VolumeSpec::local_path(root.path().join("volumes/managed-local/memory/sub")),
                 ),
             ]),
             &dirs,
         )
         .expect_err("a local path inside a managed volume must be refused");
         assert!(err.to_string().contains("'inner'"), "{err}");
+    }
+
+    #[test]
+    fn the_removed_vfs_dir_settings_are_refused_with_their_replacement() {
+        for key in ["vfs_session_dir", "vfs_ephemeral_dir"] {
+            let file: FileConfig = serde_yml::from_str(&format!("{key}: /data/x\n")).unwrap();
+            let Err(err) = merge_file(file) else {
+                panic!("{key} was accepted");
+            };
+            let err = err.to_string();
+            assert!(err.contains(&format!("`{key}`")), "{key}: {err}");
+            assert!(err.contains("`volume_dir`"), "{key}: {err}");
+        }
+        for var in ["SUBMILLI_VFS_SESSION_DIR", "SUBMILLI_VFS_EPHEMERAL_DIR"] {
+            let Err(err) = merge(
+                empty_cli(),
+                FileConfig::default(),
+                env_from(&[(var, "/data/x")]),
+            ) else {
+                panic!("{var} was accepted");
+            };
+            let err = err.to_string();
+            assert!(err.contains(&format!("${var}")), "{var}: {err}");
+            assert!(err.contains("`volume_dir`"), "{var}: {err}");
+        }
+        for (flag, cli) in [
+            (
+                "--vfs-session-dir",
+                Cli {
+                    vfs_session_dir: Some("/data/x".into()),
+                    ..empty_cli()
+                },
+            ),
+            (
+                "--vfs-ephemeral-dir",
+                Cli {
+                    vfs_ephemeral_dir: Some("/data/x".into()),
+                    ..empty_cli()
+                },
+            ),
+        ] {
+            let Err(err) = merge(cli, FileConfig::default(), EnvConfig::default()) else {
+                panic!("{flag} was accepted");
+            };
+            let err = err.to_string();
+            assert!(err.contains(&format!("`{flag}`")), "{flag}: {err}");
+            assert!(err.contains("`volume_dir`"), "{flag}: {err}");
+        }
     }
 
     #[test]
@@ -2215,11 +2302,7 @@ network:
         assert_eq!(addr, "127.0.0.1:8128".parse().unwrap());
         assert_eq!(config.blueprint_dir.unwrap(), default_blueprint_dir());
         assert_eq!(config.database_path.unwrap(), default_database_path());
-        assert_eq!(
-            config.session_storage_root.unwrap(),
-            default_session_storage_root()
-        );
-        assert!(config.ephemeral_storage_root.is_none());
+        assert!(config.volume_root.is_none());
         assert!(config.secret_store.is_none());
         assert_eq!(config.secret_store_dir.unwrap(), default_secret_store_dir());
     }
@@ -2469,8 +2552,7 @@ network:
             ("SUBMILLI_BLUEPRINT_DIR", "/env/bp"),
             ("SUBMILLI_SESSION_STORE_DIR", "/env/sessions"),
             ("SUBMILLI_DATABASE_PATH", "/env/submilli.db"),
-            ("SUBMILLI_VFS_SESSION_DIR", "/env/vfs"),
-            ("SUBMILLI_VFS_EPHEMERAL_DIR", "/env/scratch"),
+            ("SUBMILLI_VOLUME_DIR", "/env/volumes"),
             ("SUBMILLI_PACKAGE_STORE_DIR", "/env/packages"),
         ]);
         let file = FileConfig {
@@ -2479,8 +2561,7 @@ network:
             blueprint_dir: Some("/file/bp".into()),
             session_store_dir: Some("/file/sessions".into()),
             database_path: Some("/file/submilli.db".into()),
-            vfs_session_dir: Some("/file/vfs".into()),
-            vfs_ephemeral_dir: Some("/file/scratch".into()),
+            volume_dir: Some("/file/volumes".into()),
             package_store_dir: Some("/file/packages".into()),
             ..FileConfig::default()
         };
@@ -2495,14 +2576,7 @@ network:
             config.database_path.unwrap(),
             PathBuf::from("/env/submilli.db")
         );
-        assert_eq!(
-            config.session_storage_root.unwrap(),
-            PathBuf::from("/env/vfs")
-        );
-        assert_eq!(
-            config.ephemeral_storage_root.unwrap(),
-            PathBuf::from("/env/scratch")
-        );
+        assert_eq!(config.volume_root.unwrap(), PathBuf::from("/env/volumes"));
         assert_eq!(
             config.package_store_root.unwrap(),
             PathBuf::from("/env/packages")

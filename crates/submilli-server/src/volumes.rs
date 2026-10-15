@@ -8,19 +8,19 @@
 //! that may write opens the volume, and is kept for the life of the process.
 //!
 //! Nothing here deletes a volume's files. A `managed-local` volume's directory
-//! is created on first use under the managed root and left alone after; a
-//! `local-path` directory belongs to the operator outright.
+//! is created on first use under the volume root's `managed-local/` and left
+//! alone after; a `local-path` directory belongs to the operator outright.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use interpreter::runtime::{DiskQuota, measure_host_dir};
 use tokio::sync::OnceCell;
 
 use crate::config::{
-    Access, SizeLimit, VolumeKind, VolumeSpec, VolumeTable, default_managed_volume_root,
-    is_managed_name,
+    Access, MissingDirs, SizeLimit, VolumeKind, VolumeRoot, VolumeSpec, VolumeTable,
+    create_owned_dir, is_managed_name,
 };
 use crate::session_manager::SessionError;
 
@@ -33,6 +33,11 @@ pub struct VolumeRegistry {
     /// poisoned-lock panic rather than reading a table that may be half-updated.
     table: RwLock<VolumeTable>,
     managed_root: PathBuf,
+    /// Whether a missing `managed_root` is created along with a volume's
+    /// directory. Refused under a configured [`VolumeRoot`], whose
+    /// `managed-local/` is created at startup and must not be recreated if its
+    /// mount disappears.
+    missing_dirs: MissingDirs,
     /// One cell per volume with a byte limit, so concurrent first users
     /// measure it once and share the result. Grows with the table, under the
     /// same poisoning rule.
@@ -45,7 +50,7 @@ pub struct VolumeRegistry {
 
 impl Default for VolumeRegistry {
     fn default() -> Self {
-        Self::new(VolumeTable::new(), default_managed_volume_root())
+        Self::in_root(VolumeTable::new(), &VolumeRoot::from_config(None))
     }
 }
 
@@ -141,7 +146,18 @@ fn check_new_managed(table: &VolumeTable, volume: &str) -> Result<(), DeclareErr
 }
 
 impl VolumeRegistry {
+    /// The volumes of `table`, with `managed-local` ones stored under `root`.
+    pub fn in_root(table: VolumeTable, root: &VolumeRoot) -> Self {
+        Self::build(table, root.managed_dir(), root.missing_dirs())
+    }
+
+    /// The volumes of `table`, with `managed-local` ones stored directly under
+    /// `managed_root`, which is created when missing.
     pub fn new(table: VolumeTable, managed_root: PathBuf) -> Self {
+        Self::build(table, managed_root, MissingDirs::Create)
+    }
+
+    fn build(table: VolumeTable, managed_root: PathBuf, missing_dirs: MissingDirs) -> Self {
         let quotas = table
             .iter()
             .filter(|(_, spec)| matches!(spec.size_limit, SizeLimit::Bytes(_)))
@@ -150,6 +166,7 @@ impl VolumeRegistry {
         Self {
             table: RwLock::new(table),
             managed_root,
+            missing_dirs,
             quotas: RwLock::new(quotas),
             usage_offsets: BTreeMap::new(),
         }
@@ -296,7 +313,7 @@ impl VolumeRegistry {
         };
         let host = self.host_of(volume, &spec.kind)?;
         if spec.kind == VolumeKind::ManagedLocal {
-            ensure_managed_dir(&self.managed_root, &host).map_err(|err| {
+            create_owned_dir(&host, self.missing_dirs).map_err(|err| {
                 tracing::error!(
                     volume,
                     path = %host.display(),
@@ -386,7 +403,7 @@ impl VolumeRegistry {
             let Ok(dir) = self.host_of(name, &spec.kind) else {
                 continue;
             };
-            if let Err(err) = ensure_managed_dir(&self.managed_root, &dir) {
+            if let Err(err) = create_owned_dir(&dir, self.missing_dirs) {
                 tracing::warn!(
                     volume = name.as_str(),
                     path = %dir.display(),
@@ -419,44 +436,11 @@ pub fn check_reference(
     Ok(())
 }
 
-/// Make sure a managed volume's directory exists as a plain directory, creating
-/// it (owner-only on Unix) when it does not. A link there is refused: the
-/// directory is opened with the server's full authority, so a link swapped in
-/// would aim the volume anywhere.
-fn ensure_managed_dir(root: &Path, dir: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(root)?;
-    match std::fs::symlink_metadata(dir) {
-        Ok(meta) => require_plain_dir(&meta),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            let mut builder = std::fs::DirBuilder::new();
-            #[cfg(unix)]
-            std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-            match builder.create(dir) {
-                Ok(()) => Ok(()),
-                // Another first user created it in between; check what it made.
-                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                    require_plain_dir(&std::fs::symlink_metadata(dir)?)
-                }
-                Err(err) => Err(err),
-            }
-        }
-        Err(err) => Err(err),
-    }
-}
-
-fn require_plain_dir(meta: &std::fs::Metadata) -> std::io::Result<()> {
-    if meta.is_dir() {
-        return Ok(());
-    }
-    Err(std::io::Error::other(
-        "the managed volume's path exists and is not a plain directory",
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::VolumeSpec;
+    use std::path::Path;
 
     fn registry(root: &Path, table: VolumeTable) -> VolumeRegistry {
         VolumeRegistry::new(table, root.join("volumes"))
@@ -628,5 +612,25 @@ mod tests {
         let measured = registry.quota("later").await.unwrap().unwrap();
         assert!(!measured.is_unmeasured());
         assert_eq!(measured.used(), 0);
+    }
+
+    #[test]
+    fn a_lost_managed_root_is_not_recreated_under_a_configured_root() {
+        let root = tempfile::tempdir().unwrap();
+        let volume_root = VolumeRoot::configured(root.path());
+        volume_root.prepare().unwrap();
+        let registry = VolumeRegistry::in_root(
+            VolumeTable::from([(
+                "notes".to_string(),
+                VolumeSpec::managed(SizeLimit::Unlimited),
+            )]),
+            &volume_root,
+        );
+        std::fs::remove_dir(volume_root.managed_dir()).unwrap();
+        assert!(matches!(
+            registry.resolve("notes", None),
+            Err(SessionError::VolumeUnavailable(_))
+        ));
+        assert!(!volume_root.managed_dir().exists());
     }
 }

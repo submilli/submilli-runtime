@@ -42,7 +42,7 @@ async fn durable(
     let database = Arc::new(ServerDatabase::open(&root.join("server.db")).await.unwrap());
     let state = AppState::new(ServerConfig {
         database: Some(database.clone()),
-        session_storage_root: Some(root.join("workspaces")),
+        volume_root: Some(root.to_path_buf()),
         session_cipher: key
             .map(|key| Arc::new(SecretCipher::new(&KeySource::File(key.to_path_buf())).unwrap())),
         secret_store_dir: Some(root.join("secrets")),
@@ -418,7 +418,7 @@ async fn a_legacy_directory_under_another_key_is_not_imported() {
     );
     let state = AppState::new(ServerConfig {
         database: Some(database.clone()),
-        session_storage_root: Some(root.path().join("workspaces")),
+        volume_root: Some(root.path().to_path_buf()),
         session_cipher: Some(Arc::new(SecretCipher::new(&KeySource::File(key)).unwrap())),
         secret_store_dir: Some(root.path().join("secrets")),
         ..in_memory_config::config()
@@ -485,7 +485,7 @@ async fn a_legacy_entry_that_differs_from_the_database_stops_the_import() {
     );
     let state = AppState::new(ServerConfig {
         database: Some(database.clone()),
-        session_storage_root: Some(root.path().join("workspaces")),
+        volume_root: Some(root.path().to_path_buf()),
         session_cipher: Some(Arc::new(SecretCipher::new(&KeySource::File(key)).unwrap())),
         secret_store_dir: Some(root.path().join("secrets")),
         ..in_memory_config::config()
@@ -542,7 +542,7 @@ async fn a_legacy_directory_holding_the_database_is_refused_before_importing() {
     );
     let config = |secret_store_dir| ServerConfig {
         database: Some(database.clone()),
-        session_storage_root: Some(root.path().join("workspaces")),
+        volume_root: Some(root.path().to_path_buf()),
         session_cipher: Some(Arc::new(
             SecretCipher::new(&KeySource::File(key.clone())).unwrap(),
         )),

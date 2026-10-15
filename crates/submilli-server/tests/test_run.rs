@@ -122,7 +122,7 @@ impl World {
         let recordings = Arc::new(Recordings::default());
         let config = ServerConfig {
             blueprints: Some(store.clone()),
-            session_storage_root: Some(dirs.path().join("sessions")),
+            volume_root: Some(dirs.path().to_path_buf()),
             run_recorder: Some(Arc::new(Factory(recordings.clone()))),
             ..in_memory_config::config()
         };

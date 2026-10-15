@@ -112,7 +112,7 @@ impl Playground {
         let blueprint: Blueprint = submilli_blueprint::parse(yaml).unwrap();
         let config = ServerConfig {
             blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]).unwrap())),
-            session_storage_root: Some(dir.join("sessions")),
+            volume_root: Some(dir.to_path_buf()),
             network_policy: submilli_server::NetworkPolicy::deny_private().allow_localhost(true),
             run_recorder: Some(Arc::new(tee)),
             ..ServerConfig::default()

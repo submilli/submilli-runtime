@@ -328,12 +328,12 @@ impl AppState {
         let oauth_http =
             Arc::new(ReqwestHttpClient::new(Arc::clone(&policy))) as Arc<dyn HttpClient>;
 
-        // Both roots are created lazily on first use (`create_dir_all` makes
-        // parents), so construction never touches the filesystem — tests and
-        // read-only deploys stay happy.
-        let session_root = config
-            .session_storage_root
-            .unwrap_or_else(crate::config::default_session_storage_root);
+        // A configured volume root must already be there, and gets its
+        // directories now; the default one is created on first use, so a server
+        // that never stores a workspace never touches the disk for it.
+        let volume_root = crate::config::VolumeRoot::from_config(config.volume_root);
+        volume_root.prepare()?;
+        let session_root = volume_root.sessions_dir();
         let session_store_dir = config.session_store_dir;
         let session_store = Arc::new(crate::session_store::SqliteSessionStore::new(
             database.clone(),
@@ -343,12 +343,10 @@ impl AppState {
         let session_manager = Arc::new(
             SessionManager::new(
                 session_root.clone(),
-                config.ephemeral_storage_root,
-                Arc::new(crate::volumes::VolumeRegistry::new(
+                Some(volume_root.ephemeral_dir()),
+                Arc::new(crate::volumes::VolumeRegistry::in_root(
                     config.volumes,
-                    config
-                        .managed_volume_root
-                        .unwrap_or_else(crate::config::default_managed_volume_root),
+                    &volume_root,
                 )),
                 http_client_factory,
                 Arc::clone(&session_store),
@@ -380,6 +378,7 @@ impl AppState {
                 },
             )
             .with_cipher(config.session_cipher.clone())
+            .with_missing_dirs(volume_root.missing_dirs())
             .with_response_retention(ResponseRetention {
                 ttl: config
                     .idempotency_retention
@@ -1608,10 +1607,26 @@ mod tests {
     };
 
     #[tokio::test]
+    async fn a_configured_volume_root_that_is_missing_fails_startup() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("unmounted");
+        let Err(err) = AppState::new(ServerConfig {
+            volume_root: Some(root.clone()),
+            ..crate::config::test_config()
+        })
+        .await
+        else {
+            panic!("a missing volume root was accepted");
+        };
+        assert!(err.to_string().contains("Mount it or create it"), "{err}");
+        assert!(!root.exists());
+    }
+
+    #[tokio::test]
     async fn failed_boot_does_not_start_the_reaper() {
         let root = tempfile::tempdir().unwrap();
         let state = AppState::new(ServerConfig {
-            session_storage_root: Some(root.path().to_path_buf()),
+            volume_root: Some(root.path().to_path_buf()),
             ..crate::config::test_config()
         })
         .await
@@ -1661,7 +1676,7 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let state = AppState::new(ServerConfig {
-            session_storage_root: Some(root.path().to_path_buf()),
+            volume_root: Some(root.path().to_path_buf()),
             ..crate::config::test_config()
         })
         .await
@@ -1689,7 +1704,7 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let state = AppState::new(ServerConfig {
-            session_storage_root: Some(root.path().to_path_buf()),
+            volume_root: Some(root.path().to_path_buf()),
             ..crate::config::test_config()
         })
         .await

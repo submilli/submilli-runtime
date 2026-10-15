@@ -261,7 +261,7 @@ async fn recording_failure_still_tears_down_one_shot_session() {
     let router = app(AppState::new(ServerConfig {
         sessions: Some(store),
         blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]).unwrap())),
-        session_storage_root: Some(root.path().into()),
+        volume_root: Some(root.path().into()),
         ..Default::default()
     })
     .await

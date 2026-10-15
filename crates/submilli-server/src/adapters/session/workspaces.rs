@@ -1,14 +1,19 @@
 use crate::application::sessions::error::SessionError;
 use crate::application::sessions::ports::SessionWorkspaces;
+use crate::config::{MissingDirs, create_owned_dir};
 use crate::domain::session::RootVfs;
-use crate::session_manager::build_vfs;
+use crate::session_manager::{EphemeralRoot, build_vfs};
 use crate::volumes::VolumeRegistry;
 use std::path::{Path, PathBuf};
 use submilli_blueprint::{Blueprint, VarBindings, VfsConfig};
 
 pub(crate) struct LocalSessionWorkspaces<'a> {
     pub session_root: &'a Path,
-    pub ephemeral_root: Option<&'a Path>,
+    /// Whether a missing `session_root` may be created. When it may not, a
+    /// missing root is an error everywhere, listing included: see
+    /// [`SessionManager::with_missing_dirs`](crate::session_manager::SessionManager::with_missing_dirs).
+    pub missing_dirs: MissingDirs,
+    pub ephemeral_root: Option<&'a EphemeralRoot>,
     pub volumes: &'a VolumeRegistry,
 }
 
@@ -55,7 +60,12 @@ impl SessionWorkspaces for LocalSessionWorkspaces<'_> {
         let owned_root = matches!(blueprint.vfs, VfsConfig::PerSession { .. })
             .then(|| self.session_root.join(id));
         if let Some(root) = &owned_root {
-            std::fs::create_dir_all(root).map_err(|e| SessionError::Io(e.to_string()))?;
+            create_owned_dir(root, self.missing_dirs).map_err(|e| {
+                SessionError::Io(format!(
+                    "creating session workspace {}: {e}",
+                    root.display()
+                ))
+            })?;
         }
         let vfs = match build_vfs(
             blueprint,
@@ -81,8 +91,18 @@ impl SessionWorkspaces for LocalSessionWorkspaces<'_> {
     fn list(&self) -> Result<Vec<(String, PathBuf)>, SessionError> {
         let entries = match std::fs::read_dir(self.session_root) {
             Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(SessionError::Io(error.to_string())),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && self.missing_dirs == MissingDirs::Create =>
+            {
+                return Ok(Vec::new());
+            }
+            Err(error) => {
+                return Err(SessionError::Io(format!(
+                    "listing session workspaces under {}: {error}",
+                    self.session_root.display()
+                )));
+            }
         };
         let mut folders = Vec::new();
         for entry in entries {

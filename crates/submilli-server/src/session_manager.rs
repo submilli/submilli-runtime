@@ -48,7 +48,7 @@ use crate::domain::idempotent_request::ResponseRetention;
 
 use crate::adapters::session::repository::{LoadedSession, SessionPersistence};
 use crate::blueprint::StoreError;
-use crate::config::VolumeTable;
+use crate::config::{MissingDirs, VolumeTable};
 use crate::domain::session::{RootVfs, Session, SessionBinding, SessionId};
 use crate::domain::tools::SessionTools;
 use crate::runs::RunRegistry;
@@ -112,8 +112,12 @@ pub struct SessionManager {
     unit_of_work: Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory>,
     /// Durable root for `per_session` directories (keyed by session id).
     session_root: PathBuf,
+    /// Whether a missing `session_root` is created along with a session's
+    /// directory. Refused under a configured volume root, whose `sessions/` is
+    /// created at startup and must not be recreated if its mount disappears.
+    missing_dirs: MissingDirs,
     /// Root for `ephemeral` scratch dirs; `None` uses the OS temp dir.
-    ephemeral_root: Option<PathBuf>,
+    ephemeral_root: Option<EphemeralRoot>,
     /// Operator-declared named volumes every blueprint resolves through.
     /// Passed in rather than looked up globally, so every mount path takes the
     /// same table and shares the same size limits.
@@ -292,7 +296,11 @@ impl SessionManager {
             reaper_started: AtomicBool::new(false),
             repository: SessionPersistence::new(store.clone(), session_root.clone()),
             session_root,
-            ephemeral_root,
+            missing_dirs: MissingDirs::Create,
+            ephemeral_root: ephemeral_root.map(|path| EphemeralRoot {
+                path,
+                missing_dirs: MissingDirs::Create,
+            }),
             volumes,
             store,
             database,
@@ -411,6 +419,19 @@ impl SessionManager {
         &self.session_kv.budget
     }
 
+    /// What to do when the session root or ephemeral root is missing; both are
+    /// created by default. [`MissingDirs::Refuse`] is for a configured volume
+    /// root's `sessions/` and `ephemeral/`, checked at startup: a missing one
+    /// then means its mount is gone, so the work that needs it fails and the
+    /// boot sweeps refuse to run.
+    pub fn with_missing_dirs(mut self, missing_dirs: MissingDirs) -> Self {
+        self.missing_dirs = missing_dirs;
+        if let Some(root) = &mut self.ephemeral_root {
+            root.missing_dirs = missing_dirs;
+        }
+        self
+    }
+
     pub fn with_cipher(mut self, cipher: Option<Arc<SecretCipher>>) -> Self {
         let cipher = cipher.or_else(|| self.database.ephemeral_cipher());
         self.unit_of_work = crate::adapters::unit_of_work::for_sessions(
@@ -517,8 +538,8 @@ impl SessionManager {
     }
 
     /// Root for `ephemeral` scratch directories, if one was configured.
-    pub(crate) fn ephemeral_root(&self) -> Option<&Path> {
-        self.ephemeral_root.as_deref()
+    pub(crate) fn ephemeral_root(&self) -> Option<&EphemeralRoot> {
+        self.ephemeral_root.as_ref()
     }
 
     /// The declared volume table, for registration checks and listings.
@@ -617,7 +638,7 @@ impl SessionManager {
             blueprint,
             variables,
             loaded.session().root().owned_path(),
-            self.ephemeral_root.as_deref(),
+            self.ephemeral_root.as_ref(),
             &self.volumes,
         )?;
         if resolving_legacy {
@@ -629,7 +650,8 @@ impl SessionManager {
     fn workspaces(&self) -> LocalSessionWorkspaces<'_> {
         LocalSessionWorkspaces {
             session_root: &self.session_root,
-            ephemeral_root: self.ephemeral_root.as_deref(),
+            missing_dirs: self.missing_dirs,
+            ephemeral_root: self.ephemeral_root.as_ref(),
             volumes: &self.volumes,
         }
     }
@@ -688,7 +710,7 @@ impl SessionManager {
             blueprint,
             variables,
             session_root,
-            self.ephemeral_root.as_deref(),
+            self.ephemeral_root.as_ref(),
             volumes,
         )?;
         Ok((
@@ -803,6 +825,12 @@ impl SessionManager {
     pub async fn boot(&self) -> Result<(), BootError> {
         self.store.initialize().await.map_err(BootError::Sessions)?;
         self.store.load_all().await.map_err(BootError::Sessions)?;
+        if let Some(root) = &self.ephemeral_root {
+            root.sweep().map_err(|source| BootError::Scratch {
+                path: root.path.clone(),
+                source,
+            })?;
+        }
         crate::application::sessions::recover::RecoverSessions::new(
             self.unit_of_work.as_ref(),
             &SessionAuditLog(self.audit.as_ref()),
@@ -909,6 +937,83 @@ fn validate_session_id(id: &str) -> Result<(), SessionError> {
         .map_err(Into::into)
 }
 
+/// Where `ephemeral` scratch directories are allocated, and whether that
+/// directory may be created when it is missing.
+#[derive(Debug, Clone)]
+pub(crate) struct EphemeralRoot {
+    path: PathBuf,
+    missing_dirs: MissingDirs,
+}
+
+impl EphemeralRoot {
+    fn tempdir(&self) -> std::io::Result<Vfs> {
+        if self.missing_dirs == MissingDirs::Create {
+            std::fs::create_dir_all(&self.path)?;
+        }
+        Vfs::tempdir_in(&self.path)
+    }
+
+    /// Remove scratch directories an earlier process left behind: a scratch
+    /// directory is removed when its execute ends, so at boot every one is a
+    /// leftover from a crash. Entries without the scratch prefix are left alone,
+    /// and a link with it is removed without following it. Only a root that
+    /// cannot be opened fails the sweep; an entry that cannot be read or removed
+    /// is logged and left for the next boot.
+    ///
+    /// This assumes one server per root. Workers sharing a root would remove
+    /// each other's live scratch (SUB-1343).
+    fn sweep(&self) -> std::io::Result<()> {
+        let entries = match std::fs::read_dir(&self.path) {
+            Ok(entries) => entries,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && self.missing_dirs == MissingDirs::Create =>
+            {
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                // The listing may not move past a failed entry; stop rather than
+                // spin, and leave what is left for the next boot.
+                Err(error) => {
+                    tracing::warn!(
+                        path = %self.path.display(),
+                        %error,
+                        "listing leftover ephemeral scratch failed; it is retried at the next boot"
+                    );
+                    break;
+                }
+            };
+            let is_scratch = entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(interpreter::runtime::vfs::TEMPDIR_PREFIX));
+            if !is_scratch {
+                continue;
+            }
+            let path = entry.path();
+            let removed = entry.file_type().and_then(|file_type| {
+                if file_type.is_dir() {
+                    std::fs::remove_dir_all(&path)
+                } else {
+                    std::fs::remove_file(&path)
+                }
+            });
+            if let Err(error) = removed {
+                tracing::warn!(
+                    path = %path.display(),
+                    %error,
+                    "removing leftover ephemeral scratch failed; it is retried at the next boot"
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Build the `Vfs` for one execute. Every named volume — a `named` root or a
 /// mount — resolves through `volumes` here, at the single point every VFS is
 /// constructed, so no route into a session can mount a directory the operator
@@ -918,7 +1023,7 @@ pub(crate) fn build_vfs(
     blueprint: &Blueprint,
     variables: &VarBindings,
     session_root: Option<&Path>,
-    ephemeral_root: Option<&Path>,
+    ephemeral_root: Option<&EphemeralRoot>,
     volumes: &VolumeRegistry,
 ) -> Result<Vfs, SessionError> {
     // `Vfs` formats the host root into its error, and these roots are the server's own
@@ -939,7 +1044,7 @@ pub(crate) fn build_vfs(
     let root = match &config {
         VfsConfig::None => return Ok(Vfs::none()),
         VfsConfig::Ephemeral { .. } => match ephemeral_root {
-            Some(root) => Vfs::tempdir_in(root).map_err(io("ephemeral"))?,
+            Some(root) => root.tempdir().map_err(io("ephemeral"))?,
             None => Vfs::tempdir().map_err(io("ephemeral"))?,
         },
         VfsConfig::PerSession { .. } => {
@@ -2646,5 +2751,125 @@ mod tests {
         manager.database.close().await.unwrap();
         assert!(manager.boot().await.is_err());
         assert!(orphan.exists());
+    }
+
+    fn ephemeral_bp() -> Blueprint {
+        Blueprint {
+            name: "e".into(),
+            vfs: VfsConfig::Ephemeral {
+                size_limit: None,
+                mounts: Default::default(),
+                cwd: None,
+            },
+            ..Default::default()
+        }
+    }
+
+    /// A manager over `root/sessions` and `root/ephemeral` that may not create
+    /// them, as under a configured volume root.
+    fn fixed_root_manager(root: &Path) -> SessionManager {
+        SessionManager::new(
+            root.join("sessions"),
+            Some(root.join("ephemeral")),
+            Arc::default(),
+            no_http(),
+            mem_store(),
+            CapabilitySettings::default(),
+        )
+        .with_missing_dirs(MissingDirs::Refuse)
+    }
+
+    #[tokio::test]
+    async fn a_lost_session_root_fails_the_session_and_is_not_recreated() {
+        let root = tempfile::tempdir().unwrap();
+        let mgr = fixed_root_manager(root.path());
+        mgr.ensure("sid", &per_session(HOUR))
+            .await
+            .expect_err("a session needs its root");
+        assert!(!root.path().join("sessions").exists());
+        // With scratch present, it is the session sweep that refuses.
+        std::fs::create_dir(root.path().join("ephemeral")).unwrap();
+        let err = mgr.boot().await.expect_err("the sweep needs its root");
+        assert!(matches!(err, BootError::Sessions(_)), "{err}");
+        assert!(!root.path().join("sessions").exists());
+    }
+
+    #[tokio::test]
+    async fn boot_refuses_a_lost_ephemeral_root_only_when_it_may_not_create_it() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("sessions")).unwrap();
+        let err = fixed_root_manager(root.path())
+            .boot()
+            .await
+            .expect_err("the sweep needs its root");
+        assert!(matches!(err, BootError::Scratch { .. }), "{err}");
+        assert!(!root.path().join("ephemeral").exists());
+
+        let creating = SessionManager::new(
+            root.path().join("sessions"),
+            Some(root.path().join("ephemeral")),
+            Arc::default(),
+            no_http(),
+            mem_store(),
+            CapabilitySettings::default(),
+        );
+        creating
+            .boot()
+            .await
+            .expect("a root that may be created needs no sweep");
+    }
+
+    #[tokio::test]
+    async fn a_lost_ephemeral_root_fails_the_run_and_is_not_recreated() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("sessions")).unwrap();
+        let mgr = fixed_root_manager(root.path());
+        let bp = ephemeral_bp();
+        mgr.ensure("sid", &bp)
+            .await
+            .expect_err("an ephemeral run needs its root");
+        assert!(!root.path().join("ephemeral").exists());
+
+        std::fs::create_dir(root.path().join("ephemeral")).unwrap();
+        mgr.ensure("sid", &bp).await.unwrap();
+        let (vfs, _) = mgr.vfs_for_execute("sid", &bp).await.unwrap();
+        assert!(vfs.root().starts_with(root.path().join("ephemeral")));
+    }
+
+    #[tokio::test]
+    async fn boot_removes_leftover_scratch_and_nothing_else() {
+        let root = tempfile::tempdir().unwrap();
+        let ephemeral = root.path().join("ephemeral");
+        let leftover = ephemeral.join(format!(
+            "{}crashed",
+            interpreter::runtime::vfs::TEMPDIR_PREFIX
+        ));
+        std::fs::create_dir_all(leftover.join("deep")).unwrap();
+        std::fs::write(leftover.join("deep/a.txt"), b"x").unwrap();
+        let foreign = ephemeral.join("not-scratch");
+        std::fs::create_dir(&foreign).unwrap();
+        let stray_file =
+            ephemeral.join(format!("{}file", interpreter::runtime::vfs::TEMPDIR_PREFIX));
+        std::fs::write(&stray_file, b"x").unwrap();
+        std::fs::create_dir(root.path().join("sessions")).unwrap();
+        // A link with the prefix goes, but what it points at stays.
+        #[cfg(unix)]
+        let (link, target) = {
+            let target = tempfile::tempdir().unwrap();
+            std::fs::write(target.path().join("kept.txt"), b"x").unwrap();
+            let link = ephemeral.join(format!("{}link", interpreter::runtime::vfs::TEMPDIR_PREFIX));
+            std::os::unix::fs::symlink(target.path(), &link).unwrap();
+            (link, target)
+        };
+
+        fixed_root_manager(root.path()).boot().await.expect("boot");
+        assert!(!leftover.exists());
+        assert!(!stray_file.exists());
+        assert!(foreign.exists());
+        #[cfg(unix)]
+        {
+            assert!(std::fs::symlink_metadata(&link).is_err());
+            assert!(target.path().join("kept.txt").exists());
+        }
     }
 }

@@ -201,7 +201,7 @@ fn server_built(log: DecisionLogConfig, usage: ProviderUsage, events: bool) -> S
         blueprints: Some(Arc::new(
             InMemoryBlueprintStore::seed([blueprint()]).expect("seed"),
         )),
-        session_storage_root: Some(dirs.path().join("sessions")),
+        volume_root: Some(dirs.path().to_path_buf()),
         llm_dispatch: Some(Arc::new(Model { usage })),
         run_recorder: Some(Arc::new(Factory {
             collected: collected.clone(),
@@ -802,7 +802,7 @@ function main(): number {{
             blueprints: Some(Arc::new(
                 InMemoryBlueprintStore::seed([blueprint()]).unwrap(),
             )),
-            session_storage_root: Some(dirs.path().join("sessions")),
+            volume_root: Some(dirs.path().to_path_buf()),
             ..in_memory_config::config()
         };
         (AppState::new(config).await.unwrap(), dirs)

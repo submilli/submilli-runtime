@@ -31,6 +31,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVER_BIN="${SERVER_BIN:-${REPO_ROOT}/target/debug/submilli-server}"
 
 STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/submilli-idem-XXXXXX")"
+# A configured volume root must exist before the server starts.
+mkdir -p "${STATE_DIR}/volumes"
 SERVER_PID=""
 MOCK_PID=""
 SERVER_PORT=""
@@ -159,7 +161,7 @@ start_server() {
     SUBMILLI_PORT="$SERVER_PORT" \
     SUBMILLI_SESSION_STORE_DIR="${STATE_DIR}/sessions" \
     SUBMILLI_BLUEPRINT_DIR="${STATE_DIR}/blueprints" \
-    SUBMILLI_VFS_SESSION_DIR="${STATE_DIR}/vfs" \
+    SUBMILLI_VOLUME_DIR="${STATE_DIR}/volumes" \
     SUBMILLI_SECRET_STORE_DIR="${STATE_DIR}/secrets" \
     SUBMILLI_PACKAGE_STORE_DIR="${STATE_DIR}/packages" \
     SUBMILLI_ALLOW_LOCALHOST=1 \

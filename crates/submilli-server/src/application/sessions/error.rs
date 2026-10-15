@@ -8,6 +8,11 @@ pub enum BootError {
     Idempotency(StoreError),
     /// The pre-database secret-store directory could not be imported.
     Secrets(ImportFailure),
+    /// Leftover `ephemeral` scratch could not be listed for removal.
+    Scratch {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
 }
 
 impl std::fmt::Display for BootError {
@@ -16,6 +21,11 @@ impl std::fmt::Display for BootError {
             Self::Sessions(_) => f.write_str("cannot enumerate persisted sessions"),
             Self::Idempotency(_) => f.write_str("cannot enumerate idempotency sessions"),
             Self::Secrets(_) => f.write_str("cannot import the secret-store directory"),
+            Self::Scratch { path, .. } => write!(
+                f,
+                "cannot sweep leftover ephemeral scratch under {}",
+                path.display()
+            ),
         }
     }
 }
@@ -25,6 +35,7 @@ impl std::error::Error for BootError {
         match self {
             Self::Sessions(error) | Self::Idempotency(error) => Some(error),
             Self::Secrets(error) => Some(error),
+            Self::Scratch { source, .. } => Some(source),
         }
     }
 }

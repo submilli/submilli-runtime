@@ -491,9 +491,8 @@ fn server_config(
         network_policy: egress.policy(),
         blueprint_dir: Some(state_dir.blueprints_dir()),
         session_store_dir: Some(state_dir.sessions_dir()),
-        session_storage_root: Some(state_dir.session_vfs_dir()),
-        ephemeral_storage_root: Some(state_dir.ephemeral_vfs_dir()),
-        managed_volume_root: Some(state_dir.volumes_dir()),
+        // Created with the state directory, so the server can require it.
+        volume_root: Some(state_dir.volume_root()),
         // The developer's own stores, so `build publish-local` and `secret put`
         // keep working.
         package_store_root: Some(submilli_build::default_package_store_dir()),

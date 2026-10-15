@@ -609,7 +609,7 @@ async fn authentication_audit_keeps_peer_addresses_for_http_and_https() {
                 file: Some(audit_path.clone()),
                 ..Default::default()
             },
-            session_storage_root: Some(dir.path().join("sessions")),
+            volume_root: Some(dir.path().to_path_buf()),
             ..Default::default()
         };
         let server = tokio::spawn(submilli_server::serve(

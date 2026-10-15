@@ -159,9 +159,7 @@ pub(crate) fn settings_hash(
     addr: std::net::SocketAddr,
     grace: std::time::Duration,
 ) -> Option<String> {
-    use crate::config::{
-        default_managed_volume_root, default_package_store_dir, default_session_storage_root,
-    };
+    use crate::config::{default_package_store_dir, default_volume_root};
     use crate::session_manager::{
         DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS, DEFAULT_MAX_ALL_EXECUTIONS_TOKENS,
         DEFAULT_MAX_CONCURRENCY, DEFAULT_MAX_EMBEDDING_CONCURRENCY, DEFAULT_TOTAL_SESSION_KV_BYTES,
@@ -180,11 +178,9 @@ pub(crate) fn settings_hash(
         "audit_file": config.audit.file.as_deref().map(path_hash),
         "blueprint_dir": config.blueprint_dir.as_deref().map(path_hash), "session_store_dir": config.session_store_dir.as_deref().map(path_hash),
         "database_path": config.database_path.as_deref().map(path_hash),
-        "session_storage_root": path_hash(&config.session_storage_root.clone().unwrap_or_else(default_session_storage_root)),
-        "ephemeral_storage_root": path_hash(&config.ephemeral_storage_root.clone().unwrap_or_else(std::env::temp_dir)),
+        "volume_root": path_hash(&config.volume_root.clone().unwrap_or_else(default_volume_root)),
         "package_store_root": path_hash(&config.package_store_root.clone().unwrap_or_else(default_package_store_dir)),
         "package_fallback_root": config.package_fallback_root.as_deref().map(path_hash),
-        "managed_volume_root": path_hash(&config.managed_volume_root.clone().unwrap_or_else(default_managed_volume_root)),
         "volumes": format!("{:?}", config.volumes),
         "mcp_allowed_hosts": config.mcp_allowed_hosts.clone().unwrap_or_else(|| vec!["localhost".into(), "127.0.0.1".into(), "::1".into()]),
         "oauth": oauth, "github_token_file": config.github_token_file.as_deref().map(path_hash),
@@ -1116,7 +1112,7 @@ mod tests {
             Some(crate::session_manager::DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS);
         config.max_session_state_memory =
             Some(crate::session_manager::DEFAULT_TOTAL_SESSION_KV_BYTES);
-        config.session_storage_root = Some(crate::config::default_session_storage_root());
+        config.volume_root = Some(crate::config::default_volume_root());
         assert_eq!(settings_hash(&config, addr, grace).unwrap(), hash);
         config.volumes.insert(
             "data".into(),
@@ -1160,11 +1156,9 @@ mod tests {
             },
             blueprint_dir: Some(path.clone()),
             session_store_dir: Some(path.clone()),
-            session_storage_root: Some(path.clone()),
-            ephemeral_storage_root: Some(path.clone()),
+            volume_root: Some(path.clone()),
             package_store_root: Some(path.clone()),
             package_fallback_root: Some(path.clone()),
-            managed_volume_root: Some(path.clone()),
             github_token_file: Some(path),
             ..Default::default()
         };

@@ -165,14 +165,20 @@ default — and measure steady-state RSS under sustained load, not RSS at startu
 ## Storage
 
 `persistence.enabled` defaults to **true**. Blueprints registered through the API,
-sessions, installed packages, secrets, and `managed-local` named volumes all live
-on the volume, under its `server/` subdirectory, and the failure mode of `false`
+sessions and their files, installed packages, secrets, `managed-local` named
+volumes, and ephemeral scratch all live on the volume, under its `server/`
+subdirectory, and the failure mode of `false`
 is silent data loss on reschedule while the failure mode of `true` is a loud
 unbound-PVC error at install. Prefer the loud one.
 
-Named volumes are declared under `config.volumes` (see `values.yaml`). A
-`managed-local` volume is stored under `server/volumes/` on this claim, so it
-needs nothing else; a custom `config.volume_dir` must also sit on durable storage.
+Every directory a program's filesystem uses sits under one volume root,
+`server/volumes/` on this claim: `managed-local/<name>` for `managed-local`
+named volumes, `sessions/<session id>` for `per_session` files, and
+`ephemeral/` for scratch. Named volumes are declared under `config.volumes` (see
+`values.yaml`) and need nothing else. A custom `config.volume_dir` must sit on
+durable storage and must already exist when the server starts: the server never
+creates a configured root, so a missing mount fails startup instead of being
+replaced by an empty directory.
 A `local-path` volume names a directory inside the container, which you mount
 yourself, for example from a Secret or ConfigMap through `secrets:`.
 
@@ -334,9 +340,10 @@ config:
 ```
 
 Keys the chart sets from its own values (`bind`, `port`, `max_execution_memory`,
-`shutdown_grace`, `vfs_ephemeral_dir`,
-`secret_store.key_file`, `allow_unauthenticated`, `github_token_file`) are
-refused there, with a message naming the value to use. Entries under
+`shutdown_grace`, `secret_store.key_file`, `allow_unauthenticated`,
+`github_token_file`) are refused there, with a message naming the value to use.
+So are `vfs_session_dir` and `vfs_ephemeral_dir`, which the server no longer
+reads. Entries under
 `config.api_tokens` are added after the chart's two, each with a `token_file`
 that a `secrets:` mount provides. `extraEnv` still overrides the file,
 because the server ranks a `SUBMILLI_*` variable above it.
