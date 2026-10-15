@@ -1002,6 +1002,7 @@ async fn configured_execution_timeout_interrupts_loop_without_expiring_early() {
         .expect("seed blueprints"),
     );
     let router = app(AppState::new(ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
         blueprints: Some(blueprints),
         runtime: RuntimeConfig {
             timeout: Some(Duration::from_secs(1)),

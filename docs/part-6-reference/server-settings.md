@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1f5b0bfab6570812ae1bb1cb859ae11fcb0632fb150a14bd7c11e85f61be7f92"
+  contentHash: "aed75f2fe587c235f87f38399eb175b83014dec1139086b93f418d2f8a981003"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -44,10 +44,9 @@ flat names listed. A dash means the form doesn't exist.
 | `database_path` | `--database-path` | `SUBMILLI_DATABASE_PATH` | path | `$SUBMILLI_HOME/server/db/submilli.db` | SQLite database file. |
 | `blueprint_dir` | `--blueprint-dir` | `SUBMILLI_BLUEPRINT_DIR` | path | `$SUBMILLI_HOME/server/blueprints` | Obsolete. |
 | `session_store_dir` | `--session-store-dir` | `SUBMILLI_SESSION_STORE_DIR` | path | `$SUBMILLI_HOME/server/sessions` | Session lifecycle records. |
-| `vfs_session_dir` | `--vfs-session-dir` | `SUBMILLI_VFS_SESSION_DIR` | path | `$SUBMILLI_HOME/server/vfs/sessions` | Files of `per_session` filesystems. |
-| `vfs_ephemeral_dir` | `--vfs-ephemeral-dir` | `SUBMILLI_VFS_EPHEMERAL_DIR` | path | the OS temp directory | Scratch directories of `ephemeral` filesystems. |
 | `package_store_dir` | `--package-store-dir` | `SUBMILLI_PACKAGE_STORE_DIR` | path | `$SUBMILLI_HOME/server/packages` | Installed Packages. |
-| `volume_dir` | `--volume-dir` | `SUBMILLI_VOLUME_DIR` | path | `$SUBMILLI_HOME/server/volumes` | `managed-local` volumes. |
+| `volume_dir` | `--volume-dir` | `SUBMILLI_VOLUME_DIR` | path | `$SUBMILLI_HOME/server/volumes` | `managed-local` volumes, `per_session` files and `ephemeral` scratch. See [Directories](#directories). |
+| — | `--create-volume-dir` | — | boolean | `false` | Create a missing `volume_dir` at startup. See [Directories](#directories). |
 | `secret_store.dir` | `--secret-store-dir` | `SUBMILLI_SECRET_STORE_DIR` | path | `$SUBMILLI_HOME/server/secrets` | The encrypted secret store. See [`secret_store`](#secret_store). |
 | `secret_store.key_file` | `--secret-store-key-file` | `SUBMILLI_SECRET_STORE_KEY_FILE` | path | none | File holding the store's key. |
 | `secret_store.key_env` | `--secret-store-key-env` | `SUBMILLI_SECRET_STORE_KEY_ENV` | variable name | `SUBMILLI_SECRET_KEY` | Variable holding the store's key. |
@@ -59,7 +58,6 @@ flat names listed. A dash means the form doesn't exist.
 | `max_execution_time` | `--max-execution-time` | `SUBMILLI_MAX_EXECUTION_TIME` | seconds | `0`, no limit | Time one run may take. |
 | `max_execution_fuel` | `--max-execution-fuel` | `SUBMILLI_MAX_EXECUTION_FUEL` | count, at least 1 | `1T` | Fuel one run may burn. |
 | `max_execution_stack` | `--max-execution-stack` | `SUBMILLI_MAX_EXECUTION_STACK` | kibibytes, 1 to 16384 | `512` | Stack one run may use. |
-| `max_session_state_memory` | `--max-session-state-memory` | `SUBMILLI_MAX_SESSION_STATE_MEMORY` | megabytes, at least 1 | `1024` | `submilli:session` state across all sessions. |
 | `max_llm_tokens` | `--max-llm-tokens` | `SUBMILLI_MAX_LLM_TOKENS` | count, at least 1 | `20M` | Model tokens across all runs. |
 | `max_execution_llm_tokens` | `--max-execution-llm-tokens` | `SUBMILLI_MAX_EXECUTION_LLM_TOKENS` | count, at least 1 | `1M` | Model tokens one run may spend. |
 | `max_llm_concurrency` | `--max-llm-concurrency` | `SUBMILLI_MAX_LLM_CONCURRENCY` | prompts, at least 1 | `4` | Prompts of one `llm.batch` in flight at once. |
@@ -195,14 +193,19 @@ mcp_allowed_hosts:
 | --- | --- | --- |
 | `blueprint_dir` | Obsolete. | `$SUBMILLI_HOME/server/blueprints` |
 | `session_store_dir` | Open sessions' lifecycle records, so sessions and idle timeouts survive a restart. | `$SUBMILLI_HOME/server/sessions` |
-| `vfs_session_dir` | The files of each session with a `per_session` filesystem. | `$SUBMILLI_HOME/server/vfs/sessions` |
-| `vfs_ephemeral_dir` | One directory per run of an `ephemeral` filesystem, deleted when the run ends. | The OS temp directory |
 | `package_store_dir` | Packages installed with `submilli server packages install`. | `$SUBMILLI_HOME/server/packages` |
-| `volume_dir` | One directory per `managed-local` volume. | `$SUBMILLI_HOME/server/volumes` |
+| `volume_dir` | `managed-local/<name>` for each `managed-local` volume, `sessions/<session id>` for the files of each session with a `per_session` filesystem, and `ephemeral/` with one directory per run of an `ephemeral` filesystem, deleted when the run ends. | `$SUBMILLI_HOME/server/volumes` |
 | `secret_store.dir` | The encrypted secret store. | `$SUBMILLI_HOME/server/secrets` |
 
-The server creates each directory it needs. It also reads the CLI's Package
-store, `$SUBMILLI_HOME/packages`, as a read-only fallback.
+The server creates each directory it needs, except a `volume_dir` you set,
+which must exist when the server starts. On a host where nothing can create it
+first, `--create-volume-dir` lets the server create it. Use it only for a
+directory on a disk that is always mounted by then. The volume root's
+`managed-local/`, `sessions/` and `ephemeral/` directories are created at
+startup and never while the server runs. Without the flag, a disk that isn't
+mounted stops the server, or the work that needs it, instead of filling an
+empty directory in its place. The server also reads the CLI's Package store, `$SUBMILLI_HOME/packages`,
+as a read-only fallback.
 
 ## `secret_store`
 
@@ -221,6 +224,12 @@ commands answer `no secret store is configured on this server`. A key that
 can't be read stops the server from starting. Values go in and never come
 back out through the API.
 
+The key also encrypts `submilli:session` state and seals `session.list`
+cursors. Without a key, session state is stored unencrypted and cursors stop
+working when the server restarts. After the key changes, state sealed with
+the old key can't be read: a `session.get` of it ends the run, while `has` and
+`list` still see it and `set` and `remove` still replace it.
+
 ## `volumes`
 
 Named volumes a Blueprint may use as its filesystem root or mount under
@@ -228,7 +237,7 @@ Named volumes a Blueprint may use as its filesystem root or mount under
 
 | Key | Value |
 | --- | --- |
-| `kind` | Required. `managed-local`: the server keeps the files at `<volume_dir>/<name>`, created on first use. `local-path`: the files are in the directory `path` names, which the server never creates or deletes. |
+| `kind` | Required. `managed-local`: the server keeps the files at `<volume_dir>/managed-local/<name>`, created on first use. `local-path`: the files are in the directory `path` names, which the server never creates or deletes. |
 | `path` | Required for `local-path`, refused for `managed-local`. An absolute path. |
 | `access` | `read_write` (default) or `read_only`. A Blueprint can narrow it, never widen it. |
 | `size_limit` | Required. A size such as `500MB` or `10GB`, or `unlimited`. Units are binary: `KB` is 1,024 bytes, `MB` 1,024 KB, `GB` 1,024 MB, `TB` 1,024 GB. `B` or no unit means bytes. |
@@ -431,14 +440,12 @@ Options:
           Source directory for session JSON import into SQLite; also holds the file-backed idempotency ledger. Mount on durable storage. [default: ~/.submilli/server/sessions] Env: `$SUBMILLI_SESSION_STORE_DIR`
       --database-path <PATH>
           Server SQLite database file. The parent directory is created at boot. [default: ~/.submilli/server/db/submilli.db] Env: `$SUBMILLI_DATABASE_PATH`
-      --vfs-session-dir <VFS_SESSION_DIR>
-          Durable root for `per_session` VFS directories. Mount on a PersistentVolume so a session's files survive a server restart. [default: ~/.submilli/server/vfs/sessions] Env: `$SUBMILLI_VFS_SESSION_DIR`
-      --vfs-ephemeral-dir <VFS_EPHEMERAL_DIR>
-          Root for `ephemeral` scratch directories. Defaults to the OS temp dir; point it at volatile storage (tmpfs / `emptyDir`) to keep them off the durable volume. Env: `$SUBMILLI_VFS_EPHEMERAL_DIR`
       --volume-dir <VOLUME_DIR>
-          Root for `managed-local` named volumes, one directory per volume name. Mount on durable storage: named volumes outlive sessions and restarts. The server creates a volume's directory on first use and never deletes it. [default: ~/.submilli/server/volumes] Env: `$SUBMILLI_VOLUME_DIR`
+          Durable root for `managed-local` named volumes (`managed-local/<name>`), `per_session` workspaces (`sessions/<session id>`) and `ephemeral` scratch (`ephemeral/`). Mount on durable storage: named volumes and session files outlive restarts. A path set here must already exist. The server does not create it unless given `--create-volume-dir`, so a missing mount fails startup. [default: ~/.submilli/server/volumes, created at startup] Env: `$SUBMILLI_VOLUME_DIR`
+      --create-volume-dir
+          Create the volume directory (from `--volume-dir`, `$SUBMILLI_VOLUME_DIR` or `volume_dir`) when it is missing, instead of failing startup. For a host where nothing else can create the directory before the server starts. Only use it when the directory is on durable storage that is always mounted when the server starts: otherwise named volumes and session files go to a fresh empty directory in its place. Does nothing when no volume directory is set, since the server creates its default one anyway. No config-file key or environment variable
       --secret-store-dir <SECRET_STORE_DIR>
-          Directory backing the encrypted secret store (one sealed file per secret). Not the CLI's store at ~/.submilli/secrets, which `submilli secret put` and `mcp authenticate` fill and `submilli run` reads. [default: ~/.submilli/server/secrets] Env: `$SUBMILLI_SECRET_STORE_DIR`
+          Directory of a secret store from before secrets and MCP OAuth grants were kept in the database (one sealed file per secret). When it exists, startup imports it with the secret-store key and moves it to `archive/secrets` beside it. Not the CLI's store at ~/.submilli/secrets, which `submilli secret put` and `mcp authenticate` fill and `submilli run` reads. [default: ~/.submilli/server/secrets] Env: `$SUBMILLI_SECRET_STORE_DIR`
       --package-store-dir <PACKAGE_STORE_DIR>
           Root of the package store that `submilli server packages install` writes to and the runtime loads packages from first. Created if absent. Packages published locally with `submilli build publish-local` or `submilli install` (~/.submilli/packages) are readable as a fallback and never written. [default: ~/.submilli/server/packages] Env: `$SUBMILLI_PACKAGE_STORE_DIR`
       --secret-store-key-env <SECRET_STORE_KEY_ENV>
@@ -463,8 +470,6 @@ Options:
           Fuel one execution may burn, roughly one unit per Wasm instruction; a program that runs out ends with `fuel exhausted`. The backstop for a runaway loop when no execution time is set. [default: 1000000000000] Env: `$SUBMILLI_MAX_EXECUTION_FUEL`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1T or 10_000
       --max-execution-stack <KIBIBYTES>
           Wasm stack one execution may use, in kibibytes; deeper recursion ends with `call stack exhausted`. [default: 512] Env: `$SUBMILLI_MAX_EXECUTION_STACK`, which outranks the config file
-      --max-session-state-memory <MEGABYTES>
-          Memory every live session's `submilli:session` state may hold *in total*, in megabytes. Unlike `--max-execution-memory`, which bounds one execution, this bounds the process against session count: reservations are taken atomically, so a `set` that would push the server past this is refused rather than evicting another session's state. [default: 1024] Env: `$SUBMILLI_MAX_SESSION_STATE_MEMORY`, which outranks the config file
       --max-llm-tokens <TOKENS>
           Tokens every live execution's `submilli:llm` calls may spend *in total*. This is the ceiling on what the server can spend against the operator's provider credential: reservations cover the prompt plus the reserved output before dispatch, so a call that would push the server past this is refused rather than billed. [default: 20000000] Env: `$SUBMILLI_MAX_LLM_TOKENS`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 20M or 10_000
       --max-execution-llm-tokens <TOKENS>

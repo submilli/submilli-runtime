@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "05086b03dfa77e84521d4390ea813c1046e5016e3d0ea8a9cd0828a153966565"
+  contentHash: "83bcf0e7ecb7fe472640fdbb4fae593dd3ada047854dd42ed011320017efd40f"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -42,7 +42,7 @@ volumes:
 
 | Kind | Where its files live |
 | --- | --- |
-| `managed-local` | A directory the server creates the first time a program uses the volume, under `volume_dir` (`$SUBMILLI_HOME/server/volumes/<name>` by default) |
+| `managed-local` | A directory the server creates the first time a program uses the volume, under `volume_dir` (`$SUBMILLI_HOME/server/volumes/managed-local/<name>` by default) |
 | `local-path` | The directory at `path`, which you created and the server never creates or deletes |
 
 `size_limit` is required, a size such as `100MB` or `10GB`, or
@@ -272,17 +272,18 @@ reach the rest of what the Blueprint mounts. The boundary is `subPath`.
 ## Where the files live
 
 A managed volume's files are under `volume_dir`, in a directory named
-after the volume, and a `local-path` volume's are where you put them:
+after the volume inside `managed-local/`, and a `local-path` volume's are
+where you put them:
 
 ```text
-~/.submilli/server/volumes/project-memory/notes.md
+~/.submilli/server/volumes/managed-local/project-memory/notes.md
 ```
 
 Nothing the server does deletes a volume's files. Ending a session or
 removing a Blueprint leaves them, and removing the declaration from the
 config only stops Blueprints from naming the volume. Declare it again
 and its files are still there. To remove a managed volume for good,
-delete its directory under `volume_dir` while the server is stopped.
-Back up `volume_dir` with the sessions, as [Run the
+delete its directory under `volume_dir/managed-local` while the server is
+stopped. Back up `volume_dir` with the sessions, as [Run the
 server](/docs/server/run-the-server) says. As with a session's files,
 nothing can rebuild what programs kept there.

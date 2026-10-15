@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "3566a2b67ff2e3d642ea0b5bf08a3550941a0cadae2557fea63d9acb79e7ba7d"
+  contentHash: "9a88396374834d296f0877349dc864c7ad616c0fbd10db972d8cdc33678e5a09"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -412,7 +412,7 @@ Options:
       --max-llm-tokens <TOKENS>
           Tokens this run's `submilli:llm` calls may spend in total. A run that asks for more raises a catchable `QuotaExceededError` rather than being billed.
           
-          Finite by default, deliberately: unlike `submilli:session`, whose state is memory-only, a blueprint-configured provider spends real money against the operator's credential, and a CLI run has no server-wide ceiling behind it. [default: 1000000] Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`.
+          Finite by default, deliberately: a blueprint-configured provider spends real money against the operator's credential, and a CLI run has no server-wide ceiling behind it. [default: 1000000] Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`.
 
       --max-llm-concurrency <PROMPTS>
           Prompts one `llm.batch` dispatches at once. [default: 4] Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`

@@ -10,14 +10,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 
 #[cfg(target_os = "macos")]
 use interpreter::runtime::MAX_MEASURED_DEPTH;
 #[cfg(target_os = "macos")]
 use interpreter::runtime::open_host_subdir;
 use interpreter::runtime::session_kv::{
-    InMemorySessionKv, SessionKvEntry, SessionKvError, SessionKvLimits, SessionKvPage,
+    InMemorySessionKv, SessionKvEntry, SessionKvFuture, SessionKvLimits, SessionKvPage,
     SessionKvStore,
 };
 use interpreter::runtime::{
@@ -747,7 +747,7 @@ pub struct ForkedSessionKv {
     own: InMemorySessionKv,
     /// Keys the run removed that the source still holds. Held across each operation, so
     /// the two stores change together.
-    removed: Mutex<BTreeSet<Vec<u16>>>,
+    removed: tokio::sync::Mutex<BTreeSet<Vec<u16>>>,
 }
 
 impl ForkedSessionKv {
@@ -758,102 +758,108 @@ impl ForkedSessionKv {
         Self {
             base,
             own: InMemorySessionKv::new(limits),
-            removed: Mutex::new(BTreeSet::new()),
+            removed: tokio::sync::Mutex::new(BTreeSet::new()),
         }
-    }
-
-    fn removed(&self) -> MutexGuard<'_, BTreeSet<Vec<u16>>> {
-        self.removed.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
 impl SessionKvStore for ForkedSessionKv {
-    fn get(&self, key: &[u16]) -> Result<Option<Vec<u16>>, SessionKvError> {
-        let removed = self.removed();
-        if let Some(own) = self.own.get(key)? {
-            return Ok(Some(own));
-        }
-        match &self.base {
-            Some(base) if !removed.contains(key) => base.get(key),
-            _ => Ok(None),
-        }
+    fn get<'a>(&'a self, key: &'a [u16]) -> SessionKvFuture<'a, Option<Vec<u16>>> {
+        Box::pin(async move {
+            let removed = self.removed.lock().await;
+            if let Some(own) = self.own.get_now(key)? {
+                return Ok(Some(own));
+            }
+            match &self.base {
+                Some(base) if !removed.contains(key) => base.get(key).await,
+                _ => Ok(None),
+            }
+        })
     }
 
-    fn has(&self, key: &[u16]) -> Result<bool, SessionKvError> {
-        let removed = self.removed();
-        if self.own.has(key)? {
-            return Ok(true);
-        }
-        match &self.base {
-            Some(base) if !removed.contains(key) => base.has(key),
-            _ => Ok(false),
-        }
+    fn has<'a>(&'a self, key: &'a [u16]) -> SessionKvFuture<'a, bool> {
+        Box::pin(async move {
+            let removed = self.removed.lock().await;
+            if self.own.has_now(key)? {
+                return Ok(true);
+            }
+            match &self.base {
+                Some(base) if !removed.contains(key) => base.has(key).await,
+                _ => Ok(false),
+            }
+        })
     }
 
-    fn set(&self, key: &[u16], payload: &[u16]) -> Result<(), SessionKvError> {
-        let mut removed = self.removed();
-        self.own.set(key, payload)?;
-        removed.remove(key);
-        Ok(())
+    fn set<'a>(&'a self, key: &'a [u16], payload: &'a [u16]) -> SessionKvFuture<'a, ()> {
+        Box::pin(async move {
+            let mut removed = self.removed.lock().await;
+            self.own.set_now(key, payload)?;
+            removed.remove(key);
+            Ok(())
+        })
     }
 
-    fn remove(&self, key: &[u16]) -> Result<bool, SessionKvError> {
-        let mut removed = self.removed();
-        let was_own = self.own.remove(key)?;
-        let in_base = match &self.base {
-            Some(base) if !removed.contains(key) => base.has(key)?,
-            _ => false,
-        };
-        if in_base {
-            removed.insert(key.to_vec());
-        }
-        Ok(was_own || in_base)
+    fn remove<'a>(&'a self, key: &'a [u16]) -> SessionKvFuture<'a, bool> {
+        Box::pin(async move {
+            let mut removed = self.removed.lock().await;
+            let was_own = self.own.remove_now(key)?;
+            let in_base = match &self.base {
+                Some(base) if !removed.contains(key) => base.has(key).await?,
+                _ => false,
+            };
+            if in_base {
+                removed.insert(key.to_vec());
+            }
+            Ok(was_own || in_base)
+        })
     }
 
     /// Both stores are scanned and merged: the window ends where the earlier of the two
     /// stopped, so a page covers keys neither skipped. A page may look at up to twice
     /// `max_scan` keys.
-    fn scan(
-        &self,
-        after: Option<&[u16]>,
-        prefix: &[u16],
+    fn scan<'a>(
+        &'a self,
+        after: Option<&'a [u16]>,
+        prefix: &'a [u16],
         max_scan: usize,
-    ) -> Result<SessionKvPage, SessionKvError> {
-        let removed = self.removed();
-        let own = self.own.scan(after, prefix, max_scan)?;
-        let Some(base) = &self.base else {
-            return Ok(own);
-        };
-        let base = base.scan(after, prefix, max_scan)?;
-        let end = [&own, &base]
-            .into_iter()
-            .filter(|page| !page.scanned_all)
-            .filter_map(|page| page.last_scanned.clone())
-            .min();
-        let within = |key: &Vec<u16>| end.as_ref().is_none_or(|end| key <= end);
-        let mut merged: BTreeMap<Vec<u16>, u64> = BTreeMap::new();
-        for entry in base.entries {
-            if within(&entry.key) && !removed.contains(&entry.key) {
-                merged.insert(entry.key, entry.size_bytes);
-            }
-        }
-        for entry in own.entries {
-            if within(&entry.key) {
-                merged.insert(entry.key, entry.size_bytes);
-            }
-        }
-        let scanned_all = own.scanned_all && base.scanned_all;
-        Ok(SessionKvPage {
-            entries: merged
+    ) -> SessionKvFuture<'a, SessionKvPage> {
+        Box::pin(async move {
+            let removed = self.removed.lock().await;
+            let own = self.own.scan_now(after, prefix, max_scan)?;
+            let Some(base) = &self.base else {
+                return Ok(own);
+            };
+            let base = base.scan(after, prefix, max_scan).await?;
+            let end = [&own, &base]
                 .into_iter()
-                .map(|(key, size_bytes)| SessionKvEntry { key, size_bytes })
-                .collect(),
-            last_scanned: if scanned_all {
-                own.last_scanned.max(base.last_scanned)
-            } else {
-                end
-            },
-            scanned_all,
+                .filter(|page| !page.scanned_all)
+                .filter_map(|page| page.last_scanned.clone())
+                .min();
+            let within = |key: &Vec<u16>| end.as_ref().is_none_or(|end| key <= end);
+            let mut merged: BTreeMap<Vec<u16>, u64> = BTreeMap::new();
+            for entry in base.entries {
+                if within(&entry.key) && !removed.contains(&entry.key) {
+                    merged.insert(entry.key, entry.size_bytes);
+                }
+            }
+            for entry in own.entries {
+                if within(&entry.key) {
+                    merged.insert(entry.key, entry.size_bytes);
+                }
+            }
+            let scanned_all = own.scanned_all && base.scanned_all;
+            Ok(SessionKvPage {
+                entries: merged
+                    .into_iter()
+                    .map(|(key, size_bytes)| SessionKvEntry { key, size_bytes })
+                    .collect(),
+                last_scanned: if scanned_all {
+                    own.last_scanned.max(base.last_scanned)
+                } else {
+                    end
+                },
+                scanned_all,
+            })
         })
     }
 
@@ -875,16 +881,16 @@ mod tests {
         text.encode_utf16().collect()
     }
 
-    fn source_with(entries: &[(&str, &str)]) -> Arc<InMemorySessionKv> {
+    async fn source_with(entries: &[(&str, &str)]) -> Arc<InMemorySessionKv> {
         let source = Arc::new(InMemorySessionKv::default());
         for (name, value) in entries {
-            source.set(&key(name), &key(value)).expect("set");
+            source.set(&key(name), &key(value)).await.expect("set");
         }
         source
     }
 
-    fn scanned(store: &dyn SessionKvStore, prefix: &str) -> Vec<String> {
-        let page = store.scan(None, &key(prefix), 100).expect("scan");
+    async fn scanned(store: &dyn SessionKvStore, prefix: &str) -> Vec<String> {
+        let page = store.scan(None, &key(prefix), 100).await.expect("scan");
         assert!(page.scanned_all);
         page.entries
             .iter()
@@ -892,44 +898,44 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn a_forked_store_reads_through_and_keeps_its_own_writes() {
-        let source = source_with(&[("a", "1"), ("b", "2")]);
+    #[tokio::test]
+    async fn a_forked_store_reads_through_and_keeps_its_own_writes() {
+        let source = source_with(&[("a", "1"), ("b", "2")]).await;
         let forked = ForkedSessionKv::new(Some(source.clone()));
-        assert_eq!(forked.get(&key("a")).unwrap(), Some(key("1")));
-        forked.set(&key("a"), &key("changed")).unwrap();
-        forked.set(&key("c"), &key("3")).unwrap();
-        assert_eq!(forked.get(&key("a")).unwrap(), Some(key("changed")));
-        assert!(forked.has(&key("c")).unwrap());
-        assert_eq!(source.get(&key("a")).unwrap(), Some(key("1")));
-        assert!(!source.has(&key("c")).unwrap());
+        assert_eq!(forked.get(&key("a")).await.unwrap(), Some(key("1")));
+        forked.set(&key("a"), &key("changed")).await.unwrap();
+        forked.set(&key("c"), &key("3")).await.unwrap();
+        assert_eq!(forked.get(&key("a")).await.unwrap(), Some(key("changed")));
+        assert!(forked.has(&key("c")).await.unwrap());
+        assert_eq!(source.get(&key("a")).await.unwrap(), Some(key("1")));
+        assert!(!source.has(&key("c")).await.unwrap());
     }
 
-    #[test]
-    fn a_removal_hides_the_source_entry_until_it_is_set_again() {
-        let source = source_with(&[("a", "1")]);
+    #[tokio::test]
+    async fn a_removal_hides_the_source_entry_until_it_is_set_again() {
+        let source = source_with(&[("a", "1")]).await;
         let forked = ForkedSessionKv::new(Some(source.clone()));
-        assert!(forked.remove(&key("a")).unwrap());
-        assert!(!forked.remove(&key("a")).unwrap(), "already removed");
-        assert_eq!(forked.get(&key("a")).unwrap(), None);
-        assert!(!forked.has(&key("a")).unwrap());
-        assert!(scanned(&forked, "").is_empty());
-        assert!(source.has(&key("a")).unwrap(), "the source keeps it");
-        forked.set(&key("a"), &key("back")).unwrap();
-        assert_eq!(forked.get(&key("a")).unwrap(), Some(key("back")));
-        assert_eq!(scanned(&forked, ""), ["a"]);
+        assert!(forked.remove(&key("a")).await.unwrap());
+        assert!(!forked.remove(&key("a")).await.unwrap(), "already removed");
+        assert_eq!(forked.get(&key("a")).await.unwrap(), None);
+        assert!(!forked.has(&key("a")).await.unwrap());
+        assert!(scanned(&forked, "").await.is_empty());
+        assert!(source.has(&key("a")).await.unwrap(), "the source keeps it");
+        forked.set(&key("a"), &key("back")).await.unwrap();
+        assert_eq!(forked.get(&key("a")).await.unwrap(), Some(key("back")));
+        assert_eq!(scanned(&forked, "").await, ["a"]);
     }
 
-    #[test]
-    fn a_scan_merges_both_stores_in_key_order() {
-        let source = source_with(&[("a", "1"), ("c", "3"), ("x1", "9")]);
+    #[tokio::test]
+    async fn a_scan_merges_both_stores_in_key_order() {
+        let source = source_with(&[("a", "1"), ("c", "3"), ("x1", "9")]).await;
         let forked = ForkedSessionKv::new(Some(source));
-        forked.set(&key("b"), &key("2")).unwrap();
-        forked.set(&key("c"), &key("override")).unwrap();
-        forked.remove(&key("a")).unwrap();
-        assert_eq!(scanned(&forked, ""), ["b", "c", "x1"]);
-        assert_eq!(scanned(&forked, "x"), ["x1"]);
-        let page = forked.scan(None, &key(""), 100).unwrap();
+        forked.set(&key("b"), &key("2")).await.unwrap();
+        forked.set(&key("c"), &key("override")).await.unwrap();
+        forked.remove(&key("a")).await.unwrap();
+        assert_eq!(scanned(&forked, "").await, ["b", "c", "x1"]);
+        assert_eq!(scanned(&forked, "x").await, ["x1"]);
+        let page = forked.scan(None, &key(""), 100).await.unwrap();
         let sizes: Vec<u64> = page.entries.iter().map(|entry| entry.size_bytes).collect();
         assert_eq!(
             sizes[1],
@@ -938,16 +944,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_bounded_scan_pages_through_the_merge() {
-        let source = source_with(&[("a", "1"), ("c", "3"), ("e", "5")]);
+    #[tokio::test]
+    async fn a_bounded_scan_pages_through_the_merge() {
+        let source = source_with(&[("a", "1"), ("c", "3"), ("e", "5")]).await;
         let forked = ForkedSessionKv::new(Some(source));
-        forked.set(&key("b"), &key("2")).unwrap();
-        forked.set(&key("d"), &key("4")).unwrap();
+        forked.set(&key("b"), &key("2")).await.unwrap();
+        forked.set(&key("d"), &key("4")).await.unwrap();
         let mut seen = Vec::new();
         let mut after: Option<Vec<u16>> = None;
         loop {
-            let page = forked.scan(after.as_deref(), &key(""), 2).unwrap();
+            let page = forked.scan(after.as_deref(), &key(""), 2).await.unwrap();
             seen.extend(
                 page.entries
                     .iter()
@@ -970,14 +976,19 @@ mod tests {
             crate::blueprint::SqliteBlueprintStore::new(database.clone(), None).add(blueprint()),
         )
         .unwrap();
+        let volume_root = crate::config::VolumeRoot::default_root(root);
+        volume_root.prepare().unwrap();
         SessionManager::new(
-            root.to_path_buf(),
-            None,
-            Arc::new(VolumeRegistry::new(volumes, root.join("managed"))),
+            &volume_root,
+            Arc::new(VolumeRegistry::in_root(volumes, &volume_root)),
             Arc::new(|| -> Arc<dyn interpreter::stdlib::http::HttpClient> {
                 panic!("no HTTP in this test")
             }),
-            Arc::new(SqliteSessionStore::new(database, None, root.to_path_buf())),
+            Arc::new(SqliteSessionStore::new(
+                database,
+                None,
+                volume_root.sessions_dir(),
+            )),
             CapabilitySettings::default(),
         )
     }
@@ -1030,6 +1041,7 @@ mod tests {
         manager
             .session_kv_for_execute(&session)
             .set(&key("k"), &key("v"))
+            .await
             .unwrap();
 
         let copy = Throwaway::copy(&manager, Some(&session), &blueprint, &VarBindings::new())
@@ -1042,7 +1054,7 @@ mod tests {
             std::fs::read_to_string(copied_session.join("notes.txt")).unwrap(),
             "written by the source run"
         );
-        assert_eq!(copy.kv.get(&key("k")).unwrap(), Some(key("v")));
+        assert_eq!(copy.kv.get(&key("k")).await.unwrap(), Some(key("v")));
 
         // The run's volume resolves to the copy, the read-only one to the original.
         let in_copy = copy.volumes.resolve("data", None).unwrap().host;
@@ -1057,7 +1069,7 @@ mod tests {
             .unwrap();
         std::io::Write::write_all(&mut log, b"two\n").unwrap();
         std::fs::write(copied_session.join("notes.txt"), "changed").unwrap();
-        copy.kv.set(&key("k"), &key("changed")).unwrap();
+        copy.kv.set(&key("k"), &key("changed")).await.unwrap();
 
         assert_eq!(std::fs::read(data.join("log.txt")).unwrap(), b"one\n");
         assert_eq!(
@@ -1068,6 +1080,7 @@ mod tests {
             manager
                 .session_kv_for_execute(&session)
                 .get(&key("k"))
+                .await
                 .unwrap(),
             Some(key("v"))
         );
@@ -1096,7 +1109,7 @@ mod tests {
         assert!(!copy.report.session_found);
         let session = copy.session_root.as_ref().expect("an empty workspace");
         assert_eq!(std::fs::read_dir(session).unwrap().count(), 0);
-        assert!(!copy.kv.has(&key("k")).unwrap());
+        assert!(!copy.kv.has(&key("k")).await.unwrap());
     }
 
     #[tokio::test]
@@ -1680,7 +1693,7 @@ mod tests {
             &blueprint,
             &VarBindings::new(),
             copy.session_root.as_deref(),
-            None,
+            manager.ephemeral_root(),
             &copy.volumes,
         );
         assert!(vfs.is_ok());
@@ -1696,7 +1709,7 @@ mod tests {
             &blueprint,
             &VarBindings::new(),
             missing.session_root.as_deref(),
-            None,
+            manager.ephemeral_root(),
             &missing.volumes,
         );
         assert!(vfs.is_err(), "the read-only mount's directory is missing");
@@ -1765,7 +1778,7 @@ mod tests {
             &blueprint,
             &user_bindings("dave"),
             copy.session_root.as_deref(),
-            None,
+            manager.ephemeral_root(),
             &copy.volumes,
         );
         assert!(vfs.is_ok());

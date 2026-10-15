@@ -31,6 +31,19 @@ impl Sealer {
         })
     }
 
+    /// The id of the key [`Self::seal`] seals with, or `None` without a key.
+    pub fn key_id(&self) -> Option<[u8; KEY_ID_LEN]> {
+        self.cipher.as_deref().map(SecretCipher::key_id)
+    }
+
+    /// The key id a sealed blob names, without opening it.
+    pub fn sealed_key_id(blob: &[u8]) -> Option<&[u8]> {
+        match blob.split_first() {
+            Some((&FORMAT, rest)) => rest.get(..KEY_ID_LEN),
+            _ => None,
+        }
+    }
+
     pub fn seal(&self, owner: &str, plaintext: &[u8]) -> Result<Vec<u8>, StoreError> {
         let cipher = self.cipher()?;
         let sealed = cipher

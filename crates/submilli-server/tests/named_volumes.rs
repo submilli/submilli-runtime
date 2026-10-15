@@ -49,8 +49,7 @@ impl Server {
             blueprints: Some(Arc::new(
                 InMemoryBlueprintStore::seed(blueprints).expect("seed blueprints"),
             )),
-            session_storage_root: Some(data.join("sessions")),
-            managed_volume_root: Some(data.join("volumes")),
+            volume_root: Some(data.to_path_buf()),
             volumes,
             ..in_memory_config::config()
         };
@@ -153,7 +152,7 @@ function main(): string {
         json!("be kind|fs.write|per_session|2|/handbook|read_only|1048576")
     );
     assert_eq!(
-        std::fs::read_to_string(data.path().join("volumes/project-memory/note.md")).unwrap(),
+        std::fs::read_to_string(data.path().join("managed-local/project-memory/note.md")).unwrap(),
         "remember"
     );
     assert_eq!(
@@ -275,7 +274,7 @@ function main(): boolean {{
         written, 3,
         "1000 bytes hold three 300-byte files and no more"
     );
-    let on_disk: u64 = std::fs::read_dir(data.path().join("volumes/capped"))
+    let on_disk: u64 = std::fs::read_dir(data.path().join("managed-local/capped"))
         .unwrap()
         .map(|entry| entry.unwrap().metadata().unwrap().len())
         .sum();
@@ -311,7 +310,7 @@ vfs:
             .await;
         assert!(!status.is_success(), "{refused}");
         assert!(refused.to_string().contains("not declared"), "{refused}");
-        assert!(data.path().join("volumes/notes/n.txt").exists());
+        assert!(data.path().join("managed-local/notes/n.txt").exists());
     }
     let server = Server::new(data.path(), &[blueprint], volumes());
     server.state.boot().await.expect("boot");
@@ -409,8 +408,11 @@ vfs:
         let result = server.run_in(session, r#"import { readText } from "submilli:fs"; function main(): string { return readText("a.md")!; }"#).await;
         assert_eq!(result["result"], user, "{result}");
         assert_eq!(
-            std::fs::read_to_string(data.path().join(format!("volumes/notes/users/{user}/a.md")))
-                .unwrap(),
+            std::fs::read_to_string(
+                data.path()
+                    .join(format!("managed-local/notes/users/{user}/a.md"))
+            )
+            .unwrap(),
             user
         );
     }
@@ -441,7 +443,7 @@ vfs:
         VolumeTable::from([("notes".into(), managed(SizeLimit::Bytes(10)))]),
     );
     // A read-only alias requires the selected directory to exist before setup.
-    std::fs::create_dir_all(data.path().join("volumes/notes/users/ada")).unwrap();
+    std::fs::create_dir_all(data.path().join("managed-local/notes/users/ada")).unwrap();
     let session = server.session("aliases").await;
     let written = server.run_in(&session, r#"import { writeText, readText } from "submilli:fs"; function main(): string { writeText("a", "12345678"); return readText("/readonly/a")!; }"#).await;
     assert_eq!(written["result"], "12345678", "{written}");
@@ -473,7 +475,7 @@ vfs:
     assert!(!status.is_success(), "{body}");
     assert!(body.to_string().contains("notes"), "{body}");
     assert!(!body.to_string().contains(data.path().to_str().unwrap()));
-    assert!(!data.path().join("volumes/notes/missing").exists());
+    assert!(!data.path().join("managed-local/notes/missing").exists());
 }
 
 #[tokio::test]
@@ -497,7 +499,8 @@ vfs:
     assert!(output["error"].is_null(), "{output}");
     assert_eq!(output["result"], "/drafts", "{output}");
     assert_eq!(
-        std::fs::read_to_string(data.path().join("volumes/notes/users/ada/drafts/a")).unwrap(),
+        std::fs::read_to_string(data.path().join("managed-local/notes/users/ada/drafts/a"))
+            .unwrap(),
         "once"
     );
 }

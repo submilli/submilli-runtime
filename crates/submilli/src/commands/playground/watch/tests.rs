@@ -113,8 +113,7 @@ impl Fixture {
         let blueprints = Arc::new(Flaky::new(database));
         let state = AppState::new(ServerConfig {
             blueprints: Some(blueprints.clone()),
-            session_storage_root: Some(dir.join("sessions")),
-            managed_volume_root: Some(dir.join("volumes")),
+            volume_root: Some(dir.to_path_buf()),
             package_store_root: Some(dir.join("packages")),
             ..ServerConfig::default()
         })

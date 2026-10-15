@@ -693,6 +693,7 @@ async fn an_uncaught_policy_denial_over_mcp_is_a_permission_denied_error() {
     let blueprint = submilli_blueprint::parse(DENY_ALL).expect("valid policy blueprint");
     let blueprints = Arc::new(InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"));
     let state = AppState::new(ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
         blueprints: Some(blueprints),
         ..ServerConfig::default()
     })

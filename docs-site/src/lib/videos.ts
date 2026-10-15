@@ -2,6 +2,10 @@ import registry from '../data/videos.json' with { type: 'json' };
 
 export const films = registry.films.filter((film) => film.status === 'published');
 export type Film = (typeof films)[number];
+
+export function videoHeadingId(film: Pick<Film, 'id'>): string {
+  return `video-${film.id}-title`;
+}
 const selectedIntroduction = films.find((film) => film.id === 'code-execution-introduction');
 if (!selectedIntroduction) throw new Error('The code-execution introduction must be in the video registry');
 export const introduction = selectedIntroduction;

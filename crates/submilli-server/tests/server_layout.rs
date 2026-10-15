@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::Child;
 use std::time::Duration;
 
-use common::{free_port, signal, spawn_server, wait_for_exit, wait_ready};
+use common::{free_port, server_command, signal, spawn_server, wait_for_exit, wait_ready};
 use submilli_blueprint::Blueprint;
 use submilli_server::blueprint::{BlueprintStore, FileBlueprintStore};
 
@@ -55,6 +55,51 @@ fn an_explicitly_configured_directory_is_imported_then_archived() {
     assert!(!explicit.exists(), "the whole source directory is archived");
     assert!(home.path().join("archive/blueprints/index.json").is_file());
     assert!(!home.path().join("server/blueprints").exists());
+}
+
+#[test]
+fn a_missing_configured_volume_dir_fails_startup() {
+    let home = tempfile::tempdir().expect("temp home");
+    let volumes = home.path().join("disk/volumes");
+    // Port 0: startup fails before the server binds.
+    let output = server_command(
+        home.path(),
+        0,
+        1,
+        &[("SUBMILLI_VOLUME_DIR", volumes.to_str().unwrap())],
+    )
+    .stderr(std::process::Stdio::piped())
+    .output()
+    .expect("run server");
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains(volumes.to_str().unwrap()), "{error}");
+    assert!(error.contains("--create-volume-dir"), "{error}");
+    assert!(!volumes.exists());
+}
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[test]
+fn create_volume_dir_creates_a_missing_configured_volume_dir() {
+    let home = tempfile::tempdir().expect("temp home");
+    let volumes = home.path().join("disk/volumes");
+    let port = free_port();
+
+    let mut server = server_command(
+        home.path(),
+        port,
+        1,
+        &[("SUBMILLI_VOLUME_DIR", volumes.to_str().unwrap())],
+    )
+    .arg("--create-volume-dir")
+    .spawn()
+    .expect("spawn server");
+    wait_ready(port);
+    stop(&mut server);
+
+    for dir in ["managed-local", "sessions", "ephemeral"] {
+        assert!(volumes.join(dir).is_dir(), "{dir}");
+    }
 }
 
 fn seed_blueprint(dir: &Path, name: &str) {

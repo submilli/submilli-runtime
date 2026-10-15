@@ -52,8 +52,7 @@ use crate::session::{InMemorySessionStore, SessionStore};
 use crate::session_manager::{
     CapabilitySettings, DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS,
     DEFAULT_MAX_ALL_EXECUTIONS_TOKENS, DEFAULT_MAX_CONCURRENCY, DEFAULT_MAX_EMBEDDING_CONCURRENCY,
-    DEFAULT_TOTAL_SESSION_KV_BYTES, EmbeddingSettings, HttpClientFactory, LlmSettings,
-    SessionKvSettings, SessionManager,
+    EmbeddingSettings, HttpClientFactory, LlmSettings, SessionKvSettings, SessionManager,
 };
 use crate::session_store::DurableSessionStore;
 use submilli_shared::mcp::discovery::{DiscoveryAuth, DiscoveryError};
@@ -328,12 +327,11 @@ impl AppState {
         let oauth_http =
             Arc::new(ReqwestHttpClient::new(Arc::clone(&policy))) as Arc<dyn HttpClient>;
 
-        // Both roots are created lazily on first use (`create_dir_all` makes
-        // parents), so construction never touches the filesystem — tests and
-        // read-only deploys stay happy.
-        let session_root = config
-            .session_storage_root
-            .unwrap_or_else(crate::config::default_session_storage_root);
+        // The only place the volume root and its directories are created: a
+        // configured root must already be there, the default one is made now.
+        let volume_root = crate::config::VolumeRoot::from_config(config.volume_root);
+        volume_root.prepare()?;
+        let session_root = volume_root.sessions_dir();
         let session_store_dir = config.session_store_dir;
         let session_store = Arc::new(crate::session_store::SqliteSessionStore::new(
             database.clone(),
@@ -342,23 +340,15 @@ impl AppState {
         ));
         let session_manager = Arc::new(
             SessionManager::new(
-                session_root.clone(),
-                config.ephemeral_storage_root,
-                Arc::new(crate::volumes::VolumeRegistry::new(
+                &volume_root,
+                Arc::new(crate::volumes::VolumeRegistry::in_root(
                     config.volumes,
-                    config
-                        .managed_volume_root
-                        .unwrap_or_else(crate::config::default_managed_volume_root),
+                    &volume_root,
                 )),
                 http_client_factory,
                 Arc::clone(&session_store),
                 CapabilitySettings {
-                    session_kv: SessionKvSettings::new(
-                        config.session_kv_limits,
-                        config
-                            .max_session_state_memory
-                            .unwrap_or(DEFAULT_TOTAL_SESSION_KV_BYTES),
-                    ),
+                    session_kv: SessionKvSettings::new(config.session_kv_limits),
                     llm: LlmSettings::new(
                         config.llm_limits,
                         config
@@ -1608,10 +1598,26 @@ mod tests {
     };
 
     #[tokio::test]
+    async fn a_configured_volume_root_that_is_missing_fails_startup() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("unmounted");
+        let Err(err) = AppState::new(ServerConfig {
+            volume_root: Some(root.clone()),
+            ..crate::config::test_config()
+        })
+        .await
+        else {
+            panic!("a missing volume root was accepted");
+        };
+        assert!(err.to_string().contains("Mount it or create it"), "{err}");
+        assert!(!root.exists());
+    }
+
+    #[tokio::test]
     async fn failed_boot_does_not_start_the_reaper() {
         let root = tempfile::tempdir().unwrap();
         let state = AppState::new(ServerConfig {
-            session_storage_root: Some(root.path().to_path_buf()),
+            volume_root: Some(root.path().to_path_buf()),
             ..crate::config::test_config()
         })
         .await
@@ -1661,7 +1667,7 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let state = AppState::new(ServerConfig {
-            session_storage_root: Some(root.path().to_path_buf()),
+            volume_root: Some(root.path().to_path_buf()),
             ..crate::config::test_config()
         })
         .await
@@ -1689,7 +1695,7 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let state = AppState::new(ServerConfig {
-            session_storage_root: Some(root.path().to_path_buf()),
+            volume_root: Some(root.path().to_path_buf()),
             ..crate::config::test_config()
         })
         .await

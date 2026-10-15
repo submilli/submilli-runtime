@@ -101,7 +101,7 @@ export const mastra = new Mastra({
       name: 'Support assistant',
       instructions: 'Use the available Submilli tools. Answer with the returned value.',
       // Configure the host provider here. Example: OPENAI_API_KEY plus this model.
-      model: 'openai/gpt-4o-mini',
+      model: 'openai/gpt-5.5',
     }),
   },
 });

@@ -50,8 +50,7 @@ impl Harness {
         let mut state = AppState::with_llm_dispatch_factory(
             ServerConfig {
                 blueprints: Some(blueprints),
-                session_storage_root: Some(root.path().join("sessions")),
-                ephemeral_storage_root: Some(root.path().join("ephemeral")),
+                volume_root: Some(root.path().to_path_buf()),
                 database: Some(ledger.database.clone()),
                 ..ServerConfig::default()
             },

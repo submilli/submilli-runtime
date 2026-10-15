@@ -11,6 +11,9 @@ pub enum StoreError {
     },
     /// The row changed since it was read; nothing was written.
     Conflict,
+    /// The store refused new work because too much is already waiting; nothing
+    /// was done, so the caller may try again.
+    Busy,
 }
 
 impl std::fmt::Display for StoreError {
@@ -25,6 +28,7 @@ impl std::fmt::Display for StoreError {
                 write!(f, "blueprint '{name}' revision counter exhausted")
             }
             Self::Conflict => f.write_str("the record changed since it was read"),
+            Self::Busy => f.write_str("the database has too much work waiting"),
         }
     }
 }

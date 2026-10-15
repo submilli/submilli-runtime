@@ -8,7 +8,9 @@ controls, and captions; captions start off and viewers can enable them with the
 player's CC control.
 
 The library is `/docs/videos/`. Its published films are ordered as introduction,
-Challenges, Helps, Quickstart, How Submilli works, Packages, and Blueprints.
+Challenges, Helps, Blueprints, Packages, How Submilli works, Support agent example,
+and Quickstart. Concepts lead into the worked example, then the hands-on guide.
+The contents menu lists the videos without an Overview entry.
 How Submilli works appears under the execution explanation on `/docs/server/`.
 Packages and Blueprints also appear on
 `/docs/packages/` and `/docs/blueprints/`, respectively.

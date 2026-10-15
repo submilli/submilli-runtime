@@ -2,12 +2,14 @@ use super::tests::{fixture, proceed, read_request};
 use super::*;
 use crate::application::error::StoreError;
 use crate::application::unit_of_work::UnitOfWork;
+use crate::domain::idempotent_request::RequestState;
 use crate::domain::session::Session;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Default)]
 struct CommitFault {
     lose_ack: AtomicBool,
+    fail_begin: AtomicBool,
     pause_after_commit: AtomicBool,
     committed: tokio::sync::Notify,
     release: tokio::sync::Notify,
@@ -23,6 +25,9 @@ struct FaultUnit {
 #[async_trait::async_trait]
 impl UnitOfWorkFactory for FaultFactory {
     async fn begin(&self) -> Result<Box<dyn UnitOfWork>, StoreError> {
+        if self.fault.fail_begin.swap(false, Ordering::SeqCst) {
+            return Err(StoreError::Io("injected begin failure".into()));
+        }
         Ok(Box::new(FaultUnit {
             inner: self.inner.begin().await?,
             fault: self.fault.clone(),
@@ -55,29 +60,27 @@ impl UnitOfWork for FaultUnit {
     async fn remove_blueprint(&mut self, name: &str) -> Result<bool, StoreError> {
         self.inner.remove_blueprint(name).await
     }
-    async fn get_request(
+    async fn get_run(&mut self, id: &str) -> Result<Option<crate::domain::run::Run>, StoreError> {
+        self.inner.get_run(id).await
+    }
+    async fn run_for_key(
         &mut self,
         session_id: &str,
         key: &str,
-    ) -> Result<Option<crate::domain::idempotent_request::IdempotentRequest>, StoreError> {
-        self.inner.get_request(session_id, key).await
+    ) -> Result<Option<crate::domain::run::Run>, StoreError> {
+        self.inner.run_for_key(session_id, key).await
     }
-    async fn save_request(
+    async fn save_run(&mut self, request: crate::domain::run::Run) -> Result<(), StoreError> {
+        self.inner.save_run(request).await
+    }
+    async fn active_session_runs(
         &mut self,
-        request: crate::domain::idempotent_request::IdempotentRequest,
-    ) -> Result<(), StoreError> {
-        self.inner.save_request(request).await
+        session_id: &str,
+    ) -> Result<Vec<crate::domain::run::Run>, StoreError> {
+        self.inner.active_session_runs(session_id).await
     }
-    async fn remove_request(&mut self, session_id: &str, key: &str) -> Result<(), StoreError> {
-        self.inner.remove_request(session_id, key).await
-    }
-    async fn remove_session_requests(&mut self, session_id: &str) -> Result<(), StoreError> {
-        self.inner.remove_session_requests(session_id).await
-    }
-    async fn unfinished_requests(
-        &mut self,
-    ) -> Result<Vec<crate::domain::idempotent_request::IdempotentRequest>, StoreError> {
-        self.inner.unfinished_requests().await
+    async fn unfinished_runs(&mut self) -> Result<Vec<crate::domain::run::Run>, StoreError> {
+        self.inner.unfinished_runs().await
     }
     async fn sessions_with_responses_to_expire(
         &mut self,
@@ -154,6 +157,58 @@ impl UnitOfWork for FaultUnit {
     }
     async fn remove_blueprint_grants(&mut self, blueprint: &str) -> Result<(), StoreError> {
         self.inner.remove_blueprint_grants(blueprint).await
+    }
+    async fn session_is_active(&mut self, id: &str) -> Result<bool, StoreError> {
+        self.inner.session_is_active(id).await
+    }
+    async fn session_state_get(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<Option<Vec<u16>>, StoreError> {
+        self.inner.session_state_get(session_id, key).await
+    }
+    async fn session_state_has(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<bool, StoreError> {
+        self.inner.session_state_has(session_id, key).await
+    }
+    async fn session_state_usage(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<crate::application::unit_of_work::SessionStateUsage, StoreError> {
+        self.inner.session_state_usage(session_id, key).await
+    }
+    async fn session_state_put(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+        payload: &[u16],
+        size: crate::application::unit_of_work::SessionStateSize,
+    ) -> Result<(), StoreError> {
+        self.inner
+            .session_state_put(session_id, key, payload, size)
+            .await
+    }
+    async fn session_state_remove(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<bool, StoreError> {
+        self.inner.session_state_remove(session_id, key).await
+    }
+    async fn session_state_keys(
+        &mut self,
+        session_id: &str,
+        after: Option<&[u16]>,
+        max_keys: usize,
+    ) -> Result<crate::application::unit_of_work::SessionStateKeys, StoreError> {
+        self.inner
+            .session_state_keys(session_id, after, max_keys)
+            .await
     }
     async fn commit(self: Box<Self>) -> Result<(), StoreError> {
         self.inner.commit().await?;
@@ -316,7 +371,7 @@ fn runtime_recreation_recovers_requests_even_when_database_worker_survives() {
 }
 
 #[tokio::test]
-async fn disk_reopen_preserves_completed_bytes_and_recovers_unfinished_requests() {
+async fn disk_reopen_preserves_completed_bytes_and_recovers_unfinished_runs() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("server.db");
     let database = Arc::new(crate::database::ServerDatabase::open(&path).await.unwrap());
@@ -334,7 +389,7 @@ async fn disk_reopen_preserves_completed_bytes_and_recovers_unfinished_requests(
     )
     .unwrap();
     let mut unit = units.begin().await.unwrap();
-    unit.save_request(abandoned).await.unwrap();
+    unit.save_run(abandoned).await.unwrap();
     unit.commit().await.unwrap();
     coordinator.drain().await;
     database.close().await.unwrap();
@@ -359,7 +414,7 @@ async fn failed_request_cleanup_rolls_back_expiry() {
     let (database, units, coordinator) = fixture().await;
     let guard = proceed(coordinator.reserve("session", "key", "code").await);
     database.transaction(|connection| Box::pin(async move {
-        sqlx::query("CREATE TRIGGER reject_request_delete BEFORE DELETE ON idempotent_requests BEGIN SELECT RAISE(FAIL, 'injected'); END").execute(connection).await?;
+        sqlx::query("CREATE TRIGGER reject_request_delete BEFORE UPDATE ON runs BEGIN SELECT RAISE(FAIL, 'injected'); END").execute(connection).await?;
         Ok(())
     })).await.unwrap();
 
@@ -371,7 +426,7 @@ async fn failed_request_cleanup_rolls_back_expiry() {
         unit.get_session("session").await.unwrap().unwrap().status(),
         crate::domain::session::SessionStatus::Active
     );
-    assert!(unit.get_request("session", "key").await.unwrap().is_some());
+    assert!(unit.run_for_key("session", "key").await.unwrap().is_some());
     drop(unit);
     database
         .transaction(|connection| {
@@ -390,7 +445,7 @@ async fn failed_request_cleanup_rolls_back_expiry() {
         read_request(units.as_ref(), "session", "key")
             .await
             .unwrap()
-            .is_none()
+            .is_some_and(|run| run.state() == &RequestState::Cancelled)
     );
 }
 
@@ -457,4 +512,59 @@ async fn database_contention_cannot_exceed_reservation_deadline() {
 struct Audit;
 impl crate::application::sessions::ports::AuditLog for Audit {
     fn record(&self, _: &str, _: crate::application::sessions::ports::SessionEvent) {}
+}
+
+#[tokio::test]
+async fn lost_unkeyed_preparation_and_claim_acknowledgements_keep_one_identity() {
+    let (database, units, _) = fixture().await;
+    let fault = Arc::new(CommitFault::default());
+    let units: Arc<dyn UnitOfWorkFactory> = Arc::new(FaultFactory {
+        inner: units,
+        fault: fault.clone(),
+    });
+    let coordinator = Arc::new(Coordinator::new(
+        units.clone(),
+        database.generation().unwrap(),
+    ));
+    fault.lose_ack.store(true, Ordering::SeqCst);
+    let guard = proceed(
+        coordinator
+            .prepare("session", None, "code", "lost-ack", None, "mcp")
+            .await,
+    );
+    fault.lose_ack.store(true, Ordering::SeqCst);
+    coordinator.claim("lost-ack").await.unwrap();
+    guard.finish_unkeyed().await;
+    let run = units
+        .begin()
+        .await
+        .unwrap()
+        .get_run("lost-ack")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(run.state(), &RequestState::Finished);
+    assert_eq!(run.identity().admission_order, 1);
+    assert_eq!(run.attempt(), 1);
+}
+
+#[tokio::test]
+async fn early_storage_failure_cannot_authorize_a_repeated_claim() {
+    let (database, units, _) = fixture().await;
+    let fault = Arc::new(CommitFault::default());
+    let units: Arc<dyn UnitOfWorkFactory> = Arc::new(FaultFactory {
+        inner: units,
+        fault: fault.clone(),
+    });
+    let coordinator = Arc::new(Coordinator::new(units, database.generation().unwrap()));
+    let guard = proceed(
+        coordinator
+            .prepare("session", None, "code", "claimed", None, "mcp")
+            .await,
+    );
+    coordinator.claim("claimed").await.unwrap();
+    fault.fail_begin.store(true, Ordering::SeqCst);
+    assert!(coordinator.claim("claimed").await.is_err());
+    assert!(coordinator.claim("claimed").await.is_err());
+    guard.finish_unkeyed().await;
 }

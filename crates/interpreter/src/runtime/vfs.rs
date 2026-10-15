@@ -290,6 +290,10 @@ impl std::error::Error for MountError {}
 /// so a valid blueprint never reaches this; it holds for direct embedders.
 pub const MAX_MOUNTS: usize = 16;
 
+/// The name prefix of every directory [`Vfs::tempdir`] and [`Vfs::tempdir_in`]
+/// create, so a host can recognise its leftover scratch.
+pub const TEMPDIR_PREFIX: &str = "submilli-vfs-";
+
 impl Vfs {
     /// A VFS that backs no directory. Every `submilli:fs.*` call traps; only
     /// `fs.info()` works (reporting `mode: none`).
@@ -341,16 +345,16 @@ impl Vfs {
     }
 
     pub fn tempdir() -> io::Result<Self> {
-        let td = tempfile::Builder::new().prefix("submilli-vfs-").tempdir()?;
+        let td = tempfile::Builder::new().prefix(TEMPDIR_PREFIX).tempdir()?;
         Self::from_owned(td)
     }
 
-    /// Like [`tempdir`](Self::tempdir) but allocated under `parent` (created if
-    /// absent). Lets the host place ephemeral scratch on a chosen volume.
+    /// Like [`tempdir`](Self::tempdir) but allocated under `parent`, which must
+    /// already exist. Lets the host place ephemeral scratch on a chosen volume,
+    /// and decide itself whether a missing one may be created.
     pub fn tempdir_in(parent: &Path) -> io::Result<Self> {
-        std::fs::create_dir_all(parent)?;
         let td = tempfile::Builder::new()
-            .prefix("submilli-vfs-")
+            .prefix(TEMPDIR_PREFIX)
             .tempdir_in(parent)?;
         Self::from_owned(td)
     }

@@ -41,6 +41,7 @@ async fn execute(config: RuntimeConfig, code: &str) -> Value {
         .expect("seed blueprints"),
     );
     let state = AppState::new(ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
         blueprints: Some(blueprints),
         runtime: config,
         ..Default::default()

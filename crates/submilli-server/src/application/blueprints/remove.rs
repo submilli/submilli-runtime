@@ -48,7 +48,11 @@ impl<'a> RemoveBlueprint<'a> {
             }
             session.close(ClosedReason::BlueprintRemoved);
             closed.push(session.id().as_str().to_owned());
-            unit.remove_session_requests(session.id().as_str()).await?;
+            crate::application::sessions::runs::cancel_session_runs(
+                unit.as_mut(),
+                session.id().as_str(),
+            )
+            .await?;
             unit.save_session(session).await?;
         }
         unit.remove_blueprint_grants(name).await?;

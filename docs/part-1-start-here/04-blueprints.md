@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "6549ef36ecaa2395d1e2df53b57ae67df2822a459d80ecab1e6282d33ab0b373"
+  contentHash: "5b680b5e59b5a76e6b3117d1fd0eca9d5e70cb2fe85e696784b9343f63d034c0"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -142,8 +142,11 @@ and variables.
 
 ## Semantic permission model
 
-A semantic permission model defines which business operations an agent may
-perform, on which resources, and with which argument values.
+Submilli runs agent-generated code in WebAssembly isolation and lets you
+specify which business operations it may perform, on which resources, and
+with which argument values. You write those permissions in a Blueprint.
+The runtime enforces them at the checks provided by the standard library
+and trusted Packages.
 
 Consider the alternative. You run the agent in a secure sandbox, or route
 all of its traffic through a gateway, and write rules over what it sends. To
@@ -156,8 +159,10 @@ uses, and again when a service changes its API.
 And the fact the rule most needs, the customer's class, isn't in the
 request at all.
 
-Submilli inverts that. The Package that performs the operation says what it
-means. `acme.com/credits.apply` means applying a credit, and the Package
+Submilli's runtime and native Package ecosystem were built together for
+agents. Packages describe operations and supply typed fields to runtime
+permission checks, so you can write rules in terms of business operations.
+For example, `acme.com/credits.apply` means applying a credit, and the Package
 hands the runtime the customer, the amount, and the customer's class, typed,
 before anything is sent. The rule is written against those fields, never
 against a raw payload. Nobody guesses what a request does, and the model is never asked

@@ -11,7 +11,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "521e3731d06d15fd9d06f0f7f2a9be690b49945ad73aacaa5327096808b42af2"
+  contentHash: "ef8b4935584aeac51b9a612c5936f84fd816929e91ec72ec291df3daf9a51b71"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -289,7 +289,7 @@ uninstall` so that uninstalling doesn't delete your data. Delete the
 claim by hand when you mean to. A named volume of kind `managed-local`,
 declared under `config.volumes` as [Mount a shared
 volume](/docs/server/mount-a-shared-volume) shows, lives on the same
-claim.
+claim, with sessions' files and each run's scratch directory.
 
 The chart runs the server as a StatefulSet, and its volume uses the
 `ReadWriteOncePod` access mode (Kubernetes 1.29 and later). Both exist

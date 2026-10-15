@@ -158,10 +158,9 @@ impl Server {
                 ApiToken::new("app", Role::User, APP_TOKEN).expect("token"),
                 ApiToken::new("operator", Role::Admin, ADMIN_TOKEN).expect("token"),
             ]),
-            session_storage_root: Some(dirs.path().join("sessions")),
+            volume_root: Some(dirs.path().to_path_buf()),
             database_path: Some(dirs.path().join("server.db")),
             package_store_root: Some(dirs.path().join("packages")),
-            managed_volume_root: Some(dirs.path().join("volumes")),
             run_recorder: Some(Arc::new(Factory(Arc::clone(&runs)))),
             ..in_memory_config::config()
         };
@@ -180,7 +179,7 @@ impl Server {
     }
 
     fn managed_root(&self) -> PathBuf {
-        self.dirs.path().join("volumes")
+        self.dirs.path().join("managed-local")
     }
 
     fn packages(&self) -> PathBuf {

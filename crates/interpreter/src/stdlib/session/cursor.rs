@@ -15,9 +15,9 @@
 //!   of where the scan resumed — but forgery is also how a holder would probe
 //!   the encoding, so it is refused rather than tolerated.
 //!
-//! Both fall out of authenticated encryption under a process-wide secret. The
-//! key travels as big-endian code-unit bytes — exact for lone surrogates, which
-//! no UTF-8 round trip survives.
+//! Both fall out of authenticated encryption under a secret the embedder
+//! supplies as [`CursorKeys`]. The key travels as big-endian code-unit bytes —
+//! exact for lone surrogates, which no UTF-8 round trip survives.
 //!
 //! Carrying the prefix digest *inside* the sealed payload rather than binding it
 //! into the tag is the one non-obvious choice, and it is what keeps a reuse
@@ -28,10 +28,15 @@
 //! [`CursorError::PrefixMismatch`], a caller mistake with an obvious fix, while
 //! a tag failure reports [`CursorError::Malformed`].
 //!
-//! The secret is per process and never persisted, so cursors do not outlive a
-//! restart — as the state they page over does not either.
+//! Each cursor names the key that sealed it, in the clear and covered by the
+//! tag, so an embedder can replace its key and still open cursors sealed with
+//! the old one. An embedder whose state survives a restart supplies keys that
+//! survive it too; with none supplied, cursors are sealed under a random
+//! per-process key and stop working when the process restarts.
 
 use std::sync::OnceLock;
+
+use crate::runtime::session_kv::{CURSOR_KEY_ID_LEN, CursorKey, CursorKeys};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -41,8 +46,8 @@ use sha2::Sha256;
 type HmacSha256 = Hmac<Sha256>;
 
 /// Bumped if the payload layout changes, so an old cursor is rejected rather
-/// than misread.
-const VERSION: u8 = 2;
+/// than misread. Version 3 added the key id.
+const VERSION: u8 = 3;
 
 /// Per-cursor randomness, so two cursors over the same prefix and key are not
 /// byte-identical and a holder cannot recognise a key it has seen before.
@@ -59,34 +64,47 @@ const DIGEST_LEN: usize = 8;
 
 /// Longest base64url cursor this store can mint, including its sealed key.
 pub(super) fn max_cursor_units(max_key_units: u64) -> u64 {
-    let overhead = (1 + NONCE_LEN + DIGEST_LEN + TAG_LEN) as u64;
+    let overhead = (1 + CURSOR_KEY_ID_LEN + NONCE_LEN + DIGEST_LEN + TAG_LEN) as u64;
     overhead
         .saturating_add(max_key_units.saturating_mul(2))
         .saturating_mul(4)
         .div_ceil(3)
 }
 
-/// Process-wide cursor secret, or `None` where `getrandom` has no entropy to
-/// give. Cursors are then refused rather than minted under a fixed key, which
-/// would silently restore the disclosure this module exists to close.
-fn secret() -> Option<&'static [u8; 32]> {
-    static SECRET: OnceLock<Option<[u8; 32]>> = OnceLock::new();
-    SECRET
-        .get_or_init(|| {
-            let mut bytes = [0u8; 32];
-            getrandom::getrandom(&mut bytes).ok()?;
-            Some(bytes)
-        })
-        .as_ref()
+/// Per-process cursor keys, for an embedder that supplies none, or `None` where
+/// `getrandom` has no entropy to give. Cursors are then refused rather than
+/// minted under a fixed key, which would silently restore the disclosure this
+/// module exists to close.
+fn process_keys() -> Option<&'static CursorKeys> {
+    static KEYS: OnceLock<Option<CursorKeys>> = OnceLock::new();
+    KEYS.get_or_init(|| {
+        let mut id = [0u8; CURSOR_KEY_ID_LEN];
+        let mut secret = [0u8; 32];
+        getrandom::getrandom(&mut id).ok()?;
+        getrandom::getrandom(&mut secret).ok()?;
+        Some(CursorKeys::new(CursorKey::new(id, secret), Vec::new()))
+    })
+    .as_ref()
 }
 
-pub(super) fn encode(prefix: &[u16], resume_after: &[u16]) -> Result<String, CursorError> {
-    let secret = secret().ok_or(CursorError::NoEntropy)?;
+fn resolve(keys: Option<&CursorKeys>) -> Result<&CursorKeys, CursorError> {
+    match keys {
+        Some(keys) => Ok(keys),
+        None => process_keys().ok_or(CursorError::NoEntropy),
+    }
+}
+
+pub(super) fn encode(
+    keys: Option<&CursorKeys>,
+    prefix: &[u16],
+    resume_after: &[u16],
+) -> Result<String, CursorError> {
+    let key = resolve(keys)?.current();
     let mut nonce = [0u8; NONCE_LEN];
     getrandom::getrandom(&mut nonce).map_err(|_| CursorError::NoEntropy)?;
 
     encode_with(prefix, resume_after, &nonce, || {
-        Ok(CursorCrypto::new(secret))
+        Ok((*key.id(), CursorCrypto::new(key.secret())))
     })
 }
 
@@ -94,9 +112,9 @@ fn encode_with(
     prefix: &[u16],
     resume_after: &[u16],
     nonce: &[u8; NONCE_LEN],
-    initialize: impl FnOnce() -> Result<CursorCrypto, CursorError>,
+    initialize: impl FnOnce() -> Result<([u8; CURSOR_KEY_ID_LEN], CursorCrypto), CursorError>,
 ) -> Result<String, CursorError> {
-    let crypto = initialize()?;
+    let (key_id, crypto) = initialize()?;
     let length = ciphertext_len(resume_after.len())?;
     let mut ciphertext = reserved_vec(length)?;
     ciphertext.extend_from_slice(&crypto.prefix_digest(prefix)?);
@@ -106,13 +124,14 @@ fn encode_with(
     crypto.xor_keystream(nonce, &mut ciphertext)?;
 
     let length = length
-        .checked_add(1 + NONCE_LEN + TAG_LEN)
+        .checked_add(1 + CURSOR_KEY_ID_LEN + NONCE_LEN + TAG_LEN)
         .ok_or(CursorError::Internal("cursor payload size overflow"))?;
     let mut payload = reserved_vec(length)?;
     payload.push(VERSION);
+    payload.extend_from_slice(&key_id);
     payload.extend_from_slice(nonce);
     payload.extend_from_slice(&ciphertext);
-    payload.extend_from_slice(&crypto.tag(nonce, &ciphertext));
+    payload.extend_from_slice(&crypto.tag(&key_id, nonce, &ciphertext));
     let length = base64::encoded_len(payload.len(), false)
         .ok_or(CursorError::Internal("cursor encoding size overflow"))?;
     let mut encoded = reserved_vec(length)?;
@@ -129,6 +148,8 @@ fn encode_with(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CursorError {
     Malformed,
+    /// Sealed under a key this runtime no longer holds.
+    UnknownKey,
     PrefixMismatch,
     NoEntropy,
     Internal(&'static str),
@@ -140,12 +161,15 @@ impl std::fmt::Display for CursorError {
             Self::Internal(message) => write!(f, "session.list: {message}"),
             Self::Malformed => f.write_str(
                 "session.list: the cursor is not one this runtime issued — pass the \
-                 `nextCursor` from the previous page unchanged, or `null` to start over. \
-                 A cursor from before a server restart is no longer valid.",
+                 `nextCursor` from the previous page unchanged, or omit it to start over",
+            ),
+            Self::UnknownKey => f.write_str(
+                "session.list: the cursor was sealed under a key this server no longer \
+                 holds — omit the cursor to start the listing over",
             ),
             Self::PrefixMismatch => f.write_str(
                 "session.list: the cursor was issued for a different prefix — a cursor \
-                 resumes only the listing that produced it; pass `null` to start the new \
+                 resumes only the listing that produced it; omit the cursor to start the new \
                  prefix from the beginning",
             ),
             Self::NoEntropy => f.write_str(
@@ -158,19 +182,24 @@ impl std::fmt::Display for CursorError {
     }
 }
 
-pub(super) fn decode(prefix: &[u16], cursor: &[u16]) -> Result<Vec<u16>, CursorError> {
-    decode_with(prefix, cursor, || {
-        Ok(CursorCrypto::new(secret().ok_or(CursorError::NoEntropy)?))
+pub(super) fn decode(
+    keys: Option<&CursorKeys>,
+    prefix: &[u16],
+    cursor: &[u16],
+) -> Result<Vec<u16>, CursorError> {
+    let keys = resolve(keys)?;
+    decode_with(prefix, cursor, |id| {
+        let key = keys.find(id).ok_or(CursorError::UnknownKey)?;
+        Ok(CursorCrypto::new(key.secret()))
     })
 }
 
 fn decode_with(
     prefix: &[u16],
     cursor: &[u16],
-    initialize: impl FnOnce() -> Result<CursorCrypto, CursorError>,
+    lookup: impl FnOnce(&[u8]) -> Result<CursorCrypto, CursorError>,
 ) -> Result<Vec<u16>, CursorError> {
     let text = ascii(cursor)?;
-    let crypto = initialize()?;
     // Decoded base64 cannot be longer than its ASCII input.
     let mut payload = reserved_vec(text.len())?;
     payload.resize(text.len(), 0);
@@ -188,6 +217,9 @@ fn decode_with(
     let body = payload
         .strip_prefix(&[VERSION])
         .ok_or(CursorError::Malformed)?;
+    let (key_id, body) = body
+        .split_at_checked(CURSOR_KEY_ID_LEN)
+        .ok_or(CursorError::Malformed)?;
     let (nonce, rest) = body
         .split_at_checked(NONCE_LEN)
         .ok_or(CursorError::Malformed)?;
@@ -196,7 +228,8 @@ fn decode_with(
         .checked_sub(TAG_LEN)
         .ok_or(CursorError::Malformed)?;
     let (ciphertext, found) = rest.split_at(split);
-    if !constant_time_eq(found, &crypto.tag(nonce, ciphertext)) {
+    let crypto = lookup(key_id)?;
+    if !constant_time_eq(found, &crypto.tag(key_id, nonce, ciphertext)) {
         return Err(CursorError::Malformed);
     }
 
@@ -222,7 +255,7 @@ struct CursorCrypto {
 
 impl CursorCrypto {
     fn new(secret: &[u8; 32]) -> Self {
-        // HMAC accepts keys of any length; this process key is always 32 bytes.
+        // HMAC accepts keys of any length; a cursor key is always 32 bytes.
         Self {
             initial: HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length"),
         }
@@ -245,9 +278,10 @@ impl CursorCrypto {
         Ok(())
     }
 
-    fn tag(&self, nonce: &[u8], ciphertext: &[u8]) -> [u8; TAG_LEN] {
+    fn tag(&self, key_id: &[u8], nonce: &[u8], ciphertext: &[u8]) -> [u8; TAG_LEN] {
         let mut mac = self.initial.clone();
         mac.update(b"submilli:session/cursor/tag");
+        mac.update(key_id);
         mac.update(nonce);
         mac.update(ciphertext);
         truncate(mac.finalize().into_bytes().into())
@@ -328,18 +362,30 @@ mod tests {
     }
 
     fn mint(prefix: &[u16], key: &[u16]) -> String {
-        encode(prefix, key).expect("this host has entropy")
+        encode(None, prefix, key).expect("this host has entropy")
+    }
+
+    /// Under the per-process keys, as every test here but the keyring ones.
+    fn decode(prefix: &[u16], cursor: &[u16]) -> Result<Vec<u16>, CursorError> {
+        super::decode(None, prefix, cursor)
+    }
+
+    fn keys(id: u8, secret: u8) -> CursorKeys {
+        CursorKeys::new(
+            CursorKey::new([id; CURSOR_KEY_ID_LEN], [secret; 32]),
+            Vec::new(),
+        )
     }
 
     #[test]
     fn entropy_failure_propagates_from_both_paths() {
-        let no_entropy = || Err(CursorError::NoEntropy);
         assert_eq!(
-            encode_with(&[], &[], &[9; NONCE_LEN], no_entropy),
+            encode_with(&[], &[], &[9; NONCE_LEN], || Err(CursorError::NoEntropy)),
             Err(CursorError::NoEntropy)
         );
+        let cursor = encode(Some(&keys(1, 1)), &[], &[]).unwrap();
         assert_eq!(
-            decode_with(&[], &u("AA"), no_entropy),
+            decode_with(&[], &u(&cursor), |_| Err(CursorError::NoEntropy)),
             Err(CursorError::NoEntropy)
         );
     }
@@ -363,36 +409,87 @@ mod tests {
         ));
     }
 
+    /// Cursors outlive the process that minted them, so the encoding is a
+    /// stored format: a change must bump [`VERSION`] rather than alter these.
     #[test]
-    fn version_two_encoding_matches_pre_change_vectors() {
-        // Captured from the original Rust signing helpers at 1b71c3f2, with
-        // fixed test-only entropy. The prefix includes a lone surrogate too.
+    fn version_three_encoding_matches_fixed_vectors() {
+        // Fixed test-only key id, key and entropy. The prefix includes a lone
+        // surrogate too.
         let vectors = [
             (
                 vec![],
-                "AgkJCQkJCQkJCQkJCQkJCQl48t14NbpgXmTlukNSywGRYHXfL4fUgOA",
+                "AwUFBQUFBQUFCQkJCQkJCQkJCQkJCQkJCXjy3Xg1umBeXyuyp_61hizsROmzw4jGvw",
             ),
             (
                 vec![0x61, 0xd800, 0x62],
-                "AgkJCQkJCQkJCQkJCQkJCQl48t14NbpgXkTvhMzZ2e_vpBm9uJOWUpBDLI2wgdU",
+                "AwUFBQUFBQUFCQkJCQkJCQkJCQkJCQkJCXjy3Xg1umBeRO-EzNnZdekE95jY8upqdYlafpmyQQ",
             ),
             (
                 (0u16..40).collect(),
-                "AgkJCQkJCQkJCQkJCQkJCQl48t14NbpgXkSOXM3Zueb_r1fc1-hILWHbdUqLdq2UrN1APkbo2onT9VFLapUanTnQXMCjfICQsMYKZk9k1POWkxmYBBeX6Sl4EdtbfkaakIXrx1ZiPISW4wiXsl54Mq_9KbaWTH-uTw",
+                "AwUFBQUFBQUFCQkJCQkJCQkJCQkJCQkJCXjy3Xg1umBeRI5czdm55v-vV9zX6EgtYdt1Sot2rZSs3UA-RujaidP1UUtqlRqdOdBcwKN8gJCwxgpmT2TU85aTGZgEF5fpKXgR21t-RpqQhevHVmI8hJa2x1D9ApIC0CGauLtesu3V",
             ),
         ];
         let prefix = [0x70, 0xd800];
         for (key, expected) in vectors {
             let encoded = encode_with(&prefix, &key, &[9; NONCE_LEN], || {
-                Ok(CursorCrypto::new(&[7; 32]))
+                Ok(([5; CURSOR_KEY_ID_LEN], CursorCrypto::new(&[7; 32])))
             })
             .unwrap();
             assert_eq!(encoded, expected);
             assert_eq!(
-                decode_with(&prefix, &u(expected), || Ok(CursorCrypto::new(&[7; 32]))).unwrap(),
+                decode_with(&prefix, &u(expected), |id| {
+                    assert_eq!(id, [5; CURSOR_KEY_ID_LEN]);
+                    Ok(CursorCrypto::new(&[7; 32]))
+                })
+                .unwrap(),
                 key
             );
         }
+    }
+
+    /// The same key, installed again after a restart, opens what the earlier
+    /// process minted.
+    #[test]
+    fn a_cursor_opens_under_an_equal_keyring() {
+        let cursor = encode(Some(&keys(1, 7)), &u("p"), &u("p/k")).unwrap();
+        assert_eq!(
+            super::decode(Some(&keys(1, 7)), &u("p"), &u(&cursor)),
+            Ok(u("p/k"))
+        );
+    }
+
+    #[test]
+    fn a_cursor_sealed_under_a_retired_key_still_opens() {
+        let old = keys(1, 7);
+        let cursor = encode(Some(&old), &u("p"), &u("p/k")).unwrap();
+        let rotated = CursorKeys::new(
+            CursorKey::new([2; CURSOR_KEY_ID_LEN], [8; 32]),
+            vec![old.current().clone()],
+        );
+        assert_eq!(
+            super::decode(Some(&rotated), &u("p"), &u(&cursor)),
+            Ok(u("p/k"))
+        );
+        let fresh = encode(Some(&rotated), &u("p"), &u("p/k")).unwrap();
+        assert_eq!(
+            super::decode(Some(&old), &u("p"), &u(&fresh)),
+            Err(CursorError::UnknownKey)
+        );
+    }
+
+    #[test]
+    fn a_cursor_under_an_unknown_key_is_refused() {
+        let cursor = encode(Some(&keys(1, 7)), &u("p"), &u("p/k")).unwrap();
+        assert_eq!(
+            super::decode(Some(&keys(2, 7)), &u("p"), &u(&cursor)),
+            Err(CursorError::UnknownKey)
+        );
+        // The id names the key but proves nothing: a cursor relabelled with the
+        // id of a key it was not sealed under fails the tag.
+        assert_eq!(
+            super::decode(Some(&keys(1, 8)), &u("p"), &u(&cursor)),
+            Err(CursorError::Malformed)
+        );
     }
 
     #[tokio::test]
@@ -525,6 +622,7 @@ mod tests {
     #[test]
     fn a_hand_built_cursor_is_refused() {
         let mut forged = vec![VERSION];
+        forged.extend_from_slice(process_keys().unwrap().current().id());
         forged.extend_from_slice(&[0u8; NONCE_LEN]);
         forged.extend_from_slice(&units_to_bytes(&u("zzz-denied-7")));
         forged.extend_from_slice(&[0u8; TAG_LEN]);

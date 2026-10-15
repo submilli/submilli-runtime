@@ -532,6 +532,7 @@ mod blueprint_scoped {
             ))
             .unwrap();
             let router = app(AppState::new(ServerConfig {
+                volume_root: Some(tempfile::tempdir().unwrap().keep()),
                 blueprints: Some(Arc::new(
                     InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
                 )),
