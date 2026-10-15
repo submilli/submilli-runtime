@@ -12,8 +12,8 @@
 
 mod install;
 
-pub(crate) use install::declare_types;
 pub use install::{declare, install};
+pub(crate) use install::{declare_types, install_constants};
 
 use base64::Engine as _;
 use base64::alphabet;

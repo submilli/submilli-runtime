@@ -18,6 +18,22 @@ use crate::runtime::prelude::{MODULE_NAME, closure, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
 
 /// Dispatch key for an instance method `Uint8Array#<m>`.
+/// `Uint8Array.BYTES_PER_ELEMENT`, and the instance property of that name.
+const BYTES_PER_ELEMENT: f64 = 1.0;
+
+/// `Uint8Array.BYTES_PER_ELEMENT` as a host-owned global, like the `Number`
+/// statics: a value symbol the guest imports.
+pub(crate) fn install_constants(
+    linker: &mut Linker<StoreData>,
+    store: &mut wasmtime::Store<StoreData>,
+) -> wasmtime::Result<()> {
+    let gty = wasmtime::GlobalType::new(ValType::F64, wasmtime::Mutability::Var);
+    let global = wasmtime::Global::new(&mut *store, gty, Val::F64(BYTES_PER_ELEMENT.to_bits()))?;
+    let mangled = ctor_key("BYTES_PER_ELEMENT");
+    linker.define(&mut *store, MODULE_NAME, mangled.as_str(), global)?;
+    Ok(())
+}
+
 fn method_key(method: &str) -> MangledName {
     crate::mangle::extend(&crate::mangle::prelude("Uint8Array"), method)
 }
@@ -78,6 +94,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             *abi_result(results, 0)? = Val::F64(
                 super::length(caller, abi_arg(params, 0)?, "Uint8Array#length")?.to_bits(),
             );
+            Ok(())
+        },
+    )?;
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        method_key("BYTES_PER_ELEMENT"),
+        ft(vec![uint8.clone()], vec![num.clone()]),
+        true,
+        |_caller, _params, results| {
+            *abi_result(results, 0)? = Val::F64(BYTES_PER_ELEMENT.to_bits());
             Ok(())
         },
     )?;
@@ -751,6 +778,20 @@ fn byte_callback_params(leading: Vec<Type>) -> Vec<Type> {
 
 pub fn declare(defs: &mut PackageDeclaration) {
     let u8a = || Param::new("a", Type::Uint8Array);
+    // The static constant imports as a global, like `Number.EPSILON`.
+    let bytes_per_element = ctor_key("BYTES_PER_ELEMENT");
+    defs.values.insert(
+        bytes_per_element.as_str().to_string(),
+        crate::ValueSymbol {
+            name: "BYTES_PER_ELEMENT".to_string(),
+            mangled_name: bytes_per_element,
+            declaration_span: crate::Span::at(crate::FileId::PRELUDE),
+            kind: crate::ValueKind::Const {
+                ty: Type::Number,
+                doc: None,
+            },
+        },
+    );
     // A callback's slot is erased (see `install`); its type for checking calls
     // is in `declare_types`.
     let callback = || Param::new("f", Type::Unknown);
@@ -781,6 +822,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
 
     m(defs, "length", vec![u8a()], Type::Number);
     m(defs, "byteLength", vec![u8a()], Type::Number);
+    m(defs, "BYTES_PER_ELEMENT", vec![u8a()], Type::Number);
     m(
         defs,
         "at",
@@ -1523,6 +1565,16 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         },
                     ),
                     (
+                        "BYTES_PER_ELEMENT".to_string(),
+                        PropertySig {
+                            ty: Type::Number,
+                            readonly: true,
+                            intrinsic: false,
+                            optional: false,
+                            doc: doc("/** The size in bytes of each element: always `1`. */"),
+                        },
+                    ),
+                    (
                         "byteLength".to_string(),
                         PropertySig {
                             ty: Type::Number,
@@ -1665,7 +1717,16 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         },
                     ),
                 ]),
-                properties: BTreeMap::new(),
+                properties: BTreeMap::from([(
+                    "BYTES_PER_ELEMENT".to_string(),
+                    PropertySig {
+                        ty: Type::Number,
+                        readonly: true,
+                        intrinsic: false,
+                        optional: false,
+                        doc: doc("/** The size in bytes of each element: always `1`. */"),
+                    },
+                )]),
                 dispatch: Dispatch::Static,
                 doc: doc(
                     "/** Constructor object for `Uint8Array`. Accessed via the global `Uint8Array` binding. */",

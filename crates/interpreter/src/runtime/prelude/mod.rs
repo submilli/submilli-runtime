@@ -88,6 +88,7 @@ pub(crate) fn install_vtables(
     let error_host = error::install_store_bound(linker, store, &intr, &vtables.string)?;
     number::install_constants(linker, store)?;
     math::install_constants(linker, store)?;
+    uint8array::install_constants(linker, store)?;
     Ok((vtables, error_host))
 }
 
