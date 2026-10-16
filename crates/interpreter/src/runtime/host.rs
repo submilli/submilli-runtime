@@ -1741,6 +1741,7 @@ pub(crate) const CALL_MODULES: &[&str] = &[
     crate::stdlib::embedding::MODULE_NAME,
     crate::stdlib::session::MODULE_NAME,
     crate::stdlib::secrets::MODULE_NAME,
+    crate::stdlib::variables::MODULE_NAME,
     crate::stdlib::git::MODULE_NAME,
     crate::stdlib::code::MODULE_NAME,
     crate::stdlib::security::MODULE_NAME,

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "0c0bc4473a6190d42b62591fd18417e05a020896859c10e1432b86fd6a0f2afb"
+  contentHash: "06fb15b26a4d15f704a5594984672989a0c6b06e5783b2c9c8e161cd5a46ace2"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -214,17 +214,17 @@ read checks the requested alias name and grants no access to its target name.
 | `session.remove` | `key: string` | Delete a session key | `key glob "triage/*"` |
 | `session.list` | `prefix: string` | Enumerate session keys under a prefix | `prefix == "triage/"` |
 
-### `submilli:variables`
-
-| Capability | Fields | Operation | Example filter |
-| --- | --- | --- | --- |
-| `variables.get` | `name: string` | Read an immutable Blueprint/session configuration variable | `name == "BROWSER_STORE_NAME"` |
-
 ### `@tools`
 
 | Capability | Fields | Operation | Example filter |
 | --- | --- | --- | --- |
 | `tools.call` | `tool: string` | Call an application tool the harness declared for the session (`@tools`). The harness answers each call, and may refuse it | `tool == "query_orders"` |
+
+### `submilli:variables`
+
+| Capability | Fields | Operation | Example filter |
+| --- | --- | --- | --- |
+| `variables.get` | `name: string` | Read an immutable Blueprint/session configuration variable | `name == "BROWSER_STORE_NAME"` |
 
 ### `@mcp`
 

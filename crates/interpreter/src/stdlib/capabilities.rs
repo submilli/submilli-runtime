@@ -549,12 +549,12 @@ const CORE_CATALOG: &[CapabilityGroup] = &[
         capabilities: SESSION,
     },
     CapabilityGroup {
-        module: "submilli:variables",
-        capabilities: VARIABLES,
-    },
-    CapabilityGroup {
         module: "@tools",
         capabilities: TOOLS,
+    },
+    CapabilityGroup {
+        module: "submilli:variables",
+        capabilities: VARIABLES,
     },
 ];
 

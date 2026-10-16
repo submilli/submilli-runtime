@@ -547,7 +547,7 @@ mod tests {
     /// The request is the decision's context; the response is kept for whole reads and
     /// session reads.
     const RESPONSE_ONLY: &[&str] = &["fs.read", "session.read", "session.list"];
-    /// Writes, git, secrets, and the reads whose results are deferred to playback
+    /// Writes, git, secrets, bound configuration, and the reads whose results are deferred to playback
     /// (`stat`, `peek`, `list`, and the streaming reads): timing and outcome only. A
     /// secret's value is never kept. `fs.exists` and `fs.size` gate as `fs.stat` and do
     /// keep their answer, which no class requires.
@@ -564,6 +564,7 @@ mod tests {
         "git.fetch",
         "git.commit",
         "secrets.get",
+        "variables.get",
         "session.write",
         "session.remove",
     ];
@@ -658,6 +659,10 @@ mod tests {
         (
             "src/stdlib/secrets.rs",
             Some(crate::stdlib::secrets::MODULE_NAME),
+        ),
+        (
+            "src/stdlib/variables.rs",
+            Some(crate::stdlib::variables::MODULE_NAME),
         ),
         (
             "src/stdlib/security.rs",
