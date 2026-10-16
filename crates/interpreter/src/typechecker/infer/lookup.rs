@@ -143,6 +143,11 @@ impl<'a> Inferer<'a> {
                 if array_view.is_some() {
                     sig = restrict_to_reads(sig, generics)?;
                 }
+                if recv_ty.is_readonly_array() {
+                    for param in &mut sig.params {
+                        param.ty = readonly_callback_receivers(&param.ty, &sym.mangled_name);
+                    }
+                }
                 let bindings: BTreeMap<String, Type> = generics.iter().cloned().zip(args).collect();
                 Some((sig, bindings, sym.mangled_name.clone(), *dispatch))
             }
@@ -240,6 +245,7 @@ impl<'a> Inferer<'a> {
         crate::MangledName,
         crate::Dispatch,
     )> {
+        let original_recv_ty = recv_ty;
         let array_view = recv_ty.array_like_union_view();
         let recv_ty = array_view.as_ref().unwrap_or(recv_ty);
         let (mangled, _package, interface_name, args) = recv_ty.interface_routing()?;
@@ -253,7 +259,12 @@ impl<'a> Inferer<'a> {
         else {
             return None;
         };
-        let sig = properties.get(name)?.clone();
+        let mut sig = properties.get(name)?.clone();
+        // `Array#length` is writable, but as in tsc not through a readonly
+        // array, and a tuple's length is fixed.
+        if mangled == crate::mangle::prelude("Array") && fixed_length_array(original_recv_ty) {
+            sig.readonly = true;
+        }
         let bindings: BTreeMap<String, Type> = generics.iter().cloned().zip(args).collect();
         Some((sig, bindings, sym.mangled_name.clone(), *dispatch))
     }
@@ -745,6 +756,37 @@ fn readonly_callback_arrays(ty: &Type, generics: &[String]) -> Type {
     }
 }
 
+/// `ty` with each callback parameter that receives the interface `mangled`
+/// itself made `readonly`: `ReadonlyMap#forEach` passes the map as a
+/// `ReadonlyMap`, as tsc declares it.
+fn readonly_callback_receivers(ty: &Type, mangled: &crate::MangledName) -> Type {
+    let Type::Function {
+        params,
+        optional,
+        ret,
+        predicate,
+        has_rest,
+    } = ty
+    else {
+        return ty.clone();
+    };
+    Type::Function {
+        optional: *optional,
+        params: params
+            .iter()
+            .map(|param| match param {
+                Type::InterfaceRef { mangled: own, .. } if own == mangled => {
+                    Type::Readonly(Box::new(param.clone()))
+                }
+                _ => param.clone(),
+            })
+            .collect(),
+        ret: ret.clone(),
+        predicate: predicate.clone(),
+        has_rest: *has_rest,
+    }
+}
+
 /// Whether one of `generics` appears in `ty` other than as a parameter of a
 /// function type, where a callback receives it and so reads it.
 fn generic_flows_in(ty: &Type, generics: &[String]) -> bool {
@@ -773,6 +815,17 @@ fn generic_flows_in(ty: &Type, generics: &[String]) -> bool {
         Type::Alias { args, ty, .. } => {
             args.iter().any(|arg| generic_flows_in(arg, generics)) || generic_flows_in(ty, generics)
         }
+        _ => false,
+    }
+}
+
+/// A readonly array or a tuple, or a union with one among its members.
+fn fixed_length_array(ty: &Type) -> bool {
+    if ty.is_readonly_array() || matches!(ty.peel(), Type::Tuple(_)) {
+        return true;
+    }
+    match ty.peel() {
+        Type::Union(members) => members.iter().any(fixed_length_array),
         _ => false,
     }
 }

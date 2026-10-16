@@ -23,9 +23,10 @@ pub(crate) mod engine;
 pub(crate) mod input;
 mod install;
 mod output;
+mod replace_callback;
 
-pub(crate) use install::declare_types;
 pub use install::{declare, install};
+pub(crate) use install::{declare_types, replacement_type};
 
 use wasmtime::{ArrayRef, ArrayRefPre, Caller, ExternRef, Rooted, StructRef, StructRefPre, Val};
 
@@ -453,7 +454,100 @@ pub(super) fn last_index_getter(
     params: &[Val],
 ) -> wasmtime::Result<f64> {
     let st = as_struct(caller, abi_arg(params, 0)?, "RegExp#lastIndex")?;
-    Ok(last_index(caller, &st)? as f64)
+    match st.field(&mut *caller, 2)? {
+        Val::I32(v) => Ok(f64::from(v)),
+        other => wasmtime::bail!("RegExp: lastIndex is {other:?}, not i32"),
+    }
+}
+
+/// `re.lastIndex = value`. The slot holds an integer: the value is truncated
+/// toward zero (NaN is 0) and saturates at the `i32` range, which only
+/// changes what a fractional or out-of-range write reads back; matching
+/// clamps a negative index to 0 and fails past the end either way.
+pub(super) fn last_index_setter(
+    caller: &mut Caller<'_, StoreData>,
+    params: &[Val],
+) -> wasmtime::Result<()> {
+    let Val::F64(bits) = *abi_arg(params, 1)? else {
+        wasmtime::bail!("RegExp#lastIndex: value is not f64");
+    };
+    set_last_index(caller, abi_arg(params, 0)?, f64::from_bits(bits))
+}
+
+/// `re.lastIndex = value`, for the host setter and for a write through a
+/// structural view of the regex.
+pub(crate) fn set_last_index(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    value: f64,
+) -> wasmtime::Result<()> {
+    let st = as_struct(caller, receiver, "RegExp#lastIndex")?;
+    // `as` truncates toward zero, saturates, and maps NaN to 0.
+    st.set_field(&mut *caller, 2, Val::I32(value as i32))
+}
+
+/// `RegExp.escape(s)` (ES2025): `s` with every character that has a meaning
+/// in a pattern escaped, so the result matches `s` literally. A leading
+/// letter or digit is escaped too, so the result can follow `\0` or `\c`.
+pub(super) fn escape_units(input: &[u16]) -> Vec<u16> {
+    let mut out = Vec::with_capacity(input.len());
+    for (index, c) in char::decode_utf16(input.iter().copied()).enumerate() {
+        let push = |out: &mut Vec<u16>, text: &str| out.extend(text.encode_utf16());
+        match c {
+            Err(lone) => push(&mut out, &format!("\\u{:04x}", lone.unpaired_surrogate())),
+            Ok(c) if index == 0 && c.is_ascii_alphanumeric() => {
+                push(&mut out, &format!("\\x{:02x}", u32::from(c)));
+            }
+            Ok(c) => push(&mut out, &escape_char(c)),
+        }
+    }
+    out
+}
+
+fn escape_char(c: char) -> String {
+    const SYNTAX: &str = "^$\\.*+?()[]{}|/";
+    const OTHER_PUNCTUATORS: &str = ",-=<>#&!%:;@~'`\"";
+    if SYNTAX.contains(c) {
+        return format!("\\{c}");
+    }
+    let control = match c {
+        '\t' => Some('t'),
+        '\n' => Some('n'),
+        '\u{b}' => Some('v'),
+        '\u{c}' => Some('f'),
+        '\r' => Some('r'),
+        _ => None,
+    };
+    if let Some(letter) = control {
+        return format!("\\{letter}");
+    }
+    if !(OTHER_PUNCTUATORS.contains(c) || is_js_whitespace_or_line_terminator(c)) {
+        return c.to_string();
+    }
+    if u32::from(c) <= 0xFF {
+        return format!("\\x{:02x}", u32::from(c));
+    }
+    let mut units = [0u16; 2];
+    c.encode_utf16(&mut units)
+        .iter()
+        .map(|unit| format!("\\u{unit:04x}"))
+        .collect()
+}
+
+/// ECMAScript `WhiteSpace` or `LineTerminator`: the Zs category plus TAB, VT,
+/// FF, ZWNBSP, LF, CR, LS and PS.
+fn is_js_whitespace_or_line_terminator(c: char) -> bool {
+    matches!(
+        c,
+        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200a}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}'
+                | '\u{feff}'
+    )
 }
 
 /// A boolean flag getter — `flag_mask & bitset != 0`.
@@ -578,11 +672,28 @@ pub(super) fn string_match(
         .try_into()
         .map_err(|_| wasmtime::Error::msg("string_match: invalid argument count"))?;
     let input = input::read(caller, abi_arg(params, 0)?)?;
-    let st = as_struct(caller, abi_arg(params, 1)?, "String#match(regex)")?;
+    let st = pattern_arg(caller, abi_arg(params, 1)?, "String#match(regex)")?;
     match exec_at(caller, &st, &input, 0)? {
         Some(s) => build_match_box(caller, &input, abi_arg(params, 0)?, &s),
         None => Ok(Val::null_any_ref()),
     }
+}
+
+/// The regex `match` or `search` runs: a string argument is compiled as a
+/// pattern with no flags, as JavaScript's `new RegExp(s)` does.
+fn pattern_arg(
+    caller: &mut Caller<'_, StoreData>,
+    arg: &Val,
+    name: &str,
+) -> wasmtime::Result<Rooted<StructRef>> {
+    if !arg_is_string(caller, arg)? {
+        return as_struct(caller, arg, name);
+    }
+    let no_flags = Val::AnyRef(Some(
+        crate::runtime::host::write_submilli_string_struct(caller, "")?.to_anyref(),
+    ));
+    let regex = construct(caller, arg, &no_flags)?;
+    as_struct(caller, &regex, name)
 }
 
 /// `String#search(re)` — index of the first match, or `-1`.
@@ -591,7 +702,7 @@ pub(super) fn string_search(
     params: &[Val],
 ) -> wasmtime::Result<f64> {
     let input = input::read(caller, abi_arg(params, 0)?)?;
-    let st = as_struct(caller, abi_arg(params, 1)?, "String#search(regex)")?;
+    let st = pattern_arg(caller, abi_arg(params, 1)?, "String#search(regex)")?;
     Ok(match find_at(caller, &st, &input, 0)? {
         Some((start, _)) => start as f64,
         None => -1.0,
@@ -651,6 +762,29 @@ pub(super) fn string_replace(
     let st = as_struct(caller, abi_arg(params, 1)?, "String#replace(regex)")?;
     let all = flag_bits(caller, &st)? & FlagSet::G.bits() as i32 != 0;
     replace_regex(caller, params, &st, all, "String#replace(replacement)")
+}
+
+/// `String#replace` or `replaceAll` whose replacement may be a function.
+pub(super) async fn string_replace_any(
+    caller: &mut Caller<'_, StoreData>,
+    params: &[Val],
+    all: bool,
+) -> wasmtime::Result<Val> {
+    if arg_is_string(caller, abi_arg(params, 2)?)? {
+        return if all {
+            string_replace_all(caller, params)
+        } else {
+            string_replace(caller, params)
+        };
+    }
+    replace_callback::replace_with_callback(
+        caller,
+        abi_arg(params, 0)?,
+        abi_arg(params, 1)?,
+        abi_arg(params, 2)?,
+        all,
+    )
+    .await
 }
 
 /// `String#replaceAll(search, replacement)` — always all occurrences (the regex

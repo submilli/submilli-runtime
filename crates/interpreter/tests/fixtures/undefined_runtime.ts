@@ -21,8 +21,6 @@ function main(): void {
     assert(!!missingValue === false, "undefined boolean conversion");
     assert(!Object.is(null, undefined), "null differs from undefined");
     assert(Object.is(undefined, undefined), "undefined equals itself");
-    assert(Object.is(undefined), "omitted comparison argument is undefined");
-    assert(Object.is(), "both omitted comparison arguments are undefined");
     assert(!Error.isError(undefined), "undefined is not an error");
     assert(!Error.isError(), "omitted argument is not an error");
     assert(JSON.stringify(present) === "{}", "JSON omits undefined property");

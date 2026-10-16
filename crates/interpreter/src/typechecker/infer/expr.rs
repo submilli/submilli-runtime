@@ -255,7 +255,7 @@ fn excess_field_fix_help(
 /// Array methods that mutate the receiver. Rejected on tuple-typed and `readonly`
 /// receivers: tuples are fixed-length, so mutation would break their arity and
 /// per-position types, and a `readonly` array only permits reading.
-fn is_mutating_array_method(name: &str) -> bool {
+pub(super) fn is_mutating_array_method(name: &str) -> bool {
     matches!(
         name,
         "push"
@@ -268,6 +268,26 @@ fn is_mutating_array_method(name: &str) -> bool {
             | "fill"
             | "copyWithin"
     )
+}
+
+/// `"Map"` or `"Set"` for a `ReadonlyMap` or `ReadonlySet` receiver, or a
+/// union with one as a member.
+fn readonly_collection(ty: &Type) -> Option<&'static str> {
+    if let Type::Union(members) = ty.peel() {
+        return members.iter().find_map(readonly_collection);
+    }
+    if !ty.is_readonly_array() {
+        return None;
+    }
+    match ty.peel() {
+        Type::InterfaceRef { mangled, .. } if *mangled == crate::mangle::prelude("Map") => {
+            Some("Map")
+        }
+        Type::InterfaceRef { mangled, .. } if *mangled == crate::mangle::prelude("Set") => {
+            Some("Set")
+        }
+        _ => None,
+    }
 }
 
 /// The copying counterpart of a mutating array method, where the prelude has one.
@@ -2114,6 +2134,19 @@ impl Inferer<'_> {
     /// whether it reported, in which case the caller poisons the call.
     fn reject_unsupported_array_call(&mut self, recv_ty: &Type, name: &crate::Ident) -> bool {
         if self.reject_array_like_union_call(recv_ty, name) {
+            return true;
+        }
+        if let Some(collection) = readonly_collection(recv_ty)
+            && matches!(name.name.as_str(), "set" | "add" | "delete" | "clear")
+        {
+            self.error_with_help(
+                name.span,
+                format!("cannot call `{}` on `{}`", name.name, recv_ty),
+                vec![format!(
+                    "`{}` mutates the {collection}, and a `Readonly{collection}` only permits reading",
+                    name.name
+                )],
+            );
             return true;
         }
         if !is_mutating_array_method(&name.name) {
@@ -7990,6 +8023,18 @@ impl Inferer<'_> {
                 length_ty,
             ));
         }
+        // A function's `length` without a `Function` interface: the spec has
+        // no `Function` type, and `length` is the one property it reads.
+        if name.name == "length" && matches!(receiver_ty.peel(), Type::Function { .. }) {
+            return Ok((
+                TypedExprKind::InterfacePropertyAccess {
+                    receiver: typed_receiver,
+                    iface: crate::mangle::prelude("Function"),
+                    name,
+                },
+                Type::Number,
+            ));
+        }
         // interface-property dispatch lands here BEFORE the
         // user-object field path. `lookup_interface_property` returns `None`
         // for `Object` so user-object reads aren't shadowed by a hypothetical
@@ -8257,6 +8302,8 @@ impl Inferer<'_> {
         }
         let is_array = matches!(recv_ty.peel(), Type::Array(_));
         let method = name.name.clone();
+        let is_set = iface_mangled == crate::mangle::prelude("Set");
+        let is_array_iface = iface_mangled == crate::mangle::prelude("Array");
         let call = self.infer_generic_method_call(
             typed_receiver,
             iface_mangled,
@@ -8268,10 +8315,119 @@ impl Inferer<'_> {
             expected,
             span,
         )?;
+        if is_array_iface
+            && method == "concat"
+            && let Type::Array(element) = call.1.peel()
+        {
+            self.reject_concat_arrays_as_elements(&call.0, element)?;
+        }
         if is_array {
             return self.narrow_by_callback_predicate(&method, call, span);
         }
+        if is_set && method == "intersection" {
+            return self.narrow_set_intersection(call);
+        }
         Ok(call)
+    }
+
+    /// `concat` spreads every array argument, as JavaScript does, so an array
+    /// may not stand for one element even where the element type is itself an
+    /// array: `rows.concat([1, 2])` on `number[][]` appends `1` and `2`. tsc
+    /// accepts that call through its `T` arm; Submilli reports it, since the
+    /// result would hold numbers typed as arrays.
+    fn reject_concat_arrays_as_elements(
+        &mut self,
+        call: &TypedExprKind,
+        element: &Type,
+    ) -> Result<(), CompilerFailure> {
+        let TypedExprKind::MethodCall { args, .. } = call else {
+            return Ok(());
+        };
+        let Some(&packed) = args.last() else {
+            return Ok(());
+        };
+        let TypedExprKind::ArrayLiteral { elements, .. } = &self
+            .typed_ast
+            .try_expr(packed)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        else {
+            return Ok(());
+        };
+        let spread_target = Type::Readonly(Box::new(Type::Array(Box::new(element.clone()))));
+        for item in elements.clone() {
+            let (id, spread) = match item {
+                crate::TypedArrayElement::Value(id) => (id, false),
+                crate::TypedArrayElement::Spread(id) => (id, true),
+            };
+            let typed = self
+                .typed_ast
+                .try_expr(id)
+                .map_err(crate::typechecker::arena_failure)?;
+            let span = typed.span;
+            let arg_ty = match (spread, typed.ty.peel()) {
+                (false, _) => typed.ty.peel_preserving_readonly().clone(),
+                (true, Type::Array(inner)) => inner.as_ref().clone(),
+                (true, _) => continue,
+            };
+            let members = match arg_ty.peel() {
+                Type::Union(members) => members.clone(),
+                _ => vec![arg_ty.clone()],
+            };
+            let spreads_wrongly = members.iter().any(|member| {
+                matches!(member.peel(), Type::Array(_) | Type::Tuple(_))
+                    && !super::assignable::assignable(member, &spread_target, self.resolver())
+            });
+            if spreads_wrongly {
+                self.error_with_help(
+                    span,
+                    format!("`concat` spreads `{arg_ty}` into elements of type `{element}`"),
+                    vec![
+                        "`concat` appends an array argument's elements, not the array; \
+                         wrap it to append it as one element: `concat([value])`"
+                            .to_string(),
+                    ],
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// `a.intersection(b)` holds only elements of both sets, so where `b`'s
+    /// element type is the narrower one the result has it. tsc types the result
+    /// `Set<T & U>`; this matches it whenever one element type contains the
+    /// other. Sets share one representation, so only the static type changes.
+    fn narrow_set_intersection(
+        &mut self,
+        (kind, ty): (TypedExprKind, Type),
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let set_element = |ty: &Type| match ty.peel() {
+            Type::InterfaceRef { mangled, args, .. }
+                if *mangled == crate::mangle::prelude("Set") && args.len() == 1 =>
+            {
+                Some(args[0].clone())
+            }
+            _ => None,
+        };
+        let TypedExprKind::MethodCall { args, .. } = &kind else {
+            return Ok((kind, ty));
+        };
+        let Some(&other) = args.first() else {
+            return Ok((kind, ty));
+        };
+        let other_ty = self
+            .typed_ast
+            .try_expr(other)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .clone();
+        let (Some(own), Some(theirs)) = (set_element(&ty), set_element(&other_ty)) else {
+            return Ok((kind, ty));
+        };
+        if own == theirs || !assignable(&theirs, &own, self.resolver()) {
+            return Ok((kind, ty));
+        }
+        Ok((kind, Type::prelude_interface("Set", vec![theirs])))
     }
 
     /// `u.name(args)` where `u` is a union of strings with arrays or tuples,

@@ -259,10 +259,12 @@ fn write_node<'a>(
             )
         }
         Type::Array(inner) => {
-            let parens = matches!(
-                inner.as_ref(),
-                Type::Union(_) | Type::Function { .. } | Type::Readonly(_) | Type::Refined { .. }
-            );
+            let parens = match inner.as_ref() {
+                // `ReadonlyMap<K, V>[]` needs no parentheses.
+                Type::Readonly(element) => !matches!(element.as_ref(), Type::InterfaceRef { .. }),
+                Type::Union(_) | Type::Function { .. } | Type::Refined { .. } => true,
+                _ => false,
+            };
             if parens {
                 out.push("(")?;
             }
@@ -270,7 +272,12 @@ fn write_node<'a>(
             push(frames, Frame::Type(inner, child))
         }
         Type::Readonly(inner) => {
-            out.push("readonly ")?;
+            // A readonly `Map` or `Set` is spelled `ReadonlyMap` / `ReadonlySet`.
+            out.push(if matches!(inner.as_ref(), Type::InterfaceRef { .. }) {
+                "Readonly"
+            } else {
+                "readonly "
+            })?;
             push(frames, Frame::Type(inner, child))
         }
         Type::Tuple(tuple) => {

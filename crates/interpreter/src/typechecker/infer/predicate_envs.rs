@@ -467,6 +467,15 @@ impl<'a> Inferer<'a> {
                 type_predicate: Some(predicate),
                 ..
             } => self.guard_envs(&predicate, &args, cond_expr_id)?,
+            TypedExprKind::MethodCall {
+                receiver,
+                iface,
+                name,
+                args,
+                type_predicate: None,
+            } if name.name == "every" && iface == crate::mangle::prelude("Array") => {
+                self.every_guard_envs(receiver, &args, cond_expr_id)?
+            }
             TypedExprKind::GenericMethodCall {
                 args,
                 type_predicate: Some(predicate),
@@ -509,6 +518,57 @@ impl<'a> Inferer<'a> {
             self.forget_later_writes(&mut true_env, arg, call)?;
             self.forget_later_writes(&mut false_env, arg, call)?;
         }
+        Ok((true_env, false_env))
+    }
+
+    /// `xs.every(guard)` with a guard `(x) => x is S` narrows `xs` to `S[]`, or
+    /// `readonly S[]` for a readonly `xs`, as tsc's `this is S[]` overloads do.
+    fn every_guard_envs(
+        &mut self,
+        receiver: ExprId,
+        args: &[ExprId],
+        call: ExprId,
+    ) -> Result<(narrowing::NarrowEnv, narrowing::NarrowEnv), crate::compiler_error::CompilerFailure>
+    {
+        let empty = || (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
+        let Some(&callback) = args.first() else {
+            return Ok(empty());
+        };
+        let Type::Function {
+            predicate: Some(predicate),
+            ..
+        } = self
+            .typed_ast
+            .try_expr(callback)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .peel()
+            .clone()
+        else {
+            return Ok(empty());
+        };
+        if predicate.parameter_index != 0 {
+            return Ok(empty());
+        }
+        let asserted = Type::Array(Box::new(predicate.asserted_type));
+        let receiver_ty = &self
+            .typed_ast
+            .try_expr(receiver)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty;
+        // tsc's `ReadonlyArray#every` asserts `this is readonly S[]`.
+        let asserted = if receiver_ty.is_readonly_array() {
+            Type::Readonly(Box::new(asserted))
+        } else {
+            asserted
+        };
+        let Some((mut true_env, mut false_env)) =
+            self.narrow_path_to_asserted(receiver, &asserted)?
+        else {
+            return Ok(empty());
+        };
+        self.forget_later_writes(&mut true_env, receiver, call)?;
+        self.forget_later_writes(&mut false_env, receiver, call)?;
         Ok((true_env, false_env))
     }
 

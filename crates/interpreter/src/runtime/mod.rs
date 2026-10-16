@@ -226,7 +226,7 @@ pub struct StoreData {
     /// The call-metadata closure environment type, built on first use for the
     /// same reason as [`Self::intrinsic_types`].
     pub(crate) call_metadata_type: Option<wasmtime::StructType>,
-    pub(crate) iterator_functions: [Option<wasmtime::Func>; 10],
+    pub(crate) iterator_functions: [Option<wasmtime::Func>; 13],
     pub(crate) iterator_constants: [Option<wasmtime::Global>; 6],
     /// The object each static-dispatch binding is as a value, by its string
     /// form; see `prelude::object::static_value`.
@@ -324,7 +324,7 @@ impl StoreData {
             undefined_value: None,
             closure_receiver_type: None,
             call_metadata_type: None,
-            iterator_functions: [None; 10],
+            iterator_functions: [None; 13],
             iterator_constants: [None; 6],
             static_values: std::collections::BTreeMap::new(),
             parameter_cache: Default::default(),

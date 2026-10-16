@@ -14,6 +14,7 @@ use crate::runtime::host::{register_host_fn, register_host_fn_async};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::{MODULE_NAME, closure, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
+use std::collections::BTreeMap;
 
 /// The dispatch key codegen looks up for `Map#<method>`.
 fn method_key(method: &str) -> MangledName {
@@ -187,6 +188,24 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             })
         },
     )?;
+    register_host_fn_async(
+        linker,
+        MODULE_NAME,
+        ctor_key("groupBy"),
+        ft(vec![obj.clone(), obj.clone()], vec![obj.clone()]),
+        true,
+        |caller, params, results| {
+            Box::pin(async move {
+                *abi_result(results, 0)? = crate::runtime::prelude::object::map_group_by(
+                    caller,
+                    abi_arg(params, 0)?,
+                    abi_arg(params, 1)?,
+                )
+                .await?;
+                Ok(())
+            })
+        },
+    )?;
     Ok(())
 }
 
@@ -242,7 +261,9 @@ pub fn declare(defs: &mut PackageDeclaration) {
         vec![Param::new(
             "entries",
             Type::union(vec![
-                Type::Readonly(Box::new(Type::Array(Box::new(entry())))),
+                Type::Readonly(Box::new(Type::Array(Box::new(Type::Readonly(Box::new(
+                    entry(),
+                )))))),
                 Type::prelude_interface("Iterable".to_string(), vec![entry()]),
                 Type::prelude_interface("Iterator".to_string(), vec![entry()]),
                 Type::Null,
@@ -251,6 +272,41 @@ pub fn declare(defs: &mut PackageDeclaration) {
         )],
         map_ty(),
     );
+    declare_method(
+        defs,
+        "groupBy",
+        ctor_key("groupBy"),
+        vec![
+            Param::new("items", Type::Unknown),
+            Param::new("keySelector", Type::Unknown),
+        ],
+        Type::prelude_interface("Map".to_string(), vec![Type::Unknown, Type::Unknown]),
+    );
+}
+
+/// `Map.groupBy`'s parameters, as tsc's lib declares them.
+fn group_by_params() -> Vec<Param> {
+    let element = Type::TypeVar("T".into());
+    vec![
+        Param::new(
+            "items",
+            Type::union(vec![
+                Type::Readonly(Box::new(Type::Array(Box::new(element.clone())))),
+                Type::prelude_interface("Iterable", vec![element.clone()]),
+                Type::prelude_interface("Iterator", vec![element.clone()]),
+            ]),
+        ),
+        Param::new(
+            "keySelector",
+            Type::Function {
+                params: vec![element, Type::Number],
+                optional: 0,
+                ret: Box::new(Type::TypeVar("K".into())),
+                predicate: None,
+                has_rest: false,
+            },
+        ),
+    ]
 }
 
 /// The type/interface surface this module implements — its slice of the
@@ -262,7 +318,24 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         Dispatch, MethodSig, Param, PropertySig, Span, Type, TypeKind, TypeSymbol, ValueKind,
         ValueSymbol,
     };
-    use std::collections::BTreeMap;
+    // `ReadonlyMap` is `Map` seen through `readonly`: the typechecker rejects
+    // the mutating methods, and the value is the same `Map` at runtime.
+    defs.types.insert(
+        "ReadonlyMap".to_string(),
+        TypeSymbol {
+            name: "ReadonlyMap".to_string(),
+            mangled_name: crate::mangle::prelude("ReadonlyMap"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: TypeKind::Alias {
+                generics: vec!["K".to_string(), "V".to_string()],
+                ty: Type::Readonly(Box::new(Type::prelude_interface(
+                    "Map".to_string(),
+                    vec![Type::TypeVar("K".to_string()), Type::TypeVar("V".to_string())],
+                ))),
+                doc: doc("/** A `Map` that can only be read: `get`, `has`, `size`, `forEach` and iteration, but not `set`, `delete` or `clear`. Every `Map<K, V>` is a `ReadonlyMap<K, V>`. */"),
+            },
+        },
+    );
     defs.types.insert(
         "Map".to_string(),
         TypeSymbol {
@@ -465,6 +538,21 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([(
+                    "groupBy".to_string(),
+                    MethodSig {
+                        optional: false,
+                        generics: vec!["K".to_string(), "T".to_string()],
+                        params: group_by_params(),
+                        ret: Type::prelude_interface("Map".to_string(), vec![
+                            Type::TypeVar("K".to_string()),
+                            Type::Array(Box::new(Type::TypeVar("T".to_string()))),
+                        ]),
+                        predicate: None,
+                        doc: doc(
+                            "/** Groups iterable elements by the callback's result: a `Map` from each key to the elements it was returned for, in first-seen order. The callback receives the element and its index. */",
+                        ),
+                    },
+                ), (
                     "new".to_string(),
                     MethodSig {
                         optional: false,
@@ -472,10 +560,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         params: vec![Param::with_default(
                             "entries",
                             Type::union(vec![
-                                Type::Readonly(Box::new(Type::Array(Box::new(Type::Tuple(vec![
-                                    Type::TypeVar("K".to_string()),
-                                    Type::TypeVar("V".to_string()),
-                                ].into()))))),
+                                Type::Readonly(Box::new(Type::Array(Box::new(Type::Readonly(
+                                    Box::new(Type::Tuple(vec![
+                                        Type::TypeVar("K".to_string()),
+                                        Type::TypeVar("V".to_string()),
+                                    ].into())),
+                                ))))),
                                 Type::prelude_interface(
                                     "Iterable".to_string(),
                                     vec![Type::Tuple(vec![

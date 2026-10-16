@@ -100,6 +100,7 @@ pub(super) fn check_initialized(
         .symbols
         .prelude_func_idx("ReferenceError#constructor")
         .ok_or_else(|| internal_failure("ReferenceError constructor was not imported"))?;
+    crate::codegen::throw::emit_no_error_options(emitter);
     emitter.instruction(Instruction::Call(constructor));
     crate::codegen::throw::emit_error_throw(emitter, ctx);
     emitter.emit_end();

@@ -8,10 +8,12 @@ use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
 use crate::runtime::host::{
-    intrinsic_string_type, register_host_fn, uri_error, write_submilli_string_struct,
-    write_submilli_string_struct_units,
+    intrinsic_string_type, register_host_fn, register_host_fn_async, uri_error,
+    write_submilli_string_struct, write_submilli_string_struct_units,
 };
+use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::MODULE_NAME;
+use crate::runtime::prelude::string::string_ctor_call;
 use crate::runtime::prelude::vtable::read_string_units;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
@@ -127,35 +129,53 @@ pub fn decode_uri_js(input: &[u16]) -> Result<Vec<u16>, String> {
 }
 
 pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-    type EncodeOp = fn(&[u16]) -> Result<String, String>;
     type DecodeOp = fn(&[u16]) -> Result<Vec<u16>, String>;
     let engine = linker.engine().clone();
     let string_struct = ValType::Ref(RefType::new(
         false,
         HeapType::ConcreteStruct(intrinsic_string_type(&engine)?),
     ));
-    let ty = FuncType::new(&engine, [string_struct.clone()], [string_struct]);
-    let encoders: [(&str, EncodeOp); 2] = [
-        ("encodeURIComponent", encode_uri_component_js),
-        ("encodeURI", encode_uri_js),
-    ];
-    for (name, op) in encoders {
-        register_host_fn(
-            linker,
-            MODULE_NAME,
-            crate::mangle::prelude(name),
-            ty.clone(),
-            /* deterministic = */ true,
-            move |caller, params, results| -> wasmtime::Result<()> {
-                let units = read_string_units(&mut *caller, abi_arg(params, 0)?, name)?;
+    let ty = FuncType::new(&engine, [string_struct.clone()], [string_struct.clone()]);
+    // `encodeURIComponent` takes `string | number | boolean`, as in tsc's lib,
+    // boxed (a primitive-only union lowers to non-null `$Object`), and converts
+    // the way `String(value)` does. `encodeURI` takes only a string.
+    let obj_param = ValType::Ref(RefType::new(
+        false,
+        HeapType::ConcreteStruct(build_intrinsic_types(&engine)?.object),
+    ));
+    register_host_fn_async(
+        linker,
+        MODULE_NAME,
+        crate::mangle::prelude("encodeURIComponent"),
+        FuncType::new(&engine, [obj_param], [string_struct.clone()]),
+        /* deterministic = */ true,
+        |caller, params, results| {
+            Box::pin(async move {
+                let text = string_ctor_call(&mut *caller, abi_arg(params, 0)?).await?;
+                let units = read_string_units(&mut *caller, &text, "encodeURIComponent")?;
                 fuel::charge(&mut *caller, fuel::SCAN, units.len() as u64)?;
-                let encoded = op(&units).map_err(uri_error)?;
+                let encoded = encode_uri_component_js(&units).map_err(uri_error)?;
                 let st = write_submilli_string_struct(caller, &encoded)?;
                 *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
-            },
-        )?;
-    }
+            })
+        },
+    )?;
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        crate::mangle::prelude("encodeURI"),
+        ty.clone(),
+        /* deterministic = */ true,
+        |caller, params, results| -> wasmtime::Result<()> {
+            let units = read_string_units(&mut *caller, abi_arg(params, 0)?, "encodeURI")?;
+            fuel::charge(&mut *caller, fuel::SCAN, units.len() as u64)?;
+            let encoded = encode_uri_js(&units).map_err(uri_error)?;
+            let st = write_submilli_string_struct(caller, &encoded)?;
+            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
+            Ok(())
+        },
+    )?;
     let decoders: [(&str, DecodeOp); 2] = [
         ("decodeURIComponent", decode_uri_component_js),
         ("decodeURI", decode_uri_js),
@@ -181,7 +201,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 }
 
 pub(crate) fn declare(defs: &mut PackageDeclaration) {
-    let mut insert = |name: &str, doc_text: &str| {
+    let mut insert = |name: &str, param: Type, doc_text: &str| {
         let mangled = crate::mangle::prelude(name);
         // Keyed by the mangled name like `declare_method` — codegen routes on
         // `mangled_name`, and the typechecker's public-values pass loads these
@@ -194,7 +214,7 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
                 declaration_span: Span::at(crate::FileId::URI),
                 kind: ValueKind::Function {
                     generics: Vec::new(),
-                    params: vec![Param::new("uri", Type::String)],
+                    params: vec![Param::new("uri", param)],
                     ret: Type::String,
                     type_predicate: None,
                     doc: crate::doc(crate::FileId::URI, doc_text),
@@ -204,18 +224,22 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
     };
     insert(
         "encodeURIComponent",
-        "/**\n * Percent-encodes everything except letters, digits, and `- _ . ! ~ * ' ( )`.\n * Use for query values and path segments. Throws a catchable `URIError` on a lone surrogate.\n * @param uri The text to encode.\n */",
+        Type::union(vec![Type::String, Type::Number, Type::Boolean]),
+        "/**\n * Percent-encodes everything except letters, digits, and `- _ . ! ~ * ' ( )`.\n * Use for query values and path segments. Throws a catchable `URIError` on a lone surrogate.\n * @param uri The text to encode; a number or boolean is converted as `String(uri)` does.\n */",
     );
     insert(
         "encodeURI",
+        Type::String,
         "/**\n * Percent-encodes like `encodeURIComponent` but preserves the URI structure characters `; / ? : @ & = + $ , #`.\n * Use on a complete URI. Throws a catchable `URIError` on a lone surrogate.\n * @param uri The URI to encode.\n */",
     );
     insert(
         "decodeURIComponent",
+        Type::String,
         "/**\n * Decodes every `%XX` escape. Throws a catchable `URIError` (`\"URI malformed\"`) on an invalid escape sequence.\n * @param uri The text to decode.\n */",
     );
     insert(
         "decodeURI",
+        Type::String,
         "/**\n * Decodes `%XX` escapes but leaves the URI structure characters `; / ? : @ & = + $ , #` encoded.\n * Throws a catchable `URIError` (`\"URI malformed\"`) on an invalid escape sequence.\n * @param uri The URI to decode.\n */",
     );
 }

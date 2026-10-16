@@ -27,7 +27,7 @@ use crate::runtime::host::{host_boxed_number_vtable, write_submilli_array_struct
 use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::prelude::closure::Closure;
 use crate::runtime::prelude::collection::both_nan;
-use crate::runtime::prelude::iterator::{IterKind, make_index_iterator};
+use crate::runtime::prelude::iterator::{IterKind, IteratorSource, make_index_iterator};
 use crate::runtime::prelude::keep::{KeptValue, KeptValues, keep_all};
 use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_string_units};
 
@@ -243,8 +243,14 @@ fn concat(
     mut acc: Vec<Val>,
     others: &Val,
 ) -> wasmtime::Result<Vec<Val>> {
-    for sub in read_array(caller, others, "Array#concat")? {
-        acc.extend(read_array(caller, &sub, "Array#concat")?);
+    // As in JS, an array argument contributes its elements and anything else
+    // is appended as one element.
+    for item in read_array(caller, others, "Array#concat")? {
+        if is_array(caller, &item)? {
+            acc.extend(read_array(caller, &item, "Array#concat")?);
+        } else {
+            acc.push(item);
+        }
     }
     Ok(acc)
 }
@@ -327,8 +333,37 @@ async fn join(
 // Mutators (snapshot transforms preserve receiver identity)
 // ---------------------------------------------------------------------------
 
-fn push(caller: &mut Caller<'_, StoreData>, receiver: &Val, elem: Val) -> wasmtime::Result<f64> {
-    crate::runtime::array_storage::ArrayStorage::read(caller, receiver)?.push(caller, elem)
+fn push(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    items: Vec<Val>,
+) -> wasmtime::Result<f64> {
+    let mut storage = ArrayStorage::read(caller, receiver)?;
+    let mut length = f64::from(storage.len);
+    for item in items {
+        length = storage.push(caller, item)?;
+    }
+    Ok(length)
+}
+
+/// `xs.length = value`: truncates in place. JavaScript would also grow the
+/// array with holes, which Submilli arrays cannot hold, so growth throws.
+pub(crate) fn set_length(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    value: f64,
+) -> wasmtime::Result<()> {
+    if !(value >= 0.0 && value.fract() == 0.0 && value <= f64::from(u32::MAX)) {
+        return Err(crate::runtime::host::range_error("Invalid array length"));
+    }
+    let mut storage = ArrayStorage::read(caller, receiver)?;
+    if value > f64::from(storage.len) {
+        return Err(crate::runtime::host::range_error(format!(
+            "Cannot grow an array by writing length {value}; its length is {}",
+            storage.len
+        )));
+    }
+    storage.resize(caller, value as usize, Val::null_any_ref())
 }
 
 /// `pop()`: the last element, removed in place; `undefined` when empty.
@@ -790,15 +825,33 @@ fn array_step(
 }
 
 pub fn values(caller: &mut Caller<'_, StoreData>, array: &Val) -> wasmtime::Result<Val> {
-    make_index_iterator(caller, *array, IterKind::Values, array_step)
+    make_index_iterator(
+        caller,
+        IteratorSource::Array,
+        *array,
+        IterKind::Values,
+        array_step,
+    )
 }
 
 fn keys(caller: &mut Caller<'_, StoreData>, array: &Val) -> wasmtime::Result<Val> {
-    make_index_iterator(caller, *array, IterKind::Keys, array_step)
+    make_index_iterator(
+        caller,
+        IteratorSource::Array,
+        *array,
+        IterKind::Keys,
+        array_step,
+    )
 }
 
 fn entries(caller: &mut Caller<'_, StoreData>, array: &Val) -> wasmtime::Result<Val> {
-    make_index_iterator(caller, *array, IterKind::Entries, array_step)
+    make_index_iterator(
+        caller,
+        IteratorSource::Array,
+        *array,
+        IterKind::Entries,
+        array_step,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -876,6 +929,8 @@ pub(super) async fn from(
         &super::set::set_backing_struct(caller.engine(), &intr)?,
     )? {
         super::set::values(caller, src)?
+    } else if is_a(caller, src, &intr.uint8_array)? {
+        super::uint8array::values(caller, src)?
     } else if let Some(iter_method) = object_field(caller, src, "iterator")? {
         let c = closure::read(caller, &iter_method, "Array.from iterable")?;
         c.call_with_receiver(caller, *src, &[]).await?

@@ -14,8 +14,8 @@ use super::transforms::{TrimEnds, to_lower_case, to_upper_case, trim_range};
 use super::{
     RangeError, Str, at_index, cmp, code_point, concat_length, ends_with_window, from_char_code,
     from_code_point, includes, index_of, is_well_formed, last_index_of, normalize, pad_length,
-    repeat_length, slice_range, starts_with_window, string_index_unit, substring_range,
-    to_well_formed, unit_index,
+    repeat_length, slice_range, starts_with_window, string_index_unit, substr_range,
+    substring_range, to_well_formed, unit_index,
 };
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
@@ -56,6 +56,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 
     reg_range_to_str(linker, &engine, &abi, "slice", slice_range)?;
     reg_range_to_str(linker, &engine, &abi, "substring", substring_range)?;
+    reg_range_to_str(linker, &engine, &abi, "substr", substr_range)?;
 
     reg_str_str_num_to_num(linker, &engine, &abi, "indexOf", index_of)?;
     reg_str_str_num_to_num(linker, &engine, &abi, "lastIndexOf", last_index_of)?;
@@ -82,6 +83,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     reg_trim(linker, &engine, &abi, "trim", TrimEnds::Both)?;
     reg_trim(linker, &engine, &abi, "trimStart", TrimEnds::Start)?;
     reg_trim(linker, &engine, &abi, "trimEnd", TrimEnds::End)?;
+    reg_trim(linker, &engine, &abi, "trimLeft", TrimEnds::Start)?;
+    reg_trim(linker, &engine, &abi, "trimRight", TrimEnds::End)?;
     reg_str_str_to_str_fallible(linker, &engine, &abi, "normalize", normalize)?;
 
     reg_repeat(linker, &engine, &abi)?;
@@ -337,6 +340,16 @@ pub fn declare(defs: &mut PackageDeclaration) {
     );
     m(
         defs,
+        "substr",
+        vec![
+            s(),
+            Param::new("start", Type::Number),
+            Param::new("length", Type::Number),
+        ],
+        Type::String,
+    );
+    m(
+        defs,
         "indexOf",
         vec![
             s(),
@@ -388,7 +401,10 @@ pub fn declare(defs: &mut PackageDeclaration) {
     m(
         defs,
         "concat",
-        vec![s(), Param::new("other", Type::String)],
+        vec![
+            s(),
+            Param::new("strings", Type::Array(Box::new(Type::String))),
+        ],
         Type::String,
     );
     m(
@@ -418,6 +434,8 @@ pub fn declare(defs: &mut PackageDeclaration) {
     m(defs, "trim", vec![s()], Type::String);
     m(defs, "trimStart", vec![s()], Type::String);
     m(defs, "trimEnd", vec![s()], Type::String);
+    m(defs, "trimLeft", vec![s()], Type::String);
+    m(defs, "trimRight", vec![s()], Type::String);
     m(
         defs,
         "normalize",
@@ -847,24 +865,28 @@ fn reg_window_predicate(
     )
 }
 
-/// `String#concat`; the `+` operator registers the same operation as
-/// `string_concat`.
+/// `String#concat(...strings)`; the `+` operator registers the two-string
+/// operation as `string_concat`.
 fn reg_concat(
     linker: &mut Linker<StoreData>,
     engine: &wasmtime::Engine,
     abi: &StringAbi,
 ) -> wasmtime::Result<()> {
     let s = abi.value_type();
+    let array = ValType::Ref(RefType::new(
+        false,
+        HeapType::ConcreteStruct(crate::runtime::host::intrinsic_array_type(engine)?),
+    ));
     let abi = abi.clone();
     register_host_fn(
         linker,
         MODULE_NAME,
         method_key("concat"),
-        FuncType::new(engine, [s.clone(), s.clone()], [s]),
+        FuncType::new(engine, [s.clone(), array.clone()], [s]),
         true,
         move |caller, params, results| {
             *abi_result(results, 0)? =
-                abi.concat(caller, abi_arg(params, 0)?, abi_arg(params, 1)?, "concat")?;
+                abi.concat_all(caller, abi_arg(params, 0)?, abi_arg(params, 1)?)?;
             Ok(())
         },
     )
@@ -1209,6 +1231,29 @@ impl StringAbi {
         self.build(caller, a.vtable, &[a.whole(), b.whole()])
     }
 
+    /// `String#concat`: the receiver followed by each string in `others`, an
+    /// `$Array` of the rest arguments.
+    fn concat_all(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        receiver: &Val,
+        others: &Val,
+    ) -> wasmtime::Result<Val> {
+        let receiver = self.payload(caller, receiver, "concat")?;
+        let others =
+            crate::runtime::array_storage::ArrayStorage::read(caller, others)?.snapshot(caller)?;
+        let mut runs = Vec::with_capacity(others.len() + 1);
+        let mut total = receiver.len;
+        runs.push(receiver.whole());
+        for other in &others {
+            let other = self.payload(caller, other, "concat")?;
+            total = concat_length(total, other.len)?;
+            runs.push(other.whole());
+        }
+        fuel::charge(&mut *caller, fuel::COPY, total as u64)?;
+        self.build(caller, receiver.vtable, &runs)
+    }
+
     /// Builds a string from `runs` directly in a new GC array (see [`gc_text`]).
     fn build(
         &self,
@@ -1250,7 +1295,7 @@ impl StringAbi {
 /// `String(value)`: null renders `"null"`, as ECMAScript's ToString does; a
 /// bigint renders its decimal text; anything else re-enters its vtable
 /// `toString` slot.
-async fn string_ctor_call(
+pub(crate) async fn string_ctor_call(
     caller: &mut Caller<'_, StoreData>,
     value: &Val,
 ) -> wasmtime::Result<Val> {
@@ -1469,11 +1514,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             optional: false,
                             generics: Vec::new(),
-                            params: vec![Param::new("other", Type::String)],
+                            params: vec![Param::rest(
+                                "strings",
+                                Type::Array(Box::new(Type::String)),
+                            )],
                             ret: Type::String,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns a new string with `other` appended.\n * The receiver is not modified.\n * @param other String to append.\n */",
+                                "/**\n * Returns a new string with each of `strings` appended, in order.\n * The receiver is not modified.\n * @param strings Zero or more strings to append.\n */",
                             ),
                         },
                     ),
@@ -1616,6 +1664,26 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             predicate: None,
                             doc: doc(
                                 "/**\n * Returns a new string containing the code units from `start` (inclusive) to `end` (exclusive).\n * Negative values count from the end. The receiver is not modified.\n * @param start First index to copy. Defaults to `0`.\n * @param end Index one past the last to copy. Defaults to the string length.\n */",
+                            ),
+                        },
+                    ),
+                    (
+                        "substr".to_string(),
+                        MethodSig {
+                            optional: false,
+                            generics: Vec::new(),
+                            params: vec![
+                                Param::new("start", Type::Number),
+                                Param::with_default(
+                                    "length",
+                                    Type::Number,
+                                    crate::DefaultValue::Number(f64::INFINITY),
+                                ),
+                            ],
+                            ret: Type::String,
+                            predicate: None,
+                            doc: doc(
+                                "/**\n * Returns `length` code units starting at `start`; a negative `start` counts from the end. Deprecated in JavaScript in favour of `slice`.\n * @param start First index to copy.\n * @param length How many code units to copy. Defaults to the rest of the string.\n */",
                             ),
                         },
                     ),
@@ -1849,6 +1917,32 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         },
                     ),
                     (
+                        "trimLeft".to_string(),
+                        MethodSig {
+                            optional: false,
+                            generics: Vec::new(),
+                            params: Vec::new(),
+                            ret: Type::String,
+                            predicate: None,
+                            doc: doc(
+                                "/**\n * The older name of `trimStart`: returns a new string with Unicode whitespace removed from the start.\n */",
+                            ),
+                        },
+                    ),
+                    (
+                        "trimRight".to_string(),
+                        MethodSig {
+                            optional: false,
+                            generics: Vec::new(),
+                            params: Vec::new(),
+                            ret: Type::String,
+                            predicate: None,
+                            doc: doc(
+                                "/**\n * The older name of `trimEnd`: returns a new string with Unicode whitespace removed from the end.\n */",
+                            ),
+                        },
+                    ),
+                    (
                         "trimEnd".to_string(),
                         MethodSig {
                             optional: false,
@@ -1889,7 +1983,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Vec::new(),
                             params: vec![Param::new(
                                 "re",
-                                Type::prelude_interface("RegExp".to_string(), Vec::new()),
+                                Type::Union(vec![
+                                    Type::String,
+                                    Type::prelude_interface("RegExp".to_string(), Vec::new()),
+                                ]),
                             )],
                             ret: Type::Union(vec![
                                 Type::prelude_interface("RegExpMatch".to_string(), Vec::new()),
@@ -1897,7 +1994,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ]),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Find the next match of `re` in this string. Equivalent to `re.exec(this)` (v1; the `g`-flag array shape is a follow-up).\n * @param re The pattern to search for.\n */",
+                                "/**\n * Find the next match of `re` in this string. Equivalent to `re.exec(this)` (v1; the `g`-flag array shape is a follow-up).\n * @param re The pattern to search for; a string is compiled as a pattern, as `new RegExp(re)` does.\n */",
                             ),
                         },
                     ),
@@ -1908,12 +2005,15 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Vec::new(),
                             params: vec![Param::new(
                                 "re",
-                                Type::prelude_interface("RegExp".to_string(), Vec::new()),
+                                Type::Union(vec![
+                                    Type::String,
+                                    Type::prelude_interface("RegExp".to_string(), Vec::new()),
+                                ]),
                             )],
                             ret: Type::Number,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Index of the first match of `re` in this string, or `-1` if no match.\n * @param re The pattern to search for.\n */",
+                                "/**\n * Index of the first match of `re` in this string, or `-1` if no match.\n * @param re The pattern to search for; a string is compiled as a pattern, as `new RegExp(re)` does.\n */",
                             ),
                         },
                     ),
@@ -1930,12 +2030,15 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                         Type::prelude_interface("RegExp".to_string(), Vec::new()),
                                     ]),
                                 ),
-                                Param::new("replacement", Type::String),
+                                Param::new(
+                                    "replacement",
+                                    crate::runtime::prelude::regex::replacement_type(),
+                                ),
                             ],
                             ret: Type::String,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Replace the first match of `search` with `replacement`. For a `RegExp` `search`, the replacement may reference numbered captures (`$1`, `$2`) and named captures (`$<name>`); for both `string` and `RegExp` arms, the special tokens `$$` (literal `$`), `$&` (matched substring), `` $` `` (substring before the match), and `$'` (substring after the match) are honoured.\n * @param search Substring or pattern to match.\n * @param replacement The replacement string.\n */",
+                                "/**\n * Replace the first match of `search` with `replacement`. For a `RegExp` `search`, the replacement may reference numbered captures (`$1`, `$2`) and named captures (`$<name>`); for both `string` and `RegExp` arms, the special tokens `$$` (literal `$`), `$&` (matched substring), `` $` `` (substring before the match), and `$'` (substring after the match) are honoured.\n * @param search Substring or pattern to match.\n * @param replacement The replacement string, or a function called for each match with the matched text, each capture (`undefined` if it didn't participate), the match's offset, the whole string and, when the pattern names groups, an object of them, whose result replaces the match.\n */",
                             ),
                         },
                     ),
@@ -1952,7 +2055,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                         Type::prelude_interface("RegExp".to_string(), Vec::new()),
                                     ]),
                                 ),
-                                Param::new("replacement", Type::String),
+                                Param::new(
+                                    "replacement",
+                                    crate::runtime::prelude::regex::replacement_type(),
+                                ),
                             ],
                             ret: Type::String,
                             predicate: None,

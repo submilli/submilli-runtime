@@ -11,6 +11,7 @@ mod assign;
 mod dynamic;
 mod from_entries;
 mod group_by;
+pub(crate) use group_by::map_group_by;
 mod index;
 mod static_value;
 
@@ -441,6 +442,20 @@ fn copy_field_name(
 
 /// Append without replacing the receiver, so every alias sees the new slot.
 /// Existing indices (including class payload and guard slots) stay unchanged.
+/// A fresh object with `fields` (name, value) in order, for host code that
+/// hands JavaScript an object (`replace`'s named groups).
+pub(crate) fn object_from_fields(
+    caller: &mut Caller<'_, StoreData>,
+    fields: &[(Val, Val)],
+) -> wasmtime::Result<Val> {
+    let empty = Val::null_any_ref();
+    let object = spread(caller, &empty, &empty, &empty, &empty)?;
+    for (name, value) in fields {
+        insert_field(caller, &object, name, value)?;
+    }
+    Ok(object)
+}
+
 fn insert_field(
     caller: &mut Caller<'_, StoreData>,
     obj: &Val,
@@ -574,6 +589,17 @@ fn inserted_field_name(caller: &mut Caller<'_, StoreData>, name: &Val) -> wasmti
     Ok(Val::AnyRef(Some(
         StructRef::new(&mut *caller, &pre, &values)?.to_anyref(),
     )))
+}
+
+/// `object[name]` as JavaScript reads it: a data field, a getter's result, or
+/// `undefined` when the object has neither.
+pub(crate) async fn read_property(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    name: &str,
+) -> wasmtime::Result<Val> {
+    let key = crate::runtime::host::write_submilli_string_struct(caller, name)?;
+    dynamic::get(caller, object, &Val::AnyRef(Some(key.to_anyref()))).await
 }
 
 pub(crate) fn field_was_inserted(
@@ -1010,8 +1036,8 @@ pub fn declare(defs: &mut PackageDeclaration) {
         "is",
         ctor_key("is"),
         vec![
-            Param::with_default("a", Type::Unknown, crate::DefaultValue::Undefined),
-            Param::with_default("b", Type::Unknown, crate::DefaultValue::Undefined),
+            Param::new("a", Type::Unknown),
+            Param::new("b", Type::Unknown),
         ],
         Type::Boolean,
     );
@@ -1232,8 +1258,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             optional: false,
                             generics: Vec::new(),
                             params: vec![
-                                Param::with_default("a", Type::Unknown, crate::DefaultValue::Undefined),
-                                Param::with_default("b", Type::Unknown, crate::DefaultValue::Undefined),
+                                Param::new("a", Type::Unknown),
+                                Param::new("b", Type::Unknown),
                             ],
                             ret: Type::Boolean,
                             predicate: None,
