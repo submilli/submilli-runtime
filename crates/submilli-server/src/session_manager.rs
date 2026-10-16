@@ -751,10 +751,9 @@ impl SessionManager {
 
     async fn cleanup(&self, id: &str) -> Result<(), SessionError> {
         let _finalization = self.finalization_lock.lock().await;
-        let Some(record) = self.store.load(id).await? else {
-            return Ok(());
-        };
-        if record.status == SessionStatus::Active || !record.cleanup_pending {
+        if let Some(record) = self.store.load(id).await?
+            && (record.status == SessionStatus::Active || !record.cleanup_pending)
+        {
             return Ok(());
         }
         // Its waiting runs stop before their files go and before their
@@ -3042,7 +3041,7 @@ impl SessionManager {
         &self,
         executor: Arc<dyn crate::application::sessions::finalization::FinalizerExecutor>,
     ) {
-        // Construction installs this once before AppState can be shared.
+        // Boot installs this once under its initialization lock, before recovery.
         let _ = self.finalizer_executor.set(executor);
     }
     pub(crate) fn finalizer_store(&self) -> crate::adapters::session::finalizers::StoredFinalizers {
@@ -3053,36 +3052,32 @@ impl SessionManager {
         id: &str,
         packages: &crate::app::PreparedBlueprintPackages,
     ) -> Result<Arc<dyn interpreter::runtime::session_finalizers::SessionFinalizers>, String> {
-        let mut archives = std::collections::BTreeMap::new();
+        let mut package_versions = std::collections::BTreeMap::new();
         for module in &packages.modules {
             if !module.declaration.values.contains_key("finalizer") {
                 continue;
             }
             let required =
                 crate::finalizers::dependency_names(packages, &module.metadata.package_name)?;
-            let mut roots = Vec::new();
-            for root in &packages.script_declarations {
-                if crate::finalizers::dependency_names(packages, &root.package_name)?
-                    .contains(&module.metadata.package_name)
-                {
-                    roots.push(root.package_name.clone());
-                }
-            }
-            let artifacts = packages
+            let versions: std::collections::BTreeMap<_, _> = packages
                 .modules
                 .iter()
                 .filter(|module| required.contains(&module.metadata.package_name))
-                .map(|module| module.artifact.as_ref())
+                .map(|module| {
+                    (
+                        module.metadata.package_name.clone(),
+                        module.metadata.package_version.clone(),
+                    )
+                })
                 .collect();
-            let archive = crate::finalizers::FinalizerArchiveRef { roots, artifacts };
-            let archive = crate::finalizers::encode_archive(&archive)?;
-            archives.insert(module.metadata.package_name.clone(), Arc::new(archive));
+            let versions = serde_json::to_string(&versions).map_err(|error| error.to_string())?;
+            package_versions.insert(module.metadata.package_name.clone(), versions);
         }
         Ok(Arc::new(
             crate::adapters::session::finalizers::RegistrationProvider {
                 store: self.finalizers.clone(),
                 session: id.to_owned(),
-                archives,
+                package_versions,
                 limits: self.session_kv.limits,
             },
         ))

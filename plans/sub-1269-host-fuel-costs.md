@@ -1968,10 +1968,10 @@ SUB-1292 final behavior checks: the Temporal bare toJSON/quoted JSON-hook resear
 
 | Host function | Formula and timing |
 | --- | --- |
-| `session.registerFinalizer` | `CALL`; shared key reading and `GATE`; shared serialization charges; `HASH × artifactBytes + IO × artifactBytes + IO × payloadBytes` before hashing, sealing, and committing. No refusing charge after the durable registration effect. |
+| `session.registerFinalizer` | `CALL`; shared key reading and `GATE`; shared serialization charges; `COPY × versionMetadataBytes + IO × versionMetadataBytes + IO × payloadBytes` before copying metadata, sealing, and committing. No refusing charge after the durable registration effect. |
 | `session.unregisterFinalizer` | `CALL` plus shared key reading and `GATE`; the bounded registration lookup/removal is covered by the host-call overhead. No refusing charge after deletion. |
 
-Keys are local to the engine-attributed package. The retained executable closure
-is prepared outside guest execution; each registration charges the archive bytes
-it hashes and passes into the database. Each finalization attempt receives fresh
-fuel independently of the originating execution.
+Keys are local to the engine-attributed package. Each registration charges the
+package-version metadata it copies into the database; package code is not archived.
+Each finalization attempt receives fresh fuel independently of the originating
+execution.

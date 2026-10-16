@@ -508,8 +508,9 @@ export function finalizer(key: string, value: ResourceHandle): void {
 After creating the resource, call `session.registerFinalizer(handle.id, handle)`.
 Recorded test runs (including live-call modes) refuse registration with a catchable
 error; release newly created resources through the same compensation path.
-Registration commits both serializable arguments and the exact package artifact
-closure before returning. If a registration refusal is catchable, attempt immediate
+Registration commits serializable arguments and package/dependency versions
+before returning. Code stays in the installed package store; upgrades, removals,
+or unavailable versions may lose cleanup. If a registration refusal is catchable, attempt immediate
 remote cleanup and rethrow the original error. Storage failures with an uncertain
 commit terminate execution; a remote lease/idle timeout must cover that uncertainty
 and a crash between creation and registration.

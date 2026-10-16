@@ -492,9 +492,6 @@ impl AppState {
                 blueprint_tags: AsyncRwLock::new(HashMap::new()),
             }),
         };
-        state
-            .session_manager()
-            .set_finalizer_executor(Arc::new(AppFinalizerExecutor(Arc::downgrade(&state.inner))));
         Ok(state)
     }
 
@@ -509,6 +506,8 @@ impl AppState {
         if self.inner.booted.load(Ordering::Acquire) {
             return Ok(());
         }
+        self.session_manager()
+            .set_finalizer_executor(Arc::new(AppFinalizerExecutor(Arc::downgrade(&self.inner))));
         self.inner.session_manager.boot().await?;
         self.import_legacy_secrets().await?;
         self.inner.idempotency.recover().await.map_err(|error| {
@@ -1062,7 +1061,6 @@ impl AppState {
             }
             modules.push(PreparedPackageModule {
                 module,
-                artifact: Arc::new(artifact.clone()),
                 declaration: artifact.package_declaration,
                 type_info: artifact.type_info,
                 metadata: artifact.metadata,
@@ -1140,37 +1138,26 @@ impl AppState {
         &self,
         name: &str,
     ) -> Result<bool, crate::application::blueprints::remove::RemoveBlueprintError> {
-        let state = self.clone();
-        let name = name.to_owned();
-        tokio::spawn(async move {
-            let removed = crate::application::blueprints::remove::RemoveBlueprint::new(
-                state.inner.unit_of_work.as_ref(),
-                &crate::adapters::session::audit_log::SessionAuditLog(Some(state.audit())),
-                &state,
-                &state,
-                &state,
-            )
-            .execute(&name)
-            .await?;
-            if removed {
-                state
-                    .session_manager()
-                    .process_pending_cleanup()
-                    .await
-                    .map_err(|error| {
-                        crate::application::blueprints::remove::RemoveBlueprintError::Storage(
-                            crate::application::error::StoreError::Io(error.to_string()),
-                        )
-                    })?;
-            }
-            Ok(removed)
-        })
-        .await
-        .map_err(|_| {
-            crate::application::blueprints::remove::RemoveBlueprintError::Storage(
-                crate::application::error::StoreError::Io("blueprint removal task failed".into()),
-            )
-        })?
+        let removed = crate::application::blueprints::remove::RemoveBlueprint::new(
+            self.inner.unit_of_work.as_ref(),
+            &crate::adapters::session::audit_log::SessionAuditLog(Some(self.audit())),
+            self,
+            self,
+            self,
+        )
+        .execute(name)
+        .await?;
+        if removed {
+            self.session_manager()
+                .process_pending_cleanup()
+                .await
+                .map_err(|error| {
+                    crate::application::blueprints::remove::RemoveBlueprintError::Storage(
+                        crate::application::error::StoreError::Io(error.to_string()),
+                    )
+                })?;
+        }
+        Ok(removed)
     }
 }
 
@@ -1223,7 +1210,6 @@ pub struct PreparedBlueprintPackages {
 
 #[derive(Clone, Debug)]
 pub struct PreparedPackageModule {
-    pub artifact: Arc<submilli_build::Artifact>,
     pub module: Module,
     pub declaration: PackageDeclaration,
     pub type_info: interpreter::TypeInfoTable,

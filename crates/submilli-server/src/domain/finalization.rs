@@ -25,7 +25,7 @@ pub(crate) struct FinalizerInvocation {
     pub package: String,
     pub key: Vec<u16>,
     pub value: Result<Vec<u16>, FinalizerFailure>,
-    pub artifact_digest: String,
+    pub package_versions: Result<std::collections::BTreeMap<String, String>, FinalizerFailure>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

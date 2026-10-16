@@ -42,8 +42,8 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         fatal_host_error("no durable session finalizer provider configured")
                     })?;
                     if registering {
-                        let bytes = provider.artifact_bytes(&package);
-                        fuel::charge(&mut *caller, fuel::HASH, bytes)?;
+                        let bytes = provider.registration_bytes(&package);
+                        fuel::charge(&mut *caller, fuel::COPY, bytes)?;
                         fuel::charge(&mut *caller, fuel::IO, bytes)?;
                         let payload = value::serialize(caller, abi_arg(params, 1)?).await?;
                         fuel::charge(

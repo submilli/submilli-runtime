@@ -1,4 +1,4 @@
-//! Execute a pinned package entry point in an independently bounded runtime.
+//! Execute an installed package entry point in an independently bounded runtime.
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -55,22 +55,22 @@ async fn load_artifacts(
     invocation: &FinalizerInvocation,
     authority: &CleanupAuthority,
 ) -> Result<Vec<submilli_build::Artifact>, FinalizerFailure> {
-    let archive = state
-        .session_manager()
-        .finalizer_store()
-        .archive(&invocation.artifact_digest)
-        .await
+    let versions = invocation
+        .package_versions
+        .as_ref()
+        .map_err(|failure| *failure)?;
+    let artifacts = state
+        .package_store()
+        .load_closure([invocation.package.as_str()])
         .map_err(|_| FinalizerFailure::ArtifactUnavailable)?;
-    let archive: FinalizerArchive =
-        serde_json::from_slice(&archive).map_err(|_| FinalizerFailure::ArtifactUnavailable)?;
-    if !archive
-        .roots
-        .iter()
-        .any(|root| authority.blueprint.packages.contains(root))
+    if artifacts.len() != versions.len()
+        || artifacts.iter().any(|artifact| {
+            versions.get(&artifact.metadata.package_name)
+                != Some(&artifact.metadata.package_version)
+        })
     {
-        return Err(FinalizerFailure::AuthorityUnavailable);
+        return Err(FinalizerFailure::ArtifactUnavailable);
     }
-    let artifacts = archive.artifacts;
     for artifact in &artifacts {
         artifact
             .package_declaration
@@ -82,6 +82,20 @@ async fn load_artifacts(
         .any(|artifact| artifact.metadata.schema_version != submilli_build::ARTIFACT_SCHEMA_VERSION)
     {
         return Err(FinalizerFailure::ArtifactUnavailable);
+    }
+    let permitted = authority.blueprint.packages.contains(&invocation.package)
+        || authority.blueprint.packages.iter().any(|root| {
+            state
+                .package_store()
+                .load_closure([root.as_str()])
+                .is_ok_and(|artifacts| {
+                    artifacts
+                        .iter()
+                        .any(|artifact| artifact.metadata.package_name == invocation.package)
+                })
+        });
+    if !permitted {
+        return Err(FinalizerFailure::AuthorityUnavailable);
     }
     Ok(artifacts)
 }
@@ -297,11 +311,6 @@ fn literal(units: &[u16]) -> String {
 #[cfg(test)]
 mod tests;
 
-#[derive(serde::Serialize, serde::Deserialize)]
-pub(crate) struct FinalizerArchive {
-    pub roots: Vec<String>,
-    pub artifacts: Vec<submilli_build::Artifact>,
-}
 pub(crate) fn dependency_names(
     packages: &crate::app::PreparedBlueprintPackages,
     root: &str,
@@ -326,34 +335,4 @@ pub(crate) fn dependency_names(
         );
     }
     Ok(names)
-}
-pub(crate) fn encode_archive(archive: &impl serde::Serialize) -> Result<Vec<u8>, String> {
-    let mut writer = ArchiveWriter(Vec::new());
-    serde_json::to_writer(&mut writer, archive)
-        .map_err(|_| "finalizer artifact closure cannot be encoded within 64 MiB".to_owned())?;
-    Ok(writer.0)
-}
-struct ArchiveWriter(Vec<u8>);
-impl std::io::Write for ArchiveWriter {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if bytes.len()
-            > crate::adapters::session::finalizers::MAX_ARCHIVE_BYTES.saturating_sub(self.0.len())
-        {
-            return Err(std::io::Error::other("finalizer archive size limit"));
-        }
-        self.0
-            .try_reserve(bytes.len())
-            .map_err(std::io::Error::other)?;
-        self.0.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-#[derive(serde::Serialize)]
-pub(crate) struct FinalizerArchiveRef<'a> {
-    pub roots: Vec<String>,
-    pub artifacts: Vec<&'a submilli_build::Artifact>,
 }
