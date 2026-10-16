@@ -930,6 +930,9 @@ fn emit_index_access(
     } else if recv_ty.lowered() == &Type::Uint8Array {
         emit_expr(emitter, ctx, *receiver)?;
         emit_uint8_index_with_receiver_on_stack(emitter, ctx, *index)?;
+    } else if recv_ty.is_string_shaped() {
+        emit_expr(emitter, ctx, *receiver)?;
+        emit_string_index_with_receiver_on_stack(emitter, ctx, *index)?;
     } else {
         emit_expr(emitter, ctx, *receiver)?;
         emit_bounds_checked_index_with_receiver_on_stack(
@@ -941,6 +944,46 @@ fn emit_index_access(
         )?;
     }
 
+    Ok(())
+}
+
+/// `s[index]`, with `s` on the stack: the host helper reads the code unit,
+/// throwing `RangeError` out of range as an array read does.
+fn emit_string_index_with_receiver_on_stack(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    index: ExprId,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let Some(helper) = ctx.require(
+        ctx.symbols.prelude_func_idx("string_index"),
+        "string index helper imported",
+    ) else {
+        return Ok(());
+    };
+    // A chain step's receiver may sit on the stack in a wider slot, such as
+    // `string | undefined`'s, so it is cast to `$string` after the index runs.
+    let receiver = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
+    emitter.instruction(Instruction::LocalSet(receiver));
+    emit_expr(emitter, ctx, index)?;
+    emit_index_number(
+        emitter,
+        ctx,
+        &ctx.ta
+            .try_expr(index)
+            .map_err(crate::codegen::arena_failure)?
+            .ty,
+    )?;
+    let index_local = emitter.add_anonymous_local(ValType::F64)?;
+    emitter.instruction(Instruction::LocalSet(index_local));
+    emitter.instruction(Instruction::LocalGet(receiver));
+    crate::codegen::cast_check::emit_operation_cast_on_stack(
+        emitter,
+        ctx,
+        &Type::Unknown,
+        &Type::String,
+    )?;
+    emitter.instruction(Instruction::LocalGet(index_local));
+    emitter.instruction(Instruction::Call(helper));
     Ok(())
 }
 
@@ -3104,6 +3147,8 @@ fn emit_chain_access(
                 cast::emit_coerce_to_slot(emitter, ctx, check_ty, result_ty)?;
             } else if receiver_ty.lowered() == &Type::Uint8Array {
                 emit_uint8_index_with_receiver_on_stack(emitter, ctx, *idx)?;
+            } else if receiver_ty.is_string_shaped() {
+                emit_string_index_with_receiver_on_stack(emitter, ctx, *idx)?;
             } else {
                 let source_ty = match receiver_ty.lowered() {
                     Type::Array(element) => element.as_ref(),
@@ -5060,33 +5105,7 @@ fn emit_typeof_tag(
                     .ty,
             )?;
             emitter.instruction(Instruction::LocalSet(scratch));
-
-            // Stated as the complement of the primitive tags rather than a list
-            // of object-like types: every runtime value is an `$Object`
-            // subtype, so a positive list silently answers "not an object" for
-            // any struct nobody remembered to add. The exclusions below are
-            // exhaustive by construction — they are the `$Object` subtypes that
-            // carry a primitive tag of their own.
-            let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
-                crate::codegen::internal_failure("intrinsics declared by codegen entry")
-            })?;
-            emitter.instruction(Instruction::LocalGet(scratch));
-            emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
-                intrinsics.object,
-            )));
-            for primitive in [
-                intrinsics.string,
-                intrinsics.boxed_number,
-                intrinsics.boxed_boolean,
-                intrinsics.bigint,
-                intrinsics.closure,
-                intrinsics.undefined,
-            ] {
-                emitter.instruction(Instruction::LocalGet(scratch));
-                emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(primitive)));
-                emitter.instruction(Instruction::I32Eqz);
-                emitter.instruction(Instruction::I32And);
-            }
+            emit_is_non_primitive(emitter, ctx, scratch, Closures::AreNotObjects)?;
             if nullable {
                 // JS quirk: `typeof null === "object"`. Only OR in
                 // the null check when the source's Wasm type admits
@@ -5098,6 +5117,55 @@ fn emit_typeof_tag(
             }
         }
     };
+    Ok(())
+}
+
+/// Whether a closure passes [`emit_is_non_primitive`]: it does for the
+/// `object` type, but `typeof` tags it `"function"`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Closures {
+    AreObjects,
+    AreNotObjects,
+}
+
+/// Test whether the value in `local` is an object rather than `null`,
+/// `undefined` or a primitive, leaving an `i32` on the stack.
+///
+/// Stated as the complement of the primitive tags rather than a list of
+/// object-like types: every runtime value is an `$Object` subtype, so a
+/// positive list silently answers "not an object" for any struct nobody
+/// remembered to add. The exclusions below are exhaustive by construction —
+/// they are the `$Object` subtypes that carry a primitive tag of their own.
+pub(crate) fn emit_is_non_primitive(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    local: u32,
+    closures: Closures,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
+    emitter.instruction(Instruction::LocalGet(local));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        intrinsics.object,
+    )));
+    let mut excluded = vec![
+        intrinsics.string,
+        intrinsics.boxed_number,
+        intrinsics.boxed_boolean,
+        intrinsics.bigint,
+        intrinsics.undefined,
+    ];
+    if closures == Closures::AreNotObjects {
+        excluded.push(intrinsics.closure);
+    }
+    for primitive in excluded {
+        emitter.instruction(Instruction::LocalGet(local));
+        emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(primitive)));
+        emitter.instruction(Instruction::I32Eqz);
+        emitter.instruction(Instruction::I32And);
+    }
     Ok(())
 }
 

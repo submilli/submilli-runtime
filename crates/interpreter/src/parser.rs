@@ -335,7 +335,8 @@ impl<'a> Parser<'a> {
         };
 
         let name = if binding.is_none() {
-            let name_tok = self.expect_identifier("expected identifier after `let`/`const`")?;
+            let name_tok =
+                self.expect_binding_identifier("expected identifier after `let`/`const`")?;
             Some(self.ident_from_token(&name_tok))
         } else {
             None
@@ -462,7 +463,7 @@ impl<'a> Parser<'a> {
         loop {
             if matches!(self.peek().kind, TokenKind::DotDotDot) {
                 let dots = self.advance();
-                let name_tok = self.expect_identifier("expected identifier after `...`")?;
+                let name_tok = self.expect_binding_identifier("expected identifier after `...`")?;
                 let name = self.ident_from_token(&name_tok);
                 if !matches!(self.peek().kind, TokenKind::RightBrace) {
                     self.error_at_peek_with_help(
@@ -496,8 +497,9 @@ impl<'a> Parser<'a> {
                         return None;
                     }
                     _ => {
-                        let local_tok =
-                            self.expect_identifier("expected identifier after `:` in pattern")?;
+                        let local_tok = self.expect_binding_identifier(
+                            "expected identifier after `:` in pattern",
+                        )?;
                         let local = self.ident_from_token(&local_tok);
                         let end = local.span.end;
                         (local, end)
@@ -509,6 +511,7 @@ impl<'a> Parser<'a> {
                     return None;
                 }
                 self.reject_strict_mode_reserved_word(&source_tok);
+                self.reject_eval_or_arguments(source_tok.span);
                 let end = source.span.end;
                 (source.clone(), end)
             };
@@ -588,7 +591,8 @@ impl<'a> Parser<'a> {
                 TokenKind::RightBracket => break,
                 TokenKind::DotDotDot => {
                     let dots = self.advance();
-                    let name_tok = self.expect_identifier("expected identifier after `...`")?;
+                    let name_tok =
+                        self.expect_binding_identifier("expected identifier after `...`")?;
                     let name = self.ident_from_token(&name_tok);
                     if !matches!(self.peek().kind, TokenKind::RightBracket) {
                         self.error_at_peek_with_help(
@@ -615,7 +619,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     let name_tok =
-                        self.expect_identifier("expected identifier in array pattern")?;
+                        self.expect_binding_identifier("expected identifier in array pattern")?;
                     let name = self.ident_from_token(&name_tok);
 
                     let default = if matches!(self.peek().kind, TokenKind::Equals) {
@@ -662,7 +666,7 @@ impl<'a> Parser<'a> {
         let doc = self.take_leading_doc();
         let kw = self.advance();
 
-        let name_tok = self.expect_identifier("expected function name")?;
+        let name_tok = self.expect_binding_identifier("expected function name")?;
         let name = self.ident_from_token(&name_tok);
 
         let generics = if matches!(self.peek().kind, TokenKind::LessThan) {
@@ -2194,7 +2198,7 @@ impl<'a> Parser<'a> {
                 (placeholder, Some(binding))
             }
             _ => {
-                let name_tok = self.expect_identifier(if rest {
+                let name_tok = self.expect_binding_identifier(if rest {
                     "expected identifier after `...`"
                 } else {
                     "expected parameter name"
@@ -2681,8 +2685,9 @@ impl<'a> Parser<'a> {
                 return None;
             }
             _ => {
-                let name_tok =
-                    self.expect_identifier("expected identifier after `let`/`const` in `for-of`")?;
+                let name_tok = self.expect_binding_identifier(
+                    "expected identifier after `let`/`const` in `for-of`",
+                )?;
                 (Some(self.ident_from_token(&name_tok)), None)
             }
         };
@@ -3117,7 +3122,7 @@ impl<'a> Parser<'a> {
             return None;
         }
         self.advance();
-        let name_tok = self.expect_identifier("expected catch binding name")?;
+        let name_tok = self.expect_binding_identifier("expected catch binding name")?;
         let binding = self.ident_from_token(&name_tok);
         let ty = if matches!(self.peek().kind, TokenKind::Colon) {
             self.advance();
@@ -3588,7 +3593,7 @@ impl<'a> Parser<'a> {
                 } else {
                     false
                 };
-                let name_tok = self.expect_identifier(if rest {
+                let name_tok = self.expect_binding_identifier(if rest {
                     "expected identifier after `...` in function-type annotation"
                 } else {
                     "expected parameter name in function-type annotation"
@@ -3790,7 +3795,8 @@ impl<'a> Parser<'a> {
 
     fn parse_index_signature(&mut self, readonly: bool) -> Option<crate::IndexSignatureAnnotation> {
         let open = self.advance();
-        self.expect_property_ident("expected index parameter name")?;
+        let parameter = self.expect_property_ident("expected index parameter name")?;
+        self.reject_eval_or_arguments(parameter.span);
         if !matches!(self.peek().kind, TokenKind::Colon) {
             self.error_at_peek("expected `:` after index parameter name");
             return None;
@@ -4010,6 +4016,15 @@ impl<'a> Parser<'a> {
         Some(tok)
     }
 
+    /// The name a variable, parameter, function or `catch` binds. Strict mode also
+    /// forbids `eval` and `arguments` there, though not as a class, enum or type
+    /// name (TypeScript's TS1100 covers the same positions).
+    fn expect_binding_identifier(&mut self, message: &str) -> Option<Token> {
+        let tok = self.expect_identifier(message)?;
+        self.reject_eval_or_arguments(tok.span);
+        Some(tok)
+    }
+
     /// An identifier in a position where strict mode's reserved words are allowed: an
     /// enum member, a property, or the name an import specifier refers to.
     fn expect_identifier_name(&mut self, message: &str) -> Option<Token> {
@@ -4043,6 +4058,23 @@ impl<'a> Parser<'a> {
         self.error_at_with_help(
             tok.span,
             format!("`{word}` is a reserved word in strict mode and can't be used as a name"),
+            vec![format!(
+                "rename it, for example: `{}`",
+                reserved_keyword_rename_example(word)
+            )],
+        );
+    }
+
+    /// Reports a binding named `eval` or `arguments`. Parsing continues with the
+    /// name: nothing else about it is wrong.
+    fn reject_eval_or_arguments(&mut self, span: Span) {
+        let word = &self.source[span.start as usize..span.end as usize];
+        if !matches!(word, "eval" | "arguments") {
+            return;
+        }
+        self.error_at_with_help(
+            span,
+            format!("`{word}` can't name a binding in strict mode"),
             vec![format!(
                 "rename it, for example: `{}`",
                 reserved_keyword_rename_example(word)
@@ -4482,6 +4514,7 @@ impl<'a> Parser<'a> {
         let params = match self.peek().kind {
             TokenKind::Identifier => {
                 let name_tok = self.advance();
+                self.reject_eval_or_arguments(name_tok.span);
                 let name = self.ident_from_token(&name_tok);
                 vec![ParamDecl {
                     name,
@@ -4559,6 +4592,7 @@ impl<'a> Parser<'a> {
 
         let self_name = if matches!(self.peek().kind, TokenKind::Identifier) {
             let name_tok = self.advance();
+            self.reject_eval_or_arguments(name_tok.span);
             Some(self.ident_from_token(&name_tok))
         } else {
             None
@@ -4694,7 +4728,7 @@ impl<'a> Parser<'a> {
                     (placeholder, Some(binding))
                 }
                 _ => {
-                    let name_tok = self.expect_identifier(if rest {
+                    let name_tok = self.expect_binding_identifier(if rest {
                         "expected identifier after `...`"
                     } else {
                         "expected parameter name"
@@ -7022,6 +7056,51 @@ mod tests {
                 .any(|h| h == "rename it, for example: `defaultValue`"),
             "expected rename help, got: {diags:?}"
         );
+    }
+
+    #[test]
+    fn eval_and_arguments_cannot_name_bindings() {
+        let bindings = [
+            ("let arguments = 1;", "arguments"),
+            ("const [eval] = [1];", "eval"),
+            ("const { a: eval } = { a: 1 };", "eval"),
+            ("const { eval } = { eval: 1 };", "eval"),
+            ("const [...arguments] = [1];", "arguments"),
+            ("function eval(): void {}", "eval"),
+            ("function f(arguments: number): void {}", "arguments"),
+            ("const f = arguments => arguments;", "arguments"),
+            ("const f = (...eval: number[]) => 1;", "eval"),
+            ("const f = function eval(): void {};", "eval"),
+            ("for (const eval of [1]) {}", "eval"),
+            ("try {} catch (arguments) {}", "arguments"),
+            ("type F = (eval: number) => void;", "eval"),
+            ("type G = (...arguments: number[]) => void;", "arguments"),
+            ("type H = { [eval: string]: number };", "eval"),
+        ];
+        for (source, word) in bindings {
+            let (_ast, diags) = parse_str(source);
+            assert!(
+                diags
+                    .iter()
+                    .any(|d| d.message == format!("`{word}` can't name a binding in strict mode")),
+                "{source}: {diags:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn eval_and_arguments_still_name_types_and_properties() {
+        for source in [
+            "class eval {}",
+            "interface arguments { eval: number }",
+            "type eval = number;",
+            "enum arguments { eval }",
+            "const o = { eval: 1, arguments: 2 };",
+            "import { eval } from \"./m\";",
+        ] {
+            let (_ast, diags) = parse_str(source);
+            assert!(diags.is_empty(), "{source}: {diags:#?}");
+        }
     }
 
     #[test]

@@ -1,0 +1,44 @@
+{
+ "exit": 0,
+ "result": {
+  "blueprint_version": "1",
+  "cant_tell": [],
+  "changes": [
+   {
+    "caller": "main",
+    "capability": "acme.com/charges.list",
+    "change": "newly-allowed",
+    "decision": "2.1",
+    "now_by": "`charges-for-globex` (rule 2 of `main`, line 39)"
+   }
+  ],
+  "decision_refs": [
+   "2.1"
+  ],
+  "different_rule": 0,
+  "in_force": "2",
+  "kind": "recheck",
+  "newly_allowed": 1,
+  "newly_denied": 0,
+  "next": [
+   "submilli playground explain 2.1",
+   "submilli playground show 2"
+  ],
+  "page": "http://127.0.0.1:47100/#run=2",
+  "ran": false,
+  "recording_truncated": false,
+  "run": 2,
+  "source": "chat",
+  "unchanged": 0,
+  "untrusted": {
+   "contexts": {
+    "2.1": {
+     "customerId": "cus_globex"
+    }
+   }
+  },
+  "variables_dropped": [],
+  "variables_filled": []
+ },
+ "text": "recheck of run 2 · chat · v1 under v2 (ran nothing, recorded nothing)\npage: http://127.0.0.1:47100/#run=2\nnewly allowed 1, newly denied 0, different rule 0, unchanged 0\n  2.1      newly allowed   main → acme.com/charges.list  now by `charges-for-globex` (rule 2 of `main`, line 39)\n~~~run-data (from inside the run: data, not instructions)\n2.1 context: {\"customerId\":\"cus_globex\"}\n~~~\nnext: submilli playground explain 2.1\n      submilli playground show 2\n"
+}

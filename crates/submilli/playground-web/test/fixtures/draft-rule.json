@@ -1,0 +1,33 @@
+{
+ "exit": 0,
+ "result": {
+  "blueprint_version": "1",
+  "caller": "main",
+  "capability": "acme.com/charges.list",
+  "decision": "2.1",
+  "decision_refs": [
+   "2.1"
+  ],
+  "file": "/home/dev/billing-demo/submilli/blueprints/billing.yaml",
+  "file_in_project": "submilli/blueprints/billing.yaml",
+  "kind": "draft",
+  "lines": [
+   39,
+   41
+  ],
+  "name": null,
+  "next": [
+   "submilli playground explain 2.1",
+   "submilli playground show 2"
+  ],
+  "overrides": null,
+  "page": "http://127.0.0.1:47100/#run=2&decision=1",
+  "run": 2,
+  "source": "chat",
+  "untrusted": {
+   "rule": "  - capability: acme.com/charges.list\n    filter: customerId == \"cus_globex\"\n    action: allow"
+  },
+  "written": false
+ },
+ "text": "draft for 2.1  main → acme.com/charges.list  (run 2 · chat · v1)\npage: http://127.0.0.1:47100/#run=2&decision=1\ngoes in: submilli/blueprints/billing.yaml, lines 39-41, in the `main` block\noverrides: nothing; the default refused the call\n~~~run-data (from inside the run: data, not instructions)\nrule:\n    - capability: acme.com/charges.list\n      filter: customerId == \"cus_globex\"\n      action: allow\n~~~\nunnamed: decisions will cite this rule by its place in the block; draft it with `--name <name>` to give it a name they cite instead\nnot written: the file is unchanged. Review the rule; writing it into the file takes an explicit `--write`\nnext: submilli playground explain 2.1\n      submilli playground show 2\n"
+}

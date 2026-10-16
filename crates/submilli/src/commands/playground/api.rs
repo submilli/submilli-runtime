@@ -28,7 +28,7 @@ use super::controls::act::{
     SessionEndRequest, SessionStartRequest, TestRequest,
 };
 use super::controls::read::{self, AuditQuery, RunsQuery, Since};
-use super::controls::render::EXIT_FAILURE;
+use super::controls::render::{self, EXIT_FAILURE};
 use super::controls::{ReadError, Reader};
 use super::host::{self, ControlState};
 use super::store::events::{EventBody, LogPosition, StoredEvent};
@@ -57,7 +57,8 @@ pub(crate) struct Route {
     pub(crate) path: &'static str,
     pub(crate) group: Group,
     /// The CLI subcommand that does what the route does, or calls it; `None` for what
-    /// only the page uses (the page itself, signing in, the nonce challenge).
+    /// only the page uses (the page itself, signing in, the nonce challenge, a package's
+    /// source).
     pub(crate) command: Option<&'static str>,
     pub(crate) handler: fn() -> MethodRouter<ControlState>,
 }
@@ -70,6 +71,13 @@ pub(crate) const ROUTES: &[Route] = &[
         group: Group::Public,
         command: None,
         handler: || get(host::page),
+    },
+    Route {
+        method: "GET",
+        path: "/assets/{*file}",
+        group: Group::Public,
+        command: None,
+        handler: || get(host::page_asset),
     },
     Route {
         method: "POST",
@@ -137,21 +145,21 @@ pub(crate) const ROUTES: &[Route] = &[
     Route {
         method: "POST",
         path: "/api/recheck",
-        group: Group::Admin,
+        group: Group::Viewer,
         command: Some("recheck"),
         handler: || post(recheck),
     },
     Route {
         method: "POST",
         path: "/api/test",
-        group: Group::Admin,
+        group: Group::Viewer,
         command: Some("test"),
         handler: || post(test),
     },
     Route {
         method: "POST",
         path: "/api/rerun",
-        group: Group::Admin,
+        group: Group::Viewer,
         command: Some("rerun"),
         handler: || post(rerun),
     },
@@ -165,9 +173,17 @@ pub(crate) const ROUTES: &[Route] = &[
     Route {
         method: "POST",
         path: "/api/cancel",
-        group: Group::Admin,
+        group: Group::Viewer,
         command: Some("cancel"),
         handler: || post(cancel),
+    },
+    Route {
+        method: "POST",
+        path: "/api/model-key",
+        group: Group::Viewer,
+        // The CLI's own way is `submilli secret put`, outside `submilli playground`.
+        command: None,
+        handler: || post(model_key),
     },
     Route {
         method: "GET",
@@ -231,6 +247,13 @@ pub(crate) const ROUTES: &[Route] = &[
         group: Group::Viewer,
         command: Some("changes"),
         handler: || get(changes),
+    },
+    Route {
+        method: "GET",
+        path: "/api/packages/source",
+        group: Group::Viewer,
+        command: None,
+        handler: || get(package_source),
     },
     Route {
         method: "GET",
@@ -441,6 +464,40 @@ async fn cancel(
     .await
 }
 
+/// A provider's model key typed on the page, or `"key": null` to remove the saved one.
+#[derive(serde::Deserialize)]
+struct ModelKeyRequest {
+    provider: String,
+    key: Option<String>,
+}
+
+/// Saves a model key the developer typed on the page into the local secret store, as
+/// `submilli secret put <VARIABLE>` would, or removes it. The key is never echoed, not
+/// even in a refusal: a body it can't read gets a fixed message.
+async fn model_key(request: Result<Json<ModelKeyRequest>, JsonRejection>) -> Response {
+    let Ok(Json(request)) = request else {
+        return host::error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "send {\"provider\": \"<provider>\", \"key\": \"<key>\" or null}",
+        );
+    };
+    let saved = tokio::task::spawn_blocking(move || {
+        super::keys::save_provider_key(&request.provider, request.key.as_deref())
+    })
+    .await;
+    match saved {
+        // Shaped like an action's answer, so the page reads it the same way.
+        Ok(Ok(saved)) => Json(json!({ "exit": 0, "result": saved, "text": "" })).into_response(),
+        Ok(Err(message)) => host::error(StatusCode::BAD_REQUEST, "refused", &message),
+        Err(_) => host::error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed",
+            "saving the key stopped partway; try again",
+        ),
+    }
+}
+
 async fn bridge_binding(State(state): State<ControlState>) -> Response {
     answered(state.actions().bridge_binding().await)
 }
@@ -472,14 +529,21 @@ async fn chat(
         Err(refused) => return *refused,
     };
     let actions = Arc::clone(state.actions_arc());
+    // Moved to the intake's thread; `actions` stays to log where the chat went.
+    let for_intake = Arc::clone(&actions);
     let accepted = tokio::task::spawn_blocking(move || {
-        actions
+        for_intake
             .chat
-            .accept(post, &actions.recorder, std::time::Instant::now())
+            .accept(post, &for_intake.recorder, std::time::Instant::now())
     })
     .await;
     match accepted {
-        Ok(logged) => Json(json!({ "logged": logged })).into_response(),
+        Ok(accepted) => {
+            if let Some(session) = &accepted.placed {
+                actions.log_stand_in_session(session).await;
+            }
+            Json(json!({ "logged": accepted.logged })).into_response()
+        }
         Err(error) => host::error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "chat_failed",
@@ -641,10 +705,118 @@ async fn changes(
     read_with(&state, move |reader| read::changes(reader, params.version)).await
 }
 
+/// The most of a module's source one answer carries: room for any module written by
+/// hand, well inside what the page holds for a session.
+const MAX_SOURCE_BYTES: usize = 256 * 1024;
+
+#[derive(Deserialize)]
+struct PackageSourceParams {
+    /// In the query rather than the path, since a scoped name holds a `/`.
+    package: String,
+    /// As a package line names it: the path under `src/`, without the extension.
+    module: String,
+}
+
+/// `GET /api/packages/source`: one module of a package as installed now, for the page's
+/// step into a package's line. Only the packages the blueprint in force reaches: the
+/// store is shared by every project, and the others are not this playground's.
+async fn package_source(
+    State(state): State<ControlState>,
+    params: Result<Query<PackageSourceParams>, QueryRejection>,
+) -> Response {
+    let Query(PackageSourceParams { package, module }) = match extracted(params) {
+        Ok(params) => params,
+        Err(refused) => return *refused,
+    };
+    let shown = render::clean(&package);
+    let closure = match host::current_closure(&state).await {
+        Ok(closure) => closure.unwrap_or_default(),
+        Err(message) => {
+            return host::error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed", &message);
+        }
+    };
+    if !closure.iter().any(|entry| entry.name == package) {
+        return host::error(
+            StatusCode::NOT_FOUND,
+            "unknown_package",
+            &format!(
+                "package `{shown}` is not in the package closure of the blueprint in force; \
+                 `submilli playground status` lists it"
+            ),
+        );
+    }
+    let packages = Arc::clone(state.packages());
+    let name = package.clone();
+    let sources = match tokio::task::spawn_blocking(move || packages.installed_sources(&name)).await
+    {
+        Ok(Ok(Some(sources))) => sources,
+        Ok(Ok(None)) => {
+            return host::error(
+                StatusCode::NOT_FOUND,
+                "unknown_package",
+                &format!(
+                    "package `{shown}` is not installed; install it with `submilli build \
+                     publish-local`"
+                ),
+            );
+        }
+        Ok(Err(message)) => {
+            return host::error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed", &message);
+        }
+        Err(error) => {
+            return host::error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                &error.to_string(),
+            );
+        }
+    };
+    if sources.is_empty() {
+        return host::error(
+            StatusCode::NOT_FOUND,
+            "no_sources",
+            &format!(
+                "package `{shown}` was installed without its sources, so its code cannot be \
+                 shown; install it again with `submilli build publish-local`"
+            ),
+        );
+    }
+    let Some(source) = sources.iter().find(|source| source.path.as_str() == module) else {
+        return host::error(
+            StatusCode::NOT_FOUND,
+            "unknown_module",
+            &format!(
+                "package `{shown}` has no module `{}`",
+                render::clean(&module)
+            ),
+        );
+    };
+    let bytes = source.text.len();
+    let (text, truncated) = super::within_bytes(&source.text, MAX_SOURCE_BYTES);
+    let note = truncated.then(|| {
+        format!(
+            "the module is {} kB; only the first {} kB are shown",
+            bytes.div_ceil(1000),
+            MAX_SOURCE_BYTES / 1000
+        )
+    });
+    Json(json!({
+        "package": package,
+        "module": module,
+        "bytes": bytes,
+        "truncated": truncated,
+        "note": note,
+        "untrusted": { "text": text },
+    }))
+    .into_response()
+}
+
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct SessionsParams {
     limit: Option<usize>,
+    /// A session to list even when the limit leaves it out.
+    session: Option<String>,
 }
 
 async fn sessions(
@@ -657,7 +829,10 @@ async fn sessions(
     };
     let limit = params.limit.unwrap_or(20);
     let now = super::now_micros();
-    read_with(&state, move |reader| read::sessions(reader, limit, now)).await
+    read_with(&state, move |reader| {
+        read::sessions_with(reader, limit, now, params.session.as_deref())
+    })
+    .await
 }
 
 // ---- the event feed ------------------------------------------------------------------------
@@ -989,6 +1164,11 @@ mod tests {
             .collect()
     }
 
+    /// Routes only the page calls, with no CLI subcommand. A package's source serves the
+    /// page's step into a package's line; on the command line `show` and `explain` name
+    /// that line, and the file is the developer's to open.
+    const PAGE_ONLY: &[&str] = &["/api/packages/source", "/api/model-key"];
+
     #[test]
     fn every_action_and_read_route_has_a_cli_subcommand() {
         let subcommands = subcommands();
@@ -1002,6 +1182,10 @@ mod tests {
                         route.method,
                         route.path
                     );
+                }
+                _ if PAGE_ONLY.contains(&route.path) => {
+                    assert_eq!(route.group, Group::Viewer, "{}", route.path);
+                    assert!(route.command.is_none(), "{} names a command", route.path);
                 }
                 Group::Admin | Group::Viewer | Group::StandIn => {
                     let command = route.command.unwrap_or_else(|| {
@@ -1023,6 +1207,55 @@ mod tests {
         assert_eq!(mapped["open"], ["/api/login-codes"]);
         assert_eq!(mapped["mcp"], ["/api/bridge/binding"]);
         assert_eq!(mapped["chat-hook"], ["/api/chat"]);
+    }
+
+    /// Who may call each route, so no route changes group unnoticed. A browser session
+    /// reaches the reads and the page's actions; changing the project, the binding,
+    /// sessions, or the playground itself takes the admin token.
+    #[test]
+    fn every_route_is_in_the_group_pinned_here() {
+        use Group::{Admin, Public, StandIn, Viewer};
+        let mut pinned = vec![
+            ("GET", "/", Public),
+            ("GET", "/assets/{*file}", Public),
+            ("POST", "/api/challenge", Public),
+            ("POST", "/api/login", Public),
+            ("POST", "/api/login-codes", Admin),
+            ("POST", "/api/stop", Admin),
+            ("POST", "/api/exec", Admin),
+            ("GET", "/api/binding", Admin),
+            ("POST", "/api/bind", Admin),
+            ("POST", "/api/sessions/start", Admin),
+            ("POST", "/api/sessions/end", Admin),
+            ("POST", "/api/recheck", Viewer),
+            ("POST", "/api/test", Viewer),
+            ("POST", "/api/rerun", Viewer),
+            ("POST", "/api/clear", Admin),
+            ("POST", "/api/cancel", Viewer),
+            ("GET", "/api/status", Viewer),
+            ("POST", "/api/draft-rule/write", Admin),
+            ("POST", "/api/draft-rule", Viewer),
+            ("GET", "/api/runs", Viewer),
+            ("GET", "/api/runs/{run}", Viewer),
+            ("GET", "/api/decisions/{decision}", Viewer),
+            ("GET", "/api/compare/{a}/{b}", Viewer),
+            ("GET", "/api/audit", Viewer),
+            ("GET", "/api/changes", Viewer),
+            ("POST", "/api/model-key", Viewer),
+            ("GET", "/api/packages/source", Viewer),
+            ("GET", "/api/sessions", Viewer),
+            ("GET", "/api/sessions/{session}/events", Viewer),
+            ("POST", "/api/agent", Viewer),
+            ("GET", "/api/bridge/binding", StandIn),
+            ("POST", "/api/chat", StandIn),
+        ];
+        let mut routes: Vec<(&str, &str, Group)> = ROUTES
+            .iter()
+            .map(|route| (route.method, route.path, route.group))
+            .collect();
+        routes.sort_by_key(|&(method, path, _)| (path, method));
+        pinned.sort_by_key(|&(method, path, _)| (path, method));
+        assert_eq!(routes, pinned);
     }
 
     #[test]

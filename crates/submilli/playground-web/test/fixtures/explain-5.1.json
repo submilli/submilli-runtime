@@ -1,0 +1,64 @@
+{
+ "kind": "decision",
+ "run": 5,
+ "page": "http://127.0.0.1:47100/#run=5&decision=1",
+ "blueprint_version": "2",
+ "source": "test",
+ "decision_refs": [
+  "5.1"
+ ],
+ "decision": "5.1",
+ "outcome": "allow",
+ "caller": "main",
+ "capability": "acme.com/charges.list",
+ "decided_by": {
+  "kind": "rule",
+  "rule": {
+   "caller": "main",
+   "index": 2,
+   "position": 3,
+   "name": "globex-support",
+   "line": 35,
+   "column": 3,
+   "end_line": 38
+  },
+  "filter": "customerId == \"cus_globex\""
+ },
+ "near_misses": [
+  {
+   "rule": {
+    "caller": "main",
+    "index": 0,
+    "position": 1,
+    "name": "charges-for-signed-in-customer",
+    "line": 27,
+    "column": 3,
+    "end_line": 30
+   },
+   "filter": "customerId == ${vars.customerId}",
+   "failures": [
+    {
+     "comparison": "customerId == ${vars.customerId}",
+     "reason": "the values differ",
+     "negated": false
+    }
+   ]
+  }
+ ],
+ "next": [
+  "submilli playground show 5"
+ ],
+ "untrusted": {
+  "context": {
+   "customerId": "cus_globex"
+  },
+  "near_misses": [
+   [
+    {
+     "actual": "cus_globex",
+     "expected": "cus_northwind"
+    }
+   ]
+  ]
+ }
+}

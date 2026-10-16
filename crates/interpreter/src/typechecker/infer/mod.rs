@@ -121,6 +121,7 @@ pub fn infer_with_transitive_checked<'a>(
         typed_ast: TypedAst::with_package(package_name),
         diagnostics: bindings.diagnostics,
         top_symbols: BTreeMap::new(),
+        imported_values: std::collections::HashSet::new(),
         types: TypeNamespace::new(),
         type_registry: TypeRegistry::new(),
         scopes: Scopes::default(),
@@ -412,6 +413,7 @@ pub fn infer_package_checked<'a>(
         typed_ast: TypedAst::with_package(package_name),
         diagnostics: Vec::new(),
         top_symbols: BTreeMap::new(),
+        imported_values: std::collections::HashSet::new(),
         types: TypeNamespace::new(),
         type_registry: TypeRegistry::new(),
         scopes: Scopes::default(),
@@ -815,6 +817,9 @@ pub(super) struct Inferer<'a> {
     pub(super) typed_ast: TypedAst,
     pub(super) diagnostics: Vec<Diagnostic>,
     pub(super) top_symbols: BTreeMap<String, ValueEntry>,
+    /// The `top_symbols` an import binds. An import is a read-only view of the
+    /// exporter's binding, so nothing here may assign to one.
+    pub(super) imported_values: std::collections::HashSet<String>,
     pub(super) types: TypeNamespace<'a>,
     /// Import-independent FQN registry for *structural* resolution of already-typed
     /// values. See [`TypeRegistry`].
@@ -1107,6 +1112,7 @@ impl<'a> Inferer<'a> {
         self.current_export_seen.clear();
         self.inferred_modules = inferred_modules.clone();
         self.top_symbols.clear();
+        self.imported_values.clear();
         self.types = TypeNamespace::new();
         self.type_registry = TypeRegistry::new();
         self.scopes = Scopes::default();

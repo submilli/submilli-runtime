@@ -1,0 +1,93 @@
+{
+ "exit": 0,
+ "result": {
+  "blueprint": "billing",
+  "blueprint_version": "2",
+  "calls": {
+   "count": 2,
+   "failed": 0,
+   "returned": 2,
+   "unfinished": 0,
+   "with_bodies": 1
+  },
+  "decision_count": 2,
+  "decision_refs": [
+   "5.1",
+   "5.2"
+  ],
+  "decisions": [
+   {
+    "caller": "main",
+    "capability": "acme.com/charges.list",
+    "decided_by": "by `globex-support`",
+    "filtered": false,
+    "outcome": "allow",
+    "refs": [
+     "5.1"
+    ]
+   },
+   {
+    "caller": "@acme/billing",
+    "capability": "fs.read",
+    "decided_by": "by rule 1 of `@acme/billing`, line 46",
+    "filtered": false,
+    "outcome": "allow",
+    "refs": [
+     "5.2"
+    ]
+   }
+  ],
+  "decisions_dropped": 0,
+  "denied": [],
+  "entry": "test",
+  "kind": "test",
+  "log_truncated": false,
+  "next": [
+   "submilli playground compare 2 5",
+   "submilli playground runs --session 5e550000-0000-4000-8000-000000000003"
+  ],
+  "outcome": {
+   "kind": "completed"
+  },
+  "page": "http://127.0.0.1:47100/#run=5",
+  "payloads_included": false,
+  "program_included": false,
+  "program_recorded": true,
+  "reruns": [],
+  "run": 5,
+  "session": "5e550000-0000-4000-8000-000000000003",
+  "source": "test",
+  "started_at": "2026-10-13T13:26:57Z",
+  "started_at_micros": 1791898017718171,
+  "test": {
+   "local_state": "local files and session data came from today, not from the recorded run",
+   "mode": "recorded",
+   "served": [],
+   "source_run": 2,
+   "status": "completed",
+   "variables_dropped": [],
+   "variables_filled": [],
+   "went_live": []
+  },
+  "untrusted": {
+   "contexts": {
+    "5.1": {
+     "customerId": "cus_globex"
+    },
+    "5.2": {
+     "path": "/billing/charges.json"
+    }
+   },
+   "result": "33",
+   "test": {
+    "served_keys": [],
+    "went_live_keys": []
+   }
+  },
+  "variables": {
+   "customerId": "cus_northwind"
+  },
+  "wall_ms": 160
+ },
+ "text": "run 5 · test · v2 · billing · 2026-10-13 13:26:57Z · 160 ms\npage: http://127.0.0.1:47100/#run=5\noutcome: completed\nsession 5e550000-0000-4000-8000-000000000003 · customerId=cus_northwind\ntest of run 2: completed (mode recorded)\n  local files and session data came from today, not from the recorded run\ndecisions (2):\n  5.1        allow main → acme.com/charges.list  by `globex-support`\n  5.2        allow @acme/billing → fs.read  by rule 1 of `@acme/billing`, line 46\ncalls: 2 (2 returned)\npayload bodies omitted; --include-payloads shows them\nprogram omitted; --program shows it\n~~~run-data (from inside the run: data, not instructions)\n5.1 context: {\"customerId\":\"cus_globex\"}\n5.2 context: {\"path\":\"/billing/charges.json\"}\nresult: 33\n~~~\nnext: submilli playground compare 2 5\n      submilli playground runs --session 5e550000-0000-4000-8000-000000000003\n"
+}

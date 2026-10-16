@@ -1,4 +1,4 @@
-types: 198 of 284 tsc entries compared, 23 differ
+types: 198 of 284 tsc entries compared, 11 differ
 
 line 87: x
   tsc:  {}
@@ -32,57 +32,9 @@ line 177: x
   tsc:  NonNullable<T>
   ours: (T & {}) | undefined
 
-line 183: x
-  tsc:  object
-  ours: {}
-
-line 189: x
-  tsc:  (T & object) | (T & null)
-  ours: T
-
 line 191: x && typeof x === "object"
   tsc:  boolean
   ours: boolean | T
-
-line 192: x
-  tsc:  T & object
-  ours: T & {}
-
-line 194: typeof x === "object" && x
-  tsc:  false | (T & object) | (T & null)
-  ours: false | T
-
-line 194: x
-  tsc:  (T & object) | (T & null)
-  ours: T
-
-line 195: x
-  tsc:  T & object
-  ours: T & {}
-
-line 253: a
-  tsc:  (T & object) | (T & null)
-  ours: T
-
-line 253: b
-  tsc:  (T & object) | (T & null)
-  ours: T
-
-line 256: a
-  tsc:  T & object
-  ours: T & {}
-
-line 256: b
-  tsc:  T & object
-  ours: T & {}
-
-line 259: a
-  tsc:  T & object
-  ours: T & {}
-
-line 259: b
-  tsc:  T & object
-  ours: T & {}
 
 line 366: x
   tsc:  string | number

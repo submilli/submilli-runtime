@@ -229,6 +229,7 @@ pub(super) fn erase_generic_params(ty: &Type) -> Type {
         | Type::Void
         | Type::Never
         | Type::Unknown
+        | Type::NonPrimitive
         | Type::Error
         | Type::NumberEnum { .. }
         | Type::StringEnum { .. } => ty.clone(),

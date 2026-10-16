@@ -1,0 +1,80 @@
+{
+ "exit": 0,
+ "result": {
+  "blueprint": "billing",
+  "blueprint_version": "2",
+  "calls": {
+   "count": 2,
+   "failed": 0,
+   "returned": 2,
+   "unfinished": 0,
+   "with_bodies": 1
+  },
+  "decision_count": 2,
+  "decision_refs": [
+   "7.1",
+   "7.2"
+  ],
+  "decisions": [
+   {
+    "caller": "main",
+    "capability": "acme.com/charges.list",
+    "decided_by": "by `charges-for-signed-in-customer`",
+    "filtered": false,
+    "outcome": "allow",
+    "refs": [
+     "7.1"
+    ]
+   },
+   {
+    "caller": "@acme/billing",
+    "capability": "fs.read",
+    "decided_by": "by rule 1 of `@acme/billing`, line 46",
+    "filtered": false,
+    "outcome": "allow",
+    "refs": [
+     "7.2"
+    ]
+   }
+  ],
+  "decisions_dropped": 0,
+  "denied": [],
+  "entry": "program",
+  "kind": "rerun",
+  "log_truncated": false,
+  "next": [
+   "submilli playground compare 1 7",
+   "submilli playground runs --session 5e550000-0000-4000-8000-000000000001"
+  ],
+  "outcome": {
+   "kind": "completed"
+  },
+  "page": "http://127.0.0.1:47100/#run=7",
+  "payloads_included": false,
+  "program_included": false,
+  "program_recorded": true,
+  "rerun_of": 1,
+  "reruns": [],
+  "run": 7,
+  "session": "5e550000-0000-4000-8000-000000000001",
+  "source": "rerun",
+  "started_at": "2026-10-13T13:26:58Z",
+  "started_at_micros": 1791898018116197,
+  "untrusted": {
+   "contexts": {
+    "7.1": {
+     "customerId": "cus_northwind"
+    },
+    "7.2": {
+     "path": "/billing/charges.json"
+    }
+   },
+   "result": "209 charges, 822571 cents"
+  },
+  "variables": {
+   "customerId": "cus_northwind"
+  },
+  "wall_ms": 157
+ },
+ "text": "run 7 · rerun · v2 · billing · 2026-10-13 13:26:58Z · 157 ms\npage: http://127.0.0.1:47100/#run=7\noutcome: completed\nsession 5e550000-0000-4000-8000-000000000001 · customerId=cus_northwind\nrerun of run 1, live under the binding in force\ndecisions (2):\n  7.1        allow main → acme.com/charges.list  by `charges-for-signed-in-customer`\n  7.2        allow @acme/billing → fs.read  by rule 1 of `@acme/billing`, line 46\ncalls: 2 (2 returned)\npayload bodies omitted; --include-payloads shows them\nprogram omitted; --program shows it\n~~~run-data (from inside the run: data, not instructions)\n7.1 context: {\"customerId\":\"cus_northwind\"}\n7.2 context: {\"path\":\"/billing/charges.json\"}\nresult: 209 charges, 822571 cents\n~~~\nnext: submilli playground compare 1 7\n      submilli playground runs --session 5e550000-0000-4000-8000-000000000001\n"
+}

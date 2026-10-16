@@ -15,8 +15,10 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use axum::Json;
 use axum::Router;
-use axum::extract::{Request, State};
-use axum::http::header::{CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
+use axum::extract::{Path, Request, State};
+use axum::http::header::{
+    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS,
+};
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -54,6 +56,8 @@ pub(crate) struct HostOptions {
     /// Print the ready record once serving, as `--foreground` does; a detached
     /// child's output goes to its log, and the parent prints the record instead.
     pub(crate) print: Option<super::Output>,
+    /// Open the printed record's login link in the browser.
+    pub(crate) open: bool,
 }
 
 /// What the control listener reports about this instance. Built once at start.
@@ -73,8 +77,13 @@ pub(crate) struct Description {
     pub(crate) egress_grants: Vec<String>,
     pub(crate) provider: Option<String>,
     pub(crate) model: Option<String>,
+    /// Where the provider's key was found, in words: "the project's .env".
+    pub(crate) key_from: Option<String>,
+    /// The project's `.env` is in a git repository that doesn't ignore it.
+    pub(crate) env_file_tracked: bool,
     /// The models a chat can use, as `<provider>:<model>`, the default first: one for
-    /// each provider whose key the playground started with.
+    /// each provider the playground has a key for. `status` reads them again, so a key
+    /// added to the `.env` or the secret store shows without a restart.
     pub(crate) chat_models: Vec<String>,
     /// The blueprint's package closure at start: each package's origin and whether a
     /// program may import it. `status` reads it again for the blueprint in force.
@@ -102,6 +111,8 @@ pub(crate) struct Status {
     pub(crate) stopping: bool,
     pub(crate) browser_sessions: usize,
     pub(crate) blueprint_status: BlueprintStatus,
+    /// The variables the blueprint in force declares, by name.
+    pub(crate) declared_variables: Vec<DeclaredVariable>,
     /// Why the closure of the blueprint in force could not be read; `packages` is
     /// then the closure at start.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -111,6 +122,17 @@ pub(crate) struct Status {
     pub(crate) health: Option<String>,
     /// The binding new runs get: variable values, and secret names only.
     pub(crate) binding: BindingView,
+    /// Each provider chat works with, the variable its key goes under, and where its key
+    /// is found now: the page offers to add or replace one.
+    pub(crate) model_keys: Vec<super::agent::ProviderKey>,
+}
+
+/// A variable the blueprint declares, and whether a run must have a value for it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct DeclaredVariable {
+    pub(crate) name: String,
+    pub(crate) required: bool,
 }
 
 /// The binding as `status` shows it: the variables, and only the names of the secrets.
@@ -349,6 +371,7 @@ async fn run(
         binding: std::sync::Mutex::new(binding),
         binding_file: state_dir.binding_path(),
         blueprints: Arc::clone(&blueprints),
+        applier: Arc::clone(&applier),
         blueprint_name: serving.name.clone(),
         blueprint_path: options.project.blueprint.clone(),
         project_root: options.project.root.clone(),
@@ -410,7 +433,11 @@ async fn run(
         drop(options.start_lock);
         if let Some(output) = options.print {
             let code = auth.mint_login_code(Now::current())?;
-            ReadyRecord::new(&description, None, &code, false).print(output);
+            ReadyRecord::new(&description, None, &code, false).announce(
+                output,
+                options.open,
+                &state_dir,
+            );
         }
         submilli_server::serve_embedded(server, state, SHUTDOWN_GRACE, signals)
             .await
@@ -513,7 +540,8 @@ fn describe(
     server_port: u16,
     packages: Vec<ClosureEntry>,
 ) -> Description {
-    let (provider, model) = detect_provider();
+    super::keys::use_project(&options.project.root);
+    let (provider, model, key_from) = detect_provider();
     let provider = provider.map(str::to_owned);
     Description {
         project: options.project.root.clone(),
@@ -530,24 +558,24 @@ fn describe(
         egress_grants: options.egress.grants(),
         provider,
         model,
+        key_from,
+        env_file_tracked: super::keys::env_file_tracked(&options.project.root),
         chat_models: super::agent::offered_here(),
         packages,
     }
 }
 
-/// The bring-your-own-key provider the environment names when the playground
-/// starts. Only which variable is set is read here, never its value.
-fn detect_provider() -> (Option<&'static str>, Option<String>) {
+/// The bring-your-own-key provider chat uses now, its model, and where its key was
+/// found. Only where a key is is reported, never its value.
+fn detect_provider() -> (Option<&'static str>, Option<String>, Option<String>) {
     match super::agent::configured() {
-        Ok(choice) => (Some(choice.provider), Some(choice.model)),
+        Ok(choice) => {
+            let from = super::agent::key_source(&choice).map(|source| source.words().to_owned());
+            (Some(choice.provider), Some(choice.model), from)
+        }
         // Not configured, or configured wrong: `chat` says how; the model variable is
         // shown as it was set.
-        Err(_) => (
-            None,
-            std::env::var(super::agent::MODEL_VARIABLE)
-                .ok()
-                .filter(|model| !model.trim().is_empty()),
-        ),
+        Err(_) => (None, super::keys::value(super::agent::MODEL_VARIABLE), None),
     }
 }
 
@@ -574,6 +602,11 @@ impl ControlState {
 
     pub(crate) fn actions_arc(&self) -> &Arc<Actions> {
         &self.0.actions
+    }
+
+    /// The project's packages and the store they install into.
+    pub(crate) fn packages(&self) -> &Arc<ProjectPackages> {
+        &self.0.packages
     }
 
     /// Becomes `true` once the playground has drained and is closing its listener.
@@ -809,11 +842,43 @@ pub(crate) async fn mint_login_code(State(state): State<ControlState>) -> Respon
 
 pub(crate) async fn status(State(state): State<ControlState>) -> Response {
     let mut description = state.0.description.clone();
-    // The closure of the blueprint in force now, which a save may have changed.
-    let packages_error = match current_closure(&state).await {
-        Ok(Some(closure)) => {
-            description.packages = closure;
-            None
+    // A key added to the project's `.env` or the secret store since start counts now.
+    let mut model_keys = Vec::new();
+    if let Ok(((provider, model, key_from), offered, keys)) = tokio::task::spawn_blocking(|| {
+        (
+            detect_provider(),
+            super::agent::offered_here(),
+            super::agent::keys_now(),
+        )
+    })
+    .await
+    {
+        description.provider = provider.map(str::to_owned);
+        description.model = model;
+        description.key_from = key_from;
+        description.chat_models = offered;
+        model_keys = keys;
+    }
+    let mut declared_variables = Vec::new();
+    // The variables and the closure of the blueprint in force now, which a save may have
+    // changed.
+    let packages_error = match blueprint_in_force(&state).await {
+        Ok(Some(blueprint)) => {
+            declared_variables = blueprint
+                .variables
+                .iter()
+                .map(|(name, declared)| DeclaredVariable {
+                    name: name.clone(),
+                    required: declared.required,
+                })
+                .collect();
+            match closure_of(&state, blueprint).await {
+                Ok(closure) => {
+                    description.packages = closure;
+                    None
+                }
+                Err(message) => Some(message),
+            }
         }
         Ok(None) => None,
         Err(message) => Some(message),
@@ -831,24 +896,44 @@ pub(crate) async fn status(State(state): State<ControlState>) -> Response {
         stopping,
         browser_sessions: state.0.auth.browser_sessions(Now::current()),
         blueprint_status,
+        declared_variables,
         packages_error,
         health: None,
         binding: state.actions().binding_view(),
+        model_keys,
     })
     .into_response()
 }
 
-async fn current_closure(state: &ControlState) -> Result<Option<Vec<ClosureEntry>>, String> {
-    let blueprint = match state.0.blueprints.get(&state.0.blueprint_name).await {
-        Ok(Some(blueprint)) => blueprint,
-        Ok(None) => return Ok(None),
-        Err(error) => return Err(error.to_string()),
-    };
+/// The package closure of the blueprint in force; `None` when no blueprint is.
+pub(crate) async fn current_closure(
+    state: &ControlState,
+) -> Result<Option<Vec<ClosureEntry>>, String> {
+    match blueprint_in_force(state).await? {
+        Some(blueprint) => closure_of(state, blueprint).await.map(Some),
+        None => Ok(None),
+    }
+}
+
+async fn blueprint_in_force(
+    state: &ControlState,
+) -> Result<Option<submilli_blueprint::Blueprint>, String> {
+    state
+        .0
+        .blueprints
+        .get(&state.0.blueprint_name)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn closure_of(
+    state: &ControlState,
+    blueprint: submilli_blueprint::Blueprint,
+) -> Result<Vec<ClosureEntry>, String> {
     let packages = Arc::clone(&state.0.packages);
     tokio::task::spawn_blocking(move || packages.closure(&blueprint))
         .await
         .map_err(|error| error.to_string())?
-        .map(Some)
         .map_err(|failure| failure.to_string())
 }
 
@@ -858,41 +943,78 @@ pub(crate) async fn stop(State(state): State<ControlState>) -> Response {
     (StatusCode::ACCEPTED, Json(json!({ "stopping": true }))).into_response()
 }
 
-/// A stand-in until the page arrives: it trades the link's login code for a
-/// browser session, keeps the token out of the address bar, and shows the status.
+/// The page's built files, by path under its build directory: `index.html`, and the
+/// content-hashed files under `assets/` it loads.
+const PAGE_FILES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/page_files.rs"));
+
+/// The page and its assets load only from this listener, and nothing else may frame,
+/// post from, or rebase them.
+const PAGE_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
+                        font-src 'self'; img-src 'self' data:; connect-src 'self'; \
+                        base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+fn page_file(path: &str) -> Option<&'static [u8]> {
+    PAGE_FILES
+        .iter()
+        .find(|(name, _)| *name == path)
+        .map(|(_, bytes)| *bytes)
+}
+
+/// The page. It names its assets by content hash, so it is never cached itself: a new
+/// build reaches the browser on the next load.
 pub(crate) async fn page() -> Response {
+    let Some(html) = page_file("index.html") else {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "this build has no playground page",
+        );
+    };
     (
-        [(
-            CONTENT_TYPE,
-            HeaderValue::from_static("text/html; charset=utf-8"),
-        )],
-        PAGE,
+        [
+            (
+                CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            ),
+            (CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            (CONTENT_SECURITY_POLICY, HeaderValue::from_static(PAGE_CSP)),
+        ],
+        html,
     )
         .into_response()
 }
 
-const PAGE: &str = r#"<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Submilli playground</title></head>
-<body><h1>Submilli playground</h1><pre id="status">Signing in...</pre>
-<script>
-(async () => {
-  const out = document.getElementById("status");
-  const code = new URLSearchParams(location.hash.slice(1)).get("login");
-  history.replaceState(null, "", location.pathname + location.search);
-  try {
-    if (code) {
-      const r = await fetch("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code }) });
-      if (r.ok) localStorage.setItem("submilli-playground-session", (await r.json()).session_token);
+/// A file the page loads. Its name carries its content hash, so it never changes and
+/// the browser may keep it.
+pub(crate) async fn page_asset(Path(file): Path<String>) -> Response {
+    let Some(bytes) = page_file(&format!("assets/{file}")) else {
+        return error(StatusCode::NOT_FOUND, "not_found", "no such page asset");
+    };
+    (
+        [
+            (CONTENT_TYPE, HeaderValue::from_static(content_type(&file))),
+            (
+                CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=31536000, immutable"),
+            ),
+            (CONTENT_SECURITY_POLICY, HeaderValue::from_static(PAGE_CSP)),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
+fn content_type(file: &str) -> &'static str {
+    match file.rsplit_once('.').map(|(_, extension)| extension) {
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("svg") => "image/svg+xml",
+        Some("txt") => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
     }
-    const token = localStorage.getItem("submilli-playground-session");
-    const r = await fetch("/api/status", { headers: token ? { authorization: "Bearer " + token } : {} });
-    if (r.status === 401) { localStorage.removeItem("submilli-playground-session"); out.textContent = "Run `submilli playground open` for a new link."; return; }
-    out.textContent = JSON.stringify(await r.json(), null, 2);
-  } catch (e) { out.textContent = String(e); }
-})();
-</script></body></html>
-"#;
+}
 
 #[cfg(test)]
 mod tests {
@@ -924,5 +1046,42 @@ mod tests {
             ["allow-localhost", "allow-ip 10.1.0.0/16"]
         );
         let _: submilli_server::NetworkPolicy = granted.policy();
+    }
+
+    /// Text React carries that names a URL without ever requesting it: the XML
+    /// namespaces it creates elements in, and the link it puts in a production error
+    /// message.
+    const NOT_REQUESTED: &[&str] = &[
+        "http://www.w3.org/1998/Math/MathML",
+        "http://www.w3.org/1999/xhtml",
+        "http://www.w3.org/1999/xlink",
+        "http://www.w3.org/2000/svg",
+        "http://www.w3.org/XML/1998/namespace",
+        "https://reactjs.org/docs/error-decoder.html?invariant=",
+    ];
+
+    #[test]
+    fn no_page_file_names_another_origin() {
+        assert!(page_file("index.html").is_some());
+        for (name, bytes) in PAGE_FILES {
+            // The fonts' license text links to the license's home.
+            if name.ends_with(".txt") {
+                continue;
+            }
+            let mut text = String::from_utf8_lossy(bytes).into_owned();
+            for allowed in NOT_REQUESTED {
+                text = text.replace(allowed, "");
+            }
+            for scheme in ["http://", "https://"] {
+                assert!(
+                    !text.contains(scheme),
+                    "{name} names {}",
+                    text.split(scheme)
+                        .nth(1)
+                        .map(|rest| rest.chars().take(60).collect::<String>())
+                        .unwrap_or_default()
+                );
+            }
+        }
     }
 }

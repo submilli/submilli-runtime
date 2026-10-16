@@ -410,6 +410,9 @@ pub(crate) struct Actions {
     /// Where `bind` saves the binding's variables for the next start.
     pub(crate) binding_file: PathBuf,
     pub(crate) blueprints: Arc<dyn submilli_server::blueprint::BlueprintStore>,
+    /// Applies the blueprint file; a run first catches up on a save the watcher has
+    /// not applied yet.
+    pub(crate) applier: Arc<super::super::watch::Applier>,
     pub(crate) blueprint_name: String,
     pub(crate) blueprint_path: PathBuf,
     pub(crate) project_root: PathBuf,
@@ -440,8 +443,10 @@ impl Actions {
             .map_err(ActError::from)
     }
 
-    /// The blueprint in force, as the server runs it.
+    /// The blueprint in force, as the server runs it, once the file's latest save is
+    /// applied.
     async fn blueprint(&self, name: &str) -> Result<Blueprint, ActError> {
+        self.applier.catch_up().await;
         match self.blueprints.get(name).await {
             Ok(Some(blueprint)) => Ok(blueprint),
             Ok(None) => Err(ActError::usage(
@@ -671,12 +676,7 @@ impl Actions {
 
     /// The binding, after applying `request` when one is given.
     pub(crate) async fn bind(&self, request: Option<BindRequest>) -> Answer {
-        let bound = request.as_ref().map(|request| {
-            (
-                request.variables.keys().cloned().collect::<Vec<_>>(),
-                request.secrets.keys().cloned().collect::<Vec<_>>(),
-            )
-        });
+        let binds = request.is_some();
         let (binding, saved) = {
             let mut binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
             let mut saved = Ok(());
@@ -691,8 +691,11 @@ impl Actions {
             (binding.clone(), saved)
         };
         let mut warnings = Vec::new();
-        if let Some((variables, secrets)) = &bound {
-            warnings.extend(self.undeclared_in_binding(variables, secrets).await);
+        if binds {
+            // Every bound name, not only this bind's: one kept from before is left out too.
+            let variables: Vec<String> = binding.variables.keys().cloned().collect();
+            let secrets: Vec<String> = binding.secrets.keys().cloned().collect();
+            warnings.extend(self.undeclared_in_binding(&variables, &secrets).await);
             warnings.extend(self.open_sessions_that_differ(&binding).await);
         }
         if let Err(error) = saved {
@@ -741,7 +744,8 @@ impl Actions {
         warnings
     }
 
-    /// A warning for each open started session whose fixed values differ from `binding`.
+    /// A warning when open started sessions keep values that differ from `binding`: the
+    /// session and how to end it when there is one, else the first and how many more.
     async fn open_sessions_that_differ(&self, binding: &Binding) -> Vec<String> {
         let open = match self.logged_open_sessions() {
             Ok(open) => open,
@@ -752,7 +756,7 @@ impl Actions {
                 )];
             }
         };
-        let mut warnings = Vec::new();
+        let mut keeping: Vec<(String, String)> = Vec::new();
         for session in open {
             let Ok(Some(fixed)) = session_variables(&self.app, &session).await else {
                 continue;
@@ -766,16 +770,25 @@ impl Actions {
                 })
                 .collect();
             if !differ.is_empty() {
-                warnings.push(format!(
-                    "open session {} keeps {}; its runs do not change. End it with `submilli \
-                     playground session end {}` and start a new one to use the new values",
-                    clean(&session),
-                    differ.join(", "),
-                    clean(&session)
-                ));
+                keeping.push((clean(&session), differ.join(", ")));
             }
         }
-        warnings
+        match keeping.as_slice() {
+            [] => Vec::new(),
+            [(session, values)] => vec![format!(
+                "open session {session} keeps {values}; its runs do not change. End it with \
+                 `submilli playground session end {session}` and start a new one to use the new \
+                 values"
+            )],
+            [(session, values), rest @ ..] => vec![format!(
+                "{} open sessions keep their own values, such as {} with {values} (+{} more); \
+                 their runs do not change. New sessions use the new values; `submilli \
+                 playground sessions` lists the open ones",
+                rest.len() + 1,
+                session.get(..8).unwrap_or(session),
+                rest.len()
+            )],
+        }
     }
 
     /// The binding as `status` shows it: never a secret's value.
@@ -834,6 +847,16 @@ impl Actions {
             provider: request.provider_settings.clone().unwrap_or_default(),
         };
         let (choice, settings, resume, answering) = if let Some(session) = &request.session {
+            if !request.variables.is_empty() {
+                return Err(ActError::usage(
+                    "session-values-fixed",
+                    format!(
+                        "session {} keeps the variables it started with; start a new chat to \
+                         set variables",
+                        clean(session)
+                    ),
+                ));
+            }
             if !asked.is_default() {
                 return Err(ActError::usage(
                     "settings-fixed",
@@ -865,12 +888,12 @@ impl Actions {
             (!settings.is_default()).then(|| serde_json::to_value(&settings).unwrap_or_default());
         let continued = resume.is_some();
         // A session carried on keeps the variables and secrets it started with; a new one
-        // takes the binding's.
+        // takes the binding's, under the variables the request names.
         let (blueprint, variables, secrets) = if continued {
             (None, BTreeMap::new(), BTreeMap::new())
         } else {
             let blueprint = self.blueprint(&self.blueprint_name).await?;
-            let (variables, secrets) = self.for_new_run(&blueprint, &BTreeMap::new())?;
+            let (variables, secrets) = self.for_new_run(&blueprint, &request.variables)?;
             (Some(blueprint), variables, secrets)
         };
         let model = choice.named();
@@ -972,6 +995,7 @@ impl Actions {
                         fixed_settings = settings;
                     }
                     SessionEntry::Ended { .. } => ended = true,
+                    SessionEntry::Chatted { .. } => {}
                 }
             }
             let log = store.read_events(Some(&id))?;
@@ -990,14 +1014,15 @@ impl Actions {
                 ),
             ));
         };
-        let open = match session_variables(&self.app, session).await {
-            Ok(fixed) => fixed.is_some(),
+        let fixed_variables = match session_variables(&self.app, session).await {
+            Ok(fixed) => fixed,
             Err(error) => {
                 return Err(ActError::failure(format!(
                     "reading session {shown} failed: {error}"
                 )));
             }
         };
+        let open = fixed_variables.is_some();
         if ended || !open {
             return Err(ActError::usage(
                 "session-ended",
@@ -1068,6 +1093,7 @@ impl Actions {
             session: session.to_owned(),
             history: agent::history(logged.into_iter().map(|(_, entry)| entry)),
             said: numbered.len(),
+            variables: fixed_variables.unwrap_or_default(),
         };
         Ok((choice, settings, resume))
     }
@@ -1101,6 +1127,35 @@ impl Actions {
         if let Err(error) = logged {
             super::super::log::note(&format!(
                 "chat session {} was not listed, so it cannot be carried on: {error}",
+                clean(session)
+            ));
+        }
+    }
+
+    /// Lists session `session`, where a stand-in now chats, with the variables it holds.
+    /// Only noted when that fails: the chat is logged either way.
+    pub(crate) async fn log_stand_in_session(&self, session: &str) {
+        // A resumed stand-in can come back to a session already listed.
+        let listed = self
+            .store
+            .session_log()
+            .is_ok_and(|log| log.iter().any(|line| line.entry.session_id() == session));
+        if listed {
+            return;
+        }
+        let variables = session_variables(&self.app, session)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let logged = self.store.append_session(SessionEntry::Chatted {
+            session_id: session.to_owned(),
+            variables,
+            label: super::super::state::STAND_IN_TOKEN.to_owned(),
+        });
+        if let Err(error) = logged {
+            super::super::log::note(&format!(
+                "stand-in session {} was not listed: {error}",
                 clean(session)
             ));
         }
@@ -1224,6 +1279,7 @@ impl Actions {
             match line.entry {
                 SessionEntry::Started { session_id, .. } => open.push(session_id),
                 SessionEntry::Ended { session_id } => open.retain(|id| *id != session_id),
+                SessionEntry::Chatted { .. } => {}
             }
         }
         Ok(open)
@@ -1291,7 +1347,8 @@ impl Actions {
             .take(3)
             .map(|change| Next::Explain(change.decision))
             .collect();
-        if !changes.is_empty() {
+        // A file tool's run recorded no program, so there is nothing to test.
+        if !changes.is_empty() && stored.recording.code.is_some() {
             suggestions.push(Next::Test(id));
         }
         suggestions.push(Next::Show(id));
@@ -2360,6 +2417,10 @@ pub(crate) struct ChatRequest {
     /// The most tool calls run for one answer; the default when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) max_calls_per_answer: Option<u16>,
+    /// Variable values a new session starts with, over the binding's. A session carried
+    /// on keeps its own.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) variables: BTreeMap<String, String>,
 }
 
 /// An action as the CLI sends it to the running playground.

@@ -2178,6 +2178,9 @@ impl Inferer<'_> {
             let kind_clone = entry.kind.clone();
             let prev_span = entry.declaration_span;
             let mangled = entry.mangled_name.clone();
+            if self.imported_values.contains(&target.name) {
+                return self.rejected_import_write(target, mangled, prev_span, value);
+            }
             match kind_clone {
                 ValueKind::Let { ty, .. } => {
                     let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
@@ -2251,6 +2254,25 @@ impl Inferer<'_> {
                 boxed: false,
                 narrowed_shadow_ty: None,
             }
+        })
+    }
+
+    /// Report a write to an imported binding and type its value on its own,
+    /// so the value's errors still surface.
+    fn rejected_import_write(
+        &mut self,
+        target: Ident,
+        mangled: crate::MangledName,
+        import_span: Span,
+        value: ExprId,
+    ) -> Result<TypedStmtKind, CompilerFailure> {
+        self.report_import_write(&target, import_span);
+        let (typed_value, _) = self.infer_expr(value, None)?;
+        Ok(TypedStmtKind::AssignGlobal {
+            ident: target,
+            mangled,
+            target_ty: Type::Error,
+            value: typed_value,
         })
     }
 
@@ -2358,6 +2380,9 @@ impl Inferer<'_> {
             let kind_clone = entry.kind.clone();
             let prev_span = entry.declaration_span;
             let mangled = entry.mangled_name.clone();
+            if self.imported_values.contains(&target.name) {
+                return self.rejected_import_write(target, mangled, prev_span, value);
+            }
             match kind_clone {
                 ValueKind::Let { ty, .. } => {
                     self.compound_assign_global(target, mangled, ty, op, op_span, value, span)?

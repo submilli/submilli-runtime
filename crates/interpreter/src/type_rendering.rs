@@ -198,6 +198,7 @@ fn write_node<'a>(
         Type::Undefined => out.push("undefined"),
         Type::Void => out.push("void"),
         Type::Unknown => out.push("unknown"),
+        Type::NonPrimitive => out.push("object"),
         Type::Error => out.push("<error>"),
         Type::Never => out.push("never"),
         Type::TypeVar(name) | Type::GenericParam { name, .. } => out.push(name),
@@ -627,6 +628,7 @@ fn child_count(ty: &Type) -> usize {
         | Type::Undefined
         | Type::Void
         | Type::Unknown
+        | Type::NonPrimitive
         | Type::Error
         | Type::Never
         | Type::TypeVar(_)

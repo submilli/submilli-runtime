@@ -1121,8 +1121,12 @@ impl CodegenAnalysis {
                     AccessorKind::Get,
                 );
             }
-            TypedExprKind::IndexAccess { .. } => {
+            TypedExprKind::IndexAccess { receiver, .. } => {
                 self.note_index_check();
+                self.note_string_index(
+                    ta.source_type(*receiver)
+                        .map_err(crate::codegen::arena_failure)?,
+                );
             }
             TypedExprKind::Closure {
                 runtime_generics,
@@ -1352,6 +1356,7 @@ impl CodegenAnalysis {
                     // A chain index is bounds-checked like any other, so it
                     // needs the same message in the pool.
                     self.note_index_check();
+                    self.note_string_index(receiver_ty);
                 }
                 TypedChainPart::Call {
                     result_ty,
@@ -1444,6 +1449,15 @@ impl CodegenAnalysis {
             // where the receiver turns out to be getter-backed.
             self.string_pool
                 .intern_text(throw::READ_ONLY_PROPERTY_MESSAGE);
+        }
+    }
+
+    /// `s[i]` reads through the prelude's string index helper. A chain step's
+    /// receiver may still be typed nullable: `s?.[i]` reads the non-null part.
+    fn note_string_index(&mut self, receiver_ty: &Type) {
+        if crate::typechecker::infer::narrowing::strip_nullish(receiver_ty).is_string_shaped() {
+            self.dependency_usage
+                .note_value(crate::mangle::prelude("string_index"));
         }
     }
 

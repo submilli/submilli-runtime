@@ -1,5 +1,1 @@
 types: 5 of 12 tsc entries compared, 0 differ
-
-errors:
-line 7: tsc TS1100: Invalid use of 'arguments' in strict mode. (we accept)
-line 9: tsc TS1100: Invalid use of 'arguments' in strict mode. (we accept)

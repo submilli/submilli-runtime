@@ -158,6 +158,8 @@ pub(crate) struct Applier {
     /// One apply at a time: the watcher can fire while `start` is still applying, and
     /// two applies reading the same change log would log the same version twice.
     turn: tokio::sync::Mutex<()>,
+    /// The file's text the last apply read, so `catch_up` skips a file already acted on.
+    seen: Mutex<Option<String>>,
 }
 
 impl Applier {
@@ -170,6 +172,7 @@ impl Applier {
             packages: None,
             status: Arc::default(),
             turn: tokio::sync::Mutex::new(()),
+            seen: Mutex::default(),
         }
     }
 
@@ -214,6 +217,26 @@ impl Applier {
         self.apply_file_at(Moment::Save).await
     }
 
+    /// Before a run: applies a save the watcher has not reached yet, so the run uses
+    /// the file as it is now. A file the last apply already read is left as it was.
+    pub(crate) async fn catch_up(&self) {
+        // An apply that already read the file marks it seen before it logs the
+        // version, so wait for it to finish: the run then gets that version.
+        drop(self.turn.lock().await);
+        let Ok(yaml) = std::fs::read_to_string(&self.path) else {
+            return;
+        };
+        let seen = self
+            .seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_deref()
+            == Some(&yaml);
+        if !seen {
+            self.apply_file().await;
+        }
+    }
+
     async fn apply_file_at(&self, moment: Moment) -> Outcome {
         let _turn = self.turn.lock().await;
         let was_refused = self.lock_status().refused.is_some();
@@ -243,6 +266,7 @@ impl Applier {
                 ));
             }
         };
+        *self.seen.lock().unwrap_or_else(PoisonError::into_inner) = Some(yaml.clone());
         // No other apply can log a version while this one holds the turn, so the
         // version read here stays the one in force until this save is logged.
         let current = changes.current();

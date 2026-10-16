@@ -1,4 +1,4 @@
-types: 256 of 277 tsc entries compared, 80 differ
+types: 256 of 277 tsc entries compared, 81 differ
 
 line 22: s1
   tsc:  ""
@@ -284,9 +284,13 @@ line 76: z && a
   tsc:  undefined
   ours: number[] | undefined
 
-line 77: s
-  tsc:  ""
-  ours: never
+line 77: z2
+  tsc:  undefined
+  ours: "" | undefined
+
+line 77: z && s
+  tsc:  undefined
+  ours: "" | undefined
 
 line 78: z3
   tsc:  undefined

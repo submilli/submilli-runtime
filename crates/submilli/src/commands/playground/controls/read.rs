@@ -10,8 +10,11 @@ use serde_json::Value;
 use submilli_blueprint::{Blueprint, Citation};
 use submilli_server::error::ErrorKind;
 
+use crate::commands::playground::labels;
 use crate::commands::playground::packages::{ClosureEntry, Origin};
+use crate::commands::playground::store::Store;
 use crate::commands::playground::store::changes::{Changes, Version, WindowStart, version_tag};
+use crate::commands::playground::store::events::ChatRole;
 use crate::commands::playground::store::run::{DecisionRef, RunSummary, StoredRun};
 use crate::commands::playground::store::sessions::SessionEntry;
 
@@ -533,6 +536,16 @@ pub(crate) struct RunningRow {
     pub(crate) started_at_micros: u64,
     pub(crate) started_at: String,
     pub(crate) session: Option<String>,
+    pub(crate) untrusted: RunningUntrusted,
+}
+
+/// What a run in flight carries from inside it.
+#[derive(Debug, Default, Serialize)]
+pub(crate) struct RunningUntrusted {
+    /// The program it runs, so it can be read before the run ends; absent for a file
+    /// tool's call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) program: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -667,6 +680,7 @@ fn running_rows(
             started_at: super::render::rfc3339(run.started_at_micros),
             started_at_micros: run.started_at_micros,
             session: run.session_id,
+            untrusted: RunningUntrusted { program: run.code },
         })
         .collect();
     rows.sort_by_key(|row| std::cmp::Reverse(row.run));
@@ -1978,6 +1992,11 @@ pub(crate) struct SessionRow {
     pub(crate) runs: Vec<u64>,
     /// Whether any call in it was denied.
     pub(crate) denied: bool,
+    /// How many of its runs were cancelled, how many didn't compile, and how many
+    /// failed some other way (didn't start, or hit an error); denials are `denied`.
+    pub(crate) cancelled: usize,
+    pub(crate) rejected: usize,
+    pub(crate) failed: usize,
     /// For a session started through the playground: whether it is still open.
     pub(crate) open: Option<bool>,
     /// A started session not ended here but idle longer than the idle timeout it
@@ -1990,7 +2009,65 @@ pub(crate) struct SessionRow {
     /// The idle timeout its start recorded, in milliseconds.
     #[serde(skip)]
     idle_timeout_ms: Option<u64>,
+    /// How many tests and reruns of its runs there are.
+    pub(crate) follow_ups: usize,
+    /// How many messages were said to the agent in its conversation.
+    pub(crate) asks: usize,
+    pub(crate) untrusted: SessionUntrusted,
 }
+
+impl SessionRow {
+    /// Holds only a test or a rerun, in the session the playground made for it: the
+    /// page's `isThrowaway`.
+    fn is_follow_up(&self) -> bool {
+        !self.sources.is_empty()
+            && self
+                .sources
+                .iter()
+                .all(|source| source == labels::TEST || source == labels::RERUN)
+    }
+}
+
+/// The newest `limit` sessions that aren't a test's or rerun's own, and up to `limit` of
+/// those, newer than the last one kept; `also` is listed wherever it falls. And how many
+/// sessions of the first kind were left out.
+fn newest_sessions(
+    sessions: Vec<SessionRow>,
+    limit: usize,
+    also: Option<&str>,
+) -> (Vec<SessionRow>, usize) {
+    let (mut regular_seen, mut follow_ups_seen, mut more) = (0, 0, 0);
+    let mut listed = Vec::new();
+    for session in sessions {
+        let wanted = also == Some(session.session.as_str());
+        let follow_up = session.is_follow_up();
+        let within = if follow_up {
+            follow_ups_seen += 1;
+            // Older than the last regular session kept, or past the cap on follow-ups.
+            regular_seen < limit && follow_ups_seen <= limit
+        } else {
+            regular_seen += 1;
+            regular_seen <= limit
+        };
+        if within || wanted {
+            listed.push(session);
+        } else if !follow_up {
+            more += 1;
+        }
+    }
+    (listed, more)
+}
+
+/// What a session's conversation said: written by whoever drove it.
+#[derive(Debug, Default, Serialize)]
+pub(crate) struct SessionUntrusted {
+    /// The first message said to the agent, capped at [`TASK_CHARS`] characters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) task: Option<String>,
+}
+
+/// How much of a session's first message the sessions list carries.
+const TASK_CHARS: usize = 200;
 
 /// `id`'s row, added with no runs, first seen at `at`, when there is none yet.
 fn session_row<'r>(
@@ -2009,10 +2086,16 @@ fn session_row<'r>(
         run_count: 0,
         runs: Vec::new(),
         denied: false,
+        cancelled: 0,
+        rejected: 0,
+        failed: 0,
         open: None,
         expired: false,
         last_active_micros: at,
         idle_timeout_ms: None,
+        follow_ups: 0,
+        asks: 0,
+        untrusted: SessionUntrusted::default(),
     })
 }
 
@@ -2032,12 +2115,65 @@ fn mark_expired(rows: &mut BTreeMap<String, SessionRow>, now_micros: u64) {
     }
 }
 
+/// Counts each session's tests and reruns: a test names its source run in its own record,
+/// a rerun in the links.
+fn count_follow_ups(
+    reader: &Reader,
+    rows: &mut BTreeMap<String, SessionRow>,
+) -> Result<(), ReadError> {
+    let mut session_of: BTreeMap<u64, String> = BTreeMap::new();
+    for row in rows.values() {
+        for run in &row.runs {
+            session_of.insert(*run, row.session.clone());
+        }
+    }
+    let links = reader.reruns()?;
+    let sources = reader
+        .summaries()?
+        .into_iter()
+        .filter_map(|summary| summary.test_of.and_then(|link| link.run))
+        .chain(links.into_values());
+    for source in sources {
+        if let Some(row) = session_of.get(&source).and_then(|id| rows.get_mut(id)) {
+            row.follow_ups = row.follow_ups.saturating_add(1);
+        }
+    }
+    Ok(())
+}
+
+/// The session's first message to the agent, and how many it was sent, from its
+/// conversation as it stands.
+fn read_task(store: &Store, session: &mut SessionRow) -> Result<(), ReadError> {
+    let log = store.read_events(Some(&session.session))?;
+    let mut asks = log
+        .chat()
+        .into_iter()
+        .filter(|(_, turn)| turn.role == ChatRole::User)
+        .map(|(_, turn)| turn.text.as_str());
+    if let Some(first) = asks.next() {
+        session.untrusted.task = Some(first.chars().take(TASK_CHARS).collect());
+        session.asks = 1 + asks.count();
+    }
+    Ok(())
+}
+
 /// The sessions, newest first; a started session idle past its idle timeout at
 /// `now_micros` lists as expired.
 pub(crate) fn sessions(
     reader: &Reader,
     limit: usize,
     now_micros: u64,
+) -> Result<SessionsResult, ReadError> {
+    sessions_with(reader, limit, now_micros, None)
+}
+
+/// [`sessions`], with session `also` listed too, however old: the page asks for the
+/// session it shows, which the limit can leave out, as an old test's own session.
+pub(crate) fn sessions_with(
+    reader: &Reader,
+    limit: usize,
+    now_micros: u64,
+    also: Option<&str>,
 ) -> Result<SessionsResult, ReadError> {
     let mut rows: BTreeMap<String, SessionRow> = BTreeMap::new();
     if let Some(store) = &reader.store {
@@ -2064,6 +2200,18 @@ pub(crate) fn sessions(
                     session.settings = settings;
                 }
                 SessionEntry::Ended { .. } => session.open = Some(false),
+                SessionEntry::Chatted {
+                    variables, label, ..
+                } => {
+                    session.started_at_micros = session.started_at_micros.min(line.at_micros);
+                    session.last_active_micros = session.last_active_micros.max(line.at_micros);
+                    if session.variables.is_empty() {
+                        session.variables = variables;
+                    }
+                    if !session.sources.contains(&label) {
+                        session.sources.push(label);
+                    }
+                }
             }
         }
     }
@@ -2082,23 +2230,51 @@ pub(crate) fn sessions(
         session.run_count = session.run_count.saturating_add(1);
         session.runs.push(summary.id);
         session.denied |= summary.denied > 0;
+        match summary.error {
+            None | Some(ErrorKind::PermissionDenied) => {}
+            Some(ErrorKind::Cancelled) => session.cancelled = session.cancelled.saturating_add(1),
+            Some(ErrorKind::CompileError) => session.rejected = session.rejected.saturating_add(1),
+            Some(_) => session.failed = session.failed.saturating_add(1),
+        }
         let ended = summary
             .started_at_micros
             .saturating_add(summary.wall_ms.saturating_mul(1000));
         session.last_active_micros = session.last_active_micros.max(ended);
     }
+    // A session whose only run is still in flight, as a test's or rerun's own session is
+    // until its run ends, is listed from the start, so it can be opened and watched. Its
+    // run is listed once stored. As with the run list, only while the playground that
+    // noted the run is running.
+    if let Some(store) = reader.store.as_ref().filter(|_| reader.page.base.is_some()) {
+        for run in store.running()? {
+            let Some(id) = &run.session_id else {
+                continue;
+            };
+            let session = session_row(&mut rows, id, run.started_at_micros);
+            session.started_at_micros = session.started_at_micros.min(run.started_at_micros);
+            session.last_active_micros = session.last_active_micros.max(run.started_at_micros);
+            if !session.sources.contains(&run.label) {
+                session.sources.push(run.label);
+            }
+        }
+    }
     mark_expired(&mut rows, now_micros);
+    count_follow_ups(reader, &mut rows)?;
     let mut sessions: Vec<SessionRow> = rows.into_values().collect();
     sessions.sort_by(|a, b| {
         b.started_at_micros
             .cmp(&a.started_at_micros)
             .then_with(|| b.runs.last().cmp(&a.runs.last()))
     });
-    let limit = limit.max(1);
-    let more = sessions.len().saturating_sub(limit);
-    sessions.truncate(limit);
+    // The limit counts the sessions people and agents work in. A test's or rerun's own
+    // session doesn't take a place, so many of them can't push those out; the newest of
+    // them are listed alongside, so each shows under its run.
+    let (mut sessions, more) = newest_sessions(sessions, limit.max(1), also);
     for session in &mut sessions {
         session.started_at = super::render::rfc3339(session.started_at_micros);
+        if let Some(store) = &reader.store {
+            read_task(store, session)?;
+        }
     }
     let suggestions: Vec<Next> = sessions
         .iter()
