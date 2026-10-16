@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "2205a17b6f7ffe1bf404c00c1ef204a12d01aaa88a90e96d933928f9322d999c"
+  contentHash: "de13486d7bc1f8768624a6813f0e2f2aba50fa3879807b8ecc168ec49c2eaeef"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -30,6 +30,7 @@ and `Temporal`, are on [Built-ins](/docs/reference/built-ins).
 | `submilli:crypto` | SHA-256, SHA-512, HMAC-SHA-256, random bytes | Nothing |
 | `submilli:url` | URL and query-string parsing and building | Nothing |
 | `submilli:uuid` | UUID v4 and v7 | Nothing |
+| `submilli:variables` | Immutable session configuration, for Packages | `variables.get` |
 | `submilli:secrets` | A declared secret's value, for Packages | `secrets.get` |
 | `submilli:security` | `check`, for Packages | The capability it names |
 | `submilli:test` | `label` and `expectException`, for test files | Nothing |
@@ -198,6 +199,37 @@ whether the Package's caller may perform `capability` with the fields in
 `label(description)` from `submilli:test` starts a named test, and
 `expectException(fn, errorType?)` checks that `fn` throws
 ([Write tests](/docs/packages/write-tests)).
+
+## Package configuration
+
+`submilli:variables.get(name: string): string | undefined` reads the session's
+resolved configuration under the `variables.get { name }` capability.
+
+Every read checks the Package's permission before looking up a value. An
+allowed missing name returns `undefined`; a denied name throws
+`PermissionDeniedError` whether it exists or not. Main-module reads are always
+denied, even under `default: allow`. There is no enumeration or write API.
+
+A browser Package can use this fragment internally:
+
+```typescript
+import * as variables from "submilli:variables";
+
+const storeName = variables.get("BROWSER_STORE_NAME");
+if (storeName === undefined) {
+  throw new Error("BROWSER_STORE_NAME is not configured");
+}
+```
+
+Grant the Package `variables.get` with `name == "BROWSER_STORE_NAME"`.
+[Variable declarations](/docs/reference/blueprint-file#variables) can alias this
+name to the session's `USER_ID`. The grant is checked against
+`BROWSER_STORE_NAME`; it does not grant access to `USER_ID`. A configured store
+name grants no access to that store: the browser service must authenticate the
+caller and authorize the resource independently.
+
+Variables hold non-secret configuration and remain fixed for the session.
+Use secrets for credentials and `submilli:session` for mutable key-value state.
 
 <!-- generated:stdlib -->
 
@@ -572,5 +604,13 @@ UUID v4/v7 generation and validation.
 | `v4(): string` |  | Generate a random UUID v4 (RFC 4122). |
 | `v7(): string` |  | Generate a time-ordered UUID v7 (RFC 9562). |
 | `validate(string: string): boolean` |  | Returns `true` if `string` is a valid UUID (any version), `false` otherwise. |
+
+## `submilli:variables`
+
+Immutable Blueprint/session configuration for packages.
+
+| Function | Capability | Description |
+| --- | --- | --- |
+| `get(name: string): string \| undefined` | `variables.get { name }` | Read immutable Blueprint/session configuration. |
 
 <!-- /generated:stdlib -->

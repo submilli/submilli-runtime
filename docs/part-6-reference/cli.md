@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "258ed2b058b7e90e9a6a25eb32a56c63ba779cc9bd92e9785a661018bb55312f"
+  contentHash: "537129c09a319698511c9c6b3a42103ae69154500a7093eb2181781278b853c0"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -904,6 +904,7 @@ Arguments:
 Options:
       --required               Reject a session that omits the variable or binds it to an empty string
       --default <VALUE>        Value bound when the caller supplies none. A variable is always a string
+      --alias <NAME>           Resolve from another declared variable instead of accepting a binding
       --blueprint <BLUEPRINT>  Blueprint file to edit (default: ./blueprint.yaml)
   -h, --help                   Print help
 ```

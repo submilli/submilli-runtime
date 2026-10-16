@@ -1805,3 +1805,26 @@ async fn a_model_removed_from_the_blueprint_fails_as_it_does_in_a_normal_run() {
     assert!(outcome.report.stopped.is_none(), "a refusal, not a stop");
     assert!(outcome.report.served.is_empty());
 }
+
+#[tokio::test]
+async fn recorded_alias_snapshots_are_not_resubmitted_as_direct_bindings() {
+    let world = World::new(vec![blueprint(
+        "name: bp\ndefault: deny\nvariables:\n  USER_ID: { required: true }\n  BROWSER_STORE_NAME: { alias: USER_ID, required: true }\n",
+    )]);
+    let source = world
+        .run(
+            "bp",
+            "function main(): number { return 42; }",
+            &[("USER_ID", "alice")],
+        )
+        .await;
+    assert_eq!(source.response.result.as_deref(), Some("42"));
+    assert_eq!(source.recorded.variables["BROWSER_STORE_NAME"], "alice");
+    let outcome = world.test(&source.recorded, TestMode::Recorded).await;
+    assert_eq!(
+        outcome.response.result.as_deref(),
+        Some("42"),
+        "{:?}",
+        outcome.response.error
+    );
+}

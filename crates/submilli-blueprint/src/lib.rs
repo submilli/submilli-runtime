@@ -47,7 +47,7 @@ pub use submilli_policy::{
     FilterExpr, NearMiss, PermissionRule, Resolution, ResolutionCause, RuleRef, VarBindings,
     validate_scoped_name,
 };
-pub use variables::{VariableDecl, VariableError, resolve_variables};
+pub use variables::{VariableDecl, VariableError, resolve_variables, validate_resolved_variables};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]

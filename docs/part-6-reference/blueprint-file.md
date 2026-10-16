@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "f3711833cef3e6e09e3ec73265ba911bd05ae6917a898f05a7626eac908568f1"
+  contentHash: "e39fff88433856622ba7aec48a281a80732644b9b5fe813510eeb720c8dffb94"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -415,13 +415,44 @@ the server's store. See [Registration](#registration).
 ## variables
 
 A map from variable name to its rule. An application supplies variable
-values, as strings, when it opens a session. The program can't read or
-change them.
+values, as strings, when it opens a session. Packages can read granted names
+through `submilli:variables`; generated main programs cannot read them directly.
+Neither can change the bindings.
 
 | Field | Type | Default | Constraints |
 | --- | --- | --- | --- |
 | `required` | boolean | `false` | `true` refuses a session that doesn't supply a non-empty value |
-| `default` | string | none | The value bound when the session supplies none. Can't be combined with `required: true` |
+| `default` | string | none | The value bound when the session supplies none. Can't be combined with `required: true` or `alias` |
+| `alias` | string | none | Another declared variable name. Resolves from its target; direct bindings for this name are refused. May be combined with `required: true` |
+
+For example, a browser Package can require `BROWSER_STORE_NAME` while the
+application binds only `USER_ID`:
+
+```yaml
+variables:
+  USER_ID: { required: true }
+  BROWSER_STORE_NAME: { alias: USER_ID, required: true }
+```
+
+Aliases resolve at session creation, including chains, in target-first order.
+Undeclared targets, self-references and cycles refuse the Blueprint. An alias
+marked `required: true` must resolve to a non-empty value; an optional alias
+with an unbound target is unbound. An alias declaration satisfies the linter's
+check for a Package's literal variable requirement. Lint warns when a Package
+requires a name missing from `variables:`, as it does for secrets.
+
+The application binds ordinary names through REST session creation's
+`variables` object, `submilli server session open --var NAME=VALUE`, or MCP
+initialization's `Submilli-Variables` header and `_meta.variables` object.
+Session values override defaults; MCP metadata overrides the header. Empty
+ordinary bindings are treated as absent. These are trusted application inputs;
+model-facing execution tools cannot change them.
+
+The resolved snapshot is stored with the session and survives separate
+executions and server restarts. Changing defaults or aliases does not recompute
+an existing snapshot. Open a new session to use changed configuration. There
+is no variable update API or variable-specific size limit. Credentials belong
+in secrets, and mutable program state belongs in session KV.
 
 An optional variable with no value and no default is unbound, and a filter
 comparing against it doesn't match. A session that supplies a name the file

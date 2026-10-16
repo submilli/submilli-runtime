@@ -906,6 +906,7 @@ fn module_description(name: &str) -> &'static str {
         "submilli:session" => "Session-scoped key-value state: get/has/set/remove/list.",
         "submilli:skills" => "Harness skills: list(), load(name) and readFile(name, path).",
         "submilli:url" => "URL parse/build and query-string handling. Pure compute.",
+        "submilli:variables" => "Immutable Blueprint/session configuration for packages.",
         "submilli:uuid" => "UUID v4/v7 generation and validation.",
         _ => "",
     }
@@ -2501,7 +2502,7 @@ mod tests {
     }
 
     #[test]
-    fn fs_and_secrets_docs_render_capabilities() {
+    fn fs_and_package_configuration_docs_render_capabilities() {
         let fs = docs("submilli:fs").expect("fs module");
         assert!(fs.declarations.contains("@capability fs.read"));
         assert!(fs.declarations.contains("@capability fs.write"));
@@ -2509,6 +2510,13 @@ mod tests {
 
         let secrets = docs("submilli:secrets").expect("secrets module");
         assert!(secrets.declarations.contains("@capability secrets.get"));
+        let variables = docs("submilli:variables").expect("variables module");
+        assert!(variables.declarations.contains("@capability variables.get"));
+        assert!(
+            variables
+                .declarations
+                .contains("get(name: string): string | undefined")
+        );
     }
 
     #[test]

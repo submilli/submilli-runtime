@@ -684,6 +684,7 @@ async fn prepare_and_run(
             state.secret_store().cloned(),
             Arc::clone(&harness_secrets),
         )),
+        variables: Arc::clone(&variables),
         security_check,
         http_client,
         mcp_transport,

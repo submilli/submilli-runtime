@@ -17,7 +17,7 @@ mod file;
 pub mod git;
 pub mod init;
 pub mod lint;
-mod package_secrets;
+mod package_configuration;
 pub mod prompt;
 pub mod secret;
 pub mod variable;

@@ -169,7 +169,7 @@ impl VfsSessionManager {
         if binding.blueprint() != blueprint.name {
             return Err(init_error("session blueprint mismatch".into()));
         }
-        resolve_variables(&blueprint.variables, binding.variables())
+        submilli_blueprint::validate_resolved_variables(&blueprint.variables, binding.variables())
             .map_err(|error| init_error(error.to_string()))?;
         resolve_harness_secrets(
             &blueprint.secrets,

@@ -5,12 +5,12 @@ use submilli_build::CapabilitySchema;
 
 const SECRETS_GET: &str = "secrets.get";
 
-pub fn missing_package_secret_warnings(
+pub fn missing_package_configuration_warnings(
     blueprint: &Blueprint,
     package: &str,
     capabilities: &CapabilitySchema,
 ) -> Vec<String> {
-    required_secret_names(capabilities)
+    let mut warnings: Vec<String> = required_names(capabilities, SECRETS_GET)
         .into_iter()
         .filter(|secret| !blueprint.secrets.contains_key(secret))
         .map(|secret| {
@@ -18,14 +18,21 @@ pub fn missing_package_secret_warnings(
                 "package `{package}` requires secret `{secret}`, but `secrets:` does not declare it"
             )
         })
-        .collect()
+        .collect();
+    warnings.extend(required_names(capabilities, "variables.get")
+        .into_iter()
+        .filter(|name| !blueprint.variables.contains_key(name))
+        .map(|name| format!(
+            "package `{package}` requires variable `{name}`, but `variables:` does not declare it"
+        )));
+    warnings
 }
 
-fn required_secret_names(capabilities: &CapabilitySchema) -> BTreeSet<String> {
+fn required_names(capabilities: &CapabilitySchema, capability: &str) -> BTreeSet<String> {
     capabilities
         .requires
         .iter()
-        .filter(|required| required.capability == SECRETS_GET)
+        .filter(|required| required.capability == capability)
         .filter_map(|required| required.filter.as_deref())
         .filter_map(parse_filter)
         .flat_map(|filter| {
@@ -55,6 +62,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn warns_for_missing_variable_and_accepts_alias_declaration() {
+        let capabilities = CapabilitySchema {
+            requires: vec![RequiredCapability {
+                capability: "variables.get".into(),
+                filter: Some("name == \"BROWSER_STORE_NAME\"".into()),
+            }],
+            ..CapabilitySchema::default()
+        };
+        let empty = submilli_blueprint::parse("name: test\n").unwrap();
+        assert_eq!(
+            missing_package_configuration_warnings(&empty, "@acme/browser", &capabilities),
+            [
+                "package `@acme/browser` requires variable `BROWSER_STORE_NAME`, but `variables:` does not declare it"
+            ]
+        );
+        for decl in ["{}", "{ alias: USER_ID, required: true }"] {
+            let blueprint = submilli_blueprint::parse(&format!("name: test\nvariables:\n  USER_ID: {{ required: true }}\n  BROWSER_STORE_NAME: {decl}\n")).unwrap();
+            assert!(
+                missing_package_configuration_warnings(&blueprint, "@acme/browser", &capabilities)
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
     fn warns_for_missing_literal_secret_requirement() {
         let blueprint = submilli_blueprint::parse("name: test\n").expect("blueprint parses");
         let capabilities = CapabilitySchema {
@@ -65,7 +97,8 @@ mod tests {
             ..CapabilitySchema::default()
         };
 
-        let warnings = missing_package_secret_warnings(&blueprint, "@acme/app", &capabilities);
+        let warnings =
+            missing_package_configuration_warnings(&blueprint, "@acme/app", &capabilities);
 
         assert_eq!(
             warnings,
@@ -89,7 +122,8 @@ mod tests {
             ..CapabilitySchema::default()
         };
 
-        let warnings = missing_package_secret_warnings(&blueprint, "@acme/app", &capabilities);
+        let warnings =
+            missing_package_configuration_warnings(&blueprint, "@acme/app", &capabilities);
 
         assert!(warnings.is_empty(), "{warnings:?}");
     }
@@ -110,6 +144,6 @@ mod tests {
             ..CapabilitySchema::default()
         };
 
-        assert!(required_secret_names(&capabilities).is_empty());
+        assert!(required_names(&capabilities, SECRETS_GET).is_empty());
     }
 }

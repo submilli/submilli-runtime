@@ -36,7 +36,7 @@ use super::capability_names::{
 };
 use super::declared_packages::{self, DeclaredPackages};
 use super::file::{has_capability_rule, has_matching_rule};
-use super::package_secrets::missing_package_secret_warnings;
+use super::package_configuration::missing_package_configuration_warnings;
 use submilli_shared::blueprint_validation::unreported_field_errors;
 
 #[derive(clap::Args)]
@@ -143,7 +143,7 @@ fn inspect_blueprint(blueprint: &Blueprint) -> LintFindings {
     }
     warnings.extend(missing_caller_block_warnings(blueprint));
     for (package, artifact) in &packages.artifacts {
-        warnings.extend(missing_package_secret_warnings(
+        warnings.extend(missing_package_configuration_warnings(
             blueprint,
             package,
             &artifact.capabilities,

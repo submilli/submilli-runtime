@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a00994223aa3786dd1b8b6f915f06e5dca2ab6c871dfc664121ca6efb5896591"
+  contentHash: "0c0bc4473a6190d42b62591fd18417e05a020896859c10e1432b86fd6a0f2afb"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -85,6 +85,7 @@ Package. A program calling `listCharges` is judged under `main` for
 
 These are refused before the rules are read, whatever `default` says:
 
+- `variables.get` from `main`. Configuration is available only to Packages.
 - `secrets.get` from `main`. A secret's value is available only to Packages,
   and `submilli blueprint capability add` refuses to write the rule.
 - A write to a volume the Blueprint mounts read-only.
@@ -93,7 +94,7 @@ These are refused before the rules are read, whatever `default` says:
 
 | Source | Names | Fields |
 | --- | --- | --- |
-| The standard library | `embedding.embed`, `fs.*`, `git.*`, `http.*`, `llm.call`, `secrets.get`, `session.*` | In the tables below |
+| The standard library | `embedding.embed`, `fs.*`, `git.*`, `http.*`, `llm.call`, `secrets.get`, `variables.get`, `session.*` | In the tables below |
 | A Package | Chosen by its author, such as `acme.com/credits.apply` | Declared by its `@capability` tags ([Package manifest](/docs/reference/package-manifest)) |
 | An MCP server the Blueprint declares | `mcp.<server>`, such as `mcp.linear` | `tool`, `transport` ([MCP servers](/docs/reference/mcp-servers)) |
 | The application's tools a harness declares for a session | `tools.call` | `tool` ([Application tools](/docs/reference/http-api#application-tools)) |
@@ -144,6 +145,9 @@ out, and a condition on a missing field is false.
   would return as `session.read`. A refused key is left out.
 - **MCP tools:** the tool is a field, not part of the name. Write
   `capability: mcp.linear` with `filter: tool == "save_issue"`.
+
+`variables.get` is available only to Packages, regardless of policy. An alias
+read checks the requested alias name and grants no access to its target name.
 
 <!-- generated:capabilities -->
 
@@ -210,6 +214,12 @@ out, and a condition on a missing field is false.
 | `session.remove` | `key: string` | Delete a session key | `key glob "triage/*"` |
 | `session.list` | `prefix: string` | Enumerate session keys under a prefix | `prefix == "triage/"` |
 
+### `submilli:variables`
+
+| Capability | Fields | Operation | Example filter |
+| --- | --- | --- | --- |
+| `variables.get` | `name: string` | Read an immutable Blueprint/session configuration variable | `name == "BROWSER_STORE_NAME"` |
+
 ### `@tools`
 
 | Capability | Fields | Operation | Example filter |
@@ -242,7 +252,7 @@ out, and a condition on a missing field is false.
 `submilli blueprint lint` also warns, without stopping, about:
 
 - `default: allow`
-- a rule for `secrets.get` under `main`
+- a rule for `secrets.get` or `variables.get` under `main`
 - a rule that an earlier unfiltered rule always decides first
 - a capability name nothing provides, with a suggestion
 - an `http.<method>` name that only `http.request` reaches
