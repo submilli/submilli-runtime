@@ -1,0 +1,76 @@
+{
+ "kind": "run",
+ "run": 4,
+ "page": "http://127.0.0.1:47100/#run=4",
+ "blueprint_version": "1",
+ "source": "chat",
+ "decision_refs": [
+  "4.1",
+  "4.2"
+ ],
+ "blueprint": "billing",
+ "entry": "mcp",
+ "started_at_micros": 1791898016827551,
+ "started_at": "2026-10-13T13:26:56Z",
+ "wall_ms": 299,
+ "outcome": {
+  "kind": "completed"
+ },
+ "denied": [],
+ "session": "5e550000-0000-4000-8000-000000000004",
+ "variables": {
+  "customerId": "cus_northwind"
+ },
+ "reruns": [],
+ "decision_count": 2,
+ "decisions": [
+  {
+   "refs": [
+    "4.1"
+   ],
+   "outcome": "allow",
+   "caller": "main",
+   "capability": "acme.com/charges.list",
+   "decided_by": "by `charges-for-signed-in-customer`",
+   "filtered": false
+  },
+  {
+   "refs": [
+    "4.2"
+   ],
+   "outcome": "allow",
+   "caller": "@acme/billing",
+   "capability": "fs.read",
+   "decided_by": "by rule 1 of `@acme/billing`, line 42",
+   "filtered": false
+  }
+ ],
+ "decisions_dropped": 0,
+ "log_truncated": false,
+ "calls": {
+  "count": 2,
+  "returned": 2,
+  "failed": 0,
+  "unfinished": 0,
+  "with_bodies": 1
+ },
+ "payloads_included": false,
+ "program_recorded": true,
+ "program_included": true,
+ "next": [
+  "submilli playground explain 4.1",
+  "submilli playground runs --session 5e550000-0000-4000-8000-000000000004"
+ ],
+ "untrusted": {
+  "contexts": {
+   "4.1": {
+    "customerId": "cus_northwind"
+   },
+   "4.2": {
+    "path": "/billing/charges.json"
+   }
+  },
+  "result": "ch_0153 <b>12997</b>, ch_0308 <b>12997</b>, ch_0096 <b>12995</b>",
+  "program": "import { listCharges } from \"@acme/billing\";\n\nfunction main(): string {\n    const charges = listCharges(\"cus_northwind\");\n    charges.sort((a, b) => b.amount - a.amount);\n    return charges.slice(0, 3).map((c) => `${c.id} <b>${c.amount}</b>`).join(\", \");\n}\n"
+ }
+}

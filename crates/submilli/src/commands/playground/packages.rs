@@ -201,6 +201,25 @@ impl ProjectPackages {
         PackageStore::new(&self.store_root)
     }
 
+    /// The source modules the installed copy of package `name` embeds, as the store holds
+    /// it now; `None` when the store does not hold it. Reads the filesystem, so an async
+    /// caller runs it on a blocking thread.
+    pub(crate) fn installed_sources(
+        &self,
+        name: &str,
+    ) -> Result<Option<Vec<ArtifactSource>>, String> {
+        let Some(located) = self
+            .store()
+            .locate(name)
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(None);
+        };
+        read_installed_sources(&located.dir)
+            .map(|installed| Some(installed.sources))
+            .map_err(|error| error.to_string())
+    }
+
     fn manifest(&self) -> Result<ProjectManifest, ResolutionFailure> {
         self.read_manifest().map(|(manifest, _)| manifest)
     }

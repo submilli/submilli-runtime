@@ -1,0 +1,37 @@
+{
+ "kind": "decision",
+ "run": 4,
+ "page": "http://127.0.0.1:47100/#run=4&decision=1",
+ "blueprint_version": "1",
+ "source": "chat",
+ "decision_refs": [
+  "4.1"
+ ],
+ "decision": "4.1",
+ "outcome": "allow",
+ "caller": "main",
+ "capability": "acme.com/charges.list",
+ "decided_by": {
+  "kind": "rule",
+  "rule": {
+   "caller": "main",
+   "index": 0,
+   "position": 1,
+   "name": "charges-for-signed-in-customer",
+   "line": 27,
+   "column": 3,
+   "end_line": 30
+  },
+  "filter": "customerId == ${vars.customerId}"
+ },
+ "near_misses": [],
+ "next": [
+  "submilli playground show 4"
+ ],
+ "untrusted": {
+  "context": {
+   "customerId": "cus_northwind"
+  },
+  "near_misses": []
+ }
+}

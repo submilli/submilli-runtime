@@ -1,0 +1,48 @@
+name: Playground page
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/submilli/playground-web/**"
+      - "crates/submilli/src/commands/playground/web/dist/**"
+      - ".github/workflows/playground-page.yml"
+  pull_request:
+    paths:
+      - "crates/submilli/playground-web/**"
+      - "crates/submilli/src/commands/playground/web/dist/**"
+      - ".github/workflows/playground-page.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/submilli/playground-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/submilli/playground-web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      # The binary embeds the committed build, so it must be exactly what the sources build.
+      - name: Check the committed build matches a fresh one
+        working-directory: .
+        run: |
+          dist=crates/submilli/src/commands/playground/web/dist
+          git diff --exit-code -- "$dist"
+          untracked="$(git status --porcelain -- "$dist")"
+          if [ -n "$untracked" ]; then
+            echo "The fresh build differs from the committed one; run \`npm run build\` in crates/submilli/playground-web and commit the result:"
+            echo "$untracked"
+            exit 1
+          fi

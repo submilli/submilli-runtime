@@ -325,4 +325,31 @@ function main(): string {
             "3"
         );
     }
+
+    #[test]
+    fn a_run_started_right_after_a_save_uses_the_saved_version() {
+        let project = Project::new(PINNED);
+        project.start();
+        project.wait_for_version(1);
+        let program = project.root.join("check.ts");
+        std::fs::write(&program, CHECK).unwrap();
+        let program = program.display().to_string();
+
+        // Run from the CLI at once, before the watcher's debounce has passed: the run
+        // applies the save first instead of running under version 1.
+        project.save_by_rename(
+            &PINNED.replace("      filter: customerId == ${vars.customerId}\n", ""),
+        );
+        let output = project.run(&[
+            "exec",
+            &program,
+            "--var",
+            "customerId=cus_northwind",
+            "--json",
+        ]);
+        let ran: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(ran["untrusted"]["result"], "allowed", "{ran}");
+        assert_eq!(ran["blueprint_version"], "2", "{ran}");
+        assert_eq!(project.versions().len(), 2);
+    }
 }

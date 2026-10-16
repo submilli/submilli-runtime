@@ -1,0 +1,37 @@
+{
+ "kind": "decision",
+ "run": 7,
+ "page": "http://127.0.0.1:47100/#run=7&decision=2",
+ "blueprint_version": "2",
+ "source": "rerun",
+ "decision_refs": [
+  "7.2"
+ ],
+ "decision": "7.2",
+ "outcome": "allow",
+ "caller": "@acme/billing",
+ "capability": "fs.read",
+ "decided_by": {
+  "kind": "rule",
+  "rule": {
+   "caller": "@acme/billing",
+   "index": 0,
+   "position": 1,
+   "name": null,
+   "line": 46,
+   "column": 3,
+   "end_line": 48
+  },
+  "filter": "path == \"/billing/charges.json\""
+ },
+ "near_misses": [],
+ "next": [
+  "submilli playground show 7"
+ ],
+ "untrusted": {
+  "context": {
+   "path": "/billing/charges.json"
+  },
+  "near_misses": []
+ }
+}

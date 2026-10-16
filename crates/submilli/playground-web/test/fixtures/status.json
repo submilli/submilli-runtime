@@ -1,0 +1,47 @@
+{
+ "project": "/home/dev/billing-demo",
+ "blueprint": {
+  "name": "billing",
+  "path": "/home/dev/billing-demo/submilli/blueprints/billing.yaml"
+ },
+ "url": "http://127.0.0.1:47100/",
+ "server_url": "http://127.0.0.1:47100",
+ "pid": 34699,
+ "app_token_file": "/home/dev/billing-demo/.submilli/playground/tokens/app",
+ "state_dir": "/home/dev/billing-demo/.submilli/playground",
+ "log_file": "/home/dev/billing-demo/.submilli/playground/playground.log",
+ "egress_grants": [],
+ "provider": "anthropic",
+ "model": "claude-sonnet-5-5",
+ "chat_models": [
+  "anthropic:claude-sonnet-5-5"
+ ],
+ "packages": [
+  {
+   "name": "@acme/billing",
+   "version": "0.1.0",
+   "origin": "blueprint",
+   "importable": true,
+   "project": true
+  }
+ ],
+ "running": true,
+ "stopping": false,
+ "browser_sessions": 0,
+ "blueprint_status": {
+  "version": 2,
+  "refused": null
+ },
+ "binding": {
+  "variables": {
+   "customerId": "cus_northwind"
+  },
+  "secrets": []
+ },
+ "declared_variables": [
+  {
+   "name": "customerId",
+   "required": true
+  }
+ ]
+}
