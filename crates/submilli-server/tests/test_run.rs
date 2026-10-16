@@ -1828,3 +1828,77 @@ async fn recorded_alias_snapshots_are_not_resubmitted_as_direct_bindings() {
         outcome.response.error
     );
 }
+
+#[tokio::test]
+async fn replay_finalizers_never_enqueue_live_resource_cleanup() {
+    let packages = tempfile::tempdir().unwrap();
+    let package = interpreter::compile_package(
+        "@test/resource", interpreter::ModulePath::from("lib"),
+        &[interpreter::PackageSourceModule {
+            path: interpreter::ModulePath::from("lib"),
+            source: r#"
+                import * as session from "submilli:session";
+                export function retain(key: string): void { session.registerFinalizer(key, key); }
+                export function finalizer(key: string, value: string): void { assert(key === value); }
+            "#,
+        }], &[],
+    ).unwrap();
+    submilli_build::write_package_artifact(
+        packages.path().join("@test/resource"),
+        &package.wasm,
+        &package.type_info,
+        &submilli_build::derive_capability_schema(
+            &package.declaration,
+            &[],
+            &package.required_capabilities,
+        ),
+        &package.declaration,
+        &submilli_build::ArtifactMetadata::new("@test/resource", "1", vec![]),
+    )
+    .unwrap();
+    let world = World::with(
+        vec![blueprint(
+            "name: resources
+default: allow
+packages: ['@test/resource']
+",
+        )],
+        |mut config| {
+            config.package_store_root = Some(packages.path().to_owned());
+            config
+        },
+    );
+    let source = world.run("resources", r#"import { retain } from "@test/resource"; function main(): string { try { retain("recorded-resource"); } catch (error: Error) { return error.message; } return "ok"; }"#, &[]).await;
+    assert!(
+        source.response.error.is_none(),
+        "{:?}",
+        source.response.error
+    );
+    let original =
+        submilli_server::record::session_finalizers(&world.state, &source.response.session_id)
+            .await
+            .unwrap();
+    assert_eq!(original.len(), 1);
+    for mode in [TestMode::Recorded, TestMode::ReadsLive, TestMode::Live] {
+        let replay = world.test(&source.recorded, mode).await;
+        assert!(
+            replay.response.error.is_none(),
+            "{:?}",
+            replay.response.error
+        );
+        assert!(
+            replay
+                .response
+                .result
+                .as_deref()
+                .unwrap()
+                .contains("unavailable during test replay")
+        );
+        assert!(
+            submilli_server::record::session_finalizers(&world.state, &replay.response.session_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+}

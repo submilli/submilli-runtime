@@ -98,6 +98,13 @@ impl From<CredentialError> for SessionError {
 }
 
 pub struct SessionManager {
+    finalizers: crate::adapters::session::finalizers::StoredFinalizers,
+    finalizer_executor:
+        std::sync::OnceLock<Arc<dyn crate::application::sessions::finalization::FinalizerExecutor>>,
+    finalization_lock: tokio::sync::Mutex<()>,
+    /// Poisoning can leave execution scopes partly installed; never recover that map.
+    resource_scopes:
+        std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<ResourceScope>>>,
     audit: Option<crate::audit::AuditLog>,
     resources: resources::SessionResources,
     reaper_started: AtomicBool,
@@ -273,6 +280,13 @@ impl SessionManager {
             .as_deref()
             .map(derive_cursor_keys);
         Self {
+            finalizers: crate::adapters::session::finalizers::StoredFinalizers {
+                database: database.clone(),
+                sealer: crate::adapters::sealing::Sealer::new(database.ephemeral_cipher()),
+            },
+            finalizer_executor: std::sync::OnceLock::new(),
+            finalization_lock: tokio::sync::Mutex::new(()),
+            resource_scopes: std::sync::Mutex::new(std::collections::HashMap::new()),
             audit: None,
             credentials: CredentialCodec::new(database.ephemeral_cipher()),
             unit_of_work: crate::adapters::unit_of_work::for_sessions(
@@ -438,6 +452,7 @@ impl SessionManager {
             cipher.clone(),
             self.last_runs.max_bytes(),
         ));
+        self.finalizers.sealer = crate::adapters::sealing::Sealer::new(cipher.clone());
         self.credentials = CredentialCodec::new(cipher);
         self
     }
@@ -730,25 +745,43 @@ impl SessionManager {
         )
         .execute(id, ClosedReason::Deleted)
         .await?;
-        if closed && let Err(error) = self.cleanup(id).await {
-            tracing::warn!(%error, "session cleanup will retry");
-        }
+        self.cleanup(id).await?;
         Ok(closed)
     }
 
     async fn cleanup(&self, id: &str) -> Result<(), SessionError> {
-        if self
-            .store
-            .load(id)
-            .await?
-            .is_some_and(|record| record.status == SessionStatus::Active)
-        {
+        let _finalization = self.finalization_lock.lock().await;
+        let Some(record) = self.store.load(id).await? else {
+            return Ok(());
+        };
+        if record.status == SessionStatus::Active || !record.cleanup_pending {
             return Ok(());
         }
         // Its waiting runs stop before their files go and before their
         // idempotency entries are purged. One still going after the drain
         // writes no outcome back when it ends (`RunEntry::cancel_unrecorded`).
+        let scope = self.resource_scope(id);
+        scope.cancel.cancel();
         self.runs.end_session(id, RUN_DRAIN).await;
+        // The runner holds its read permit until blocking host work has drained.
+        let _drained = scope.work.write().await;
+        if let Some(executor) = self.finalizer_executor.get() {
+            crate::application::sessions::finalization::finalize_session(
+                &self.finalizers,
+                executor.as_ref(),
+                id,
+            )
+            .await?;
+        } else {
+            if self.finalizers.has_unfinished(id).await? {
+                return Err(SessionError::Io("finalizer executor is unavailable".into()));
+            }
+        }
+        if self.finalizers.has_unfinished(id).await? {
+            return Err(SessionError::Io(
+                "finalization completion could not be recorded; recovery is required".into(),
+            ));
+        }
         self.resources.evict(id);
         self.last_runs.remove_session_files(id).await;
         let Some(task) = self.store.cleanup_task(id).await? else {
@@ -775,6 +808,19 @@ impl SessionManager {
                 );
             }
         }
+        let owned_id = id.to_owned();
+        self.database
+            .transaction(move |connection| {
+                Box::pin(async move {
+                    sqlx::query("DELETE FROM finalizer_context WHERE session_id=?")
+                        .bind(owned_id)
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .map_err(|error| SessionError::Io(error.to_string()))?;
         self.store.complete_cleanup(id).await?;
         Ok(())
     }
@@ -815,7 +861,7 @@ impl SessionManager {
         .await?)
     }
 
-    async fn process_pending_cleanup(&self) -> Result<(), SessionError> {
+    pub(crate) async fn process_pending_cleanup(&self) -> Result<(), SessionError> {
         self.resources
             .retain_active(&self.store.active_ids().await?);
         for task in self.store.pending_cleanup().await? {
@@ -830,6 +876,10 @@ impl SessionManager {
 
     pub async fn boot(&self) -> Result<(), BootError> {
         self.store.initialize().await.map_err(BootError::Sessions)?;
+        self.finalizers
+            .recover()
+            .await
+            .map_err(BootError::Sessions)?;
         self.store.load_all().await.map_err(BootError::Sessions)?;
         self.ephemeral_root
             .sweep()
@@ -2948,5 +2998,169 @@ mod tests {
             assert!(std::fs::symlink_metadata(&link).is_err());
             assert!(target.path().join("kept.txt").exists());
         }
+    }
+}
+
+#[derive(Default)]
+struct ResourceScope {
+    work: Arc<tokio::sync::RwLock<()>>,
+    cancel: tokio_util::sync::CancellationToken,
+}
+pub(crate) struct ResourceUse {
+    _scope: Arc<ResourceScope>,
+    _permit: tokio::sync::OwnedRwLockReadGuard<()>,
+    pub cancel: tokio_util::sync::CancellationToken,
+}
+impl SessionManager {
+    fn resource_scope(&self, id: &str) -> Arc<ResourceScope> {
+        let mut scopes = self
+            .resource_scopes
+            .lock()
+            .expect("session resource scopes poisoned");
+        scopes.retain(|_, scope| scope.strong_count() > 0);
+        if let Some(scope) = scopes.get(id).and_then(std::sync::Weak::upgrade) {
+            return scope;
+        }
+        let scope = Arc::new(ResourceScope::default());
+        scopes.insert(id.to_owned(), Arc::downgrade(&scope));
+        scope
+    }
+    pub(crate) async fn admit_resource_work(&self, id: &str) -> Result<ResourceUse, SessionError> {
+        let scope = self.resource_scope(id);
+        let permit = scope.work.clone().read_owned().await;
+        self.available(id).await?;
+        if scope.cancel.is_cancelled() {
+            return Err(SessionError::UnknownSession);
+        }
+        Ok(ResourceUse {
+            _permit: permit,
+            cancel: scope.cancel.clone(),
+            _scope: scope,
+        })
+    }
+    pub(crate) fn set_finalizer_executor(
+        &self,
+        executor: Arc<dyn crate::application::sessions::finalization::FinalizerExecutor>,
+    ) {
+        // Construction installs this once before AppState can be shared.
+        let _ = self.finalizer_executor.set(executor);
+    }
+    pub(crate) fn finalizer_store(&self) -> crate::adapters::session::finalizers::StoredFinalizers {
+        self.finalizers.clone()
+    }
+    pub(crate) fn finalizer_provider(
+        &self,
+        id: &str,
+        packages: &crate::app::PreparedBlueprintPackages,
+    ) -> Result<Arc<dyn interpreter::runtime::session_finalizers::SessionFinalizers>, String> {
+        let mut archives = std::collections::BTreeMap::new();
+        for module in &packages.modules {
+            if !module.declaration.values.contains_key("finalizer") {
+                continue;
+            }
+            let required =
+                crate::finalizers::dependency_names(packages, &module.metadata.package_name)?;
+            let mut roots = Vec::new();
+            for root in &packages.script_declarations {
+                if crate::finalizers::dependency_names(packages, &root.package_name)?
+                    .contains(&module.metadata.package_name)
+                {
+                    roots.push(root.package_name.clone());
+                }
+            }
+            let artifacts = packages
+                .modules
+                .iter()
+                .filter(|module| required.contains(&module.metadata.package_name))
+                .map(|module| module.artifact.as_ref())
+                .collect();
+            let archive = crate::finalizers::FinalizerArchiveRef { roots, artifacts };
+            let archive = crate::finalizers::encode_archive(&archive)?;
+            archives.insert(module.metadata.package_name.clone(), Arc::new(archive));
+        }
+        Ok(Arc::new(
+            crate::adapters::session::finalizers::RegistrationProvider {
+                store: self.finalizers.clone(),
+                session: id.to_owned(),
+                archives,
+                limits: self.session_kv.limits,
+            },
+        ))
+    }
+    pub(crate) async fn finalizer_bindings(
+        &self,
+        id: &str,
+    ) -> Result<
+        (
+            crate::domain::session::SessionBinding,
+            Arc<HarnessSecretBindings>,
+        ),
+        SessionError,
+    > {
+        let loaded = self
+            .repository
+            .find(id)
+            .await?
+            .ok_or(SessionError::UnknownSession)?;
+        let binding = loaded.session().binding().clone();
+        let session_id = id.to_owned();
+        let id = id.to_owned();
+        let sealed: Option<Vec<u8>> = self.database.read(move |connection| Box::pin(async move {
+            sqlx::query_scalar("SELECT encrypted_harness_bindings FROM finalizer_context WHERE session_id=?").bind(id).fetch_one(connection).await.map_err(Into::into)
+        })).await.map_err(|error| SessionError::Io(error.to_string()))?;
+        let credentials = sealed.map_or(
+            crate::adapters::session::credentials::SessionCredentials::Absent,
+            crate::adapters::session::credentials::SessionCredentials::Encrypted,
+        );
+        let secrets = self
+            .credentials
+            .open(&session_id, &credentials)?
+            .unwrap_or_default();
+        Ok((binding, secrets))
+    }
+}
+
+impl SessionManager {
+    pub async fn close_owned(self: &Arc<Self>, id: &str) -> Result<bool, SessionError> {
+        let manager = self.clone();
+        let id = id.to_owned();
+        tokio::spawn(async move { manager.wipe_now(&id).await })
+            .await
+            .map_err(|_| SessionError::Io("session cleanup task failed".into()))?
+    }
+    pub(crate) async fn finalizer_vfs(
+        &self,
+        id: &str,
+        blueprint: &Blueprint,
+        variables: &VarBindings,
+    ) -> Result<(Vfs, VfsInfo), SessionError> {
+        let loaded = self
+            .repository
+            .find(id)
+            .await?
+            .ok_or(SessionError::UnknownSession)?;
+        let root = match loaded.session().root() {
+            RootVfs::PerSession { path } => path.clone(),
+            _ => self.session_root.join(id),
+        };
+        let vfs = build_vfs(
+            blueprint,
+            variables,
+            Some(&root),
+            &self.ephemeral_root,
+            &self.volumes,
+        )?;
+        Ok((
+            attach_limits(vfs, blueprint, &self.volumes).await?,
+            vfs_info(blueprint),
+        ))
+    }
+}
+
+impl SessionManager {
+    pub(crate) fn replay_finalizers(
+        &self,
+    ) -> Arc<dyn interpreter::runtime::session_finalizers::SessionFinalizers> {
+        Arc::new(crate::record::ReplayFinalizers::new(self.session_kv.limits))
     }
 }

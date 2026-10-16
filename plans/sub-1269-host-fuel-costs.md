@@ -1963,3 +1963,15 @@ SUB-1292 repeated-call implementation notes: caller attribution uses the release
 SUB-1292 repeated-call measurements: callback metadata plus invocation count 128/256 drops from 593,152/2,365,952 native fuel to 29,348/58,532; the compiler-reachable forEach fixture costs 32,785/65,297. ZonedDateTime daysInWeek loops drop from 29,952/59,904 to 2,048/4,096 (exact CALL only). Iterator loops drop from 16,262/32,390 to 14,860/29,580 by reusing constants/functions, without tuning CALL. Git checkout parent preparation is only used by whole-repository publication and is left to SUB-1129.
 
 SUB-1292 final behavior checks: the Temporal bare toJSON/quoted JSON-hook research comparison was invalid: serializing the bare ISO result equals the quoted hook, including through unknown. Canonical alias equality was fixed earlier; no quotation or fuel change is needed. Closure ABI arity now refuses a missing environment parameter as an internal fatal error, including direct invoke, and native argument vectors use admitted fallible allocations. The listed explicit panic sites already fixed on main are integrated at final rebase rather than duplicated.
+
+## Durable session finalizers (SUB-1860)
+
+| Host function | Formula and timing |
+| --- | --- |
+| `session.registerFinalizer` | `CALL`; shared key reading and `GATE`; shared serialization charges; `HASH × artifactBytes + IO × artifactBytes + IO × payloadBytes` before hashing, sealing, and committing. No refusing charge after the durable registration effect. |
+| `session.unregisterFinalizer` | `CALL` plus shared key reading and `GATE`; the bounded registration lookup/removal is covered by the host-call overhead. No refusing charge after deletion. |
+
+Keys are local to the engine-attributed package. The retained executable closure
+is prepared outside guest execution; each registration charges the archive bytes
+it hashes and passes into the database. Each finalization attempt receives fresh
+fuel independently of the originating execution.

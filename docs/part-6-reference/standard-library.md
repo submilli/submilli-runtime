@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "de13486d7bc1f8768624a6813f0e2f2aba50fa3879807b8ecc168ec49c2eaeef"
+  contentHash: "19bad81a54636a3ad18e6f0789c483e4c1439f4c8ffa82917f0aab4cf2108cd3"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -230,6 +230,86 @@ caller and authorize the resource independently.
 
 Variables hold non-secret configuration and remain fixed for the session.
 Use secrets for credentials and `submilli:session` for mutable key-value state.
+
+## Durable package finalizers
+
+Packages can register cleanup for remote resources owned by a runtime session:
+
+```typescript
+import * as session from "submilli:session";
+import * as http from "submilli:http";
+
+export interface ResourceHandle { id: string; url: string; }
+
+export function retain(handle: ResourceHandle): void {
+    session.registerFinalizer(handle.id, handle);
+}
+
+export function finalizer(key: string, value: ResourceHandle): void {
+    const response = http.delete(value.url);
+    if (response.status !== 204 && response.status !== 404) {
+        throw new Error("Resource cleanup failed");
+    }
+}
+```
+
+The package root exports one fixed, nongeneric
+`finalizer(key: string, value: T): void`. Registration arguments must match
+`T` and satisfy the same serialization rules as session KV values.
+
+| Function | Behavior |
+| --- | --- |
+| `registerFinalizer(key: string, value: unknown): void` | Durably register this package's cleanup and its immutable artifact closure. |
+| `unregisterFinalizer(key: string): void` | Remove this package's registration after explicit remote release; absent keys are harmless. |
+
+Both operations require the package-only `session.finalize { key }` capability.
+The engine namespaces keys by session and package identity. Packages supply only
+the local key; the finalizer receives that original key. Identical keys in
+different packages do not conflict. Duplicate live keys within one package/session
+are rejected, including across package versions.
+
+Recorded test runs, including their live-call modes, refuse registration with a
+catchable error because replay cannot durably own resources. Package code must
+compensate for that refusal through its normal immediate-cleanup path. Replay
+unregistration validates the local key and treats it as absent.
+
+A successful registration survives separate executions and server restart.
+Explicit close, idle expiry, and administrative termination wait for cleanup
+attempts. Registration concurrent with termination either commits before closure
+or fails; closure stops new resource work and drains existing executions before
+finalization. Each attempt has independent fuel/memory limits and a finite timeout
+(the configured execution timeout, or 30 seconds when normal runs have none).
+
+Throws, traps, denied permissions, and exhausted budgets record terminal failure
+without automatic retry. Other registrations still run. Recovery attempts pending
+or interrupted work, so a crash after a remote effect but before its outcome commits
+can repeat that effect. Finalizers must be idempotent.
+
+Cleanup uses current blueprint permissions and credentials and the exact retained
+package/dependency artifacts, never an upgraded implementation. Revocation or
+unavailable/incompatible artifacts can cause terminal failure. Retained executable
+closures and argument data are released when their registrations finish.
+
+Registration storage has its own quota using the configured session KV limits:
+key/value limits, registration count, and total bytes including retained artifact
+closures. A closure is additionally capped at 64 MiB. KV writes, replacement,
+and deletion do not run finalizers. Finalizers cannot register/unregister finalizers.
+
+Remote creation and registration are separate effects. On a catchable registration
+refusal, the package should attempt immediate cleanup. A crash or uncertain storage
+failure before acknowledgment still requires a remote lease/idle timeout or other
+recovery mechanism; a stored handle does not checkpoint remote process memory.
+
+`GET /v1/sessions/{id}/finalizers` reports package, local key, status, and sanitized
+failure category, without arguments or credentials.
+
+Call `registerFinalizer` directly (namespace and named imports are supported)
+so the compiler can validate its value against the package finalizer signature.
+The REST session-close response includes sanitized finalizer outcomes when
+registrations exist; sessions without registrations retain the empty 204 response.
+Embedders can use `end_session_with_finalizers` for the same report; the existing
+`end_session` boolean API remains available.
+
 
 <!-- generated:stdlib -->
 
@@ -533,15 +613,17 @@ Policy-gated access to Blueprint-declared secrets.
 
 ## `submilli:session`
 
-Session-scoped key-value state: get/has/set/remove/list.
+Session-scoped key-value state and durable package-owned resource cleanup.
 
 | Function | Capability | Description |
 | --- | --- | --- |
 | `get<T>(key: string): T \| undefined` | `session.read { key }` | Read a session value, checked against `T`. |
 | `has(key: string): boolean` | `session.read { key }` | Whether the session holds an entry for `key`. |
 | `list(prefix: string, limit: number, cursor?: string): Page` | `session.list { prefix }`<br>`session.read { key } - per candidate key` | Enumerate session keys starting with `prefix`, in UTF-16 code-unit order. |
+| `registerFinalizer(key: string, value: unknown): void` | `session.finalize { key }` | Register package-owned resource cleanup. |
 | `remove(key: string): boolean` | `session.remove { key }` | Delete `key`. |
 | `set(key: string, value: unknown): void` | `session.write { key }` | Store `value` under `key`, replacing any previous entry. |
+| `unregisterFinalizer(key: string): void` | `session.finalize { key }` | Forget cleanup after explicitly releasing the resource. |
 
 ### `Entry`
 
@@ -560,6 +642,7 @@ One page of a `list` call: the `entries` it discloses and the `nextCursor` that 
 | --- | --- |
 | `readonly entries: Entry[]` | The keys this page discloses, in UTF-16 code-unit order. |
 | `readonly nextCursor: string \| undefined` | Opaque cursor for the next page, or `undefined` when no further matching key remains. |
+
 
 ## `submilli:url`
 

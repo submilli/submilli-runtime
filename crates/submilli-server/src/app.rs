@@ -438,7 +438,7 @@ impl AppState {
             cipher: config.session_cipher.clone(),
         });
 
-        Ok(Self {
+        let state = Self {
             inner: Arc::new(AppStateInner {
                 boot_lock: AsyncMutex::new(()),
                 booted: AtomicBool::new(false),
@@ -491,7 +491,11 @@ impl AppState {
                 pre_execute: config.pre_execute,
                 blueprint_tags: AsyncRwLock::new(HashMap::new()),
             }),
-        })
+        };
+        state
+            .session_manager()
+            .set_finalizer_executor(Arc::new(AppFinalizerExecutor(Arc::downgrade(&state.inner))));
+        Ok(state)
     }
 
     /// Rehydrate persisted sessions and sweep orphan directories. Await once
@@ -1058,6 +1062,7 @@ impl AppState {
             }
             modules.push(PreparedPackageModule {
                 module,
+                artifact: Arc::new(artifact.clone()),
                 declaration: artifact.package_declaration,
                 type_info: artifact.type_info,
                 metadata: artifact.metadata,
@@ -1135,15 +1140,37 @@ impl AppState {
         &self,
         name: &str,
     ) -> Result<bool, crate::application::blueprints::remove::RemoveBlueprintError> {
-        crate::application::blueprints::remove::RemoveBlueprint::new(
-            self.inner.unit_of_work.as_ref(),
-            &crate::adapters::session::audit_log::SessionAuditLog(Some(self.audit())),
-            self,
-            self,
-            self,
-        )
-        .execute(name)
+        let state = self.clone();
+        let name = name.to_owned();
+        tokio::spawn(async move {
+            let removed = crate::application::blueprints::remove::RemoveBlueprint::new(
+                state.inner.unit_of_work.as_ref(),
+                &crate::adapters::session::audit_log::SessionAuditLog(Some(state.audit())),
+                &state,
+                &state,
+                &state,
+            )
+            .execute(&name)
+            .await?;
+            if removed {
+                state
+                    .session_manager()
+                    .process_pending_cleanup()
+                    .await
+                    .map_err(|error| {
+                        crate::application::blueprints::remove::RemoveBlueprintError::Storage(
+                            crate::application::error::StoreError::Io(error.to_string()),
+                        )
+                    })?;
+            }
+            Ok(removed)
+        })
         .await
+        .map_err(|_| {
+            crate::application::blueprints::remove::RemoveBlueprintError::Storage(
+                crate::application::error::StoreError::Io("blueprint removal task failed".into()),
+            )
+        })?
     }
 }
 
@@ -1196,6 +1223,7 @@ pub struct PreparedBlueprintPackages {
 
 #[derive(Clone, Debug)]
 pub struct PreparedPackageModule {
+    pub artifact: Arc<submilli_build::Artifact>,
     pub module: Module,
     pub declaration: PackageDeclaration,
     pub type_info: interpreter::TypeInfoTable,
@@ -1318,6 +1346,11 @@ fn routes(auth: Arc<AuthConfig>, audit: crate::audit::AuditLog) -> Routes {
         .route("/v1/shutdown", Access::Admin, post(admin::shutdown))
         .route("/v1/execute", Access::User, post(execute::handle))
         .route("/v1/sessions", Access::User, post(sessions::create))
+        .route(
+            "/v1/sessions/{session_id}/finalizers",
+            Access::User,
+            get(sessions::finalizers),
+        )
         .route(
             "/v1/sessions/{session_id}/execute",
             Access::User,
@@ -1854,3 +1887,18 @@ mod blueprint_mutation_tests;
 
 #[cfg(test)]
 mod local_apply_tests;
+
+struct AppFinalizerExecutor(std::sync::Weak<AppStateInner>);
+#[async_trait::async_trait]
+impl crate::application::sessions::finalization::FinalizerExecutor for AppFinalizerExecutor {
+    async fn execute(
+        &self,
+        invocation: &crate::domain::finalization::FinalizerInvocation,
+    ) -> Result<(), crate::domain::finalization::FinalizerFailure> {
+        let inner = self
+            .0
+            .upgrade()
+            .ok_or(crate::domain::finalization::FinalizerFailure::AuthorityUnavailable)?;
+        crate::finalizers::execute(&AppState { inner }, invocation).await
+    }
+}

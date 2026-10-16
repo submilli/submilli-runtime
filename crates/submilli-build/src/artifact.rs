@@ -238,7 +238,7 @@ impl ArtifactDependency {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Artifact {
     pub wasm: Vec<u8>,
     pub type_info: TypeInfoTable,
