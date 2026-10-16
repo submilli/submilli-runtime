@@ -880,7 +880,7 @@ impl ReplayFinalizers {
     }
 }
 impl interpreter::runtime::session_finalizers::SessionFinalizers for ReplayFinalizers {
-    fn artifact_bytes(&self, _: &str) -> u64 {
+    fn registration_bytes(&self, _: &str) -> u64 {
         0
     }
     fn register<'a>(

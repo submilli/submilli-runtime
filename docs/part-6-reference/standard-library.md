@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "19bad81a54636a3ad18e6f0789c483e4c1439f4c8ffa82917f0aab4cf2108cd3"
+  contentHash: "1b64aea0f6b4014066c678e0dada2ecd41a554cf9c4e2c70c6dda65e46cf4ccb"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -259,7 +259,7 @@ The package root exports one fixed, nongeneric
 
 | Function | Behavior |
 | --- | --- |
-| `registerFinalizer(key: string, value: unknown): void` | Durably register this package's cleanup and its immutable artifact closure. |
+| `registerFinalizer(key: string, value: unknown): void` | Durably register this package's cleanup arguments and package versions. |
 | `unregisterFinalizer(key: string): void` | Remove this package's registration after explicit remote release; absent keys are harmless. |
 
 Both operations require the package-only `session.finalize { key }` capability.
@@ -285,14 +285,15 @@ without automatic retry. Other registrations still run. Recovery attempts pendin
 or interrupted work, so a crash after a remote effect but before its outcome commits
 can repeat that effect. Finalizers must be idempotent.
 
-Cleanup uses current blueprint permissions and credentials and the exact retained
-package/dependency artifacts, never an upgraded implementation. Revocation or
-unavailable/incompatible artifacts can cause terminal failure. Retained executable
-closures and argument data are released when their registrations finish.
+Cleanup uses current blueprint permissions and credentials and loads code from
+the installed package store. Registration records the package and dependency
+versions, without retaining their code. If a version changes or a package is
+unavailable, cleanup fails terminally; upgrades may therefore lose cleanup.
+Argument data is released when its registration finishes.
 
 Registration storage has its own quota using the configured session KV limits:
-key/value limits, registration count, and total bytes including retained artifact
-closures. A closure is additionally capped at 64 MiB. KV writes, replacement,
+key/value limits, registration count, and total bytes including package-version
+metadata. KV writes, replacement,
 and deletion do not run finalizers. Finalizers cannot register/unregister finalizers.
 
 Remote creation and registration are separate effects. On a catchable registration

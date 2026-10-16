@@ -22,9 +22,9 @@ pub(crate) async fn finalize_session(
     session: &str,
 ) -> Result<(), StoreError> {
     while let Some(invocation) = registrations.claim_next(session).await? {
-        let outcome = match &invocation.value {
-            Err(failure) => Err(*failure),
-            Ok(_) => executor.execute(&invocation).await,
+        let outcome = match (&invocation.value, &invocation.package_versions) {
+            (Err(failure), _) | (_, Err(failure)) => Err(*failure),
+            (Ok(_), Ok(_)) => executor.execute(&invocation).await,
         };
         registrations.complete(&invocation.id, outcome).await?;
     }

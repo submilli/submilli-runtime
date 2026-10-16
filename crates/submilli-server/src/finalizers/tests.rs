@@ -186,7 +186,7 @@ async fn early_release_removes_only_the_owning_packages_key() {
 }
 
 #[tokio::test]
-async fn registrations_survive_restart_and_use_the_registered_artifact() {
+async fn package_upgrade_makes_registered_cleanup_unavailable() {
     let server = Server::new().await;
     let id = server.start().await;
     let response = server.run(&id, r#"import { retain } from "@test/a"; function main(): void { retain("original", false); }"#).await;
@@ -206,7 +206,7 @@ async fn registrations_survive_restart_and_use_the_registered_artifact() {
     end_session(&state, &id).await.unwrap();
     assert_eq!(
         session_finalizers(&state, &id).await.unwrap()[0].status,
-        "succeeded"
+        "failed"
     );
 }
 
@@ -264,6 +264,30 @@ async fn unreadable_arguments_fail_only_their_registration() {
     let session = id.clone();
     server.state.database().unwrap().transaction(move |connection| Box::pin(async move {
         sqlx::query("UPDATE session_finalizers SET payload=x'01' WHERE session_id=? AND local_key=?")
+            .bind(session).bind("bad".encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<_>>()).execute(connection).await?;
+        Ok(())
+    })).await.unwrap();
+    end_session(&server.state, &id).await.unwrap();
+    let rows = session_finalizers(&server.state, &id).await.unwrap();
+    assert!(
+        rows.iter()
+            .any(|row| row.key == "bad" && row.status == "failed")
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.key == "good" && row.status == "succeeded")
+    );
+}
+
+#[tokio::test]
+async fn unreadable_package_versions_fail_only_their_registration() {
+    let server = Server::new().await;
+    let id = server.start().await;
+    let response = server.run(&id, r#"import { retain } from "@test/a"; function main(): void { retain("bad", false); retain("good", false); }"#).await;
+    assert!(response.error.is_none(), "{:?}", response.error);
+    let session = id.clone();
+    server.state.database().unwrap().transaction(move |connection| Box::pin(async move {
+        sqlx::query("UPDATE session_finalizers SET package_versions='invalid json' WHERE session_id=? AND local_key=?")
             .bind(session).bind("bad".encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<_>>()).execute(connection).await?;
         Ok(())
     })).await.unwrap();
@@ -383,82 +407,81 @@ async fn unrelated_initializers_are_not_replayed_for_another_packages_cleanup() 
 }
 
 #[tokio::test]
-async fn dependency_packages_can_finalize_through_their_authorized_root() {
-    let server = Server::new().await;
-    let dependency =
-        submilli_build::read_package_artifact(server.root.path().join("packages/@test/a")).unwrap();
-    let compiled = crate::compiler_thread::run(|| interpreter::compile_package(
+async fn dependency_package_cleanup_checks_installed_versions() {
+    for installed in ["unchanged", "upgraded", "removed"] {
+        let server = Server::new().await;
+        let dependency =
+            submilli_build::read_package_artifact(server.root.path().join("packages/@test/a"))
+                .unwrap();
+        let compiled = crate::compiler_thread::run(|| interpreter::compile_package(
         "@test/root", interpreter::ModulePath::from("lib"), &[interpreter::PackageSourceModule {
             path: interpreter::ModulePath::from("lib"),
             source: r#"import { retain } from "@test/a"; export function open(): void { retain("dependency", false); }"#,
         }], &[&dependency.package_declaration],
     )).unwrap().unwrap();
-    submilli_build::write_package_artifact(
-        server.root.path().join("packages/@test/root"),
-        &compiled.wasm,
-        &compiled.type_info,
-        &submilli_build::derive_capability_schema(
+        submilli_build::write_package_artifact(
+            server.root.path().join("packages/@test/root"),
+            &compiled.wasm,
+            &compiled.type_info,
+            &submilli_build::derive_capability_schema(
+                &compiled.declaration,
+                &[&dependency.package_declaration],
+                &compiled.required_capabilities,
+            ),
             &compiled.declaration,
-            &[&dependency.package_declaration],
-            &compiled.required_capabilities,
-        ),
-        &compiled.declaration,
-        &submilli_build::ArtifactMetadata::new(
-            "@test/root",
-            "1",
-            vec![submilli_build::ArtifactDependency::new("@test/a", "1")],
-        ),
-    )
-    .unwrap();
-    let policy = "name: finalizers
+            &submilli_build::ArtifactMetadata::new(
+                "@test/root",
+                "1",
+                vec![submilli_build::ArtifactDependency::new("@test/a", "1")],
+            ),
+        )
+        .unwrap();
+        let policy = "name: finalizers
 default: allow
 packages: ['@test/root']
 vfs: per_session
 ";
-    server
-        .state
-        .blueprints()
-        .upsert_yaml(StoredBlueprint::new(
-            submilli_blueprint::parse(policy).unwrap(),
-            policy.into(),
-        ))
-        .await
-        .unwrap();
-    let id = server.start().await;
-    let response = server
-        .run(
-            &id,
-            r#"import { open } from "@test/root"; function main(): void { open(); }"#,
-        )
-        .await;
-    assert!(response.error.is_none(), "{:?}", response.error);
-    end_session(&server.state, &id).await.unwrap();
-    assert_eq!(
-        session_finalizers(&server.state, &id).await.unwrap()[0].status,
-        "succeeded"
-    );
+        server
+            .state
+            .blueprints()
+            .upsert_yaml(StoredBlueprint::new(
+                submilli_blueprint::parse(policy).unwrap(),
+                policy.into(),
+            ))
+            .await
+            .unwrap();
+        let id = server.start().await;
+        let response = server
+            .run(
+                &id,
+                r#"import { open } from "@test/root"; function main(): void { open(); }"#,
+            )
+            .await;
+        assert!(response.error.is_none(), "{:?}", response.error);
+        match installed {
+            "upgraded" => publish(server.root.path(), "@test/a", SOURCE, "2"),
+            "removed" => {
+                std::fs::remove_dir_all(server.root.path().join("packages/@test/a")).unwrap();
+            }
+            _ => {}
+        }
+        end_session(&server.state, &id).await.unwrap();
+        let rows = session_finalizers(&server.state, &id).await.unwrap();
+        if installed == "unchanged" {
+            assert_eq!(rows[0].status, "succeeded");
+        } else {
+            assert_eq!(rows[0].failure.as_deref(), Some("artifact_unavailable"));
+        }
+    }
 }
 
 #[tokio::test]
-async fn missing_pinned_artifact_fails_without_running_a_newer_version() {
+async fn missing_installed_package_fails_cleanup() {
     let server = Server::new().await;
     let id = server.start().await;
     let response = server.run(&id, r#"import { retain } from "@test/a"; function main(): void { retain("missing", false); }"#).await;
     assert!(response.error.is_none(), "{:?}", response.error);
-    server
-        .state
-        .database()
-        .unwrap()
-        .transaction(|connection| {
-            Box::pin(async move {
-                sqlx::query("UPDATE finalizer_artifacts SET archive=x'01'")
-                    .execute(connection)
-                    .await?;
-                Ok(())
-            })
-        })
-        .await
-        .unwrap();
+    std::fs::remove_dir_all(server.root.path().join("packages/@test/a")).unwrap();
     end_session(&server.state, &id).await.unwrap();
     let rows = session_finalizers(&server.state, &id).await.unwrap();
     assert_eq!(rows[0].failure.as_deref(), Some("artifact_unavailable"));
