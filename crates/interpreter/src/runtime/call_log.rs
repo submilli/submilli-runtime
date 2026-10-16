@@ -567,6 +567,7 @@ mod tests {
         "variables.get",
         "session.write",
         "session.remove",
+        "session.finalize",
     ];
 
     #[test]
@@ -670,6 +671,10 @@ mod tests {
         ),
         (
             "src/stdlib/session/mod.rs",
+            Some(crate::stdlib::session::MODULE_NAME),
+        ),
+        (
+            "src/stdlib/session/finalizers.rs",
             Some(crate::stdlib::session::MODULE_NAME),
         ),
         (
