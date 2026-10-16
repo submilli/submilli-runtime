@@ -330,7 +330,7 @@ fn intent_size_bound_is_checked_before_publication() {
 
 #[cfg(unix)]
 #[test]
-fn reopened_ordinary_vfs_cannot_read_private_aliases() {
+fn reopened_workspace_cannot_read_private_aliases() {
     let root = tempfile::tempdir().unwrap();
     let workspace = workspace(root.path());
     let secret = root.path().join(PRIVATE).join(&workspace.id).join("secret");
@@ -340,8 +340,17 @@ fn reopened_ordinary_vfs_cannot_read_private_aliases() {
         root.path().join("alias"),
     )
     .unwrap();
-    let ordinary = Vfs::external(root.path().to_owned()).unwrap();
-    assert!(interpreter::runtime::fs::resolve_content(&ordinary, "/", "/alias").is_err());
+    let restored = Workspace::reopen(
+        Vfs::external(root.path().to_owned()).unwrap(),
+        &workspace.identity(),
+    )
+    .unwrap();
+    assert!(super::paths::resolve_content(restored.vfs(), "/", "/alias").is_err());
+    assert!(
+        restored
+            .open_reader(&uuid::Uuid::new_v4().to_string(), "/alias")
+            .is_err()
+    );
 }
 
 #[test]

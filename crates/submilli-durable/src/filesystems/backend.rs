@@ -1,6 +1,7 @@
 //! Interpreter filesystem port backed by the verified recovery protocol.
 use super::*;
 use crate::object::Retention;
+use crate::recovery::paths;
 use interpreter::runtime::filesystem::{
     DirectoryEntry, DirectoryReader, FileReader, FileWriter, Filesystem,
     FilesystemError as PortError, FilesystemInfo, Invocation, NativeOperation,
@@ -16,13 +17,18 @@ impl Filesystem for DurableFilesystem {
     fn cwd(&self) -> &str {
         self.workspace.vfs().cwd()
     }
-    fn recovery_protected(&self) -> bool {
-        true
+    fn path_cost(&self, path: &str) -> u64 {
+        use interpreter::runtime::fuel;
+        fuel::SCAN
+            .cost(path.len() as u64)
+            .saturating_add(fuel::SYSCALL.cost(path.split('/').count() as u64))
     }
     fn placement(&self, path: &str) -> Result<Placement, PortError> {
-        Ok(fs::resolve_content(self.workspace.vfs(), self.cwd(), path)?
-            .placement()
-            .clone())
+        Ok(
+            paths::resolve_content(self.workspace.vfs(), self.cwd(), path)?
+                .placement()
+                .clone(),
+        )
     }
     fn native_scope(&self, _: NativeOperation) -> Result<&Vfs, PortError> {
         Err(PortError::Unsupported(
@@ -36,8 +42,9 @@ impl Filesystem for DurableFilesystem {
         tokio::task::spawn_blocking(move || {
             let _access = access;
             if follow {
-                fs::resolve_content(&vfs, vfs.cwd(), &path)?.metadata()
+                paths::resolve_content(&vfs, vfs.cwd(), &path)?.metadata()
             } else {
+                paths::check_access(&vfs, vfs.cwd(), &path)?;
                 fs::resolve_link(&vfs, vfs.cwd(), &path)?.symlink_metadata()
             }
         })
@@ -56,7 +63,7 @@ impl Filesystem for DurableFilesystem {
         let access = self.objects.filesystem_resources.clone().read_owned().await;
         tokio::task::spawn_blocking(move || {
             let _access = access;
-            let file = fs::resolve_content(&vfs, vfs.cwd(), &path)?.open()?;
+            let file = paths::resolve_content(&vfs, vfs.cwd(), &path)?.open()?;
             interpreter::runtime::filesystem::bounded_read(file, offset, maximum_bytes)
         })
         .await
@@ -304,10 +311,11 @@ impl FileWriter for DurableWriter {
     }
 }
 fn operation(invocation: &Invocation) -> Result<&str, PortError> {
-    invocation
-        .operation
-        .as_deref()
-        .ok_or(PortError::MissingOperation)
+    invocation.operation.as_deref().ok_or_else(|| {
+        PortError::Backend(Box::new(FilesystemError::Configuration(
+            "durable filesystem operation requires a stable operation identity",
+        )))
+    })
 }
 fn backend(error: FilesystemError) -> PortError {
     match error {

@@ -1240,3 +1240,109 @@ async fn durable_quota_scan_stops_before_mutation_and_resumes_with_fuel() {
     run_backend(&fixture, source, operation).await.unwrap();
     assert!(root.join("created").is_dir());
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
+    use interpreter::runtime::filesystem::{Filesystem, Invocation, NativeFilesystem};
+    let fixture = Fixture::new().await;
+    let backend = &fixture.filesystem.0;
+    let root = fixture.filesystem.vfs().root();
+    let private = ".git-submilli-recovery";
+    std::fs::write(root.join(private).join("secret"), b"private").unwrap();
+    std::fs::write(root.join("public"), b"public").unwrap();
+    std::os::unix::fs::symlink(private, root.join("alias")).unwrap();
+    for path in [
+        "/.git-submilli-recovery/secret",
+        "/alias/secret",
+        "/alias/missing/child",
+    ] {
+        assert!(Filesystem::metadata(backend, path, true).await.is_err());
+        assert!(Filesystem::metadata(backend, path, false).await.is_err());
+        assert!(Filesystem::read(backend, path, 0, 100).await.is_err());
+        let invocation = Invocation {
+            operation: Some(uuid::Uuid::new_v4().to_string()),
+            ..Default::default()
+        };
+        assert!(
+            Filesystem::open_reader(backend, &invocation, path)
+                .await
+                .is_err()
+        );
+        let invocation = Invocation {
+            operation: Some(uuid::Uuid::new_v4().to_string()),
+            ..Default::default()
+        };
+        assert!(
+            Filesystem::write(backend, &invocation, path, b"overwrite".to_vec(), false)
+                .await
+                .is_err()
+        );
+    }
+    for path in ["/.git-submilli-recovery", "/alias"] {
+        let invocation = Invocation {
+            operation: Some(uuid::Uuid::new_v4().to_string()),
+            ..Default::default()
+        };
+        assert!(
+            Filesystem::open_directory(backend, &invocation, path, true)
+                .await
+                .is_err()
+        );
+    }
+    let invocation = Invocation {
+        operation: Some(uuid::Uuid::new_v4().to_string()),
+        ..Default::default()
+    };
+    let mut listing = Filesystem::open_directory(backend, &invocation, "/", true)
+        .await
+        .unwrap();
+    while let Some(entry) = listing.next_entry() {
+        assert!(!entry.path.contains(private));
+    }
+    assert_eq!(
+        Filesystem::read(backend, "/public", 0, 100).await.unwrap(),
+        b"public"
+    );
+    assert_eq!(
+        std::fs::read(root.join(private).join("secret")).unwrap(),
+        b"private"
+    );
+
+    // Preflight cost estimation must not inspect protected contents either.
+    std::fs::write(root.join(private).join("large"), vec![0; 1024 * 1024]).unwrap();
+    let invocation = Invocation {
+        operation: Some(uuid::Uuid::new_v4().to_string()),
+        work: Some(Arc::new(interpreter::runtime::fuel::WorkBudget::new(
+            10_000,
+        ))),
+    };
+    let error = Filesystem::mkdir(backend, &invocation, "/alias/large", false)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            interpreter::runtime::filesystem::FilesystemError::Rejected(_)
+        ),
+        "{error}"
+    );
+
+    // Backend policy must not leak into the interpreter's ordinary implementation.
+    // Production callers must keep retained volumes assigned to their durable backend.
+    let native = NativeFilesystem::new(Vfs::external(root.to_owned()).unwrap());
+    assert_eq!(
+        Filesystem::read(&native, "/alias/secret", 0, 100)
+            .await
+            .unwrap(),
+        b"private"
+    );
+    let mut listing = Filesystem::open_directory(&native, &Invocation::default(), "/", false)
+        .await
+        .unwrap();
+    let mut found = false;
+    while let Some(entry) = listing.next_entry() {
+        found |= entry.name == private;
+    }
+    assert!(found);
+}

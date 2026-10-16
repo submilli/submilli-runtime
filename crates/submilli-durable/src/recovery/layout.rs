@@ -103,7 +103,7 @@ impl WorkspaceLayout {
                 })
                 .map_err(|_| RecoveryError::Conflict)?;
         }
-        vfs = vfs.with_retained_cwd(&self.cwd)?.protect_recovery();
+        vfs = vfs.with_cwd_path(&self.cwd)?;
         // Verify the recorded writable backing roots before exposing the VFS.
         for recorded in &identity.volumes {
             let path = interpreter::runtime::fs::resolve_content(&vfs, "/", &recorded.mount)?;
@@ -141,7 +141,7 @@ impl WorkspaceLayout {
             {
                 Ok(root) => root,
                 Err(error) if removed && error.kind() == std::io::ErrorKind::NotFound => {
-                    quota.reconcile_retained(0);
+                    quota.set_used(0);
                     continue;
                 }
                 Err(error) => return Err(error.into()),
@@ -149,7 +149,7 @@ impl WorkspaceLayout {
             if FileIdentity::of(&root.dir_metadata()?)? != identity {
                 return Err(RecoveryError::Conflict);
             }
-            quota.reconcile_retained(super::paths::used_bytes(&root)?);
+            quota.set_used(super::paths::used_bytes(&root)?);
         }
         Ok(())
     }
@@ -191,7 +191,7 @@ impl WorkspaceLayout {
         if self.mode != VfsMode::Ephemeral {
             return Ok(());
         }
-        let expected = format!("{}{workspace}", interpreter::runtime::vfs::RETAINED_PREFIX);
+        let expected = format!("{}{workspace}", crate::recovery::RETAINED_PREFIX);
         if self.root.file_name().and_then(|name| name.to_str()) != Some(&expected) {
             return Err(RecoveryError::Conflict);
         }
@@ -255,11 +255,7 @@ impl EphemeralReservation {
 
     pub fn remove_uninitialized(&self) -> Result<(), RecoveryError> {
         let parent = self.parent()?;
-        let name = format!(
-            "{}{}",
-            interpreter::runtime::vfs::RETAINED_PREFIX,
-            self.workspace
-        );
+        let name = format!("{}{}", crate::recovery::RETAINED_PREFIX, self.workspace);
         if let Some(metadata) = super::paths::existing(&parent, &name)? {
             if !metadata.is_dir() || metadata.file_type().is_symlink() {
                 return Err(RecoveryError::Conflict);

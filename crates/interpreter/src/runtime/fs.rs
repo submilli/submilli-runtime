@@ -19,8 +19,6 @@ use cap_std::fs::{Dir, File, Metadata, OpenOptions, ReadDir};
 use crate::runtime::Vfs;
 use crate::runtime::vfs::{Access, Mount, Placement};
 
-/// Reserved recovery namespace, also protected for ordinary runs.
-pub const RECOVERY_DIRECTORY: &str = ".git-submilli-recovery";
 pub(crate) mod removal;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -372,103 +370,6 @@ impl ContentPath {
             rel,
             placement: self.placement.clone(),
         }
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum StorageError {
-    #[error(transparent)]
-    Containment(#[from] ContainError),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    #[error("unsupported native storage operation: {0}")]
-    Unsupported(&'static str),
-}
-
-/// A checked location and held ancestor handles. Names are journal metadata;
-/// all actual I/O is relative to the returned capabilities.
-pub struct MutationLocation {
-    pub path: ContentPath,
-    pub mount: String,
-    pub parent: String,
-    pub name: String,
-    pub parent_identity: FileIdentity,
-    pub ancestors: Vec<Dir>,
-}
-
-impl Vfs {
-    pub fn mutation_location(
-        &self,
-        guest: &str,
-        follow_final: bool,
-        git: bool,
-    ) -> Result<MutationLocation, StorageError> {
-        let mut path = resolve_content(self, self.cwd(), guest)?;
-        path.writable()?;
-        if path.is_root() {
-            return Err(StorageError::Unsupported("volume root mutation"));
-        }
-        check_mount_points(&path.dir, &path.rel, &path.placement, true, follow_final)?;
-        if follow_final
-            && path
-                .dir
-                .symlink_metadata(&path.rel)
-                .is_ok_and(|m| m.file_type().is_symlink())
-        {
-            path.rel = path.dir.canonicalize(&path.rel)?;
-        }
-        if !git && protected_metadata(&path.rel) {
-            return Err(StorageError::Unsupported("protected metadata"));
-        }
-        let parent = path
-            .rel
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
-        let resolved = path.dir.canonicalize(parent)?;
-        if git
-            && resolved != parent
-            && !(resolved.as_os_str().is_empty() && parent == Path::new("."))
-        {
-            return Err(StorageError::Unsupported("Git metadata aliases"));
-        }
-        if !git && protected_metadata(&resolved) {
-            return Err(StorageError::Unsupported("protected metadata alias"));
-        }
-        let parent = if resolved.as_os_str().is_empty() {
-            Path::new(".")
-        } else {
-            &resolved
-        };
-        let name = path
-            .rel
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or(StorageError::Unsupported("non-UTF-8 path"))?
-            .to_owned();
-        let parent_name = parent
-            .to_str()
-            .ok_or(StorageError::Unsupported("non-UTF-8 path"))?
-            .to_owned();
-        let parent_identity = FileIdentity::of(&path.dir.open_dir(parent)?.dir_metadata()?)?;
-        let ancestors = parent
-            .ancestors()
-            .map(|ancestor| {
-                path.dir.open_dir(if ancestor.as_os_str().is_empty() {
-                    Path::new(".")
-                } else {
-                    ancestor
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(MutationLocation {
-            mount: path.placement.mount_point().into(),
-            path,
-            parent: parent_name,
-            name,
-            parent_identity,
-            ancestors,
-        })
     }
 }
 
@@ -864,7 +765,6 @@ pub fn resolve_content(
     vfs.dir().ok_or(ContainError::Disabled)?;
     let rel = relative(cwd, guest_path)?;
     let (dir, rel, placement) = vfs.locate(&rel).ok_or(ContainError::Disabled)?;
-    check_recovery_access(vfs, &dir, &rel)?;
     Ok(ContentPath::new(dir, rel, placement))
 }
 
@@ -881,7 +781,6 @@ pub fn resolve_link(vfs: &Vfs, cwd: &str, guest_path: &str) -> Result<LinkPath, 
     vfs.dir().ok_or(ContainError::Disabled)?;
     let rel = relative(cwd, guest_path)?;
     let (root, rel, placement) = vfs.locate(&rel).ok_or(ContainError::Disabled)?;
-    check_recovery_access(vfs, &root, &rel)?;
     let Some(name) = rel.file_name() else {
         let name = OsString::from(".");
         let guard = ContentPath::new(Arc::clone(&root), PathBuf::from(&name), placement);
@@ -971,47 +870,6 @@ pub fn protected_metadata(path: &Path) -> bool {
     })
 }
 
-pub fn private_recovery_path(path: &Path) -> bool {
-    path.components().any(|part| {
-        part.as_os_str()
-            .to_string_lossy()
-            .trim_end_matches([' ', '.'])
-            .eq_ignore_ascii_case(RECOVERY_DIRECTORY)
-    })
-}
-
-fn check_recovery_access(vfs: &Vfs, root: &Dir, path: &Path) -> Result<(), ContainError> {
-    if private_recovery_path(path) {
-        return Err(ContainError::Io(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "private filesystem recovery state",
-        )));
-    }
-    if !vfs.recovery_protected() {
-        return Ok(());
-    }
-    // Ordinary paths have already been lexically checked. Durable roots also
-    // reject aliases to their private artifacts. The exclusive-writer contract
-    // excludes a link swap between resolution and the synchronous host action.
-    for ancestor in path.ancestors() {
-        if ancestor.as_os_str().is_empty() {
-            continue;
-        }
-        match root.canonicalize(ancestor) {
-            Ok(real) if private_recovery_path(&real) => {
-                return Err(ContainError::Io(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "private filesystem recovery alias",
-                )));
-            }
-            Ok(_) => return Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Ok(())
-}
-
 /// Refuse a repository at the root-relative `path` that would overlap a mount:
 /// one the path is inside of (an alias of a mount point leads into its hidden
 /// placeholder), or one at or below it, judged by spelling and by where the path
@@ -1044,7 +902,7 @@ pub(crate) fn check_repository_clear_of_mounts(
 /// than the volume. Both are checked on the path as written and on where it
 /// lands once the root's links are followed, so a link to an ancestor cannot
 /// spell its way past the guard.
-fn check_mount_points(
+pub fn check_mount_points(
     root: &Dir,
     path: &Path,
     placement: &Placement,

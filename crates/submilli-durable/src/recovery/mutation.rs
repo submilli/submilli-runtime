@@ -24,7 +24,7 @@ impl Workspace {
             Mutation::Append { path, .. } => (path, true),
             Mutation::Move { source, .. } => (source, false),
         };
-        let (source, _) = self.entry_access(path, follows, mutation.repository().is_some())?;
+        let source = self.entry_access(path, follows, mutation.repository().is_some())?;
         let parent = self.parent(&source)?;
         let metadata = existing(&parent, &source.name)?;
         let original_directory = metadata
@@ -173,7 +173,7 @@ impl Workspace {
         if intent.original.is_none() {
             return Err(std::io::Error::from(std::io::ErrorKind::NotFound).into());
         }
-        let (destination, _) = self.entry(guest, false)?;
+        let destination = self.entry(guest, false)?;
         if destination.mount != intent.source.mount {
             return Err(RecoveryError::Unsupported(
                 "cross-volume move requires a compound plan",

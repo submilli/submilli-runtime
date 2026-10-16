@@ -28,7 +28,7 @@ impl Workspace {
     /// handle. A crash before that commit leaves a private, collectable pin.
     pub fn open_reader(&self, resource: &str, path: &str) -> Result<RetainedReader, RecoveryError> {
         paths::validate_id(resource)?;
-        let (entry, _) = self.entry(path, true)?;
+        let entry = self.entry(path, true)?;
         let parent = self.parent(&entry)?;
         let mut file = parent.open(&entry.name)?;
         let metadata = file.metadata()?;

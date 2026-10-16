@@ -71,7 +71,6 @@ pub struct Vfs {
     /// The named volume backing the root, under [`VfsMode::Named`].
     volume: Option<Arc<str>>,
     mounts: Arc<[Mount]>,
-    recovery_protected: bool,
 }
 
 /// A named volume grafted at a guest path below the root.
@@ -298,8 +297,6 @@ pub const MAX_MOUNTS: usize = 16;
 /// The name prefix of every directory [`Vfs::tempdir`] and [`Vfs::tempdir_in`]
 /// create, so a host can recognise its leftover scratch.
 pub const TEMPDIR_PREFIX: &str = "submilli-vfs-";
-/// Retained by SQL run ownership, never by TempDir or the scratch boot sweep.
-pub const RETAINED_PREFIX: &str = "submilli-vfs-run-";
 
 impl Vfs {
     /// A VFS that backs no directory. Every `submilli:fs.*` call traps; only
@@ -314,7 +311,6 @@ impl Vfs {
             access: Access::ReadWrite,
             volume: None,
             mounts: Arc::from([]),
-            recovery_protected: false,
             cwd: Arc::from("/"),
             ancestors: Arc::from([]),
         }
@@ -333,7 +329,6 @@ impl Vfs {
         }
         let dir = open_root(&root)?;
         let identity = dir_identity(&dir, Path::new("."), &dir.dir_metadata()?)?;
-        let recovery_protected = dir.try_exists(crate::runtime::fs::RECOVERY_DIRECTORY)?;
         Ok(Self {
             root,
             mode,
@@ -343,7 +338,6 @@ impl Vfs {
             access: Access::ReadWrite,
             volume: None,
             mounts: Arc::from([]),
-            recovery_protected,
             cwd: Arc::from("/"),
             ancestors: Arc::from([identity]),
         })
@@ -382,7 +376,6 @@ impl Vfs {
             access: Access::ReadWrite,
             volume: None,
             mounts: Arc::from([]),
-            recovery_protected: false,
             cwd: Arc::from("/"),
             ancestors: Arc::from([identity]),
         })
@@ -408,19 +401,9 @@ impl Vfs {
         self.mode
     }
 
-    /// Disposable scratch cannot back a logical durable run: its last VFS
-    /// owner deletes the directory, including after interpreter teardown.
+    /// Whether dropping the last owner automatically removes this directory.
     pub fn is_disposable(&self) -> bool {
         self._owned.is_some()
-    }
-
-    pub fn protect_recovery(mut self) -> Self {
-        self.recovery_protected = true;
-        self
-    }
-
-    pub(crate) fn recovery_protected(&self) -> bool {
-        self.recovery_protected
     }
 
     /// Enforce `limit` bytes on the files this VFS holds, starting from what the
@@ -521,9 +504,6 @@ impl Vfs {
             spec.access,
         )
         .map_err(MountError::Io)?;
-        self.recovery_protected |= dir
-            .try_exists(crate::runtime::fs::RECOVERY_DIRECTORY)
-            .map_err(MountError::Io)?;
         let mount = Mount {
             guest: Arc::from(spec.guest_path.as_str()),
             rel,
@@ -643,15 +623,10 @@ impl Vfs {
         &self.cwd
     }
 
-    pub fn with_cwd(mut self, cwd: &str) -> Result<Self, crate::runtime::fs::ContainError> {
-        use crate::runtime::fs::{ContainError, guest_normalize, resolve_content};
-        if !cwd.starts_with('/') || cwd.len() > 4096 || guest_normalize("/", cwd)? != cwd {
-            return Err(ContainError::Io(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "cwd must be an absolute normalized guest path",
-            )));
-        }
-        let target = resolve_content(&self, "/", cwd)?;
+    pub fn with_cwd(self, cwd: &str) -> Result<Self, crate::runtime::fs::ContainError> {
+        use crate::runtime::fs::{ContainError, resolve_content};
+        let vfs = self.with_cwd_path(cwd)?;
+        let target = resolve_content(&vfs, "/", cwd)?;
         match target.open_dir() {
             Ok(_) => {}
             Err(ContainError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
@@ -660,21 +635,16 @@ impl Vfs {
             }
             Err(error) => return Err(error),
         }
-        self.cwd = Arc::from(cwd);
-        Ok(self)
+        Ok(vfs)
     }
 
-    /// Recovery restores the logical path even when an earlier effect removed
-    /// its directory. Recreating it here would be an unjournaled mutation.
-    pub fn with_retained_cwd(
-        mut self,
-        cwd: &str,
-    ) -> Result<Self, crate::runtime::fs::ContainError> {
+    /// Set the logical working directory without creating it on disk.
+    pub fn with_cwd_path(mut self, cwd: &str) -> Result<Self, crate::runtime::fs::ContainError> {
         use crate::runtime::fs::{ContainError, guest_normalize};
         if !cwd.starts_with('/') || cwd.len() > 4096 || guest_normalize("/", cwd)? != cwd {
             return Err(ContainError::Io(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "retained cwd must be an absolute normalized guest path",
+                "cwd must be an absolute normalized guest path",
             )));
         }
         self.cwd = Arc::from(cwd);
@@ -791,33 +761,8 @@ fn for_each_regular_file(
     root: &Dir,
     max_entries: usize,
     skip_vanished: bool,
-    visit: impl FnMut(FileIdentity, u64),
-) -> io::Result<()> {
-    walk_regular_files(root, max_entries, skip_vanished, || Ok(()), visit)
-}
-
-/// Enumerate regular files, admitting the root and each entry before inspecting it.
-/// The callback can stop traversal with the caller's typed resource-limit error.
-pub fn regular_files_with_budget<E: From<io::Error>>(
-    root: &Dir,
-    max_entries: usize,
-    charge_entry: impl FnMut() -> Result<(), E>,
-) -> Result<Vec<(FileIdentity, u64)>, E> {
-    let mut files = Vec::new();
-    walk_regular_files(root, max_entries, false, charge_entry, |file, bytes| {
-        files.push((file, bytes));
-    })?;
-    Ok(files)
-}
-
-fn walk_regular_files<E: From<io::Error>>(
-    root: &Dir,
-    max_entries: usize,
-    skip_vanished: bool,
-    mut charge_entry: impl FnMut() -> Result<(), E>,
     mut visit: impl FnMut(FileIdentity, u64),
-) -> Result<(), E> {
-    charge_entry()?;
+) -> io::Result<()> {
     let mut entries: usize = 0;
     let mut open: Vec<cap_std::fs::ReadDir> = vec![root.entries()?];
     while let Some(dir) = open.last_mut() {
@@ -825,15 +770,13 @@ fn walk_regular_files<E: From<io::Error>>(
             open.pop();
             continue;
         };
-        charge_entry()?;
         let entry = entry?;
         entries += 1;
         if entries > max_entries {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("more than {max_entries} entries"),
-            )
-            .into());
+            ));
         }
         let Some(kind) = vanished(entry.file_type(), skip_vanished)? else {
             continue;
@@ -843,8 +786,7 @@ fn walk_regular_files<E: From<io::Error>>(
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("directories nested more than {MAX_MEASURED_DEPTH} deep"),
-                )
-                .into());
+                ));
             }
             let Some(child) = vanished(
                 entry.open_dir().and_then(|dir| dir.entries()),
