@@ -1,5 +1,4 @@
 //! Pure domain rules and value objects.
-pub mod durable_object;
 pub mod idempotent_request;
 pub mod mcp_grant;
 pub mod run;

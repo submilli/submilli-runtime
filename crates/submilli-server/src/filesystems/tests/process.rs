@@ -38,6 +38,7 @@ async fn open(root: &Path) -> (Arc<ServerDatabase>, DurableObjects) {
 
 #[tokio::test]
 async fn crash_child() {
+    submilli_durable::set_test_checkpoint(checkpoint);
     let Some(root) = std::env::var_os("SUBMILLI_FILESYSTEM_CRASH_ROOT") else {
         return;
     };

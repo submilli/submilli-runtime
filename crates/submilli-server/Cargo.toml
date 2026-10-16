@@ -17,6 +17,7 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [dependencies]
+submilli-durable = { path = "../submilli-durable" }
 getrandom = "0.2"
 interpreter = { workspace = true }
 submilli-blueprint = { path = "../submilli-blueprint" }
@@ -62,6 +63,7 @@ signal-hook = "0.3"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
+submilli-durable = { path = "../submilli-durable", features = ["test-support"] }
 reqwest = { workspace = true }
 insta = { workspace = true }
 rcgen.workspace = true

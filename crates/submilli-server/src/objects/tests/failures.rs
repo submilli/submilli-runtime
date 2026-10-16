@@ -15,10 +15,9 @@ async fn publication_acknowledgements_and_transactions_belong_to_one_store() {
         .await
         .unwrap();
     assert!(b.store.bind(&prepared, retention()).await.is_err());
-    let mut foreign_unit = b.store.publications.begin().await.unwrap();
+    let mut foreign_unit = b.store.begin().await.unwrap();
     assert!(
         a.store
-            .publications
             .bind_in(foreign_unit.as_mut(), &prepared, retention())
             .await
             .is_err()
@@ -310,7 +309,7 @@ async fn payload_transaction_rollback_and_wrong_owner_fail_closed() {
         .publish(&id, Cursor::new(vec![3; 3]))
         .await
         .unwrap();
-    let mut unit = fixture.store.publications.begin().await.unwrap();
+    let mut unit = fixture.store.begin().await.unwrap();
     let payload = fixture
         .store
         .bind_payload_in(

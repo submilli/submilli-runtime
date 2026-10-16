@@ -502,7 +502,10 @@ async fn invoke(
         history_cache: caller.data().git_history.clone(),
         origin: crate::stdlib::shared::call_origin(&*caller),
     };
-    let vfs = caller.data().vfs.clone();
+    let vfs = caller
+        .data()
+        .native_filesystem(crate::runtime::filesystem::NativeOperation::Git)?
+        .clone();
     let op = op.to_owned();
     let is_constructor = !method;
     let returns_string = op == "commit";
@@ -644,7 +647,7 @@ async fn decode_arguments(
     } else {
         operations::text_arg(&args, usize::from(op == "clone"))?.to_owned()
     };
-    let path = crate::runtime::fs::guest_normalize(caller.data().vfs.cwd(), &path)?;
+    let path = crate::runtime::fs::guest_normalize(caller.data().filesystem.cwd(), &path)?;
     if path
         .split('/')
         .any(|part| part.eq_ignore_ascii_case(".git") || stage::is_reserved_stage_name(part))

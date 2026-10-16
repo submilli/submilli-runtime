@@ -25,7 +25,13 @@ async fn aggregate_quota_refusal_keeps_writer_editable_and_retireable() {
         fs.close_writer(&writer, &close).await,
         Err(FilesystemError::Objects(ObjectStoreError::Limit))
     ));
-    assert!(fs.journal.pending_writer(fs.id()).await.unwrap().is_none());
+    assert!(
+        fs.test_journal()
+            .pending_writer(fs.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
     let chunk = fixture.capture(b"after refusal").await;
     fs.write_chunk(&writer, &id(), chunk).await.unwrap();
     // A changed chunk list gets another capture ID, rather than conflicting
@@ -63,7 +69,10 @@ async fn cancelled_close_reservation_allows_more_chunks_and_retires_stale_captur
     fs.write_chunk(&writer, &id(), first.clone()).await.unwrap();
     // State at cancellation after successful quota reservation but before
     // close admission: no publication or close effect has started.
-    let stale = fs.reserve_writer_capture(&writer, &[first]).await.unwrap();
+    let stale = fs
+        .test_reserve_writer_capture(&writer, &[first])
+        .await
+        .unwrap();
     let second = fixture.capture(b" second").await;
     fs.write_chunk(&writer, &id(), second).await.unwrap();
     fs.close_writer(&writer, &id()).await.unwrap();
@@ -121,7 +130,13 @@ async fn permanent_resource_limits_do_not_fence_the_workspace() {
     fs.write_chunk(&writer, &id(), chunk.clone()).await.unwrap();
     fs.write_chunk(&writer, &id(), chunk).await.unwrap();
     assert!(fs.close_writer(&writer, &id()).await.is_err());
-    assert!(fs.journal.pending_writer(fs.id()).await.unwrap().is_none());
+    assert!(
+        fs.test_journal()
+            .pending_writer(fs.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(!fs.vfs().root().join("out").exists());
     assert_eq!(
         fs.open_directory(&id(), "/", false, 0)
@@ -179,7 +194,13 @@ async fn compound_admission_reserves_all_effect_slots() {
     ];
     assert!(fs.execute_plan(&id(), steps).await.is_err());
     assert!(!fs.vfs().root().join("one").exists());
-    assert!(fs.journal.pending_plan(fs.id()).await.unwrap().is_none());
+    assert!(
+        fs.test_journal()
+            .pending_plan(fs.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
     fs.execute_plan(
         &id(),
         vec![Mutation::CreateDirectory {
@@ -189,7 +210,13 @@ async fn compound_admission_reserves_all_effect_slots() {
     .await
     .unwrap();
     assert!(fs.close_writer(&writer, &id()).await.is_err());
-    assert!(fs.journal.pending_writer(fs.id()).await.unwrap().is_none());
+    assert!(
+        fs.test_journal()
+            .pending_writer(fs.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
     let workspace = fs.id().to_owned();
     fixture.database.transaction(move |connection| Box::pin(async move {
         sqlx::query("DELETE FROM durable_effects WHERE run_id=(SELECT run_id FROM durable_workspaces WHERE workspace_id=?) AND effect_id LIKE 'capacity-%'").bind(workspace).execute(connection).await?;
@@ -238,7 +265,10 @@ async fn pending_resources_recover_and_rejected_opens_replay() {
     let fs = &fixture.filesystem;
     std::fs::write(fs.vfs().root().join("file"), b"data").unwrap();
     let reader = id();
-    fs.journal.reader(fs.id(), &reader, "/file").await.unwrap();
+    fs.test_journal()
+        .reader(fs.id(), &reader, "/file")
+        .await
+        .unwrap();
     assert!(fs.recover().await.unwrap().is_some());
     let mut handle = fs.open_reader(&reader, "/file").await.unwrap();
     let mut bytes = Vec::new();
@@ -246,7 +276,7 @@ async fn pending_resources_recover_and_rejected_opens_replay() {
     assert_eq!(bytes, b"data");
     drop(handle);
     let listing = id();
-    fs.journal
+    fs.test_journal()
         .listing(fs.id(), &listing, "/", false, None)
         .await
         .unwrap();
@@ -412,7 +442,7 @@ async fn named_and_session_roots_resume_deleted_cwd_and_release_mounted_quota() 
 #[tokio::test]
 async fn cancelled_blocking_work_holds_admission_until_it_drains() {
     let fixture = Fixture::new().await;
-    let gate = Arc::new(fixture.objects.filesystem_gate.clone().lock_owned().await);
+    let gate = Arc::new(fixture.objects.test_gate().clone().lock_owned().await);
     let (started, entered) = tokio::sync::oneshot::channel();
     let (release, wait) = std::sync::mpsc::channel();
     let worker = tokio::spawn(blocking(gate, move || {
@@ -423,11 +453,11 @@ async fn cancelled_blocking_work_holds_admission_until_it_drains() {
     entered.await.unwrap();
     worker.abort();
     assert!(worker.await.unwrap_err().is_cancelled());
-    assert!(fixture.objects.filesystem_gate.try_lock().is_err());
+    assert!(fixture.objects.test_gate().try_lock().is_err());
     release.send(()).unwrap();
     let drained = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        fixture.objects.filesystem_gate.lock(),
+        fixture.objects.test_gate().lock(),
     )
     .await
     .unwrap();

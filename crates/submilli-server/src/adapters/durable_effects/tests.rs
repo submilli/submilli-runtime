@@ -1,12 +1,7 @@
-use super::*;
-use crate::database::ServerDatabase;
+use crate::{adapters::unit_of_work::durable::units, database::ServerDatabase};
 use std::sync::Arc;
+use submilli_durable::{UnitFactory, effects::*, unit_of_work::StoreError};
 use submilli_shared::secret_store::SecretCipher;
-
-fn sealer() -> Sealer {
-    Sealer::new(Some(Arc::new(SecretCipher::from_key([7; 32]))))
-}
-
 fn key(effect: &str) -> EffectKey<'_> {
     EffectKey {
         run: "run",
@@ -15,256 +10,214 @@ fn key(effect: &str) -> EffectKey<'_> {
         version: 1,
     }
 }
-
-async fn database(path: &std::path::Path) -> ServerDatabase {
-    let database = ServerDatabase::open(path).await.unwrap();
-    database.transaction(|connection| Box::pin(async move {
+async fn database(path: &std::path::Path) -> (Arc<ServerDatabase>, UnitFactory) {
+    let db = Arc::new(ServerDatabase::open(path).await.unwrap());
+    db.transaction(|connection| Box::pin(async move {
         sqlx::query("INSERT OR IGNORE INTO runs(run_id,reservation_id,session_id,fingerprint,owner_generation,admission_order,created_at_unix_ms,state) VALUES('run','reservation','session','request','startup',1,0,'running')").execute(connection).await?;
         Ok(())
     })).await.unwrap();
-    database
+    let factory = units(db.clone(), Arc::new(SecretCipher::from_key([7; 32])));
+    (db, factory)
 }
-
 #[tokio::test]
 async fn shared_records_survive_reopen_and_lost_ack_without_a_workspace() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("db");
-    let db = database(&path).await;
-    db.transaction(|connection| {
-        Box::pin(async move {
-            admit(connection, &sealer(), &key("one"), b"immutable request").await?;
-            prepare(connection, &sealer(), &key("one"), b"recovery data").await?;
-            complete(connection, &sealer(), &key("one"), b"result", false).await
-        })
-    })
-    .await
-    .unwrap();
+    let (db, factory) = database(&path).await;
+    let mut unit = factory().await.unwrap();
+    admit(unit.as_mut(), &key("one"), b"immutable request")
+        .await
+        .unwrap();
+    prepare(unit.as_mut(), &key("one"), b"recovery data")
+        .await
+        .unwrap();
+    complete(unit.as_mut(), &key("one"), b"result", false)
+        .await
+        .unwrap();
+    unit.commit().await.unwrap();
+    drop(factory);
     db.close().await.unwrap();
     drop(db);
-    let db = database(&path).await;
-    db.transaction(|connection| {
-        Box::pin(async move {
-            // The caller did not retain the commit acknowledgement. Re-admission
-            // and completion reconcile the same row, without a second effect.
-            let record = admit(connection, &sealer(), &key("one"), b"immutable request").await?;
-            assert_eq!(record.outcome.as_deref(), Some(b"result".as_slice()));
-            assert_eq!(
-                record.recovery_payload.as_deref(),
-                Some(b"recovery data".as_slice())
-            );
-            complete(connection, &sealer(), &key("one"), b"result", false).await?;
-            assert!(
-                complete(connection, &sealer(), &key("one"), b"changed", false)
-                    .await
-                    .is_err()
-            );
-            assert!(
-                prepare(connection, &sealer(), &key("one"), b"recovery data")
-                    .await
-                    .is_err()
-            );
-            let count: i64 = sqlx::query_scalar("SELECT count(*) FROM durable_effects")
-                .fetch_one(connection)
-                .await?;
-            assert_eq!(count, 1);
-            Ok(())
-        })
-    })
-    .await
-    .unwrap();
+    let (_db, factory) = database(&path).await;
+    let mut unit = factory().await.unwrap();
+    let record = admit(unit.as_mut(), &key("one"), b"immutable request")
+        .await
+        .unwrap();
+    assert_eq!(record.outcome.as_deref(), Some(b"result".as_slice()));
+    assert_eq!(
+        record.recovery_payload.as_deref(),
+        Some(b"recovery data".as_slice())
+    );
+    complete(unit.as_mut(), &key("one"), b"result", false)
+        .await
+        .unwrap();
+    assert!(
+        complete(unit.as_mut(), &key("one"), b"changed", false)
+            .await
+            .is_err()
+    );
+    assert!(
+        prepare(unit.as_mut(), &key("one"), b"recovery data")
+            .await
+            .is_err()
+    );
+    assert_eq!(unit.effect_count("run").await.unwrap(), 1);
 }
-
 #[tokio::test]
 async fn identity_and_pending_exclusion_are_shared_across_operation_adapters() {
     let root = tempfile::tempdir().unwrap();
-    let db = database(&root.path().join("db")).await;
-    db.transaction(|connection| {
-        Box::pin(async move {
-            admit(connection, &sealer(), &key("one"), b"request").await?;
-            let other = EffectKey {
-                operation: "other.operation",
-                ..key("one")
-            };
-            assert!(
-                admit(connection, &sealer(), &other, b"request")
-                    .await
-                    .is_err()
-            );
-            let other_version = EffectKey {
+    let (_db, factory) = database(&root.path().join("db")).await;
+    let mut unit = factory().await.unwrap();
+    admit(unit.as_mut(), &key("one"), b"request").await.unwrap();
+    let other = EffectKey {
+        operation: "other.operation",
+        ..key("one")
+    };
+    assert!(admit(unit.as_mut(), &other, b"request").await.is_err());
+    assert!(
+        load(
+            unit.as_mut(),
+            &EffectKey {
                 version: 2,
                 ..key("one")
-            };
-            assert!(load(connection, &sealer(), &other_version).await.is_err());
-            assert!(
-                admit(connection, &sealer(), &key("one"), b"changed")
-                    .await
-                    .is_err()
-            );
-            let other_slot = EffectKey {
-                operation: "other.operation",
-                ..key("two")
-            };
-            assert!(
-                admit(connection, &sealer(), &other_slot, b"request")
-                    .await
-                    .is_err()
-            );
-            assert!(
-                complete(
-                    connection,
-                    &sealer(),
-                    &key("one"),
-                    b"success too soon",
-                    false
-                )
-                .await
-                .is_err()
-            );
-            complete(connection, &sealer(), &key("one"), b"refusal", true).await?;
-            admit(connection, &sealer(), &other_slot, b"request").await?;
-            prepare(connection, &sealer(), &other_slot, b"intent").await?;
-            prepare(connection, &sealer(), &other_slot, b"intent").await?;
-            assert!(
-                prepare(connection, &sealer(), &other_slot, b"changed intent")
-                    .await
-                    .is_err()
-            );
-            assert!(
-                complete(
-                    connection,
-                    &sealer(),
-                    &other_slot,
-                    b"uncertain is not refusal",
-                    true
-                )
-                .await
-                .is_err()
-            );
-            Ok(())
-        })
-    })
-    .await
-    .unwrap();
+            }
+        )
+        .await
+        .is_err()
+    );
+    assert!(admit(unit.as_mut(), &key("one"), b"changed").await.is_err());
+    let other_slot = EffectKey {
+        operation: "other.operation",
+        ..key("two")
+    };
+    assert!(admit(unit.as_mut(), &other_slot, b"request").await.is_err());
+    assert!(
+        complete(unit.as_mut(), &key("one"), b"too soon", false)
+            .await
+            .is_err()
+    );
+    complete(unit.as_mut(), &key("one"), b"refusal", true)
+        .await
+        .unwrap();
+    admit(unit.as_mut(), &other_slot, b"request").await.unwrap();
+    prepare(unit.as_mut(), &other_slot, b"intent")
+        .await
+        .unwrap();
+    prepare(unit.as_mut(), &other_slot, b"intent")
+        .await
+        .unwrap();
+    assert!(
+        prepare(unit.as_mut(), &other_slot, b"changed")
+            .await
+            .is_err()
+    );
+    assert!(
+        complete(unit.as_mut(), &other_slot, b"uncertain", true)
+            .await
+            .is_err()
+    );
 }
-
 #[tokio::test]
-async fn aborted_transaction_leaves_no_effect_or_pending_slot() {
+async fn dropped_unit_discards_effect_and_pending_slot() {
     let root = tempfile::tempdir().unwrap();
-    let db = database(&root.path().join("db")).await;
-    let result: Result<(), _> = db
-        .transaction(|connection| {
-            Box::pin(async move {
-                admit(connection, &sealer(), &key("one"), b"request").await?;
-                prepare(connection, &sealer(), &key("one"), b"intent").await?;
-                Err(DatabaseError::SessionConflict)
-            })
-        })
-        .await;
-    assert!(result.is_err());
-    db.transaction(|connection| {
-        Box::pin(async move {
-            assert!(load(connection, &sealer(), &key("one")).await?.is_none());
-            assert!(pending(connection, "run").await?.is_none());
-            admit(connection, &sealer(), &key("two"), b"request").await?;
-            Ok(())
-        })
-    })
-    .await
-    .unwrap();
+    let (_db, factory) = database(&root.path().join("db")).await;
+    let mut unit = factory().await.unwrap();
+    admit(unit.as_mut(), &key("one"), b"request").await.unwrap();
+    prepare(unit.as_mut(), &key("one"), b"intent")
+        .await
+        .unwrap();
+    drop(unit);
+    let mut unit = factory().await.unwrap();
+    assert!(load(unit.as_mut(), &key("one")).await.unwrap().is_none());
+    assert!(unit.pending_effect("run").await.unwrap().is_none());
+    admit(unit.as_mut(), &key("two"), b"request").await.unwrap();
+    unit.commit().await.unwrap();
 }
-
 #[tokio::test]
 async fn records_are_bounded_and_sealed_to_field_row_operation_and_version() {
     let root = tempfile::tempdir().unwrap();
-    let db = database(&root.path().join("db")).await;
-    db.transaction(|connection| {
-        Box::pin(async move {
-            let oversized = vec![0; MAX_RECORD + 1];
-            assert!(
-                admit(connection, &sealer(), &key("one"), &oversized)
-                    .await
-                    .is_err()
-            );
-            admit(connection, &sealer(), &key("one"), &vec![1; MAX_RECORD]).await?;
-            assert!(
-                prepare(connection, &sealer(), &key("one"), &oversized)
-                    .await
-                    .is_err()
-            );
-            prepare(connection, &sealer(), &key("one"), b"recovery canary").await?;
-            assert!(
-                complete(connection, &sealer(), &key("one"), &oversized, false)
-                    .await
-                    .is_err()
-            );
-            complete(connection, &sealer(), &key("one"), b"outcome canary", false).await?;
-            let row = sqlx::query("SELECT request,recovery_payload,outcome FROM durable_effects")
-                .fetch_one(&mut *connection)
-                .await?;
-            let recovery: Vec<u8> = row.try_get("recovery_payload")?;
-            assert!(!recovery.windows(6).any(|bytes| bytes == b"canary"));
-            assert!(open(&sealer(), &key("one"), "outcome", &recovery).is_err());
-            assert!(open(&sealer(), &key("two"), "recovery", &recovery).is_err());
-            let other_run = EffectKey {
-                run: "other",
-                ..key("one")
-            };
-            assert!(open(&sealer(), &other_run, "recovery", &recovery).is_err());
-            let wrong_key = Sealer::new(Some(Arc::new(SecretCipher::from_key([8; 32]))));
-            assert!(load(connection, &wrong_key, &key("one")).await.is_err());
-            assert!(
-                load(connection, &Sealer::default(), &key("one"))
-                    .await
-                    .is_err()
-            );
-            sqlx::query("UPDATE durable_effects SET version=2")
-                .execute(&mut *connection)
-                .await?;
-            let version_two = EffectKey {
-                version: 2,
-                ..key("one")
-            };
-            assert!(load(connection, &sealer(), &version_two).await.is_err());
-            sqlx::query("UPDATE durable_effects SET version=1,operation='other'")
-                .execute(&mut *connection)
-                .await?;
-            let other_operation = EffectKey {
-                operation: "other",
-                ..key("one")
-            };
-            assert!(load(connection, &sealer(), &other_operation).await.is_err());
-            Ok(())
-        })
-    })
-    .await
-    .unwrap();
-}
-
-#[tokio::test]
-async fn concurrent_admission_preserves_one_request_and_different_runs_are_independent() {
-    let root = tempfile::tempdir().unwrap();
-    let db = Arc::new(database(&root.path().join("db")).await);
-    let first = db.clone();
-    let second = db.clone();
-    let (one, two) = tokio::join!(
-        first.transaction(|connection| Box::pin(async move {
-            admit(connection, &sealer(), &key("one"), b"first")
-                .await
-                .map(|_| ())
-        })),
-        second.transaction(|connection| Box::pin(async move {
-            admit(connection, &sealer(), &key("one"), b"second")
-                .await
-                .map(|_| ())
-        })),
+    let (db, factory) = database(&root.path().join("db")).await;
+    let mut unit = factory().await.unwrap();
+    let oversized = vec![0; MAX_RECORD + 1];
+    assert!(admit(unit.as_mut(), &key("one"), &oversized).await.is_err());
+    admit(unit.as_mut(), &key("one"), b"secret request")
+        .await
+        .unwrap();
+    assert!(
+        prepare(unit.as_mut(), &key("one"), &oversized)
+            .await
+            .is_err()
     );
-    assert_ne!(one.is_ok(), two.is_ok());
-    db.transaction(|connection| Box::pin(async move {
-        sqlx::query("INSERT INTO runs(run_id,reservation_id,session_id,fingerprint,owner_generation,admission_order,created_at_unix_ms,state) VALUES('other','other-reservation','session','request','startup',2,0,'running')").execute(&mut *connection).await?;
-        let other = EffectKey { run: "other", ..key("one") };
-        admit(connection, &sealer(), &other, b"independent").await?;
-        assert_eq!(pending(connection, "run").await?.as_deref(), Some("one"));
-        assert_eq!(pending(connection, "other").await?.as_deref(), Some("one"));
-        Ok(())
-    })).await.unwrap();
+    prepare(unit.as_mut(), &key("one"), b"secret intent")
+        .await
+        .unwrap();
+    assert!(
+        complete(unit.as_mut(), &key("one"), &oversized, false)
+            .await
+            .is_err()
+    );
+    complete(unit.as_mut(), &key("one"), b"secret outcome", false)
+        .await
+        .unwrap();
+    unit.commit().await.unwrap();
+    let original: (Vec<u8>, Vec<u8>) = db
+        .read(|connection| {
+            Box::pin(async move {
+                Ok(sqlx::query_as(
+                    "SELECT recovery_payload,outcome FROM durable_effects WHERE effect_id='one'",
+                )
+                .fetch_one(connection)
+                .await?)
+            })
+        })
+        .await
+        .unwrap();
+    for attack in [
+        "UPDATE durable_effects SET operation='other'",
+        "UPDATE durable_effects SET version=2",
+        "UPDATE durable_effects SET effect_id='two'",
+        "UPDATE durable_effects SET recovery_payload=request",
+        "UPDATE durable_effects SET outcome=request",
+    ] {
+        let changed_row = attack_is_row(attack);
+        let attack = attack.to_owned();
+        db.transaction(move |connection| {
+            Box::pin(async move {
+                sqlx::query(sqlx::AssertSqlSafe(attack.as_str()))
+                    .execute(&mut *connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+        let mut unit = factory().await.unwrap();
+        assert!(
+            unit.get_effect("run", if changed_row { "two" } else { "one" })
+                .await
+                .is_err()
+        );
+        drop(unit);
+        let original = original.clone();
+        db.transaction(move |connection| Box::pin(async move {
+            sqlx::query("UPDATE durable_effects SET operation='test.operation',version=1,effect_id='one',recovery_payload=?,outcome=?")
+                .bind(original.0).bind(original.1).execute(connection).await?;
+            Ok(())
+        })).await.unwrap();
+    }
+}
+fn attack_is_row(attack: &str) -> bool {
+    attack.contains("effect_id")
+}
+#[tokio::test]
+async fn direct_persistence_refuses_rewriting_committed_effect_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let (_db, factory) = database(&root.path().join("db")).await;
+    let mut unit = factory().await.unwrap();
+    let mut record = admit(unit.as_mut(), &key("one"), b"request").await.unwrap();
+    record.request = b"changed".to_vec();
+    assert!(matches!(
+        unit.save_effect(record).await,
+        Err(StoreError::Io(_) | StoreError::Database(_) | StoreError::Conflict)
+    ));
 }

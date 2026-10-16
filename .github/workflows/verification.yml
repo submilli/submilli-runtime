@@ -33,6 +33,8 @@ jobs:
         run: python3 verification/check.py --model objects --output "$RUNNER_TEMP/objects-model"
       - name: Check shared effect identity and lifecycle
         run: python3 verification/check.py --model effects --output "$RUNNER_TEMP/effects-model"
+      - name: Durable unit of work model
+        run: python3 verification/check.py --model unit-of-work --output "$RUNNER_TEMP/unit-of-work-model"
       - name: Check fixed-offset append recovery
         run: python3 verification/check.py --model filesystem --output "$RUNNER_TEMP/filesystem-model"
       - name: Check regular-file namespace recovery
@@ -53,6 +55,7 @@ jobs:
             ${{ runner.temp }}/admission-model
             ${{ runner.temp }}/objects-model
             ${{ runner.temp }}/effects-model
+            ${{ runner.temp }}/unit-of-work-model
             ${{ runner.temp }}/filesystem-model
             ${{ runner.temp }}/namespace-model
             ${{ runner.temp }}/directories-model

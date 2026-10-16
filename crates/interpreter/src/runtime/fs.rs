@@ -19,8 +19,10 @@ use cap_std::fs::{Dir, File, Metadata, OpenOptions, ReadDir};
 use crate::runtime::Vfs;
 use crate::runtime::vfs::{Access, Mount, Placement};
 
-pub mod recovery;
+/// Reserved recovery namespace, also protected for ordinary runs.
+pub const RECOVERY_DIRECTORY: &str = ".git-submilli-recovery";
 pub(crate) mod removal;
+pub mod storage;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ResolveError {
@@ -878,7 +880,7 @@ pub(crate) fn private_recovery_path(path: &Path) -> bool {
         part.as_os_str()
             .to_string_lossy()
             .trim_end_matches([' ', '.'])
-            .eq_ignore_ascii_case(recovery::PRIVATE)
+            .eq_ignore_ascii_case(RECOVERY_DIRECTORY)
     })
 }
 

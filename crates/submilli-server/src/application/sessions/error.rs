@@ -4,7 +4,7 @@ use crate::domain::session::SessionRuleError;
 
 #[derive(Debug)]
 pub enum BootError {
-    Objects(crate::application::durable_objects::ObjectStoreError),
+    Objects(submilli_durable::publications::ObjectStoreError),
     Sessions(StoreError),
     Idempotency(StoreError),
     /// Leftover last-run files could not be removed.

@@ -18,27 +18,6 @@ pub(crate) trait UnitOfWorkFactory: Send + Sync {
 #[async_trait::async_trait]
 pub(crate) trait UnitOfWork: Send {
     async fn session_has_retained_workspace(&mut self, session: &str) -> Result<bool, StoreError>;
-    async fn object_store_identity(
-        &mut self,
-    ) -> Result<Option<crate::domain::durable_object::ObjectStoreIdentity>, StoreError>;
-    async fn identify_object_store(
-        &mut self,
-        identity: crate::domain::durable_object::ObjectStoreIdentity,
-    ) -> Result<(), StoreError>;
-    async fn get_object(
-        &mut self,
-        id: &crate::domain::durable_object::ObjectId,
-    ) -> Result<Option<crate::domain::durable_object::DurableObject>, StoreError>;
-    async fn save_object(
-        &mut self,
-        object: crate::domain::durable_object::DurableObject,
-    ) -> Result<(), StoreError>;
-    async fn objects_after(
-        &mut self,
-        after: Option<crate::domain::durable_object::ObjectId>,
-        limit: u32,
-    ) -> Result<Vec<crate::domain::durable_object::DurableObject>, StoreError>;
-    async fn object_usage(&mut self, owner: &str) -> Result<(u64, u64), StoreError>;
     async fn get_session(&mut self, id: &str) -> Result<Option<Session>, StoreError>;
     async fn sessions_due_for_expiry(
         &mut self,

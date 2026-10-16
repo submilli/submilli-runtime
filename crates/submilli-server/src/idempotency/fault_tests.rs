@@ -39,39 +39,6 @@ impl UnitOfWork for FaultUnit {
     async fn session_has_retained_workspace(&mut self, session: &str) -> Result<bool, StoreError> {
         self.inner.session_has_retained_workspace(session).await
     }
-    async fn object_store_identity(
-        &mut self,
-    ) -> Result<Option<crate::domain::durable_object::ObjectStoreIdentity>, StoreError> {
-        self.inner.object_store_identity().await
-    }
-    async fn identify_object_store(
-        &mut self,
-        identity: crate::domain::durable_object::ObjectStoreIdentity,
-    ) -> Result<(), StoreError> {
-        self.inner.identify_object_store(identity).await
-    }
-    async fn get_object(
-        &mut self,
-        id: &crate::domain::durable_object::ObjectId,
-    ) -> Result<Option<crate::domain::durable_object::DurableObject>, StoreError> {
-        self.inner.get_object(id).await
-    }
-    async fn save_object(
-        &mut self,
-        object: crate::domain::durable_object::DurableObject,
-    ) -> Result<(), StoreError> {
-        self.inner.save_object(object).await
-    }
-    async fn objects_after(
-        &mut self,
-        after: Option<crate::domain::durable_object::ObjectId>,
-        limit: u32,
-    ) -> Result<Vec<crate::domain::durable_object::DurableObject>, StoreError> {
-        self.inner.objects_after(after, limit).await
-    }
-    async fn object_usage(&mut self, owner: &str) -> Result<(u64, u64), StoreError> {
-        self.inner.object_usage(owner).await
-    }
     async fn get_session(&mut self, id: &str) -> Result<Option<Session>, StoreError> {
         self.inner.get_session(id).await
     }
