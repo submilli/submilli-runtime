@@ -130,19 +130,38 @@ async function checkFilm(film, origin, fetchImpl, timeoutMs) {
 }
 
 async function checkMedia(url, fetchImpl, film, timeoutMs) {
+  const rangeStart = 64;
+  const rangeEnd = 127;
+  const expectedLength = rangeEnd - rangeStart + 1;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response;
   let reader;
   try {
-    response = await fetchImpl(url, { headers: { Range: 'bytes=0-0' }, signal: controller.signal });
-    if (![200, 206].includes(response.status)) fail(film, `media returned HTTP ${response.status} (${url})`);
+    response = await fetchImpl(url, { headers: { Range: `bytes=${rangeStart}-${rangeEnd}` }, signal: controller.signal });
+    if (response.status !== 206) {
+      if (response.status === 200) fail(film, `media ignored the byte range and returned HTTP 200 (${url})`);
+      fail(film, `media returned HTTP ${response.status} (${url})`);
+    }
     if (!response.headers.get('content-type')?.toLowerCase().startsWith('video/mp4')) {
       fail(film, `media did not identify itself as video/mp4 (${url})`);
     }
+    const contentRange = response.headers.get('content-range') ?? '';
+    const rangeMatch = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange);
+    if (!rangeMatch || Number(rangeMatch[1]) !== rangeStart || Number(rangeMatch[2]) !== rangeEnd
+      || Number(rangeMatch[3]) <= rangeEnd) {
+      fail(film, `media returned an invalid Content-Range for bytes=${rangeStart}-${rangeEnd}: ${JSON.stringify(contentRange)} (${url})`);
+    }
     reader = response.body?.getReader();
-    const chunk = await reader?.read();
-    if (!chunk?.value?.byteLength) fail(film, `media returned an empty body (${url})`);
+    if (!reader) fail(film, `media returned no readable body (${url})`);
+    let bodyLength = 0;
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      bodyLength += chunk.value?.byteLength ?? 0;
+      if (bodyLength > expectedLength) fail(film, `media body exceeded the requested range (${url})`);
+    }
+    if (bodyLength !== expectedLength) fail(film, `media body was truncated: expected ${expectedLength} bytes, received ${bodyLength} (${url})`);
   } catch (error) {
     if (error.message?.startsWith('Published video check failed')) throw error;
     fail(film, `media request failed (${url}): ${controller.signal.aborted ? `timed out after ${timeoutMs}ms` : error.message}`);
