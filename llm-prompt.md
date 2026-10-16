@@ -96,10 +96,6 @@ package resolves the value internally and never returns it — e.g.
 no route around this: not another package, not asking a package to
 fetch the value and hand it back, not raw HTTP.
 
-Configuration variables are also Package-only: `submilli:variables.get` is
-refused from main regardless of policy. The application binds configuration
-when it opens the session; call the Package API that uses it.
-
 Budget refusals (filesystem space, model tokens, and session state) throw
 `QuotaExceededError`, a catchable `Error`. Free space, reduce the request,
 or report the budget to the operator. Argument-size caps remain `RangeError`.
