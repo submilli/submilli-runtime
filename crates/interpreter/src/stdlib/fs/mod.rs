@@ -1468,31 +1468,23 @@ fn gate(
     capability: &str,
     context: serde_json::Value,
 ) -> wasmtime::Result<Option<CallTicket>> {
-    let private_path_work = if caller.data().filesystem.recovery_protected() {
-        context
-            .as_object()
-            .into_iter()
-            .flat_map(|object| object.iter())
-            .filter(|(key, _)| {
-                matches!(
-                    key.as_str(),
-                    "path" | "from" | "to" | "source" | "destination"
-                )
-            })
-            .filter_map(|(_, value)| value.as_str())
-            .fold((0u64, 0u64), |(bytes, depth), path| {
-                (
-                    bytes.saturating_add(path.len() as u64),
-                    depth.saturating_add(path.split('/').count() as u64),
-                )
-            })
-    } else {
-        (0, 0)
-    };
+    let path_cost = context
+        .as_object()
+        .into_iter()
+        .flat_map(|object| object.iter())
+        .filter(|(key, _)| {
+            matches!(
+                key.as_str(),
+                "path" | "from" | "to" | "source" | "destination"
+            )
+        })
+        .filter_map(|(_, value)| value.as_str())
+        .fold(0u64, |cost, path| {
+            cost.saturating_add(caller.data().filesystem.path_cost(path))
+        });
     let ticket = check_security_call(&mut *caller, capability, context)?;
     fuel::charge(&mut *caller, fuel::SYSCALL, 1)?;
-    fuel::charge(&mut *caller, fuel::SCAN, private_path_work.0)?;
-    fuel::charge(&mut *caller, fuel::SYSCALL, private_path_work.1)?;
+    fuel::charge_host_fuel(&mut *caller, path_cost)?;
     Ok(ticket)
 }
 
@@ -1521,7 +1513,6 @@ fn backend_error(op: &str, path: &str, error: PortError) -> wasmtime::Error {
         PortError::Containment(error) => write_target_trap(op, path, &error),
         PortError::Quota(error) => quota_refusal(op, path, error),
         PortError::Backend(error) => crate::runtime::host::fatal_host_error(error),
-        PortError::MissingOperation => crate::runtime::host::fatal_host_error(error),
         other => wasmtime::Error::msg(format!("{op} {path}: {other}")),
     }
 }
@@ -1914,14 +1905,14 @@ fn meter_mutation(
 /// How one copy walk treats its tree.
 #[derive(Clone, Copy)]
 struct CopyRun<'a> {
-    pub(crate) recursive: bool,
-    pub(crate) links: LinkCopies,
+    recursive: bool,
+    links: LinkCopies,
     /// `fs.copy` or `fs.move`, for diagnostics.
-    pub(crate) op: &'a str,
+    op: &'a str,
     /// `from -> to` as the program wrote them, for diagnostics.
-    pub(crate) pair: &'a str,
+    pair: &'a str,
     /// The destination volume's limit.
-    pub(crate) quota: Option<&'a Arc<DiskQuota>>,
+    quota: Option<&'a Arc<DiskQuota>>,
 }
 
 /// What a copy does with a link inside the tree that the platform will not
@@ -1940,8 +1931,8 @@ const MAX_COPY_DEPTH: usize = 64;
 
 #[derive(Default)]
 struct CopyWork {
-    pub(crate) entries: u64,
-    pub(crate) bytes: u64,
+    entries: u64,
+    bytes: u64,
 }
 
 impl CopyWork {
@@ -1990,9 +1981,6 @@ fn copy_bounded(
         };
         let entry = entry.map_err(|e| contain_trap(run.op, run.pair, &ContainError::from(e)))?;
         let name = entry.file_name();
-        if crate::runtime::fs::private_recovery_path(std::path::Path::new(&name)) {
-            continue;
-        }
         let from = frame.from.child(Arc::clone(&frame.from_dir), name.clone());
         let to = frame.to.child(Arc::clone(&frame.to_dir), name);
         if let Some(child) = copy_entry(&from, &to, run, work, frames.len())? {

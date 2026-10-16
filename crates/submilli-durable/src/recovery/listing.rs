@@ -42,7 +42,7 @@ impl Workspace {
             if let Some(work) = work {
                 work.charge(fuel::SYSCALL, 1)?;
             }
-            let resolved = fs::resolve_content(&self.vfs, "/", &guest)?;
+            let resolved = paths::resolve_content(&self.vfs, "/", &guest)?;
             let directory = resolved.open_dir()?;
             for entry in directory.entries()? {
                 if let Some(work) = work {
@@ -50,7 +50,7 @@ impl Workspace {
                 }
                 let entry = entry?;
                 let name = entry.file_name();
-                if fs::private_recovery_path(std::path::Path::new(&name)) {
+                if paths::private_recovery_path(std::path::Path::new(&name)) {
                     continue;
                 }
                 let name = name

@@ -246,8 +246,8 @@ impl Entry {
         let parent = std::path::Path::new(&self.parent);
         let name = std::path::Path::new(&self.name);
         if self.name.contains('/')
-            || interpreter::runtime::fs::private_recovery_path(parent)
-            || interpreter::runtime::fs::private_recovery_path(name)
+            || paths::private_recovery_path(parent)
+            || paths::private_recovery_path(name)
             || (!git
                 && (interpreter::runtime::fs::protected_metadata(parent)
                     || interpreter::runtime::fs::protected_metadata(name)))

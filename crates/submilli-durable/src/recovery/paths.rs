@@ -3,12 +3,82 @@ use super::{FileIdentity, MAX_DEPTH, MAX_ENTRIES, PRIVATE, RecoveryError, Vfs, V
 use cap_fs_ext::DirExt;
 use cap_std::fs::{Dir, Metadata};
 use interpreter::runtime::fs::{self, ContentPath};
-use interpreter::runtime::vfs::Access;
+use interpreter::runtime::vfs::{Access, Placement};
 use interpreter::runtime::{fuel, fuel::WorkBudget};
 use std::collections::{BTreeMap, HashSet};
 use std::io;
 use std::path::{Component, Path};
 use std::sync::Arc;
+
+pub(crate) fn resolve_content(
+    vfs: &Vfs,
+    cwd: &str,
+    guest: &str,
+) -> Result<ContentPath, fs::ContainError> {
+    check_access(vfs, cwd, guest)?;
+    fs::resolve_content(vfs, cwd, guest)
+}
+
+pub(crate) fn check_access(vfs: &Vfs, cwd: &str, guest: &str) -> Result<(), fs::ContainError> {
+    locate(vfs, cwd, guest)?;
+    Ok(())
+}
+
+struct Location {
+    root: Arc<Dir>,
+    relative: std::path::PathBuf,
+    placement: Placement,
+}
+
+fn locate(vfs: &Vfs, cwd: &str, guest: &str) -> Result<Location, fs::ContainError> {
+    vfs.dir().ok_or(fs::ContainError::Disabled)?;
+    let normalized = fs::guest_normalize(cwd, guest)?;
+    let relative = normalized.trim_start_matches('/');
+    let relative = if relative.is_empty() {
+        Path::new(".")
+    } else {
+        Path::new(relative)
+    };
+    let (root, relative, placement) = vfs.locate(relative).ok_or(fs::ContainError::Disabled)?;
+    check_private_access(&root, &relative)?;
+    Ok(Location {
+        root,
+        relative,
+        placement,
+    })
+}
+
+pub(super) fn private_recovery_path(path: &Path) -> bool {
+    path.components().any(|part| {
+        part.as_os_str()
+            .to_string_lossy()
+            .trim_end_matches([' ', '.'])
+            .eq_ignore_ascii_case(PRIVATE)
+    })
+}
+
+fn check_private_access(root: &Dir, path: &Path) -> Result<(), fs::ContainError> {
+    let denied = || {
+        fs::ContainError::Io(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "private filesystem recovery state",
+        ))
+    };
+    if private_recovery_path(path) {
+        return Err(denied());
+    }
+    // The run owns the volumes exclusively, so no guest can swap a link between
+    // this check and the operation. Missing leaves still need their parent checked.
+    for ancestor in path.ancestors().filter(|p| !p.as_os_str().is_empty()) {
+        match root.canonicalize(ancestor) {
+            Ok(real) if private_recovery_path(&real) => return Err(denied()),
+            Ok(_) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
 
 pub(super) fn validate_id(id: &str) -> Result<(), RecoveryError> {
     match uuid::Uuid::parse_str(id) {
@@ -136,11 +206,7 @@ pub(super) fn current(dir: &Dir, name: &str) -> Result<Option<FileIdentity>, Rec
 }
 
 impl Workspace {
-    pub(super) fn entry(
-        &self,
-        guest: &str,
-        follow_final: bool,
-    ) -> Result<(Entry, ContentPath), RecoveryError> {
+    pub(super) fn entry(&self, guest: &str, follow_final: bool) -> Result<Entry, RecoveryError> {
         self.entry_access(guest, follow_final, false)
     }
 
@@ -149,26 +215,75 @@ impl Workspace {
         guest: &str,
         follow_final: bool,
         git: bool,
-    ) -> Result<(Entry, ContentPath), RecoveryError> {
-        let location = self
-            .vfs
-            .mutation_location(guest, follow_final, git)
-            .map_err(|error| match error {
-                fs::StorageError::Containment(error) => RecoveryError::Containment(error),
-                fs::StorageError::Io(error) => RecoveryError::Io(error),
-                fs::StorageError::Unsupported(message) => RecoveryError::Unsupported(message),
-            })?;
-        for ancestor in &location.ancestors {
-            sync(ancestor)?;
+    ) -> Result<Entry, RecoveryError> {
+        let location = locate(&self.vfs, self.vfs.cwd(), guest)?;
+        let Location {
+            root,
+            mut relative,
+            placement,
+        } = location;
+        if placement.access() == Access::ReadOnly {
+            return Err(fs::ContainError::ReadOnly(Arc::from(placement.mount_point())).into());
+        }
+        if relative == Path::new(".") {
+            return Err(RecoveryError::Unsupported("volume root mutation"));
+        }
+        fs::check_mount_points(&root, &relative, &placement, true, follow_final)?;
+        if follow_final
+            && root
+                .symlink_metadata(&relative)
+                .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            relative = root.canonicalize(&relative)?;
+        }
+        if !git && fs::protected_metadata(&relative) {
+            return Err(RecoveryError::Unsupported("protected metadata"));
+        }
+        let parent = relative
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let resolved = root.canonicalize(parent)?;
+        if git
+            && resolved != parent
+            && !(resolved.as_os_str().is_empty() && parent == Path::new("."))
+        {
+            return Err(RecoveryError::Unsupported("Git metadata aliases"));
+        }
+        if !git && fs::protected_metadata(&resolved) {
+            return Err(RecoveryError::Unsupported("protected metadata alias"));
+        }
+        let parent = if resolved.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            &resolved
+        };
+        let name = relative
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or(RecoveryError::Unsupported("non-UTF-8 path"))?;
+        let parent_name = parent
+            .to_str()
+            .ok_or(RecoveryError::Unsupported("non-UTF-8 path"))?;
+        let parent_identity = identity(&root.open_dir(parent)?.dir_metadata()?)?;
+        // The primitive models assume the starting namespace survives a crash.
+        // Establish that before recording the mutation's intent.
+        for ancestor in parent.ancestors() {
+            let ancestor = if ancestor.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                ancestor
+            };
+            sync(&root.open_dir(ancestor)?)?;
         }
         let entry = Entry {
-            mount: location.mount,
-            parent: location.parent,
-            parent_identity: location.parent_identity,
-            name: location.name,
+            mount: placement.mount_point().into(),
+            parent: parent_name.into(),
+            parent_identity,
+            name: name.into(),
         };
         self.volume(&entry.mount)?;
-        Ok((entry, location.path))
+        Ok(entry)
     }
 
     pub(super) fn parent(&self, entry: &Entry) -> Result<Dir, RecoveryError> {
@@ -263,13 +378,40 @@ fn regular_files(
     root: &Dir,
     work: Option<&WorkBudget>,
 ) -> Result<Vec<(FileIdentity, u64)>, RecoveryError> {
-    interpreter::runtime::vfs::regular_files_with_budget(root, MAX_ENTRIES, || {
+    let charge = || -> Result<(), RecoveryError> {
         if let Some(work) = work {
             work.charge(fuel::SYSCALL, 2)?;
             work.charge(fuel::ELEM, 1)?;
         }
         Ok(())
-    })
+    };
+    charge()?;
+    let mut files = Vec::new();
+    let mut count = 0;
+    let mut open = vec![root.entries()?];
+    while let Some(directory) = open.last_mut() {
+        let Some(entry) = directory.next() else {
+            open.pop();
+            continue;
+        };
+        charge()?;
+        let entry = entry?;
+        count += 1;
+        if count > MAX_ENTRIES {
+            return Err(RecoveryError::Limit);
+        }
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            if open.len() > MAX_DEPTH {
+                return Err(RecoveryError::Limit);
+            }
+            open.push(entry.open_dir()?.entries()?);
+        } else if kind.is_file() {
+            let metadata = cap_fs_ext::DirEntryExt::full_metadata(&entry)?;
+            files.push((identity(&metadata)?, metadata.len()));
+        }
+    }
+    Ok(files)
 }
 
 pub(super) fn remove_private_tree(parent: &Dir, name: &str) -> Result<(), RecoveryError> {

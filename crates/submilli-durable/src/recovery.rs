@@ -9,7 +9,7 @@
 mod layout;
 mod listing;
 mod mutation;
-mod paths;
+pub(crate) mod paths;
 mod plan;
 mod resources;
 
@@ -25,9 +25,11 @@ use std::collections::BTreeMap;
 use std::io::{self, Read};
 use std::sync::Arc;
 
-/// Reserved even when no durable run is currently using a volume. Git's stage
-/// namespace already prevents checkout/publication from installing this name.
+/// Private artifacts are hidden by this backend. Git's stage namespace also
+/// prevents checkout/publication from installing this name.
 pub(crate) const PRIVATE: &str = ".git-submilli-recovery";
+/// Retained by SQL run ownership, never by the scratch boot sweep.
+pub const RETAINED_PREFIX: &str = "submilli-vfs-run-";
 const MAX_ENTRIES: usize = 10_000;
 const MAX_DEPTH: usize = 64;
 
@@ -85,7 +87,7 @@ impl Workspace {
         create: bool,
     ) -> Result<Vfs, RecoveryError> {
         paths::validate_id(id)?;
-        let name = format!("{}{id}", interpreter::runtime::vfs::RETAINED_PREFIX);
+        let name = format!("{}{id}", crate::recovery::RETAINED_PREFIX);
         let root = Dir::open_ambient_dir(parent, cap_std::ambient_authority())?;
         let dir = paths::private_dir(&root, &name, create)?;
         paths::sync(&dir)?;
@@ -110,7 +112,7 @@ impl Workspace {
         }
         let volumes = paths::open_volumes(&vfs, id, true)?;
         Ok(Self {
-            vfs: vfs.protect_recovery(),
+            vfs,
             id: id.to_owned(),
             volumes: Arc::new(volumes),
             work: None,
@@ -127,7 +129,7 @@ impl Workspace {
         let workspace = Self {
             volumes: Arc::new(paths::open_volumes(&vfs, &identity.id, false)?),
             work: None,
-            vfs: vfs.protect_recovery(),
+            vfs,
             id: identity.id.clone(),
         };
         if workspace.identity() != *identity {
@@ -159,8 +161,8 @@ impl Workspace {
         }
     }
 
-    /// Read-only guest access to retained storage. Mutating host operations
-    /// must go through the journal before this VFS is used for durable runs.
+    /// Backing storage for trusted host integration. Guest access must go
+    /// through the durable backend, which protects its private artifacts.
     pub fn vfs(&self) -> &Vfs {
         &self.vfs
     }
@@ -230,7 +232,7 @@ impl Workspace {
     fn reconcile_quotas(&self) -> Result<(), RecoveryError> {
         for volume in self.volumes.values() {
             if let Some(quota) = &volume.quota {
-                quota.reconcile_retained(volume.used_bytes(self.work.as_deref())?);
+                quota.set_used(volume.used_bytes(self.work.as_deref())?);
             }
         }
         Ok(())

@@ -371,7 +371,7 @@ impl DurableFilesystem {
         Ok(())
     }
     fn charge_preparation(&self, request: &Mutation) -> Result<(), FilesystemError> {
-        use interpreter::runtime::{fs, fuel};
+        use interpreter::runtime::fuel;
         if self.work.is_none() {
             return Ok(());
         }
@@ -387,7 +387,7 @@ impl DurableFilesystem {
         };
         // The protocol repeats validation before use. An absent/unreadable path
         // is diagnosed there; it contributes no known content-hashing cost here.
-        let original = fs::resolve_content(self.vfs(), self.vfs().cwd(), path)
+        let original = crate::recovery::paths::resolve_content(self.vfs(), self.vfs().cwd(), path)
             .and_then(|p| p.metadata())
             .ok()
             .filter(cap_std::fs::Metadata::is_file)

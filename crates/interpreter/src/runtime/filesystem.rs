@@ -1,8 +1,7 @@
 //! Filesystem services supplied by the embedding runtime.
 //!
-//! Capability checks and fuel admission belong to the host caller. A durable
-//! implementation requires stable operation identities supplied by execution
-//! history; a tracing ticket is not such an identity.
+//! Capability checks and fuel admission belong to the host caller. Embedders
+//! may supply operation identities and a work budget with each invocation.
 use super::fs::{self, ContainError};
 use super::vfs::{Access, Placement, VfsMode};
 use super::{QuotaCharge, QuotaExceeded, Vfs};
@@ -25,8 +24,6 @@ pub enum FilesystemError {
     Quota(#[from] QuotaExceeded),
     #[error("unsupported filesystem operation: {0}")]
     Unsupported(&'static str),
-    #[error("durable filesystem operation requires a stable operation identity")]
-    MissingOperation,
     #[error("{0}")]
     Execution(wasmtime::Error),
     #[error("{0}")]
@@ -52,7 +49,6 @@ pub struct FilesystemInfo {
     pub volume: Option<String>,
     pub maximum_bytes: Option<u64>,
     pub mounts: Vec<MountInfo>,
-    pub recovery_protected: bool,
 }
 impl FilesystemInfo {
     pub fn from_vfs(vfs: &Vfs) -> Self {
@@ -62,7 +58,6 @@ impl FilesystemInfo {
             access: vfs.access(),
             volume: vfs.volume().map(str::to_owned),
             maximum_bytes: vfs.quota().map(|q| q.limit()),
-            recovery_protected: vfs.recovery_protected(),
             mounts: vfs
                 .mounts()
                 .iter()
@@ -120,7 +115,10 @@ pub enum NativeOperation {
 pub trait Filesystem: Send + Sync {
     fn info(&self) -> FilesystemInfo;
     fn cwd(&self) -> &str;
-    fn recovery_protected(&self) -> bool;
+    /// Additional fuel to admit before resolving a guest path.
+    fn path_cost(&self, _path: &str) -> u64 {
+        0
+    }
     fn placement(&self, path: &str) -> Result<Placement, FilesystemError>;
     fn native_scope(&self, operation: NativeOperation) -> Result<&Vfs, FilesystemError>;
     async fn metadata(
@@ -202,9 +200,6 @@ impl Filesystem for NativeFilesystem {
     }
     fn cwd(&self) -> &str {
         self.vfs.cwd()
-    }
-    fn recovery_protected(&self) -> bool {
-        self.vfs.recovery_protected()
     }
     fn placement(&self, path: &str) -> Result<Placement, FilesystemError> {
         Ok(fs::resolve_content(&self.vfs, self.vfs.cwd(), path)?

@@ -1045,7 +1045,7 @@ impl EphemeralRoot {
             };
             let is_scratch = entry.file_name().to_str().is_some_and(|name| {
                 name.starts_with(interpreter::runtime::vfs::TEMPDIR_PREFIX)
-                    && !name.starts_with(interpreter::runtime::vfs::RETAINED_PREFIX)
+                    && !name.starts_with(submilli_durable::recovery::RETAINED_PREFIX)
             });
             if !is_scratch {
                 continue;
@@ -3036,7 +3036,7 @@ mod tests {
         std::fs::create_dir(&foreign).unwrap();
         let retained = ephemeral.join(format!(
             "{}logical-run",
-            interpreter::runtime::vfs::RETAINED_PREFIX
+            submilli_durable::recovery::RETAINED_PREFIX
         ));
         std::fs::create_dir(&retained).unwrap();
         std::fs::write(retained.join("kept"), b"durable").unwrap();

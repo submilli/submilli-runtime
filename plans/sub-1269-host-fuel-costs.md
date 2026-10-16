@@ -1476,7 +1476,7 @@ The new formulas should replace these ad-hoc units with rated classes rather tha
 
 ### `submilli:fs` — operations
 
-Durable workspace path protection adds `SCAN(p) + SYSCALL(d)` at the fs gate before resolving aliases into private recovery state. Directory traversal already charges entries that it skips, including recovery directories. The async filesystem recovery adapter is below the host ABI; its caller admits work before effects and settles publication work before returning a durable result.
+The filesystem backend supplies its additional path admission cost through `Filesystem::path_cost`; the host gate charges it before calling the backend. The native backend adds zero. The durable backend adds `SCAN(p) + SYSCALL(d)` before resolving aliases into private recovery state. Durable directory traversal charges entries that it skips, including recovery directories. The async filesystem recovery adapter is below the host ABI; its caller admits work before effects and settles publication work before returning a durable result.
 
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
