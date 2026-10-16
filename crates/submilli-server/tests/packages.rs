@@ -42,7 +42,13 @@ async fn search_lists_all_and_filters_by_symbol() {
     assert_eq!(status, StatusCode::OK);
     // Every stdlib module but `submilli:llm` and `submilli:embedding`, which need
     // models declared.
-    assert_eq!(all["results"].as_array().unwrap().len(), 8, "got: {all}");
+    let listed = all["results"].as_array().unwrap();
+    assert_eq!(listed.len(), 9, "got: {all}");
+    assert!(
+        listed
+            .iter()
+            .any(|entry| entry["name"] == "submilli:variables")
+    );
 
     let (_, hit) = get("/packages/search?q=sha256").await;
     let names: Vec<&str> = hit["results"]
