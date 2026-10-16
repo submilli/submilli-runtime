@@ -1,6 +1,5 @@
 use super::{MAX_DEPTH, MAX_ENTRIES, RecoveryError, Workspace, paths};
 use interpreter::runtime::fs;
-use interpreter::runtime::fs::storage::NativeDirectory;
 use serde::{Deserialize, Serialize};
 
 pub const MAX_LISTING_BYTES: usize = 4 * 1024 * 1024;
@@ -28,7 +27,7 @@ impl Workspace {
         &self,
         path: &str,
         recursive: bool,
-        work: Option<&interpreter::runtime::filesystem::work::WorkBudget>,
+        work: Option<&interpreter::runtime::fuel::WorkBudget>,
     ) -> Result<Vec<DirectoryEntry>, RecoveryError> {
         use interpreter::runtime::fuel;
         paths::validate_guest_path(path)?;
@@ -44,14 +43,14 @@ impl Workspace {
                 work.charge(fuel::SYSCALL, 1)?;
             }
             let resolved = fs::resolve_content(&self.vfs, "/", &guest)?;
-            let directory = resolved.open_directory()?;
+            let directory = resolved.open_dir()?;
             for entry in directory.entries()? {
                 if let Some(work) = work {
                     work.charge(fuel::SYSCALL, 2)?;
                 }
                 let entry = entry?;
                 let name = entry.file_name();
-                if fs::storage::private_recovery_path(std::path::Path::new(&name)) {
+                if fs::private_recovery_path(std::path::Path::new(&name)) {
                     continue;
                 }
                 let name = name

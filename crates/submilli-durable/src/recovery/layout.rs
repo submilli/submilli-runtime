@@ -1,5 +1,4 @@
 use super::{FileIdentity, RecoveryError, Vfs, WorkspaceIdentity};
-use interpreter::runtime::fs::storage::{NativeMount, NativeStorage, RetainedQuota};
 use interpreter::runtime::vfs::{Access, MountSpec, VfsMode};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -45,8 +44,8 @@ impl WorkspaceLayout {
             .map(|mount| {
                 Ok(MountLayout {
                     path: mount.guest_path().into(),
-                    host: std::fs::canonicalize(mount.host_path())?,
-                    identity: FileIdentity::of(&mount.directory().dir_metadata()?)?,
+                    host: std::fs::canonicalize(mount.host())?,
+                    identity: FileIdentity::of(&mount.dir().dir_metadata()?)?,
                     volume: mount.volume().into(),
                     access: mount.access(),
                     maximum_bytes: mount.quota().map(|q| q.limit()),

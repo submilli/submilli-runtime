@@ -41,7 +41,7 @@ pub enum FilesystemError {
 
 #[derive(Clone)]
 pub struct DurableFilesystem {
-    work: Option<Arc<interpreter::runtime::filesystem::work::WorkBudget>>,
+    work: Option<Arc<interpreter::runtime::fuel::WorkBudget>>,
     workspace: Arc<Workspace>,
     journal: FilesystemJournal,
     objects: DurableObjects,

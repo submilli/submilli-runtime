@@ -1503,9 +1503,9 @@ Durable workspace path protection adds `SCAN(p) + SYSCALL(d)` at the fs gate bef
 | `submilli:fs#list` | Stats, opens the directory, collects mounts below when recursive, starts a `ContainedWalk` (`stdlib/fs/mod.rs:699`) | `CALL + SCAN(p) + SYSCALL(d) + ELEM(1)` | before | Lazy: entries are paid in `next`. |
 
 Filesystem dispatch now uses `runtime::filesystem::Filesystem`. Native tree
-algorithms live in `runtime/filesystem/mutations.rs`; `MutationBudget` preserves
+algorithms live in `stdlib/fs/mod.rs`; `MutationBudget` preserves
 incremental `SYSCALL`/memory admission and post-effect settlement. Native writer
-publication lives in `runtime/filesystem/native_writer.rs`. The formulas above
+publication lives in `stdlib/fs/handles.rs`. The formulas above
 remain at the host boundary. Byte and directory iterators settle result
 construction after advancing, so an out-of-fuel result cannot lose an item.
 Durable preparation additionally admits `HASH(2 * original + 3 * payload) +
@@ -1529,9 +1529,9 @@ history; this extraction does not install the durable backend for ordinary runs.
 
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
-| `submilli:fs#FileWriter#writeLine` | Converts the string to UTF-8, reserves quota, `writeln!` into an 8 KiB `BufWriter` (`runtime/filesystem/native_writer.rs`) | `CALL + SCAN(len(s)) + IO(b + 1)` | before | Streaming handle: this is the per-chunk charge. |
-| `submilli:fs#FileWriter#writeBytes` | Copies the array out, reserves quota, `write_all` (`runtime/filesystem/native_writer.rs`) | `CALL + COPY(b) + IO(b)` | before | |
-| `submilli:fs#FileWriter#close` | Flushes at most 8 KiB, `fsync`, checks the temp file identity, covers the replaced file in the quota, renames (`runtime/filesystem/native_writer.rs`) | `CALL` | before | Idempotent; a second call is a no-op. The bytes were charged at write time. SUB-1292: ordinary metadata prefixes now use O(d) one-component operations. The old implementation never billed the research d² term literally, so there is no quadratic fuel term to lower. Existing input/byte charges are unchanged; detailed native metering is added on remove/move paths. |
+| `submilli:fs#FileWriter#writeLine` | Converts the string to UTF-8, reserves quota, `writeln!` into an 8 KiB `BufWriter` (`stdlib/fs/handles.rs`) | `CALL + SCAN(len(s)) + IO(b + 1)` | before | Streaming handle: this is the per-chunk charge. |
+| `submilli:fs#FileWriter#writeBytes` | Copies the array out, reserves quota, `write_all` (`stdlib/fs/handles.rs`) | `CALL + COPY(b) + IO(b)` | before | |
+| `submilli:fs#FileWriter#close` | Flushes at most 8 KiB, `fsync`, checks the temp file identity, covers the replaced file in the quota, renames (`stdlib/fs/handles.rs`) | `CALL` | before | Idempotent; a second call is a no-op. The bytes were charged at write time. SUB-1292: ordinary metadata prefixes now use O(d) one-component operations. The old implementation never billed the research d² term literally, so there is no quadratic fuel term to lower. Existing input/byte charges are unchanged; detailed native metering is added on remove/move paths. |
 
 ### `submilli:fs` — field getters
 

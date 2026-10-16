@@ -22,7 +22,6 @@ use crate::runtime::vfs::{Access, Mount, Placement};
 /// Reserved recovery namespace, also protected for ordinary runs.
 pub const RECOVERY_DIRECTORY: &str = ".git-submilli-recovery";
 pub(crate) mod removal;
-pub mod storage;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ResolveError {
@@ -373,6 +372,103 @@ impl ContentPath {
             rel,
             placement: self.placement.clone(),
         }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum StorageError {
+    #[error(transparent)]
+    Containment(#[from] ContainError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("unsupported native storage operation: {0}")]
+    Unsupported(&'static str),
+}
+
+/// A checked location and held ancestor handles. Names are journal metadata;
+/// all actual I/O is relative to the returned capabilities.
+pub struct MutationLocation {
+    pub path: ContentPath,
+    pub mount: String,
+    pub parent: String,
+    pub name: String,
+    pub parent_identity: FileIdentity,
+    pub ancestors: Vec<Dir>,
+}
+
+impl Vfs {
+    pub fn mutation_location(
+        &self,
+        guest: &str,
+        follow_final: bool,
+        git: bool,
+    ) -> Result<MutationLocation, StorageError> {
+        let mut path = resolve_content(self, self.cwd(), guest)?;
+        path.writable()?;
+        if path.is_root() {
+            return Err(StorageError::Unsupported("volume root mutation"));
+        }
+        check_mount_points(&path.dir, &path.rel, &path.placement, true, follow_final)?;
+        if follow_final
+            && path
+                .dir
+                .symlink_metadata(&path.rel)
+                .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            path.rel = path.dir.canonicalize(&path.rel)?;
+        }
+        if !git && protected_metadata(&path.rel) {
+            return Err(StorageError::Unsupported("protected metadata"));
+        }
+        let parent = path
+            .rel
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let resolved = path.dir.canonicalize(parent)?;
+        if git
+            && resolved != parent
+            && !(resolved.as_os_str().is_empty() && parent == Path::new("."))
+        {
+            return Err(StorageError::Unsupported("Git metadata aliases"));
+        }
+        if !git && protected_metadata(&resolved) {
+            return Err(StorageError::Unsupported("protected metadata alias"));
+        }
+        let parent = if resolved.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            &resolved
+        };
+        let name = path
+            .rel
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or(StorageError::Unsupported("non-UTF-8 path"))?
+            .to_owned();
+        let parent_name = parent
+            .to_str()
+            .ok_or(StorageError::Unsupported("non-UTF-8 path"))?
+            .to_owned();
+        let parent_identity = FileIdentity::of(&path.dir.open_dir(parent)?.dir_metadata()?)?;
+        let ancestors = parent
+            .ancestors()
+            .map(|ancestor| {
+                path.dir.open_dir(if ancestor.as_os_str().is_empty() {
+                    Path::new(".")
+                } else {
+                    ancestor
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(MutationLocation {
+            mount: path.placement.mount_point().into(),
+            path,
+            parent: parent_name,
+            name,
+            parent_identity,
+            ancestors,
+        })
     }
 }
 
@@ -856,7 +952,7 @@ fn relative(cwd: &str, guest_path: &str) -> Result<PathBuf, ResolveError> {
     Ok(out)
 }
 
-pub(crate) fn protected_metadata(path: &Path) -> bool {
+pub fn protected_metadata(path: &Path) -> bool {
     path.components().any(|part| {
         let name = part.as_os_str().to_string_lossy();
         let options = gix::validate::path::component::Options {
@@ -875,7 +971,7 @@ pub(crate) fn protected_metadata(path: &Path) -> bool {
     })
 }
 
-pub(crate) fn private_recovery_path(path: &Path) -> bool {
+pub fn private_recovery_path(path: &Path) -> bool {
     path.components().any(|part| {
         part.as_os_str()
             .to_string_lossy()

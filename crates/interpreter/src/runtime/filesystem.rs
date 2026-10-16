@@ -3,18 +3,16 @@
 //! Capability checks and fuel admission belong to the host caller. A durable
 //! implementation requires stable operation identities supplied by execution
 //! history; a tracing ticket is not such an identity.
-use super::{QuotaCharge, QuotaExceeded, Vfs};
-pub(crate) mod mutations;
-pub mod native_writer;
-pub mod work;
 use super::fs::{self, ContainError};
 use super::vfs::{Access, Placement, VfsMode};
+use super::{QuotaCharge, QuotaExceeded, Vfs};
+use crate::stdlib::fs::handles::{NativeWriter, TempFile};
 use std::io::{Read, Seek, SeekFrom, Write};
 
 #[derive(Clone, Default)]
 pub struct Invocation {
     pub operation: Option<String>,
-    pub work: Option<std::sync::Arc<work::WorkBudget>>,
+    pub work: Option<std::sync::Arc<super::fuel::WorkBudget>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -34,7 +32,7 @@ pub enum FilesystemError {
     #[error("{0}")]
     Rejected(String),
     #[error(transparent)]
-    Exhausted(#[from] work::Exhausted),
+    Exhausted(#[from] super::fuel::Exhausted),
     #[error("filesystem backend failed: {0}")]
     Backend(Box<dyn std::error::Error + Send + Sync>),
 }
@@ -290,7 +288,8 @@ impl Filesystem for NativeFilesystem {
         recursive: bool,
         budget: &mut dyn MutationBudget,
     ) -> Result<(), FilesystemError> {
-        mutations::remove(&self.vfs, path, recursive, budget).map_err(FilesystemError::Execution)
+        crate::stdlib::fs::native_remove(&self.vfs, path, recursive, budget)
+            .map_err(FilesystemError::Execution)
     }
     async fn move_entry(
         &self,
@@ -299,7 +298,8 @@ impl Filesystem for NativeFilesystem {
         to: &str,
         budget: &mut dyn MutationBudget,
     ) -> Result<(), FilesystemError> {
-        mutations::move_entry(&self.vfs, from, to, budget).map_err(FilesystemError::Execution)
+        crate::stdlib::fs::native_move(&self.vfs, from, to, budget)
+            .map_err(FilesystemError::Execution)
     }
     async fn copy(
         &self,
@@ -309,7 +309,8 @@ impl Filesystem for NativeFilesystem {
         recursive: bool,
         budget: &mut dyn MutationBudget,
     ) -> Result<(), FilesystemError> {
-        mutations::copy(&self.vfs, from, to, recursive, budget).map_err(FilesystemError::Execution)
+        crate::stdlib::fs::native_copy(&self.vfs, from, to, recursive, budget)
+            .map_err(FilesystemError::Execution)
     }
     async fn open_reader(
         &self,
@@ -364,9 +365,9 @@ impl Filesystem for NativeFilesystem {
         }
         let temp_path = path.temp_sibling();
         let file = temp_path.create_new()?;
-        let temp = native_writer::TempFile::created(temp_path, &file)?;
+        let temp = TempFile::created(temp_path, &file)?;
         let quota = path.placement().quota().cloned();
-        Ok(Box::new(native_writer::NativeWriter::new(
+        Ok(Box::new(NativeWriter::new(
             file.into_std(),
             temp,
             path,
