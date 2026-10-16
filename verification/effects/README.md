@@ -7,8 +7,9 @@ the adapter codec; `request`, `recovery_payload` and `outcome` are sealed separa
 with authenticated run/effect/operation/version/field identity. The existing
 sealer includes its format and encryption-key identity.
 
-The shared adapter in `crates/submilli-server/src/adapters/durable_effects.rs`
-operates inside a caller-owned SQLite transaction. Callers perform admission and
+The shared lifecycle in `crates/submilli-durable/src/effects.rs` operates inside
+a caller-owned `UnitOfWork`. The server maps its records through
+`crates/submilli-server/src/adapters/unit_of_work/durable_state.rs`. Callers perform admission and
 resource checks and pin referenced objects in that same transaction. The current
 filesystem caller retains its single-run exclusion, plan/cursor/writer gates and
 run-lifecycle checks. The storage helper alone is not permission to dispatch an
@@ -23,7 +24,7 @@ effect, supersede a pending compound plan or write from a stale execution attemp
 | Retry | Same identity/request/payload/outcome reconciles; conflicts fail | Return recorded outcome without filesystem mutation |
 
 The payload format for `filesystem.mutation`, version 1, includes the workspace,
-optional compound plan and mutation in the request, an engine `Intent` as recovery
+optional compound plan and mutation in the request, a durable filesystem `Intent` as recovery
 payload, and a completed/refused outcome. It validates intent-to-request identity
 when reading. Large file bytes stay in the object store. Records have a 64 KiB
 plaintext bound and a run has at most 10,000 effect rows. These are the existing

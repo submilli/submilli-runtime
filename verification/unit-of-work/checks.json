@@ -1,0 +1,77 @@
+{
+  "module": "DurableUnitOfWork",
+  "constants": {
+    "Fault": "none",
+    "Witness": "none"
+  },
+  "invariants": [
+    "TypeOK",
+    "AtomicAdmissionAndPins",
+    "DropDiscards",
+    "ReadOwnWrites",
+    "CommitBeforeReturn"
+  ],
+  "properties": [],
+  "cases": [
+    {
+      "name": "transaction-safety",
+      "kind": "safety"
+    },
+    {
+      "name": "negative-early-commit",
+      "kind": "negative",
+      "invariant": "AtomicAdmissionAndPins",
+      "constants": {
+        "Fault": "early-commit"
+      }
+    },
+    {
+      "name": "negative-drop-writes",
+      "kind": "negative",
+      "invariant": "DropDiscards",
+      "constants": {
+        "Fault": "drop-writes"
+      }
+    },
+    {
+      "name": "negative-stale-read",
+      "kind": "negative",
+      "invariant": "ReadOwnWrites",
+      "constants": {
+        "Fault": "stale-read"
+      }
+    },
+    {
+      "name": "negative-early-return",
+      "kind": "negative",
+      "invariant": "CommitBeforeReturn",
+      "constants": {
+        "Fault": "early-return"
+      }
+    },
+    {
+      "name": "witness-read-own-writes",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "read-own-writes"
+      }
+    },
+    {
+      "name": "witness-rollback",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "rollback"
+      }
+    },
+    {
+      "name": "witness-lost-ack",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "lost-ack"
+      }
+    }
+  ]
+}

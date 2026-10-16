@@ -212,7 +212,7 @@ pub(super) fn glob(
     let cwd = if absolute {
         "/"
     } else {
-        caller.data().vfs.cwd()
+        caller.data().filesystem.cwd()
     }
     .to_owned();
     let prefix_root = glob_root(pattern);
@@ -547,8 +547,14 @@ fn validate_root(
         {
             return Ok(false);
         }
-        let metadata = match resolve_link(&caller.data().vfs, caller.data().vfs.cwd(), &path)
-            .and_then(|resolved| resolved.symlink_metadata())
+        let metadata = match resolve_link(
+            caller
+                .data()
+                .native_filesystem(crate::runtime::filesystem::NativeOperation::Filesystem)?,
+            caller.data().filesystem.cwd(),
+            &path,
+        )
+        .and_then(|resolved| resolved.symlink_metadata())
         {
             Ok(metadata) => metadata,
             Err(crate::runtime::fs::ContainError::Io(error))
@@ -816,9 +822,9 @@ impl Options {
         let path = match present(caller, val, "path")? {
             Some(v) => {
                 let path = argument(caller, budget, &v)?;
-                normalize(caller.data().vfs.cwd(), &path)?
+                normalize(caller.data().filesystem.cwd(), &path)?
             }
-            None => caller.data().vfs.cwd().to_owned(),
+            None => caller.data().filesystem.cwd().to_owned(),
         };
         let mode = match present(caller, val, "mode")? {
             Some(v) => argument(caller, budget, &v)?,

@@ -399,7 +399,7 @@ impl AppState {
         let generation = database.generation()?;
         let unit_of_work: Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory> =
             Arc::new(crate::adapters::unit_of_work::SqliteUnitOfWorkFactory {
-                database,
+                database: database.clone(),
                 session_root: session_root.clone(),
                 cipher: config.session_cipher.clone(),
             });
@@ -413,14 +413,7 @@ impl AppState {
                     .session_cipher
                     .clone()
                     .context("durable object storage requires the secret-store encryption key")?;
-                Some(
-                    crate::objects::DurableObjects::with_units(
-                        objects,
-                        unit_of_work.clone(),
-                        cipher,
-                    )
-                    .await?,
-                )
+                Some(crate::objects::DurableObjects::open(objects, database.clone(), cipher).await?)
             }
             None => None,
         };

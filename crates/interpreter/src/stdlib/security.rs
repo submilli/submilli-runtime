@@ -106,7 +106,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     },
                 )?;
                 let policy = caller.data().security_check.clone();
-                let cwd = caller.data().vfs.cwd().to_owned();
+                let cwd = caller.data().filesystem.cwd().to_owned();
                 let ticket =
                     crate::stdlib::shared::begin_recorded_call(&*caller, &who, &capability);
                 let site = CallSite::new(ticket, EntryPath::PackageCheck);

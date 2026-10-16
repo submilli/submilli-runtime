@@ -96,3 +96,10 @@ unchanged replacement files, and cleanup only after work drains. The adapter
 must also cover admission failures, source/capability attribution, resource
 quotas, file/directory persistence errors and post-effect fuel settlement; those
 mechanisms are not established by this finite model.
+
+## Extracted implementation boundary
+
+The implementation lives in `crates/submilli-durable/src/recovery/`, `filesystems/` and `journal/`. The server implements the durable
+unit of work and maps records to SQLite. The [unit-of-work model](../unit-of-work/README.md)
+checks the atomic admission-and-retention assumption at this boundary. Existing
+protocol actions, record versions and encryption associated data are unchanged.

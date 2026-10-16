@@ -20,6 +20,7 @@ pub(crate) fn checkpoint(point: &str) {
 
 #[tokio::test]
 async fn crash_child() {
+    submilli_durable::set_test_checkpoint(checkpoint);
     let Some(root) = std::env::var_os("SUBMILLI_OBJECT_CRASH_ROOT") else {
         return;
     };

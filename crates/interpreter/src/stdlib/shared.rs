@@ -138,7 +138,7 @@ pub(crate) fn check_security_call(
         store.as_context().data().security_check.as_ref(),
         capability,
         &context,
-        store.as_context().data().vfs.cwd(),
+        store.as_context().data().filesystem.cwd(),
         CallSite::new(ticket, EntryPath::GatedOp),
     )?;
     Ok(ticket)
@@ -367,8 +367,12 @@ pub fn resolve_content_or_trap(
     guest_path: &str,
     op: &str,
 ) -> wasmtime::Result<ContentPath> {
-    resolve_content(&data.vfs, data.vfs.cwd(), guest_path)
-        .map_err(|err| contain_trap(op, guest_path, &err))
+    resolve_content(
+        data.native_filesystem(native_operation(op))?,
+        data.filesystem.cwd(),
+        guest_path,
+    )
+    .map_err(|err| contain_trap(op, guest_path, &err))
 }
 
 /// Resolve a guest path for an operation that acts on the link itself — the final
@@ -378,8 +382,12 @@ pub fn resolve_link_or_trap(
     guest_path: &str,
     op: &str,
 ) -> wasmtime::Result<LinkPath> {
-    resolve_link(&data.vfs, data.vfs.cwd(), guest_path)
-        .map_err(|err| contain_trap(op, guest_path, &err))
+    resolve_link(
+        data.native_filesystem(native_operation(op))?,
+        data.filesystem.cwd(),
+        guest_path,
+    )
+    .map_err(|err| contain_trap(op, guest_path, &err))
 }
 
 /// Refuse a write into a volume mounted read-only, attributed to the running
@@ -704,5 +712,16 @@ pub(crate) fn optional_number(
             write_boxed_number_struct(caller, number)?.to_anyref(),
         ))),
         None => crate::runtime::prelude::undefined::value(caller),
+    }
+}
+
+fn native_operation(op: &str) -> crate::runtime::filesystem::NativeOperation {
+    use crate::runtime::filesystem::NativeOperation;
+    if op.starts_with("code.") {
+        NativeOperation::Code
+    } else if op.starts_with("http.") {
+        NativeOperation::Download
+    } else {
+        NativeOperation::Filesystem
     }
 }

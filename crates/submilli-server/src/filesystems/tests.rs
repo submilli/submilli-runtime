@@ -1,8 +1,13 @@
 use super::*;
-use crate::domain::durable_object::Retention;
-use crate::objects::DurableObjectConfig;
+use sha2::{Digest, Sha256};
+use submilli_durable::filesystems::workspace_id;
+use submilli_durable::object::ObjectId;
+use submilli_durable::recovery::WorkspaceLayout;
+
+use crate::objects::{DurableObjectConfig, ObjectStoreError};
 use std::collections::BTreeSet;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
+use submilli_durable::object::Retention;
 use submilli_shared::secret_store::SecretCipher;
 mod boundaries;
 pub(crate) mod process;
@@ -21,14 +26,21 @@ impl Fixture {
     }
 
     async fn with_maximum_object_bytes(maximum_object_bytes: u64) -> Self {
-        Self::with_limits(crate::application::durable_objects::ObjectLimits {
+        Self::with_limits(submilli_durable::publications::ObjectLimits {
             maximum_object_bytes,
             ..Default::default()
         })
         .await
     }
 
-    async fn with_limits(limits: crate::application::durable_objects::ObjectLimits) -> Self {
+    async fn with_limits(limits: submilli_durable::publications::ObjectLimits) -> Self {
+        Self::with_filesystem_limit(limits, None).await
+    }
+
+    async fn with_filesystem_limit(
+        limits: submilli_durable::publications::ObjectLimits,
+        maximum_bytes: Option<u64>,
+    ) -> Self {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("objects")).unwrap();
         std::fs::create_dir(root.path().join("ephemeral")).unwrap();
@@ -55,15 +67,26 @@ impl Fixture {
                 .bind(&id).bind(id).execute(connection).await?;
             Ok(())
         })).await.unwrap();
-        let filesystem = DurableFilesystem::retained_ephemeral(
-            &root.path().join("ephemeral"),
-            &run,
-            "owner",
-            database.clone(),
-            objects.clone(),
-        )
-        .await
-        .unwrap();
+        let filesystem = if let Some(maximum_bytes) = maximum_bytes {
+            let directory = root.path().join("workspace");
+            std::fs::create_dir(&directory).unwrap();
+            let vfs = Vfs::external(directory)
+                .unwrap()
+                .with_size_limit(maximum_bytes);
+            DurableFilesystem::open(vfs, &run, "owner", database.clone(), objects.clone())
+                .await
+                .unwrap()
+        } else {
+            DurableFilesystem::retained_ephemeral(
+                &root.path().join("ephemeral"),
+                &run,
+                "owner",
+                database.clone(),
+                objects.clone(),
+            )
+            .await
+            .unwrap()
+        };
         Self {
             root,
             database,
@@ -130,19 +153,19 @@ async fn publication_without_receipt(
 ) {
     let gate = Arc::new(
         filesystem
-            .objects
-            .filesystem_gate
+            .test_objects()
+            .test_gate()
             .clone()
             .lock_owned()
             .await,
     );
     filesystem
-        .journal
+        .test_journal()
         .admit(filesystem.id(), effect, &request)
         .await
         .unwrap();
-    let workspace = filesystem.workspace.clone();
-    let mut source = filesystem.content(&request).unwrap();
+    let workspace = filesystem.test_workspace().clone();
+    let mut source = filesystem.test_content(&request).unwrap();
     let effect = effect.to_owned();
     let intent = blocking(gate.clone(), move || {
         workspace.prepare(&effect, request, &mut source)
@@ -150,12 +173,12 @@ async fn publication_without_receipt(
     .await
     .unwrap();
     filesystem
-        .journal
+        .test_journal()
         .prepared(filesystem.id(), &intent)
         .await
         .unwrap();
-    let workspace = filesystem.workspace.clone();
-    let mut source = filesystem.content(intent.mutation()).unwrap();
+    let workspace = filesystem.test_workspace().clone();
+    let mut source = filesystem.test_content(intent.mutation()).unwrap();
     blocking(gate, move || workspace.apply(&intent, &mut source))
         .await
         .unwrap();
@@ -383,7 +406,7 @@ async fn terminal_cleanup_handles_cancelled_bootstrap_and_missing_cwd() {
     let layout =
         WorkspaceLayout::capture(&fixture.filesystem.vfs().clone().with_cwd("/cwd").unwrap())
             .unwrap();
-    let stored = fixture.filesystem.journal.clone();
+    let stored = fixture.filesystem.test_journal().clone();
     // Store the layout as it would have been admitted, then simulate deletion
     // of cwd before the cleanup's final root unlink.
     let bytes = fixture
@@ -425,7 +448,7 @@ async fn terminal_cleanup_handles_cancelled_bootstrap_and_missing_cwd() {
     let bootstrap = Fixture::new().await;
     let id = bootstrap.filesystem.id().to_owned();
     // No public contents are possible before registration of the full layout.
-    bootstrap.filesystem.workspace.retire().unwrap();
+    bootstrap.filesystem.test_workspace().retire().unwrap();
     std::fs::remove_dir(
         bootstrap
             .filesystem
@@ -452,7 +475,7 @@ async fn terminal_cleanup_handles_cancelled_bootstrap_and_missing_cwd() {
     assert_eq!(
         bootstrap
             .filesystem
-            .journal
+            .test_journal()
             .workspace(&id, "owner")
             .await
             .unwrap()
@@ -469,7 +492,7 @@ async fn terminal_runs_refuse_new_effects_and_wrong_owner_cannot_fence_cleanup()
     assert_eq!(
         fixture
             .filesystem
-            .journal
+            .test_journal()
             .workspace(fixture.filesystem.id(), "owner")
             .await
             .unwrap()
@@ -523,12 +546,12 @@ async fn writer_chunks_survive_pause_and_duplicate_close_never_republishes() {
         .await
         .unwrap();
     resumed
-        .journal
+        .test_journal()
         .closing_writer(
             resumed.id(),
             &resource,
             &close,
-            resumed.objects.maximum_bytes(),
+            resumed.test_objects().maximum_bytes(),
         )
         .await
         .unwrap();
@@ -641,15 +664,15 @@ async fn compound_plan_continues_a_committed_prefix_and_replays_a_failure() {
     ];
     fixture
         .filesystem
-        .journal
+        .test_journal()
         .plan(fixture.filesystem.id(), &plan, &steps)
         .await
         .unwrap();
-    let gate = Arc::new(fixture.objects.filesystem_gate.clone().lock_owned().await);
+    let gate = Arc::new(fixture.objects.test_gate().clone().lock_owned().await);
     let effect = workspace_id(&format!("plan:{plan}:0"), fixture.filesystem.id());
     fixture
         .filesystem
-        .execute_step(gate.clone(), &effect, steps[0].clone(), Some(&plan), false)
+        .test_execute_step(gate.clone(), &effect, steps[0].clone(), Some(&plan), false)
         .await
         .unwrap();
     drop(gate);
@@ -808,16 +831,16 @@ async fn prepared_git_publication_recovers_the_same_commit() {
     let plan = uuid::Uuid::new_v4().to_string();
     fixture
         .filesystem
-        .journal
+        .test_journal()
         .plan(fixture.filesystem.id(), &plan, &steps)
         .await
         .unwrap();
-    let gate = Arc::new(fixture.objects.filesystem_gate.clone().lock_owned().await);
+    let gate = Arc::new(fixture.objects.test_gate().clone().lock_owned().await);
     for (index, step) in steps.iter().take(2).enumerate() {
         let effect = workspace_id(&format!("plan:{plan}:{index}"), fixture.filesystem.id());
         fixture
             .filesystem
-            .execute_step(gate.clone(), &effect, step.clone(), Some(&plan), true)
+            .test_execute_step(gate.clone(), &effect, step.clone(), Some(&plan), true)
             .await
             .unwrap();
     }
@@ -853,7 +876,7 @@ async fn prepared_git_publication_recovers_the_same_commit() {
 
 #[tokio::test]
 async fn filesystem_uses_the_shared_run_effect_identity_and_payload() {
-    use crate::adapters::durable_effects::{self as effects, EffectKey};
+    use submilli_durable::effects::{self, EffectKey};
 
     let fixture = Fixture::new().await;
     let content = fixture.capture(b"shared effect bytes").await;
@@ -870,20 +893,350 @@ async fn filesystem_uses_the_shared_run_effect_identity_and_payload() {
         .unwrap();
     let run = fixture.run.clone();
     let workspace = fixture.filesystem.id().to_owned();
-    let sealer = fixture.objects.sealer();
-    fixture.database.transaction(move |connection| Box::pin(async move {
-        let key = EffectKey { run: &run, effect: "bb54bf79-dcbc-4c79-9483-7a498bf08f0a", operation: "filesystem.mutation", version: 1 };
-        let record = effects::load(connection, &sealer, &key).await?.unwrap();
-        let request: serde_json::Value = serde_json::from_slice(&record.request).unwrap();
-        assert_eq!(request["workspace"], workspace);
-        let intent = interpreter::runtime::fs::recovery::Intent::decode(record.recovery_payload.as_ref().unwrap()).unwrap();
-        assert_eq!(intent.effect(), "bb54bf79-dcbc-4c79-9483-7a498bf08f0a");
-        assert!(record.outcome.is_some());
-        let foreign = EffectKey { operation: "other.operation", ..key };
-        assert!(effects::admit(connection, &sealer, &foreign, &record.request).await.is_err());
-        let duplicate_table: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='durable_filesystem_effects')")
-            .fetch_one(connection).await?;
-        assert!(!duplicate_table);
+    let mut unit = fixture.objects.units(fixture.database.clone())()
+        .await
+        .unwrap();
+    let key = EffectKey {
+        run: &run,
+        effect: "bb54bf79-dcbc-4c79-9483-7a498bf08f0a",
+        operation: "filesystem.mutation",
+        version: 1,
+    };
+    let record = effects::load(unit.as_mut(), &key).await.unwrap().unwrap();
+    let request: serde_json::Value = serde_json::from_slice(&record.request).unwrap();
+    assert_eq!(request["workspace"], workspace);
+    let intent =
+        submilli_durable::recovery::Intent::decode(record.recovery_payload.as_ref().unwrap())
+            .unwrap();
+    assert_eq!(intent.effect(), "bb54bf79-dcbc-4c79-9483-7a498bf08f0a");
+    assert!(record.outcome.is_some());
+    let foreign = EffectKey {
+        operation: "other.operation",
+        ..key
+    };
+    assert!(
+        effects::admit(unit.as_mut(), &foreign, &record.request)
+            .await
+            .is_err()
+    );
+    drop(unit);
+    let duplicate_table: bool = fixture.database.read(|connection| Box::pin(async move {
+        Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='durable_filesystem_effects')").fetch_one(connection).await?)
+    })).await.unwrap();
+    assert!(!duplicate_table);
+}
+
+async fn blocking<T: Send + 'static>(
+    guard: Arc<tokio::sync::OwnedMutexGuard<()>>,
+    operation: impl FnOnce() -> Result<T, RecoveryError> + Send + 'static,
+) -> Result<T, FilesystemError> {
+    tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        operation()
+    })
+    .await
+    .map_err(|e| FilesystemError::Worker(e.to_string()))?
+    .map_err(Into::into)
+}
+
+#[tokio::test]
+async fn interpreter_uses_durable_backend_and_replay_does_not_repeat_append() {
+    let fixture = Fixture::new().await;
+    let source = r#"import { appendText } from "submilli:fs";
+        function main(): void { appendText("/port.txt", "once"); }"#;
+    run_backend(
+        &fixture,
+        source,
+        Some("00000000-0000-4000-8000-000000000031"),
+    )
+    .await
+    .unwrap();
+    run_backend(
+        &fixture,
+        source,
+        Some("00000000-0000-4000-8000-000000000031"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read(fixture.filesystem.vfs().root().join("port.txt")).unwrap(),
+        b"once"
+    );
+    let factory = fixture.objects.units(fixture.database.clone());
+    let mut unit = factory().await.unwrap();
+    assert_eq!(unit.effect_count(&fixture.run).await.unwrap(), 1);
+    let effect = unit
+        .get_effect(&fixture.run, "00000000-0000-4000-8000-000000000031")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(effect.state(), "done");
+    drop(unit);
+    let error = run_backend(&fixture, source, None).await.unwrap_err();
+    assert!(
+        error.to_string().contains("stable operation identity"),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read(fixture.filesystem.vfs().root().join("port.txt")).unwrap(),
+        b"once"
+    );
+}
+
+#[tokio::test]
+async fn selected_durable_backend_refuses_native_bypasses_before_work() {
+    use interpreter::runtime::{StoreData, filesystem::NativeOperation};
+    let fixture = Fixture::new().await;
+    let data = StoreData::with_filesystem(Arc::new(fixture.filesystem.0.clone()), 64 << 20);
+    for operation in [
+        NativeOperation::Code,
+        NativeOperation::Download,
+        NativeOperation::Git,
+    ] {
+        assert!(data.native_filesystem(operation).is_err());
+    }
+    let source = r#"import { mkdir } from "submilli:fs";
+        function main(): void { mkdir("/unprepared/child", true); }"#;
+    assert!(
+        run_backend(
+            &fixture,
+            source,
+            Some("00000000-0000-4000-8000-000000000032")
+        )
+        .await
+        .is_err()
+    );
+    assert!(std::fs::read(fixture.filesystem.vfs().root().join("unprepared/child")).is_err());
+    let mut unit = fixture.objects.begin().await.unwrap();
+    assert_eq!(unit.effect_count(&fixture.run).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn failed_effect_admission_rolls_back_its_object_retention() {
+    let fixture = Fixture::new().await;
+    let content = fixture.capture(b"atomic").await;
+    fixture.database.transaction(|connection| Box::pin(async move {
+        sqlx::query("CREATE TRIGGER refuse_effect BEFORE INSERT ON durable_effects BEGIN SELECT RAISE(FAIL, 'injected admission failure'); END")
+            .execute(connection).await?;
         Ok(())
     })).await.unwrap();
+    assert!(
+        fixture
+            .filesystem
+            .execute(
+                "00000000-0000-4000-8000-000000000033",
+                Mutation::Write {
+                    path: "/atomic".into(),
+                    content: content.clone()
+                }
+            )
+            .await
+            .is_err()
+    );
+    let mut unit = fixture.objects.begin().await.unwrap();
+    let object = unit
+        .get_object(&ObjectId::parse(content.id).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        !object
+            .retention()
+            .contains(&Retention::Workspace(fixture.filesystem.id().into()))
+    );
+    assert_eq!(unit.effect_count(&fixture.run).await.unwrap(), 0);
+    drop(unit);
+    assert!(std::fs::read(fixture.filesystem.vfs().root().join("atomic")).is_err());
+}
+
+async fn run_backend(
+    fixture: &Fixture,
+    source: &str,
+    operation: Option<&str>,
+) -> wasmtime::Result<Option<String>> {
+    run_backend_fueled(fixture, source, operation, None).await
+}
+
+async fn run_backend_fueled(
+    fixture: &Fixture,
+    source: &str,
+    operation: Option<&str>,
+    fuel: Option<u64>,
+) -> wasmtime::Result<Option<String>> {
+    use interpreter::runtime::{
+        RuntimeConfig, StoreData, dispatch_main_async, install_runtime_async,
+    };
+    let compiled =
+        interpreter::compile_script(source, "backend.ts", interpreter::FileId(0), &[], &[])
+            .unwrap();
+    let config = RuntimeConfig::default();
+    let engine = config.engine().unwrap();
+    let mut data = StoreData::with_filesystem(Arc::new(fixture.filesystem.0.clone()), 64 << 20);
+    data.filesystem_invocation.operation = operation.map(str::to_owned);
+    let mut store = config.store(&engine, data).unwrap();
+    let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
+    let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+    install_runtime_async(&mut linker, &mut store)
+        .await
+        .unwrap();
+    let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+    if let Some(fuel) = fuel {
+        store.set_fuel(fuel).unwrap();
+    }
+    dispatch_main_async(&mut store, &instance).await
+}
+
+#[tokio::test]
+async fn durable_refusals_remain_catchable_in_guest_code() {
+    let fixture = Fixture::new().await;
+    std::fs::write(fixture.filesystem.vfs().root().join("existing"), b"keep").unwrap();
+    let source = r#"import { mkdir } from "submilli:fs";
+        function main(): void {
+            let caught = false;
+            try { mkdir("/existing", false); } catch (error: Error) { caught = true; }
+            assert(caught, "a recorded preflight refusal is catchable");
+        }"#;
+    run_backend(
+        &fixture,
+        source,
+        Some("00000000-0000-4000-8000-000000000041"),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn durable_listing_keeps_native_sizes_and_consecutive_subtrees() {
+    let fixture = Fixture::new().await;
+    let root = fixture.filesystem.vfs().root();
+    std::fs::create_dir(root.join("a")).unwrap();
+    std::fs::write(root.join("a/z"), "child").unwrap();
+    std::fs::write(root.join("a.txt"), "sibling").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("a.txt", root.join("link")).unwrap();
+    let source = r#"import { list } from "submilli:fs";
+        function main(): void {
+            let sequence = "";
+            for (const entry of list("/", true)) {
+                if (entry.kind !== "file") { assert(entry.size === 0, "non-file size"); }
+                sequence += entry.name + ",";
+            }
+            assert(sequence.indexOf("a,z,") >= 0, "directory subtree stays consecutive");
+        }"#;
+    run_backend(
+        &fixture,
+        source,
+        Some("00000000-0000-4000-8000-000000000042"),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn durable_append_and_eager_listing_admit_their_own_fuel() {
+    let fixture = Fixture::new().await;
+    let root = fixture.filesystem.vfs().root();
+    let original = vec![b'x'; 64 * 1024];
+    std::fs::write(root.join("large"), &original).unwrap();
+    let append = r#"import { appendText } from "submilli:fs";
+        function main(): void { appendText("/large", ""); }"#;
+    let error = run_backend_fueled(
+        &fixture,
+        append,
+        Some("00000000-0000-4000-8000-000000000043"),
+        Some(10_000),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.is::<wasmtime::Trap>(), "{error}");
+    assert_eq!(std::fs::read(root.join("large")).unwrap(), original);
+    // The admitted identity is still resumable after fuel is replenished.
+    run_backend(
+        &fixture,
+        append,
+        Some("00000000-0000-4000-8000-000000000043"),
+    )
+    .await
+    .unwrap();
+    for index in 0..100 {
+        std::fs::write(root.join(format!("entry-{index}")), "").unwrap();
+    }
+    let listing = r#"import { list } from "submilli:fs";
+        function main(): void { list("/", false); }"#;
+    let error = run_backend_fueled(
+        &fixture,
+        listing,
+        Some("00000000-0000-4000-8000-000000000044"),
+        Some(10_000),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.is::<wasmtime::Trap>(), "{error}");
+}
+
+#[tokio::test]
+async fn payload_capture_holds_retirement_exclusion_at_every_transaction() {
+    use interpreter::runtime::filesystem::{Filesystem, Invocation};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let fixture = Fixture::new().await;
+    let active = Arc::new(AtomicBool::new(false));
+    let checked = Arc::new(AtomicUsize::new(0));
+    let gate = fixture.objects.test_gate().clone();
+    let delegate = fixture.objects.units(fixture.database.clone());
+    let factory: submilli_durable::UnitFactory = Arc::new({
+        let active = active.clone();
+        let checked = checked.clone();
+        move || {
+            if active.load(Ordering::SeqCst) {
+                assert!(
+                    gate.try_lock().is_err(),
+                    "retirement must not interleave with capture admission or publication"
+                );
+                checked.fetch_add(1, Ordering::SeqCst);
+            }
+            delegate()
+        }
+    });
+    let filesystem = submilli_durable::filesystems::DurableFilesystem::open(
+        fixture.filesystem.vfs().clone(),
+        &fixture.run,
+        "owner",
+        factory,
+        fixture.objects.inner().clone(),
+    )
+    .await
+    .unwrap();
+    active.store(true, Ordering::SeqCst);
+    filesystem
+        .write(
+            &Invocation {
+                operation: Some("00000000-0000-4000-8000-000000000045".into()),
+                ..Default::default()
+            },
+            "/captured",
+            b"retained".to_vec(),
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(checked.load(Ordering::SeqCst) > 1);
+}
+
+#[tokio::test]
+async fn durable_quota_scan_stops_before_mutation_and_resumes_with_fuel() {
+    let fixture = Fixture::with_filesystem_limit(Default::default(), Some(1 << 20)).await;
+    let root = fixture.filesystem.vfs().root();
+    for index in 0..100 {
+        std::fs::write(root.join(format!("entry-{index}")), "").unwrap();
+    }
+    let source = r#"import { mkdir } from "submilli:fs";
+        function main(): void { mkdir("/created", false); }"#;
+    let operation = Some("00000000-0000-4000-8000-000000000045");
+    let error = run_backend_fueled(&fixture, source, operation, Some(10_000))
+        .await
+        .unwrap_err();
+    assert!(error.is::<wasmtime::Trap>(), "{error}");
+    assert!(!root.join("created").exists());
+    run_backend(&fixture, source, operation).await.unwrap();
+    assert!(root.join("created").is_dir());
 }

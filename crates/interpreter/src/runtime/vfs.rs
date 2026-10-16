@@ -333,7 +333,7 @@ impl Vfs {
         }
         let dir = open_root(&root)?;
         let identity = dir_identity(&dir, Path::new("."), &dir.dir_metadata()?)?;
-        let recovery_protected = dir.try_exists(crate::runtime::fs::recovery::PRIVATE)?;
+        let recovery_protected = dir.try_exists(crate::runtime::fs::RECOVERY_DIRECTORY)?;
         Ok(Self {
             root,
             mode,
@@ -522,7 +522,7 @@ impl Vfs {
         )
         .map_err(MountError::Io)?;
         self.recovery_protected |= dir
-            .try_exists(crate::runtime::fs::recovery::PRIVATE)
+            .try_exists(crate::runtime::fs::RECOVERY_DIRECTORY)
             .map_err(MountError::Io)?;
         let mount = Mount {
             guest: Arc::from(spec.guest_path.as_str()),
@@ -791,8 +791,33 @@ fn for_each_regular_file(
     root: &Dir,
     max_entries: usize,
     skip_vanished: bool,
-    mut visit: impl FnMut(FileIdentity, u64),
+    visit: impl FnMut(FileIdentity, u64),
 ) -> io::Result<()> {
+    walk_regular_files(root, max_entries, skip_vanished, || Ok(()), visit)
+}
+
+/// Enumerate regular files, admitting the root and each entry before inspecting it.
+/// The callback can stop traversal with the caller's typed resource-limit error.
+pub fn regular_files_with_budget<E: From<io::Error>>(
+    root: &Dir,
+    max_entries: usize,
+    charge_entry: impl FnMut() -> Result<(), E>,
+) -> Result<Vec<(FileIdentity, u64)>, E> {
+    let mut files = Vec::new();
+    walk_regular_files(root, max_entries, false, charge_entry, |file, bytes| {
+        files.push((file, bytes));
+    })?;
+    Ok(files)
+}
+
+fn walk_regular_files<E: From<io::Error>>(
+    root: &Dir,
+    max_entries: usize,
+    skip_vanished: bool,
+    mut charge_entry: impl FnMut() -> Result<(), E>,
+    mut visit: impl FnMut(FileIdentity, u64),
+) -> Result<(), E> {
+    charge_entry()?;
     let mut entries: usize = 0;
     let mut open: Vec<cap_std::fs::ReadDir> = vec![root.entries()?];
     while let Some(dir) = open.last_mut() {
@@ -800,13 +825,15 @@ fn for_each_regular_file(
             open.pop();
             continue;
         };
+        charge_entry()?;
         let entry = entry?;
         entries += 1;
         if entries > max_entries {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("more than {max_entries} entries"),
-            ));
+            )
+            .into());
         }
         let Some(kind) = vanished(entry.file_type(), skip_vanished)? else {
             continue;
@@ -816,7 +843,8 @@ fn for_each_regular_file(
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("directories nested more than {MAX_MEASURED_DEPTH} deep"),
-                ));
+                )
+                .into());
             }
             let Some(child) = vanished(
                 entry.open_dir().and_then(|dir| dir.entries()),

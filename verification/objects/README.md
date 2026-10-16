@@ -275,3 +275,10 @@ Multi-node ownership and stale writers remain in SUB-1798/1799. EFS/S3 adapters
 must establish their own publication/persistence contract, persistent reader and
 backup pins, collection exclusion and fencing. Local POSIX sync/rename rules and
 the disappearance of process-local readers cannot simply be carried over to HA.
+
+## Extracted implementation boundary
+
+The implementation lives in `crates/submilli-durable/src/object.rs`, `publications.rs`, `objects.rs` and `local_objects.rs`. The server implements the durable
+unit of work and maps records to SQLite. The [unit-of-work model](../unit-of-work/README.md)
+checks the atomic admission-and-retention assumption at this boundary. Existing
+protocol actions, record versions and encryption associated data are unchanged.

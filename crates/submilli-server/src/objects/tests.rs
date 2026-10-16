@@ -1,6 +1,9 @@
 use super::*;
-use crate::domain::durable_object::{CollectionState, PublicationState};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
+use std::io::{Cursor, Read, Write};
+use submilli_durable::object::Retention;
+use submilli_durable::object::{CollectionState, PublicationState};
 use tempfile::TempDir;
 
 mod cancellation;
@@ -49,13 +52,9 @@ impl Fixture {
             .join("objects")
             .join(format!("{}.{suffix}", id.as_str()))
     }
-    async fn row(&self, id: &ObjectId) -> crate::domain::durable_object::DurableObject {
-        let units = crate::adapters::unit_of_work::for_sessions(
-            self.database.clone(),
-            PathBuf::new(),
-            Some(cipher()),
-        );
-        let mut unit = units.begin().await.unwrap();
+    async fn row(&self, id: &ObjectId) -> submilli_durable::object::DurableObject {
+        let units = crate::adapters::unit_of_work::durable::units(self.database.clone(), cipher());
+        let mut unit = (units)().await.unwrap();
         unit.get_object(id).await.unwrap().unwrap()
     }
 }
@@ -145,15 +144,10 @@ async fn bind_rollback_and_lost_ack_reuse_one_reference_and_accounting() {
         .publish(&id, Cursor::new(vec![9; 30]))
         .await
         .unwrap();
-    let units = crate::adapters::unit_of_work::for_sessions(
-        fixture.database.clone(),
-        PathBuf::new(),
-        Some(cipher()),
-    );
-    let mut unit = units.begin().await.unwrap();
+    let units = crate::adapters::unit_of_work::durable::units(fixture.database.clone(), cipher());
+    let mut unit = (units)().await.unwrap();
     fixture
         .store
-        .publications
         .bind_in(unit.as_mut(), &prepared, retention())
         .await
         .unwrap();
@@ -166,10 +160,9 @@ async fn bind_rollback_and_lost_ack_reuse_one_reference_and_accounting() {
         fixture.row(&id).await.publication(),
         PublicationState::Pending
     );
-    let mut unit = units.begin().await.unwrap();
+    let mut unit = (units)().await.unwrap();
     let first = fixture
         .store
-        .publications
         .bind_in(unit.as_mut(), &prepared, retention())
         .await
         .unwrap();
@@ -277,12 +270,8 @@ async fn deletion_claim_is_resumed_after_restart() {
         .await
         .unwrap();
     fixture.store.abandon(&id).await.unwrap();
-    let units = crate::adapters::unit_of_work::for_sessions(
-        fixture.database.clone(),
-        PathBuf::new(),
-        Some(cipher()),
-    );
-    let mut unit = units.begin().await.unwrap();
+    let units = crate::adapters::unit_of_work::durable::units(fixture.database.clone(), cipher());
+    let mut unit = (units)().await.unwrap();
     let mut object = unit.get_object(&id).await.unwrap().unwrap();
     object.collect().unwrap();
     unit.save_object(object).await.unwrap();

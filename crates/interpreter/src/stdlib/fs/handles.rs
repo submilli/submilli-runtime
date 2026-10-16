@@ -13,16 +13,18 @@
 use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+#[cfg(test)]
+use std::io::Write;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use cap_std::fs::{Dir, DirEntry, ReadDir};
 
-use crate::runtime::fs::{ContainError, ContentPath, FileIdentity};
+use crate::runtime::fs::ContentPath;
 use crate::runtime::limits::{MemoryCapExceeded, TenantLimits};
-use crate::runtime::{DiskQuota, Holder, OpenFileGuard, QuotaCharge, QuotaExceeded};
+use crate::runtime::{DiskQuota, OpenFileGuard};
 
 /// Footprint charged per reader/writer, matching the default `BufReader`/`BufWriter`
 /// capacity. Byte readers add their `chunk_size` working buffer on top.
@@ -81,7 +83,7 @@ pub trait Closable: Send + Sync {
 
 /// Line iterator over a file. `close()` and `Drop` both free the fd and refund bytes.
 pub struct ChargedLineReader {
-    reader: Option<BufReader<File>>,
+    reader: Option<BufReader<Box<dyn crate::runtime::filesystem::FileReader>>>,
     buf: Vec<u8>,
     bom_handled: bool,
     /// OS-read bytes (including buffered read-ahead) and scanned line bytes,
@@ -96,7 +98,7 @@ pub struct ChargedLineReader {
 
 impl ChargedLineReader {
     pub fn new(
-        reader: BufReader<File>,
+        reader: BufReader<Box<dyn crate::runtime::filesystem::FileReader>>,
         limits: &TenantLimits,
         held: Option<OpenFileGuard>,
     ) -> Result<Self, MemoryCapExceeded> {
@@ -215,7 +217,7 @@ impl Closable for Option<ChargedLineReader> {
 
 /// Fixed-size chunk iterator over a file.
 pub struct ChargedByteReader {
-    file: Option<File>,
+    file: Option<Box<dyn crate::runtime::filesystem::FileReader>>,
     chunk_size: usize,
     charge: ByteCharge,
     /// Keeps the file's bytes counted against the size limit while it is open,
@@ -225,7 +227,7 @@ pub struct ChargedByteReader {
 
 impl ChargedByteReader {
     pub fn new(
-        file: File,
+        file: Box<dyn crate::runtime::filesystem::FileReader>,
         chunk_size: usize,
         limits: &TenantLimits,
         held: Option<OpenFileGuard>,
@@ -393,7 +395,7 @@ impl ContainedWalk {
         })
     }
 
-    fn next_entry(&mut self) -> Option<WalkEntry> {
+    pub(crate) fn next_entry(&mut self) -> Option<WalkEntry> {
         loop {
             let level = self.stack.last_mut()?;
             match level.iter.as_mut().map(Iterator::next) {
@@ -529,20 +531,28 @@ pub fn kind_of(ft: &cap_std::fs::FileType) -> &'static str {
 
 /// Directory walker (flat or recursive).
 pub struct ChargedDirIter {
-    walk: Option<ContainedWalk>,
+    walk: Option<Box<dyn crate::runtime::filesystem::DirectoryReader>>,
     charge: ByteCharge,
 }
 
 impl ChargedDirIter {
-    pub fn new(walk: ContainedWalk, limits: &TenantLimits) -> Result<Self, MemoryCapExceeded> {
+    pub fn new(
+        walk: Box<dyn crate::runtime::filesystem::DirectoryReader>,
+        limits: &TenantLimits,
+    ) -> Result<Self, MemoryCapExceeded> {
         Ok(Self {
+            charge: ByteCharge::new(limits, HANDLE_BUF_BYTES.max(walk.retained_bytes()))?,
             walk: Some(walk),
-            charge: ByteCharge::new(limits, HANDLE_BUF_BYTES)?,
         })
     }
 
     pub fn next_entry(&mut self) -> Option<WalkEntry> {
-        self.walk.as_mut().and_then(ContainedWalk::next_entry)
+        self.walk.as_mut()?.next_entry().map(|entry| WalkEntry {
+            name: entry.name,
+            guest_path: entry.path,
+            kind: entry.kind,
+            size: entry.bytes,
+        })
     }
 
     pub fn close(&mut self) {
@@ -551,73 +561,14 @@ impl ChargedDirIter {
     }
 }
 
-/// Buffered writer to a temp sibling file. Explicit [`close`](Self::close) fsyncs and
-/// atomically renames it onto `final_path`; `Drop` (the safety net for an un-`close`d
-/// writer) discards the temp file without renaming, removing it only while its name
-/// still refers to the writer's file.
+use crate::runtime::filesystem::native_writer::NativeWriter;
+pub use crate::runtime::filesystem::native_writer::{TempFile, WriteError};
+/// Compatibility wrapper for native writer consumers. The native algorithm is
+/// shared with the filesystem backend; this wrapper only owns host memory.
 pub struct ChargedFileWriter {
-    /// `None` once the writer is closed.
-    open: Option<OpenWrite>,
-    /// Both sides stay contained paths for the whole lifetime of the writer. The commit
-    /// happens through the same handle the open resolved against, so a link swapped over
-    /// the parent between `writer()` and `close()` cannot redirect it — and the drop path
-    /// cannot unlink something under the server's working directory.
-    temp: TempFile,
-    final_path: ContentPath,
+    writer: NativeWriter,
     charge: ByteCharge,
 }
-
-/// The temp file a writer streams into. The program can reach it by name while the
-/// writer is open, so before committing or discarding it, the writer checks that the
-/// name still refers to the file it created.
-pub struct TempFile {
-    path: ContentPath,
-    identity: FileIdentity,
-}
-
-impl TempFile {
-    /// The temp file just created at `path` and opened as `file`.
-    pub fn created(path: ContentPath, file: &cap_std::fs::File) -> std::io::Result<Self> {
-        Ok(Self {
-            path,
-            identity: FileIdentity::of(&file.metadata()?)?,
-        })
-    }
-
-    fn is_intact(&self) -> Result<bool, ContainError> {
-        self.path.refers_to(self.identity)
-    }
-}
-
-/// An open writer's buffer and its claim on the VFS's size limit. Program code runs
-/// between writes, so the claim replaces nothing up front: every byte written counts
-/// until `close` covers the file it replaces.
-struct OpenWrite {
-    writer: BufWriter<File>,
-    disk_charge: QuotaCharge,
-    /// Registers the temp file as the writer's own, so a removal of it by name
-    /// leaves its bytes for the writer to settle.
-    held: Option<OpenFileGuard>,
-}
-
-/// Why a write through a [`ChargedFileWriter`] failed.
-#[derive(Debug)]
-pub enum WriteError {
-    Io(std::io::Error),
-    Contain(ContainError),
-    Full(QuotaExceeded),
-}
-
-impl std::fmt::Display for WriteError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            WriteError::Io(e) => e.fmt(f),
-            WriteError::Contain(e) => e.fmt(f),
-            WriteError::Full(e) => e.fmt(f),
-        }
-    }
-}
-
 impl ChargedFileWriter {
     pub fn new(
         file: File,
@@ -626,142 +577,56 @@ impl ChargedFileWriter {
         limits: &TenantLimits,
         quota: Option<Arc<DiskQuota>>,
     ) -> Result<Self, MemoryCapExceeded> {
-        let held = quota
-            .as_ref()
-            .map(|quota| quota.hold(temp.identity, Holder::Writer));
         Ok(Self {
-            open: Some(OpenWrite {
-                writer: BufWriter::new(file),
-                disk_charge: QuotaCharge::new(quota, None),
-                held,
-            }),
-            temp,
-            final_path,
+            writer: NativeWriter::new(file, temp, final_path, quota),
             charge: ByteCharge::new(limits, HANDLE_BUF_BYTES)?,
         })
     }
-
     pub fn write_line(&mut self, line: &str) -> Result<(), WriteError> {
-        let open = self.reserve(line.len() as u64 + 1)?;
-        writeln!(open.writer, "{line}").map_err(WriteError::Io)
+        self.writer.write_line(line)
     }
-
     pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<(), WriteError> {
-        let open = self.reserve(bytes.len() as u64)?;
-        open.writer.write_all(bytes).map_err(WriteError::Io)
+        self.writer.write_bytes(bytes)
     }
-
-    fn reserve(&mut self, bytes: u64) -> Result<&mut OpenWrite, WriteError> {
-        let open = self
-            .open
-            .as_mut()
-            .ok_or_else(|| WriteError::Io(std::io::Error::other("writer already closed")))?;
-        open.disk_charge.reserve(bytes).map_err(WriteError::Full)?;
-        Ok(open)
-    }
-
-    /// Flush, fsync, and atomically rename temp→final. Idempotent: a second call after a
-    /// successful close is a no-op.
     pub fn close(&mut self) -> Result<(), WriteError> {
-        let Some(open) = self.open.take() else {
-            return Ok(());
-        };
-        let result = finalize(open, &self.temp, &self.final_path);
+        let result = self.writer.close();
         self.charge.release();
         result
     }
 }
 
-impl Drop for ChargedFileWriter {
-    fn drop(&mut self) {
-        if let Some(open) = self.open.take() {
-            // Discard the temp file rather than rename it: a GC-timed rename would be
-            // non-deterministic.
-            let unlinked = open
-                .writer
-                .into_inner()
-                .ok()
-                .is_some_and(|file| is_unlinked(&file));
-            discard_temp(&self.temp, open.disk_charge, unlinked);
-            drop(open.held);
-        }
+/// A guest writer holds only the selected backend and its bounded host buffer.
+pub struct BackendFileWriter {
+    writer: Box<dyn crate::runtime::filesystem::FileWriter>,
+    charge: ByteCharge,
+}
+impl BackendFileWriter {
+    pub fn new(
+        writer: Box<dyn crate::runtime::filesystem::FileWriter>,
+        limits: &TenantLimits,
+    ) -> Result<Self, MemoryCapExceeded> {
+        Ok(Self {
+            writer,
+            charge: ByteCharge::new(limits, HANDLE_BUF_BYTES)?,
+        })
     }
-}
-
-/// Whether `file` has no name left, so its data goes once every handle on it
-/// closes.
-fn is_unlinked(file: &File) -> bool {
-    cap_std::fs::Metadata::from_file(file)
-        .is_ok_and(|meta| crate::runtime::fs::link_count(&meta) == Some(0))
-}
-
-/// Remove an uncommitted temp file and settle its disk charge. The program can reach
-/// the temp file by name while the writer is open. If the name no longer refers to
-/// the writer's file, it was moved or replaced: nothing is removed, and its bytes
-/// stay counted while they may still be on disk under another name. Once the file
-/// has no name at all, whether removed here or by the program, its bytes go when
-/// the last handle on it closes.
-fn discard_temp(temp: &TempFile, disk_charge: QuotaCharge, unlinked: bool) {
-    let removed = temp.is_intact().unwrap_or(false) && temp.path.remove_file().is_ok();
-    if removed || unlinked {
-        disk_charge.release_when_closed(temp.identity);
-    } else {
-        disk_charge.keep();
+    pub async fn write(
+        &mut self,
+        invocation: &crate::runtime::filesystem::Invocation,
+        bytes: Vec<u8>,
+    ) -> Result<(), crate::runtime::filesystem::FilesystemError> {
+        self.writer.write(invocation, bytes).await
     }
-}
-
-/// Commit the temp file over the final one. Any failure discards the temp file.
-fn finalize(open: OpenWrite, temp: &TempFile, final_path: &ContentPath) -> Result<(), WriteError> {
-    let OpenWrite {
-        writer,
-        mut disk_charge,
-        held,
-    } = open;
-    let committed = match flush_and_sync(writer) {
-        Ok(unlinked) => {
-            let renamed = rename_into_place(temp, final_path, &mut disk_charge);
-            match renamed {
-                Ok(()) => disk_charge.commit(),
-                Err(_) => discard_temp(temp, disk_charge, unlinked),
-            }
-            renamed
+    pub async fn close(
+        &mut self,
+        invocation: &crate::runtime::filesystem::Invocation,
+    ) -> Result<(), crate::runtime::filesystem::FilesystemError> {
+        let result = self.writer.close(invocation).await;
+        if self.writer.is_closed() {
+            self.charge.release();
         }
-        Err(err) => {
-            discard_temp(temp, disk_charge, false);
-            Err(err)
-        }
-    };
-    drop(held);
-    committed
-}
-
-/// Flush and sync the writer's file and close it, reporting whether the file has no
-/// name left. Closing before the rename lets Windows handles release; unix `rename`
-/// over an open file works either way.
-fn flush_and_sync(writer: BufWriter<File>) -> Result<bool, WriteError> {
-    let mut file = writer
-        .into_inner()
-        .map_err(|e| WriteError::Io(e.into_error()))?;
-    file.flush().map_err(WriteError::Io)?;
-    file.sync_all().map_err(WriteError::Io)?;
-    Ok(is_unlinked(&file))
-}
-
-/// Rename the temp file over the final one, first covering what it replaces.
-fn rename_into_place(
-    temp: &TempFile,
-    final_path: &ContentPath,
-    disk_charge: &mut QuotaCharge,
-) -> Result<(), WriteError> {
-    if !temp.is_intact().map_err(WriteError::Contain)? {
-        return Err(WriteError::Io(std::io::Error::other(
-            "the writer's temporary file was moved or replaced",
-        )));
+        result
     }
-    disk_charge
-        .cover(final_path.regular_file())
-        .map_err(WriteError::Full)?;
-    temp.path.rename_to(final_path).map_err(WriteError::Contain)
 }
 
 impl Closable for ChargedLineReader {
@@ -786,6 +651,27 @@ impl Closable for ChargedDirIter {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn failed_native_backend_close_refunds_a_discarded_buffer() {
+        use crate::runtime::filesystem::{Filesystem, Invocation, NativeFilesystem};
+        let root = tempfile::tempdir().unwrap();
+        let filesystem = NativeFilesystem::new(
+            crate::runtime::Vfs::external(root.path().to_path_buf()).unwrap(),
+        );
+        let invocation = Invocation::default();
+        let limits = TenantLimits::new(64 * 1024);
+        let writer = filesystem
+            .open_writer(&invocation, "/target")
+            .await
+            .unwrap();
+        let mut handle = BackendFileWriter::new(writer, &limits).unwrap();
+        handle.write(&invocation, b"data".to_vec()).await.unwrap();
+        std::fs::create_dir(root.path().join("target")).unwrap();
+        assert!(handle.close(&invocation).await.is_err());
+        assert_eq!(limits.host_attached_bytes(), 0);
+        assert!(handle.close(&invocation).await.is_ok());
+    }
+
     fn temp_file() -> File {
         tempfile::tempfile().expect("anonymous temp file")
     }
@@ -795,7 +681,7 @@ mod tests {
         let mut file = temp_file();
         file.write_all(contents).unwrap();
         file.seek(SeekFrom::Start(0)).unwrap();
-        ChargedLineReader::new(BufReader::new(file), limits, None).unwrap()
+        ChargedLineReader::new(BufReader::new(Box::new(file)), limits, None).unwrap()
     }
 
     #[test]
@@ -845,7 +731,8 @@ mod tests {
     #[test]
     fn drop_releases_bytes_back_to_limits() {
         let limits = TenantLimits::new(10 * 1024 * 1024);
-        let reader = ChargedLineReader::new(BufReader::new(temp_file()), &limits, None).unwrap();
+        let reader =
+            ChargedLineReader::new(BufReader::new(Box::new(temp_file())), &limits, None).unwrap();
         assert!(limits.host_attached_bytes() > 0, "new should charge bytes");
         drop(reader);
         assert_eq!(
@@ -858,8 +745,9 @@ mod tests {
     #[test]
     fn drop_releases_one_of_many_proportionally() {
         let limits = TenantLimits::new(10 * 1024 * 1024);
-        let r1 = ChargedLineReader::new(BufReader::new(temp_file()), &limits, None).unwrap();
-        let r2 = ChargedByteReader::new(temp_file(), 4096, &limits, None).unwrap();
+        let r1 =
+            ChargedLineReader::new(BufReader::new(Box::new(temp_file())), &limits, None).unwrap();
+        let r2 = ChargedByteReader::new(Box::new(temp_file()), 4096, &limits, None).unwrap();
         let total = limits.host_attached_bytes();
         assert_eq!(total, HANDLE_BUF_BYTES + (HANDLE_BUF_BYTES + 4096));
         drop(r1);
@@ -872,7 +760,7 @@ mod tests {
     fn close_refunds_eagerly_and_is_idempotent() {
         let limits = TenantLimits::new(10 * 1024 * 1024);
         let mut reader =
-            ChargedLineReader::new(BufReader::new(temp_file()), &limits, None).unwrap();
+            ChargedLineReader::new(BufReader::new(Box::new(temp_file())), &limits, None).unwrap();
         assert!(limits.host_attached_bytes() > 0);
         reader.close();
         assert_eq!(limits.host_attached_bytes(), 0, "close refunds immediately");
