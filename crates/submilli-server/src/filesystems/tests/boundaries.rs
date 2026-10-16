@@ -165,7 +165,7 @@ async fn compound_admission_reserves_all_effect_slots() {
     // these synthetic rows are removed before any outcome decoding or cleanup.
     let workspace = fs.id().to_owned();
     fixture.database.transaction(move |connection| Box::pin(async move {
-        sqlx::query("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<9999) INSERT INTO durable_filesystem_effects(workspace_id,effect_id,request,intent,outcome,state) SELECT ?, 'capacity-'||i, X'00', X'00', X'00', 'done' FROM n")
+        sqlx::query("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<9999) INSERT INTO durable_effects(run_id,effect_id,operation,version,request,recovery_payload,outcome,state) SELECT (SELECT run_id FROM durable_workspaces WHERE workspace_id=?), 'capacity-'||i, 'capacity-test', 1, X'00', X'00', X'00', 'done' FROM n")
             .bind(workspace).execute(connection).await?;
         Ok(())
     })).await.unwrap();
@@ -192,7 +192,7 @@ async fn compound_admission_reserves_all_effect_slots() {
     assert!(fs.journal.pending_writer(fs.id()).await.unwrap().is_none());
     let workspace = fs.id().to_owned();
     fixture.database.transaction(move |connection| Box::pin(async move {
-        sqlx::query("DELETE FROM durable_filesystem_effects WHERE workspace_id=? AND effect_id LIKE 'capacity-%'").bind(workspace).execute(connection).await?;
+        sqlx::query("DELETE FROM durable_effects WHERE run_id=(SELECT run_id FROM durable_workspaces WHERE workspace_id=?) AND effect_id LIKE 'capacity-%'").bind(workspace).execute(connection).await?;
         Ok(())
     })).await.unwrap();
     fixture.terminal().await;

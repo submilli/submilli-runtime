@@ -27,8 +27,8 @@ impl FilesystemJournal {
                 .bind(&workspace).fetch_one(&mut *connection).await?;
             if count >= MAX_EFFECTS { return Err(DatabaseError::SessionConflict); }
             resources::require_ready(connection, &workspace, None).await?;
-            let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM durable_filesystem_effects WHERE workspace_id=? AND state IN ('preparing','pending'))")
-                .bind(&workspace).fetch_one(&mut *connection).await?;
+            let run = workspace_run(connection, &workspace).await?;
+            let pending = effects::pending(connection, &run).await?.is_some();
             if pending { return Err(DatabaseError::SessionConflict); }
             // Pending plans exclude all unrelated effects, so these available
             // slots remain reserved for this plan until its outcome commits.
@@ -69,8 +69,8 @@ impl FilesystemJournal {
         let (workspace, id, outcome) = (workspace.to_owned(), id.to_owned(), outcome.clone());
         let sealer = self.sealer.clone();
         self.database.transaction(move |connection| Box::pin(async move {
-            let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM durable_filesystem_effects WHERE workspace_id=? AND state IN ('preparing','pending'))")
-                .bind(&workspace).fetch_one(&mut *connection).await?;
+            let run = workspace_run(connection, &workspace).await?;
+            let pending = effects::pending(connection, &run).await?.is_some();
             if pending { return Err(DatabaseError::SessionConflict); }
             sqlx::query("UPDATE durable_filesystem_plans SET outcome=? WHERE workspace_id=? AND plan_id=? AND outcome IS NULL")
                 .bind(encode(&sealer, &plan_owner(&workspace, &id), &outcome)?).bind(workspace).bind(id).execute(connection).await?;
@@ -84,16 +84,8 @@ pub(super) async fn require_effect_capacity(
     workspace: &str,
     additional: usize,
 ) -> Result<(), DatabaseError> {
-    let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM durable_filesystem_effects WHERE workspace_id=?")
-            .bind(workspace)
-            .fetch_one(connection)
-            .await?;
-    let additional = i64::try_from(additional).map_err(invalid)?;
-    if additional > MAX_EFFECTS.saturating_sub(count) {
-        return Err(DatabaseError::SessionConflict);
-    }
-    Ok(())
+    let run = workspace_run(connection, workspace).await?;
+    effects::require_capacity(connection, &run, additional).await
 }
 
 pub(super) async fn require_unused_effect(
@@ -101,9 +93,11 @@ pub(super) async fn require_unused_effect(
     workspace: &str,
     effect: &str,
 ) -> Result<(), DatabaseError> {
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM durable_filesystem_effects WHERE workspace_id=? AND effect_id=?) OR EXISTS(SELECT 1 FROM durable_filesystem_writers WHERE workspace_id=? AND close_effect=?)")
-        .bind(workspace).bind(effect).bind(workspace).bind(effect).fetch_one(connection).await?;
-    if exists {
+    let run = workspace_run(connection, workspace).await?;
+    let exists = effects::exists(connection, &run, effect).await?;
+    let closing: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM durable_filesystem_writers WHERE workspace_id=? AND close_effect=?)")
+        .bind(workspace).bind(effect).fetch_one(connection).await?;
+    if exists || closing {
         return Err(DatabaseError::SessionConflict);
     }
     Ok(())
@@ -115,19 +109,13 @@ pub(crate) fn plan_effect_id(workspace: &str, plan: &str, index: usize) -> Strin
 
 pub(super) async fn require_plan(
     connection: &mut SqliteConnection,
+    sealer: &Sealer,
     workspace: &str,
     effect: &str,
     plan: Option<&str>,
 ) -> Result<(), DatabaseError> {
-    let existing: Option<Option<String>> = sqlx::query_scalar(
-        "SELECT plan_id FROM durable_filesystem_effects WHERE workspace_id=? AND effect_id=?",
-    )
-    .bind(workspace)
-    .bind(effect)
-    .fetch_optional(&mut *connection)
-    .await?;
-    if let Some(existing) = existing {
-        return if existing.as_deref() == plan {
+    if let Some(existing) = load_effect(connection, sealer, workspace, effect).await? {
+        return if existing.plan.as_deref() == plan {
             Ok(())
         } else {
             Err(DatabaseError::SessionConflict)

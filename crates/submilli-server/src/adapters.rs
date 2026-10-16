@@ -1,5 +1,6 @@
 //! Infrastructure implementations of application ports.
 pub(crate) mod blueprint;
+pub(crate) mod durable_effects;
 pub(crate) mod durable_filesystems;
 pub(crate) mod durable_objects;
 pub(crate) mod mcp_grant;

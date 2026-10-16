@@ -850,3 +850,40 @@ async fn prepared_git_publication_recovers_the_same_commit() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn filesystem_uses_the_shared_run_effect_identity_and_payload() {
+    use crate::adapters::durable_effects::{self as effects, EffectKey};
+
+    let fixture = Fixture::new().await;
+    let content = fixture.capture(b"shared effect bytes").await;
+    fixture
+        .filesystem
+        .execute(
+            "bb54bf79-dcbc-4c79-9483-7a498bf08f0a",
+            Mutation::Write {
+                path: "/shared".into(),
+                content,
+            },
+        )
+        .await
+        .unwrap();
+    let run = fixture.run.clone();
+    let workspace = fixture.filesystem.id().to_owned();
+    let sealer = fixture.objects.sealer();
+    fixture.database.transaction(move |connection| Box::pin(async move {
+        let key = EffectKey { run: &run, effect: "bb54bf79-dcbc-4c79-9483-7a498bf08f0a", operation: "filesystem.mutation", version: 1 };
+        let record = effects::load(connection, &sealer, &key).await?.unwrap();
+        let request: serde_json::Value = serde_json::from_slice(&record.request).unwrap();
+        assert_eq!(request["workspace"], workspace);
+        let intent = interpreter::runtime::fs::recovery::Intent::decode(record.recovery_payload.as_ref().unwrap()).unwrap();
+        assert_eq!(intent.effect(), "bb54bf79-dcbc-4c79-9483-7a498bf08f0a");
+        assert!(record.outcome.is_some());
+        let foreign = EffectKey { operation: "other.operation", ..key };
+        assert!(effects::admit(connection, &sealer, &foreign, &record.request).await.is_err());
+        let duplicate_table: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='durable_filesystem_effects')")
+            .fetch_one(connection).await?;
+        assert!(!duplicate_table);
+        Ok(())
+    })).await.unwrap();
+}

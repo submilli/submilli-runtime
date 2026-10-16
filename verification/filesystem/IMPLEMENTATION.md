@@ -31,8 +31,15 @@ corrupt roots, pins, parent identities, captures and append prefixes fail closed
 
 ## Journal and persistence ordering
 
-Migration 10 holds workspace, effect, resource and ordered-plan records, separate
-from execution history. Paths, layouts, intents and outcomes are sealed.
+Migration 10 holds workspace, resource and ordered-plan records, plus the shared
+`durable_effects` table. An effect is keyed by `(run_id, effect_id)` and carries
+an operation name/version, immutable request, adapter recovery payload and final
+outcome. The filesystem adapter stores its workspace/plan/mutation in the sealed
+request and its prepared `Intent` in `recovery_payload`. There is no separate
+filesystem effect row or second primitive receipt. All operation adapters share
+the same identity namespace and one-pending-effect constraint per run. Paths,
+layouts, requests, recovery payloads and outcomes are sealed; shared effect fields
+are authenticated separately against run, effect, operation and version.
 Captured bytes and directory snapshots live in the immutable object store.
 Mutable candidate files never share an inode with an immutable capture.
 
@@ -60,6 +67,15 @@ storing its full layout. Cleanup handles each case. Bootstrap cleanup removes
 only an empty reserved root. Full-layout cleanup checks backing-root identities
 directly and tolerates already deleted cwd, mount placeholders, private subtrees
 or ephemeral roots. It does not restore an execution layout before deletion.
+
+The [shared effect model](../effects/README.md) checks the storage lifecycle.
+This is the storage subset of SUB-1837, not its ordered execution history. It
+has no committed history sequence, attempt-generation fence, accounting, terminal
+event or interpreter replay dispatcher. Those must use this effect identity and
+outcome rather than introduce a parallel primitive-effects journal. Compound
+plans still orchestrate child effects and keep an aggregate outcome; this is not
+a second receipt for an individual primitive. Workspace/resource records span
+multiple effects and remain separate.
 
 ## Primitive operations
 
