@@ -687,7 +687,7 @@ pub fn infer_package_checked<'a>(
         package_name,
         &tc.typed_ast,
         &package_declaration,
-        &tc.typed_ast.exports,
+        tc.resolver(),
         module_surfaces,
         &dependencies,
     )
@@ -1341,6 +1341,73 @@ mod tests {
     use crate::{Asi, Sources, Token, TokenKind, lower_patterns, parse};
 
     use super::*;
+
+    #[test]
+    fn finalizer_rule_propagates_type_budget_exhaustion() {
+        let mut sources = Sources::new();
+        let (module, file, ast) = parse_module(
+            &mut sources,
+            "lib",
+            r#"
+            import * as session from "submilli:session";
+            export function open(): void { session.registerFinalizer("k", 1); }
+            export function finalizer(key: string, value: number): void {}
+        "#,
+        );
+        let mut dependencies = runtime_external_packages();
+        let session = crate::stdlib::session::package_declaration();
+        dependencies.insert(session.package_name.clone(), session);
+        let (typed_ast, package, diagnostics) = infer_package_checked(
+            "@test/resource",
+            ModulePath::from("lib"),
+            vec![(module, file, &ast)],
+            &sources,
+            dependencies,
+            BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == crate::Severity::Error),
+            "{diagnostics:?}"
+        );
+        let types = TypeNamespace::new();
+        let registry = TypeRegistry::new();
+        let limits = crate::type_size::TypeLimits::with_work_allowance(0);
+        let resolver = assignable::TypeResolver {
+            types: &types,
+            registry: &registry,
+            limits: &limits,
+            strict_subtype: false,
+        };
+        let error = crate::typechecker::rules::check_package(
+            "@test/resource",
+            &typed_ast,
+            &package,
+            resolver,
+            std::iter::empty(),
+            &[],
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                error.fatal,
+                Some(CompilerFailure::Limit {
+                    stage: CompilerStage::Infer,
+                    ..
+                })
+            ),
+            "{error:?}"
+        );
+        assert!(
+            !error
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("does not match")),
+            "{error:?}"
+        );
+    }
 
     #[test]
     fn dependency_measurement_failure_is_internal_and_keeps_package_context() {

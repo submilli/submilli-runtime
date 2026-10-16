@@ -128,6 +128,23 @@ pub fn package_declaration() -> PackageDeclaration {
              session.read {{ key: $key }} per candidate key\n */"
         ),
     );
+    insert_fn(
+        &mut defs,
+        "registerFinalizer",
+        vec![
+            Param::new("key", Type::String),
+            Param::new("value", Type::Unknown),
+        ],
+        Type::Void,
+        "/** Register durable cleanup using this package's finalizer(key, value). Packages only. Keys are automatically namespaced by the engine; duplicate live keys are rejected.\n * @capability session.finalize { key: $key }\n */",
+    );
+    insert_fn(
+        &mut defs,
+        "unregisterFinalizer",
+        vec![Param::new("key", Type::String)],
+        Type::Void,
+        "/** Forget cleanup after releasing the resource. Packages only; keys are local to the calling package.\n * @capability session.finalize { key: $key }\n */",
+    );
     defs
 }
 

@@ -454,7 +454,7 @@ impl SessionManager for VfsSessionManager {
         }
         self.state
             .session_manager()
-            .wipe_now(id.as_ref())
+            .close_owned(id.as_ref())
             .await
             .map_err(|error| init_error(error.to_string()))?;
         self.inner.close_session(id).await
@@ -546,7 +546,7 @@ impl SessionStore for RmcpSessionStore {
     }
 
     async fn delete(&self, session_id: &str) -> Result<(), SessionStoreError> {
-        self.state.session_manager().wipe_now(session_id).await?;
+        self.state.session_manager().close_owned(session_id).await?;
         Ok(())
     }
 }

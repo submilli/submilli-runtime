@@ -524,6 +524,21 @@ fn compile_parsed_script(
     external_declarations: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
 ) -> Result<CompiledScript, CompileError> {
+    crate::typechecker::infer::check_declaration_types(
+        external_declarations.iter().chain(transitive).copied(),
+    )?;
+    let visible: Vec<_> = external_declarations
+        .iter()
+        .map(|defs| {
+            let mut defs = (*defs).clone();
+            if owning_package != Some(defs.package_name.as_str()) {
+                defs.values.remove("finalizer");
+            }
+            defs
+        })
+        .collect();
+    let visible_refs: Vec<_> = visible.iter().collect();
+    let external_declarations = visible_refs.as_slice();
     let (mut ta, diags, mut timings) = front_end_with_transitive(
         source,
         parsed,

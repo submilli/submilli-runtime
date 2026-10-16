@@ -250,7 +250,7 @@ pub(crate) async fn one_shot_with(
     .await;
     // A one-shot session must not outlive its run: retaining it would hold
     // its state and files until `idle_timeout`, a day by default.
-    if let Err(error) = state.session_manager().wipe_now(&session_id).await {
+    if let Err(error) = state.session_manager().close_owned(&session_id).await {
         tracing::warn!(%error, "transient session cleanup failed");
     }
     let mut response = outcome.response;
@@ -618,6 +618,24 @@ async fn prepare_and_run(
             }
         };
 
+    if test.is_none()
+        && matches!(&vfs_source, VfsSource::Rest)
+        && let Err(message) = open_session(state, session_id, &blueprint).await
+    {
+        return fail(ErrorKind::RuntimeError, message);
+    }
+    let resource_use = if test.is_none() {
+        match state
+            .session_manager()
+            .admit_resource_work(session_id)
+            .await
+        {
+            Ok(scope) => Some(scope),
+            Err(error) => return fail(ErrorKind::RuntimeError, error.to_string()),
+        }
+    } else {
+        None
+    };
     let context = WorldContext {
         state,
         session_id,
@@ -631,6 +649,7 @@ async fn prepare_and_run(
         cancel_requested,
     };
     // The one place a test run's world replaces the run's own.
+    let simulating = test.is_some();
     let world = match test {
         Some(test) => test.into_world(context).await,
         None => live_world(context, vfs_source, &script_imports.mcp_servers).await,
@@ -668,6 +687,11 @@ async fn prepare_and_run(
             }) as Arc<dyn interpreter::runtime::SecurityCheck>
         },
     );
+    let packages =
+        match state.prepared_packages_for_imports(blueprint_name, &blueprint, &script_imports) {
+            Ok(packages) => packages,
+            Err(err) => return fail(ErrorKind::PackageResolution, err.to_string()),
+        };
     let services = runner::HostServices {
         // Keyed completion updates activity with its recorded outcome in one transaction.
         session_manager: idempotency_key.is_none().then(|| manager.clone()),
@@ -690,6 +714,15 @@ async fn prepare_and_run(
         mcp_transport,
         tool_provider: run_tools.as_ref().map(|tools| Arc::clone(&tools.provider)),
         session_kv,
+        session_finalizers: if simulating {
+            Some(manager.replay_finalizers())
+        } else {
+            match manager.finalizer_provider(session_id, &packages) {
+                Ok(provider) => Some(provider),
+                Err(message) => return fail(ErrorKind::RuntimeError, message),
+            }
+        },
+        resource_use,
         cursor_keys: manager.cursor_keys(),
         llm_provider,
         llm_budget: Some(llm_budget),
@@ -699,11 +732,6 @@ async fn prepare_and_run(
         cancel_requested,
         throwaway,
     };
-    let packages =
-        match state.prepared_packages_for_imports(blueprint_name, &blueprint, &script_imports) {
-            Ok(packages) => packages,
-            Err(err) => return fail(ErrorKind::PackageResolution, err.to_string()),
-        };
     // This commit is the admission barrier. A failure before it permits only a
     // proven preparation release; after it, a lost run remains indeterminate.
     if let Err(error) = state.idempotency().claim(&execution_id_of(audit)).await {
@@ -804,17 +832,14 @@ async fn live_world(
     let manager = context.state.session_manager();
     let (vfs, vfs_info) = match vfs_source {
         VfsSource::Mcp { vfs, vfs_info } => (vfs, vfs_info),
-        VfsSource::Rest => {
-            open_session(context.state, context.session_id, context.blueprint).await?;
-            manager
-                .vfs_for_execute_with_variables(
-                    context.session_id,
-                    context.blueprint,
-                    context.variables,
-                )
-                .await
-                .map_err(|err| format!("internal: vfs init failed: {err}"))?
-        }
+        VfsSource::Rest => manager
+            .vfs_for_execute_with_variables(
+                context.session_id,
+                context.blueprint,
+                context.variables,
+            )
+            .await
+            .map_err(|err| format!("internal: vfs init failed: {err}"))?,
     };
     let (http_client, mcp_transport) = outside_clients(&context);
     Ok(RunWorld {

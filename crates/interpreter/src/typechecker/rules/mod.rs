@@ -13,6 +13,7 @@ mod doc_consistency;
 mod exported_docs;
 pub(crate) mod exported_signature_types;
 mod fallthrough;
+mod finalizers;
 mod main_required;
 mod missing_return;
 mod return_outside_function;
@@ -83,12 +84,17 @@ pub(in crate::typechecker) fn check_package<'a>(
     package_name: &str,
     typed_ast: &TypedAst,
     package: &PackageDeclaration,
-    exports: &[ExportEntry],
+    resolver: super::infer::assignable::TypeResolver<'_>,
     modules: impl IntoIterator<Item = PackageModuleSurface<'a>>,
     dependencies: &[&PackageDeclaration],
 ) -> Result<Vec<Diagnostic>, CompileError> {
     tree_height::check_typed(typed_ast, CompilerStage::Infer)?;
     let mut diags = Vec::new();
+    finalizers::run(typed_ast, package, resolver, &mut diags).map_err(|fatal| CompileError {
+        diagnostics: diags.clone(),
+        fatal: Some(fatal),
+    })?;
+    let exports = &typed_ast.exports;
     for module in modules {
         exported_signature_types::run_module(
             package_name,

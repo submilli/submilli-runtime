@@ -15,6 +15,7 @@
 use crate::runtime::host::{abi_arg, abi_result};
 mod cursor;
 pub mod declaration;
+mod finalizers;
 pub(crate) mod value;
 
 use std::sync::Arc;
@@ -54,6 +55,7 @@ const PAGE_NEXT_CURSOR: usize = 2;
 pub use declaration::package_declaration;
 
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    finalizers::install(linker)?;
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
     // `key: string` takes the whole `$string` struct rather than the raw payload
