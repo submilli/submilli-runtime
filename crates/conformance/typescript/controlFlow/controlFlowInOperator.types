@@ -1,0 +1,172 @@
+=== controlFlowInOperator.ts ===
+const a = 'a';
+>a : "a"
+>  : ^^^
+>'a' : "a"
+>    : ^^^
+
+const b = 'b';
+>b : "b"
+>  : ^^^
+>'b' : "b"
+>    : ^^^
+
+const d = 'd';
+>d : "d"
+>  : ^^^
+>'d' : "d"
+>    : ^^^
+
+
+/*pruned*/;
+/*pruned*/;
+
+/*pruned*/;
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+// repro from https://github.com/microsoft/TypeScript/issues/54790
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+function uniqueID_54790_2(id: string | number, seenIDs: object): void {
+>uniqueID_54790_2 : (id: string | number, seenIDs: object) => void
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>id : string | number
+>   : ^^^^^^^^^^^^^^^
+>seenIDs : object
+>        : ^^^^^^
+
+  id = "a";
+>id = "a" : "a"
+>         : ^^^
+>id : string | number
+>   : ^^^^^^^^^^^^^^^
+>"a" : "a"
+>    : ^^^
+
+  for (let i = 1; i < 3; i++) {
+>i : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>i < 3 : boolean
+>      : ^^^^^^^
+>i : number
+>  : ^^^^^^
+>3 : 3
+>  : ^
+>i++ : number
+>    : ^^^^^^
+>i : number
+>  : ^^^^^^
+
+    const newID = `${id}`;
+>newID : string
+>      : ^^^^^^
+>`${id}` : string
+>        : ^^^^^^
+>id : string
+>   : ^^^^^^
+
+    if (newID in seenIDs) {
+>newID in seenIDs : boolean
+>                 : ^^^^^^^
+>newID : string
+>      : ^^^^^^
+>seenIDs : object
+>        : ^^^^^^
+
+    }
+  }
+}
+
+function uniqueID_54790_3(id: string | number, seenIDs: object): void {
+>uniqueID_54790_3 : (id: string | number, seenIDs: object) => void
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>id : string | number
+>   : ^^^^^^^^^^^^^^^
+>seenIDs : object
+>        : ^^^^^^
+
+  id = "a";
+>id = "a" : "a"
+>         : ^^^
+>id : string | number
+>   : ^^^^^^^^^^^^^^^
+>"a" : "a"
+>    : ^^^
+
+  for (let i = 1; i < 3; i++) {
+>i : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>i < 3 : boolean
+>      : ^^^^^^^
+>i : number
+>  : ^^^^^^
+>3 : 3
+>  : ^
+>i++ : number
+>    : ^^^^^^
+>i : number
+>  : ^^^^^^
+
+    const newID = id;
+>newID : string
+>      : ^^^^^^
+>id : string
+>   : ^^^^^^
+
+    if (newID in seenIDs) {
+>newID in seenIDs : boolean
+>                 : ^^^^^^^
+>newID : string
+>      : ^^^^^^
+>seenIDs : object
+>        : ^^^^^^
+
+    }
+  }
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

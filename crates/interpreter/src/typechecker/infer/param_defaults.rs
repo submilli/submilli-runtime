@@ -550,9 +550,9 @@ impl Inferer<'_> {
     }
 }
 
-/// The type a parameter has once its default ran: `strip_undefined`, except
-/// that a parameter of type `undefined` alone has no value left, which is
-/// `never` here rather than the stripper's poisoned `Error`.
+/// `ty` less `undefined`: the type a parameter has once its default ran, or a
+/// spread adds for an optional field. `strip_undefined`, except that
+/// `undefined` alone leaves `never` rather than the stripper's poisoned `Error`.
 pub(super) fn without_undefined(ty: &Type) -> Type {
     if matches!(ty.peel(), Type::Undefined) {
         return Type::Never;

@@ -1,4 +1,2 @@
 line 13 extra: by-design spec §1.10 a namespace import may only appear as the left side of a member access, not as a value
-line 15, 16 type: bug SUB-1680 an assignment to an imported binding is accepted (tsc rejects the line and types the target `any`)
-line 15, 16 missed: bug SUB-1680 an assignment to an imported binding is accepted
 line 21, 22 type: by-design spec §1.10 a namespace import may only appear as the left side of a member access, not as a value (`a3` was bound to one)

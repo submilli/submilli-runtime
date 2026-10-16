@@ -1046,7 +1046,11 @@ impl SymbolTable {
                     heap_type: HeapType::Concrete(idx),
                 })
             }
-            Type::TypeVar(_) | Type::GenericParam { .. } | Type::Unknown | Type::Void => {
+            Type::TypeVar(_)
+            | Type::GenericParam { .. }
+            | Type::Unknown
+            | Type::NonPrimitive
+            | Type::Void => {
                 // Erased-generic and dynamic slots lower to nullable `(ref null $Object)`;
                 // nullable so `null` literals can flow in via WasmGC subtyping.
                 let object_idx = self

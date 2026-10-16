@@ -203,6 +203,10 @@ fn walk(
             path,
             "`unknown` has no JSON Schema — an unconstrained schema would let the model return anything; name the shape you expect",
         )),
+        Type::NonPrimitive => Err(reject(
+            path,
+            "`object` has no JSON Schema — it admits any object, array or function; name the shape you expect",
+        )),
         Type::Function { .. } => Err(reject(path, "functions have no JSON form")),
         Type::BigInt | Type::BigIntLiteral(_) => Err(reject(
             path,

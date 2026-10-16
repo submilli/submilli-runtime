@@ -1,0 +1,48 @@
+=== assignObjectToNonPrimitive.ts ===
+let x = {};
+>x : {}
+>  : ^^
+>{} : {}
+>   : ^^
+
+let y = {foo: "bar"};
+>y : { foo: string; }
+>  : ^^^^^^^^^^^^^^^^
+>{foo: "bar"} : { foo: string; }
+>             : ^^^^^^^^^^^^^^^^
+>foo : string
+>    : ^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+let a: object = null as unknown as (object);
+>a : object
+>  : ^^^^^^
+>null as unknown as (object) : object
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+a = x;
+>a = x : {}
+>      : ^^
+>a : object
+>  : ^^^^^^
+>x : {}
+>  : ^^
+
+a = y;
+>a = y : { foo: string; }
+>      : ^^^^^^^^^^^^^^^^
+>a : object
+>  : ^^^^^^
+>y : { foo: string; }
+>  : ^^^^^^^^^^^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

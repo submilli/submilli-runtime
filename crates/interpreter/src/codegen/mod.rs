@@ -3645,13 +3645,15 @@ function main(): string {
     #[test]
     fn symbol_table_resolves_prelude_function_indices() {
         let map = build_symbol_table("function main(): void { }");
-        // Alphabetical: isFinite, isNaN, string_cmp, string_concat, string_eq, string_length.
+        // Alphabetical: isFinite, isNaN, string_cmp, string_concat, string_eq,
+        // string_index, string_length.
         assert_eq!(map.prelude_func_idx("isFinite"), Some(0));
         assert_eq!(map.prelude_func_idx("isNaN"), Some(1));
         assert_eq!(map.prelude_func_idx("string_cmp"), Some(2));
         assert_eq!(map.prelude_func_idx("string_concat"), Some(3));
         assert_eq!(map.prelude_func_idx("string_eq"), Some(4));
-        assert_eq!(map.prelude_func_idx("string_length"), Some(5));
+        assert_eq!(map.prelude_func_idx("string_index"), Some(5));
+        assert_eq!(map.prelude_func_idx("string_length"), Some(6));
         assert_eq!(map.prelude_func_idx("missing"), None);
     }
 

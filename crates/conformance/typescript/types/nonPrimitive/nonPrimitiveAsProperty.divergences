@@ -1,0 +1,5 @@
+types: 5 of 13 tsc entries compared, 1 differ
+
+line 9: {foo: "bar"}
+  tsc:  { foo: string; }
+  ours: WithNonPrimitive

@@ -467,6 +467,7 @@ mod tests {
                 "string_concat",
                 "string_eq",
                 "string_false",
+                "string_index",
                 "string_length",
                 "string_null",
                 "string_object_function",

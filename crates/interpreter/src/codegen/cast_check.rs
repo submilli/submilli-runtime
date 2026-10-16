@@ -324,6 +324,15 @@ fn emit_structural_test_inner(
             emitter.instruction(Instruction::I32Or);
             emitter.instruction(Instruction::I32Eqz);
         }
+        // `object` holds every value but the primitives, `null` and `undefined`.
+        Type::Unknown if matches!(ty.peel(), Type::NonPrimitive) => {
+            crate::codegen::function_emitter::expr::emit_is_non_primitive(
+                emitter,
+                ctx,
+                value_local,
+                crate::codegen::function_emitter::expr::Closures::AreObjects,
+            )?;
+        }
         Type::Unknown => emitter.instruction(Instruction::I32Const(1)),
         Type::Number => emit_ref_test(emitter, value_local, boxed_number_idx(ctx)?),
         Type::Boolean => emit_ref_test(emitter, value_local, boxed_boolean_idx(ctx)?),

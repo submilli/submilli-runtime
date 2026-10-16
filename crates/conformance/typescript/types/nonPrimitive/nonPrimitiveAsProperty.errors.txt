@@ -1,0 +1,1 @@
+nonPrimitiveAsProperty.ts(9,28): error TS2322: Type 'string' is not assignable to type 'object'.

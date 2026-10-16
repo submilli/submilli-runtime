@@ -195,6 +195,7 @@ for (const word of words) {
 | `==` and `!=` | Strict, like `===` and `!==`, so `1 == "1"` and `x == null` are compile errors |
 | Return types | Declared on functions and methods; arrow functions infer them |
 | `items[i]` | Out-of-range reads and writes throw `RangeError`. `items.at(i)` returns `undefined`. `push` appends |
+| `text[i]` | Reads one UTF-16 code unit as a string; out of range it throws `RangeError`. `text.charAt(i)` returns `""` |
 | `let x: T;` | Needs an initializer unless `T` includes `undefined` |
 | Runtime APIs | The standard library and Submilli Packages, in place of Node.js APIs, browser globals, and npm |
 | Dates and times | `Temporal`, in place of `Date` |

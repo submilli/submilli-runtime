@@ -5,7 +5,7 @@ in `/`) is left out whole, with its subdirectories, except for any case in the s
 Written by `../typescript-baselines/port-suite.cjs`: change its lists or the porter,
 not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't read.
 
-3479 entries: 3208 not supported, 73 the port changes what it checks, 120 duplicate, 77 checks too little, 1 porter failure.
+3482 entries: 3211 not supported, 73 the port changes what it checks, 120 duplicate, 77 checks too little, 1 porter failure.
 
 | Case | Reason | Detail |
 |:-----|:-------|:-------|
@@ -427,11 +427,9 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `controlFlow/controlFlowForInStatement2.ts` | not supported | expected `:` after index parameter name, on ` type A = { [keywordA]: number }; ` |
 | `controlFlow/controlFlowForOfStatement.ts` | not supported | expected `;` after expression, on ` for (x of obj) { ` |
 | `controlFlow/controlFlowGenericTypes.ts` | not supported | expected `,` or `>`, on ` function f1<T extends string \| undefined>(x: T, y: { a: T }, z: [T]): string { ` |
-| `controlFlow/controlFlowInOperator.ts` | not supported | expected `:` after index parameter name, on ` type A = { [a]: number; }; ` |
 | `controlFlow/controlFlowInstanceOfGuardPrimitives.ts` | not supported | `Date` is not supported, on ` function distinguish(thing: string \| number \| Date): void { ` |
 | `controlFlow/controlFlowIterationErrorsAsync.ts` | not supported | expected `;` after expression, on ` async function len(s: string): Promise<number> { ` |
 | `controlFlow/controlFlowNullishCoalesce.ts` | the port changes what it checks | `tsc` then reports TS2448 |
-| `controlFlow/controlFlowOptionalChain.ts` | not supported | `any` is not supported, on ` [key: string]: any; ` |
 | `controlFlow/controlFlowSuperPropertyAccess.ts` | not supported | `protected` is not supported, on ` protected m?(): void; ` |
 | `controlFlow/definiteAssignmentAssertions.ts` | not supported | expected `:` and a type for the class field, on ` a!: number; ` |
 | `controlFlow/definiteAssignmentAssertionsWithObjectShortHand.ts` | not supported | expected `,` or `}`, on ` const foo = { a! } ` |
@@ -3082,7 +3080,13 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `types/never/neverIntersectionNotCallable.ts` | not supported | intersection types |
 | `types/never/neverTypeErrors2.ts` | duplicate | of `types/never/neverTypeErrors1.ts` |
 | `types/never/neverUnionIntersection.ts` | not supported | intersection types |
-| `types/nonPrimitive/` | not supported | the `object` type |
+| `types/nonPrimitive/nonPrimitiveAndEmptyObject.ts` | not supported | expected `;`, `,`, or `}` after interface member, on ` fooProps?: BarProps & object; ` |
+| `types/nonPrimitive/nonPrimitiveAndTypeVariables.ts` | not supported | expected `:` after index parameter name, on ` type A<T, V> = { [P in keyof T]: T[P] extends V ? 1 : 0; }; ` |
+| `types/nonPrimitive/nonPrimitiveConstraintOfIndexAccessType.ts` | not supported | expected `,` or `>`, on ` function f<T extends object, P extends keyof T>(s: string, tp: T[P]): void { ` |
+| `types/nonPrimitive/nonPrimitiveIndexingWithForIn.ts` | not supported | `let` declaration requires an initializer, on ` for (let key in a) { ` |
+| `types/nonPrimitive/nonPrimitiveIndexingWithForInNoImplicitAny.ts` | not supported | `let` declaration requires an initializer, on ` for (let key in a) { ` |
+| `types/nonPrimitive/nonPrimitiveIndexingWithForInSupressError.ts` | not supported | `let` declaration requires an initializer, on ` for (let key in a) { ` |
+| `types/nonPrimitive/nonPrimitiveUnionIntersection.ts` | not supported | intersection types |
 | `types/objectTypeLiteral/callSignatures/callSignaturesThatDifferOnlyByReturnType.ts` | not supported | parameter requires a type annotation, on ` (x): number; ` |
 | `types/objectTypeLiteral/callSignatures/callSignaturesThatDifferOnlyByReturnType2.ts` | not supported | `as` to `A` is not yet supported: interfaces with methods are nominal — a plain structural check can't verify their vtable at runtime, on ` let x: A = null as unknown as (A); ` |
 | `types/objectTypeLiteral/callSignatures/callSignaturesThatDifferOnlyByReturnType3.ts` | not supported | duplicate declaration of interface `I`, on ` interface I { ` |
@@ -3175,7 +3179,6 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `types/spread/objectSpreadNoTransform.ts` | not supported | `let` declaration requires an initializer, on ` let b; ` |
 | `types/spread/objectSpreadSetonlyAccessor.ts` | not supported | expected `,` or `}`, on ` const o1: { foo: number, bar: undefined } = { foo: 1, ... { set bar(_v: numbe... ` |
 | `types/spread/spreadNonObject1.ts` | not supported | expected type, on `` type S = `${number}`; `` |
-| `types/spread/spreadNonPrimitive.ts` | not supported | unknown type `object`, on ` let o: object = null as unknown as (object); ` |
 | `types/spread/spreadObjectOrFalsy.ts` | not supported | expected `,` or `)`, on ` function f1<T>(a: T & undefined): any { ` |
 | `types/spread/spreadTypeVariable.ts` | not supported | expected `,` or `>`, on ` function f1<T extends number>(arg: T): any { ` |
 | `types/stringLiteral/stringLiteralTypesAsTypeParameterConstraint01.ts` | not supported | expected `,` or `>`, on ` function foo<T extends "foo">(f: (x: T) => T): (x: T) => T { ` |
