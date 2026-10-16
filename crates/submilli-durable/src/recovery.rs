@@ -6,8 +6,6 @@
 //! again. One logical run exclusively owns every backing volume; this module
 //! does not supply cross-process leases or fencing.
 
-use interpreter::runtime::fs::storage::{NativeStorage, RetainedQuota};
-
 mod layout;
 mod listing;
 mod mutation;
@@ -36,7 +34,7 @@ const MAX_DEPTH: usize = 64;
 #[derive(Debug, thiserror::Error)]
 pub enum RecoveryError {
     #[error(transparent)]
-    Fuel(#[from] interpreter::runtime::filesystem::work::Exhausted),
+    Fuel(#[from] interpreter::runtime::fuel::Exhausted),
     #[error("filesystem recovery I/O failed: {0}")]
     Io(#[from] io::Error),
     #[error("filesystem containment refused recovery: {0}")]
@@ -66,7 +64,7 @@ pub struct Workspace {
     vfs: Vfs,
     id: String,
     volumes: Arc<BTreeMap<String, Volume>>,
-    work: Option<Arc<interpreter::runtime::filesystem::work::WorkBudget>>,
+    work: Option<Arc<interpreter::runtime::fuel::WorkBudget>>,
 }
 
 struct Volume {
@@ -140,7 +138,7 @@ impl Workspace {
 
     pub(crate) fn metered(
         &self,
-        work: Option<Arc<interpreter::runtime::filesystem::work::WorkBudget>>,
+        work: Option<Arc<interpreter::runtime::fuel::WorkBudget>>,
     ) -> Self {
         let mut workspace = self.clone();
         workspace.work = work;

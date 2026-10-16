@@ -2,10 +2,9 @@ use super::plan::Entry;
 use super::{FileIdentity, MAX_DEPTH, MAX_ENTRIES, PRIVATE, RecoveryError, Vfs, Volume, Workspace};
 use cap_fs_ext::DirExt;
 use cap_std::fs::{Dir, Metadata};
-use interpreter::runtime::fs::storage::{NativeMount, NativeStorage};
 use interpreter::runtime::fs::{self, ContentPath};
 use interpreter::runtime::vfs::Access;
-use interpreter::runtime::{filesystem::work::WorkBudget, fuel};
+use interpreter::runtime::{fuel, fuel::WorkBudget};
 use std::collections::{BTreeMap, HashSet};
 use std::io;
 use std::path::{Component, Path};
@@ -59,7 +58,7 @@ pub(super) fn open_volumes(
         .iter()
         .filter(|m| m.access() == Access::ReadWrite)
     {
-        let volume = open_volume(mount.directory(), id, create, mount.quota().cloned())?;
+        let volume = open_volume(mount.dir(), id, create, mount.quota().cloned())?;
         if volumes
             .values()
             .any(|other| other.identity == volume.identity)
@@ -115,7 +114,7 @@ pub(super) fn sync(dir: &Dir) -> Result<(), RecoveryError> {
     // A Dir may carry O_PATH on Linux, which cannot be fsynced. Open a
     // readable handle relative to the held directory, preserving its identity
     // even if its original path has been renamed or replaced.
-    fs::storage::sync_directory(dir)?;
+    dir.open(".")?.sync_all()?;
     checkpoint("directory-sync")?;
     Ok(())
 }
@@ -155,11 +154,9 @@ impl Workspace {
             .vfs
             .mutation_location(guest, follow_final, git)
             .map_err(|error| match error {
-                fs::storage::StorageError::Containment(error) => RecoveryError::Containment(error),
-                fs::storage::StorageError::Io(error) => RecoveryError::Io(error),
-                fs::storage::StorageError::Unsupported(message) => {
-                    RecoveryError::Unsupported(message)
-                }
+                fs::StorageError::Containment(error) => RecoveryError::Containment(error),
+                fs::StorageError::Io(error) => RecoveryError::Io(error),
+                fs::StorageError::Unsupported(message) => RecoveryError::Unsupported(message),
             })?;
         for ancestor in &location.ancestors {
             sync(ancestor)?;

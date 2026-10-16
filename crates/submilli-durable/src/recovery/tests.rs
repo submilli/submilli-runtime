@@ -469,7 +469,7 @@ fn retained_bytes_are_charged_once_and_failed_growth_does_not_change_the_file() 
 
 #[test]
 fn retained_reader_alias_validation_admits_each_scanned_entry() {
-    use interpreter::runtime::{filesystem::work::WorkBudget, fuel};
+    use interpreter::runtime::{fuel, fuel::WorkBudget};
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("file"), "content").unwrap();
     let workspace = workspace(root.path());

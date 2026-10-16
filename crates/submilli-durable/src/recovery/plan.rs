@@ -246,11 +246,11 @@ impl Entry {
         let parent = std::path::Path::new(&self.parent);
         let name = std::path::Path::new(&self.name);
         if self.name.contains('/')
-            || interpreter::runtime::fs::storage::private_recovery_path(parent)
-            || interpreter::runtime::fs::storage::private_recovery_path(name)
+            || interpreter::runtime::fs::private_recovery_path(parent)
+            || interpreter::runtime::fs::private_recovery_path(name)
             || (!git
-                && (interpreter::runtime::fs::storage::protected_metadata(parent)
-                    || interpreter::runtime::fs::storage::protected_metadata(name)))
+                && (interpreter::runtime::fs::protected_metadata(parent)
+                    || interpreter::runtime::fs::protected_metadata(name)))
         {
             return Err(RecoveryError::InvalidRecord);
         }

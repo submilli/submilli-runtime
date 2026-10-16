@@ -116,11 +116,11 @@ impl Mount {
         &self.rel
     }
 
-    pub(crate) fn dir(&self) -> &Arc<Dir> {
+    pub fn dir(&self) -> &Arc<Dir> {
         &self.dir
     }
 
-    pub(crate) fn host(&self) -> &Path {
+    pub fn host(&self) -> &Path {
         &self.host
     }
 
@@ -414,7 +414,7 @@ impl Vfs {
         self._owned.is_some()
     }
 
-    pub(crate) fn protect_recovery(mut self) -> Self {
+    pub fn protect_recovery(mut self) -> Self {
         self.recovery_protected = true;
         self
     }
@@ -666,7 +666,7 @@ impl Vfs {
 
     /// Recovery restores the logical path even when an earlier effect removed
     /// its directory. Recreating it here would be an unjournaled mutation.
-    pub(crate) fn with_retained_cwd(
+    pub fn with_retained_cwd(
         mut self,
         cwd: &str,
     ) -> Result<Self, crate::runtime::fs::ContainError> {
