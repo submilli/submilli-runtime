@@ -23,6 +23,7 @@ pub mod number;
 pub mod prelude;
 pub mod secrets;
 pub mod security;
+pub mod session_finalizers;
 pub mod session_kv;
 pub mod skills;
 pub mod token_ledger;
@@ -178,6 +179,9 @@ pub struct StoreData {
     /// becoming per-execution scratch state that no later `execute` can read —
     /// the guest surface reports that as a configuration error.
     pub session_kv: Option<Arc<dyn SessionKvStore>>,
+    /// Durable package-owned resource cleanup supplied by the embedder.
+    pub session_finalizers: Option<Arc<dyn session_finalizers::SessionFinalizers>>,
+    pub finalizing: bool,
     /// The keys `session.list` cursors are sealed with. `None` seals them with a
     /// per-process key, so they stop working when the process restarts.
     pub cursor_keys: Option<Arc<CursorKeys>>,
@@ -308,6 +312,8 @@ impl StoreData {
             embedding_provider: None,
             embedding_budget: None,
             session_kv: None,
+            session_finalizers: None,
+            finalizing: false,
             cursor_keys: None,
             agent_provider: None,
             skill_provider: None,

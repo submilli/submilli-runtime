@@ -869,9 +869,10 @@ pub async fn disconnect(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> axum::response::Response {
-    match state.session_manager().wipe_now(&session_id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+    match crate::record::end_session_with_finalizers(&state, &session_id).await {
+        Ok(report) if !report.closed => StatusCode::NOT_FOUND.into_response(),
+        Ok(report) if report.finalizers.is_empty() => StatusCode::NO_CONTENT.into_response(),
+        Ok(report) => Json(report).into_response(),
         Err(error) => session_state_response(error),
     }
 }
@@ -936,4 +937,15 @@ fn execution_store_failure(error: crate::blueprint::StoreError) -> axum::respons
         );
     }
     (status, Json(body)).into_response()
+}
+
+/// Durable cleanup diagnostics, available after close.
+pub async fn finalizers(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> axum::response::Response {
+    match crate::record::session_finalizers(&state, &id).await {
+        Ok(records) => Json(records).into_response(),
+        Err(error) => session_state_response(error),
+    }
 }

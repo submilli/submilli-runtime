@@ -13,6 +13,7 @@ mod diagnostics;
 mod enums;
 mod exports;
 pub mod expr;
+mod finalizers;
 mod format_definition;
 mod format_signature;
 mod forward_globals;
@@ -696,6 +697,7 @@ pub fn infer_package_checked<'a>(
             .with_prior_diagnostics(&tc.diagnostics)
             .with_prior_diagnostics(&diagnostics)
     })?;
+    tc.validate_finalizers(&package_declaration)?;
     tc.diagnostics.extend(rule_diagnostics);
     diagnostics.extend(tc.diagnostics);
     Ok((tc.typed_ast, package_declaration, diagnostics))

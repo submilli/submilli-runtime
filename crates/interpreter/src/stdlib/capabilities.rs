@@ -485,6 +485,15 @@ const VARIABLES: &[Capability] = &[Capability {
 
 const SESSION: &[Capability] = &[
     Capability {
+        name: "session.finalize",
+        main_denial: Some(
+            "finalizer registrations belong to packages; main-module access cannot be granted",
+        ),
+        summary: "Register or unregister durable package-owned session cleanup",
+        filter_fields: &[KEY],
+        example_filter: "key glob \"browser/*\"",
+    },
+    Capability {
         name: "session.read",
         main_denial: None,
         summary: "Read session state (get, has), and decide which keys a list may reveal",
@@ -695,7 +704,10 @@ mod tests {
             .filter(|cap| !cap.grantable_to_main())
             .map(|cap| cap.name)
             .collect();
-        assert_eq!(refused, ["secrets.get", "variables.get"]);
+        assert_eq!(
+            refused,
+            ["secrets.get", "session.finalize", "variables.get"]
+        );
     }
 
     /// The core set lists exactly the core catalog, in the same order, so every
@@ -759,6 +771,7 @@ mod tests {
         assert_eq!(
             names,
             [
+                "session.finalize",
                 "session.read",
                 "session.write",
                 "session.remove",

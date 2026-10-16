@@ -80,6 +80,19 @@ output), not with reassurance:
     a `try` whose `catch` returns) deciding whether the check runs, or a call
     through interface dispatch: trace those by hand.
 
+## Session-owned resources
+
+For packages that create remote resources, verify cleanup registration occurs
+inside the package before the handle escapes. Check engine-owned key namespacing,
+duplicate rejection, the fixed `finalizer(key, value)` entry point, and an
+idempotent remote close. Early release must close remotely before unregistering.
+
+Exercise separate executions sharing a session handle, KV deletion without
+cleanup, close/expiry, and recovery after interruption. Confirm errors/traps become
+terminal without retries, one failure leaves other finalizers runnable, current
+policy revocation is enforced, and a remote lease covers creation-before-registration
+crashes. Inspect finalizer diagnostics without exposing arguments or credentials.
+
 ## Confidence
 
 Rate each finding with one of three anchors, chosen by what you actually did,
