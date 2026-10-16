@@ -604,6 +604,28 @@ pub fn read_string_arg(
     }
 }
 
+/// Read a string without replacing lone surrogates at a UTF-8 boundary.
+pub(crate) fn read_string_arg_units(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+    name: &str,
+) -> wasmtime::Result<Vec<u16>> {
+    let any = match val {
+        Val::AnyRef(Some(any)) => *any,
+        _ => return Err(type_error(format!("{name} expects a string"))),
+    };
+    let string = any.unwrap_struct(&mut *caller)?;
+    let raw = match string.field(&mut *caller, 1)? {
+        Val::AnyRef(Some(raw)) => raw.unwrap_array(&mut *caller)?,
+        _ => {
+            return Err(fatal_host_error(format!(
+                "{name}: malformed string payload"
+            )));
+        }
+    };
+    read_code_units(caller, raw, name)
+}
+
 /// Read a real `$Array<$string>` into `Vec<String>`. Null slots → empty string.
 pub fn read_string_array_arg(
     caller: &mut Caller<'_, StoreData>,
@@ -658,7 +680,12 @@ pub(crate) fn encode_utf16(
     s: &str,
 ) -> wasmtime::Result<Vec<u16>> {
     fuel::charge(ctx, fuel::SCAN, s.len() as u64)?;
-    Ok(s.encode_utf16().collect())
+    // A UTF-8 byte count bounds its UTF-16 unit count. Reserve fallibly once
+    // before encoding, so extend cannot trigger infallible capacity growth.
+    let mut units = Vec::new();
+    units.try_reserve_exact(s.len()).map_err(fatal_host_error)?;
+    units.extend(s.encode_utf16());
+    Ok(units)
 }
 
 /// Builds a `$rawString` payload from UTF-16 code units in one pass. Every
@@ -1714,6 +1741,7 @@ pub(crate) const CALL_MODULES: &[&str] = &[
     crate::stdlib::embedding::MODULE_NAME,
     crate::stdlib::session::MODULE_NAME,
     crate::stdlib::secrets::MODULE_NAME,
+    crate::stdlib::variables::MODULE_NAME,
     crate::stdlib::git::MODULE_NAME,
     crate::stdlib::code::MODULE_NAME,
     crate::stdlib::security::MODULE_NAME,

@@ -32,6 +32,7 @@ pub mod skills;
 pub mod test;
 pub mod url;
 pub mod uuid;
+pub mod variables;
 
 use wasmtime::Linker;
 
@@ -283,6 +284,7 @@ fn core_package_declarations() -> Vec<PackageDeclaration> {
         session::package_declaration(),
         url::package_declaration(),
         uuid::package_declaration(),
+        variables::package_declaration(),
     ]
 }
 
@@ -299,6 +301,7 @@ fn install_core_host_functions(linker: &mut Linker<StoreData>) -> wasmtime::Resu
     session::install(linker)?;
     url::install(linker)?;
     uuid::install(linker)?;
+    variables::install(linker)?;
     Ok(())
 }
 

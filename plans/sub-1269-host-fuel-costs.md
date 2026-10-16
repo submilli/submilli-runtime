@@ -1852,6 +1852,12 @@ Optional: installed only for an embedder that enables it. Variables: `T` = bytes
 |---|---|---|---|---|
 | `submilli:mcp#call` | gated transport, admitted JSON tree converted directly to guest objects | `CALL + gate/argument terms + IO(request bytes) + IO(received bytes) + PARSE(received bytes + embedded text bytes parsed) + ELEM(validation nodes/keys + allocated nodes) + string SCAN/COPY` | request before; all result/error handling settles after the tool effect | 8 MiB HTTP body/per-event SSE bound before parsing; result tree limited to 100,000 nodes/keys, depth 128, and 8 MiB of string bytes plus 16 bytes per node/key. Transport returns an admitted owned tree, with no JSON serialization/reparse or intermediate guest string. Discovery uses the same bounded adapter. Limit/internal allocation failures never trigger OAuth replay. |
 
+### submilli:variables
+
+| Function | Work | Formula | Timing | Notes |
+| --- | --- | --- | --- | --- |
+| `submilli:variables#get` | Read name, authorize, look up immutable bindings, marshal value | `CALL + COPY(name units) + SCAN(name units) + COPY(name bytes) + GATE + SCAN(name bytes × lookup depth) + SCAN(value bytes) + COPY(value units)` | before work and output allocation | Argument copy, gate and output conversion/copy use shared helpers. Lookup depth is `ilog2(max(binding count, 1)) + 1`. No external effects. |
+
 ### submilli:secrets
 
 | Function | What the host does | Formula | Charge point | Notes |

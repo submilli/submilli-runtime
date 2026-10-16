@@ -498,6 +498,7 @@ fn execute_on_this_thread(
     }
     // Use with_vfs_and_cap directly rather than RuntimeConfig::run to keep console output streaming, not buffered.
     let mut data = StoreData::with_vfs_and_cap(vfs, cfg.max_store_bytes);
+    data.variables = Arc::clone(&variables);
     data.vfs_info.size_limit = size_limit;
     data.install_type_info(compiled.type_info.clone());
     if let Some(bp) = &blueprint {

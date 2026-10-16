@@ -88,6 +88,7 @@ pub struct HostServices {
     pub(crate) audit: Option<Arc<crate::audit::ExecutionAudit>>,
     pub git: Result<Option<interpreter::stdlib::git::GitConfig>, String>,
     pub auth_proxy: Arc<dyn AuthProxy>,
+    pub variables: Arc<submilli_blueprint::VarBindings>,
     pub secret_provider: Arc<dyn SecretProvider>,
     pub security_check: Arc<dyn SecurityCheck>,
     pub http_client: Arc<dyn HttpClient>,
@@ -343,6 +344,7 @@ async fn run_inner(
     data.git = git;
     data.vfs_info = vfs_info;
     data.auth_proxy = services.auth_proxy;
+    data.variables = services.variables;
     data.secret_provider = services.secret_provider;
     data.security_check = services.security_check;
     // Outermost, so the host functions see the recorder; installed before packages run
@@ -1145,6 +1147,7 @@ mod tests {
                 username: None,
             })),
             auth_proxy: defaults.auth_proxy,
+            variables: defaults.variables,
             secret_provider: defaults.secret_provider,
             audit: None,
             security_check: security.clone(),

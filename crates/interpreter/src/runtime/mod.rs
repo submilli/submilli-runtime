@@ -138,6 +138,8 @@ pub struct StoreData {
     /// Operator ceiling for a download, including streaming its body.
     pub http_max_download_timeout_ms: u64,
     pub auth_proxy: Arc<dyn AuthProxy>,
+    /// Immutable configuration resolved by the trusted session creator.
+    pub variables: Arc<std::collections::BTreeMap<String, String>>,
     pub secret_provider: Arc<dyn SecretProvider>,
     /// The outbound `@mcp/<server>` transport the `submilli:mcp.call` host fn
     /// dispatches through, present when the embedder wires one. `None` in the
@@ -296,6 +298,7 @@ impl StoreData {
             http_max_response_size: DEFAULT_HTTP_MAX_RESPONSE_SIZE,
             http_max_download_timeout_ms: 60_000,
             auth_proxy: crate::stdlib::http::default_auth_proxy(),
+            variables: Arc::default(),
             secret_provider: Arc::new(secrets::NoopSecretProvider),
             mcp_transport: None,
             tool_provider: None,
