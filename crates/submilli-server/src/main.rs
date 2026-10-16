@@ -249,6 +249,13 @@ pub struct Cli {
     #[arg(long, value_name = "RUNS")]
     max_suspended_runs: Option<usize>,
 
+    /// The largest last run a session keeps, in megabytes of its
+    /// `{result, console, error}` JSON. A larger run keeps only its size, and
+    /// `GET /v1/sessions/{id}/last-run` answers `413`. [default: 64]
+    /// Env: `$SUBMILLI_MAX_LAST_RUN_SIZE`, which outranks the config file.
+    #[arg(long, value_name = "MEGABYTES")]
+    max_last_run_size: Option<u64>,
+
     /// Seconds a keyed execute's response is kept for replay after it
     /// completes. Past that, the key still refuses to run again, with
     /// `idempotency_response_expired`. `0` keeps only the newest

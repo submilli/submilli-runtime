@@ -13,7 +13,6 @@ use submilli_shared::secret_store::SecretStore;
 
 use crate::auth::AuthConfig;
 use crate::blueprint::BlueprintStore;
-use crate::session::SessionStore;
 
 #[derive(Clone, Default)]
 pub struct ServerConfig {
@@ -28,8 +27,6 @@ pub struct ServerConfig {
     /// Outbound HTTP egress policy (SSRF guard). Defaults to allow-all; the
     /// `submilli-server` binary installs `deny_private` via its CLI flags.
     pub network_policy: NetworkPolicy,
-    /// When `None`, `AppState::new` installs an in-memory store.
-    pub sessions: Option<Arc<dyn SessionStore>>,
     /// Optional startup blueprint source. Stores on the shared database are reused;
     /// other sources are copied into SQLite before requests are admitted.
     pub blueprints: Option<Arc<dyn BlueprintStore>>,
@@ -102,6 +99,10 @@ pub struct ServerConfig {
     /// Runs that may wait on the harness at once, server-wide. `None` uses
     /// [`crate::runs::DEFAULT_MAX_SUSPENDED_RUNS`].
     pub max_suspended_runs: Option<usize>,
+    /// The largest last run a session keeps, in bytes of its JSON; a larger
+    /// one keeps only its size. `None` uses
+    /// [`crate::session_manager::DEFAULT_MAX_LAST_RUN_BYTES`].
+    pub max_last_run_size: Option<u64>,
     /// How long a keyed execute's response is kept for replay after it
     /// completes. `None` uses [`ResponseRetention::default`]'s.
     ///

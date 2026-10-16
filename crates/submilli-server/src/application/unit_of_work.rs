@@ -1,5 +1,6 @@
 //! Transactional queries and writes for application use cases.
 use crate::application::error::StoreError;
+use crate::application::sessions::ports::StagedLastRun;
 use crate::domain::mcp_grant::{GrantOverview, GrantVersion, McpGrant};
 use crate::domain::secret::{Secret, SecretName};
 use crate::domain::session::Session;
@@ -124,6 +125,18 @@ pub(crate) trait UnitOfWork: Send {
         after: Option<&[u16]>,
         max_keys: usize,
     ) -> Result<SessionStateKeys, StoreError>;
+    /// Record a session's last run over the one before. Returns the spill
+    /// file the one before was kept in, to release once this unit commits.
+    async fn put_last_run(
+        &mut self,
+        session_id: &str,
+        run_id: &str,
+        completed_at: SystemTime,
+        staged: &StagedLastRun,
+    ) -> Result<Option<String>, StoreError>;
+    /// Forget a session's last run. Returns the spill file it was kept in, to
+    /// release once this unit commits.
+    async fn remove_last_run(&mut self, session_id: &str) -> Result<Option<String>, StoreError>;
     async fn commit(self: Box<Self>) -> Result<(), StoreError>;
 }
 

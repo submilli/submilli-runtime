@@ -11,6 +11,8 @@ use tokio::sync::{mpsc, oneshot};
 use crate::adapters::sealing::Sealer;
 use crate::adapters::session::credentials::CredentialCodec;
 use crate::adapters::session::kv;
+use crate::adapters::session::last_run;
+use crate::application::sessions::ports::StagedLastRun;
 use crate::application::unit_of_work::{SessionStateKeys, SessionStateSize, SessionStateUsage};
 use crate::application::unit_of_work::{UnitOfWork, UnitOfWorkFactory};
 use crate::blueprint::StoreError;
@@ -521,6 +523,31 @@ impl UnitOfWork for SqliteUnitOfWork {
             Box::pin(
                 async move { kv::keys(connection, &session_id, after.as_deref(), max_keys).await },
             )
+        })
+        .await
+    }
+
+    async fn put_last_run(
+        &mut self,
+        session_id: &str,
+        run_id: &str,
+        completed_at: SystemTime,
+        staged: &StagedLastRun,
+    ) -> Result<Option<String>, StoreError> {
+        let (session_id, run_id, staged) =
+            (session_id.to_owned(), run_id.to_owned(), staged.clone());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move {
+                last_run::put(connection, &session_id, &run_id, completed_at, &staged).await
+            })
+        })
+        .await
+    }
+
+    async fn remove_last_run(&mut self, session_id: &str) -> Result<Option<String>, StoreError> {
+        let session_id = session_id.to_owned();
+        self.query(move |connection| {
+            Box::pin(async move { Ok(last_run::remove(connection, &session_id).await?) })
         })
         .await
     }

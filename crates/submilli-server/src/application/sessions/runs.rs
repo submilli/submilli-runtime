@@ -1,5 +1,6 @@
 //! Run preparation, admission, and terminal transitions. Execution waits outside transactions.
 use crate::application::error::StoreError;
+use crate::application::sessions::ports::StagedLastRun;
 use crate::application::unit_of_work::{UnitOfWork, UnitOfWorkFactory};
 use crate::domain::idempotent_request::{RecordedOutcome, RequestState, ResponseRetention};
 use crate::domain::run::Run;
@@ -104,29 +105,35 @@ impl ResolveRun {
     pub fn new(units: Arc<dyn UnitOfWorkFactory>) -> Self {
         Self { units }
     }
+    /// Record how the run ended, and with it the session's last run as
+    /// [`LastRunEffect`] says. `last_run` is what was staged for a run that
+    /// ends on its own, `None` when staging failed. Returns the spill file the
+    /// session's last run before was kept in, when this replaced or forgot it.
     pub async fn execute(
         &self,
         reservation: &Run,
         resolution: &RunResolution,
-    ) -> Result<(), RunFailure> {
+        last_run: Option<&StagedLastRun>,
+    ) -> Result<Option<String>, RunFailure> {
         let mut unit = self.units.begin().await?;
         let Some(mut request) = unit.get_run(reservation.reservation_id()).await? else {
-            return Ok(());
+            return Ok(None);
         };
         if request.reservation_id() != reservation.reservation_id() {
-            return Ok(());
+            return Ok(None);
         }
         if !matches!(
             request.state(),
             RequestState::Reserved | RequestState::Running
         ) {
-            return Ok(());
+            return Ok(None);
         }
-        match resolution {
+        let session_id = reservation.session_id();
+        let now = SystemTime::now();
+        let effect = match resolution {
             RunResolution::Completed(outcome) => {
-                let now = SystemTime::now();
                 request.complete(reservation.reservation_id(), outcome.clone(), now)?;
-                if let Some(mut session) = unit.get_session(reservation.session_id()).await?
+                if let Some(mut session) = unit.get_session(session_id).await?
                     && session.require_available(now).is_ok()
                 {
                     session
@@ -134,28 +141,58 @@ impl ResolveRun {
                         .map_err(|_| RunFailure::SessionUnavailable)?;
                     unit.save_session(session).await?;
                 }
-                unit.save_run(request).await?;
+                LastRunEffect::Record
             }
-            RunResolution::Undispatched => {
-                if request.state() == &RequestState::Reserved {
-                    request.abort_preparation()?;
+            RunResolution::Undispatched if request.state() == &RequestState::Reserved => {
+                request.abort_preparation()?;
+                LastRunEffect::Keep
+            }
+            RunResolution::Undispatched | RunResolution::Indeterminate => {
+                // Claiming is the admission barrier: a run still reserved
+                // never started, whatever became of its caller.
+                let started = request.state() == &RequestState::Running;
+                request.mark_indeterminate(reservation.reservation_id())?;
+                if started {
+                    LastRunEffect::Forget
                 } else {
-                    request.mark_indeterminate(reservation.reservation_id())?;
+                    LastRunEffect::Keep
                 }
-                unit.save_run(request).await?;
             }
             RunResolution::Finished => {
-                request.finish_unkeyed(SystemTime::now())?;
-                unit.save_run(request).await?;
+                request.finish_unkeyed(now)?;
+                LastRunEffect::Record
             }
-            RunResolution::Indeterminate => {
-                request.mark_indeterminate(reservation.reservation_id())?;
-                unit.save_run(request).await?;
+        };
+        unit.save_run(request).await?;
+        let replaced = match (effect, last_run) {
+            (LastRunEffect::Keep, _) => None,
+            // A closed session's last run went with it; writing one now would
+            // bring it back.
+            (LastRunEffect::Record, Some(staged)) => {
+                if unit.session_is_active(session_id).await? {
+                    unit.put_last_run(session_id, reservation.reservation_id(), now, staged)
+                        .await?
+                } else {
+                    None
+                }
             }
-        }
+            (LastRunEffect::Record, None) | (LastRunEffect::Forget, _) => {
+                unit.remove_last_run(session_id).await?
+            }
+        };
         unit.commit().await?;
-        Ok(())
+        Ok(replaced)
     }
+}
+
+/// What a run's end does to its session's last run.
+enum LastRunEffect {
+    /// The run ended on its own: its output is the latest.
+    Record,
+    /// What the run did is unknown, so no earlier run is the latest.
+    Forget,
+    /// The run never started: the last run before is still the latest.
+    Keep,
 }
 
 pub(crate) struct RecoverRuns<'a> {
@@ -170,6 +207,11 @@ impl<'a> RecoverRuns<'a> {
         for mut request in unit.unfinished_runs().await? {
             if request.owner_generation() != generation {
                 let id = request.reservation_id().to_owned();
+                // A run cut off once started ended unknown, as while the
+                // server runs; startup's sweep deletes the spill file.
+                if request.state() == &RequestState::Running {
+                    unit.remove_last_run(request.session_id()).await?;
+                }
                 request.mark_indeterminate(&id)?;
                 unit.save_run(request).await?;
             }

@@ -102,6 +102,8 @@ pub struct FileConfig {
     pub max_llm_concurrency: Option<usize>,
     /// Runs that may wait on the harness at once, server-wide.
     pub max_suspended_runs: Option<usize>,
+    /// Megabytes of JSON the largest last run a session keeps may hold.
+    pub max_last_run_size: Option<u64>,
     /// Seconds a keyed execute's response is kept for replay after it completes.
     pub idempotency_retention: Option<u64>,
     /// A session's newest keyed-execute responses kept whatever their age.
@@ -266,6 +268,7 @@ pub(crate) struct EnvConfig {
     max_execution_llm_tokens: Option<String>,
     max_llm_concurrency: Option<String>,
     max_suspended_runs: Option<String>,
+    max_last_run_size: Option<String>,
     idempotency_retention: Option<String>,
     idempotency_keep_last: Option<String>,
     max_embedding_tokens: Option<String>,
@@ -358,6 +361,7 @@ impl EnvConfig {
             max_execution_llm_tokens: var("SUBMILLI_MAX_EXECUTION_LLM_TOKENS"),
             max_llm_concurrency: var("SUBMILLI_MAX_LLM_CONCURRENCY"),
             max_suspended_runs: var("SUBMILLI_MAX_SUSPENDED_RUNS"),
+            max_last_run_size: var("SUBMILLI_MAX_LAST_RUN_SIZE"),
             idempotency_retention: var("SUBMILLI_IDEMPOTENCY_RETENTION"),
             idempotency_keep_last: var("SUBMILLI_IDEMPOTENCY_KEEP_LAST"),
             max_embedding_tokens: var("SUBMILLI_MAX_EMBEDDING_TOKENS"),
@@ -497,6 +501,7 @@ fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
     max_execution_llm_tokens(cli, file, env)?;
     max_llm_concurrency(cli, file, env)?;
     max_suspended_runs(cli, file, env)?;
+    max_last_run_size(cli, file, env)?;
     idempotency_retention(cli, file, env)?;
     idempotency_keep_last(cli, file, env)?;
     max_embedding_tokens(cli, file, env)?;
@@ -836,6 +841,23 @@ fn max_suspended_runs(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<O
     ))
 }
 
+/// The largest last run a session keeps, in bytes. `0` is rejected: it would
+/// keep no session's last run.
+fn max_last_run_size(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Option<u64>> {
+    let env_mb = parse_env(
+        "SUBMILLI_MAX_LAST_RUN_SIZE",
+        "a whole number of megabytes",
+        env.max_last_run_size.as_ref(),
+    )?;
+    let Some(mb) = explicit(cli.max_last_run_size, env_mb, file.max_last_run_size) else {
+        return Ok(None);
+    };
+    if mb == 0 {
+        anyhow::bail!("max last run size must be at least 1 MB, got 0");
+    }
+    Ok(Some(mb.saturating_mul(1024 * 1024)))
+}
+
 /// How long a keyed execute's response is kept for replay, in whole seconds.
 fn idempotency_retention(
     cli: &Cli,
@@ -998,6 +1020,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
     let max_llm_tokens = max_llm_tokens(&cli, &file, &env)?;
     let max_llm_concurrency = max_llm_concurrency(&cli, &file, &env)?;
     let max_suspended_runs = max_suspended_runs(&cli, &file, &env)?;
+    let max_last_run_size = max_last_run_size(&cli, &file, &env)?;
     let idempotency_retention = idempotency_retention(&cli, &file, &env)?;
     let idempotency_keep_last = idempotency_keep_last(&cli, &file, &env)?;
     // The other `LlmLimits` fields are embedder-only, the way `session_kv_limits`
@@ -1072,6 +1095,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         max_llm_tokens,
         max_llm_concurrency,
         max_suspended_runs,
+        max_last_run_size,
         idempotency_retention,
         idempotency_keep_last,
         embedding_limits,
@@ -1460,6 +1484,7 @@ mod tests {
             max_execution_llm_tokens: None,
             max_llm_concurrency: None,
             max_suspended_runs: None,
+            max_last_run_size: None,
             idempotency_retention: None,
             idempotency_keep_last: None,
             max_embedding_tokens: None,
@@ -3085,6 +3110,45 @@ network:
                 || max_embedding_concurrency(&cli, &file, &env).is_err();
             assert!(failed, "${name}=0 should have failed boot");
         }
+    }
+
+    #[test]
+    fn the_last_run_limit_walks_the_ladder_in_megabytes_and_refuses_zero() {
+        let file = FileConfig {
+            max_last_run_size: Some(2),
+            ..FileConfig::default()
+        };
+        let env = env_from(&[("SUBMILLI_MAX_LAST_RUN_SIZE", "3")]);
+        let cli = Cli {
+            max_last_run_size: Some(4),
+            ..empty_cli()
+        };
+        assert_eq!(
+            max_last_run_size(&empty_cli(), &FileConfig::default(), &EnvConfig::default()).unwrap(),
+            None
+        );
+        assert_eq!(
+            max_last_run_size(&empty_cli(), &file, &EnvConfig::default()).unwrap(),
+            Some(2 << 20)
+        );
+        assert_eq!(
+            max_last_run_size(&empty_cli(), &file, &env).unwrap(),
+            Some(3 << 20)
+        );
+        assert_eq!(max_last_run_size(&cli, &file, &env).unwrap(), Some(4 << 20));
+        let zero = Cli {
+            max_last_run_size: Some(0),
+            ..empty_cli()
+        };
+        assert!(max_last_run_size(&zero, &file, &env).is_err());
+        let malformed = env_from(&[("SUBMILLI_MAX_LAST_RUN_SIZE", "64mb")]);
+        let Err(err) = max_last_run_size(&empty_cli(), &file, &malformed) else {
+            panic!("a malformed SUBMILLI_MAX_LAST_RUN_SIZE should have failed boot");
+        };
+        assert!(
+            err.to_string().contains("SUBMILLI_MAX_LAST_RUN_SIZE"),
+            "{err}"
+        );
     }
 
     #[test]

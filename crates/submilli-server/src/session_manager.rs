@@ -87,6 +87,8 @@ pub const DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS: u64 = 50_000_000;
 /// Sub-batches one embedding call sends at once.
 pub use submilli_shared::embedding::DEFAULT_MAX_CONCURRENCY as DEFAULT_MAX_EMBEDDING_CONCURRENCY;
 
+pub use crate::adapters::session::last_run::DEFAULT_MAX_LAST_RUN_BYTES;
+use crate::adapters::session::last_run::LastRuns;
 pub use crate::application::sessions::error::{BootError, SessionError};
 
 impl From<CredentialError> for SessionError {
@@ -122,6 +124,8 @@ pub struct SessionManager {
     runs: Arc<RunRegistry>,
     /// How long keyed executes keep their responses for replay.
     response_retention: ResponseRetention,
+    /// Each session's last run, which ends with it.
+    last_runs: Arc<LastRuns>,
 }
 
 /// How long ending a session waits for its cancelled runs to stop before it
@@ -283,14 +287,31 @@ impl SessionManager {
             ephemeral_root: EphemeralRoot::in_root(volume_root),
             volumes,
             store,
-            database,
             session_kv,
             cursor_keys,
             llm,
             embedding,
             runs: Arc::new(RunRegistry::default()),
             response_retention: ResponseRetention::default(),
+            last_runs: Arc::new(LastRuns::new(
+                database.clone(),
+                database.ephemeral_cipher(),
+                DEFAULT_MAX_LAST_RUN_BYTES,
+            )),
+            database,
         }
+    }
+
+    /// Keep a session's last run only up to `max_bytes` of JSON; a larger one
+    /// keeps only its size.
+    pub fn with_max_last_run_size(mut self, max_bytes: u64) -> Self {
+        self.last_runs = Arc::new(self.last_runs.with_max_bytes(max_bytes));
+        self
+    }
+
+    /// Each session's last run.
+    pub(crate) fn last_runs(&self) -> &Arc<LastRuns> {
+        &self.last_runs
     }
 
     /// Hold at most `max` runs waiting on the harness at once.
@@ -412,6 +433,11 @@ impl SessionManager {
             cipher.clone(),
         );
         self.cursor_keys = cipher.as_deref().map(derive_cursor_keys);
+        self.last_runs = Arc::new(LastRuns::new(
+            self.database.clone(),
+            cipher.clone(),
+            self.last_runs.max_bytes(),
+        ));
         self.credentials = CredentialCodec::new(cipher);
         self
     }
@@ -724,6 +750,7 @@ impl SessionManager {
         // writes no outcome back when it ends (`RunEntry::cancel_unrecorded`).
         self.runs.end_session(id, RUN_DRAIN).await;
         self.resources.evict(id);
+        self.last_runs.remove_session_files(id).await;
         let Some(task) = self.store.cleanup_task(id).await? else {
             return Ok(());
         };
@@ -1411,6 +1438,28 @@ mod tests {
         })
         .await
         .expect("subsequent sweep");
+    }
+
+    #[tokio::test]
+    async fn an_idle_session_expires_with_its_last_run() {
+        use crate::application::sessions::ports::LastRunStaging;
+        let (manager, _root) = manager();
+        let blueprint = per_session(HOUR);
+        manager.ensure("idle", &blueprint).await.unwrap();
+        let staged = manager
+            .last_runs
+            .stage("idle", b"{}".to_vec())
+            .await
+            .unwrap();
+        let mut unit = manager.unit_of_work.begin().await.unwrap();
+        unit.put_last_run("idle", "run", SystemTime::now(), &staged)
+            .await
+            .unwrap();
+        unit.commit().await.unwrap();
+        assert!(manager.last_runs.get("idle").await.unwrap().is_some());
+        set_last_activity(&manager, "idle", UNIX_EPOCH).await;
+        assert_eq!(manager.reap_now().await.unwrap(), 1);
+        assert_eq!(manager.last_runs.get("idle").await.unwrap(), None);
     }
 
     #[tokio::test]

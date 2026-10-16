@@ -1,4 +1,5 @@
 //! HTTP-facing coordination; the application and database decide ownership.
+use crate::application::sessions::ports::{LastRunStaging, StagedLastRun};
 use crate::application::sessions::runs::{
     PrepareRun, RecoverRuns, ResolveRun, RunDisposition, RunFailure, RunResolution,
 };
@@ -120,6 +121,7 @@ pub(crate) struct Coordinator {
     tasks: TaskTracker,
     waiter_timeout: Duration,
     attached: AttachedRuns,
+    last_runs: Option<Arc<dyn LastRunStaging>>,
 }
 
 impl Coordinator {
@@ -130,7 +132,15 @@ impl Coordinator {
             tasks: TaskTracker::new(),
             waiter_timeout: DEFAULT_WAITER_TIMEOUT,
             attached: AttachedRuns::default(),
+            last_runs: None,
         }
+    }
+
+    /// Keep each session's last run with its run's end, staged through
+    /// `last_runs`. Without it, a run's end forgets the session's last run.
+    pub fn with_last_runs(mut self, last_runs: Arc<dyn LastRunStaging>) -> Self {
+        self.last_runs = Some(last_runs);
+        self
     }
 
     pub async fn recover(&self) -> Result<(), RunFailure> {
@@ -259,34 +269,33 @@ impl Coordinator {
         let (finished, completion) = oneshot::channel();
         let reservation_id = request.reservation_id().to_owned();
         let units = self.units.clone();
+        let last_runs = self.last_runs.clone();
         self.tasks.spawn(async move {
-            let resolution = receiver.await.unwrap_or(RunResolution::Indeterminate);
-            let resolver = ResolveRun::new(units.clone());
-            let first = resolver.execute(&request, &resolution).await;
-            if first.is_ok() {
-                let _ = finished.send(());
-                return;
-            }
-            // A failed acknowledgement may hide a successful commit. Reapplying
-            // this identity-checked transition is safe and never dispatches work.
-            let second = resolver.execute(&request, &resolution).await;
-            let _ = finished.send(());
-            if second.is_ok() {
-                return;
-            }
-            tracing::warn!(error = ?second.err(), "idempotency finalization remains uncertain");
-            // Preserve evidence when storage recovers, without withholding the
-            // original caller's result. Startup recovery covers process termination.
-            let fallback = match resolution {
-                RunResolution::Undispatched => RunResolution::Undispatched,
-                _ => RunResolution::Indeterminate,
-            };
-            loop {
-                match resolver.execute(&request, &fallback).await {
-                    Ok(()) => break,
-                    Err(error) if database_has_closed(&error) => break,
-                    Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+            let (resolution, last_run) = receiver
+                .await
+                .unwrap_or((RunResolution::Indeterminate, None));
+            let mut files = match last_runs.as_deref() {
+                Some(last_runs) => {
+                    Some(LastRunFiles::before(last_runs, request.session_id()).await)
                 }
+                None => None,
+            };
+            let staged = match (&mut files, last_run) {
+                (Some(files), Some(json)) => files.stage(json).await,
+                _ => None,
+            };
+            let resolver = ResolveRun::new(units.clone());
+            let resolved = resolve(&resolver, &request, &resolution, staged.as_ref()).await;
+            let _ = finished.send(());
+            let replaced = match resolved {
+                Ok(replaced) => replaced,
+                Err(error) => {
+                    tracing::warn!(?error, "idempotency finalization remains uncertain");
+                    resolve_until_recorded(&resolver, &request, &resolution).await
+                }
+            };
+            if let Some(files) = files {
+                files.release(replaced).await;
             }
         });
         ReservationGuard {
@@ -294,7 +303,94 @@ impl Coordinator {
             completion: Some(completion),
             reservation_id,
             attached: self.attached.clone(),
+            last_run: None,
         }
+    }
+}
+
+/// Record the run's end, trying twice: a failed acknowledgement may hide a
+/// successful commit, and reapplying this identity-checked transition is safe
+/// and never dispatches work. Returns the spill file the end replaced or
+/// forgot, to release once the end is settled.
+async fn resolve(
+    resolver: &ResolveRun,
+    request: &IdempotentRequest,
+    resolution: &RunResolution,
+    staged: Option<&StagedLastRun>,
+) -> Result<Option<String>, RunFailure> {
+    match resolver.execute(request, resolution, staged).await {
+        Ok(replaced) => Ok(replaced),
+        Err(_) => resolver.execute(request, resolution, staged).await,
+    }
+}
+
+/// Preserve evidence when storage recovers, without withholding the original
+/// caller's result: record the run as never started, or else as ended unknown,
+/// once storage takes it. Startup recovery covers process termination.
+async fn resolve_until_recorded(
+    resolver: &ResolveRun,
+    request: &IdempotentRequest,
+    resolution: &RunResolution,
+) -> Option<String> {
+    let fallback = match resolution {
+        RunResolution::Undispatched => RunResolution::Undispatched,
+        _ => RunResolution::Indeterminate,
+    };
+    loop {
+        match resolver.execute(request, &fallback, None).await {
+            Ok(replaced) => return replaced,
+            Err(error) if database_has_closed(&error) => return None,
+            Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+        }
+    }
+}
+
+/// The spill files a run's end may leave no record naming: the one the
+/// session's last run was in before the run ended, the one the end replaced
+/// (another run's may have come between), and the one staged for this run.
+struct LastRunFiles<'a> {
+    last_runs: &'a dyn LastRunStaging,
+    session_id: &'a str,
+    before: Option<String>,
+    staged: Option<String>,
+}
+
+impl<'a> LastRunFiles<'a> {
+    async fn before(last_runs: &'a dyn LastRunStaging, session_id: &'a str) -> Self {
+        // If this read fails, the only file lost track of is one replaced by
+        // an end whose acknowledgement was lost; the startup sweep deletes it.
+        let before = last_runs.spill_file(session_id).await.ok().flatten();
+        Self {
+            last_runs,
+            session_id,
+            before,
+            staged: None,
+        }
+    }
+
+    /// Seal the run's last-run JSON once, so a retry records the same spill
+    /// file. One that cannot be staged leaves the session with no last run.
+    async fn stage(&mut self, json: Vec<u8>) -> Option<StagedLastRun> {
+        match self.last_runs.stage(self.session_id, json).await {
+            Ok(staged) => {
+                self.staged = staged.spill_file().map(str::to_owned);
+                Some(staged)
+            }
+            Err(error) => {
+                tracing::error!(session = self.session_id, %error, "last run not kept");
+                None
+            }
+        }
+    }
+
+    /// Delete those no record names now that the run's end is settled, however
+    /// it settled: replaced, never written, or written and then lost.
+    async fn release(self, replaced: Option<String>) {
+        let files = [self.before, replaced, self.staged]
+            .into_iter()
+            .flatten()
+            .collect();
+        self.last_runs.release(self.session_id, files).await;
     }
 }
 
@@ -319,16 +415,27 @@ fn database_has_closed(error: &RunFailure) -> bool {
 }
 
 pub struct ReservationGuard {
-    sender: Option<oneshot::Sender<RunResolution>>,
+    sender: Option<oneshot::Sender<(RunResolution, Option<Vec<u8>>)>>,
     completion: Option<oneshot::Receiver<()>>,
     reservation_id: String,
     attached: AttachedRuns,
+    /// The run's last-run JSON, recorded with its end.
+    last_run: Option<Vec<u8>>,
 }
 impl ReservationGuard {
     /// Name the run executing under this reservation, so a duplicate request is
     /// answered with that run's state instead of waiting for it to finish.
     pub fn attach_run(&self, run_id: &str) {
         lock_attached(&self.attached).insert(self.reservation_id.clone(), run_id.to_owned());
+    }
+
+    /// What the session's last run becomes when this run ends on its own. A run
+    /// that ends without one leaves the session with none.
+    pub fn set_last_run(&mut self, run: &crate::session::LastRun) {
+        match run.encode() {
+            Ok(json) => self.last_run = Some(json),
+            Err(error) => tracing::error!(%error, "last run not kept"),
+        }
     }
 
     pub async fn complete(self, status: u16, body: String) {
@@ -344,7 +451,7 @@ impl ReservationGuard {
     async fn resolve(mut self, resolution: RunResolution) {
         self.detach();
         if let Some(sender) = self.sender.take() {
-            let _ = sender.send(resolution);
+            let _ = sender.send((resolution, self.last_run.take()));
         }
         if let Some(completion) = self.completion.take() {
             let _ = completion.await;
@@ -713,3 +820,6 @@ mod fault_tests;
 
 #[cfg(test)]
 mod admission_tests;
+
+#[cfg(test)]
+mod last_run_tests;

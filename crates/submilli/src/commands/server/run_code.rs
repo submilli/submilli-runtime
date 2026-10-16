@@ -42,8 +42,6 @@ pub struct Args {
 /// Owned to keep the CLI independent of the server crate at compile time.
 #[derive(Debug, Deserialize)]
 struct ExecuteResponse {
-    #[serde(default)]
-    session_id: Option<String>,
     result: Option<Value>,
     #[serde(default)]
     console: Vec<String>,
@@ -108,10 +106,14 @@ pub fn execute(args: Args) -> Result<ExitCode> {
         return Ok(ExitCode::from(1));
     }
 
-    // Execute suppresses console on success; pull it from
-    // /v1/sessions/{session_id}/last-run so the CLI can surface it on stderr.
-    if let Some(session_id) = response.session_id.as_deref() {
-        let last_run_url = session_url(base, session_id, &["last-run"])?;
+    // A one-shot response carries its whole console. A session execute
+    // suppresses it on success; the session's last run keeps it, so read it
+    // there to surface it on stderr.
+    for line in &response.console {
+        eprintln!("{line}");
+    }
+    if let Some(session) = &args.session {
+        let last_run_url = session_url(base, session, &["last-run"])?;
         if let Ok(last) = agent.get(&last_run_url).call()
             && let Ok(body) = last.into_body().read_json::<LastRunResponse>()
         {
