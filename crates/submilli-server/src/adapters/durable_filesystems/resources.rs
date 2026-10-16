@@ -332,9 +332,11 @@ pub(super) async fn require_idle(
 ) -> Result<(), DatabaseError> {
     require_live(connection, workspace).await?;
     require_ready(connection, workspace, None).await?;
-    let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM durable_filesystem_effects WHERE workspace_id=? AND state IN ('preparing','pending')) OR EXISTS(SELECT 1 FROM durable_filesystem_plans WHERE workspace_id=? AND outcome IS NULL)")
-        .bind(workspace).bind(workspace).fetch_one(connection).await?;
-    if pending {
+    let run = workspace_run(connection, workspace).await?;
+    let effect_pending = effects::pending(connection, &run).await?.is_some();
+    let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM durable_filesystem_plans WHERE workspace_id=? AND outcome IS NULL)")
+        .bind(workspace).fetch_one(connection).await?;
+    if effect_pending || pending {
         return Err(DatabaseError::SessionConflict);
     }
     Ok(())

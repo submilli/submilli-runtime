@@ -1,5 +1,6 @@
 //! SQLite persistence for the local filesystem recovery protocol. Filesystem
 //! publication and outcome commit are deliberately separate operations.
+use crate::adapters::durable_effects::{self as effects, EffectKey, MAX_EFFECTS, MAX_RECORD};
 use crate::adapters::sealing::Sealer;
 use crate::database::{DatabaseError, ServerDatabase};
 use crate::domain::durable_object::{ContentIdentity, ObjectId, ObjectReference};
@@ -11,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqliteConnection};
 use std::sync::Arc;
 
-const MAX_EFFECTS: i64 = 10_000;
-const MAX_RECORD: usize = 64 * 1024;
+const OPERATION: &str = "filesystem.mutation";
+const VERSION: u32 = 1;
 
 mod lifecycle;
 mod listings;
@@ -38,8 +39,17 @@ pub(crate) enum RecordedOutcome {
 
 pub(crate) struct EffectRecord {
     pub request: Mutation,
+    pub plan: Option<String>,
     pub intent: Option<Intent>,
     pub outcome: Option<RecordedOutcome>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FilesystemRequest {
+    workspace: String,
+    plan: Option<String>,
+    mutation: Mutation,
 }
 
 impl FilesystemJournal {
@@ -188,7 +198,7 @@ impl FilesystemJournal {
         self.database.transaction(move |connection| Box::pin(async move {
             let owner: String = sqlx::query_scalar("SELECT owner FROM durable_workspaces WHERE workspace_id=? AND state='active'")
                 .bind(&workspace).fetch_optional(&mut *connection).await?.ok_or(DatabaseError::SessionConflict)?;
-            sequences::require_plan(connection, &workspace, &effect, plan.as_deref()).await?;
+            sequences::require_plan(connection, &sealer, &workspace, &effect, plan.as_deref()).await?;
             if let Some(existing) = load_effect(connection, &sealer, &workspace, &effect).await? {
                 if existing.request != request { return Err(DatabaseError::SessionConflict); }
                 return Ok(existing);
@@ -199,14 +209,12 @@ impl FilesystemJournal {
                 .bind(&workspace).bind(&effect).fetch_one(&mut *connection).await?;
             if !running && plan.is_none() && !closing { return Err(DatabaseError::SessionConflict); }
             resources::require_ready(connection, &workspace, Some(&effect)).await?;
-            let (count, pending): (i64, i64) = sqlx::query_as("SELECT count(*),coalesce(sum(state IN ('preparing','pending')),0) FROM durable_filesystem_effects WHERE workspace_id=?")
-                .bind(&workspace).fetch_one(&mut *connection).await?;
-            if count >= MAX_EFFECTS || pending != 0 { return Err(DatabaseError::SessionConflict); }
+            let run = workspace_run(connection, &workspace).await?;
             retain_content(connection, &sealer, &workspace, &owner, &request).await?;
-            let encoded = encode(&sealer, &effect_owner(&workspace, &effect), &request)?;
-            sqlx::query("INSERT INTO durable_filesystem_effects(workspace_id,effect_id,request,plan_id,state) VALUES(?,?,?,?,'preparing')")
-                .bind(&workspace).bind(&effect).bind(encoded).bind(plan).execute(connection).await?;
-            Ok(EffectRecord { request, intent: None, outcome: None })
+            let envelope = FilesystemRequest { workspace: workspace.clone(), plan: plan.clone(), mutation: request.clone() };
+            let bytes = serde_json::to_vec(&envelope).map_err(invalid)?;
+            effects::admit(connection, &sealer, &effect_key(&run, &effect), &bytes).await?;
+            Ok(EffectRecord { request, plan, intent: None, outcome: None })
         })).await.map_err(Into::into)
     }
 
@@ -214,17 +222,23 @@ impl FilesystemJournal {
         let workspace = workspace.to_owned();
         let intent = intent.clone();
         let sealer = self.sealer.clone();
-        self.database.transaction(move |connection| Box::pin(async move {
-            let effect = intent.effect();
-            let existing = load_effect(connection, &sealer, &workspace, effect).await?.ok_or(DatabaseError::SessionConflict)?;
-            if existing.request != *intent.mutation() || existing.outcome.is_some() { return Err(DatabaseError::SessionConflict); }
-            if let Some(prior) = existing.intent { return if prior == intent { Ok(()) } else { Err(DatabaseError::SessionConflict) }; }
-            let bytes = intent.encode().map_err(invalid)?;
-            let sealed = sealer.seal(&effect_owner(&workspace, effect), &bytes).map_err(invalid)?;
-            sqlx::query("UPDATE durable_filesystem_effects SET intent=?,state='pending' WHERE workspace_id=? AND effect_id=? AND state='preparing'")
-                .bind(sealed).bind(workspace).bind(effect).execute(connection).await?;
-            Ok(())
-        })).await.map_err(Into::into)
+        self.database
+            .transaction(move |connection| {
+                Box::pin(async move {
+                    let effect = intent.effect();
+                    let existing = load_effect(connection, &sealer, &workspace, effect)
+                        .await?
+                        .ok_or(DatabaseError::SessionConflict)?;
+                    if existing.request != *intent.mutation() {
+                        return Err(DatabaseError::SessionConflict);
+                    }
+                    let run = workspace_run(connection, &workspace).await?;
+                    let bytes = intent.encode().map_err(invalid)?;
+                    effects::prepare(connection, &sealer, &effect_key(&run, effect), &bytes).await
+                })
+            })
+            .await
+            .map_err(Into::into)
     }
 
     pub async fn complete(
@@ -237,21 +251,26 @@ impl FilesystemJournal {
         let effect = effect.to_owned();
         let sealer = self.sealer.clone();
         let outcome = outcome.clone();
-        self.database.transaction(move |connection| Box::pin(async move {
-            let existing = load_effect(connection, &sealer, &workspace, &effect).await?.ok_or(DatabaseError::SessionConflict)?;
-            if let Some(prior) = existing.outcome {
-                return if serde_json::to_vec(&prior).map_err(invalid)? == serde_json::to_vec(&outcome).map_err(invalid)? { Ok(()) } else { Err(DatabaseError::SessionConflict) };
-            }
-            let (state, previous) = match outcome {
-                RecordedOutcome::Completed(_) if existing.intent.is_some() => ("done", "pending"),
-                RecordedOutcome::Rejected(_) if existing.intent.is_none() => ("rejected", "preparing"),
-                _ => return Err(DatabaseError::SessionConflict),
-            };
-            let sealed = encode(&sealer, &effect_owner(&workspace, &effect), &outcome)?;
-            sqlx::query("UPDATE durable_filesystem_effects SET outcome=?,state=? WHERE workspace_id=? AND effect_id=? AND state=?")
-                .bind(sealed).bind(state).bind(workspace).bind(effect).bind(previous).execute(connection).await?;
-            Ok(())
-        })).await.map_err(Into::into)
+        self.database
+            .transaction(move |connection| {
+                Box::pin(async move {
+                    load_effect(connection, &sealer, &workspace, &effect)
+                        .await?
+                        .ok_or(DatabaseError::SessionConflict)?;
+                    let run = workspace_run(connection, &workspace).await?;
+                    let bytes = serde_json::to_vec(&outcome).map_err(invalid)?;
+                    effects::complete(
+                        connection,
+                        &sealer,
+                        &effect_key(&run, &effect),
+                        &bytes,
+                        matches!(outcome, RecordedOutcome::Rejected(_)),
+                    )
+                    .await
+                })
+            })
+            .await
+            .map_err(Into::into)
     }
 
     pub async fn pending(
@@ -260,15 +279,21 @@ impl FilesystemJournal {
     ) -> Result<Option<(String, Mutation)>, FilesystemError> {
         let workspace = workspace.to_owned();
         let sealer = self.sealer.clone();
-        self.database.read(move |connection| Box::pin(async move {
-            let row = sqlx::query("SELECT effect_id,request FROM durable_filesystem_effects WHERE workspace_id=? AND state IN ('preparing','pending')")
-                .bind(&workspace).fetch_optional(connection).await?;
-            row.map(|row| {
-                let effect: String = row.try_get("effect_id")?;
-                let request = decode(&sealer, &effect_owner(&workspace, &effect), &row.try_get::<Vec<u8>, _>("request")?)?;
-                Ok((effect, request))
-            }).transpose()
-        })).await.map_err(Into::into)
+        self.database
+            .read(move |connection| {
+                Box::pin(async move {
+                    let run = workspace_run(connection, &workspace).await?;
+                    let Some(effect) = effects::pending(connection, &run).await? else {
+                        return Ok(None);
+                    };
+                    let record = load_effect(connection, &sealer, &workspace, &effect)
+                        .await?
+                        .ok_or(DatabaseError::SessionConflict)?;
+                    Ok(Some((effect, record.request)))
+                })
+            })
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -278,32 +303,59 @@ async fn load_effect(
     workspace: &str,
     effect: &str,
 ) -> Result<Option<EffectRecord>, DatabaseError> {
-    let row = sqlx::query("SELECT request,intent,outcome FROM durable_filesystem_effects WHERE workspace_id=? AND effect_id=?")
-        .bind(workspace).bind(effect).fetch_optional(connection).await?;
-    let owner = effect_owner(workspace, effect);
-    row.map(|row| {
-        Ok(EffectRecord {
-            request: decode(sealer, &owner, &row.try_get::<Vec<u8>, _>("request")?)?,
-            intent: row
-                .try_get::<Option<Vec<u8>>, _>("intent")?
-                .map(|bytes| {
-                    let bytes = sealer
-                        .open(&owner, &bytes, "filesystem intent")
-                        .map_err(invalid)?;
-                    Intent::decode(&bytes).map_err(invalid)
-                })
-                .transpose()?,
-            outcome: row
-                .try_get::<Option<Vec<u8>>, _>("outcome")?
-                .map(|bytes| decode(sealer, &owner, &bytes))
-                .transpose()?,
-        })
-    })
-    .transpose()
+    let run = workspace_run(connection, workspace).await?;
+    let Some(record) = effects::load(connection, sealer, &effect_key(&run, effect)).await? else {
+        return Ok(None);
+    };
+    let request: FilesystemRequest = serde_json::from_slice(&record.request).map_err(invalid)?;
+    if request.workspace != workspace {
+        return Err(DatabaseError::SessionConflict);
+    }
+    let intent = record
+        .recovery_payload
+        .map(|bytes| Intent::decode(&bytes).map_err(invalid))
+        .transpose()?;
+    let outcome = record
+        .outcome
+        .map(|bytes| serde_json::from_slice::<RecordedOutcome>(&bytes).map_err(invalid))
+        .transpose()?;
+    if let Some(intent) = &intent
+        && (intent.effect() != effect || *intent.mutation() != request.mutation)
+    {
+        return Err(DatabaseError::SessionConflict);
+    }
+    if outcome
+        .as_ref()
+        .is_some_and(|outcome| matches!(outcome, RecordedOutcome::Rejected(_)) != record.rejected)
+    {
+        return Err(DatabaseError::SessionConflict);
+    }
+    Ok(Some(EffectRecord {
+        request: request.mutation,
+        plan: request.plan,
+        intent,
+        outcome,
+    }))
 }
 
-fn effect_owner(workspace: &str, effect: &str) -> String {
-    format!("filesystem:{workspace}:{effect}")
+async fn workspace_run(
+    connection: &mut SqliteConnection,
+    workspace: &str,
+) -> Result<String, DatabaseError> {
+    sqlx::query_scalar("SELECT run_id FROM durable_workspaces WHERE workspace_id=?")
+        .bind(workspace)
+        .fetch_optional(connection)
+        .await?
+        .ok_or(DatabaseError::SessionConflict)
+}
+
+fn effect_key<'a>(run: &'a str, effect: &'a str) -> EffectKey<'a> {
+    EffectKey {
+        run,
+        effect,
+        operation: OPERATION,
+        version: VERSION,
+    }
 }
 
 fn encode<T: Serialize>(sealer: &Sealer, owner: &str, value: &T) -> Result<Vec<u8>, DatabaseError> {

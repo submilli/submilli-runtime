@@ -1,5 +1,5 @@
--- These are filesystem protocol records, not execution history. The execution
--- core will refer to their stable effect/resource identities from run events.
+-- Shared effect records and filesystem workspaces/resources. The execution
+-- history integration will use the same run-scoped effect identities.
 CREATE TABLE durable_workspaces (
     workspace_id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL UNIQUE REFERENCES runs(run_id),
@@ -13,22 +13,28 @@ CREATE TABLE durable_workspaces (
 );
 CREATE INDEX durable_workspaces_by_session ON durable_workspaces(session_id, state);
 
-CREATE TABLE durable_filesystem_effects (
-    workspace_id TEXT NOT NULL REFERENCES durable_workspaces(workspace_id),
+-- Shared effect lifecycle. Requests and outcomes are immutable once recorded;
+-- recovery_payload belongs to the operation adapter. Payload bytes are sealed
+-- before SQL; large file contents are references into the object store.
+-- Execution history sequencing, attempt fencing and accounting are separate
+-- integration work. These rows are not an append-only execution event stream.
+CREATE TABLE durable_effects (
+    run_id TEXT NOT NULL REFERENCES runs(run_id),
     effect_id TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    version INTEGER NOT NULL CHECK(version > 0),
     request BLOB NOT NULL,
-    intent BLOB,
+    recovery_payload BLOB,
     outcome BLOB,
-    plan_id TEXT,
     state TEXT NOT NULL CHECK(state IN ('preparing', 'pending', 'done', 'rejected')),
-    PRIMARY KEY(workspace_id, effect_id),
-    CHECK((state = 'preparing' AND intent IS NULL AND outcome IS NULL)
-       OR (state = 'pending' AND intent IS NOT NULL AND outcome IS NULL)
-       OR (state = 'done' AND intent IS NOT NULL AND outcome IS NOT NULL)
-       OR (state = 'rejected' AND intent IS NULL AND outcome IS NOT NULL))
+    PRIMARY KEY(run_id, effect_id),
+    CHECK((state = 'preparing' AND recovery_payload IS NULL AND outcome IS NULL)
+       OR (state = 'pending' AND recovery_payload IS NOT NULL AND outcome IS NULL)
+       OR (state = 'done' AND recovery_payload IS NOT NULL AND outcome IS NOT NULL)
+       OR (state = 'rejected' AND recovery_payload IS NULL AND outcome IS NOT NULL))
 );
--- Do not admit the next mutation until the previous outcome is durable.
-CREATE UNIQUE INDEX durable_filesystem_pending ON durable_filesystem_effects(workspace_id)
+-- One unfinished effect per run, regardless of its operation adapter.
+CREATE UNIQUE INDEX durable_effect_pending ON durable_effects(run_id)
     WHERE state IN ('preparing', 'pending');
 
 CREATE TABLE durable_filesystem_plans (

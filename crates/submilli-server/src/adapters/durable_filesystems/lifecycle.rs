@@ -35,8 +35,8 @@ impl FilesystemJournal {
             let state: String = sqlx::query_scalar("SELECT runs.state FROM runs JOIN durable_workspaces w ON w.run_id=runs.run_id WHERE workspace_id=? AND w.owner=?")
                 .bind(&workspace).bind(owner).fetch_one(&mut *connection).await?;
             if !matches!(state.as_str(), "completed" | "finished" | "cancelled" | "aborted" | "expired") { return Err(DatabaseError::SessionConflict); }
-            let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM durable_filesystem_effects WHERE workspace_id=? AND state IN ('preparing','pending'))")
-                .bind(&workspace).fetch_one(&mut *connection).await?;
+            let run = workspace_run(connection, &workspace).await?;
+            let pending = effects::pending(connection, &run).await?.is_some();
             if pending { return Err(DatabaseError::SessionConflict); }
             let closing: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM durable_filesystem_writers WHERE workspace_id=? AND state='closing')").bind(&workspace).fetch_one(&mut *connection).await?;
             if closing { return Err(DatabaseError::SessionConflict); }
@@ -55,15 +55,16 @@ impl FilesystemJournal {
             let state: String = sqlx::query_scalar("SELECT state FROM durable_workspaces WHERE workspace_id=?").bind(&workspace).fetch_one(&mut *connection).await?;
             if state == "gone" { return Ok(()); }
             if state != "retiring" { return Err(DatabaseError::SessionConflict); }
+            let run = workspace_run(connection, &workspace).await?;
             let mut after = String::new();
             loop {
-                let rows = sqlx::query("SELECT effect_id,request FROM durable_filesystem_effects WHERE workspace_id=? AND effect_id>? ORDER BY effect_id LIMIT 64")
-                    .bind(&workspace).bind(&after).fetch_all(&mut *connection).await?;
-                if rows.is_empty() { break; }
-                for row in rows {
-                    after = row.try_get("effect_id")?;
-                    let request: Mutation = decode(&sealer, &effect_owner(&workspace, &after), &row.try_get::<Vec<u8>, _>("request")?)?;
-                    release_content(connection, &sealer, &workspace, request).await?;
+                let ids: Vec<String> = sqlx::query_scalar("SELECT effect_id FROM durable_effects WHERE run_id=? AND operation=? AND effect_id>? ORDER BY effect_id LIMIT 64")
+                    .bind(&run).bind(OPERATION).bind(&after).fetch_all(&mut *connection).await?;
+                if ids.is_empty() { break; }
+                for id in ids {
+                    let record = load_effect(connection, &sealer, &workspace, &id).await?.ok_or(DatabaseError::SessionConflict)?;
+                    release_content(connection, &sealer, &workspace, record.request).await?;
+                    after = id;
                 }
             }
             let mut after = String::new();
