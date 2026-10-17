@@ -67,7 +67,7 @@ pub struct Listing {
     pub id: String,
     pub path: String,
     pub recursive: bool,
-    pub content: Option<Content>,
+    pub content: Option<Vec<crate::recovery::DirectoryEntry>>,
     pub error: Option<String>,
 }
 #[derive(Clone)]
@@ -83,11 +83,6 @@ pub struct Chunk {
     pub id: String,
     pub sequence: u32,
     pub content: Content,
-}
-#[derive(Clone)]
-pub struct Producer {
-    pub id: String,
-    pub request: [u8; 32],
 }
 
 pub struct WriterRecord {
@@ -298,13 +293,5 @@ impl Chunk {
                 && self.sequence == prior.sequence
                 && self.content == prior.content
         }))
-    }
-}
-impl Producer {
-    pub fn validate_successor(
-        &self,
-        prior: Option<&Self>,
-    ) -> Result<(), crate::unit_of_work::StoreError> {
-        require(prior.is_none_or(|prior| self.id == prior.id && self.request == prior.request))
     }
 }

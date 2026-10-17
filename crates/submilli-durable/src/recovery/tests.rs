@@ -40,7 +40,7 @@ impl Payload {
         }
     }
 }
-impl CapturedContent for Payload {
+impl InputBytes for Payload {
     fn open(&mut self, reference: &Content) -> Result<Box<dyn Read + Send>, RecoveryError> {
         if *reference != self.reference {
             return Err(RecoveryError::Conflict);

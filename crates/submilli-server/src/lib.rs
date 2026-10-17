@@ -26,7 +26,6 @@ pub mod local_apply;
 pub mod logging;
 mod mcp;
 pub mod metrics;
-pub mod objects;
 pub mod packages;
 pub mod record;
 #[cfg(test)]

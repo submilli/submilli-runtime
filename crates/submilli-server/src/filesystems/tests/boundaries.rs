@@ -6,171 +6,6 @@ fn id() -> String {
 }
 
 #[tokio::test]
-async fn aggregate_quota_refusal_keeps_writer_editable_and_retireable() {
-    let fixture = Fixture::with_limits(crate::objects::ObjectLimits {
-        maximum_object_bytes: 1536 * 1024,
-        maximum_owner_bytes: 2 * 1024 * 1024,
-        maximum_store_bytes: 4 * 1024 * 1024,
-    })
-    .await;
-    let fs = &fixture.filesystem;
-    let writer = id();
-    fs.open_writer(&writer, "/out").await.unwrap();
-    for byte in *b"ab" {
-        let chunk = fixture.capture(&vec![byte; 600 * 1024]).await;
-        fs.write_chunk(&writer, &id(), chunk).await.unwrap();
-    }
-    let close = id();
-    assert!(matches!(
-        fs.close_writer(&writer, &close).await,
-        Err(FilesystemError::Objects(ObjectStoreError::Limit))
-    ));
-    assert!(
-        fs.test_journal()
-            .pending_writer(fs.id())
-            .await
-            .unwrap()
-            .is_none()
-    );
-    let chunk = fixture.capture(b"after refusal").await;
-    fs.write_chunk(&writer, &id(), chunk).await.unwrap();
-    // A changed chunk list gets another capture ID, rather than conflicting
-    // with the private producer tracked by the previous refused attempt.
-    assert!(matches!(
-        fs.close_writer(&writer, &close).await,
-        Err(FilesystemError::Objects(ObjectStoreError::Limit))
-    ));
-    assert_eq!(
-        fs.open_directory(&id(), "/", false, 0)
-            .await
-            .unwrap()
-            .count(),
-        0
-    );
-    fs.execute(
-        &id(),
-        Mutation::CreateDirectory {
-            path: "/healthy".into(),
-        },
-    )
-    .await
-    .unwrap();
-    fixture.terminal().await;
-    fs.retire("owner").await.unwrap();
-}
-
-#[tokio::test]
-async fn cancelled_close_reservation_allows_more_chunks_and_retires_stale_capture() {
-    let fixture = Fixture::new().await;
-    let fs = &fixture.filesystem;
-    let writer = id();
-    fs.open_writer(&writer, "/out").await.unwrap();
-    let first = fixture.capture(b"first").await;
-    fs.write_chunk(&writer, &id(), first.clone()).await.unwrap();
-    // State at cancellation after successful quota reservation but before
-    // close admission: no publication or close effect has started.
-    let stale = fs
-        .test_reserve_writer_capture(&writer, &[first])
-        .await
-        .unwrap();
-    let second = fixture.capture(b" second").await;
-    fs.write_chunk(&writer, &id(), second).await.unwrap();
-    fs.close_writer(&writer, &id()).await.unwrap();
-    assert_eq!(
-        std::fs::read(fs.vfs().root().join("out")).unwrap(),
-        b"first second"
-    );
-    fixture.terminal().await;
-    fs.retire("owner").await.unwrap();
-    fixture.objects.recover().await.unwrap();
-    assert!(fixture.objects.reference(&stale).await.is_err());
-}
-
-#[tokio::test]
-async fn directory_capture_reserves_actual_encoded_size_and_records_quota_refusal() {
-    for maximum_owner_bytes in [4096, 2] {
-        let fixture = Fixture::with_limits(crate::objects::ObjectLimits {
-            maximum_object_bytes: maximum_owner_bytes,
-            maximum_owner_bytes,
-            maximum_store_bytes: maximum_owner_bytes,
-        })
-        .await;
-        let fs = &fixture.filesystem;
-        let resource = id();
-        let result = fs.open_directory(&resource, "/", false, 0).await;
-        if maximum_owner_bytes == 4096 {
-            assert_eq!(result.unwrap().count(), 0);
-        } else {
-            assert!(matches!(result, Err(FilesystemError::Rejected(_))));
-            assert!(matches!(
-                fs.open_directory(&resource, "/", false, 0).await,
-                Err(FilesystemError::Rejected(_))
-            ));
-        }
-        fs.execute(
-            &id(),
-            Mutation::CreateDirectory {
-                path: "/healthy".into(),
-            },
-        )
-        .await
-        .unwrap();
-        fixture.terminal().await;
-        fs.retire("owner").await.unwrap();
-    }
-}
-
-#[tokio::test]
-async fn permanent_resource_limits_do_not_fence_the_workspace() {
-    let fixture = Fixture::with_maximum_object_bytes(16).await;
-    let fs = &fixture.filesystem;
-    let writer = id();
-    fs.open_writer(&writer, "/out").await.unwrap();
-    let chunk = fixture.capture(b"0123456789").await;
-    fs.write_chunk(&writer, &id(), chunk.clone()).await.unwrap();
-    fs.write_chunk(&writer, &id(), chunk).await.unwrap();
-    assert!(fs.close_writer(&writer, &id()).await.is_err());
-    assert!(
-        fs.test_journal()
-            .pending_writer(fs.id())
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(!fs.vfs().root().join("out").exists());
-    assert_eq!(
-        fs.open_directory(&id(), "/", false, 0)
-            .await
-            .unwrap()
-            .count(),
-        0
-    );
-
-    std::fs::write(fs.vfs().root().join("entry"), b"a").unwrap();
-    let listing = id();
-    assert!(matches!(
-        fs.open_directory(&listing, "/", false, 0).await,
-        Err(FilesystemError::Rejected(_))
-    ));
-    fs.execute(
-        &id(),
-        Mutation::Remove {
-            path: "/entry".into(),
-        },
-    )
-    .await
-    .unwrap();
-    // Replaying the oversized snapshot remains a refusal even after it fits.
-    assert!(matches!(
-        fs.open_directory(&listing, "/", false, 0).await,
-        Err(FilesystemError::Rejected(_))
-    ));
-    assert!(fs.recover().await.unwrap().is_none());
-    fixture.terminal().await;
-    fs.retire("owner").await.unwrap();
-}
-
-#[tokio::test]
 async fn compound_admission_reserves_all_effect_slots() {
     let fixture = Fixture::new().await;
     let fs = &fixture.filesystem;
@@ -192,7 +27,7 @@ async fn compound_admission_reserves_all_effect_slots() {
             path: "/two".into(),
         },
     ];
-    assert!(fs.execute_plan(&id(), steps).await.is_err());
+    assert!(fs.execute_replayed_plan(&id(), steps).await.is_err());
     assert!(!fs.vfs().root().join("one").exists());
     assert!(
         fs.test_journal()
@@ -201,7 +36,7 @@ async fn compound_admission_reserves_all_effect_slots() {
             .unwrap()
             .is_none()
     );
-    fs.execute_plan(
+    fs.execute_replayed_plan(
         &id(),
         vec![Mutation::CreateDirectory {
             path: "/last".into(),
@@ -232,7 +67,7 @@ async fn reused_effect_ids_refuse_compound_admission_before_fencing() {
     let fs = &fixture.filesystem;
     let plan = id();
     let effect = crate::adapters::durable_filesystems::plan_effect_id(fs.id(), &plan, 0);
-    fs.execute(
+    fs.execute_replayed(
         &effect,
         Mutation::CreateDirectory {
             path: "/existing".into(),
@@ -241,7 +76,7 @@ async fn reused_effect_ids_refuse_compound_admission_before_fencing() {
     .await
     .unwrap();
     assert!(
-        fs.execute_plan(
+        fs.execute_replayed_plan(
             &plan,
             vec![Mutation::CreateDirectory {
                 path: "/new".into()
@@ -253,7 +88,7 @@ async fn reused_effect_ids_refuse_compound_admission_before_fencing() {
     let writer = id();
     fs.open_writer(&writer, "/out").await.unwrap();
     assert!(fs.close_writer(&writer, &effect).await.is_err());
-    assert!(fs.recover().await.unwrap().is_none());
+    assert!(fs.recover_replayed().await.unwrap().is_none());
     fs.close_writer(&writer, &id()).await.unwrap();
     fixture.terminal().await;
     fs.retire("owner").await.unwrap();
@@ -269,7 +104,7 @@ async fn pending_resources_recover_and_rejected_opens_replay() {
         .reader(fs.id(), &reader, "/file")
         .await
         .unwrap();
-    assert!(fs.recover().await.unwrap().is_some());
+    assert!(fs.recover_replayed().await.unwrap().is_some());
     let mut handle = fs.open_reader(&reader, "/file").await.unwrap();
     let mut bytes = Vec::new();
     handle.read_to_end(&mut bytes).unwrap();
@@ -280,7 +115,7 @@ async fn pending_resources_recover_and_rejected_opens_replay() {
         .listing(fs.id(), &listing, "/", false, None)
         .await
         .unwrap();
-    assert!(fs.recover().await.unwrap().is_some());
+    assert!(fs.recover_replayed().await.unwrap().is_some());
     assert_eq!(
         fs.open_directory(&listing, "/", false, 0)
             .await
@@ -362,11 +197,11 @@ async fn named_and_session_roots_resume_deleted_cwd_and_release_mounted_quota() 
             &run,
             "owner",
             fixture.database.clone(),
-            fixture.objects.clone(),
+            fixture.context.clone(),
         )
         .await
         .unwrap();
-        fs.execute(
+        fs.execute_replayed(
             &id(),
             Mutation::Remove {
                 path: "/cwd".into(),
@@ -374,8 +209,8 @@ async fn named_and_session_roots_resume_deleted_cwd_and_release_mounted_quota() 
         )
         .await
         .unwrap();
-        let content = fixture.capture(b"old").await;
-        fs.execute_plan(
+        let content = fixture.input(b"old").await;
+        fs.execute_replayed_plan(
             &id(),
             vec![
                 Mutation::Write {
@@ -395,16 +230,16 @@ async fn named_and_session_roots_resume_deleted_cwd_and_release_mounted_quota() 
             fs.id(),
             "owner",
             fixture.database.clone(),
-            fixture.objects.clone(),
+            fixture.context.clone(),
         )
         .await
         .unwrap();
         assert_eq!(resumed.vfs().cwd(), "/cwd");
         assert!(!root.path().join("cwd").exists());
         assert!(Arc::ptr_eq(resumed.vfs().quota().unwrap(), &root_quota));
-        let content = fixture.capture(b"changed").await;
+        let content = fixture.input(b"changed").await;
         resumed
-            .execute(
+            .execute_replayed(
                 &id(),
                 Mutation::Write {
                     path: "/mnt/copied".into(),
@@ -425,7 +260,7 @@ async fn named_and_session_roots_resume_deleted_cwd_and_release_mounted_quota() 
             fs.id(),
             "owner",
             fixture.database.clone(),
-            fixture.objects.clone(),
+            fixture.context.clone(),
         )
         .await
         .unwrap();
@@ -442,7 +277,7 @@ async fn named_and_session_roots_resume_deleted_cwd_and_release_mounted_quota() 
 #[tokio::test]
 async fn cancelled_blocking_work_holds_admission_until_it_drains() {
     let fixture = Fixture::new().await;
-    let gate = Arc::new(fixture.objects.test_gate().clone().lock_owned().await);
+    let gate = Arc::new(fixture.context.test_gate().clone().lock_owned().await);
     let (started, entered) = tokio::sync::oneshot::channel();
     let (release, wait) = std::sync::mpsc::channel();
     let worker = tokio::spawn(blocking(gate, move || {
@@ -453,18 +288,18 @@ async fn cancelled_blocking_work_holds_admission_until_it_drains() {
     entered.await.unwrap();
     worker.abort();
     assert!(worker.await.unwrap_err().is_cancelled());
-    assert!(fixture.objects.test_gate().try_lock().is_err());
+    assert!(fixture.context.test_gate().try_lock().is_err());
     release.send(()).unwrap();
     let drained = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        fixture.objects.test_gate().lock(),
+        fixture.context.test_gate().lock(),
     )
     .await
     .unwrap();
     drop(drained);
     fixture
         .filesystem
-        .execute(
+        .execute_replayed(
             &id(),
             Mutation::CreateDirectory {
                 path: "/healthy".into(),
@@ -472,32 +307,4 @@ async fn cancelled_blocking_work_holds_admission_until_it_drains() {
         )
         .await
         .unwrap();
-}
-
-#[tokio::test]
-async fn capture_storage_cannot_be_a_workspace_or_mount() {
-    let fixture = Fixture::new().await;
-    let root = tempfile::tempdir().unwrap();
-    let vfs = Vfs::external(root.path().into())
-        .unwrap()
-        .with_mount(MountSpec {
-            guest_path: "/captures".into(),
-            host: fixture.objects.directory().into(),
-            volume: "private".into(),
-            access: Access::ReadWrite,
-            quota: None,
-        })
-        .unwrap();
-    let run = additional_run(&fixture, 2).await;
-    assert!(matches!(
-        DurableFilesystem::open(
-            vfs,
-            &run,
-            "owner",
-            fixture.database.clone(),
-            fixture.objects.clone()
-        )
-        .await,
-        Err(FilesystemError::Recovery(RecoveryError::Unsupported(_)))
-    ));
 }

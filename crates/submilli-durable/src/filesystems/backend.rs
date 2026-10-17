@@ -1,13 +1,11 @@
 //! Interpreter filesystem port backed by the verified recovery protocol.
 use super::*;
-use crate::object::Retention;
 use crate::recovery::paths;
 use interpreter::runtime::filesystem::{
     DirectoryEntry, DirectoryReader, FileReader, FileWriter, Filesystem,
     FilesystemError as PortError, FilesystemInfo, Invocation,
 };
 use interpreter::runtime::{fs, vfs::Placement};
-use std::collections::BTreeSet;
 
 #[async_trait::async_trait]
 impl Filesystem for DurableFilesystem {
@@ -33,7 +31,7 @@ impl Filesystem for DurableFilesystem {
     async fn metadata(&self, path: &str, follow: bool) -> Result<cap_std::fs::Metadata, PortError> {
         let vfs = self.workspace.vfs().clone();
         let path = path.to_owned();
-        let access = self.objects.filesystem_resources.clone().read_owned().await;
+        let access = self.context.filesystem_resources.clone().read_owned().await;
         tokio::task::spawn_blocking(move || {
             let _access = access;
             if follow {
@@ -55,7 +53,7 @@ impl Filesystem for DurableFilesystem {
     ) -> Result<Vec<u8>, PortError> {
         let vfs = self.workspace.vfs().clone();
         let path = path.to_owned();
-        let access = self.objects.filesystem_resources.clone().read_owned().await;
+        let access = self.context.filesystem_resources.clone().read_owned().await;
         tokio::task::spawn_blocking(move || {
             let _access = access;
             let file = paths::resolve_content(&vfs, vfs.cwd(), &path)?.open()?;
@@ -73,10 +71,12 @@ impl Filesystem for DurableFilesystem {
     ) -> Result<(), PortError> {
         let filesystem = self.metered(invocation);
         let id = operation(invocation)?;
-        let content = filesystem
-            .capture_bytes(id, path, bytes, append)
-            .await
+        filesystem
+            .charge(interpreter::runtime::fuel::HASH, bytes.len() as u64)
             .map_err(backend)?;
+        let input =
+            ReplayInput::bytes(id.to_owned(), bytes).map_err(|error| backend(error.into()))?;
+        let content = input.content();
         let request = if append {
             Mutation::Append {
                 path: path.into(),
@@ -88,7 +88,10 @@ impl Filesystem for DurableFilesystem {
                 content,
             }
         };
-        filesystem.execute(id, request).await.map_err(backend)?;
+        filesystem
+            .execute_with_input(id, request, input)
+            .await
+            .map_err(backend)?;
         Ok(())
     }
     async fn mkdir(
@@ -212,66 +215,13 @@ impl Filesystem for DurableFilesystem {
         Ok(Box::new(DurableWriter {
             filesystem: self.clone(),
             resource: id.into(),
-            path: path.into(),
             closed: false,
         }))
-    }
-}
-impl DurableFilesystem {
-    async fn capture_bytes(
-        &self,
-        operation: &str,
-        path: &str,
-        bytes: Vec<u8>,
-        append: bool,
-    ) -> Result<Content, FilesystemError> {
-        validate_id(operation)?;
-        self.charge(
-            interpreter::runtime::fuel::HASH,
-            (bytes.len() as u64).saturating_mul(2),
-        )?;
-        let gate = Arc::new(self.objects.filesystem_gate.clone().lock_owned().await);
-        Mutation::Remove { path: path.into() }.validate()?;
-        let id = ObjectId::parse(workspace_id(&format!("payload:{operation}"), &self.id))
-            .map_err(ObjectStoreError::from)?;
-        let request =
-            serde_json::to_vec(&(path, append, bytes.len(), Sha256::digest(&bytes).to_vec()))
-                .map_err(|_| RecoveryError::InvalidRecord)?;
-        let request = Sha256::digest(request).into();
-        self.journal
-            .track_object(&self.id, id.as_str(), request)
-            .await?;
-        self.objects
-            .reserve(id.clone(), self.owner.clone(), request, bytes.len() as u64)
-            .await?;
-        let prepared = self
-            .objects
-            .publish(
-                &id,
-                CapturedBytes {
-                    bytes: std::io::Cursor::new(bytes),
-                    _gate: gate.clone(),
-                },
-            )
-            .await?;
-        let reference = self
-            .objects
-            .bind(
-                &prepared,
-                BTreeSet::from([Retention::Workspace(self.id.clone())]),
-            )
-            .await?;
-        Ok(Content {
-            id: reference.id.as_str().into(),
-            bytes: reference.content.bytes,
-            sha256: reference.content.sha256,
-        })
     }
 }
 struct DurableWriter {
     filesystem: DurableFilesystem,
     resource: String,
-    path: String,
     closed: bool,
 }
 #[async_trait::async_trait]
@@ -285,12 +235,8 @@ impl FileWriter for DurableWriter {
         if self.closed {
             return Err(PortError::Unsupported("writer is closed"));
         }
-        let content = filesystem
-            .capture_bytes(id, &self.path, bytes, true)
-            .await
-            .map_err(backend)?;
         filesystem
-            .write_chunk(&self.resource, id, content)
+            .write_chunk(&self.resource, id, bytes)
             .await
             .map_err(backend)
     }
@@ -320,18 +266,6 @@ fn backend(error: FilesystemError) -> PortError {
     }
 }
 
-// The blocking object-publication worker owns this source. Its guard outlives
-// a cancelled caller, so retirement waits until publication has stopped.
-struct CapturedBytes {
-    bytes: std::io::Cursor<Vec<u8>>,
-    _gate: Arc<tokio::sync::OwnedMutexGuard<()>>,
-}
-impl Read for CapturedBytes {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        self.bytes.read(buffer)
-    }
-}
-
 struct DurableDirectory(Option<DirectorySnapshot>);
 impl DirectoryReader for DurableDirectory {
     fn next_entry(&mut self) -> Option<DirectoryEntry> {
@@ -357,38 +291,5 @@ impl DirectoryReader for DurableDirectory {
     }
     fn close(&mut self) {
         self.0 = None;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[tokio::test]
-    async fn cancelled_capture_keeps_retirement_blocked_until_its_worker_drains() {
-        let gate = Arc::new(tokio::sync::Mutex::new(()));
-        let source = CapturedBytes {
-            bytes: std::io::Cursor::new(b"capture".to_vec()),
-            _gate: Arc::new(gate.clone().lock_owned().await),
-        };
-        let (started, ready) = tokio::sync::oneshot::channel();
-        let (release, wait) = std::sync::mpsc::channel();
-        let request = tokio::spawn(async move {
-            tokio::task::spawn_blocking(move || {
-                let source = source;
-                started.send(()).unwrap();
-                wait.recv().unwrap();
-                drop(source);
-            })
-            .await
-            .unwrap();
-        });
-        ready.await.unwrap();
-        request.abort();
-        assert!(request.await.unwrap_err().is_cancelled());
-        assert!(gate.try_lock().is_err());
-        release.send(()).unwrap();
-        let _retirement = tokio::time::timeout(std::time::Duration::from_secs(2), gate.lock())
-            .await
-            .unwrap();
     }
 }

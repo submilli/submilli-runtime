@@ -74,7 +74,11 @@ pub fn encode_listing(
     let owner = format!("listing:{workspace}:{}", value.id);
     Ok(ResourceColumns {
         request: encode(sealer, &owner, &(value.path.clone(), value.recursive))?,
-        result: encode_optional(sealer, &owner, value.content.as_ref())?,
+        result: value
+            .content
+            .as_ref()
+            .map(|entries| encode_listing_output(sealer, &owner, entries))
+            .transpose()?,
         error: encode_optional(sealer, &owner, value.error.as_ref())?,
     })
 }
@@ -90,9 +94,38 @@ pub fn decode_listing(
         id,
         path,
         recursive,
-        content: decode_optional(sealer, &owner, columns.result)?,
+        content: columns
+            .result
+            .map(|bytes| decode_listing_output(sealer, &owner, &bytes))
+            .transpose()?,
         error: decode_optional(sealer, &owner, columns.error)?,
     })
+}
+
+fn encode_listing_output(
+    sealer: &Sealer,
+    owner: &str,
+    entries: &[crate::recovery::DirectoryEntry],
+) -> Result<Vec<u8>, StoreError> {
+    let bytes = serde_json::to_vec(entries).map_err(|e| StoreError::Io(e.to_string()))?;
+    if bytes.len() > crate::recovery::MAX_LISTING_BYTES {
+        return Err(StoreError::Conflict);
+    }
+    sealer.seal(owner, &bytes)
+}
+fn decode_listing_output(
+    sealer: &Sealer,
+    owner: &str,
+    bytes: &[u8],
+) -> Result<Vec<crate::recovery::DirectoryEntry>, StoreError> {
+    if bytes.len() > crate::recovery::MAX_LISTING_BYTES + 128 {
+        return Err(StoreError::Conflict);
+    }
+    let plain = sealer.open(owner, bytes, "directory output")?;
+    if plain.len() > crate::recovery::MAX_LISTING_BYTES {
+        return Err(StoreError::Conflict);
+    }
+    serde_json::from_slice(&plain).map_err(|e| StoreError::Io(e.to_string()))
 }
 
 pub fn encode_plan(

@@ -29,8 +29,6 @@ jobs:
         run: python3 verification/check.py --output "$RUNNER_TEMP/durability-model"
       - name: Check run preparation and admission
         run: python3 verification/check.py --model admission --output "$RUNNER_TEMP/admission-model"
-      - name: Check immutable object publication, recovery and collection
-        run: python3 verification/check.py --model objects --output "$RUNNER_TEMP/objects-model"
       - name: Check shared effect identity and lifecycle
         run: python3 verification/check.py --model effects --output "$RUNNER_TEMP/effects-model"
       - name: Durable unit of work model
@@ -41,6 +39,8 @@ jobs:
         run: python3 verification/check.py --model filesystem/namespace --output "$RUNNER_TEMP/namespace-model"
       - name: Check directory recovery
         run: python3 verification/check.py --model filesystem/directories --output "$RUNNER_TEMP/directories-model"
+      - name: Check staged writer outputs without input storage
+        run: python3 verification/check.py --model filesystem/writers --output "$RUNNER_TEMP/writers-model"
       - name: Check retained resources
         run: python3 verification/check.py --model filesystem/resources --output "$RUNNER_TEMP/resources-model"
       - name: Check compound and prepared Git publication
@@ -53,12 +53,12 @@ jobs:
           path: |
             ${{ runner.temp }}/durability-model
             ${{ runner.temp }}/admission-model
-            ${{ runner.temp }}/objects-model
             ${{ runner.temp }}/effects-model
             ${{ runner.temp }}/unit-of-work-model
             ${{ runner.temp }}/filesystem-model
             ${{ runner.temp }}/namespace-model
             ${{ runner.temp }}/directories-model
+            ${{ runner.temp }}/writers-model
             ${{ runner.temp }}/resources-model
             ${{ runner.temp }}/sequences-model
           if-no-files-found: ignore

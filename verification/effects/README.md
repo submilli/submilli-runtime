@@ -10,14 +10,14 @@ sealer includes its format and encryption-key identity.
 The shared lifecycle in `crates/submilli-durable/src/effects.rs` operates inside
 a caller-owned `UnitOfWork`. The server maps its records through
 `crates/submilli-server/src/adapters/unit_of_work/durable_state.rs`. Callers perform admission and
-resource checks and pin referenced objects in that same transaction. The current
+resource checks in that same transaction. The current
 filesystem caller retains its single-run exclusion, plan/cursor/writer gates and
 run-lifecycle checks. The storage helper alone is not permission to dispatch an
 effect, supersede a pending compound plan or write from a stale execution attempt.
 
 | Transition | Shared storage | Filesystem caller |
 | --- | --- | --- |
-| Admit | Immutable request; at most one unfinished effect per run | Pin captured content with request admission |
+| Admit | Immutable request; at most one unfinished effect per run | Record input fingerprint with request admission |
 | Prepare | Write recovery payload once | Record prepared intent before public mutation |
 | Complete | Commit immutable outcome after preparation | First finish file/directory persistence barriers |
 | Reject | Commit definitive refusal only before preparation | Preflight refusal before public mutation |
@@ -26,7 +26,7 @@ effect, supersede a pending compound plan or write from a stale execution attemp
 The payload format for `filesystem.mutation`, version 1, includes the workspace,
 optional compound plan and mutation in the request, a durable filesystem `Intent` as recovery
 payload, and a completed/refused outcome. It validates intent-to-request identity
-when reading. Large file bytes stay in the object store. Records have a 64 KiB
+when reading. File input bytes are supplied by replay and are not persisted here. Records have a 64 KiB
 plaintext bound and a run has at most 10,000 effect rows. These are the existing
 filesystem bounds, now enforced by the common storage helper; configurable
 history byte/replay budgets remain future work. No truncation is allowed.
@@ -61,7 +61,8 @@ encryption, SQL isolation or storage barriers.
 These rows represent effect state, not the append-only `DurableExecution.tla`
 history. That model's `Commit` must additionally check expected sequence, attempt
 generation and run state, and atomically append the event, advance committed
-history, settle accounting and retain objects. Observation events and terminal
+history and settle accounting. Outputs can initially be stored in SQLite;
+large-object storage is a later enhancement. Observation events and terminal
 evidence are not implemented here. An observation-only effect need not use this
 prepared-mutation lifecycle; its eventual representation requires an explicit
 model mapping rather than a fabricated filesystem preparation.

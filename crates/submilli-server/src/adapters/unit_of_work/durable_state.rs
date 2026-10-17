@@ -173,53 +173,7 @@ pub(super) async fn plans_after(
         .bind(workspace).bind(after).bind(limit.min(10001)).fetch_all(connection).await.map_err(database)?
         .into_iter().map(|row| decode_plan(row, sealer, workspace)).collect()
 }
-fn decode_producer(
-    row: SqliteRow,
-    _sealer: &Sealer,
-    _workspace: &str,
-) -> Result<Producer, StoreError> {
-    let id: String = row.try_get("object_id").map_err(database)?;
-    let request = row
-        .try_get::<Vec<u8>, _>("request")
-        .map_err(database)?
-        .try_into()
-        .map_err(|_| invalid("invalid capture fingerprint"))?;
-    Ok(Producer { id, request })
-}
-pub(super) async fn get_producer(
-    connection: &mut SqliteConnection,
-    sealer: &Sealer,
-    workspace: &str,
-    id: &str,
-) -> Result<Option<Producer>, StoreError> {
-    sqlx::query("SELECT object_id,request FROM durable_filesystem_objects WHERE workspace_id=? AND object_id=?")
-        .bind(workspace).bind(id).fetch_optional(connection).await.map_err(database)?
-        .map(|row| decode_producer(row, sealer, workspace)).transpose()
-}
-pub(super) async fn save_producer(
-    connection: &mut SqliteConnection,
-    _sealer: &Sealer,
-    workspace: &str,
-    value: Producer,
-) -> Result<(), StoreError> {
-    let prior = get_producer(connection, _sealer, workspace, &value.id).await?;
-    value.validate_successor(prior.as_ref()).map_err(invalid)?;
-    let id = &value.id;
-    sqlx::query("INSERT INTO durable_filesystem_objects(workspace_id,object_id,request) VALUES(?,?,?) ON CONFLICT(workspace_id,object_id) DO UPDATE SET request=excluded.request")
-        .bind(workspace).bind(id).bind(value.request.as_slice()).execute(connection).await.map_err(database)?;
-    Ok(())
-}
-pub(super) async fn producers_after(
-    connection: &mut SqliteConnection,
-    sealer: &Sealer,
-    workspace: &str,
-    after: &str,
-    limit: u32,
-) -> Result<Vec<Producer>, StoreError> {
-    sqlx::query("SELECT object_id,request FROM durable_filesystem_objects WHERE workspace_id=? AND object_id>? ORDER BY object_id LIMIT ?")
-        .bind(workspace).bind(after).bind(limit.min(10001)).fetch_all(connection).await.map_err(database)?
-        .into_iter().map(|row| decode_producer(row, sealer, workspace)).collect()
-}
+
 pub(super) async fn pending_plan(
     connection: &mut SqliteConnection,
     sealer: &Sealer,

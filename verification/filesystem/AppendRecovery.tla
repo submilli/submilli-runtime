@@ -5,7 +5,7 @@ CONSTANTS MaxCrashes, CrashMode, Fault, Witness
 ASSUME /\ MaxCrashes \in Nat
        /\ CrashMode \in {"process", "power"}
        /\ Fault \in {"none", "fresh-offset", "early-receipt", "path-retry",
-                      "early-cleanup", "fresh-read"}
+                      "early-cleanup", "fresh-read", "unchecked-input"}
 
 (* One exclusive run, one immutable append request, then path replacement.
    SQLite commits are atomic; filesystem writes and persistence are separate.
@@ -20,15 +20,16 @@ BoundedBytes == UNION { [1..n -> Byte] : n \in 0..5 }
 
 VARIABLES sql, cache, disk, dirty, path, durablePath, pin, up,
           phase, cursor, synced, crashes, consumed, reused, readLog,
-          replayRead, replacementBytes, badReceipt, seen
+          replayRead, replacementBytes, badReceipt, input, seen
 
 vars == <<sql, cache, disk, dirty, path, durablePath, pin, up,
           phase, cursor, synced, crashes, consumed, reused, readLog,
-          replayRead, replacementBytes, badReceipt, seen>>
+          replayRead, replacementBytes, badReceipt, input, seen>>
 
 (* Request identity, original inode identity and offset are immutable constants
    in this bounded instance. pin represents durable evidence retaining that
-   inode and the immutable payload, not just an open volatile file handle. *)
+   inode, not the payload. Payload bytes are volatile and supplied again by
+   deterministic replay of recorded prior outputs. SQL retains only identity. *)
 Init ==
     /\ sql = "absent"
     /\ cache = Original
@@ -48,16 +49,32 @@ Init ==
     /\ replayRead = <<>>
     /\ replacementBytes = <<>>
     /\ badReceipt = FALSE
+    /\ input = <<>>
     /\ seen = {}
 
+(* SupplyInput accepts already fingerprint-validated replay bytes; rejected
+   offers stutter outside this abstraction. Equality stands for the fingerprint
+   check. The unchecked-input fault bypasses this acceptance boundary, so
+   InputMatches detects the bad acceptance before a public write. No payload
+   is persisted in the filesystem intent. WriterRecovery separately models
+   explicit wrong offers and their rejection. *)
+SupplyInput ==
+    /\ up /\ input = <<>> /\ sql \in {"absent", "pending"}
+    /\ input' = IF Fault = "unchecked-input" /\ sql = "pending"
+                  THEN <<2, 1>> ELSE Payload
+    /\ seen' = seen \cup (IF crashes > 0 THEN {"input-replayed"} ELSE {})
+    /\ UNCHANGED <<sql, cache, disk, dirty, path, durablePath, pin, up,
+                   phase, cursor, synced, crashes, consumed, reused, readLog,
+                   replayRead, replacementBytes, badReceipt>>
+
 Intent ==
-    /\ up /\ sql = "absent"
+    /\ up /\ sql = "absent" /\ input = Payload
     /\ sql' = "pending"
     /\ pin' = TRUE
     /\ phase' \in {"idle", "write"}
     /\ seen' = seen \cup {"intent"}
     /\ UNCHANGED <<cache, disk, dirty, path, durablePath, cursor, synced,
-                   crashes, consumed, reused, readLog, replayRead, replacementBytes, badReceipt, up>>
+                   crashes, consumed, reused, readLog, replayRead, replacementBytes, badReceipt, up, input>>
 
 Discover ==
     /\ up /\ sql = "pending" /\ phase = "idle" /\ pin
@@ -67,7 +84,7 @@ Discover ==
     /\ synced' = FALSE
     /\ seen' = seen \cup {"retry"}
     /\ UNCHANGED <<sql, cache, disk, dirty, path, durablePath, pin, up,
-                   crashes, consumed, reused, readLog, replayRead, replacementBytes, badReceipt>>
+                   crashes, consumed, reused, readLog, replayRead, replacementBytes, badReceipt, input>>
 
 Max(a, b) == IF a > b THEN a ELSE b
 WriteAt(bytes, offset, value) ==
@@ -77,10 +94,11 @@ WriteAt(bytes, offset, value) ==
 
 WriteChunk ==
     /\ up /\ sql = "pending" /\ phase = "write" /\ pin
+    /\ input # <<>>
     /\ path = "original" /\ cursor < Len(Payload)
     /\ LET offset == IF Fault = "fresh-offset" THEN Len(cache)
                      ELSE Len(Original) + cursor
-           next == WriteAt(cache, offset, Payload[cursor + 1])
+           next == WriteAt(cache, offset, input[cursor + 1])
        IN /\ Len(next) <= 5
           /\ cache' = next
     /\ cursor' = cursor + 1
@@ -88,7 +106,7 @@ WriteChunk ==
     /\ synced' = FALSE
     /\ seen' = seen \cup {"write"}
     /\ UNCHANGED <<sql, disk, path, durablePath, pin, up, phase, crashes,
-                   consumed, reused, readLog, replayRead, replacementBytes, badReceipt>>
+                   consumed, reused, readLog, replayRead, replacementBytes, badReceipt, input>>
 
 SyncFile ==
     /\ up /\ sql = "pending" /\ phase = "write"
@@ -99,7 +117,7 @@ SyncFile ==
     /\ phase' = "commit"
     /\ seen' = seen \cup {"sync"}
     /\ UNCHANGED <<sql, cache, path, durablePath, pin, up, cursor, crashes,
-                   consumed, reused, readLog, replayRead, replacementBytes, badReceipt>>
+                   consumed, reused, readLog, replayRead, replacementBytes, badReceipt, input>>
 
 CommitReceipt ==
     /\ up /\ sql = "pending"
@@ -110,7 +128,7 @@ CommitReceipt ==
     /\ phase' \in {"idle", "done"}
     /\ seen' = seen \cup {"receipt"}
     /\ UNCHANGED <<cache, disk, dirty, path, durablePath, pin, up, cursor,
-                   synced, crashes, consumed, reused, readLog, replayRead, replacementBytes>>
+                   synced, crashes, consumed, reused, readLog, replayRead, replacementBytes, input>>
 
 ObserveReceipt ==
     /\ up /\ sql = "done" /\ ~consumed
@@ -119,7 +137,7 @@ ObserveReceipt ==
     /\ readLog' = Expected
     /\ seen' = seen \cup {"consumed"}
     /\ UNCHANGED <<sql, cache, disk, dirty, path, durablePath, pin, up,
-                   cursor, synced, crashes, reused, replayRead, replacementBytes, badReceipt>>
+                   cursor, synced, crashes, reused, replayRead, replacementBytes, badReceipt, input>>
 
 (* A later, separately committed operation reuses the path. It cannot start
    while an earlier effect is pending. The old inode remains pinned for
@@ -132,7 +150,7 @@ ReplacePath ==
     /\ replacementBytes' = Replacement
     /\ seen' = seen \cup {"reuse"}
     /\ UNCHANGED <<sql, cache, disk, dirty, pin, up, phase, cursor, synced,
-                   crashes, consumed, readLog, replayRead, badReceipt>>
+                   crashes, consumed, readLog, replayRead, badReceipt, input>>
 
 Replay ==
     /\ up /\ sql = "done" /\ consumed /\ replayRead = <<>>
@@ -143,7 +161,7 @@ Replay ==
     /\ seen' = seen \cup {"replay"}
                  \cup (IF reused THEN {"replay-after-reuse"} ELSE {})
     /\ UNCHANGED <<sql, cache, disk, dirty, pin, up, phase, cursor, synced,
-                   crashes, consumed, reused, readLog, badReceipt, path, durablePath>>
+                   crashes, consumed, reused, readLog, badReceipt, path, durablePath, input>>
 
 (* Dirty appended bytes may reach disk incompletely or with damaged contents.
    The already durable original prefix is outside the write range. A completed
@@ -154,7 +172,7 @@ Writeback ==
                     UNION {[1..n -> {0, 1, 2}] : n \in 0..(Len(cache)-1)}}
     /\ UNCHANGED <<sql, cache, dirty, path, durablePath, pin, up, phase,
                    cursor, synced, crashes, consumed, reused, readLog,
-                   replayRead, replacementBytes, badReceipt, seen>>
+                   replayRead, replacementBytes, badReceipt, input, seen>>
 
 Crash ==
     /\ up /\ crashes < MaxCrashes
@@ -166,6 +184,7 @@ Crash ==
     /\ phase' = "idle"
     /\ cursor' = 0
     /\ synced' = FALSE
+    /\ input' = <<>>
     /\ replayRead' = <<>>
     /\ seen' = seen \cup
          (IF sql = "pending" /\ cache # Original THEN {"partial-crash"} ELSE {})
@@ -180,14 +199,14 @@ Restart ==
     /\ seen' = seen \cup {"restart"}
     /\ UNCHANGED <<sql, cache, disk, dirty, path, durablePath, pin, phase,
                    cursor, synced, crashes, consumed, reused, readLog,
-                   replayRead, replacementBytes, badReceipt>>
+                   replayRead, replacementBytes, badReceipt, input>>
 
 Terminal ==
     /\ up /\ sql = "done" /\ consumed /\ reused /\ replayRead # <<>>
     /\ sql' = "terminal"
     /\ UNCHANGED <<cache, disk, dirty, path, durablePath, pin, up, phase,
                    cursor, synced, crashes, consumed, reused, readLog,
-                   replayRead, replacementBytes, badReceipt, seen>>
+                   replayRead, replacementBytes, badReceipt, input, seen>>
 
 Cleanup ==
     /\ up /\ pin
@@ -196,13 +215,13 @@ Cleanup ==
     /\ seen' = seen \cup {"cleanup"}
     /\ UNCHANGED <<sql, cache, disk, dirty, path, durablePath, up, phase,
                    cursor, synced, crashes, consumed, reused, readLog,
-                   replayRead, replacementBytes, badReceipt>>
+                   replayRead, replacementBytes, badReceipt, input>>
 
-Next == Intent \/ Discover \/ WriteChunk \/ SyncFile \/ CommitReceipt
+Next == SupplyInput \/ Intent \/ Discover \/ WriteChunk \/ SyncFile \/ CommitReceipt
         \/ ObserveReceipt \/ ReplacePath \/ Replay \/ Writeback \/ Crash
         \/ Restart \/ Terminal \/ Cleanup
 Spec == Init /\ [][Next]_vars
-LiveSpec == Spec /\ WF_vars(Intent) /\ WF_vars(Discover)
+LiveSpec == Spec /\ WF_vars(SupplyInput) /\ WF_vars(Intent) /\ WF_vars(Discover)
              /\ WF_vars(WriteChunk) /\ WF_vars(SyncFile)
              /\ WF_vars(CommitReceipt) /\ WF_vars(ObserveReceipt)
              /\ WF_vars(ReplacePath) /\ WF_vars(Replay)
@@ -219,6 +238,7 @@ TypeOK ==
     /\ readLog \in {<<>>, Expected}
     /\ replayRead \in {<<>>, Expected, Replacement}
     /\ replacementBytes \in {<<>>, Replacement, Replacement \o Payload}
+InputMatches == input \in {<<>>, Payload}
 ReceiptIsDurable == ~badReceipt
 AppendExactlyOnce == sql \in {"done", "terminal"} => disk = Expected
 NewPathUntouched == reused =>

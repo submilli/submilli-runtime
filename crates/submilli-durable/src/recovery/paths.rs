@@ -80,7 +80,7 @@ fn check_private_access(root: &Dir, path: &Path) -> Result<(), fs::ContainError>
     Ok(())
 }
 
-pub(super) fn validate_id(id: &str) -> Result<(), RecoveryError> {
+pub(crate) fn validate_id(id: &str) -> Result<(), RecoveryError> {
     match uuid::Uuid::parse_str(id) {
         Ok(parsed) if parsed.to_string() == id => Ok(()),
         _ => Err(RecoveryError::InvalidRecord),

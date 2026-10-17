@@ -111,44 +111,14 @@ impl FilesystemJournal {
             .and_then(|r| r.position)
             .ok_or_else(|| StoreError::Conflict.into())
     }
-    pub async fn track_object(
-        &self,
-        workspace: &str,
-        object: &str,
-        request: [u8; 32],
-    ) -> Result<(), FilesystemError> {
-        let (workspace, object) = (workspace.to_owned(), object.to_owned());
-        self.transaction(move |unit| {
-            Box::pin(async move {
-                require_active(unit, &workspace).await?;
-                if let Some(prior) = unit.get_producer(&workspace, &object).await? {
-                    return if prior.request == request {
-                        Ok(())
-                    } else {
-                        conflict()
-                    };
-                }
-                unit.save_producer(
-                    &workspace,
-                    Producer {
-                        id: object,
-                        request,
-                    },
-                )
-                .await?;
-                Ok(())
-            })
-        })
-        .await
-    }
     pub async fn listing(
         &self,
         workspace: &str,
         resource: &str,
         path: &str,
         recursive: bool,
-        completed: Option<Content>,
-    ) -> Result<Option<Content>, FilesystemError> {
+        completed: Option<Vec<DirectoryEntry>>,
+    ) -> Result<Option<Vec<DirectoryEntry>>, FilesystemError> {
         let (workspace, resource, path) =
             (workspace.to_owned(), resource.to_owned(), path.to_owned());
         self.transaction(move |unit| {
@@ -252,6 +222,49 @@ impl FilesystemJournal {
         })
         .await
     }
+    pub async fn chunk_position(
+        &self,
+        workspace: &str,
+        resource: &str,
+        chunk: &str,
+        content: &Content,
+    ) -> Result<(String, bool, u64), FilesystemError> {
+        let mut unit = (self.units)().await?;
+        let state = require_active(unit.as_mut(), workspace).await?;
+        let writer = unit
+            .get_writer(workspace, resource)
+            .await?
+            .ok_or(StoreError::Conflict)?;
+        if let Some(prior) = unit.get_chunk(workspace, resource, chunk).await? {
+            if prior.content != *content {
+                return conflict();
+            }
+            return Ok((writer.path, true, 0));
+        }
+        require_idle(unit.as_mut(), &state).await?;
+        if writer.state != "open" || unit.resource_counts(workspace).await?.chunks >= MAX_EFFECTS {
+            return conflict();
+        }
+        let chunks = unit
+            .writer_chunks(workspace, resource, MAX_EFFECTS as u32 + 1)
+            .await?;
+        let offset = chunks
+            .iter()
+            .try_fold(0u64, |sum, chunk| sum.checked_add(chunk.content.bytes))
+            .ok_or(StoreError::Conflict)?;
+        Ok((writer.path, false, offset))
+    }
+    pub async fn writer_outcome(
+        &self,
+        workspace: &str,
+        effect: &str,
+    ) -> Result<Option<RecordedOutcome>, FilesystemError> {
+        let mut unit = (self.units)().await?;
+        let state = required_workspace(unit.as_mut(), workspace).await?;
+        Ok(load_effect(unit.as_mut(), &state, effect)
+            .await?
+            .and_then(|effect| effect.outcome))
+    }
     pub async fn writer_chunk(
         &self,
         workspace: &str,
@@ -289,15 +302,6 @@ impl FilesystemJournal {
                     .writer_chunks(&workspace, &resource, MAX_EFFECTS as u32 + 1)
                     .await?
                     .len();
-                retain_content(
-                    unit,
-                    &state,
-                    &Mutation::Write {
-                        path: "/".into(),
-                        content: content.clone(),
-                    },
-                )
-                .await?;
                 unit.save_chunk(
                     &workspace,
                     Chunk {

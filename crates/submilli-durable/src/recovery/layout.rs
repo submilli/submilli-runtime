@@ -154,19 +154,6 @@ impl WorkspaceLayout {
         Ok(())
     }
 
-    /// Immutable capture storage must never be guest-visible, even through a
-    /// mount or an enclosing directory selected by a direct library caller.
-    pub fn exclude(&self, protected: &std::path::Path) -> Result<(), RecoveryError> {
-        for root in std::iter::once(&self.root).chain(self.mounts.iter().map(|mount| &mount.host)) {
-            if root.starts_with(protected) || protected.starts_with(root) {
-                return Err(RecoveryError::Unsupported(
-                    "workspace overlaps immutable capture storage",
-                ));
-            }
-        }
-        Ok(())
-    }
-
     /// Cleanup uses the recorded backing roots directly: a previous cleanup
     /// may already have removed cwd, mount placeholders or recovery subtrees.
     pub fn retire(&self, workspace: &str) -> Result<(), RecoveryError> {

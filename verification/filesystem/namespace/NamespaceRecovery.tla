@@ -21,10 +21,10 @@ NeedsCandidate == Operation = "replace"
 
 VARIABLES sql, names, diskNames, backup, diskBackup, candidate, diskCandidate,
           candidateDirty, up, phase, syncedDirs, fileSynced, crashes, consumed,
-          reused, badReceipt, seen
+          reused, badReceipt, inputAvailable, seen
 vars == <<sql, names, diskNames, backup, diskBackup, candidate, diskCandidate,
           candidateDirty, up, phase, syncedDirs, fileSynced, crashes, consumed,
-          reused, badReceipt, seen>>
+          reused, badReceipt, inputAvailable, seen>>
 
 Init ==
     /\ sql = "absent"
@@ -35,7 +35,14 @@ Init ==
     /\ up = TRUE /\ phase = "idle"
     /\ syncedDirs = {} /\ fileSynced = FALSE
     /\ crashes = 0 /\ consumed = FALSE /\ reused = FALSE
-    /\ badReceipt = FALSE /\ seen = {}
+    /\ badReceipt = FALSE /\ inputAvailable = FALSE /\ seen = {}
+
+SupplyInput ==
+    /\ up /\ ~inputAvailable /\ sql \in {"absent", "pending"}
+    /\ inputAvailable' = TRUE
+    /\ UNCHANGED <<sql, names, diskNames, backup, diskBackup, candidate, diskCandidate,
+                   candidateDirty, up, phase, syncedDirs, fileSynced, crashes, consumed,
+                   reused, badReceipt, seen>>
 
 Intent ==
     /\ up /\ sql = "absent"
@@ -43,7 +50,7 @@ Intent ==
     /\ phase' = "prepare"
     /\ UNCHANGED <<names, diskNames, backup, diskBackup, candidate, diskCandidate,
                    candidateDirty, up, syncedDirs, fileSynced, crashes, consumed,
-                   reused, badReceipt, seen>>
+                   reused, badReceipt, inputAvailable, seen>>
 
 Discover ==
     /\ up /\ sql = "pending" /\ phase = "idle"
@@ -51,7 +58,7 @@ Discover ==
     /\ seen' = seen \cup {"retry"}
     /\ UNCHANGED <<sql, names, diskNames, backup, diskBackup, candidate, diskCandidate,
                    candidateDirty, up, syncedDirs, fileSynced, crashes, consumed,
-                   reused, badReceipt>>
+                   reused, badReceipt, inputAvailable>>
 
 (* The original file has a private recovery name, retaining its identity even
    when a cross-directory rename persists removal of the source first. Creating
@@ -62,23 +69,23 @@ PinOriginal ==
     /\ backup' = TRUE
     /\ UNCHANGED <<sql, names, diskNames, diskBackup, candidate, diskCandidate,
                    candidateDirty, up, phase, syncedDirs, fileSynced, crashes,
-                   consumed, reused, badReceipt, seen>>
+                   consumed, reused, badReceipt, inputAvailable, seen>>
 
 SyncBackup ==
     /\ up /\ sql = "pending" /\ backup /\ ~diskBackup
     /\ diskBackup' = TRUE
     /\ UNCHANGED <<sql, names, diskNames, backup, candidate, diskCandidate,
                    candidateDirty, up, phase, syncedDirs, fileSynced, crashes,
-                   consumed, reused, badReceipt, seen>>
+                   consumed, reused, badReceipt, inputAvailable, seen>>
 
 PrepareCandidate ==
     /\ up /\ sql = "pending" /\ phase = "prepare" /\ NeedsCandidate
-    /\ candidate # "complete"
+    /\ inputAvailable /\ candidate # "complete"
     /\ candidate' = IF candidate = "partial" THEN "complete" ELSE "partial"
     /\ candidateDirty' = TRUE
     /\ fileSynced' = FALSE
     /\ UNCHANGED <<sql, names, diskNames, backup, diskBackup, diskCandidate,
-                   up, phase, syncedDirs, crashes, consumed, reused, badReceipt, seen>>
+                   up, phase, syncedDirs, crashes, consumed, reused, badReceipt, inputAvailable, seen>>
 
 SyncCandidate ==
     /\ up /\ sql = "pending" /\ candidate = "complete" /\ ~fileSynced
@@ -86,7 +93,7 @@ SyncCandidate ==
     /\ candidateDirty' = FALSE
     /\ fileSynced' = TRUE
     /\ UNCHANGED <<sql, names, diskNames, backup, diskBackup, candidate,
-                   up, phase, syncedDirs, crashes, consumed, reused, badReceipt, seen>>
+                   up, phase, syncedDirs, crashes, consumed, reused, badReceipt, inputAvailable, seen>>
 
 Apply ==
     /\ up /\ sql = "pending" /\ phase = "prepare"
@@ -98,7 +105,7 @@ Apply ==
     /\ syncedDirs' = {}
     /\ seen' = seen \cup {"applied"}
     /\ UNCHANGED <<sql, diskNames, backup, diskBackup, candidate, diskCandidate,
-                   candidateDirty, up, fileSynced, crashes, consumed, reused, badReceipt>>
+                   candidateDirty, up, fileSynced, crashes, consumed, reused, badReceipt, inputAvailable>>
 
 SyncDirectory(p) ==
     /\ up /\ sql = "pending" /\ phase \in {"sync", "unlink"} /\ p \notin syncedDirs
@@ -107,7 +114,7 @@ SyncDirectory(p) ==
     /\ syncedDirs' = syncedDirs \cup {p}
     /\ UNCHANGED <<sql, names, backup, diskBackup, candidate, diskCandidate,
                    candidateDirty, up, phase, fileSynced, crashes, consumed,
-                   reused, badReceipt, seen>>
+                   reused, badReceipt, inputAvailable, seen>>
 
 RemoveSource ==
     /\ up /\ sql = "pending" /\ phase = "unlink"
@@ -116,7 +123,7 @@ RemoveSource ==
     /\ phase' = "sync"
     /\ UNCHANGED <<sql, diskNames, backup, diskBackup, candidate, diskCandidate,
                    candidateDirty, up, syncedDirs, fileSynced, crashes, consumed,
-                   reused, badReceipt, seen>>
+                   reused, badReceipt, inputAvailable, seen>>
 
 CommitReceipt ==
     /\ up /\ sql = "pending" /\ phase = "sync"
@@ -127,14 +134,14 @@ CommitReceipt ==
                        \/ (NeedsCandidate /\ diskCandidate # "complete"))
     /\ seen' = seen \cup {"receipt"}
     /\ UNCHANGED <<names, diskNames, backup, diskBackup, candidate, diskCandidate,
-                   candidateDirty, up, syncedDirs, fileSynced, crashes, consumed, reused>>
+                   candidateDirty, up, syncedDirs, fileSynced, crashes, consumed, reused, inputAvailable>>
 
 Consume ==
     /\ up /\ sql = "done" /\ ~consumed
     /\ consumed' = TRUE
     /\ seen' = seen \cup {"consumed"}
     /\ UNCHANGED <<sql, names, diskNames, backup, diskBackup, candidate, diskCandidate,
-                   candidateDirty, up, phase, syncedDirs, fileSynced, crashes, reused, badReceipt>>
+                   candidateDirty, up, phase, syncedDirs, fileSynced, crashes, reused, badReceipt, inputAvailable>>
 
 ReplacePaths ==
     /\ up /\ sql = "done" /\ consumed /\ ~reused
@@ -142,7 +149,7 @@ ReplacePaths ==
     /\ diskNames' = names'
     /\ reused' = TRUE
     /\ UNCHANGED <<sql, backup, diskBackup, candidate, diskCandidate, candidateDirty,
-                   up, phase, syncedDirs, fileSynced, crashes, consumed, badReceipt, seen>>
+                   up, phase, syncedDirs, fileSynced, crashes, consumed, badReceipt, inputAvailable, seen>>
 
 Replay ==
     /\ up /\ sql = "done" /\ reused
@@ -150,7 +157,7 @@ Replay ==
     /\ seen' = seen \cup {"replay-after-reuse"}
     /\ UNCHANGED <<sql, diskNames, backup, diskBackup, candidate, diskCandidate,
                    candidateDirty, up, phase, syncedDirs, fileSynced, crashes,
-                   consumed, reused, badReceipt>>
+                   consumed, reused, badReceipt, inputAvailable>>
 
 Writeback ==
     /\ sql = "pending"
@@ -158,18 +165,19 @@ Writeback ==
            /\ diskNames' = [diskNames EXCEPT ![p] = names[p]]
            /\ UNCHANGED <<sql, names, backup, diskBackup, candidate, diskCandidate,
                           candidateDirty, up, phase, syncedDirs, fileSynced,
-                          crashes, consumed, reused, badReceipt, seen>>
+                          crashes, consumed, reused, badReceipt, inputAvailable, seen>>
 
 CandidateWriteback ==
     /\ candidateDirty
     /\ diskCandidate' \in {"empty", "partial", "corrupt", candidate}
     /\ UNCHANGED <<sql, names, diskNames, backup, diskBackup, candidate,
                    candidateDirty, up, phase, syncedDirs, fileSynced, crashes,
-                   consumed, reused, badReceipt, seen>>
+                   consumed, reused, badReceipt, inputAvailable, seen>>
 
 Crash ==
     /\ up /\ crashes < MaxCrashes
-    /\ up' = FALSE /\ crashes' = crashes + 1
+    /\ up' = FALSE
+    /\ inputAvailable' = FALSE /\ crashes' = crashes + 1
     /\ names' = IF CrashMode = "power" THEN diskNames ELSE names
     /\ backup' = IF CrashMode = "power" THEN diskBackup ELSE backup
     /\ candidate' = IF CrashMode = "power" THEN diskCandidate ELSE candidate
@@ -188,7 +196,7 @@ Restart ==
     /\ seen' = seen \cup {"restart"}
     /\ UNCHANGED <<sql, names, diskNames, backup, diskBackup, candidate, diskCandidate,
                    candidateDirty, phase, syncedDirs, fileSynced, crashes,
-                   consumed, reused, badReceipt>>
+                   consumed, reused, badReceipt, inputAvailable>>
 
 Terminal ==
     /\ up /\ sql = "done" /\ consumed /\ reused
@@ -196,7 +204,7 @@ Terminal ==
     /\ sql' = "terminal"
     /\ UNCHANGED <<names, diskNames, backup, diskBackup, candidate, diskCandidate,
                    candidateDirty, up, phase, syncedDirs, fileSynced, crashes,
-                   consumed, reused, badReceipt, seen>>
+                   consumed, reused, badReceipt, inputAvailable, seen>>
 
 Cleanup ==
     /\ up /\ (backup \/ diskBackup)
@@ -204,14 +212,14 @@ Cleanup ==
     /\ backup' = FALSE /\ diskBackup' = FALSE
     /\ UNCHANGED <<sql, names, diskNames, candidate, diskCandidate, candidateDirty,
                    up, phase, syncedDirs, fileSynced, crashes, consumed,
-                   reused, badReceipt, seen>>
+                   reused, badReceipt, inputAvailable, seen>>
 
-Next == Intent \/ Discover \/ PinOriginal \/ SyncBackup \/ PrepareCandidate
+Next == SupplyInput \/ Intent \/ Discover \/ PinOriginal \/ SyncBackup \/ PrepareCandidate
         \/ SyncCandidate \/ Apply \/ (\E p \in Paths: SyncDirectory(p))
         \/ RemoveSource \/ CommitReceipt \/ Consume \/ ReplacePaths \/ Replay \/ Writeback
         \/ CandidateWriteback \/ Crash \/ Restart \/ Terminal \/ Cleanup
 Spec == Init /\ [][Next]_vars
-LiveSpec == Spec /\ WF_vars(Intent) /\ WF_vars(Discover)
+LiveSpec == Spec /\ WF_vars(SupplyInput) /\ WF_vars(Intent) /\ WF_vars(Discover)
              /\ WF_vars(PinOriginal) /\ WF_vars(SyncBackup)
              /\ WF_vars(PrepareCandidate) /\ WF_vars(SyncCandidate)
              /\ WF_vars(Apply) /\ (\A p \in Paths: WF_vars(SyncDirectory(p)))

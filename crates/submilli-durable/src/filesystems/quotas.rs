@@ -7,8 +7,11 @@ pub(crate) type SharedQuotas = HashMap<FileIdentity, Weak<DiskQuota>>;
 
 // Reopening a logical workspace in the same process must keep the counter used
 // by its existing VFS owners. Weak entries do not retain completed workspaces.
-pub(super) async fn share(objects: &DurableObjects, mut vfs: Vfs) -> Result<Vfs, FilesystemError> {
-    let mut shared = objects.filesystem_quotas.lock().await;
+pub(super) async fn share(
+    context: &FilesystemContext,
+    mut vfs: Vfs,
+) -> Result<Vfs, FilesystemError> {
+    let mut shared = context.filesystem_quotas.lock().await;
     shared.retain(|_, quota| quota.strong_count() != 0);
     if let (Some(root), Some(quota)) = (vfs.dir(), vfs.quota()) {
         let identity = FileIdentity::of(&root.dir_metadata().map_err(RecoveryError::from)?)
@@ -45,8 +48,8 @@ fn reuse(
     Ok(quota.clone())
 }
 
-pub(super) async fn live(objects: &DurableObjects) -> HashMap<FileIdentity, Arc<DiskQuota>> {
-    objects
+pub(super) async fn live(context: &FilesystemContext) -> HashMap<FileIdentity, Arc<DiskQuota>> {
+    context
         .filesystem_quotas
         .lock()
         .await

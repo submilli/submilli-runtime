@@ -40,10 +40,6 @@ pub struct ServerConfig {
     pub database_path: Option<PathBuf>,
     /// Shared database owner; takes precedence over database_path.
     pub database: Option<Arc<crate::database::ServerDatabase>>,
-    /// Immutable execution payload storage. The directory must exist and remain
-    /// outside every guest volume. Requires a persistent database and encryption
-    /// key. Enabling storage alone does not enable interpreter replay.
-    pub durable_objects: Option<crate::objects::DurableObjectConfig>,
     /// A secret store an embedder supplies in place of the database, backing
     /// the blueprint `store:` secret source, the `submilli server secret` CLI
     /// and MCP OAuth grants. `None` (the default) keeps secrets and grants in
@@ -725,7 +721,6 @@ pub enum SizeLimit {
 /// token files.
 #[derive(Clone, Debug, Default)]
 pub struct ServerDirectories {
-    pub durable_object_dir: Option<PathBuf>,
     pub blueprint_dir: Option<PathBuf>,
     pub package_store_root: Option<PathBuf>,
     /// The read-only package root the server falls back to; executable
@@ -763,10 +758,6 @@ impl ServerDirectories {
     /// wherever the store was opened before validating.
     pub fn from_config(config: &ServerConfig) -> Self {
         Self {
-            durable_object_dir: config
-                .durable_objects
-                .as_ref()
-                .map(|objects| objects.directory.clone()),
             blueprint_dir: Some(
                 config
                     .blueprint_dir
@@ -850,11 +841,6 @@ pub enum VolumeError {
     /// session workspaces are created by name beneath it, so either direction is
     /// unsafe.
     VolumeRootOverlap(VolumeRootOverlap),
-    DurableObjectOverlap {
-        path: PathBuf,
-        owned: &'static str,
-        owned_path: PathBuf,
-    },
 }
 
 /// One volume declaration overlapping one server-owned directory, in the
@@ -974,16 +960,6 @@ impl fmt::Display for VolumeError {
                 owned_path = o.owned_path.display(),
                 reason = o.reason,
             ),
-            VolumeError::DurableObjectOverlap {
-                path,
-                owned,
-                owned_path,
-            } => write!(
-                f,
-                "durable object directory ({}) overlaps the {owned} ({}); configure a separate directory",
-                path.display(),
-                owned_path.display(),
-            ),
         }
     }
 }
@@ -1020,7 +996,6 @@ pub fn validate_volumes(
         ..dirs.clone()
     });
     check_volume_root(root.path(), &others)?;
-    check_object_directory(dirs)?;
     let managed_root = root.managed_dir();
     let mut checked: Vec<Volume> = Vec::new();
     for (name, spec) in volumes {
@@ -1047,27 +1022,6 @@ pub fn validate_volumes(
         };
         check_against_other_volumes(&volume, &checked)?;
         checked.push(volume);
-    }
-    Ok(())
-}
-
-fn check_object_directory(dirs: &ServerDirectories) -> Result<(), VolumeError> {
-    let Some(path) = &dirs.durable_object_dir else {
-        return Ok(());
-    };
-    let shape = Shape::of(path);
-    let others = guarded_dirs(&ServerDirectories {
-        durable_object_dir: None,
-        ..dirs.clone()
-    });
-    for guard in others {
-        if shape.beneath(&guard.shape) || guard.shape.beneath(&shape) {
-            return Err(VolumeError::DurableObjectOverlap {
-                path: path.clone(),
-                owned: guard.owned,
-                owned_path: guard.path,
-            });
-        }
     }
     Ok(())
 }
@@ -1267,7 +1221,7 @@ struct GuardedDir {
 /// direction that is unsafe for it and why. Ordered so the most damaging
 /// collisions are reported first; leave the order alone.
 fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
-    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 18] = [
+    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 16] = [
         (
             "secret store",
             dirs.secret_store_dir.clone(),
@@ -1346,18 +1300,6 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
             dirs.database_path.clone(),
             Direction::VolumeContains,
             "a guest could read or replace persistent server metadata",
-        ),
-        (
-            "durable object store",
-            dirs.durable_object_dir.clone(),
-            Direction::VolumeContains,
-            "a guest could modify immutable captures or remove recovery evidence",
-        ),
-        (
-            "durable object store",
-            dirs.durable_object_dir.clone(),
-            Direction::VolumeInside,
-            "guest storage cannot overlap immutable captures or staging",
         ),
         (
             "durable session store",

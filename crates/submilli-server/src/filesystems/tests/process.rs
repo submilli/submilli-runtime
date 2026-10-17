@@ -21,19 +21,13 @@ pub(crate) fn checkpoint(point: &str) {
     }
 }
 
-async fn open(root: &Path) -> (Arc<ServerDatabase>, DurableObjects) {
+async fn open(root: &Path) -> (Arc<ServerDatabase>, FilesystemContext) {
     let database = Arc::new(ServerDatabase::open(&root.join("state.db")).await.unwrap());
-    let objects = DurableObjects::open(
-        DurableObjectConfig {
-            directory: root.join("objects"),
-            ..Default::default()
-        },
-        database.clone(),
-        Arc::new(SecretCipher::from_key([7; 32])),
-    )
-    .await
-    .unwrap();
-    (database, objects)
+    let context =
+        FilesystemContext::open(database.clone(), Arc::new(SecretCipher::from_key([7; 32])))
+            .await
+            .unwrap();
+    (database, context)
 }
 
 #[tokio::test]
@@ -43,7 +37,7 @@ async fn crash_child() {
         return;
     };
     let root = PathBuf::from(root);
-    let (database, objects) = open(&root).await;
+    let (database, context) = open(&root).await;
     database.transaction(|connection| Box::pin(async move {
         sqlx::query("INSERT INTO runs(run_id,reservation_id,session_id,fingerprint,owner_generation,admission_order,created_at_unix_ms,state) VALUES(?,?,'session','request','startup',1,0,'running')")
             .bind(RUN).bind(RUN).execute(connection).await?;
@@ -54,34 +48,30 @@ async fn crash_child() {
         RUN,
         "owner",
         database.clone(),
-        objects.clone(),
+        context.clone(),
     )
     .await
     .unwrap();
-    std::fs::write(filesystem.vfs().root().join("file"), b"initial").unwrap();
-    let id = ObjectId::parse("019c019c-019c-419c-819c-019c019c019c".into()).unwrap();
-    objects
-        .reserve(id.clone(), "owner".into(), [1; 32], 6)
-        .await
-        .unwrap();
-    let prepared = objects
-        .publish(&id, Cursor::new(b"suffix".to_vec()))
-        .await
-        .unwrap();
-    let reference = objects
-        .bind(&prepared, BTreeSet::from([Retention::Run(RUN.into())]))
-        .await
-        .unwrap();
-    let request = Mutation::Append {
-        path: "/file".into(),
-        content: Content {
-            id: reference.id.as_str().into(),
-            bytes: reference.content.bytes,
-            sha256: reference.content.sha256,
-        },
-    };
-    std::fs::write(root.join("request"), serde_json::to_vec(&request).unwrap()).unwrap();
-    filesystem.execute(EFFECT, request).await.unwrap();
+    if std::env::var("SUBMILLI_FILESYSTEM_CRASH_KIND").as_deref() == Ok("writer") {
+        filesystem.open_writer(RUN, "/file").await.unwrap();
+        filesystem
+            .write_chunk(RUN, RUN, b"suffix".to_vec())
+            .await
+            .unwrap();
+        filesystem.close_writer(RUN, EFFECT).await.unwrap();
+    } else {
+        std::fs::write(filesystem.vfs().root().join("file"), b"initial").unwrap();
+        let input = ReplayInput::bytes(EFFECT.into(), b"suffix".to_vec()).unwrap();
+        let request = Mutation::Append {
+            path: "/file".into(),
+            content: input.content(),
+        };
+        std::fs::write(root.join("request"), serde_json::to_vec(&request).unwrap()).unwrap();
+        filesystem
+            .execute_with_input(EFFECT, request, input)
+            .await
+            .unwrap();
+    }
     database
         .transaction(|connection| {
             Box::pin(async move {
@@ -101,6 +91,9 @@ async fn crash_child() {
 }
 
 fn kill_at(root: &Path, point: &str) {
+    kill_at_mode(root, point, "append");
+}
+fn kill_at_mode(root: &Path, point: &str, kind: &str) {
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -109,6 +102,7 @@ fn kill_at(root: &Path, point: &str) {
         ])
         .env("SUBMILLI_FILESYSTEM_CRASH_ROOT", root)
         .env("SUBMILLI_FILESYSTEM_CRASH_AT", point)
+        .env("SUBMILLI_FILESYSTEM_CRASH_KIND", kind)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
@@ -146,16 +140,15 @@ async fn process_restart_recovers_sql_filesystem_and_cleanup_boundaries() {
         "retired",
     ] {
         let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir(root.path().join("objects")).unwrap();
         std::fs::create_dir(root.path().join("ephemeral")).unwrap();
         let child_root = root.path().to_owned();
         tokio::task::spawn_blocking(move || kill_at(&child_root, point))
             .await
             .unwrap();
-        let (database, objects) = open(root.path()).await;
-        let id = workspace_id(RUN, objects.store_identity());
+        let (database, context) = open(root.path()).await;
+        let id = workspace_id(RUN, context.store_identity());
         if ["retirement", "filesystem-removed", "retired"].contains(&point) {
-            DurableFilesystem::recover_cleanup(&id, "owner", database, objects)
+            DurableFilesystem::recover_cleanup(&id, "owner", database, context)
                 .await
                 .unwrap();
             assert!(
@@ -172,7 +165,7 @@ async fn process_restart_recovers_sql_filesystem_and_cleanup_boundaries() {
             RUN,
             "owner",
             database,
-            objects,
+            context,
         )
         .await
         .unwrap();
@@ -182,11 +175,65 @@ async fn process_restart_recovers_sql_filesystem_and_cleanup_boundaries() {
         }
         let request: Mutation =
             serde_json::from_slice(&std::fs::read(root.path().join("request")).unwrap()).unwrap();
-        filesystem.recover().await.unwrap();
-        filesystem.execute(EFFECT, request).await.unwrap();
+        if point != "effect-receipt" {
+            assert!(matches!(
+                filesystem.recover().await,
+                Err(FilesystemError::Recovery(RecoveryError::ReplayRequired))
+            ));
+        }
+        let input = ReplayInput::bytes(EFFECT.into(), b"suffix".to_vec()).unwrap();
+        filesystem
+            .execute_with_input(EFFECT, request, input)
+            .await
+            .unwrap();
         assert_eq!(
             std::fs::read(filesystem.vfs().root().join("file")).unwrap(),
             b"initialsuffix"
+        );
+    }
+}
+
+#[tokio::test]
+async fn writer_restart_repairs_unacknowledged_output_tail_and_close() {
+    for point in [
+        "writer-staged",
+        "effect-request",
+        "effect-intent",
+        "effect-applied",
+        "effect-receipt",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("ephemeral")).unwrap();
+        let child_root = root.path().to_owned();
+        tokio::task::spawn_blocking(move || kill_at_mode(&child_root, point, "writer"))
+            .await
+            .unwrap();
+        let (database, context) = open(root.path()).await;
+        let filesystem = DurableFilesystem::retained_ephemeral(
+            &root.path().join("ephemeral"),
+            RUN,
+            "owner",
+            database,
+            context,
+        )
+        .await
+        .unwrap();
+        filesystem.open_writer(RUN, "/file").await.unwrap();
+        filesystem
+            .write_chunk(RUN, RUN, b"suffix".to_vec())
+            .await
+            .unwrap();
+        filesystem.close_writer(RUN, EFFECT).await.unwrap();
+        assert_eq!(
+            std::fs::read(filesystem.vfs().root().join("file")).unwrap(),
+            b"suffix",
+            "{point}"
+        );
+        std::fs::write(filesystem.vfs().root().join("file"), b"later").unwrap();
+        filesystem.close_writer(RUN, EFFECT).await.unwrap();
+        assert_eq!(
+            std::fs::read(filesystem.vfs().root().join("file")).unwrap(),
+            b"later"
         );
     }
 }

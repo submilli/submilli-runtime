@@ -62,45 +62,6 @@ pub(crate) const DEFAULT_SHUTDOWN_GRACE_SECS: u64 = 5;
 /// hosts never silently drops local access.
 const MCP_LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 
-/// Immutable payload storage is opt-in until execution recording is enabled.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DurableObjectsFileConfig {
-    #[serde(default = "default_object_directory")]
-    pub directory: PathBuf,
-    pub inline_bytes: Option<usize>,
-    pub maximum_object_bytes: Option<u64>,
-    pub maximum_owner_bytes: Option<u64>,
-    pub maximum_store_bytes: Option<u64>,
-}
-
-impl DurableObjectsFileConfig {
-    fn resolve(self) -> Result<submilli_server::objects::DurableObjectConfig> {
-        let mut config = submilli_server::objects::DurableObjectConfig {
-            directory: self.directory,
-            ..Default::default()
-        };
-        if let Some(value) = self.inline_bytes {
-            config.inline_bytes = value;
-        }
-        if let Some(value) = self.maximum_object_bytes {
-            config.limits.maximum_object_bytes = value;
-        }
-        if let Some(value) = self.maximum_owner_bytes {
-            config.limits.maximum_owner_bytes = value;
-        }
-        if let Some(value) = self.maximum_store_bytes {
-            config.limits.maximum_store_bytes = value;
-        }
-        config.validate()?;
-        Ok(config)
-    }
-}
-
-fn default_object_directory() -> PathBuf {
-    submilli_server::objects::DurableObjectConfig::default().directory
-}
-
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileConfig {
@@ -113,7 +74,6 @@ pub struct FileConfig {
     pub blueprint_dir: Option<PathBuf>,
     pub session_store_dir: Option<PathBuf>,
     pub database_path: Option<PathBuf>,
-    pub durable_objects: Option<DurableObjectsFileConfig>,
     /// Root of the server's VFS directories; see `--volume-dir`.
     pub volume_dir: Option<PathBuf>,
     pub package_store_dir: Option<PathBuf>,
@@ -563,10 +523,6 @@ fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
 /// without opening anything.
 fn guarded_directories(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> ServerDirectories {
     ServerDirectories {
-        durable_object_dir: file
-            .durable_objects
-            .as_ref()
-            .map(|objects| objects.directory.clone()),
         blueprint_dir: Some(
             explicit(
                 cli.blueprint_dir.clone(),
@@ -1124,10 +1080,6 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         blueprint_dir: Some(blueprint_dir),
         session_store_dir: Some(session_store_dir),
         database_path: Some(database_path),
-        durable_objects: file
-            .durable_objects
-            .map(DurableObjectsFileConfig::resolve)
-            .transpose()?,
         package_store_root,
         // The CLI's store is always readable as a fallback; there is no knob for
         // it because a locally published package resolving on the dev server is
@@ -1676,7 +1628,6 @@ network:
     /// volume at exactly one of them.
     fn dirs_under(root: &std::path::Path) -> ServerDirectories {
         ServerDirectories {
-            durable_object_dir: Some(root.join("objects")),
             blueprint_dir: Some(root.join("blueprints")),
             package_store_root: Some(root.join("packages")),
             package_fallback_root: Some(root.join("cli-packages")),
@@ -1708,7 +1659,6 @@ network:
     /// every guard test below covers it without a second list to maintain.
     fn guarded_paths(dirs: &ServerDirectories) -> Vec<(PathBuf, &'static str)> {
         let ServerDirectories {
-            durable_object_dir,
             blueprint_dir,
             package_store_root,
             package_fallback_root,
@@ -1724,7 +1674,6 @@ network:
             tls_cert_file,
         } = dirs.clone();
         [
-            (durable_object_dir, "durable object store"),
             (blueprint_dir, "blueprint store"),
             (package_store_root, "package store"),
             (package_fallback_root, "fallback package store"),

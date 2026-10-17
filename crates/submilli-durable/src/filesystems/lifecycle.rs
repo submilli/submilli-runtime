@@ -10,13 +10,13 @@ impl DurableFilesystem {
         run: &str,
         owner: &str,
         units: UnitFactory,
-        objects: DurableObjects,
+        context: FilesystemContext,
     ) -> Result<Self, FilesystemError> {
         validate_id(run)?;
         validate_owner(owner)?;
-        let id = workspace_id(run, objects.store_identity());
-        let journal = FilesystemJournal::open(units.clone(), objects.store_identity()).await?;
-        let gate = Arc::new(objects.filesystem_gate.clone().lock_owned().await);
+        let id = workspace_id(run, context.store_identity());
+        let journal = FilesystemJournal::open(units.clone(), context.store_identity()).await?;
+        let gate = Arc::new(context.filesystem_gate.clone().lock_owned().await);
         let parent = parent.to_owned();
         let reserved_id = id.clone();
         let reservation = blocking(gate.clone(), move || {
@@ -30,7 +30,7 @@ impl DurableFilesystem {
         let vfs = blocking(gate.clone(), move || reservation.open(existing.is_none())).await?;
         checkpoint("workspace-root");
         drop(gate);
-        Self::open(vfs, run, owner, units, objects).await
+        Self::open(vfs, run, owner, units, context).await
     }
 
     /// Reconstruct retained filesystem access from SQL, without rebuilding the
@@ -39,20 +39,15 @@ impl DurableFilesystem {
         workspace: &str,
         owner: &str,
         units: UnitFactory,
-        objects: DurableObjects,
+        context: FilesystemContext,
     ) -> Result<Self, FilesystemError> {
         validate_id(workspace)?;
-        let journal = FilesystemJournal::open(units, objects.store_identity()).await?;
-        let gate = Arc::new(objects.filesystem_gate.clone().lock_owned().await);
+        let journal = FilesystemJournal::open(units, context.store_identity()).await?;
+        let gate = Arc::new(context.filesystem_gate.clone().lock_owned().await);
         let stored = journal.workspace(workspace, owner).await?;
         if stored.state != "active" {
             return Err(FilesystemError::Configuration("workspace is not active"));
         }
-        stored
-            .layout
-            .as_ref()
-            .ok_or(RecoveryError::InvalidRecord)?
-            .exclude(objects.directory())?;
         let (vfs, identity) = blocking(gate.clone(), move || {
             let layout = stored.layout.ok_or(RecoveryError::InvalidRecord)?;
             let identity = stored.identity.ok_or(RecoveryError::InvalidRecord)?;
@@ -60,15 +55,14 @@ impl DurableFilesystem {
             Ok((vfs, identity))
         })
         .await?;
-        let vfs = quotas::share(&objects, vfs).await?;
+        let vfs = quotas::share(&context, vfs).await?;
         let recovered = blocking(gate, move || Workspace::reopen(vfs, &identity)).await?;
         Ok(Self {
             work: None,
             workspace: Arc::new(recovered),
             journal,
-            objects,
+            context,
             id: workspace.into(),
-            owner: owner.into(),
         })
     }
 
@@ -76,7 +70,7 @@ impl DurableFilesystem {
     /// workers have drained. SQL checks terminal run state and pending effects;
     /// the shared gate drains cancelled blocking mutation attempts.
     pub async fn retire(&self, owner: &str) -> Result<(), FilesystemError> {
-        let gate = Arc::new(self.objects.filesystem_gate.clone().lock_owned().await);
+        let gate = Arc::new(self.context.filesystem_gate.clone().lock_owned().await);
         self.journal.retire(&self.id, owner).await?;
         checkpoint("retirement");
         let stored = self.journal.workspace(&self.id, owner).await?;
@@ -84,13 +78,13 @@ impl DurableFilesystem {
             return Ok(());
         }
         let access = self
-            .objects
+            .context
             .filesystem_resources
             .clone()
             .write_owned()
             .await;
         let id = self.id.clone();
-        let quotas = quotas::live(&self.objects).await;
+        let quotas = quotas::live(&self.context).await;
         blocking(gate.clone(), move || {
             let _access = access;
             let layout = stored.layout.ok_or(RecoveryError::InvalidRecord)?;
@@ -111,19 +105,19 @@ impl DurableFilesystem {
         workspace: &str,
         owner: &str,
         units: UnitFactory,
-        objects: DurableObjects,
+        context: FilesystemContext,
     ) -> Result<(), FilesystemError> {
         validate_id(workspace)?;
-        let journal = FilesystemJournal::open(units, objects.store_identity()).await?;
-        let gate = Arc::new(objects.filesystem_gate.clone().lock_owned().await);
+        let journal = FilesystemJournal::open(units, context.store_identity()).await?;
+        let gate = Arc::new(context.filesystem_gate.clone().lock_owned().await);
         let stored = journal.workspace(workspace, owner).await?;
         if stored.state == "gone" {
             return Ok(());
         }
         journal.retire(workspace, owner).await?;
-        let access = objects.filesystem_resources.clone().write_owned().await;
+        let access = context.filesystem_resources.clone().write_owned().await;
         let id = workspace.to_owned();
-        let quotas = quotas::live(&objects).await;
+        let quotas = quotas::live(&context).await;
         blocking(gate.clone(), move || {
             let _access = access;
             if let Some(layout) = stored.layout {

@@ -1,5 +1,4 @@
 //! Persistence contract owned by durability, independent of a database driver.
-use crate::object::{DurableObject, ObjectId, ObjectStoreIdentity};
 use crate::state::*;
 use futures::future::BoxFuture;
 use std::sync::Arc;
@@ -27,19 +26,8 @@ pub type UnitFactory =
 /// durable identity in a fresh unit, never by repeating an external mutation.
 #[async_trait::async_trait]
 pub trait UnitOfWork: Send {
-    async fn object_store_identity(&mut self) -> Result<Option<ObjectStoreIdentity>, StoreError>;
-    async fn identify_object_store(
-        &mut self,
-        identity: ObjectStoreIdentity,
-    ) -> Result<(), StoreError>;
-    async fn get_object(&mut self, id: &ObjectId) -> Result<Option<DurableObject>, StoreError>;
-    async fn save_object(&mut self, object: DurableObject) -> Result<(), StoreError>;
-    async fn objects_after(
-        &mut self,
-        after: Option<ObjectId>,
-        limit: u32,
-    ) -> Result<Vec<DurableObject>, StoreError>;
-    async fn object_usage(&mut self, owner: &str) -> Result<(u64, u64), StoreError>;
+    async fn filesystem_store_identity(&mut self) -> Result<Option<String>, StoreError>;
+    async fn identify_filesystem_store(&mut self, identity: String) -> Result<(), StoreError>;
     async fn get_run(&mut self, run: &str) -> Result<Option<RunState>, StoreError>;
     async fn get_workspace(&mut self, id: &str) -> Result<Option<WorkspaceState>, StoreError>;
     async fn save_workspace(&mut self, workspace: WorkspaceState) -> Result<(), StoreError>;
@@ -104,22 +92,6 @@ pub trait UnitOfWork: Send {
         after: (&str, &str),
         limit: u32,
     ) -> Result<Vec<Chunk>, StoreError>;
-    async fn get_producer(
-        &mut self,
-        workspace: &str,
-        id: &str,
-    ) -> Result<Option<Producer>, StoreError>;
-    async fn save_producer(
-        &mut self,
-        workspace: &str,
-        producer: Producer,
-    ) -> Result<(), StoreError>;
-    async fn producers_after(
-        &mut self,
-        workspace: &str,
-        after: &str,
-        limit: u32,
-    ) -> Result<Vec<Producer>, StoreError>;
     async fn resource_counts(&mut self, workspace: &str) -> Result<ResourceCounts, StoreError>;
     async fn commit(self: Box<Self>) -> Result<(), StoreError>;
 }

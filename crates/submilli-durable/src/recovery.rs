@@ -12,6 +12,7 @@ mod mutation;
 pub(crate) mod paths;
 mod plan;
 mod resources;
+mod writer;
 
 pub use layout::{EphemeralReservation, WorkspaceLayout};
 pub use listing::{DirectoryEntry, MAX_LISTING_BYTES};
@@ -43,6 +44,8 @@ pub enum RecoveryError {
     Containment(#[from] ContainError),
     #[error("filesystem recovery identity or content does not match the intent")]
     Conflict,
+    #[error("filesystem recovery needs the original bytes supplied by execution replay")]
+    ReplayRequired,
     #[error("unsupported durable filesystem operation: {0}")]
     Unsupported(&'static str),
     #[error("invalid filesystem recovery record")]
@@ -53,9 +56,9 @@ pub enum RecoveryError {
     Limit,
 }
 
-/// Supplies immutable captured bytes. Implementations must authenticate the
-/// complete object before exposing it and must hold its retention while used.
-pub trait CapturedContent {
+/// Supplies immutable replay input bytes. Implementations authenticate the
+/// complete input before exposing it; this interface does not persist inputs.
+pub trait InputBytes {
     fn open(&mut self, content: &Content) -> Result<Box<dyn Read + Send>, RecoveryError>;
 }
 
@@ -174,7 +177,7 @@ impl Workspace {
         &self,
         effect: &str,
         mutation: Mutation,
-        content: &mut dyn CapturedContent,
+        content: &mut dyn InputBytes,
     ) -> Result<Intent, RecoveryError> {
         paths::validate_id(effect)?;
         mutation.validate()?;
@@ -189,7 +192,7 @@ impl Workspace {
     pub fn apply(
         &self,
         intent: &Intent,
-        content: &mut dyn CapturedContent,
+        content: &mut dyn InputBytes,
     ) -> Result<Outcome, RecoveryError> {
         intent.validate()?;
         if intent.workspace != self.identity() {

@@ -1,0 +1,78 @@
+{
+  "module": "WriterRecovery",
+  "constants": {
+    "MaxCrashes": 1,
+    "Fault": "none",
+    "Witness": ""
+  },
+  "invariants": [
+    "TypeOK",
+    "DurableChunks",
+    "SameBytes",
+    "NoDuplicateTail",
+    "NoRepublish"
+  ],
+  "properties": [],
+  "cases": [
+    {
+      "name": "writer-safety",
+      "kind": "safety"
+    },
+    {
+      "name": "writer-progress",
+      "kind": "liveness",
+      "specification": "LiveSpec",
+      "properties": [
+        "Progress"
+      ]
+    },
+    {
+      "name": "negative-fresh-offset",
+      "kind": "negative",
+      "invariant": "NoDuplicateTail",
+      "constants": {
+        "Fault": "fresh-offset"
+      }
+    },
+    {
+      "name": "negative-early-receipt",
+      "kind": "negative",
+      "invariant": "DurableChunks",
+      "constants": {
+        "Fault": "early-receipt"
+      }
+    },
+    {
+      "name": "negative-unchecked-input",
+      "kind": "negative",
+      "invariant": "SameBytes",
+      "constants": {
+        "Fault": "unchecked-input"
+      }
+    },
+    {
+      "name": "negative-repeat-close",
+      "kind": "negative",
+      "invariant": "NoRepublish",
+      "constants": {
+        "Fault": "repeat-close"
+      }
+    },
+    {
+      "name": "witness-tail",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "tail"
+      }
+    },
+    {
+      "name": "witness-mismatch",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "mismatch"
+      }
+    }
+  ]
+}

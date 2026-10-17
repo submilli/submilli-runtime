@@ -1,4 +1,4 @@
-//! Shared effect lifecycle. The caller's unit also owns admission and object pins.
+//! Shared effect lifecycle. Admission records metadata and argument fingerprints, not input bytes.
 pub use crate::codec::MAX_RECORD;
 use crate::{UnitOfWork, state::Effect, unit_of_work::StoreError};
 pub const MAX_EFFECTS: u64 = 10_000;

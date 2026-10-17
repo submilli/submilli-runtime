@@ -1,7 +1,7 @@
 use super::paths::{checkpoint, current, existing, identity, sync};
 use super::plan::Entry;
 use super::{
-    CapturedContent, Content, FileIdentity, Intent, Mutation, Outcome, RecoveryError, Workspace,
+    Content, FileIdentity, InputBytes, Intent, Mutation, Outcome, RecoveryError, Workspace,
 };
 use cap_std::fs::{Dir, File, OpenOptions};
 use sha2::{Digest, Sha256};
@@ -12,7 +12,7 @@ impl Workspace {
         &self,
         effect: &str,
         mutation: Mutation,
-        content: &mut dyn CapturedContent,
+        content: &mut dyn InputBytes,
     ) -> Result<Intent, RecoveryError> {
         let (path, follows) = match &mutation {
             Mutation::Write { path, .. }
@@ -136,7 +136,7 @@ impl Workspace {
         entry: &Entry,
         artifacts: &Dir,
         payload: &Content,
-        content: &mut dyn CapturedContent,
+        content: &mut dyn InputBytes,
     ) -> Result<FileIdentity, RecoveryError> {
         let present = existing(artifacts, "candidate")?;
         if present
@@ -207,7 +207,7 @@ impl Workspace {
     pub(super) fn apply_mutation(
         &self,
         intent: &Intent,
-        content: &mut dyn CapturedContent,
+        content: &mut dyn InputBytes,
     ) -> Result<Outcome, RecoveryError> {
         let artifacts = self.artifacts(&intent.source, &intent.effect, false)?;
         match &intent.mutation {
@@ -252,7 +252,7 @@ impl Workspace {
         intent: &Intent,
         artifacts: &Dir,
         payload: &Content,
-        content: &mut dyn CapturedContent,
+        content: &mut dyn InputBytes,
     ) -> Result<(), RecoveryError> {
         let candidate = intent.candidate.ok_or(RecoveryError::InvalidRecord)?;
         if current(artifacts, "candidate")? != Some(candidate) {
@@ -310,7 +310,7 @@ impl Workspace {
         intent: &Intent,
         artifacts: &Dir,
         payload: &Content,
-        content: &mut dyn CapturedContent,
+        content: &mut dyn InputBytes,
     ) -> Result<(), RecoveryError> {
         let original = intent.original.ok_or(RecoveryError::InvalidRecord)?;
         require_pin(artifacts, "original", original)?;

@@ -1,19 +1,11 @@
 //! In-memory implementation of the same transactional contract as SQL.
 //! Unused ports fail loudly, so a test cannot accidentally depend on a database.
 use super::*;
-use crate::{
-    effects::{self, EffectKey},
-    object::{ContentIdentity, Retention},
-    publications::workspaces,
-};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Mutex,
-};
+use crate::effects::{self, EffectKey};
+use std::{collections::BTreeMap, sync::Mutex};
 #[derive(Default, Clone)]
 struct State {
     effects: BTreeMap<(String, String), Effect>,
-    objects: BTreeMap<ObjectId, DurableObject>,
 }
 struct MemoryUnit {
     store: Arc<Mutex<State>>,
@@ -32,39 +24,11 @@ impl MemoryUnit {
 #[async_trait::async_trait]
 #[allow(unused_variables)]
 impl UnitOfWork for MemoryUnit {
-    async fn object_store_identity(&mut self) -> Result<Option<ObjectStoreIdentity>, StoreError> {
-        Err(StoreError::Io(
-            "unexpected persistence operation in test".into(),
-        ))
+    async fn filesystem_store_identity(&mut self) -> Result<Option<String>, StoreError> {
+        Ok(Some("test".into()))
     }
-    async fn identify_object_store(
-        &mut self,
-        identity: ObjectStoreIdentity,
-    ) -> Result<(), StoreError> {
-        Err(StoreError::Io(
-            "unexpected persistence operation in test".into(),
-        ))
-    }
-    async fn get_object(&mut self, id: &ObjectId) -> Result<Option<DurableObject>, StoreError> {
-        Ok(self.pending.objects.get(id).cloned())
-    }
-    async fn save_object(&mut self, object: DurableObject) -> Result<(), StoreError> {
-        self.pending.objects.insert(object.id().clone(), object);
+    async fn identify_filesystem_store(&mut self, _: String) -> Result<(), StoreError> {
         Ok(())
-    }
-    async fn objects_after(
-        &mut self,
-        after: Option<ObjectId>,
-        limit: u32,
-    ) -> Result<Vec<DurableObject>, StoreError> {
-        Err(StoreError::Io(
-            "unexpected persistence operation in test".into(),
-        ))
-    }
-    async fn object_usage(&mut self, owner: &str) -> Result<(u64, u64), StoreError> {
-        Err(StoreError::Io(
-            "unexpected persistence operation in test".into(),
-        ))
     }
     async fn get_run(&mut self, run: &str) -> Result<Option<RunState>, StoreError> {
         Err(StoreError::Io(
@@ -250,34 +214,6 @@ impl UnitOfWork for MemoryUnit {
             "unexpected persistence operation in test".into(),
         ))
     }
-    async fn get_producer(
-        &mut self,
-        workspace: &str,
-        id: &str,
-    ) -> Result<Option<Producer>, StoreError> {
-        Err(StoreError::Io(
-            "unexpected persistence operation in test".into(),
-        ))
-    }
-    async fn save_producer(
-        &mut self,
-        workspace: &str,
-        producer: Producer,
-    ) -> Result<(), StoreError> {
-        Err(StoreError::Io(
-            "unexpected persistence operation in test".into(),
-        ))
-    }
-    async fn producers_after(
-        &mut self,
-        workspace: &str,
-        after: &str,
-        limit: u32,
-    ) -> Result<Vec<Producer>, StoreError> {
-        Err(StoreError::Io(
-            "unexpected persistence operation in test".into(),
-        ))
-    }
     async fn resource_counts(&mut self, workspace: &str) -> Result<ResourceCounts, StoreError> {
         Err(StoreError::Io(
             "unexpected persistence operation in test".into(),
@@ -300,89 +236,40 @@ fn key() -> EffectKey<'static> {
         version: 1,
     }
 }
-fn store() -> (Arc<Mutex<State>>, crate::object::ObjectReference) {
-    let id = ObjectId::parse("00000000-0000-4000-8000-000000000001".into()).unwrap();
-    let mut object = DurableObject::reserve(id.clone(), "owner".into(), [1; 32], 10, 10).unwrap();
-    object
-        .bind(
-            ContentIdentity {
-                bytes: 4,
-                sha256: [2; 32],
-            },
-            4,
-            BTreeSet::from([Retention::Run("run".into())]),
-        )
-        .unwrap();
-    let reference = object.reference().unwrap();
-    let state = State {
-        objects: BTreeMap::from([(id, object)]),
-        ..State::default()
-    };
-    (Arc::new(Mutex::new(state)), reference)
+fn store() -> Arc<Mutex<State>> {
+    Arc::default()
 }
 #[tokio::test]
-async fn staged_effect_and_pin_are_read_together_and_drop_rolls_both_back() {
-    let (store, reference) = store();
+async fn staged_effect_reads_its_writes_and_drop_rolls_back() {
+    let store = store();
     let mut unit = MemoryUnit::begin(&store, false);
-    effects::admit(unit.as_mut(), &key(), b"write")
-        .await
-        .unwrap();
-    workspaces::retain(unit.as_mut(), "workspace", "owner", &reference)
+    effects::admit(unit.as_mut(), &key(), b"fingerprint")
         .await
         .unwrap();
     assert!(unit.get_effect("run", "effect").await.unwrap().is_some());
-    assert!(
-        unit.get_object(&reference.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .retention()
-            .contains(&Retention::Workspace("workspace".into()))
-    );
-    assert!(store.lock().unwrap().effects.is_empty());
     drop(unit);
-    let mut fresh = MemoryUnit::begin(&store, false);
-    assert!(fresh.get_effect("run", "effect").await.unwrap().is_none());
     assert!(
-        !fresh
-            .get_object(&reference.id)
+        MemoryUnit::begin(&store, false)
+            .get_effect("run", "effect")
             .await
             .unwrap()
-            .unwrap()
-            .retention()
-            .contains(&Retention::Workspace("workspace".into()))
+            .is_none()
     );
 }
 #[tokio::test]
-async fn lost_commit_acknowledgement_is_resolved_by_rereading_both_records() {
-    let (store, reference) = store();
+async fn lost_ack_is_reread_without_duplicate_effect() {
+    let store = store();
     let mut unit = MemoryUnit::begin(&store, true);
-    effects::admit(unit.as_mut(), &key(), b"write")
-        .await
-        .unwrap();
-    workspaces::retain(unit.as_mut(), "workspace", "owner", &reference)
+    effects::admit(unit.as_mut(), &key(), b"fingerprint")
         .await
         .unwrap();
     assert!(unit.commit().await.is_err());
     let mut retry = MemoryUnit::begin(&store, false);
-    effects::admit(retry.as_mut(), &key(), b"write")
-        .await
-        .unwrap();
-    workspaces::retain(retry.as_mut(), "workspace", "owner", &reference)
+    effects::admit(retry.as_mut(), &key(), b"fingerprint")
         .await
         .unwrap();
     assert_eq!(retry.effect_count("run").await.unwrap(), 1);
-    assert_eq!(
-        retry
-            .get_object(&reference.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .retention()
-            .len(),
-        2
-    );
-    effects::prepare(retry.as_mut(), &key(), b"intent")
+    effects::prepare(retry.as_mut(), &key(), b"recovery metadata")
         .await
         .unwrap();
     effects::complete(retry.as_mut(), &key(), b"result", false)
