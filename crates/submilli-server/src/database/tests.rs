@@ -725,7 +725,7 @@ async fn durability_migrations_preserve_existing_session_state() {
     .unwrap();
     let before = MIGRATOR
         .iter()
-        .filter(|migration| migration.version <= 8)
+        .filter(|migration| migration.version <= 9)
         .cloned()
         .collect();
     sqlx::migrate::Migrator::with_migrations(before)
@@ -734,7 +734,8 @@ async fn durability_migrations_preserve_existing_session_state() {
         .unwrap();
     sqlx::raw_sql(
         "INSERT INTO sessions(session_id,record_version,status,blueprint_name,idle_timeout_ms,last_activity_unix_ms,root_vfs_type) VALUES ('s',1,'active','test',0,0,'none');
-         INSERT INTO session_kv(session_id,key,payload,value_bytes,retained_bytes) VALUES ('s',X'006b',X'0076',2,4);",
+         INSERT INTO session_kv(session_id,key,payload,value_bytes,retained_bytes) VALUES ('s',X'006b',X'0076',2,4);
+         INSERT INTO last_runs(session_id,run_id,completed_at_unix_ms,storage,encoded_bytes,payload) VALUES ('s','run',1,'inline',2,X'7b7d');",
     )
     .execute(&mut connection)
     .await
@@ -756,6 +757,19 @@ async fn durability_migrations_preserve_existing_session_state() {
             .await
             .unwrap();
         assert_eq!(payload, [0, b'v']);
+        let last_run: (String, Vec<u8>) = database
+            .read(|connection| {
+                Box::pin(async move {
+                    Ok(
+                        sqlx::query_as("SELECT run_id,payload FROM last_runs WHERE session_id='s'")
+                            .fetch_one(connection)
+                            .await?,
+                    )
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(last_run, ("run".into(), b"{}".to_vec()));
         database.close().await.unwrap();
     }
 }

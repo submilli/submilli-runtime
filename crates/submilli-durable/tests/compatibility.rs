@@ -1,4 +1,4 @@
-//! Fixed schema-9/10 values from before the crate extraction. These fixtures
+//! Fixed object and filesystem values from before the crate extraction. These fixtures
 //! deliberately avoid using the new encoder to construct their expected input.
 use std::sync::Arc;
 use submilli_durable::{codec, object::ObjectId, recovery::Intent, sealing::Sealer, state::Effect};
