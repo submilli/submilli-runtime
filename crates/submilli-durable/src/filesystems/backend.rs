@@ -4,7 +4,7 @@ use crate::object::Retention;
 use crate::recovery::paths;
 use interpreter::runtime::filesystem::{
     DirectoryEntry, DirectoryReader, FileReader, FileWriter, Filesystem,
-    FilesystemError as PortError, FilesystemInfo, Invocation, NativeOperation,
+    FilesystemError as PortError, FilesystemInfo, Invocation,
 };
 use interpreter::runtime::{fs, vfs::Placement};
 use std::collections::BTreeSet;
@@ -29,11 +29,6 @@ impl Filesystem for DurableFilesystem {
                 .placement()
                 .clone(),
         )
-    }
-    fn native_scope(&self, _: NativeOperation) -> Result<&Vfs, PortError> {
-        Err(PortError::Unsupported(
-            "native access is unavailable on a durable workspace",
-        ))
     }
     async fn metadata(&self, path: &str, follow: bool) -> Result<cap_std::fs::Metadata, PortError> {
         let vfs = self.workspace.vfs().clone();

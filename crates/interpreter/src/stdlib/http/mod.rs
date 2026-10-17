@@ -559,7 +559,7 @@ fn request_principal(
         who.clone(),
         std::sync::Arc::clone(&caller.data().security_check),
         request,
-        caller.data().filesystem.cwd().to_owned(),
+        caller.data().vfs.cwd().to_owned(),
         ticket,
     );
     Ok((who, std::sync::Arc::new(guard)))
@@ -2129,15 +2129,7 @@ function main(): void {
                 "{error:?}"
             );
             assert_eq!(
-                store
-                    .data()
-                    .native_filesystem(crate::runtime::filesystem::NativeOperation::Download)
-                    .unwrap()
-                    .dir()
-                    .unwrap()
-                    .entries()
-                    .unwrap()
-                    .count(),
+                store.data().vfs.dir().unwrap().entries().unwrap().count(),
                 0
             );
         }

@@ -626,10 +626,7 @@ async fn clone_grant_includes_authentication_without_other_grants() {
     data.security_check = Arc::new(GitOnly {
         capability: "git.fetch",
     });
-    let denied_vfs = data
-        .native_filesystem(crate::runtime::filesystem::NativeOperation::Git)
-        .unwrap()
-        .clone();
+    let denied_vfs = data.vfs.clone();
     run_source(
         r#"
         import { Repository } from "submilli:git";

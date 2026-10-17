@@ -100,17 +100,6 @@ pub trait DirectoryReader: Send + Sync {
     fn close(&mut self);
 }
 
-/// Native access is scoped to an operation whose algorithm is owned by the
-/// interpreter (Git staging/publication and text editing). Backends may refuse
-/// it before any native work; callers must never fall back to another VFS.
-#[derive(Clone, Copy)]
-pub enum NativeOperation {
-    Filesystem,
-    Code,
-    Download,
-    Git,
-}
-
 #[async_trait::async_trait]
 pub trait Filesystem: Send + Sync {
     fn info(&self) -> FilesystemInfo;
@@ -120,7 +109,6 @@ pub trait Filesystem: Send + Sync {
         0
     }
     fn placement(&self, path: &str) -> Result<Placement, FilesystemError>;
-    fn native_scope(&self, operation: NativeOperation) -> Result<&Vfs, FilesystemError>;
     async fn metadata(
         &self,
         path: &str,
@@ -205,9 +193,6 @@ impl Filesystem for NativeFilesystem {
         Ok(fs::resolve_content(&self.vfs, self.vfs.cwd(), path)?
             .placement()
             .clone())
-    }
-    fn native_scope(&self, _: NativeOperation) -> Result<&Vfs, FilesystemError> {
-        Ok(&self.vfs)
     }
     async fn metadata(
         &self,

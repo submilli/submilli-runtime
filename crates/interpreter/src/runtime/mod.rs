@@ -130,6 +130,7 @@ pub struct StoreData {
     pub git: Option<crate::stdlib::git::GitConfig>,
     pub(crate) git_history: Option<Arc<crate::stdlib::git::log_cache::Cache>>,
     pub console: Box<dyn Write + Send>,
+    pub vfs: Vfs,
     pub filesystem: Arc<dyn filesystem::Filesystem>,
     pub filesystem_invocation: filesystem::Invocation,
     pub vfs_info: VfsInfo,
@@ -276,29 +277,6 @@ pub struct LinkedPackageModule<'a> {
 }
 
 impl StoreData {
-    pub fn with_filesystem(
-        filesystem: Arc<dyn filesystem::Filesystem>,
-        max_store_bytes: u64,
-    ) -> Self {
-        let info = filesystem.info();
-        let mut data = Self::with_vfs_and_cap(Vfs::none(), max_store_bytes);
-        data.vfs_info = VfsInfo {
-            mode: info.mode,
-            size_limit: info.maximum_bytes,
-        };
-        data.filesystem = filesystem;
-        data
-    }
-
-    pub fn native_filesystem(
-        &self,
-        operation: filesystem::NativeOperation,
-    ) -> wasmtime::Result<&Vfs> {
-        self.filesystem
-            .native_scope(operation)
-            .map_err(crate::runtime::host::fatal_host_error)
-    }
-
     pub fn with_vfs(vfs: Vfs) -> Self {
         Self::with_vfs_and_cap(vfs, DEFAULT_MAX_STORE_BYTES)
     }
@@ -312,7 +290,8 @@ impl StoreData {
             #[cfg(test)]
             array_growth: array_storage::GrowthStats::default(),
             console: Box::new(std::io::stderr()),
-            filesystem: Arc::new(filesystem::NativeFilesystem::new(vfs)),
+            filesystem: Arc::new(filesystem::NativeFilesystem::new(vfs.clone())),
+            vfs,
             filesystem_invocation: filesystem::Invocation::default(),
             vfs_info,
             security_check: security::default_check(),
