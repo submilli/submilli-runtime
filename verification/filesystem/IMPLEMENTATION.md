@@ -1,175 +1,114 @@
 # Filesystem recovery adapter
 
-This implements the filesystem portion of SUB-1339. The server's
-`DurableFilesystem` combines a sealed SQLite journal with the engine's
-`runtime::fs::recovery::Workspace`. It is usable without an interpreter.
-Execution history, manifests, effect dispatch, terminal run commits and startup
-supervision remain separate work. Existing HTTP/MCP requests and ordinary
-filesystem/Git host functions are not automatically routed through this API.
+`submilli-durable::filesystems::DurableFilesystem` implements the interpreter's
+filesystem interface. The server supplies its SQLite `UnitOfWork`. Neither the
+filesystem nor its persistence contract depends on durable-object storage.
+Execution history, program replay and startup supervision remain separate work.
 
-## Supported boundary
+## Inputs, outputs and recovery
 
-The adapter reuses retained files. It never rebuilds a workspace by replaying
-completed mutations. Ephemeral roots live at
-`<volume_dir>/ephemeral/submilli-vfs-run-<workspace-id>`; the ID binds the admitted
-run to the object store/database identity. Interpreter/VFS Drop keeps the root.
-Named, per-session and mounted writable volumes keep their ordinary paths;
-retirement removes private recovery artifacts, not their user data.
+The journal stores operation identity/version, paths, input length/hash,
+filesystem recovery metadata, and the final outcome. It does **not** store file
+write input bytes. `ReplayInput` holds bytes only for the current invocation.
+After restart, execution replay reconstructs them from pinned initial run inputs,
+recorded prior observations/outcomes, and deterministic computation. Recorded
+reads, clocks, randomness and other nondeterminism are prerequisites for that
+execution layer; the filesystem does not repeat those observations itself.
 
-One logical run must exclusively own all affected backing files until pending
-operations reconcile, including aliases, ordinary host functions, Git, tools
-and external writers. The local gate serializes adapter access and drains
-cancelled blocking attempts. It does not exclude other logical runs or external
-processes. General locks remain SUB-1295, with TLA+ verification required before
-implementation. No HA takeover, leases, stale-owner fencing or network storage
-guarantees are claimed.
+`execute_with_input` validates supplied input against the request fingerprint.
+Admission compares the immutable request against any prior record. A mismatch
+fails before public mutation. `recover` can discover pending work but returns
+`ReplayRequired` for a pending write/append that needs caller bytes; the caller
+replays execution and retries the same effect with `execute_with_input`. It must
+not invent a new effect ID or redo an external download to obtain those bytes.
+A completed effect returns its saved outcome without requesting input or touching
+the current pathname. Retained workspace contents are never rebuilt by replaying
+completed mutations.
 
-Storage must preserve successful file and directory synchronization. Directory
-sync errors are returned. Models distinguish process death from power loss;
-process-kill tests do not establish a device's power-loss contract. Missing or
-corrupt roots, pins, parent identities, captures and append prefixes fail closed.
+Filesystem staging remains necessary: a replacement candidate is the new file
+being constructed; original inode pins protect mutation/recovery evidence.
+These are mutable filesystem artifacts, not immutable input captures or a
+second general payload store.
 
-## Journal and persistence ordering
+## Ordering and storage
 
-Migration 10 holds workspace, resource and ordered-plan records, plus the shared
-`durable_effects` table. An effect is keyed by `(run_id, effect_id)` and carries
-an operation name/version, immutable request, adapter recovery payload and final
-outcome. The filesystem adapter stores its workspace/plan/mutation in the sealed
-request and its prepared `Intent` in `recovery_payload`. There is no separate
-filesystem effect row or second primitive receipt. All operation adapters share
-the same identity namespace and one-pending-effect constraint per run. Paths,
-layouts, requests, recovery payloads and outcomes are sealed; shared effect fields
-are authenticated separately against run, effect, operation and version.
-Captured bytes and directory snapshots live in the immutable object store.
-Mutable candidate files never share an inode with an immutable capture.
+Migration 10 contains `durable_filesystem_store` (database identity), retained
+workspaces, shared `durable_effects`, plans, readers, listings, writers and chunk
+fingerprints. No object-store or filesystem-object producer tables are created.
+Sensitive metadata and recorded outputs are sealed before reaching SQLite.
+Directory enumeration is an output, stored inline in SQLite with a 4 MiB bound;
+ordinary recovery records have a 64 KiB bound. Large-output placement is a later
+history-storage enhancement behind the same byte interface.
 
-| Boundary | Implementation | Model action |
-| --- | --- | --- |
-| Reserve before mkdir | SQLite preparing reservation, with parent identity | Workspace ownership precondition |
-| Record retained layout | Sealed layout, then active root identities | Stable workspace precondition |
-| Admit immutable request and retention | One SQLite transaction | `Intent` |
-| Prepare private evidence | Sync baseline, pin original, copy/validate candidate | Pinning and candidate preparation |
-| Store prepared intent | Separate SQLite pending transition | Strengthens the pre-apply guard |
-| Publish or reconcile | Capability-relative syscalls with expected identities | Primitive `Apply` actions |
-| Persist files and directories | Fallible synchronization barriers | File/directory sync actions |
-| Commit result before returning | SQLite done/rejected outcome | `CommitReceipt` |
-| Duplicate call | Check request, return outcome without filesystem access | `Replay` |
-| Terminal cleanup | Fence, drain, delete, release retention, tombstone | Terminal/drain/collection |
+| Boundary | Implementation/model mapping |
+| --- | --- |
+| Reserve workspace | Commit ownership/layout before creating a retained root |
+| Admit effect | Commit immutable metadata and fingerprint; no input bytes |
+| Prepare | Sync baseline, pin original, build candidate; private artifacts only |
+| Prepare commit | Persist recovery intent before public mutation |
+| Apply | Reconcile expected inode identities and fixed append offsets |
+| Persistence barriers | Sync files and containing directories |
+| Complete | Commit outcome before returning it or admitting the next mutation |
+| Replay | Validate identity/fingerprint and return committed outcome |
+| Cleanup | Require terminal state, drain workers/readers, remove artifacts, tombstone |
 
-The model's pending intent spans the implementation's preparing request and
-prepared intent. Preparation writes only private artifacts. Its definitive
-preflight refusals can be recorded. Once public mutation starts, an error leaves
-the intent pending; it cannot become a definitive guest failure. A lost SQL
-acknowledgement is resolved by loading the committed row.
+SQLite commit and acknowledgement are distinct. An uncertain commit is resolved
+by rereading the same identity. After public mutation starts, an operational
+failure keeps the effect pending; it must not become a definitive guest refusal.
+Preflight refusals may be recorded and replayed. Cancellation cannot release the
+shared filesystem gate while a blocking worker still owns it.
 
-Registration can stop before mkdir, after creating an empty root, or after
-storing its full layout. Cleanup handles each case. Bootstrap cleanup removes
-only an empty reserved root. Full-layout cleanup checks backing-root identities
-directly and tolerates already deleted cwd, mount placeholders, private subtrees
-or ephemeral roots. It does not restore an execution layout before deletion.
+## Writers and resources
 
-The [shared effect model](../effects/README.md) checks the storage lifecycle.
-This is the storage subset of SUB-1837, not its ordered execution history. It
-has no committed history sequence, attempt-generation fence, accounting, terminal
-event or interpreter replay dispatcher. Those must use this effect identity and
-outcome rather than introduce a parallel primitive-effects journal. Compound
-plans still orchestrate child effects and keep an aggregate outcome; this is not
-a second receipt for an individual primitive. Workspace/resource records span
-multiple effects and remain separate.
+A writer has one private output file on the target volume. Each write validates
+the stable chunk ID and fingerprint. New chunks overwrite at the sum of already
+acknowledged chunk lengths, truncate any unacknowledged tail, and sync the staged
+output before committing the chunk receipt. Duplicate acknowledged chunks return
+without writing; changed arguments fail. SQLite stores chunk descriptors only.
 
-## Primitive operations
+Close verifies every acknowledged chunk against the staged output, computes the
+whole-file fingerprint with bounded buffering, fences the writer, and uses the
+ordinary replacement protocol. A lost close receipt is reconciled; a completed
+close never republishes after pathname reuse. Staging counts toward filesystem
+quota, including the candidate needed for publication. Missing/corrupt acknowledged
+output blocks close rather than publishing different bytes. Dropping a writer
+does not publish its output. Terminal cleanup removes unfinished staging.
 
-* Write/download materialization copies a capture into a private candidate,
-  verifies length/hash, synchronizes it and publishes its name. Recovery repairs
-  uncommitted candidate bytes on the same inode. A completed receipt never
-  overwrites a later edit. Ordinary writes have new-file metadata semantics.
-* Append pins the original inode and hashes its durable prefix. Each attempt
-  opens without `O_APPEND`, seeks to the recorded original length and repairs
-  the captured interval. It preserves inode metadata and live-reader visibility.
-  Unexpected prefix bytes or length block recovery.
-* Same-volume move publishes a private hard link at the destination, syncs that
-  parent on every attempt, then unlinks the source and syncs its parent. Both
-  names may temporarily identify the same inode. The pin also supports defensive
-  recovery of all four combinations of persisted source/destination changes.
-* Remove retains the original inode before unlinking. Completed retries return
-  their saved result even after path reuse.
-* Empty-directory mkdir/rmdir follow their separate model. A pending new mkdir
-  may recognize only an empty directory under exclusive ownership. No child
-  mutation is admitted before its receipt.
+Readers pin the original inode durably. Dropping a handle releases native access,
+not its durable pin; cleanup waits for open readers. Execution history must record
+read bytes and logical cursor/decoder state before exposing an observation.
+Directory iterators replay their recorded listing and offset, never enumerate a
+completed listing again.
 
-Quota counts unique physical inodes, including retained versions and candidates.
-Growth is admitted before writing; shared counters reconcile after partial or
-completed work and terminal cleanup. Same-process reopen shares existing volume
-counters. Retained originals can consume space until terminal cleanup.
-Bounds include 10,000 traversed entries, depth 64, 1,000 steps per plan, 64 KiB
-protocol records and 4 MiB directory snapshots. Oversized plans fail before
-public mutation. File payloads use the configured object/filesystem limits.
+Compound plans persist ordered mutation descriptors, derived effect IDs and
+aggregate outcomes. Their inputs are supplied separately on replay. Completed
+prefixes are skipped. Source enumerations and prepared Git commit values must
+come from recorded execution outputs; fresh traversal/commit creation is not
+recovery. Ordinary Git, code tools and HTTP downloads remain available through
+the default VFS, outside this adapter's durability guarantee.
 
-## Resources and compound operations
+## Verification and limits
 
-Readers durably pin an inode before returning a logical resource. A
-`ReaderPosition` identifies that inode and the first unread byte independently
-of pathname and OS descriptor. Restoration preserves replacement semantics while
-observing append to the original inode. Native access guards delay retirement.
+The append and namespace models now distinguish volatile replay inputs from
+retained filesystem evidence: crash erases input availability, and recovery waits
+for matching input. The writer model checks staged-output/receipt ordering,
+fixed-offset retry, mismatched duplicate input, and completed-close replay.
+Shared effects check request/fingerprint immutability. The unit-of-work model
+checks atomic metadata, staged reads, rollback and lost acknowledgements.
+Directory, retained-reader and sequence models cover their separate protocols.
 
-Execution history must commit read observations and cursor advancement together.
-Replay returns recorded bytes, never a fresh read. A buffered text adapter must
-also save decoder/BOM/EOF state and account for prefetched unread bytes. Existing
-guest handle IDs and uncheckpointed native BufReaders are not resume points.
+These are bounded protocol checks, not a proof of Rust, SHA-256, SQLite or storage
+hardware, and not an end-to-end execution/filesystem composition proof. Digest
+comparison abstracts collision resistance. Progress assumes matching replay
+inputs eventually arrive, storage eventually works, and only finitely many
+crashes occur. Wrong replay remains blocked, not silently repaired.
 
-Durable writers record immutable chunks under stable IDs. Duplicate chunks do
-not append twice. Close captures the ordered concatenation and publishes it
-through the write protocol under a stable effect ID. Pause keeps every chunk;
-an unfinished close blocks new mutations until its outcome is durable.
-Permanent capture-size and effect-slot limits are checked before closing fences
-the workspace. Its aggregate object quota is reserved before close admission;
-the capture ID includes the chunk fingerprint so an interrupted reservation does
-not prevent later chunks. Directory captures reserve their actual encoded size,
-bounded by the snapshot and object limits; a listing that cannot fit records a
-definitive refusal.
-
-Directory iterators use a captured sorted listing and an offset, even if the
-directory changes later. Their object producer is journaled before reservation,
-so interrupted captures can be retired without leaking permanent object pins.
-
-`execute_plan` persists an ordered immutable mutation list and pins its captures
-before the first step. Each step has a derived ID, intent and receipt. Plans
-reserve capacity for all steps and reject reused effect IDs before admission.
-Recursive copy/remove and cross-volume moves use create/write/remove steps. The caller
-supplies captured source versions and admits the whole plan's capabilities.
-Recovery never re-enumerates sources. A definitive refusal may leave a committed
-prefix; its recorded failure prevents replay from repeating that prefix.
-
-`publish_git_plan` accepts prepared Git files and refs, with the same captured
-commit/result. It rolls forward: after admission, failures leave the publication
-pending instead of reporting a partially applied Git error. Git-scoped mutations
-exclude private staging names, reject parent aliases and preserve executable
-flags. The caller orders objects before refs. The ordinary Git host function's
-volatile undo list is not used; the future bridge must submit its prepared
-publication and must not regenerate the commit after a crash.
-
-Explicitly unsupported: disposable TempDirs, aliased writable volume roots,
-arbitrary hard-link aliases, symlink/special-file mutations, raw directory
-rename, native locks and uncheckpointed buffered guest handles. Cross-volume
-move uses a captured plan. A recorded lock acquisition is never a current lock.
-
-## Verification and integration
-
-The [append](README.md), [namespace](namespace/README.md),
-[directory](directories/README.md), [resource](resources/README.md),
-[sequence](sequences/README.md) and [object](../objects/README.md) models check
-separate bounded protocols. Composition assumes immutable captures and
-idempotent primitive steps, not an end-to-end proof of the Rust runtime.
-
-Rust tests exercise partial append, corrupt candidates, move states, lost pins,
-path reuse, private aliases, quota, persistence failures, reader cursors, writer
-pause/close, changed listings, compound prefixes and the exact Git commit after
-interrupted publication. Child-process kills exercise SQL request/intent/receipt
-and workspace initialization/retirement with a fresh database/store reopen.
-
-Before enabling guest durability, the execution bridge must supply stable IDs,
-immutable captures, full capability/fuel admission, recorded observations and
-logical checkpoints. It must settle work after effects, commit execution results
-before exposing them, finish filesystem recovery before new live work and retire
-only after terminal authority and draining. Ordinary session expiry and boot
-scratch sweeping preserve SQL-retained workspaces until retirement completes.
+One logical run exclusively owns the backing filesystem, including aliases and
+native tools, until pending mutations reconcile. One shared `FilesystemContext`
+coordinates same-process access and quotas. There are no cross-process leases,
+locks, fencing, HA takeover or network-storage guarantees here. Successful file
+and directory synchronization must survive the storage failure being modeled.
+Process-kill tests exercise application crashes; they do not establish power-loss
+behavior of a device. Limits include 10,000 traversed entries, depth 64 and 1,000
+steps per compound plan. Ephemeral workspaces remain under the retained prefix
+`submilli-vfs-run-`, outside the scratch boot sweep.

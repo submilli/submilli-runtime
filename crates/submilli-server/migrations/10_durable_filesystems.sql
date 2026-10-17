@@ -1,3 +1,9 @@
+-- Database identity binds retained workspaces to their original journal.
+CREATE TABLE durable_filesystem_store (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    identity TEXT NOT NULL UNIQUE
+);
+
 -- Shared effect records and filesystem workspaces/resources. The execution
 -- history integration will use the same run-scoped effect identities.
 CREATE TABLE durable_workspaces (
@@ -15,7 +21,8 @@ CREATE INDEX durable_workspaces_by_session ON durable_workspaces(session_id, sta
 
 -- Shared effect lifecycle. Requests and outcomes are immutable once recorded;
 -- recovery_payload belongs to the operation adapter. Payload bytes are sealed
--- before SQL; large file contents are references into the object store.
+-- before SQL. Filesystem input bytes are never stored here: requests carry
+-- identity, fingerprints and recovery metadata; replay supplies the bytes.
 -- Execution history sequencing, attempt fencing and accounting are separate
 -- integration work. These rows are not an append-only execution event stream.
 CREATE TABLE durable_effects (
@@ -53,13 +60,6 @@ CREATE TABLE durable_filesystem_readers (
     position BLOB,
     error BLOB,
     PRIMARY KEY(workspace_id, resource_id)
-);
-
-CREATE TABLE durable_filesystem_objects (
-    workspace_id TEXT NOT NULL REFERENCES durable_workspaces(workspace_id),
-    object_id TEXT NOT NULL,
-    request BLOB NOT NULL,
-    PRIMARY KEY(workspace_id, object_id)
 );
 
 CREATE TABLE durable_filesystem_listings (

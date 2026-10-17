@@ -1,7 +1,7 @@
 use super::{FileIdentity, RecoveryError, paths};
 use serde::{Deserialize, Serialize};
 
-/// An immutable object-store reference, never a host path or mutable inode.
+/// Input fingerprint and logical identity. No payload bytes or storage location.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Content {
@@ -63,6 +63,15 @@ pub enum Mutation {
 }
 
 impl Mutation {
+    pub fn content(&self) -> Option<&Content> {
+        match self {
+            Self::Write { content, .. }
+            | Self::Append { content, .. }
+            | Self::GitWrite { content, .. } => Some(content),
+            _ => None,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), RecoveryError> {
         let (path, other, content) = match self {
             Self::Write { path, content }

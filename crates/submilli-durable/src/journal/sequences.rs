@@ -33,9 +33,6 @@ impl FilesystemJournal {
                         .await?;
                 }
                 serialize(&steps)?;
-                for step in &steps {
-                    retain_content(unit, &state, step).await?;
-                }
                 let plan = Plan {
                     id,
                     steps,

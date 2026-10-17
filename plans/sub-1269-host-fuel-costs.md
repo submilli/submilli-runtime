@@ -1502,26 +1502,27 @@ The filesystem backend supplies its additional path admission cost through `File
 | `submilli:fs#bytes` | Same, with a chunk size (`stdlib/fs/mod.rs:654`) | `CALL + SCAN(p) + SYSCALL(d) + ELEM(1)` | before | `chunkSize` is not capped by `maxReadSize`; only the memory charge `8 KiB + chunkSize` bounds it. |
 | `submilli:fs#list` | Stats, opens the directory, collects mounts below when recursive, starts a `ContainedWalk` (`stdlib/fs/mod.rs:699`) | `CALL + SCAN(p) + SYSCALL(d) + ELEM(1)` | before | Lazy: entries are paid in `next`. |
 
-Filesystem dispatch now uses `runtime::filesystem::Filesystem`. Native tree
-algorithms live in `stdlib/fs/mod.rs`; `MutationBudget` preserves
-incremental `SYSCALL`/memory admission and post-effect settlement. Native writer
-publication lives in `stdlib/fs/handles.rs`. The formulas above
-remain at the host boundary. Byte and directory iterators settle result
-construction after advancing, so an out-of-fuel result cannot lose an item.
-Durable preparation additionally admits `HASH(2 * original + 3 * payload) +
-IO(2 * original + 3 * payload)` for original/candidate verification and captured
-payload passes; capture admits `HASH(2 * input bytes)`. Writer concatenation
-admits `ELEM(chunks) + HASH(3 * bytes) + IO(2 * bytes)` plus `PARSE`/`HASH` of
-its encoded chunk manifest. Directory capture charges `SYSCALL(1)` per directory,
+Filesystem dispatch uses `runtime::filesystem::Filesystem`. Default tree and
+writer algorithms live in `runtime/default_filesystem.rs`; `MutationBudget`
+preserves incremental admission and post-effect settlement. The formulas above
+remain at the host boundary. Iterators settle result construction after advancing.
+Durable preparation admits `HASH(2 * original + 3 * payload) +
+IO(2 * original + 3 * payload)` for baseline/candidate verification and input
+passes. Constructing a replay input admits `HASH(input bytes)`. Writer staging
+admits `HASH(chunk bytes) + IO(chunk bytes)` before writing. Close verifies the
+staged output with `ELEM(chunks) + HASH(2 * bytes) + IO(bytes)`, then pays ordinary
+write preparation. Directory enumeration charges `SYSCALL(1)` per directory,
 `SYSCALL(2) + ELEM(1) + PARSE(path bytes)` per entry, `sort_cost(entries)`, and
-`PARSE(encoded bytes) + HASH(encoded bytes)` for serialization/publication.
-Snapshot decoding and port ordering settle `HASH(bytes) + PARSE(bytes) +
-sort_cost(entries)` after its receipt. A per-call `WorkBudget` shares the caller's
-remaining fuel with blocking workers; admission can refuse before public mutation,
-then all remaining work settles after publication starts. Quota growth/reconciliation
-and retained-reader hard-link validation charge `SYSCALL(2) + ELEM(1)` for the
-root and each entry through the shared bounded regular-file walker, with the
-same refusal-before-mutation and settlement-after-publication rule.
+`PARSE(2 * data bytes) + COPY(data bytes)` for bounded serialization and its
+journal copy, followed by `HASH(encoded bytes)` before sealing the SQLite output.
+Replay settles `HASH(data bytes) + PARSE(data bytes)` for loading and decoding the
+committed output; data bytes include each entry's fixed fields and path bytes.
+Port ordering settles `sort_cost(entries)` after the receipt. A per-call
+`WorkBudget` shares the caller's remaining fuel with blocking workers; admission
+can refuse before mutation, then work settles after publication starts.
+Quota growth/reconciliation and retained-reader hard-link validation charge
+`SYSCALL(2) + ELEM(1)` for the root and each entry through the shared bounded
+regular-file walker. No general object publication or input archive is involved.
 Durable operation IDs and read-result replay are supplied by future execution
 history; this extraction does not install the durable backend for ordinary runs.
 

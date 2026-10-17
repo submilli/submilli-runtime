@@ -3,7 +3,7 @@ use super::*;
 impl DurableFilesystem {
     /// Publish already computed Git objects, worktree files, index and refs.
     /// The caller captures the exact commit/result before this call, checks the
-    /// complete repository capability, and orders refs after their objects.
+    /// complete repository capability, and orders refs after their Git objects.
     /// Once admitted, failures keep the publication pending for roll-forward;
     /// they never report a definitive Git error with a partially updated repo.
     pub async fn publish_git_plan(
@@ -11,6 +11,7 @@ impl DurableFilesystem {
         id: &str,
         repository: &str,
         steps: Vec<Mutation>,
+        inputs: Vec<ReplayInput>,
     ) -> Result<Outcome, FilesystemError> {
         if !steps.iter().any(|step| step.repository().is_some())
             || steps
@@ -41,20 +42,21 @@ impl DurableFilesystem {
                 | Mutation::GitRemove { .. }
                 | Mutation::GitDirectory { .. } => Ok(step),
                 _ => Err(RecoveryError::Unsupported(
-                    "Git publication requires captured files",
+                    "Git publication requires prepared files",
                 )),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        self.execute_plan(id, steps).await
+        self.execute_plan(id, steps, inputs).await
     }
     /// Recoverable ordered mutations, for recursive copy/remove, cross-volume
-    /// moves and prepared publications. Every source must already be captured.
+    /// moves and prepared publications. Every source is supplied from recorded execution outputs.
     /// The whole plan's capabilities must be admitted before this call. The
     /// order and payloads are immutable; recovery never re-enumerates a tree.
     pub async fn execute_plan(
         &self,
         id: &str,
         steps: Vec<Mutation>,
+        inputs: Vec<ReplayInput>,
     ) -> Result<Outcome, FilesystemError> {
         validate_id(id)?;
         if steps.len() > 1000 {
@@ -63,12 +65,12 @@ impl DurableFilesystem {
         for step in &steps {
             step.validate()?;
         }
-        let gate = Arc::new(self.objects.filesystem_gate.clone().lock_owned().await);
+        let gate = Arc::new(self.context.filesystem_gate.clone().lock_owned().await);
         let record = self.journal.plan(&self.id, id, &steps).await?;
         if let Some(outcome) = record.outcome {
             return unpack(outcome);
         }
-        self.execute_plan_held(gate, id, record.steps).await
+        self.execute_plan_held(gate, id, record.steps, inputs).await
     }
 
     pub(super) async fn execute_plan_held(
@@ -76,13 +78,26 @@ impl DurableFilesystem {
         gate: Arc<tokio::sync::OwnedMutexGuard<()>>,
         id: &str,
         steps: Vec<Mutation>,
+        inputs: Vec<ReplayInput>,
     ) -> Result<Outcome, FilesystemError> {
         let mut bytes = 0u64;
         let finish_publication = steps.iter().any(|step| step.repository().is_some());
         for (index, request) in steps.into_iter().enumerate() {
             let effect = crate::journal::plan_effect_id(&self.id, id, index);
             match self
-                .execute_step(gate.clone(), &effect, request, Some(id), finish_publication)
+                .execute_step(
+                    gate.clone(),
+                    &effect,
+                    request.clone(),
+                    Some(id),
+                    finish_publication,
+                    request.content().and_then(|content| {
+                        inputs
+                            .iter()
+                            .find(|input| input.content() == *content)
+                            .cloned()
+                    }),
+                )
                 .await
             {
                 Ok(outcome) => bytes = bytes.saturating_add(outcome.bytes),

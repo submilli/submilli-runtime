@@ -52,94 +52,11 @@ impl FilesystemJournal {
                 if state.state != "retiring" {
                     return conflict();
                 }
-                release_effects(unit, &state).await?;
-                release_plans(unit, &workspace).await?;
-                release_chunks(unit, &workspace).await?;
-                retire_producers(unit, &state).await?;
                 state.state = "gone".into();
                 unit.save_workspace(state).await?;
                 Ok(())
             })
         })
         .await
-    }
-}
-async fn release_effects(
-    unit: &mut dyn UnitOfWork,
-    state: &WorkspaceState,
-) -> Result<(), FilesystemError> {
-    let mut after = String::new();
-    loop {
-        let page = unit
-            .effects_after(&state.run, OPERATION, &after, 64)
-            .await?;
-        if page.is_empty() {
-            return Ok(());
-        }
-        for effect in page {
-            after = effect.id.clone();
-            release_content(unit, &state.id, &decode_effect(effect, &state.id)?.request).await?;
-        }
-    }
-}
-async fn release_plans(unit: &mut dyn UnitOfWork, workspace: &str) -> Result<(), FilesystemError> {
-    let mut after = String::new();
-    loop {
-        let page = unit.plans_after(workspace, &after, 64).await?;
-        if page.is_empty() {
-            return Ok(());
-        }
-        for plan in page {
-            after = plan.id;
-            for step in plan.steps {
-                release_content(unit, workspace, &step).await?;
-            }
-        }
-    }
-}
-async fn release_chunks(unit: &mut dyn UnitOfWork, workspace: &str) -> Result<(), FilesystemError> {
-    let mut after = (String::new(), String::new());
-    loop {
-        let page = unit
-            .chunks_after(workspace, (&after.0, &after.1), 64)
-            .await?;
-        if page.is_empty() {
-            return Ok(());
-        }
-        for chunk in page {
-            after = (chunk.writer, chunk.id);
-            release_content(
-                unit,
-                workspace,
-                &Mutation::Write {
-                    path: "/".into(),
-                    content: chunk.content,
-                },
-            )
-            .await?;
-        }
-    }
-}
-async fn retire_producers(
-    unit: &mut dyn UnitOfWork,
-    workspace: &WorkspaceState,
-) -> Result<(), FilesystemError> {
-    let mut after = String::new();
-    loop {
-        let page = unit.producers_after(&workspace.id, &after, 64).await?;
-        if page.is_empty() {
-            return Ok(());
-        }
-        for producer in page {
-            after = producer.id;
-            crate::publications::workspaces::retire_producer(
-                unit,
-                &workspace.id,
-                &workspace.owner,
-                &ObjectId::parse(after.clone()).map_err(invalid)?,
-                &producer.request,
-            )
-            .await?;
-        }
     }
 }

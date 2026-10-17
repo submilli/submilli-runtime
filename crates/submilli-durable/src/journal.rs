@@ -1,5 +1,4 @@
 //! Filesystem admission and retention rules, independent of SQL and native I/O.
-use crate::object::{ContentIdentity, ObjectId, ObjectReference};
 use crate::{
     UnitFactory, UnitOfWork, filesystems::FilesystemError, recovery::*, state::*,
     unit_of_work::StoreError,
@@ -31,15 +30,9 @@ struct FilesystemRequest {
 impl FilesystemJournal {
     pub async fn open(units: UnitFactory, expected_store: &str) -> Result<Self, FilesystemError> {
         let mut unit = units().await?;
-        if unit
-            .object_store_identity()
-            .await?
-            .as_ref()
-            .map(crate::object::ObjectStoreIdentity::as_str)
-            != Some(expected_store)
-        {
+        if unit.filesystem_store_identity().await?.as_deref() != Some(expected_store) {
             return Err(FilesystemError::Configuration(
-                "object store belongs to another database",
+                "filesystem belongs to another database",
             ));
         }
         Ok(Self { units })
@@ -204,7 +197,6 @@ impl FilesystemJournal {
                     return conflict();
                 }
                 require_ready(unit, &workspace, Some(&effect)).await?;
-                retain_content(unit, &state, &request).await?;
                 let envelope = FilesystemRequest {
                     workspace: workspace.clone(),
                     plan: plan.clone(),
@@ -414,42 +406,6 @@ async fn require_resource_limit(
         >= MAX_EFFECTS
     {
         return conflict();
-    }
-    Ok(())
-}
-fn reference(mutation: &Mutation) -> Result<Option<ObjectReference>, FilesystemError> {
-    let (Mutation::Write { content, .. }
-    | Mutation::Append { content, .. }
-    | Mutation::GitWrite { content, .. }) = mutation
-    else {
-        return Ok(None);
-    };
-    Ok(Some(ObjectReference {
-        id: ObjectId::parse(content.id.clone()).map_err(invalid)?,
-        content: ContentIdentity {
-            bytes: content.bytes,
-            sha256: content.sha256,
-        },
-    }))
-}
-async fn retain_content(
-    unit: &mut dyn UnitOfWork,
-    workspace: &WorkspaceState,
-    mutation: &Mutation,
-) -> Result<(), FilesystemError> {
-    if let Some(reference) = reference(mutation)? {
-        crate::publications::workspaces::retain(unit, &workspace.id, &workspace.owner, &reference)
-            .await?;
-    }
-    Ok(())
-}
-async fn release_content(
-    unit: &mut dyn UnitOfWork,
-    workspace: &str,
-    mutation: &Mutation,
-) -> Result<(), FilesystemError> {
-    if let Some(reference) = reference(mutation)? {
-        crate::publications::workspaces::release(unit, workspace, &reference.id).await?;
     }
     Ok(())
 }

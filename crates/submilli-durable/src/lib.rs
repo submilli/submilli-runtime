@@ -1,8 +1,5 @@
-//! Durable filesystem effects and immutable payload publication.
+//! Durable filesystem effects with replay-supplied inputs.
 //! Persistence is supplied by the embedding application.
-pub(crate) mod local_objects;
-pub mod object;
-pub mod publications;
 pub mod recovery;
 pub mod sealing;
 pub mod unit_of_work;
@@ -24,9 +21,6 @@ pub mod codec;
 pub mod effects;
 pub mod filesystems;
 pub mod journal;
-pub mod objects;
 pub mod state;
-
-pub mod object_codec;
 
 pub mod record_codec;

@@ -6,7 +6,7 @@
   },
   "invariants": [
     "TypeOK",
-    "AtomicAdmissionAndPins",
+    "AtomicAdmissionAndFingerprint",
     "DropDiscards",
     "ReadOwnWrites",
     "CommitBeforeReturn"
@@ -20,7 +20,7 @@
     {
       "name": "negative-early-commit",
       "kind": "negative",
-      "invariant": "AtomicAdmissionAndPins",
+      "invariant": "AtomicAdmissionAndFingerprint",
       "constants": {
         "Fault": "early-commit"
       }

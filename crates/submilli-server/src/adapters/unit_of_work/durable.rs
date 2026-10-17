@@ -36,79 +36,36 @@ struct SqliteDurableUnitOfWork {
 
 #[async_trait::async_trait]
 impl UnitOfWork for SqliteDurableUnitOfWork {
-    async fn object_store_identity(
-        &mut self,
-    ) -> Result<Option<submilli_durable::object::ObjectStoreIdentity>, DurableStoreError> {
+    async fn filesystem_store_identity(&mut self) -> Result<Option<String>, DurableStoreError> {
         self.transaction
             .query_recoverable(|connection| {
-                Box::pin(crate::adapters::durable_objects::store_identity(connection))
+                Box::pin(async move {
+                    sqlx::query_scalar(
+                        "SELECT identity FROM durable_filesystem_store WHERE singleton=1",
+                    )
+                    .fetch_optional(connection)
+                    .await
+                    .map_err(|error| StoreError::Database(Box::new(error)))
+                })
             })
             .await
             .map_err(durable_error)
     }
-    async fn identify_object_store(
+    async fn identify_filesystem_store(
         &mut self,
-        identity: submilli_durable::object::ObjectStoreIdentity,
+        identity: String,
     ) -> Result<(), DurableStoreError> {
         self.transaction
             .query_recoverable(move |connection| {
-                Box::pin(crate::adapters::durable_objects::identify_store(
-                    connection, identity,
-                ))
-            })
-            .await
-            .map_err(durable_error)
-    }
-    async fn get_object(
-        &mut self,
-        id: &submilli_durable::object::ObjectId,
-    ) -> Result<Option<submilli_durable::object::DurableObject>, DurableStoreError> {
-        let id = id.clone();
-        let sealer = self.sealer.clone();
-        self.transaction
-            .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    crate::adapters::durable_objects::get(connection, &id, &sealer).await
-                })
-            })
-            .await
-            .map_err(durable_error)
-    }
-    async fn save_object(
-        &mut self,
-        object: submilli_durable::object::DurableObject,
-    ) -> Result<(), DurableStoreError> {
-        let sealer = self.sealer.clone();
-        self.transaction
-            .query_recoverable(move |connection| {
-                Box::pin(async move {
-                    crate::adapters::durable_objects::save(connection, object, &sealer).await
-                })
-            })
-            .await
-            .map_err(durable_error)
-    }
-    async fn objects_after(
-        &mut self,
-        after: Option<submilli_durable::object::ObjectId>,
-        limit: u32,
-    ) -> Result<Vec<submilli_durable::object::DurableObject>, DurableStoreError> {
-        let sealer = self.sealer.clone();
-        self.transaction
-            .query_recoverable(move |connection| {
-                Box::pin(async move {
-                    crate::adapters::durable_objects::list(connection, after, limit, &sealer).await
-                })
-            })
-            .await
-            .map_err(durable_error)
-    }
-    async fn object_usage(&mut self, owner: &str) -> Result<(u64, u64), DurableStoreError> {
-        let owner = owner.to_owned();
-        self.transaction
-            .query_recoverable(move |connection| {
-                Box::pin(async move {
-                    crate::adapters::durable_objects::usage(connection, &owner).await
+                    sqlx::query(
+                        "INSERT INTO durable_filesystem_store(singleton,identity) VALUES(1,?)",
+                    )
+                    .bind(identity)
+                    .execute(connection)
+                    .await
+                    .map_err(|error| StoreError::Database(Box::new(error)))?;
+                    Ok(())
                 })
             })
             .await
@@ -256,61 +213,6 @@ impl UnitOfWork for SqliteDurableUnitOfWork {
             .query_recoverable(move |connection| {
                 Box::pin(async move {
                     super::durable_state::plans_after(
-                        connection, &sealer, &workspace, &after, limit,
-                    )
-                    .await
-                })
-            })
-            .await
-            .map_err(durable_error)
-    }
-    async fn get_producer(
-        &mut self,
-        workspace: &str,
-        id: &str,
-    ) -> Result<Option<Producer>, DurableStoreError> {
-        let workspace = workspace.to_owned();
-        let id = id.to_owned();
-        let sealer = self.sealer.clone();
-        self.transaction
-            .query_recoverable(move |connection| {
-                Box::pin(async move {
-                    super::durable_state::get_producer(connection, &sealer, &workspace, &id).await
-                })
-            })
-            .await
-            .map_err(durable_error)
-    }
-    async fn save_producer(
-        &mut self,
-        workspace: &str,
-        producer: Producer,
-    ) -> Result<(), DurableStoreError> {
-        let workspace = workspace.to_owned();
-        let sealer = self.sealer.clone();
-        self.transaction
-            .query_recoverable(move |connection| {
-                Box::pin(async move {
-                    super::durable_state::save_producer(connection, &sealer, &workspace, producer)
-                        .await
-                })
-            })
-            .await
-            .map_err(durable_error)
-    }
-    async fn producers_after(
-        &mut self,
-        workspace: &str,
-        after: &str,
-        limit: u32,
-    ) -> Result<Vec<Producer>, DurableStoreError> {
-        let workspace = workspace.to_owned();
-        let after = after.to_owned();
-        let sealer = self.sealer.clone();
-        self.transaction
-            .query_recoverable(move |connection| {
-                Box::pin(async move {
-                    super::durable_state::producers_after(
                         connection, &sealer, &workspace, &after, limit,
                     )
                     .await

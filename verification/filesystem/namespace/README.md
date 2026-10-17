@@ -2,19 +2,19 @@
 
 This SUB-1815 slice checks staged replacement, same-filesystem regular-file
 move, and regular-file removal. It complements the [append model](../README.md)
-and [immutable object protocol](../../objects/README.md). It does not verify
+and [staged writer protocol](../writers/README.md). It does not verify
 directory trees, cross-volume moves, Git transactions or open-resource replay.
 
 ## Protocol
 
 1. Commit an immutable intent identifying the original file, expected source
-   and destination versions, operation, and immutable replacement payload when
+   and destination versions, operation, and replacement input fingerprint when
    applicable. No public namespace mutation precedes the intent.
 2. Retain the original inode under a private recovery name on the same
    filesystem. Creating that name and synchronizing its parent directory are
    distinct steps. Do not mutate the source until this name is durable.
-3. For replacement, prepare a separate mutable candidate from the immutable
-   payload, validate it and synchronize its bytes before publishing its name.
+3. For replacement, prepare a separate mutable candidate from replay-supplied
+   bytes, validate it and synchronize its bytes before publishing its name.
    Recovery may rewrite damaged uncommitted candidate bytes.
 4. Apply or recognize the original namespace mutation by resource identity.
    Synchronize each affected parent directory separately. Commit the SQL
@@ -24,7 +24,7 @@ directory trees, cross-volume moves, Git transactions or open-resource replay.
    a newer entry. Release recovery evidence only after terminal work drains.
 
 The recovery name is a mutable-file retention mechanism, not an immutable
-capture. It must never alias an object-store capture. A hard link can retain a
+input archive. A hard link can retain a
 regular inode locally, but guest access to recovery names and aliases must be
 excluded. Directory hard links are not a solution for directory-tree recovery.
 
@@ -67,7 +67,9 @@ progress assumes eventual storage availability, finite crashes, eventual
 restart and weak fairness of recovery actions.
 
 The original bytes and initial namespace already exist durably. Candidate
-payload retention is supplied by the object-store protocol. SQL intent and
+input bytes are volatile. Crash clears `inputAvailable`; `SupplyInput` abstracts
+deterministic replay providing the same bytes again. Progress requires that
+supply eventually succeeds. No input payload is stored by this model. SQL intent and
 outcome commits are atomic. Recovery has drained the previous attempt and
 excludes every external writer/alias. No stale-node fencing is established.
 The replacement of paths after the first receipt is an already-durable later

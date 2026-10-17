@@ -4,10 +4,8 @@
 //! `execute` returns only after the filesystem barriers and SQL receipt commit.
 //! It never starts a new run, restores a program or changes run admission.
 use crate::journal::{FilesystemJournal, PendingResource, RecordedOutcome};
-use crate::object::{ContentIdentity, ObjectId, ObjectReference};
-use crate::objects::{DurableObjects, ObjectStoreError};
-use crate::recovery::{CapturedContent, Workspace, WorkspaceLayout};
 pub use crate::recovery::{Content, Mutation, Outcome, RecoveryError};
+use crate::recovery::{InputBytes, Workspace, WorkspaceLayout};
 use crate::{UnitFactory, unit_of_work::StoreError};
 use interpreter::runtime::Vfs;
 use sha2::{Digest, Sha256};
@@ -15,6 +13,10 @@ use std::io::Read;
 use std::sync::Arc;
 
 mod backend;
+mod context;
+mod input;
+pub use context::FilesystemContext;
+pub use input::ReplayInput;
 mod lifecycle;
 mod listings;
 pub(crate) mod quotas;
@@ -27,8 +29,6 @@ pub use resources::FilesystemReader;
 pub enum FilesystemError {
     #[error(transparent)]
     Persistence(#[from] StoreError),
-    #[error(transparent)]
-    Objects(#[from] ObjectStoreError),
     #[error(transparent)]
     Recovery(#[from] RecoveryError),
     #[error("filesystem operation was rejected before mutation: {0}")]
@@ -44,9 +44,8 @@ pub struct DurableFilesystem {
     work: Option<Arc<interpreter::runtime::fuel::WorkBudget>>,
     workspace: Arc<Workspace>,
     journal: FilesystemJournal,
-    objects: DurableObjects,
+    context: FilesystemContext,
     id: String,
-    owner: String,
 }
 
 impl DurableFilesystem {
@@ -58,16 +57,15 @@ impl DurableFilesystem {
         run_id: &str,
         owner: &str,
         units: UnitFactory,
-        objects: DurableObjects,
+        context: FilesystemContext,
     ) -> Result<Self, FilesystemError> {
         validate_id(run_id)?;
         validate_owner(owner)?;
-        let gate = Arc::new(objects.filesystem_gate.clone().lock_owned().await);
-        let journal = FilesystemJournal::open(units, objects.store_identity()).await?;
-        let id = workspace_id(run_id, objects.store_identity());
-        let vfs = self::quotas::share(&objects, vfs).await?;
+        let gate = Arc::new(context.filesystem_gate.clone().lock_owned().await);
+        let journal = FilesystemJournal::open(units, context.store_identity()).await?;
+        let id = workspace_id(run_id, context.store_identity());
+        let vfs = self::quotas::share(&context, vfs).await?;
         let layout = WorkspaceLayout::capture(&vfs)?;
-        layout.exclude(objects.directory())?;
         let identity = journal.register(&id, run_id, owner, Some(layout)).await?;
         checkpoint("workspace-layout");
         let worker_id = id.clone();
@@ -82,26 +80,14 @@ impl DurableFilesystem {
             work: None,
             workspace: Arc::new(workspace),
             journal,
-            objects,
+            context,
             id,
-            owner: owner.into(),
         })
     }
 
     #[cfg(feature = "test-support")]
-    pub fn test_content(
-        &self,
-        request: &Mutation,
-    ) -> Result<impl CapturedContent + Send + 'static, FilesystemError> {
-        self.content(request)
-    }
-    #[cfg(feature = "test-support")]
-    pub async fn test_reserve_writer_capture(
-        &self,
-        resource: &str,
-        chunks: &[Content],
-    ) -> Result<ObjectId, FilesystemError> {
-        self.reserve_writer_capture(resource, chunks).await
+    pub fn test_context(&self) -> &FilesystemContext {
+        &self.context
     }
     #[cfg(feature = "test-support")]
     pub fn test_journal(&self) -> &FilesystemJournal {
@@ -112,10 +98,6 @@ impl DurableFilesystem {
         &self.workspace
     }
     #[cfg(feature = "test-support")]
-    pub fn test_objects(&self) -> &DurableObjects {
-        &self.objects
-    }
-    #[cfg(feature = "test-support")]
     pub async fn test_execute_step(
         &self,
         gate: Arc<tokio::sync::OwnedMutexGuard<()>>,
@@ -123,8 +105,9 @@ impl DurableFilesystem {
         request: Mutation,
         plan: Option<&str>,
         finish_publication: bool,
+        input: Option<ReplayInput>,
     ) -> Result<Outcome, FilesystemError> {
-        self.execute_step(gate, effect, request, plan, finish_publication)
+        self.execute_step(gate, effect, request, plan, finish_publication, input)
             .await
     }
 
@@ -143,8 +126,24 @@ impl DurableFilesystem {
     ) -> Result<Outcome, FilesystemError> {
         validate_id(effect)?;
         request.validate()?;
-        let gate = Arc::new(self.objects.filesystem_gate.clone().lock_owned().await);
-        self.execute_held(gate, effect, request).await
+        let gate = Arc::new(self.context.filesystem_gate.clone().lock_owned().await);
+        self.execute_held(gate, effect, request, None).await
+    }
+
+    /// Retry the same effect with bytes reconstructed by execution replay.
+    pub async fn execute_with_input(
+        &self,
+        effect: &str,
+        request: Mutation,
+        input: ReplayInput,
+    ) -> Result<Outcome, FilesystemError> {
+        validate_id(effect)?;
+        request.validate()?;
+        if request.content() != Some(&input.content()) {
+            return Err(RecoveryError::Conflict.into());
+        }
+        let gate = Arc::new(self.context.filesystem_gate.clone().lock_owned().await);
+        self.execute_held(gate, effect, request, Some(input)).await
     }
 
     async fn execute_held(
@@ -152,8 +151,10 @@ impl DurableFilesystem {
         gate: Arc<tokio::sync::OwnedMutexGuard<()>>,
         effect: &str,
         request: Mutation,
+        input: Option<ReplayInput>,
     ) -> Result<Outcome, FilesystemError> {
-        self.execute_step(gate, effect, request, None, false).await
+        self.execute_step(gate, effect, request, None, false, input)
+            .await
     }
 
     async fn execute_step(
@@ -163,6 +164,7 @@ impl DurableFilesystem {
         request: Mutation,
         plan: Option<&str>,
         finish_publication: bool,
+        input: Option<ReplayInput>,
     ) -> Result<Outcome, FilesystemError> {
         let record = self
             .journal
@@ -171,6 +173,9 @@ impl DurableFilesystem {
         if let Some(outcome) = record.outcome {
             return unpack(outcome);
         }
+        if request.content().is_some() && input.is_none() {
+            return Err(RecoveryError::ReplayRequired.into());
+        }
         self.charge_preparation(&request)?;
         checkpoint("effect-request");
         let intent = if let Some(intent) = record.intent {
@@ -178,7 +183,7 @@ impl DurableFilesystem {
         } else {
             let workspace = self.workspace.clone();
             let effect_id = effect.to_owned();
-            let mut content = self.content(&request)?;
+            let mut content = input.clone();
             let prepared = blocking(gate.clone(), move || {
                 workspace.prepare(&effect_id, request, &mut content)
             })
@@ -203,7 +208,7 @@ impl DurableFilesystem {
             work.before_effect();
         }
         let workspace = self.workspace.clone();
-        let mut content = self.content(intent.mutation())?;
+        let mut content = input;
         let outcome =
             blocking(gate.clone(), move || workspace.apply(&intent, &mut content)).await?;
         let recorded = RecordedOutcome::Completed(outcome.clone());
@@ -216,7 +221,7 @@ impl DurableFilesystem {
     /// Recover this filesystem's unfinished mutation. Completed mutations are
     /// not replayed onto retained storage, even if paths have since changed.
     pub async fn recover(&self) -> Result<Option<Outcome>, FilesystemError> {
-        let gate = Arc::new(self.objects.filesystem_gate.clone().lock_owned().await);
+        let gate = Arc::new(self.context.filesystem_gate.clone().lock_owned().await);
         if let Some(resource) = self.journal.pending_resource(&self.id).await? {
             // The pending SQL resource fences new mutations while its public
             // open method reacquires the shared gate. Repeated opens are stable.
@@ -237,7 +242,7 @@ impl DurableFilesystem {
         }
         if let Some((id, plan)) = self.journal.pending_plan(&self.id).await? {
             return self
-                .execute_plan_held(gate, &id, plan.steps)
+                .execute_plan_held(gate, &id, plan.steps, Vec::new())
                 .await
                 .map(Some);
         }
@@ -250,39 +255,9 @@ impl DurableFilesystem {
         let Some((effect, request)) = self.journal.pending(&self.id).await? else {
             return Ok(None);
         };
-        self.execute_held(gate, &effect, request).await.map(Some)
-    }
-
-    fn content(&self, request: &Mutation) -> Result<Source, FilesystemError> {
-        let (Mutation::Write { content, .. }
-        | Mutation::Append { content, .. }
-        | Mutation::GitWrite { content, .. }) = request
-        else {
-            return Ok(Source(None));
-        };
-        let id = ObjectId::parse(content.id.clone()).map_err(ObjectStoreError::from)?;
-        let reference = ObjectReference {
-            id,
-            content: ContentIdentity {
-                bytes: content.bytes,
-                sha256: content.sha256,
-            },
-        };
-        Ok(Source(Some((
-            content.clone(),
-            self.objects.stream(reference),
-        ))))
-    }
-}
-
-type CapturedReader = (Content, Box<dyn Read + Send>);
-struct Source(Option<CapturedReader>);
-impl CapturedContent for Source {
-    fn open(&mut self, content: &Content) -> Result<Box<dyn Read + Send>, RecoveryError> {
-        match self.0.take() {
-            Some((expected, reader)) if expected == *content => Ok(reader),
-            _ => Err(RecoveryError::Conflict),
-        }
+        self.execute_held(gate, &effect, request, None)
+            .await
+            .map(Some)
     }
 }
 
@@ -322,12 +297,12 @@ fn preflight_refusal(error: &RecoveryError) -> bool {
                 | std::io::ErrorKind::DirectoryNotEmpty
                 | std::io::ErrorKind::PermissionDenied
         ),
-        RecoveryError::Conflict | RecoveryError::Fuel(_) => false,
+        RecoveryError::Conflict | RecoveryError::ReplayRequired | RecoveryError::Fuel(_) => false,
     }
 }
 
 fn validate_id(id: &str) -> Result<(), FilesystemError> {
-    ObjectId::parse(id.to_owned()).map_err(ObjectStoreError::from)?;
+    crate::recovery::paths::validate_id(id)?;
     Ok(())
 }
 

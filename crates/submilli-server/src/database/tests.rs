@@ -672,12 +672,10 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
                 "durable_effects",
                 "durable_filesystem_chunks",
                 "durable_filesystem_listings",
-                "durable_filesystem_objects",
                 "durable_filesystem_plans",
                 "durable_filesystem_readers",
+                "durable_filesystem_store",
                 "durable_filesystem_writers",
-                "durable_object_store",
-                "durable_objects",
                 "durable_workspaces",
                 "last_runs",
                 "mcp_grants",
@@ -704,7 +702,7 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
             })
             .await
             .unwrap();
-        assert_eq!(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        assert_eq!(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         database.close().await.unwrap();
     }
 }

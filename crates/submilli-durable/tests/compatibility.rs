@@ -1,7 +1,7 @@
-//! Fixed object and filesystem values from before the crate extraction. These fixtures
+//! Fixed filesystem values from before the crate extraction. These fixtures
 //! deliberately avoid using the new encoder to construct their expected input.
 use std::sync::Arc;
-use submilli_durable::{codec, object::ObjectId, recovery::Intent, sealing::Sealer, state::Effect};
+use submilli_durable::{codec, recovery::Intent, sealing::Sealer, state::Effect};
 use submilli_shared::secret_store::SecretCipher;
 
 #[test]
@@ -12,7 +12,7 @@ fn version_one_filesystem_intent_keeps_its_exact_encoding() {
 }
 
 #[test]
-fn shared_effect_and_object_associated_data_keep_the_original_format() {
+fn shared_effect_associated_data_keep_the_original_format() {
     let cipher = Arc::new(SecretCipher::from_key([7; 32]));
     let sealer = Sealer::new(Some(cipher.clone()));
     let effect = Effect {
@@ -37,17 +37,6 @@ fn shared_effect_and_object_associated_data_keep_the_original_format() {
         )
         .is_err()
     );
-    let id = ObjectId::parse("00000000-0000-4000-8000-000000000003".into()).unwrap();
-    let content = legacy_seal(&cipher, "durable-object:00000000-0000-4000-8000-000000000003:content", br#"{"bytes":4,"sha256":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}"#);
-    let retention = legacy_seal(
-        &cipher,
-        "durable-object:00000000-0000-4000-8000-000000000003:retention",
-        br#"[{"Run":"run"},{"Workspace":"workspace"}]"#,
-    );
-    let (content, retention) =
-        submilli_durable::object_codec::decode(&id, Some(&content), &retention, &sealer).unwrap();
-    assert_eq!(content.unwrap().bytes, 4);
-    assert_eq!(retention.len(), 2);
 }
 fn legacy_seal(cipher: &SecretCipher, owner: &str, bytes: &[u8]) -> Vec<u8> {
     let mut result = vec![2];

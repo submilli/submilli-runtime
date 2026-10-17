@@ -3,20 +3,19 @@
 The interpreter defines its filesystem traits in `runtime/filesystem.rs` and
 supplies `DefaultFilesystem` in `runtime/default_filesystem.rs`, including its
 reader, writer and directory implementations. This crate implements the same
-interface and owns immutable
-payload publication, filesystem intents, receipts, resource retention, recovery,
+interface and owns filesystem intents, receipts, resource retention, recovery,
 and cleanup. It has no dependency on the server or SQLx.
 
 The server supplies the `UnitOfWork` implementation through a `UnitFactory`
 callback. A unit reads its own writes, holds transaction exclusion, and commits
-all staged records together. Dropping it rolls back. Callers pin payloads in the
-same unit that admits their effect or compound plan. An uncertain commit is
+all staged records together. Dropping it rolls back. Input bytes are never
+written to the journal; replay supplies them again. An uncertain commit is
 resolved by opening a fresh unit and looking up the same immutable identity.
-No unit remains open during filesystem mutation or payload publication.
+No unit remains open during filesystem mutation.
 
 The SQLite adapter maps typed records to existing tables. Serialization and
-associated-data formats belong here. The object and filesystem record formats
-are unchanged. Native paths, file descriptors and database connections are not
+associated-data formats belong here. The journal stores fingerprints and recovery evidence, with recorded
+outputs inline in SQLite. Native paths, file descriptors and database connections are not
 persistence contracts.
 
 ## Interpreter boundary
@@ -35,9 +34,9 @@ execution-history sequencer before it can assign identities to successive guest
 calls; a fixed invocation is useful only for an isolated operation and its retry.
 Ordinary server and CLI runs continue to use the native backend.
 
-The durable port supports captured writes/appends, primitive directory creation,
+The durable port supports replay-supplied writes/appends, primitive directory creation,
 remove/move, retained readers, directory snapshots and chunked writers. Recursive
-mutations and copies require an explicitly captured `execute_plan`; the generic
+mutations and copies require an explicitly prepared `execute_plan`; the generic
 port refuses them before mutation.
 
 Code tools, Git and HTTP downloads retain their existing direct access through
@@ -52,8 +51,8 @@ work. The embedding runtime must drain native work before filesystem recovery.
 
 ## Verification
 
-The existing filesystem, object and shared-effect TLA+ models still specify the
-protocol. `verification/unit-of-work` checks the new transaction boundary,
+The filesystem and shared-effect TLA+ models specify the protocol, including
+volatile replay inputs and staged writer outputs. `verification/unit-of-work` checks the new transaction boundary,
 including staged reads, rollback and a lost commit acknowledgement. It is a
 bounded model of the contract, not a proof of Rust or SQLite. The interpreter's
 native filesystem tests, durable protocol tests, in-memory unit contract tests,

@@ -1,16 +1,16 @@
 # Mutable filesystem recovery
 
-This directory contains SUB-1815's bounded append protocol and a separate
-[regular-file namespace protocol](namespace/README.md). They are separate from the immutable object publication model in
-[`../objects/`](../objects/README.md). Passing it does not complete SUB-1815 or
-implement SUB-1339: directory and compound operations, error outcomes, resource
-reconstruction and the Rust adapters still need verification and implementation.
+This directory contains bounded append, namespace, directory, reader, writer and
+compound-operation models. The filesystem has no durable-object dependency;
+input payloads are supplied by execution replay, while the filesystem retains
+only its own mutation evidence. See [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
 ## Append protocol
 
-Before writing, persist the effect identity, immutable payload reference,
+Before writing, persist the effect identity, input fingerprint,
 original resource identity and original byte length in the intent transaction.
-That transaction retains the recovery inputs. The append writes the payload
+That transaction records recovery metadata, not input bytes. Replay supplies the
+same bytes after restart; a changed fingerprint is refused. The append writes the payload
 at the original length plus the chunk's offset. Recovery starts at the original
 offset and rewrites the same range, even when some or all of it already landed.
 It never opens the path with append-at-current-EOF semantics on retry.
@@ -34,10 +34,10 @@ acknowledgement.
 - Exactly one run accesses the backing filesystem. No conflicting external
   writer, alias, file tool or Git operation runs during pending recovery. Old
   local attempts drain before recovery; this model starts after that drain.
-- The original inode and immutable payload remain durably recoverable while
-  pinned. `pin` models the retention contract, not an implementation of hard
-  links, snapshots or handle reconstruction. SUB-1339 must establish it without
-  sharing a writable inode with an immutable object capture.
+- The original inode remains durably recoverable while pinned. Input bytes are
+  volatile and erased on crash. Progress requires deterministic execution replay
+  to eventually resupply the same bytes. Fingerprint matching abstracts digest
+  collision resistance; this is not an end-to-end execution composition proof.
 - The file and containing path already exist durably. Creating a new append
   target requires a separately verified namespace-publication protocol.
 - The original length and resource identity are validated before a new intent.

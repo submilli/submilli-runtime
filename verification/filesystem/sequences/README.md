@@ -1,10 +1,13 @@
 # Ordered filesystem recovery
 
-A compound operation persists its immutable ordered plan and payload retention
+A compound operation persists its immutable ordered plan of operation descriptors and fingerprints
 before its first mutation. Each step has a derived stable effect ID, its own
 prepared intent, persistence barriers and SQL receipt. Recovery replays the
 completed prefix and reconciles the pending step before admitting the next.
-It never re-enumerates sources or recomputes a Git commit.
+Replay supplies matching bytes for unfinished steps; it never re-enumerates
+sources or recomputes a Git commit. `pinned` denotes filesystem recovery evidence,
+not payload storage. Primitive Apply abstracts eventual matching input supply,
+as checked explicitly in the append and namespace models.
 
 This model composes two abstract primitive steps. `Apply`, `Sync` and `Receipt`
 remain separate; the primitive models supply identity-based reconciliation.
@@ -20,8 +23,8 @@ Witnesses require recovery after a prefix crash and replay of partial failure.
 
 Prepared Git publications use the `publication` configuration: every failure
 leaves the operation pending until it can finish the same immutable plan. No
-definitive partial-failure outcome is allowed. Its objects and refs, including
-the commit ID, are captured before publication. This is roll-forward recovery;
+definitive partial-failure outcome is allowed. Its Git objects and refs, including
+the commit ID, must be reconstructed from recorded execution outputs. This is roll-forward recovery;
 it does not verify the ordinary Git host function's existing in-memory undo
 mechanism, and those host calls are not automatically routed through this API.
 Execution history must record the compound outcome before exposing it to a
