@@ -1,5 +1,5 @@
 //! Stable encrypted representation of object content identity and retention.
-//! These envelopes retain the original schema-9 format and AAD names.
+//! These envelopes retain the original object format and AAD names.
 use crate::{
     object::{ContentIdentity, DurableObject, ObjectId, Retention},
     sealing::Sealer,
