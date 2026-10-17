@@ -109,13 +109,13 @@ fn invoke(
         "tree" => walk::tree(
             caller,
             budget,
-            &normalize(caller.data().filesystem.cwd(), &first)?,
+            &normalize(caller.data().vfs.cwd(), &first)?,
             integer(abi_arg(params, 1)?, "depth", 0)?,
         )?,
         "read" => read_window(
             caller,
             budget,
-            &normalize(caller.data().filesystem.cwd(), &first)?,
+            &normalize(caller.data().vfs.cwd(), &first)?,
             params,
         )?,
         "diffFiles" => {
@@ -123,13 +123,13 @@ fn invoke(
             let a = read_file(
                 caller,
                 budget,
-                &normalize(caller.data().filesystem.cwd(), &first)?,
+                &normalize(caller.data().vfs.cwd(), &first)?,
                 op,
             )?;
             let b = read_file(
                 caller,
                 budget,
-                &normalize(caller.data().filesystem.cwd(), &second)?,
+                &normalize(caller.data().vfs.cwd(), &second)?,
                 op,
             )?;
             budget.charge(caller, (a.len() + b.len()).saturating_mul(2))?;
@@ -147,7 +147,7 @@ fn invoke(
             return mutate(
                 caller,
                 budget,
-                &normalize(caller.data().filesystem.cwd(), &first)?,
+                &normalize(caller.data().vfs.cwd(), &first)?,
                 op,
                 params,
             );

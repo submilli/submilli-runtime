@@ -984,17 +984,27 @@ async fn interpreter_uses_durable_backend_and_replay_does_not_repeat_append() {
 }
 
 #[tokio::test]
-async fn selected_durable_backend_refuses_native_bypasses_before_work() {
-    use interpreter::runtime::{StoreData, filesystem::NativeOperation};
+async fn code_tools_remain_native_with_a_durable_filesystem_backend() {
     let fixture = Fixture::new().await;
-    let data = StoreData::with_filesystem(Arc::new(fixture.filesystem.0.clone()), 64 << 20);
-    for operation in [
-        NativeOperation::Code,
-        NativeOperation::Download,
-        NativeOperation::Git,
-    ] {
-        assert!(data.native_filesystem(operation).is_err());
-    }
+    std::fs::write(fixture.filesystem.vfs().root().join("note.ts"), b"before\n").unwrap();
+    let source = r#"import { edit, read, glob } from "submilli:code";
+        function main(): void {
+            assert(edit("/note.ts", "before", "after").changed);
+            assert(read("/note.ts").lines[0].text === "after");
+            assert(glob("/*.ts").entries.length === 1);
+        }"#;
+    run_backend(&fixture, source, None).await.unwrap();
+    assert_eq!(
+        std::fs::read(fixture.filesystem.vfs().root().join("note.ts")).unwrap(),
+        b"after\n"
+    );
+    let mut unit = fixture.objects.begin().await.unwrap();
+    assert_eq!(unit.effect_count(&fixture.run).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn durable_backend_refuses_unprepared_recursive_mutations() {
+    let fixture = Fixture::new().await;
     let source = r#"import { mkdir } from "submilli:fs";
         function main(): void { mkdir("/unprepared/child", true); }"#;
     assert!(
@@ -1071,7 +1081,8 @@ async fn run_backend_fueled(
             .unwrap();
     let config = RuntimeConfig::default();
     let engine = config.engine().unwrap();
-    let mut data = StoreData::with_filesystem(Arc::new(fixture.filesystem.0.clone()), 64 << 20);
+    let mut data = StoreData::with_vfs_and_cap(fixture.filesystem.vfs().clone(), 64 << 20);
+    data.filesystem = Arc::new(fixture.filesystem.0.clone());
     data.filesystem_invocation.operation = operation.map(str::to_owned);
     let mut store = config.store(&engine, data).unwrap();
     let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();

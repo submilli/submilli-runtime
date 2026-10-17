@@ -3133,13 +3133,7 @@ function main(): void {
             }
         "#;
         let data = StoreData::with_vfs(vfs);
-        let quota = data
-            .native_filesystem(crate::runtime::filesystem::NativeOperation::Filesystem)
-            .unwrap()
-            .mounts()[0]
-            .quota()
-            .cloned()
-            .expect("quota");
+        let quota = data.vfs.mounts()[0].quota().cloned().expect("quota");
         run_with(source, data).await.expect("mount asserts hold");
         assert_eq!(
             std::fs::read_to_string(volume.path().join("new.txt")).expect("in the volume"),

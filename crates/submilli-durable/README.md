@@ -13,13 +13,15 @@ resolved by opening a fresh unit and looking up the same immutable identity.
 No unit remains open during filesystem mutation or payload publication.
 
 The SQLite adapter maps typed records to existing tables. Serialization and
-associated-data formats belong here; migrations 9 and 10 are unchanged. Native
-paths, file descriptors and database connections are not persistence contracts.
+associated-data formats belong here. The object and filesystem record formats
+are unchanged. Native paths, file descriptors and database connections are not
+persistence contracts.
 
 ## Interpreter boundary
 
-`StoreData::with_filesystem` injects the selected backend. Filesystem host
-functions retain capability checks, caller attribution, heap limits and fuel
+Embedders set `StoreData.filesystem` to inject the selected backend, using the
+same workspace as `StoreData.vfs`. Filesystem host functions retain capability
+checks, caller attribution, heap limits and fuel
 accounting. Native tree operations receive a budget interface for incremental
 work and settlement after the first effect. Readers, writers and directory
 iterators hold backend resources. Only explicit writer close publishes output.
@@ -34,11 +36,17 @@ Ordinary server and CLI runs continue to use the native backend.
 The durable port supports captured writes/appends, primitive directory creation,
 remove/move, retained readers, directory snapshots and chunked writers. Recursive
 mutations and copies require an explicitly captured `execute_plan`; the generic
-port refuses them before mutation. Code editing, downloads and Git ask the
-selected backend for operation-scoped native access. Durable backends refuse
-that access before filesystem or network work. Their complete durable adapters,
-read-result replay, execution supervision and restart of guest programs remain
-separate work. There is no fallback VFS in the store.
+port refuses them before mutation.
+
+Code tools, Git and HTTP downloads retain their existing direct access through
+`StoreData.vfs`. Their operations remain available, but are outside this crate's
+durability guarantees: they do not record or reconcile effects through the
+filesystem backend. Their integration is tracked in
+[SUB-1857](https://linear.app/submilli/issue/SUB-1857),
+[SUB-1870](https://linear.app/submilli/issue/SUB-1870) and
+[SUB-1871](https://linear.app/submilli/issue/SUB-1871), respectively. Read-result
+replay, execution supervision and restart of guest programs also remain separate
+work. The embedding runtime must drain native work before filesystem recovery.
 
 ## Verification
 
