@@ -1255,7 +1255,8 @@ async fn durable_quota_scan_stops_before_mutation_and_resumes_with_fuel() {
 #[cfg(unix)]
 #[tokio::test]
 async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
-    use interpreter::runtime::filesystem::{Filesystem, Invocation, NativeFilesystem};
+    use interpreter::runtime::default_filesystem::DefaultFilesystem;
+    use interpreter::runtime::filesystem::{Filesystem, Invocation};
     let fixture = Fixture::new().await;
     let backend = &fixture.filesystem.0;
     let root = fixture.filesystem.vfs().root();
@@ -1341,7 +1342,7 @@ async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
 
     // Backend policy must not leak into the interpreter's ordinary implementation.
     // Production callers must keep retained volumes assigned to their durable backend.
-    let native = NativeFilesystem::new(Vfs::external(root.to_owned()).unwrap());
+    let native = DefaultFilesystem::new(Vfs::external(root.to_owned()).unwrap());
     assert_eq!(
         Filesystem::read(&native, "/alias/secret", 0, 100)
             .await
