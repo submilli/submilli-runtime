@@ -133,6 +133,9 @@ impl ArtifactReadBudget {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArtifactMetadata {
     pub schema_version: u32,
+    /// Additive metadata: existing artifacts have no deployment overrides.
+    #[serde(default)]
+    pub config: crate::PackageConfig,
     pub package_name: String,
     pub package_version: String,
     #[serde(default)]
@@ -177,6 +180,7 @@ impl ArtifactMetadata {
     ) -> Self {
         let mut metadata = Self {
             schema_version: ARTIFACT_SCHEMA_VERSION,
+            config: crate::PackageConfig::default(),
             package_name: package_name.into(),
             package_version: package_version.into(),
             description: String::new(),
@@ -197,6 +201,7 @@ impl ArtifactMetadata {
     ) -> Self {
         let mut metadata = Self {
             schema_version: ARTIFACT_SCHEMA_VERSION,
+            config: crate::PackageConfig::default(),
             package_name: package_name.into(),
             package_version: package_version.into(),
             description: description.into(),

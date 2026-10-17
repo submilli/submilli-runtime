@@ -29,6 +29,42 @@ derived from the code. `submilli blueprint add-package` and
 `submilli blueprint lint --fix` turn `requires` into the package's grants, so
 never hand-write those rules from memory.
 
+## Package build configuration
+
+Use `<package>/src/config.ts` for deployment choices fixed at installation, such
+as a self-hosted service URL. Import it with ordinary relative imports:
+
+```typescript
+// src/config.ts
+export declare const baseUrl: string;
+export const timeoutMs = 5000;
+```
+
+`export declare const` requires a build input. Exported `const` primitive
+literals provide defaults; optional primitive annotations must match. Only
+strings, finite numbers and booleans are supported. This root file is reserved
+for these declarations and comments; imports, functions and computed defaults
+are refused. There is no TOML configuration schema or special module import.
+
+Supply repeatable `--config name=value` with an explicitly selected package:
+`submilli build test -p @acme/search --config baseUrl=https://search.test`,
+`submilli install acme/search @acme/search --config baseUrl=https://search.internal`,
+or `submilli server packages install` with the same repository, package, and
+flags. Build check/publish-local/authority-map/security-review also accept inputs.
+Local builds use flags and source defaults, not the selected package's installed
+overrides. Credentials remain secrets; session identity remains a variable.
+
+Installs preserve explicit overrides across upgrades while adopting new source
+defaults. Changing installed source or configuration requires `--upgrade`.
+Install commands accept `--reset-config name` to remove an explicit override.
+Configuration values are inspectable in artifacts and never grant permissions.
+
+Inputs apply only to the selected package. If a dependency needs a required value,
+use the error's pinned local/server command to install that dependency first,
+then retry the original installation. Never forward parent inputs into dependencies
+or invent endpoint values. Dependencies with defaults remain automatic.
+Playground rebuilds retain overrides previously supplied by publish-local.
+
 ## The smallest slice
 
 ```typescript

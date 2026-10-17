@@ -32,7 +32,7 @@ that general knowledge gets wrong; what goes wrong without it is named.
 - Choosing operations, check fields, package and blueprint boundaries:
   [capability design](references/capability-design.md); without it checks
   guard fields the model can choose.
-- Package implementation: [packages](references/packages.md); without it the
+- Package implementation and install-time `src/config.ts` parameters: [packages](references/packages.md); without it the
   package is written as Node.js and fails `build`, or checks one value and
   sends another. For session-owned remote resources, follow its durable
   finalizer pattern; KV storage alone does not register cleanup.

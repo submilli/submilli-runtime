@@ -26,7 +26,15 @@ fn paired_prompts_differ_only_in_authority_evidence() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../scripts/security-review-eval/fixtures/c02");
     let (mut snapshot, manifest) = snapshot::collect_from(&root, None).unwrap();
-    snapshot.authority = Some(authority::collect(&snapshot, &manifest, None).unwrap());
+    snapshot.authority = Some(
+        authority::collect(
+            &snapshot,
+            &manifest,
+            None,
+            &submilli_build::ConfigInputs::default(),
+        )
+        .unwrap(),
+    );
     let with_map = agent::prompt(&snapshot).unwrap();
     let hash = snapshot.source_hash().unwrap();
     snapshot.authority = None;

@@ -12,6 +12,12 @@ use crate::commands::http::{ServerTarget, error_message};
 
 #[derive(clap::Args)]
 pub struct Args {
+    /// Set a src/config.ts parameter of the selected package.
+    #[arg(long, value_name = "NAME=VALUE")]
+    config: Vec<String>,
+    /// Remove a saved override and use the source default.
+    #[arg(long, value_name = "NAME")]
+    reset_config: Vec<String>,
     /// GitHub repo: `org/repo`, `github.com/org/repo`, or a full URL. A private
     /// repository needs the server's own GitHub token (`github_token_file` in
     /// its config file); this command never sends yours.
@@ -26,7 +32,7 @@ pub struct Args {
     #[arg(long)]
     sha: Option<String>,
 
-    /// Re-install over a package already present at a different commit.
+    /// Replace an installed package when its source or configuration changes.
     #[arg(long)]
     upgrade: bool,
 
@@ -40,6 +46,8 @@ pub struct Args {
 
 #[derive(Debug, Serialize)]
 struct InstallRequest {
+    config: std::collections::BTreeMap<String, String>,
+    reset_config: Vec<String>,
     url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     sha: Option<String>,
@@ -59,11 +67,18 @@ struct InstallResponse {
 }
 
 pub fn execute(args: Args) -> Result<ExitCode> {
+    let inputs = submilli_build::ConfigInputs::parse(
+        &args.config,
+        &args.reset_config,
+        args.package.is_some(),
+    )?;
     let base = args.target.base();
     let url = format!("{base}/v1/packages/install");
 
     let agent = args.target.agent()?;
     let resp = match agent.post(&url).send_json(InstallRequest {
+        config: inputs.values,
+        reset_config: inputs.reset,
         url: args.url,
         sha: args.sha,
         package: args.package,
@@ -102,6 +117,13 @@ pub fn execute(args: Args) -> Result<ExitCode> {
             for warning in warnings.iter().filter_map(serde_json::Value::as_str) {
                 eprint!("{warning}");
             }
+        }
+        if let Some(command) = body
+            .get("configuration")
+            .and_then(|configuration| configuration.get("command"))
+            .and_then(serde_json::Value::as_str)
+        {
+            eprintln!("  {}{}", command, args.target.command_flags());
         }
         eprintln!(
             "error: {}",
