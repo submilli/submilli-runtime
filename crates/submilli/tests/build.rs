@@ -2308,3 +2308,70 @@ fn deny_warnings_respects_package_selection_and_skipped_network_files() {
     );
     assert!(!stdout(&out).contains("warned/src"));
 }
+
+#[test]
+fn package_configuration_build_inputs_reach_runtime_and_documentation_checks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = '@acme/search'\nversion = '0.1.0'\ndescription = 'Search.'\n",
+    );
+    write_file(
+        &project.join("src/config.ts"),
+        "export declare const baseUrl: string;\nexport const timeoutMs = 5000;\nexport const zero = -0;\nexport const tag = '';\n",
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        "import { baseUrl, timeoutMs, zero, tag } from './config';\nimport { get } from 'submilli:http';\n/** Endpoint.\n * @returns Endpoint.\n */\nexport function endpoint(): string { return baseUrl; }\n/** Timeout.\n * @returns Timeout.\n */\nexport function timeout(): number { return timeoutMs; }\n/** Zero.\n * @returns Zero.\n */\nexport function signedZero(): number { return zero; }\n/** Tag.\n * @returns Tag.\n */\nexport function configuredTag(): string { return tag; }\n/** Fetch.\n * @returns Text.\n */\nexport function fetchText(): string { return get(baseUrl).body; }",
+    );
+    write_file(
+        &project.join("docs/readme.md"),
+        "# Search\n```ts\nimport { endpoint } from '@acme/search';\nfunction main(): void { const url: string = endpoint(); }\n```\n",
+    );
+    write_file(
+        &project.join("tests/config.test.ts"),
+        "import { endpoint, timeout, signedZero, configuredTag } from '@acme/search';\nfunction main(): void { assert(endpoint() === 'https://configured.test/?a=b'); assert(timeout() === 42); assert(1 / signedZero() < 0); assert(configuredTag() === '\\u{10fffe}\\u{100000}'); }",
+    );
+    let flags = [
+        "-p",
+        "@acme/search",
+        "--config",
+        "baseUrl=https://configured.test/?a=b",
+        "--config",
+        "timeoutMs=42",
+        "--config",
+        "zero=-0",
+        "--config",
+        "tag=\u{10fffe}\u{100000}",
+    ];
+    for command in ["check", "test", "publish-local", "authority-map"] {
+        let output = build_subcommand(command, &project, tmp.path(), &flags);
+        assert!(output.status.success(), "{command}: {}", stderr(&output));
+        let capabilities = fs::read_to_string(project.join("capabilities.yaml")).unwrap();
+        assert!(
+            capabilities.contains("host == \"configured.test\""),
+            "{command}: {capabilities}"
+        );
+    }
+    let missing = build_subcommand("check", &project, tmp.path(), &["-p", "@acme/search"]);
+    assert!(!missing.status.success());
+    assert!(stderr(&missing).contains("missing required configuration parameter `baseUrl`"));
+    let no_selection = build_subcommand("check", &project, tmp.path(), &["--config", "baseUrl=x"]);
+    assert!(!no_selection.status.success());
+    let unknown = build_subcommand(
+        "check",
+        &project,
+        tmp.path(),
+        &[
+            "-p",
+            "@acme/search",
+            "--config",
+            "baseUrl=x",
+            "--config",
+            "typo=x",
+        ],
+    );
+    assert!(!unknown.status.success());
+    assert!(stderr(&unknown).contains("unknown configuration parameter `typo`"));
+}

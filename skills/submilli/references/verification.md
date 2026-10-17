@@ -106,3 +106,13 @@ severity, each with its anchor, the quoted evidence, and the smallest fix;
 unconfirmed items; commands run and their results; questions only the user
 can answer. Do not fix anything yourself: the author applies fixes, then
 re-runs this pass. A report with no evidence is not a pass.
+
+## Package configuration checks
+
+For a package with `src/config.ts`, supply required values explicitly to local
+build/test commands with `-p <package> --config name=value`. Verify both missing
+required input failure and a supplied value reaching the operation. Check that
+capability filters describe the configured endpoint and denied permissions still
+fail. Do not inherit the selected package's installed configuration into a local
+verification command. A missing dependency configuration requires the separate
+install command shown in the diagnostic before retrying.
