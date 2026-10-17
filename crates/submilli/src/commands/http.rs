@@ -53,6 +53,16 @@ impl ServerTarget {
         }
     }
 
+    /// Shell-quoted target flags for an actionable follow-up command.
+    pub fn command_flags(&self) -> String {
+        let quote = |value: &str| format!("'{}'", value.replace('\'', "'\"'\"'"));
+        let mut flags = format!(" --server {}", quote(self.base()));
+        if let Some(path) = &self.token_file {
+            flags.push_str(&format!(" --token-file {}", quote(&path.to_string_lossy())));
+        }
+        flags
+    }
+
     pub fn agent(&self) -> Result<ureq::Agent> {
         self.agent_with_timeout(None)
     }

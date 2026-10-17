@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use crate::resolve::PlannedInstall;
 use crate::{
     BuildDiagnostic, BuiltPackage, DriverError, PackageName, PackageSource, PackageStore,
-    PackageStoreError, PackageVersion, build_packages, install_packages, load_manifest,
+    PackageStoreError, PackageVersion, build_packages_configured, install_packages, load_manifest,
 };
 
 /// What an install wrote and skipped.
@@ -44,6 +44,13 @@ pub struct InstallConflict {
 
 #[derive(Debug)]
 pub enum InstallError {
+    ConfigurationInput(crate::ConfigInputError),
+    ConfigurationRequired {
+        package: PackageName,
+        parameters: Vec<(String, String)>,
+        source: Box<PackageSource>,
+        upgrade: bool,
+    },
     WarningsDenied {
         warnings: Vec<String>,
     },
@@ -141,7 +148,49 @@ impl InstallPreparation {
         source: &PackageSource,
         upgrade: bool,
     ) -> Result<InstallReport, InstallError> {
-        let mut built = compile_repo(&self.staging, repo_dir, only, source)?;
+        self.prepare_repo_configured(
+            repo_dir,
+            only,
+            source,
+            upgrade,
+            &crate::ConfigInputs::default(),
+        )
+    }
+
+    pub fn prepare_repo_configured(
+        &mut self,
+        repo_dir: &Path,
+        only: Option<&PackageName>,
+        source: &PackageSource,
+        upgrade: bool,
+        inputs: &crate::ConfigInputs,
+    ) -> Result<InstallReport, InstallError> {
+        inputs
+            .validate(only.is_some())
+            .map_err(InstallError::ConfigurationInput)?;
+        let mut built = compile_repo(&self.staging, repo_dir, only, source, inputs).map_err(
+            |error| match error {
+                InstallError::Driver(DriverError::MissingConfiguration {
+                    package,
+                    parameters,
+                    ..
+                }) => {
+                    let installed = match self.destination.load_owned(package.as_str()) {
+                        Ok(_) => true,
+                        Err(PackageStoreError::MissingPackage { .. }) => false,
+                        Err(error) if error.is_incomplete_artifact() => false,
+                        Err(error) => return InstallError::Store(error),
+                    };
+                    InstallError::ConfigurationRequired {
+                        package,
+                        parameters,
+                        source: Box::new(source.clone()),
+                        upgrade: upgrade || installed,
+                    }
+                }
+                error => error,
+            },
+        )?;
         let warnings: Vec<String> = built
             .iter()
             .flat_map(|package| package.warnings.clone())
@@ -199,6 +248,7 @@ fn compile_repo(
     repo_dir: &Path,
     only: Option<&PackageName>,
     source: &PackageSource,
+    inputs: &crate::ConfigInputs,
 ) -> Result<Vec<BuiltPackage>, InstallError> {
     let manifest_path = repo_dir.join("submilli.toml");
     if !manifest_path.is_file() {
@@ -211,8 +261,28 @@ fn compile_repo(
         manifest_text: std::fs::read_to_string(&manifest_path).unwrap_or_default(),
         diagnostics,
     })?;
-    let mut built =
-        build_packages(&manifest, repo_dir, store, only).map_err(InstallError::Driver)?;
+    let mut configuration = std::collections::BTreeMap::new();
+    for package in crate::package_build_scope(&manifest, only).map_err(InstallError::Driver)? {
+        let mut overrides = match store.load(package.name.as_str()) {
+            Ok(artifact) => artifact.metadata.config.overrides,
+            Err(PackageStoreError::MissingPackage { .. }) => std::collections::BTreeMap::new(),
+            Err(error) if error.is_incomplete_artifact() => std::collections::BTreeMap::new(),
+            Err(error) => return Err(InstallError::Store(error)),
+        };
+        if only == Some(&package.name) {
+            for name in &inputs.reset {
+                if overrides.remove(name).is_none() {
+                    return Err(InstallError::ConfigurationInput(crate::ConfigInputError(
+                        format!("no saved configuration override `{name}` to reset"),
+                    )));
+                }
+            }
+            overrides.extend(inputs.values.clone());
+        }
+        configuration.insert(package.name.clone(), overrides);
+    }
+    let mut built = build_packages_configured(&manifest, repo_dir, store, only, &configuration)
+        .map_err(InstallError::Driver)?;
     let PackageSource::Github(github) = source;
     let mismatched = built
         .iter()
@@ -255,7 +325,9 @@ fn select_install(
             Err(err) if err.is_incomplete_artifact() => to_install.push(package.name.clone()),
             Err(err) => return Err(InstallError::Store(err)),
             Ok(artifact) => match artifact.metadata.source {
-                Some(PackageSource::Github(existing)) if existing.sha == github.sha => {
+                Some(PackageSource::Github(existing))
+                    if existing.sha == github.sha && artifact.metadata.config == package.config =>
+                {
                     up_to_date.push(package.name.clone());
                 }
                 _ if upgrade => to_install.push(package.name.clone()),
@@ -303,4 +375,40 @@ fn describe_source(source: Option<&PackageSource>) -> String {
 
 fn short_sha(sha: &str) -> &str {
     sha.get(..12).unwrap_or(sha)
+}
+
+impl InstallError {
+    /// Render a command for the transport the operator is using. Values remain
+    /// placeholders so diagnostics never invent deployment choices.
+    pub fn configuration_command(&self, server: bool) -> Option<String> {
+        let Self::ConfigurationRequired {
+            package,
+            parameters,
+            source,
+            upgrade,
+        } = self
+        else {
+            return None;
+        };
+        let PackageSource::Github(github) = source.as_ref();
+        let prefix = if server {
+            "submilli server packages install"
+        } else {
+            "submilli install"
+        };
+        let mut command = format!(
+            "{prefix} {}/{}@{} {}",
+            github.org,
+            github.repo,
+            github.sha,
+            package.as_str()
+        );
+        if *upgrade {
+            command.push_str(" --upgrade");
+        }
+        for (name, kind) in parameters {
+            command.push_str(&format!(" --config '{name}=<{kind}>'"));
+        }
+        Some(command)
+    }
 }

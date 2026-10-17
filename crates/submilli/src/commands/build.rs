@@ -15,9 +15,9 @@ use interpreter::{Severity, Sources, Span, diagnostics};
 use submilli_build::{
     BuildDiagnostic, BuildSeverity, BuiltPackage, DependencyKind, DriverError, InstallPreparation,
     Lockfile, PackageName, PackageStore, ProjectManifest, ResolveError, ScaffoldError, add_package,
-    build_packages, find_manifest_upwards, init_project, install_packages, is_valid_package_name,
-    parse_manifest, refresh_dependency_types, refresh_editor_files, resolve_github_closure,
-    write_capabilities_file,
+    build_packages_with_inputs, find_manifest_upwards, init_project, install_packages,
+    is_valid_package_name, parse_manifest, refresh_dependency_types, refresh_editor_files,
+    resolve_github_closure, write_capabilities_file,
 };
 
 use crate::commands::github::retry;
@@ -50,6 +50,9 @@ enum BuildCmd {
 
 #[derive(clap::Args)]
 struct CompileArgs {
+    /// Set a src/config.ts parameter of the explicitly selected package.
+    #[arg(long, value_name = "NAME=VALUE")]
+    config: Vec<String>,
     /// Compile only this package and its sibling dependencies.
     #[arg(short = 'p', long = "package")]
     package: Option<String>,
@@ -399,8 +402,15 @@ fn compile_project(args: CompileArgs) -> anyhow::Result<Result<CompiledProject, 
     {
         return Ok(Err(code));
     }
+    let inputs = submilli_build::ConfigInputs::parse(&args.config, &[], args.package.is_some())?;
     let only = args.package.map(PackageName::new);
-    match build_packages(&manifest, &manifest_dir, preparation.store(), only.as_ref()) {
+    match build_packages_with_inputs(
+        &manifest,
+        &manifest_dir,
+        preparation.store(),
+        only.as_ref(),
+        &inputs,
+    ) {
         Ok(built) => {
             if let Err(code) = publish_dependencies(preparation, &built, deny_warnings) {
                 return Ok(Err(code));
@@ -615,7 +625,7 @@ mod test_runner {
     };
     use submilli_build::{
         Artifact, ArtifactSource, BuiltPackage, DriverError, PackageName, PackageStore,
-        build_packages, find_manifest_upwards, parse_manifest,
+        build_packages_with_inputs, find_manifest_upwards, parse_manifest,
     };
     use wasmtime::{Engine, Linker, Module};
 
@@ -652,19 +662,29 @@ mod test_runner {
             Ok(preparation) => preparation,
             Err(code) => return Ok(code),
         };
+        let inputs = submilli_build::ConfigInputs::parse(
+            &args.compile.config,
+            &[],
+            args.compile.package.is_some(),
+        )?;
         let only = args.compile.package.map(PackageName::new);
-        let built =
-            match build_packages(&manifest, &manifest_dir, preparation.store(), only.as_ref()) {
-                Ok(built) => built,
-                Err(DriverError::Compile { rendered, .. }) => {
-                    eprint!("{rendered}");
-                    return Ok(ExitCode::from(1));
-                }
-                Err(err) => {
-                    eprintln!("error: {err}");
-                    return Ok(ExitCode::from(1));
-                }
-            };
+        let built = match build_packages_with_inputs(
+            &manifest,
+            &manifest_dir,
+            preparation.store(),
+            only.as_ref(),
+            &inputs,
+        ) {
+            Ok(built) => built,
+            Err(DriverError::Compile { rendered, .. }) => {
+                eprint!("{rendered}");
+                return Ok(ExitCode::from(1));
+            }
+            Err(err) => {
+                eprintln!("error: {err}");
+                return Ok(ExitCode::from(1));
+            }
+        };
         if let Err(code) = super::check_package_warnings(&preparation, &built, deny_warnings) {
             return Ok(code);
         }

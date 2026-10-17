@@ -25,6 +25,9 @@ const SKILL: &str = include_str!("../../../../../skills/submilli-security-review
 
 #[derive(clap::Args)]
 pub struct Args {
+    /// Set a src/config.ts parameter of the explicitly selected package.
+    #[arg(long, value_name = "NAME=VALUE")]
+    config: Vec<String>,
     /// Installed coding agent to invoke; uses its existing authentication.
     #[arg(short = 'a', long, value_enum)]
     agent: Agent,
@@ -129,6 +132,7 @@ fn review(args: &Args, report: &mut Report) -> anyhow::Result<()> {
             &snapshot,
             &manifest,
             args.package.as_deref(),
+            &submilli_build::ConfigInputs::parse(&args.config, &[], args.package.is_some())?,
         )?);
         report.set_snapshot(&snapshot)?;
     }

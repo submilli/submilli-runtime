@@ -222,7 +222,8 @@ fn publish_money(store: &Path) {
     std::fs::write(dir.path().join("submilli.toml"), text).unwrap();
     let manifest = parse_manifest(text, dir.path()).expect("the money manifest parses");
     let store = PackageStore::new(store);
-    let built = build_packages(&manifest, dir.path(), &store, None).expect("money builds");
+    let built =
+        submilli_build::build_packages(&manifest, dir.path(), &store, None).expect("money builds");
     install_packages(&store, &built).expect("money installs");
 }
 
@@ -444,4 +445,72 @@ async fn a_reinstall_whose_caller_stops_waiting_still_evicts_the_cached_package(
         "second",
         "the cancelled check evicted the cached copy it replaced"
     );
+}
+
+#[test]
+fn automatic_rebuilds_retain_explicit_package_configuration() {
+    let fixture = Fixture::starter();
+    let config = fixture.lib().parent().unwrap().join("config.ts");
+    std::fs::write(
+        &config,
+        "export declare const serviceUrl: string; export const timeoutMs = 10;",
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(fixture.package_dir.join("submilli.toml")).unwrap();
+    let manifest = parse_manifest(&text, &fixture.package_dir).unwrap();
+    let store = PackageStore::new(&fixture.store);
+    let selected = PackageName::new("@acme/billing");
+    let inputs = submilli_build::ConfigInputs::parse(
+        &["serviceUrl=https://internal.test".into()],
+        &[],
+        true,
+    )
+    .unwrap();
+    let built = submilli_build::build_packages_with_inputs(
+        &manifest,
+        &fixture.package_dir,
+        &store,
+        Some(&selected),
+        &inputs,
+    )
+    .unwrap();
+    install_packages(&store, &built).unwrap();
+    let packages = fixture.packages();
+    packages.sync(&billing()).unwrap();
+    std::fs::write(
+        &config,
+        "export declare const serviceUrl: string; export const timeoutMs = 20;",
+    )
+    .unwrap();
+    let result = packages.sync(&billing()).unwrap();
+    assert_eq!(result.reinstalled, ["@acme/billing"]);
+    let artifact = store.load("@acme/billing").unwrap();
+    assert_eq!(artifact.metadata.config.overrides, inputs.values);
+    assert_eq!(
+        serde_json::to_value(&artifact.metadata.config.values).unwrap()["timeoutMs"],
+        20.0
+    );
+}
+
+#[test]
+fn automatic_rebuild_ignores_unrelated_broken_artifacts() {
+    let fixture = Fixture::starter();
+    let manifest_path = fixture.package_dir.join("submilli.toml");
+    let mut manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    manifest.push_str("\n[[package]]\nname = '@acme/unrelated'\nversion = '1.0.0'\ndescription = 'Unrelated.'\npath = 'unrelated'\n");
+    std::fs::write(&manifest_path, manifest).unwrap();
+    std::fs::create_dir_all(fixture.package_dir.join("unrelated/src")).unwrap();
+    std::fs::write(
+        fixture.package_dir.join("unrelated/src/lib.ts"),
+        "export function value(): number { return 1; }",
+    )
+    .unwrap();
+    std::fs::create_dir_all(fixture.store.join("@acme/unrelated")).unwrap();
+    std::fs::write(
+        fixture.store.join("@acme/unrelated/metadata.json"),
+        "broken",
+    )
+    .unwrap();
+    let result = fixture.packages().sync(&billing()).unwrap();
+    assert_eq!(result.reinstalled, ["@acme/billing"]);
 }

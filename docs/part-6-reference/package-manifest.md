@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "2bf9d007262790a2ca1413ed8de0831bc6ade87eb3608f1f5dcc421805774ae9"
+  contentHash: "93e51d653ef3387f715702be604e062b6badc147a4bbd09a773f5a50538efb1a"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -45,6 +45,7 @@ files.
 | --- | --- | --- |
 | `submilli.toml` | `init`, and `new` appends | The [manifest](#submillitoml) |
 | `<path>/src/lib.ts` | `init`, `new` | The entry point, whose exports are the Package's API |
+| `<path>/src/config.ts` | You | Optional [build configuration](/docs/reference/package-configuration), with defaults and required parameters |
 | `<path>/src/**/*.ts` | You | Other modules, imported by relative path |
 | `<path>/docs/readme.md` | `init`, `new` | [The readme the model reads](#docsreadmemd). Required |
 | `<path>/README.md` | `init`, `new` | The readme for the person who installs and grants the Package. Not read by the build |

@@ -6,6 +6,7 @@
 
 pub mod artifact;
 pub mod capabilities;
+pub mod config;
 pub mod doc_examples;
 pub mod driver;
 pub mod install;
@@ -33,10 +34,14 @@ pub use capabilities::{
     CapabilitySchema, ProvidedCapability, ProvidedField, RequiredCapability,
     derive_capability_schema,
 };
+pub use config::{ConfigInputError, ConfigInputs, PackageConfig};
 pub use doc_examples::{
     DocExample, compile_check_doc_example, compile_doc_example_warnings, extract_doc_examples,
 };
-pub use driver::{BuiltPackage, DriverError, build_packages, install_packages, package_sources};
+pub use driver::{
+    BuiltPackage, DriverError, build_packages, build_packages_configured,
+    build_packages_with_inputs, install_packages, package_build_scope, package_sources,
+};
 pub use install::{
     InstallConflict, InstallError, InstallPreparation, InstallReport, InstalledPackage,
     install_from_dir, install_plan,

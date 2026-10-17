@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "939582366bba28d8df2b805e6b855166c1759169bf9c24270310278072c27d25"
+  contentHash: "f9a473e74e5af6bfbc3177af9d1d22212fa19b6534059d1ce80f809aff3f8791"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -62,6 +62,7 @@ directory, and it holds one Package or several.
 | --- | --- |
 | `submilli.toml` | The manifest: one `[[package]]` block per Package |
 | `packages/billing/src/lib.ts` | The entry point. What it exports is the Package's API. |
+| `packages/billing/src/config.ts` | Optional [build configuration](/docs/reference/package-configuration), with defaults and required parameters |
 | `packages/billing/src/*.ts` | Other source files, imported with a relative path |
 | `packages/billing/docs/readme.md` | The documentation the model reads before it writes a program |
 | `packages/billing/README.md` | The readme for the person who installs and grants the Package |

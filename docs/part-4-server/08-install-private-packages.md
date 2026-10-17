@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "4fde35ceb2a56ae7f6d8f02b3be412504e03587fc2800084e42a78acabb9b1fd"
+  contentHash: "4b60d92851321611396cd72518877a5d15517c8f063decdfc1fcb0004172860b"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -146,3 +146,9 @@ restart.
 | `uses SAML single sign-on: authorize …` | Open the link in the message, or Configure SSO on the token |
 | `GitHub's rate limit is used up` (`github_rate_limited`) | Wait the time the message gives. Without a token the limit is far lower |
 | `github_token_unavailable` | The server couldn't read `github_token_file` at install time. Check the file and its permissions |
+
+## Configuration reference
+
+| Task | Reference |
+| --- | --- |
+| Set a service URL or another required Package parameter during server installation | [Package configuration](/docs/reference/package-configuration) |
