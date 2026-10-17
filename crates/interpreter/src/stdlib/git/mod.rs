@@ -478,7 +478,7 @@ async fn invoke(
     let cancel_guard = CancelOnDrop(cancelled.clone());
     // The worker stops itself once its work passes what the run has left.
     let meter = Arc::new(meter::Meter::new(
-        meter::remaining_fuel(&mut *caller)?,
+        fuel::remaining_fuel(&mut *caller)?,
         Some(cancelled.clone()),
     ));
     let job = Job {
