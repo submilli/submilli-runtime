@@ -2,15 +2,22 @@
   "module": "WriterRecovery",
   "constants": {
     "MaxCrashes": 1,
+    "MaxCancels": 1,
     "Fault": "none",
-    "Witness": ""
+    "Witness": "tail"
   },
   "invariants": [
     "TypeOK",
+    "Retained",
     "DurableChunks",
+    "ChunkHistoryBacked",
+    "CloseHistoryBacked",
+    "ClosedAfterOutcome",
     "SameBytes",
     "NoDuplicateTail",
-    "NoRepublish"
+    "NoRepublish",
+    "ClosePublishesOutput",
+    "NoImplicitPublication"
   ],
   "properties": [],
   "cases": [
@@ -59,6 +66,62 @@
       }
     },
     {
+      "name": "negative-close-collision",
+      "kind": "negative",
+      "invariant": "ClosePublishesOutput",
+      "constants": {
+        "Fault": "close-collision"
+      }
+    },
+    {
+      "name": "negative-history-first-chunk",
+      "kind": "negative",
+      "invariant": "ChunkHistoryBacked",
+      "constants": {
+        "Fault": "history-first-chunk"
+      }
+    },
+    {
+      "name": "negative-history-first-close",
+      "kind": "negative",
+      "invariant": "CloseHistoryBacked",
+      "constants": {
+        "Fault": "history-first-close"
+      }
+    },
+    {
+      "name": "negative-early-close-receipt",
+      "kind": "negative",
+      "invariant": "ClosePublishesOutput",
+      "constants": {
+        "Fault": "early-close-receipt"
+      }
+    },
+    {
+      "name": "negative-early-writer-closed",
+      "kind": "negative",
+      "invariant": "ClosedAfterOutcome",
+      "constants": {
+        "Fault": "early-writer-closed"
+      }
+    },
+    {
+      "name": "negative-finalizer-deletes",
+      "kind": "negative",
+      "invariant": "Retained",
+      "constants": {
+        "Fault": "finalizer-deletes"
+      }
+    },
+    {
+      "name": "negative-finalizer-publishes",
+      "kind": "negative",
+      "invariant": "NoImplicitPublication",
+      "constants": {
+        "Fault": "finalizer-publishes"
+      }
+    },
+    {
       "name": "witness-tail",
       "kind": "witness",
       "invariant": "NeverWitness",
@@ -67,11 +130,131 @@
       }
     },
     {
+      "name": "witness-chunk-gap",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "chunk-gap"
+      }
+    },
+    {
+      "name": "witness-skip",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "skip"
+      }
+    },
+    {
+      "name": "witness-publication",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "publication"
+      }
+    },
+    {
+      "name": "witness-close-gap",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "close-gap"
+      }
+    },
+    {
+      "name": "witness-reservation",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "reservation"
+      }
+    },
+    {
+      "name": "witness-cancel",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "cancel"
+      }
+    },
+    {
+      "name": "witness-finalize",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "finalize"
+      }
+    },
+    {
+      "name": "witness-rejected",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "rejected"
+      }
+    },
+    {
+      "name": "witness-reuse",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "reuse"
+      }
+    },
+    {
       "name": "witness-mismatch",
       "kind": "witness",
       "invariant": "NeverWitness",
       "constants": {
         "Witness": "mismatch"
+      }
+    },
+    {
+      "name": "negative-open-history-first",
+      "kind": "negative",
+      "invariant": "Retained",
+      "constants": {
+        "Fault": "open-history-first"
+      }
+    },
+    {
+      "name": "negative-hydrate-resets-stage",
+      "kind": "negative",
+      "invariant": "DurableChunks",
+      "constants": {
+        "Fault": "hydrate-resets-stage"
+      }
+    },
+    {
+      "name": "witness-open-gap",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "open"
+      }
+    },
+    {
+      "name": "witness-cancel-tail",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "cancel-tail"
+      }
+    },
+    {
+      "name": "witness-cancel-receipt",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "cancel-receipt"
+      }
+    },
+    {
+      "name": "witness-cancel-close",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "cancel-close"
       }
     }
   ]

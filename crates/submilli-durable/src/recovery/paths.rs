@@ -359,10 +359,6 @@ impl Volume {
     }
 }
 
-pub(super) fn used_bytes(root: &Dir) -> Result<u64, RecoveryError> {
-    measured_bytes(root, None)
-}
-
 fn measured_bytes(root: &Dir, work: Option<&WorkBudget>) -> Result<u64, RecoveryError> {
     let files = regular_files(root, work)?;
     let mut seen = HashSet::new();

@@ -1,11 +1,11 @@
 //! In-memory implementation of the same transactional contract as SQL.
 //! Unused ports fail loudly, so a test cannot accidentally depend on a database.
 use super::*;
-use crate::effects::{self, EffectKey};
+use crate::operations::{self, OperationKey};
 use std::{collections::BTreeMap, sync::Mutex};
 #[derive(Default, Clone)]
 struct State {
-    effects: BTreeMap<(String, String), Effect>,
+    operations: BTreeMap<(String, String), Operation>,
 }
 struct MemoryUnit {
     store: Arc<Mutex<State>>,
@@ -24,155 +24,94 @@ impl MemoryUnit {
 #[async_trait::async_trait]
 #[allow(unused_variables)]
 impl UnitOfWork for MemoryUnit {
-    async fn filesystem_store_identity(&mut self) -> Result<Option<String>, StoreError> {
-        Ok(Some("test".into()))
-    }
-    async fn identify_filesystem_store(&mut self, _: String) -> Result<(), StoreError> {
-        Ok(())
-    }
-    async fn get_run(&mut self, run: &str) -> Result<Option<RunState>, StoreError> {
-        Err(StoreError::Io(
-            "unexpected persistence operation in test".into(),
-        ))
-    }
-    async fn get_workspace(&mut self, id: &str) -> Result<Option<WorkspaceState>, StoreError> {
-        Err(StoreError::Io(
-            "unexpected persistence operation in test".into(),
-        ))
-    }
-    async fn save_workspace(&mut self, workspace: WorkspaceState) -> Result<(), StoreError> {
-        Err(StoreError::Io(
-            "unexpected persistence operation in test".into(),
-        ))
-    }
-    async fn get_effect(&mut self, run: &str, id: &str) -> Result<Option<Effect>, StoreError> {
+    async fn get_operation(
+        &mut self,
+        scope: &str,
+        id: &str,
+    ) -> Result<Option<Operation>, StoreError> {
         Ok(self
             .pending
-            .effects
-            .get(&(run.to_owned(), id.to_owned()))
+            .operations
+            .get(&(scope.to_owned(), id.to_owned()))
             .cloned())
     }
-    async fn save_effect(&mut self, effect: Effect) -> Result<(), StoreError> {
+    async fn save_operation(&mut self, effect: Operation) -> Result<(), StoreError> {
         effect.validate_successor(
             self.pending
-                .effects
-                .get(&(effect.run.clone(), effect.id.clone())),
+                .operations
+                .get(&(effect.scope.clone(), effect.id.clone())),
         )?;
         self.pending
-            .effects
-            .insert((effect.run.clone(), effect.id.clone()), effect);
+            .operations
+            .insert((effect.scope.clone(), effect.id.clone()), effect);
         Ok(())
     }
-    async fn pending_effect(&mut self, run: &str) -> Result<Option<String>, StoreError> {
+    async fn pending_operation(&mut self, scope: &str) -> Result<Option<String>, StoreError> {
         Ok(self
             .pending
-            .effects
+            .operations
             .values()
-            .find(|e| e.run == run && e.outcome.is_none())
+            .find(|e| e.scope == scope && e.outcome.is_none())
             .map(|e| e.id.clone()))
     }
-    async fn effect_count(&mut self, run: &str) -> Result<u64, StoreError> {
+    async fn operation_count(&mut self, scope: &str) -> Result<u64, StoreError> {
         Ok(self
             .pending
-            .effects
+            .operations
             .keys()
-            .filter(|(r, _)| r == run)
+            .filter(|(r, _)| r == scope)
             .count() as u64)
     }
-    async fn effects_after(
-        &mut self,
-        run: &str,
-        operation: &str,
-        after: &str,
-        limit: u32,
-    ) -> Result<Vec<Effect>, StoreError> {
+
+    async fn get_reader(&mut self, scope: &str, id: &str) -> Result<Option<Reader>, StoreError> {
         Err(StoreError::Io(
             "unexpected persistence operation in test".into(),
         ))
     }
-    async fn get_plan(&mut self, workspace: &str, id: &str) -> Result<Option<Plan>, StoreError> {
+    async fn save_reader(&mut self, scope: &str, reader: Reader) -> Result<(), StoreError> {
         Err(StoreError::Io(
             "unexpected persistence operation in test".into(),
         ))
     }
-    async fn save_plan(&mut self, workspace: &str, plan: Plan) -> Result<(), StoreError> {
+    async fn listing_bytes(&mut self, scope: &str, id: &str) -> Result<u64, StoreError> {
+        Err(StoreError::Conflict)
+    }
+    async fn get_listing(&mut self, scope: &str, id: &str) -> Result<Option<Listing>, StoreError> {
         Err(StoreError::Io(
             "unexpected persistence operation in test".into(),
         ))
     }
-    async fn pending_plan(&mut self, workspace: &str) -> Result<Option<Plan>, StoreError> {
-        Err(StoreError::Io(
-            "unexpected persistence operation in test".into(),
-        ))
-    }
-    async fn plans_after(
-        &mut self,
-        workspace: &str,
-        after: &str,
-        limit: u32,
-    ) -> Result<Vec<Plan>, StoreError> {
-        Err(StoreError::Io(
-            "unexpected persistence operation in test".into(),
-        ))
-    }
-    async fn get_reader(
-        &mut self,
-        workspace: &str,
-        id: &str,
-    ) -> Result<Option<Reader>, StoreError> {
-        Err(StoreError::Io(
-            "unexpected persistence operation in test".into(),
-        ))
-    }
-    async fn save_reader(&mut self, workspace: &str, reader: Reader) -> Result<(), StoreError> {
-        Err(StoreError::Io(
-            "unexpected persistence operation in test".into(),
-        ))
-    }
-    async fn get_listing(
-        &mut self,
-        workspace: &str,
-        id: &str,
-    ) -> Result<Option<Listing>, StoreError> {
-        Err(StoreError::Io(
-            "unexpected persistence operation in test".into(),
-        ))
-    }
-    async fn save_listing(&mut self, workspace: &str, listing: Listing) -> Result<(), StoreError> {
+    async fn save_listing(&mut self, scope: &str, listing: Listing) -> Result<(), StoreError> {
         Err(StoreError::Io(
             "unexpected persistence operation in test".into(),
         ))
     }
     async fn pending_resource(
         &mut self,
-        workspace: &str,
+        scope: &str,
     ) -> Result<Option<PendingResource>, StoreError> {
         Err(StoreError::Io(
             "unexpected persistence operation in test".into(),
         ))
     }
-    async fn get_writer(
-        &mut self,
-        workspace: &str,
-        id: &str,
-    ) -> Result<Option<Writer>, StoreError> {
+    async fn get_writer(&mut self, scope: &str, id: &str) -> Result<Option<Writer>, StoreError> {
         Err(StoreError::Io(
             "unexpected persistence operation in test".into(),
         ))
     }
-    async fn save_writer(&mut self, workspace: &str, writer: Writer) -> Result<(), StoreError> {
+    async fn save_writer(&mut self, scope: &str, writer: Writer) -> Result<(), StoreError> {
         Err(StoreError::Io(
             "unexpected persistence operation in test".into(),
         ))
     }
-    async fn closing_writer(&mut self, workspace: &str) -> Result<Option<Writer>, StoreError> {
+    async fn closing_writer(&mut self, scope: &str) -> Result<Option<Writer>, StoreError> {
         Err(StoreError::Io(
             "unexpected persistence operation in test".into(),
         ))
     }
     async fn writer_for_effect(
         &mut self,
-        workspace: &str,
+        scope: &str,
         effect: &str,
     ) -> Result<Option<Writer>, StoreError> {
         Err(StoreError::Io(
@@ -181,7 +120,7 @@ impl UnitOfWork for MemoryUnit {
     }
     async fn get_chunk(
         &mut self,
-        workspace: &str,
+        scope: &str,
         writer: &str,
         id: &str,
     ) -> Result<Option<Chunk>, StoreError> {
@@ -189,14 +128,14 @@ impl UnitOfWork for MemoryUnit {
             "unexpected persistence operation in test".into(),
         ))
     }
-    async fn save_chunk(&mut self, workspace: &str, chunk: Chunk) -> Result<(), StoreError> {
+    async fn save_chunk(&mut self, scope: &str, chunk: Chunk) -> Result<(), StoreError> {
         Err(StoreError::Io(
             "unexpected persistence operation in test".into(),
         ))
     }
     async fn writer_chunks(
         &mut self,
-        workspace: &str,
+        scope: &str,
         writer: &str,
         limit: u32,
     ) -> Result<Vec<Chunk>, StoreError> {
@@ -204,17 +143,8 @@ impl UnitOfWork for MemoryUnit {
             "unexpected persistence operation in test".into(),
         ))
     }
-    async fn chunks_after(
-        &mut self,
-        workspace: &str,
-        after: (&str, &str),
-        limit: u32,
-    ) -> Result<Vec<Chunk>, StoreError> {
-        Err(StoreError::Io(
-            "unexpected persistence operation in test".into(),
-        ))
-    }
-    async fn resource_counts(&mut self, workspace: &str) -> Result<ResourceCounts, StoreError> {
+
+    async fn resource_counts(&mut self, scope: &str) -> Result<ResourceCounts, StoreError> {
         Err(StoreError::Io(
             "unexpected persistence operation in test".into(),
         ))
@@ -228,9 +158,9 @@ impl UnitOfWork for MemoryUnit {
         }
     }
 }
-fn key() -> EffectKey<'static> {
-    EffectKey {
-        run: "run",
+fn key() -> OperationKey<'static> {
+    OperationKey {
+        scope: "scope",
         effect: "effect",
         operation: "filesystem.mutation",
         version: 1,
@@ -243,14 +173,19 @@ fn store() -> Arc<Mutex<State>> {
 async fn staged_effect_reads_its_writes_and_drop_rolls_back() {
     let store = store();
     let mut unit = MemoryUnit::begin(&store, false);
-    effects::admit(unit.as_mut(), &key(), b"fingerprint")
+    operations::admit(unit.as_mut(), &key(), b"fingerprint")
         .await
         .unwrap();
-    assert!(unit.get_effect("run", "effect").await.unwrap().is_some());
+    assert!(
+        unit.get_operation("scope", "effect")
+            .await
+            .unwrap()
+            .is_some()
+    );
     drop(unit);
     assert!(
         MemoryUnit::begin(&store, false)
-            .get_effect("run", "effect")
+            .get_operation("scope", "effect")
             .await
             .unwrap()
             .is_none()
@@ -260,25 +195,25 @@ async fn staged_effect_reads_its_writes_and_drop_rolls_back() {
 async fn lost_ack_is_reread_without_duplicate_effect() {
     let store = store();
     let mut unit = MemoryUnit::begin(&store, true);
-    effects::admit(unit.as_mut(), &key(), b"fingerprint")
+    operations::admit(unit.as_mut(), &key(), b"fingerprint")
         .await
         .unwrap();
     assert!(unit.commit().await.is_err());
     let mut retry = MemoryUnit::begin(&store, false);
-    effects::admit(retry.as_mut(), &key(), b"fingerprint")
+    operations::admit(retry.as_mut(), &key(), b"fingerprint")
         .await
         .unwrap();
-    assert_eq!(retry.effect_count("run").await.unwrap(), 1);
-    effects::prepare(retry.as_mut(), &key(), b"recovery metadata")
+    assert_eq!(retry.operation_count("scope").await.unwrap(), 1);
+    operations::prepare(retry.as_mut(), &key(), b"recovery metadata")
         .await
         .unwrap();
-    effects::complete(retry.as_mut(), &key(), b"result", false)
+    operations::complete(retry.as_mut(), &key(), b"result", false)
         .await
         .unwrap();
     retry.commit().await.unwrap();
     let mut replay = MemoryUnit::begin(&store, false);
     assert_eq!(
-        effects::load(replay.as_mut(), &key())
+        operations::load(replay.as_mut(), &key())
             .await
             .unwrap()
             .unwrap()
@@ -287,7 +222,7 @@ async fn lost_ack_is_reread_without_duplicate_effect() {
         b"result"
     );
     assert!(
-        effects::complete(replay.as_mut(), &key(), b"different", false)
+        operations::complete(replay.as_mut(), &key(), b"different", false)
             .await
             .is_err()
     );

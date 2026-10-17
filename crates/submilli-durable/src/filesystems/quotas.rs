@@ -47,13 +47,3 @@ fn reuse(
     shared.insert(id, Arc::downgrade(quota));
     Ok(quota.clone())
 }
-
-pub(super) async fn live(context: &FilesystemContext) -> HashMap<FileIdentity, Arc<DiskQuota>> {
-    context
-        .filesystem_quotas
-        .lock()
-        .await
-        .iter()
-        .filter_map(|(id, quota)| quota.upgrade().map(|quota| (*id, quota)))
-        .collect()
-}

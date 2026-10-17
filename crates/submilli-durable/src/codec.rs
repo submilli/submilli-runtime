@@ -33,10 +33,13 @@ pub fn open(sealer: &Sealer, owner: &str, bytes: &[u8]) -> Result<Vec<u8>, Store
     }
     Ok(plain)
 }
-pub fn effect_owner(effect: &crate::state::Effect, field: &str) -> Result<String, StoreError> {
+pub fn operation_owner(
+    effect: &crate::state::Operation,
+    field: &str,
+) -> Result<String, StoreError> {
     serde_json::to_string(&(
-        "durable-effect",
-        &effect.run,
+        "filesystem-operation",
+        &effect.scope,
         &effect.id,
         &effect.operation,
         effect.version,

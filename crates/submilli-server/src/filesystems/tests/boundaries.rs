@@ -1,121 +1,35 @@
 use super::*;
-use interpreter::runtime::vfs::{Access, MountSpec, VfsMode};
+use interpreter::runtime::filesystem::FileReader;
 
 fn id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
 #[tokio::test]
-async fn compound_admission_reserves_all_effect_slots() {
-    let fixture = Fixture::new().await;
-    let fs = &fixture.filesystem;
-    let writer = id();
-    fs.open_writer(&writer, "/writer").await.unwrap();
-    // Inject completed rows only to exercise the admission count boundary;
-    // these synthetic rows are removed before any outcome decoding or cleanup.
-    let workspace = fs.id().to_owned();
-    fixture.database.transaction(move |connection| Box::pin(async move {
-        sqlx::query("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<9999) INSERT INTO durable_effects(run_id,effect_id,operation,version,request,recovery_payload,outcome,state) SELECT (SELECT run_id FROM durable_workspaces WHERE workspace_id=?), 'capacity-'||i, 'capacity-test', 1, X'00', X'00', X'00', 'done' FROM n")
-            .bind(workspace).execute(connection).await?;
-        Ok(())
-    })).await.unwrap();
-    let steps = vec![
-        Mutation::CreateDirectory {
-            path: "/one".into(),
-        },
-        Mutation::CreateDirectory {
-            path: "/two".into(),
-        },
-    ];
-    assert!(fs.execute_replayed_plan(&id(), steps).await.is_err());
-    assert!(!fs.vfs().root().join("one").exists());
-    assert!(
-        fs.test_journal()
-            .pending_plan(fs.id())
-            .await
-            .unwrap()
-            .is_none()
-    );
-    fs.execute_replayed_plan(
-        &id(),
-        vec![Mutation::CreateDirectory {
-            path: "/last".into(),
-        }],
-    )
-    .await
-    .unwrap();
-    assert!(fs.close_writer(&writer, &id()).await.is_err());
-    assert!(
-        fs.test_journal()
-            .pending_writer(fs.id())
-            .await
-            .unwrap()
-            .is_none()
-    );
-    let workspace = fs.id().to_owned();
-    fixture.database.transaction(move |connection| Box::pin(async move {
-        sqlx::query("DELETE FROM durable_effects WHERE run_id=(SELECT run_id FROM durable_workspaces WHERE workspace_id=?) AND effect_id LIKE 'capacity-%'").bind(workspace).execute(connection).await?;
-        Ok(())
-    })).await.unwrap();
-    fixture.terminal().await;
-    fs.retire("owner").await.unwrap();
-}
-
-#[tokio::test]
-async fn reused_effect_ids_refuse_compound_admission_before_fencing() {
-    let fixture = Fixture::new().await;
-    let fs = &fixture.filesystem;
-    let plan = id();
-    let effect = crate::adapters::durable_filesystems::plan_effect_id(fs.id(), &plan, 0);
-    fs.execute_replayed(
-        &effect,
-        Mutation::CreateDirectory {
-            path: "/existing".into(),
-        },
-    )
-    .await
-    .unwrap();
-    assert!(
-        fs.execute_replayed_plan(
-            &plan,
-            vec![Mutation::CreateDirectory {
-                path: "/new".into()
-            }]
-        )
-        .await
-        .is_err()
-    );
-    let writer = id();
-    fs.open_writer(&writer, "/out").await.unwrap();
-    assert!(fs.close_writer(&writer, &effect).await.is_err());
-    assert!(fs.recover_replayed().await.unwrap().is_none());
-    fs.close_writer(&writer, &id()).await.unwrap();
-    fixture.terminal().await;
-    fs.retire("owner").await.unwrap();
-}
-
-#[tokio::test]
-async fn pending_resources_recover_and_rejected_opens_replay() {
+async fn pending_resources_finish_on_explicit_retry_and_rejected_opens_replay() {
     let fixture = Fixture::new().await;
     let fs = &fixture.filesystem;
     std::fs::write(fs.vfs().root().join("file"), b"data").unwrap();
     let reader = id();
     fs.test_journal()
-        .reader(fs.id(), &reader, "/file")
+        .reader(fs.id(), &reader, "/file", &byte_options())
         .await
         .unwrap();
-    assert!(fs.recover_replayed().await.unwrap().is_some());
-    let mut handle = fs.open_reader(&reader, "/file").await.unwrap();
-    let mut bytes = Vec::new();
-    handle.read_to_end(&mut bytes).unwrap();
-    assert_eq!(bytes, b"data");
+    let mut handle = fs
+        .open_reader(&reader, "/file", byte_options())
+        .await
+        .unwrap();
+    let limits = interpreter::runtime::limits::TenantLimits::new(1 << 20);
+    assert_eq!(
+        read_bytes(handle.next(&resource_invocation(), &limits).await.unwrap()).unwrap(),
+        b"dat"
+    );
     drop(handle);
     let listing = id();
     fs.test_journal()
         .listing(fs.id(), &listing, "/", false, None)
         .await
         .unwrap();
-    assert!(fs.recover_replayed().await.unwrap().is_some());
     assert_eq!(
         fs.open_directory(&listing, "/", false, 0)
             .await
@@ -125,153 +39,14 @@ async fn pending_resources_recover_and_rejected_opens_replay() {
     );
     let missing = id();
     assert!(matches!(
-        fs.open_reader(&missing, "/missing").await,
+        fs.open_reader(&missing, "/missing", byte_options()).await,
         Err(FilesystemError::Rejected(_))
     ));
     std::fs::write(fs.vfs().root().join("missing"), b"later").unwrap();
     assert!(matches!(
-        fs.open_reader(&missing, "/missing").await,
+        fs.open_reader(&missing, "/missing", byte_options()).await,
         Err(FilesystemError::Rejected(_))
     ));
-    fixture.terminal().await;
-    fs.retire("owner").await.unwrap();
-}
-
-async fn additional_run(fixture: &Fixture, order: i64) -> String {
-    let run = id();
-    let value = run.clone();
-    fixture.database.transaction(move |connection| Box::pin(async move {
-        sqlx::query("INSERT INTO runs(run_id,reservation_id,session_id,fingerprint,owner_generation,admission_order,created_at_unix_ms,state) VALUES(?,?,'session','request','startup',?,0,'running')")
-            .bind(&value).bind(&value).bind(order).execute(connection).await?;
-        Ok(())
-    })).await.unwrap();
-    run
-}
-
-async fn finish_run(fixture: &Fixture, run: String) {
-    fixture
-        .database
-        .transaction(move |connection| {
-            Box::pin(async move {
-                sqlx::query(
-                    "UPDATE runs SET state='finished',completed_at_unix_ms=1 WHERE run_id=?",
-                )
-                .bind(run)
-                .execute(connection)
-                .await?;
-                Ok(())
-            })
-        })
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
-async fn named_and_session_roots_resume_deleted_cwd_and_release_mounted_quota() {
-    let fixture = Fixture::new().await;
-    for (index, mode) in [VfsMode::Named, VfsMode::PerSession]
-        .into_iter()
-        .enumerate()
-    {
-        let root = tempfile::tempdir().unwrap();
-        let mount = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join("original"), b"old").unwrap();
-        let root_quota = Arc::new(interpreter::runtime::DiskQuota::new(1024, 3));
-        let mount_quota = Arc::new(interpreter::runtime::DiskQuota::new(1024, 0));
-        let vfs = Vfs::external_with_mode(root.path().into(), mode)
-            .unwrap()
-            .with_shared_quota(root_quota.clone())
-            .with_cwd("/cwd")
-            .unwrap()
-            .with_mount(MountSpec {
-                guest_path: "/mnt".into(),
-                host: mount.path().into(),
-                volume: "mounted".into(),
-                access: Access::ReadWrite,
-                quota: Some(mount_quota.clone()),
-            })
-            .unwrap();
-        let run = additional_run(&fixture, index as i64 + 2).await;
-        let fs = DurableFilesystem::open(
-            vfs,
-            &run,
-            "owner",
-            fixture.database.clone(),
-            fixture.context.clone(),
-        )
-        .await
-        .unwrap();
-        fs.execute_replayed(
-            &id(),
-            Mutation::Remove {
-                path: "/cwd".into(),
-            },
-        )
-        .await
-        .unwrap();
-        let content = fixture.input(b"old").await;
-        fs.execute_replayed_plan(
-            &id(),
-            vec![
-                Mutation::Write {
-                    path: "/mnt/copied".into(),
-                    content,
-                },
-                Mutation::Remove {
-                    path: "/original".into(),
-                },
-            ],
-        )
-        .await
-        .unwrap();
-        assert_eq!(root_quota.used(), 3, "unlinked original remains pinned");
-        assert_eq!(mount_quota.used(), 3);
-        let resumed = DurableFilesystem::resume(
-            fs.id(),
-            "owner",
-            fixture.database.clone(),
-            fixture.context.clone(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(resumed.vfs().cwd(), "/cwd");
-        assert!(!root.path().join("cwd").exists());
-        assert!(Arc::ptr_eq(resumed.vfs().quota().unwrap(), &root_quota));
-        let content = fixture.input(b"changed").await;
-        resumed
-            .execute_replayed(
-                &id(),
-                Mutation::Write {
-                    path: "/mnt/copied".into(),
-                    content,
-                },
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            mount_quota.used(),
-            10,
-            "old and new versions share one counter"
-        );
-        finish_run(&fixture, run).await;
-        // Cleanup through the restart API also refreshes counters held by an
-        // older live VFS in this process.
-        DurableFilesystem::recover_cleanup(
-            fs.id(),
-            "owner",
-            fixture.database.clone(),
-            fixture.context.clone(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(root_quota.used(), 0);
-        assert_eq!(mount_quota.used(), 7);
-        assert!(root.path().is_dir());
-        assert_eq!(
-            std::fs::read(mount.path().join("copied")).unwrap(),
-            b"changed"
-        );
-    }
 }
 
 #[tokio::test]
@@ -307,4 +82,270 @@ async fn cancelled_blocking_work_holds_admission_until_it_drains() {
         )
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn changed_filesystem_binding_rejects_mutation_and_resource_retries() {
+    use interpreter::runtime::vfs::{Access, MountSpec};
+    let fixture = Fixture::new().await;
+    let fs = &fixture.filesystem;
+    std::fs::write(fs.vfs().root().join("file"), b"original").unwrap();
+    let operation = id();
+    let request = Mutation::CreateDirectory {
+        path: "/dir".into(),
+    };
+    fs.execute(&operation, request.clone()).await.unwrap();
+    let reader = id();
+    drop(
+        fs.open_reader(&reader, "/file", byte_options())
+            .await
+            .unwrap(),
+    );
+    let listing = id();
+    fs.open_directory(&listing, "/", false, 0).await.unwrap();
+    let writer = id();
+    let chunk = id();
+    let close = id();
+    fs.open_writer(&writer, "/output").await.unwrap();
+    fs.write_chunk(&writer, &chunk, b"output".to_vec())
+        .await
+        .unwrap();
+    fs.close_writer(&writer, &close).await.unwrap();
+    let alternate = fixture.root.path().join("alternate");
+    std::fs::create_dir(&alternate).unwrap();
+    assert!(
+        DurableFilesystem::open(
+            fs.vfs().clone().with_access(Access::ReadOnly),
+            fs.id(),
+            fixture.database.clone(),
+            fixture.context.clone(),
+        )
+        .await
+        .is_err()
+    );
+    let configurations = [
+        Vfs::external(alternate.clone()).unwrap(),
+        fs.vfs().clone().with_cwd("/dir").unwrap(),
+        fs.vfs()
+            .clone()
+            .with_mount(MountSpec {
+                guest_path: "/mounted".into(),
+                host: alternate.clone(),
+                volume: "extra".into(),
+                access: Access::ReadWrite,
+                quota: None,
+            })
+            .unwrap(),
+    ];
+    for vfs in configurations {
+        let changed = DurableFilesystem::open(
+            vfs,
+            fs.id(),
+            fixture.database.clone(),
+            fixture.context.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(changed.execute(&operation, request.clone()).await.is_err());
+        assert!(
+            changed
+                .open_reader(&reader, "/file", byte_options())
+                .await
+                .is_err()
+        );
+        assert!(
+            changed
+                .open_directory(&listing, "/", false, 0)
+                .await
+                .is_err()
+        );
+        assert!(changed.open_writer(&writer, "/output").await.is_err());
+        assert!(
+            changed
+                .write_chunk(&writer, &chunk, b"output".to_vec())
+                .await
+                .is_err()
+        );
+        assert!(changed.close_writer(&writer, &close).await.is_err());
+    }
+    assert!(!alternate.join("dir").exists());
+    assert!(!alternate.join("output").exists());
+    assert_eq!(
+        std::fs::read(fs.vfs().root().join("file")).unwrap(),
+        b"original"
+    );
+    assert_eq!(
+        std::fs::read(fs.vfs().root().join("output")).unwrap(),
+        b"output"
+    );
+}
+
+#[tokio::test]
+async fn caller_code_replays_completed_prefix_and_finishes_pending_suffix() {
+    let fixture = Fixture::new().await;
+    let first = id();
+    let second = id();
+    let content = fixture.input(b"once").await;
+    let requests = [
+        (
+            first,
+            Mutation::Append {
+                path: "/prefix".into(),
+                content: content.clone(),
+            },
+        ),
+        (
+            second,
+            Mutation::Append {
+                path: "/suffix".into(),
+                content,
+            },
+        ),
+    ];
+    for name in ["prefix", "suffix"] {
+        std::fs::write(fixture.filesystem.vfs().root().join(name), b"").unwrap();
+    }
+    fixture
+        .filesystem
+        .execute_replayed(&requests[0].0, requests[0].1.clone())
+        .await
+        .unwrap();
+    publication_without_receipt(&fixture.filesystem, &requests[1].0, requests[1].1.clone()).await;
+    let reopened = DurableFilesystem::open(
+        fixture.filesystem.vfs().clone(),
+        fixture.filesystem.id(),
+        fixture.database.clone(),
+        fixture.context.clone(),
+    )
+    .await
+    .unwrap();
+    // The caller has no aggregate completion yet. Its code repeats both calls.
+    for (operation, request) in &requests {
+        reopened
+            .execute_replayed(operation, request.clone())
+            .await
+            .unwrap();
+    }
+    // Even another lost caller acknowledgement does not append again.
+    for (operation, request) in &requests {
+        reopened.execute(operation, request.clone()).await.unwrap();
+    }
+    for name in ["prefix", "suffix"] {
+        assert_eq!(
+            std::fs::read(reopened.vfs().root().join(name)).unwrap(),
+            b"once"
+        );
+    }
+    fixture.assert_no_pending_work().await;
+}
+
+#[tokio::test]
+async fn writer_close_cannot_reuse_a_completed_operation_id() {
+    let fixture = Fixture::new().await;
+    let fs = &fixture.filesystem;
+    let operation = id();
+    fs.execute(
+        &operation,
+        Mutation::CreateDirectory {
+            path: "/existing".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let writer = id();
+    fs.open_writer(&writer, "/output").await.unwrap();
+    fs.write_chunk(&writer, &id(), b"output".to_vec())
+        .await
+        .unwrap();
+    assert!(fs.close_writer(&writer, &operation).await.is_err());
+    assert!(!fs.vfs().root().join("output").exists());
+    fs.close_writer(&writer, &id()).await.unwrap();
+    assert_eq!(
+        std::fs::read(fs.vfs().root().join("output")).unwrap(),
+        b"output"
+    );
+}
+
+#[tokio::test]
+async fn operation_limit_preserves_replay_and_does_not_fence_a_writer() {
+    let fixture = Fixture::new().await;
+    let fs = &fixture.filesystem;
+    let operation = id();
+    let request = Mutation::CreateDirectory {
+        path: "/existing".into(),
+    };
+    fs.execute(&operation, request.clone()).await.unwrap();
+    let writer = id();
+    fs.open_writer(&writer, "/output").await.unwrap();
+    fs.write_chunk(&writer, &id(), b"output".to_vec())
+        .await
+        .unwrap();
+    let scope = fs.id().to_owned();
+    // Count-only boundary injection: the padding records are never decoded.
+    fixture.database.transaction(move |connection| Box::pin(async move {
+        sqlx::query("WITH RECURSIVE padding(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM padding WHERE n<9999) INSERT INTO durable_filesystem_operations(scope_id,operation_id,operation,version,request,outcome,state) SELECT ?, 'padding-'||n, 'test', 1, X'', X'', 'rejected' FROM padding")
+            .bind(scope).execute(connection).await?;
+        Ok(())
+    })).await.unwrap();
+    fs.execute(&operation, request).await.unwrap();
+    assert!(
+        fs.execute(
+            &id(),
+            Mutation::CreateDirectory {
+                path: "/blocked".into()
+            }
+        )
+        .await
+        .is_err()
+    );
+    assert!(fs.close_writer(&writer, &id()).await.is_err());
+    assert!(!fs.vfs().root().join("blocked").exists());
+    assert!(!fs.vfs().root().join("output").exists());
+    // Admission refusal has not moved this writer to the closing state.
+    fs.write_chunk(&writer, &id(), b" more".to_vec())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn interrupted_writer_close_reserves_its_id_against_other_mutations() {
+    let fixture = Fixture::new().await;
+    let fs = &fixture.filesystem;
+    let writer = id();
+    let close = id();
+    fs.open_writer(&writer, "/output").await.unwrap();
+    fs.write_chunk(&writer, &id(), b"output".to_vec())
+        .await
+        .unwrap();
+    fs.test_journal()
+        .closing_writer(fs.id(), &writer, &close, i64::MAX as u64)
+        .await
+        .unwrap();
+    let reopened = DurableFilesystem::open(
+        fs.vfs().clone(),
+        fs.id(),
+        fixture.database.clone(),
+        fixture.context.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        reopened
+            .execute(
+                &close,
+                Mutation::CreateDirectory {
+                    path: "/unrelated".into()
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert!(!fs.vfs().root().join("unrelated").exists());
+    assert!(!fs.vfs().root().join("output").exists());
+    reopened.close_writer(&writer, &close).await.unwrap();
+    assert_eq!(
+        std::fs::read(fs.vfs().root().join("output")).unwrap(),
+        b"output"
+    );
+    fixture.assert_no_pending_work().await;
 }

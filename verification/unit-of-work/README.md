@@ -6,8 +6,8 @@ same cancellable transaction driver as session application units. Reads see
 staged writes, a consuming commit makes them authoritative, and dropping the
 unit discards uncommitted changes.
 
-This model refines the atomic admission assumption of the filesystem and shared
-effect models. A transaction stages an effect identity and its argument fingerprint
+This model refines the atomic admission assumption of the filesystem and operation-journal
+models. A transaction stages an effect identity and its argument fingerprint
 separately; the protocol commits only after both have been staged. It models
 reads within that transaction, drop, process crash, and recovery after a commit
 whose acknowledgement was lost. The adapter must provide serializable exclusion
@@ -17,7 +17,7 @@ Multi-node transaction concurrency, leases and fencing are outside this model.
 | Model action | Implementation |
 | --- | --- |
 | Begin | `UnitFactory` and `SqliteTransaction::begin` |
-| WriteIntent / Fingerprint | `FilesystemJournal::admit_step` and `save_effect`; both metadata fields are stored in one effect row |
+| WriteIntent / Fingerprint | `FilesystemJournal::admit` and `save_operation`; both metadata fields are stored in one filesystem operation row |
 | Read | Direct unit operations, using the held transaction connection |
 | Commit | Consuming `UnitOfWork::commit` |
 | Drop / Crash | Drop the driver; SQLite transaction rollback; retained filesystem artifacts remain governed by the filesystem models |

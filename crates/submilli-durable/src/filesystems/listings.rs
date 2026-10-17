@@ -6,24 +6,6 @@ pub struct DirectorySnapshot {
     offset: usize,
 }
 impl DirectorySnapshot {
-    pub(crate) fn remaining_entries(&self) -> usize {
-        self.entries.len()
-    }
-    pub(crate) fn depth_first(mut self) -> Self {
-        self.entries
-            .as_mut_slice()
-            .sort_by(|a, b| a.path.split('/').cmp(b.path.split('/')));
-        self
-    }
-
-    pub(crate) fn retained_bytes(&self) -> u64 {
-        self.entries.as_slice().iter().fold(0u64, |bytes, entry| {
-            bytes
-                .saturating_add(std::mem::size_of_val(entry) as u64)
-                .saturating_add(entry.path.capacity() as u64)
-        })
-    }
-
     pub fn position(&self) -> usize {
         self.offset
     }
@@ -38,6 +20,98 @@ impl Iterator for DirectorySnapshot {
 }
 
 impl DurableFilesystem {
+    pub(super) async fn listing_step(
+        &self,
+        resource: &str,
+        effect: &str,
+        close: bool,
+        limits: &interpreter::runtime::limits::TenantLimits,
+    ) -> Result<Option<interpreter::runtime::filesystem::DirectoryEntry>, FilesystemError> {
+        validate_id(resource)?;
+        validate_id(effect)?;
+        if resource == effect {
+            return Err(RecoveryError::Conflict.into());
+        }
+        let gate = self.context.filesystem_gate.clone().lock_owned().await;
+        let bytes = self.journal.listing_bytes(&self.id, resource).await?;
+        // Covers encrypted/plain JSON, decoded entries, validation copies and
+        // re-encoding during the transaction. JSON includes every path byte and
+        // fixed entry fields; Vec spare capacity and String capacity fit this bound.
+        let memory = interpreter::runtime::limits::HostBytes::new(
+            limits,
+            bytes.saturating_mul(8).saturating_add(8192),
+        )?;
+        self.charge(interpreter::runtime::fuel::HASH, bytes.saturating_mul(4))?;
+        self.charge(interpreter::runtime::fuel::PARSE, bytes.saturating_mul(4))?;
+        let filesystem = self.clone();
+        let resource = resource.to_owned();
+        let effect = effect.to_owned();
+        finish_owned(async move {
+            let _gate = gate;
+            let _memory = memory;
+            filesystem.advance_listing(&resource, &effect, close).await
+        })
+        .await
+    }
+    async fn advance_listing(
+        &self,
+        resource: &str,
+        effect: &str,
+        close: bool,
+    ) -> Result<Option<interpreter::runtime::filesystem::DirectoryEntry>, FilesystemError> {
+        use crate::state::{ListingPosition, Progress};
+        let row = self.journal.listing_record(&self.id, resource).await?;
+        let before = super::resources::progress_start(&row.progress, effect, close)?;
+        let entries = row.content.ok_or(RecoveryError::Conflict)?;
+        if before.index > entries.len() {
+            return Err(RecoveryError::Conflict.into());
+        }
+        let entry = if close || before.closed {
+            None
+        } else {
+            entries.get(before.index).cloned()
+        };
+        let after = ListingPosition {
+            index: before.index + usize::from(entry.is_some()),
+            closed: before.closed || close,
+        };
+        checkpoint("listing-next");
+        if let Some(work) = &self.work {
+            work.before_effect();
+        }
+        self.journal
+            .listing_progress(
+                &self.id,
+                resource,
+                row.progress,
+                Progress {
+                    effect: effect.into(),
+                    close,
+                    before,
+                    after,
+                },
+            )
+            .await?;
+        checkpoint("listing-progress");
+        Ok(
+            entry.map(|entry| interpreter::runtime::filesystem::DirectoryEntry {
+                name: entry.path.rsplit('/').next().unwrap_or_default().into(),
+                path: entry.path,
+                kind: if entry.directory {
+                    "directory"
+                } else if entry.symlink {
+                    "symlink"
+                } else {
+                    "file"
+                },
+                bytes: if entry.directory || entry.symlink {
+                    0
+                } else {
+                    entry.bytes
+                },
+            }),
+        )
+    }
     /// The enumeration is an output. SQLite stores it once; replay never
     /// re-enumerates a completed listing, even if the directory has changed.
     pub async fn open_directory(
@@ -46,6 +120,17 @@ impl DurableFilesystem {
         path: &str,
         recursive: bool,
         offset: usize,
+    ) -> Result<DirectorySnapshot, FilesystemError> {
+        self.open_directory_reserved(resource, path, recursive, offset, None)
+            .await
+    }
+    pub(super) async fn open_directory_reserved(
+        &self,
+        resource: &str,
+        path: &str,
+        recursive: bool,
+        offset: usize,
+        memory: Option<Arc<interpreter::runtime::limits::HostBytes>>,
     ) -> Result<DirectorySnapshot, FilesystemError> {
         validate_id(resource)?;
         Mutation::Remove { path: path.into() }.validate()?;
@@ -68,7 +153,10 @@ impl DurableFilesystem {
             let workspace = self.workspace.clone();
             let path_owned = path.to_owned();
             let work = self.work.clone();
-            let result = blocking(gate, move || {
+            let worker_memory = memory.clone();
+            let result = blocking(gate.clone(), move || {
+                // Cancellation cannot refund memory while enumeration still owns it.
+                let _memory = worker_memory;
                 workspace.directory_listing_metered(&path_owned, recursive, work.as_deref())
             })
             .await;
@@ -111,6 +199,7 @@ impl DurableFilesystem {
         for _ in 0..offset {
             entries.next();
         }
+        checkpoint("listing-open");
         Ok(DirectorySnapshot { entries, offset })
     }
 }

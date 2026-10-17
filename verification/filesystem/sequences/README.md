@@ -1,34 +1,32 @@
-# Ordered filesystem recovery
+# Caller-code replay
 
-A compound operation persists its immutable ordered plan of operation descriptors and fingerprints
-before its first mutation. Each step has a derived stable effect ID, its own
-prepared intent, persistence barriers and SQL receipt. Recovery replays the
-completed prefix and reconciles the pending step before admitting the next.
-Replay supplies matching bytes for unfinished steps; it never re-enumerates
-sources or recomputes a Git commit. `pinned` denotes filesystem recovery evidence,
-not payload storage. Primitive Apply abstracts eventual matching input supply,
-as checked explicitly in the append and namespace models.
+The caller's program executes two primitives in order using stable identities.
+There is no persisted plan, step list, aggregate filesystem outcome or recovery
+dispatcher. On restart the caller starts its code again. A completed primitive
+returns its receipt; a pending primitive reconciles its intent before returning.
+The next call follows from the code's control flow.
 
-This model composes two abstract primitive steps. `Apply`, `Sync` and `Receipt`
-remain separate; the primitive models supply identity-based reconciliation.
-A preflight refusal on the second step commits a definitive failure after the
-first completed step. This is a documented partial-result contract, not rollback.
-Replay of success or failure must leave later path reuse untouched.
+`cursor` is volatile execution position, reset by a crash. `intent`, `receipts`
+and `refused` are filesystem journal state. `applied` and `persisted` distinguish
+cached effects from synchronized filesystem state. `Apply`, `Sync`, `Receipt`
+and `Return` remain separate; primitive models supply identity-based reconciliation
+and matching replay input. A preflight refusal on the second operation is a
+persistent result, leaving the completed first operation intact, without rollback.
 
-The bounded checks cover one power crash, progress under eventual storage
-availability, immutable plans, durable ordered receipts, evidence retention,
-and completed-prefix replay. Negative variants regenerate the plan, skip a
-persistence barrier, repeat a finished prefix or collect evidence too early.
-Witnesses require recovery after a prefix crash and replay of partial failure.
+`outer` abstracts a future caller's independent completion record. A crash after
+both filesystem receipts but before that record leaves it pending. Replaying
+calls still uses the filesystem receipts and cannot repeat those mutations.
+This illustrates the retry contract; it does not implement or prove the complete
+execution-history integration, stable ID assignment or nondeterministic replay.
 
-Prepared Git publications use the `publication` configuration: every failure
-leaves the operation pending until it can finish the same immutable plan. No
-definitive partial-failure outcome is allowed. Its Git objects and refs, including
-the commit ID, must be reconstructed from recorded execution outputs. This is roll-forward recovery;
-it does not verify the ordinary Git host function's existing in-memory undo
-mechanism, and those host calls are not automatically routed through this API.
-Execution history must record the compound outcome before exposing it to a
-program. One exclusive run and drained old workers remain assumptions.
+Checks cover one power crash, ordered durable receipts, retained evidence,
+receipt-before-outer-completion, no repeated completed mutations, and progress
+under finite crashes and fair caller retries/storage actions. Negative variants
+skip synchronization, repeat a completed operation or discard evidence early.
+Witnesses require a crash after a completed prefix, replay of a persisted refusal,
+and the gap between filesystem receipts and outer completion. Evidence retention
+is a caller obligation; this component does not implement lifecycle cleanup.
+There is no prepared Git publication protocol in this model or adapter.
 
 ```sh
 python3 verification/check.py --model filesystem/sequences

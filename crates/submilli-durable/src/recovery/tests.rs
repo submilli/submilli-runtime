@@ -199,7 +199,7 @@ fn remove_refuses_a_new_file_at_a_reused_path() {
 }
 
 #[test]
-fn restored_reader_keeps_old_inode_and_cursor_but_observes_append() {
+fn restored_reader_refuses_path_replacement() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("file"), b"first").unwrap();
     let workspace = workspace(root.path());
@@ -239,10 +239,10 @@ fn restored_reader_keeps_old_inode_and_cursor_but_observes_append() {
         &workspace.identity(),
     )
     .unwrap();
-    let mut restored = recovered.restore_reader(position).unwrap();
-    let mut rest = String::new();
-    restored.read_to_string(&mut rest).unwrap();
-    assert_eq!(rest, "rst next");
+    assert!(matches!(
+        recovered.restore_reader(position),
+        Err(RecoveryError::Conflict)
+    ));
 }
 
 #[test]
@@ -477,7 +477,7 @@ fn retained_bytes_are_charged_once_and_failed_growth_does_not_change_the_file() 
 }
 
 #[test]
-fn retained_reader_alias_validation_admits_each_scanned_entry() {
+fn reader_open_does_not_pin_or_scan_unrelated_recovery_artifacts() {
     use interpreter::runtime::{fuel, fuel::WorkBudget};
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("file"), "content").unwrap();
@@ -491,11 +491,8 @@ fn retained_reader_alias_validation_admits_each_scanned_entry() {
     let work = Arc::new(WorkBudget::new(fuel::SYSCALL.cost(10)));
     let metered = workspace.metered(Some(work));
     let second = uuid::Uuid::new_v4().to_string();
-    assert!(matches!(
-        metered.open_reader(&second, "/file"),
-        Err(RecoveryError::Fuel(_))
-    ));
-    let mut reader = workspace.open_reader(&second, "/file").unwrap();
+    let mut reader = metered.open_reader(&second, "/file").unwrap();
+    assert!(!recovery.exists("readers"));
     let mut content = String::new();
     reader.read_to_string(&mut content).unwrap();
     assert_eq!(content, "content");

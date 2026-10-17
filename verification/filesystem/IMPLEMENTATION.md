@@ -1,114 +1,120 @@
-# Filesystem recovery adapter
+# Idempotent filesystem adapter
 
 `submilli-durable::filesystems::DurableFilesystem` implements the interpreter's
-filesystem interface. The server supplies its SQLite `UnitOfWork`. Neither the
-filesystem nor its persistence contract depends on durable-object storage.
-Execution history, program replay and startup supervision remain separate work.
+filesystem interface. The server supplies its SQLite `UnitOfWork`. Filesystem
+operations have their own journal, independent of execution history and durable
+objects. No pending-work dispatcher or filesystem startup recovery is installed.
+Ordinary server and CLI runs still use the default filesystem.
 
-## Inputs, outputs and recovery
+## Ownership and identity
 
-The journal stores operation identity/version, paths, input length/hash,
-filesystem recovery metadata, and the final outcome. It does **not** store file
-write input bytes. `ReplayInput` holds bytes only for the current invocation.
-After restart, execution replay reconstructs them from pinned initial run inputs,
-recorded prior observations/outcomes, and deterministic computation. Recorded
-reads, clocks, randomness and other nondeterminism are prerequisites for that
-execution layer; the filesystem does not repeat those observations itself.
+The caller passes its configured `Vfs`, with all blueprint mounts, to `open`.
+It supplies a stable UUID scope and stable operation IDs, retains the same roots
+and journal across retries, and exclusively owns the writable filesystem.
+Opening establishes access and private recovery directories; it neither creates
+a public run directory nor executes unfinished operations. A fingerprint of the
+root and mount identities, cwd, access modes and quotas binds each journal record
+to that configuration. Retry against a changed binding fails. Replacing the
+entire journal cannot be detected by this component and violates its contract.
 
-`execute_with_input` validates supplied input against the request fingerprint.
-Admission compares the immutable request against any prior record. A mismatch
-fails before public mutation. `recover` can discover pending work but returns
-`ReplayRequired` for a pending write/append that needs caller bytes; the caller
-replays execution and retries the same effect with `execute_with_input`. It must
-not invent a new effect ID or redo an external download to obtain those bytes.
-A completed effect returns its saved outcome without requesting input or touching
-the current pathname. Retained workspace contents are never rebuilt by replaying
-completed mutations.
+There is no workspace registry, database identity table or stored program plan.
+The caller's code determines operation order. It repeats calls with stable IDs;
+completed calls return their receipts and a pending call reconciles its intent.
+Even if an outer execution effect remains pending after filesystem success, its
+retry cannot repeat that filesystem operation. Ordered execution history,
+resumption and the bridge assigning these IDs remain future work.
 
-Filesystem staging remains necessary: a replacement candidate is the new file
-being constructed; original inode pins protect mutation/recovery evidence.
-These are mutable filesystem artifacts, not immutable input captures or a
-second general payload store.
+## Tables
 
-## Ordering and storage
+Migration 10 creates only filesystem-owned tables. None references a run row.
 
-Migration 10 contains `durable_filesystem_store` (database identity), retained
-workspaces, shared `durable_effects`, plans, readers, listings, writers and chunk
-fingerprints. No object-store or filesystem-object producer tables are created.
-Sensitive metadata and recorded outputs are sealed before reaching SQLite.
-Directory enumeration is an output, stored inline in SQLite with a 4 MiB bound;
-ordinary recovery records have a 64 KiB bound. Large-output placement is a later
-history-storage enhancement behind the same byte interface.
-
-| Boundary | Implementation/model mapping |
+| Table | Purpose |
 | --- | --- |
-| Reserve workspace | Commit ownership/layout before creating a retained root |
-| Admit effect | Commit immutable metadata and fingerprint; no input bytes |
-| Prepare | Sync baseline, pin original, build candidate; private artifacts only |
-| Prepare commit | Persist recovery intent before public mutation |
-| Apply | Reconcile expected inode identities and fixed append offsets |
-| Persistence barriers | Sync files and containing directories |
-| Complete | Commit outcome before returning it or admitting the next mutation |
-| Replay | Validate identity/fingerprint and return committed outcome |
-| Cleanup | Require terminal state, drain workers/readers, remove artifacts, tombstone |
+| `durable_filesystem_operations` | Immutable request and binding, prepared intent, and completed/refused outcome, keyed by scope and operation ID. |
+| `durable_filesystem_readers` | Bound path/file identity and options, open error, last effect ID and before/after logical read/close state. |
+| `durable_filesystem_listings` | Open request, immutable ordered snapshot, last effect ID and before/after next/close index. |
+| `durable_filesystem_writers` | Resource ID, bound open request and close state. |
+| `durable_filesystem_chunks` | Stable writer chunk IDs, sequence, lengths and fingerprints; offsets are derived from preceding lengths. |
 
-SQLite commit and acknowledgement are distinct. An uncertain commit is resolved
-by rereading the same identity. After public mutation starts, an operational
-failure keeps the effect pending; it must not become a definitive guest refusal.
-Preflight refusals may be recorded and replayed. Cancellation cannot release the
-shared filesystem gate while a blocking worker still owns it.
+Sensitive metadata and outputs are sealed. Ordinary records have a 64 KiB bound;
+directory enumeration is stored inline in SQLite with a 4 MiB bound. File input
+bytes are never stored in SQL. Large-output placement is a later history-storage
+concern, behind the same byte interface. There is no durable-object dependency.
 
-## Writers and resources
+## Mutation flow
 
-A writer has one private output file on the target volume. Each write validates
-the stable chunk ID and fingerprint. New chunks overwrite at the sum of already
-acknowledged chunk lengths, truncate any unacknowledged tail, and sync the staged
-output before committing the chunk receipt. Duplicate acknowledged chunks return
-without writing; changed arguments fail. SQLite stores chunk descriptors only.
+1. Commit the immutable request, input fingerprint and filesystem binding.
+2. Prepare private evidence: sync the baseline, pin the original inode, and build
+   a replacement candidate when needed. Commit the prepared intent.
+3. Apply against expected inode identities and fixed append offsets; sync files
+   and containing directories.
+4. Commit the filesystem outcome before returning success.
+5. On retry, validate the same request and binding. Return a completed receipt;
+   otherwise reconcile the prepared operation using matching replay input.
 
-Close verifies every acknowledged chunk against the staged output, computes the
-whole-file fingerprint with bounded buffering, fences the writer, and uses the
-ordinary replacement protocol. A lost close receipt is reconciled; a completed
-close never republishes after pathname reuse. Staging counts toward filesystem
-quota, including the candidate needed for publication. Missing/corrupt acknowledged
-output blocks close rather than publishing different bytes. Dropping a writer
-does not publish its output. Terminal cleanup removes unfinished staging.
+`execute_with_input` receives bytes reconstructed by execution replay.
+`execute` without those bytes returns `ReplayRequired` for an unfinished write
+or append. An uncertain SQL commit is resolved by reading the same identity.
+After public mutation starts, operational failures remain pending; only a
+preflight refusal can become a definitive rejected outcome. No SQL transaction
+spans filesystem mutation. Cancellation keeps the gate held until a blocking
+worker drains. Recovery candidates and inode pins are filesystem evidence,
+not a second input-payload store.
 
-Readers pin the original inode durably. Dropping a handle releases native access,
-not its durable pin; cleanup waits for open readers. Execution history must record
-read bytes and logical cursor/decoder state before exposing an observation.
-Directory iterators replay their recorded listing and offset, never enumerate a
-completed listing again.
+## Resources and retention
 
-Compound plans persist ordered mutation descriptors, derived effect IDs and
-aggregate outcomes. Their inputs are supplied separately on replay. Completed
-prefixes are skipped. Source enumerations and prepared Git commit values must
-come from recorded execution outputs; fresh traversal/commit creation is not
-recovery. Ordinary Git, code tools and HTTP downloads remain available through
-the default VFS, outside this adapter's durability guarantee.
+A writer stages output on the target volume. New chunks overwrite at the sum of
+acknowledged lengths, truncate any unacknowledged tail, and sync before recording
+the chunk receipt. Duplicate chunks return without writing; changed arguments
+fail. Close validates the staged bytes, fences further chunks, and uses the
+replacement protocol. A completed close never republishes after path reuse.
+Dropping the writer does not publish. Staging and candidates count toward quota.
+
+Readers and listings expose effect-aware logical steps. Each step commits its
+last effect ID and before/after position before returning; execution history
+records its output separately. Repeating an unfinished effect uses its before
+state, while a new effect uses its after state. No duplicate read bytes are
+stored. The framework must serialize calls and keep pending input unchanged.
+Readers reopen the configured path and validate identity instead of pinning an
+inode. Native read-ahead never advances SQL progress. A failed logical read leaves
+its position unchanged. Listings persist their final component-wise traversal
+order before restoring any index.
+
+`ResourceDescriptor` contains scope, resource ID and kind/options. Restoration
+constructs ID-only handles without I/O; the first dispatched call loads durable
+state. Writer restoration preserves staging and existing chunk receipts. Explicit
+reader/listing close checkpoints closed state; finalization only drops local
+resources. The temporary per-call ID provider is not a history/replay engine.
+See the [resource protocol and test mapping](resources/README.md).
+
+The caller owns retention and eventual cleanup. It must retain journal rows and
+private evidence while retries or resources remain possible and drain work and
+handles before disposal. There is no run-lifecycle check, terminal-workspace
+cleanup or automatic row deletion. Low-level cleanup helpers have this explicit
+caller precondition; the model's eligible cleanup actions describe that contract.
+
+Code tools, Git and HTTP downloads retain their existing direct VFS access and
+are outside this adapter's guarantees. Recursive mutations and copies require
+caller orchestration of primitives; no compound plan is stored.
 
 ## Verification and limits
 
-The append and namespace models now distinguish volatile replay inputs from
-retained filesystem evidence: crash erases input availability, and recovery waits
-for matching input. The writer model checks staged-output/receipt ordering,
-fixed-offset retry, mismatched duplicate input, and completed-close replay.
-Shared effects check request/fingerprint immutability. The unit-of-work model
-checks atomic metadata, staged reads, rollback and lost acknowledgements.
-Directory, retained-reader and sequence models cover their separate protocols.
+Append and namespace models distinguish volatile replay inputs from retained
+filesystem evidence. The writer model checks staged-output ordering and fixed
+offset retries. The operation-journal model checks immutable requests, intents
+and outcomes; the unit-of-work model checks atomic commits, staged reads,
+rollback and lost acknowledgements. Reader and listing models specify the
+separate filesystem-progress/history boundary; the writer model separates chunk/close
+receipts from framework completion. The directory model covers mkdir/rmdir.
+The sequence model checks caller-code replay and the gap between a filesystem
+receipt and an outer completion, without a persisted plan.
 
-These are bounded protocol checks, not a proof of Rust, SHA-256, SQLite or storage
-hardware, and not an end-to-end execution/filesystem composition proof. Digest
-comparison abstracts collision resistance. Progress assumes matching replay
-inputs eventually arrive, storage eventually works, and only finitely many
-crashes occur. Wrong replay remains blocked, not silently repaired.
-
-One logical run exclusively owns the backing filesystem, including aliases and
-native tools, until pending mutations reconcile. One shared `FilesystemContext`
-coordinates same-process access and quotas. There are no cross-process leases,
-locks, fencing, HA takeover or network-storage guarantees here. Successful file
-and directory synchronization must survive the storage failure being modeled.
-Process-kill tests exercise application crashes; they do not establish power-loss
-behavior of a device. Limits include 10,000 traversed entries, depth 64 and 1,000
-steps per compound plan. Ephemeral workspaces remain under the retained prefix
-`submilli-vfs-run-`, outside the scratch boot sweep.
+These are bounded protocol checks, not proofs of Rust, SHA-256, SQLite, storage
+hardware or end-to-end execution. Progress assumes matching replay inputs,
+eventual working storage, finite crashes and a caller that eventually retries.
+One logical owner exclusively controls the roots, including aliases/native tools.
+A shared `FilesystemContext` coordinates same-process admission and quotas.
+Cross-process leases, fencing, HA and network-storage guarantees are absent.
+Limits include 10,000 operation records per scope, 10,000 traversed entries and
+depth 64. Process-kill tests establish application-crash behavior, not physical
+power-loss guarantees.

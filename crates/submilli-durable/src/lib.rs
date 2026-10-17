@@ -1,4 +1,4 @@
-//! Durable filesystem effects with replay-supplied inputs.
+//! Durable filesystem operations with replay-supplied inputs.
 //! Persistence is supplied by the embedding application.
 pub mod recovery;
 pub mod sealing;
@@ -18,9 +18,9 @@ pub(crate) fn checkpoint(_point: &str) {
     }
 }
 pub mod codec;
-pub mod effects;
 pub mod filesystems;
 pub mod journal;
+pub mod operations;
 pub mod state;
 
 pub mod record_codec;

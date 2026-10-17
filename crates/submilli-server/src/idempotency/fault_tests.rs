@@ -36,9 +36,6 @@ impl UnitOfWorkFactory for FaultFactory {
 }
 #[async_trait::async_trait]
 impl UnitOfWork for FaultUnit {
-    async fn session_has_retained_workspace(&mut self, session: &str) -> Result<bool, StoreError> {
-        self.inner.session_has_retained_workspace(session).await
-    }
     async fn get_session(&mut self, id: &str) -> Result<Option<Session>, StoreError> {
         self.inner.get_session(id).await
     }

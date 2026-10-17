@@ -1,32 +1,153 @@
-//! Logical file resources. Execution history owns read observations and the
-//! cursor checkpoint consumed by replay; this module owns the retained inode.
+//! Effect-aware logical resources. SQL positions, not native cursors, are authoritative.
+use super::backend::{backend, operation};
 use super::*;
-use crate::recovery::{ReaderPosition, RetainedReader};
-use std::io::{self, Seek, SeekFrom};
+use crate::state::Progress;
+use interpreter::runtime::filesystem::{
+    FileReader, FilesystemError as PortError, Invocation, ReadOutput, ReadPosition, ReaderOptions,
+    ResourceDescriptor, ResourceKind,
+};
+use interpreter::runtime::limits::TenantLimits;
 
-/// A native reader with a logical, serializable position. Dropping it releases
-/// native access, not the durable inode pin. Cleanup waits for all such access.
+/// ID-only handles are valid during replay. Open a native file only for a new
+/// backend call; dropping this object never retires its durable row.
 pub struct FilesystemReader {
-    reader: RetainedReader,
-    _access: tokio::sync::OwnedRwLockReadGuard<()>,
+    pub(super) filesystem: DurableFilesystem,
+    pub(super) resource: String,
+    pub(super) options: ReaderOptions,
+}
+#[async_trait::async_trait]
+impl FileReader for FilesystemReader {
+    fn descriptor(&self) -> Option<ResourceDescriptor> {
+        Some(ResourceDescriptor {
+            scope: self.filesystem.id.clone(),
+            id: self.resource.clone(),
+            kind: ResourceKind::Reader(self.options.clone()),
+        })
+    }
+    async fn next(
+        &mut self,
+        invocation: &Invocation,
+        limits: &TenantLimits,
+    ) -> Result<ReadOutput, PortError> {
+        let fs = self.filesystem.metered(invocation);
+        let effect = operation(invocation)?;
+        validate_id(effect).map_err(backend)?;
+        if effect == self.resource {
+            return Err(backend(RecoveryError::Conflict.into()));
+        }
+        let _gate = fs.context.filesystem_gate.lock().await;
+        let row = fs
+            .journal
+            .reader_record(&fs.id, &self.resource)
+            .await
+            .map_err(backend)?;
+        if row.options != self.options {
+            return Err(backend(RecoveryError::Conflict.into()));
+        }
+        let before = progress_start(&row.progress, effect, false).map_err(backend)?;
+        let initial = row
+            .position
+            .ok_or_else(|| backend(RecoveryError::Conflict.into()))?;
+        // Revalidate the path on every dispatched call, even in the same process.
+        // Native buffering cannot become an alternative progress authority.
+        let mut after = before.clone();
+        let output = if before.closed {
+            interpreter::runtime::default_filesystem::read_item(
+                &mut std::io::Cursor::new([]),
+                &self.options,
+                &mut after,
+                invocation,
+                limits,
+            )?
+        } else {
+            let mut native = fs
+                .workspace
+                .restore_reader(initial)
+                .map_err(|e| backend(e.into()))?;
+            interpreter::runtime::default_filesystem::read_item(
+                &mut native,
+                &self.options,
+                &mut after,
+                invocation,
+                limits,
+            )?
+        };
+        checkpoint("reader-read");
+        if let Some(work) = &invocation.work {
+            work.before_effect();
+        }
+        fs.journal
+            .reader_progress(
+                &fs.id,
+                &self.resource,
+                row.progress,
+                Progress {
+                    effect: effect.into(),
+                    close: false,
+                    before,
+                    after,
+                },
+            )
+            .await
+            .map_err(backend)?;
+        checkpoint("reader-progress");
+        Ok(output)
+    }
+    async fn close(&mut self, invocation: &Invocation) -> Result<(), PortError> {
+        let fs = self.filesystem.metered(invocation);
+        let effect = operation(invocation)?;
+        validate_id(effect).map_err(backend)?;
+        if effect == self.resource {
+            return Err(backend(RecoveryError::Conflict.into()));
+        }
+        let _gate = fs.context.filesystem_gate.lock().await;
+        let row = fs
+            .journal
+            .reader_record(&fs.id, &self.resource)
+            .await
+            .map_err(backend)?;
+        if row.options != self.options {
+            return Err(backend(RecoveryError::Conflict.into()));
+        }
+        let before = progress_start(&row.progress, effect, true).map_err(backend)?;
+        let after = ReadPosition {
+            closed: true,
+            ..before.clone()
+        };
+        if let Some(work) = &invocation.work {
+            work.before_effect();
+        }
+        fs.journal
+            .reader_progress(
+                &fs.id,
+                &self.resource,
+                row.progress,
+                Progress {
+                    effect: effect.into(),
+                    close: true,
+                    before,
+                    after,
+                },
+            )
+            .await
+            .map_err(backend)
+    }
 }
 
-impl FilesystemReader {
-    /// Save only at a host boundary, atomically with its recorded observation.
-    /// Buffered text adapters must first account for their unread buffer and
-    /// decoder flags. A bare descriptor position is not a text checkpoint.
-    pub fn position(&mut self) -> Result<ReaderPosition, FilesystemError> {
-        Ok(self.reader.position()?)
-    }
-}
-impl Read for FilesystemReader {
-    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        self.reader.read(bytes)
-    }
-}
-impl Seek for FilesystemReader {
-    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
-        self.reader.seek(position)
+pub(super) fn progress_start<T: Clone + Default>(
+    progress: &Option<Progress<T>>,
+    effect: &str,
+    close: bool,
+) -> Result<T, FilesystemError> {
+    match progress {
+        Some(prior) if prior.effect == effect => {
+            if prior.close != close {
+                return Err(RecoveryError::Conflict.into());
+            }
+            Ok(prior.before.clone())
+        }
+        Some(prior) => Ok(prior.after.clone()),
+        None => Ok(T::default()),
     }
 }
 
@@ -35,63 +156,45 @@ impl DurableFilesystem {
         &self,
         resource: &str,
         path: &str,
+        options: ReaderOptions,
     ) -> Result<FilesystemReader, FilesystemError> {
         validate_id(resource)?;
         Mutation::Remove { path: path.into() }.validate()?;
-        let gate = Arc::new(self.context.filesystem_gate.clone().lock_owned().await);
-        let initial = self.journal.reader(&self.id, resource, path).await?;
-        let opening = initial.is_none();
-        let access = self.context.filesystem_resources.clone().read_owned().await;
-        let workspace = self.workspace.clone();
-        let (id, path) = (resource.to_owned(), path.to_owned());
-        let opened = blocking(gate.clone(), move || {
-            let reader = match initial {
-                Some(position) => workspace.restore_reader(position)?,
-                None => workspace.open_reader(&id, &path)?,
-            };
-            Ok(FilesystemReader {
-                reader,
-                _access: access,
-            })
-        })
-        .await;
-        let mut reader = match opened {
-            Ok(reader) => reader,
-            Err(FilesystemError::Recovery(error)) if opening && preflight_refusal(&error) => {
-                self.journal
-                    .reject_reader(&self.id, resource, error.to_string())
-                    .await?;
-                return Err(FilesystemError::Rejected(error.to_string()));
-            }
-            Err(error) => return Err(error),
-        };
-        self.journal
-            .reader_opened(&self.id, resource, &reader.reader.position()?)
-            .await?;
-        Ok(reader)
-    }
-
-    pub async fn restore_reader(
-        &self,
-        position: ReaderPosition,
-    ) -> Result<FilesystemReader, FilesystemError> {
+        if matches!(options, ReaderOptions::Bytes { chunk_size: 0 }) {
+            return Err(RecoveryError::InvalidRecord.into());
+        }
         let gate = Arc::new(self.context.filesystem_gate.clone().lock_owned().await);
         let initial = self
             .journal
-            .reader_position(&self.id, position.resource())
+            .reader(&self.id, resource, path, &options)
             .await?;
-        if !initial.same_resource(&position) {
-            return Err(RecoveryError::Conflict.into());
-        }
-        let access = self.context.filesystem_resources.clone().read_owned().await;
-        let workspace = self.workspace.clone();
-        blocking(gate, move || {
-            Ok(FilesystemReader {
-                reader: workspace.restore_reader(position)?,
-                _access: access,
+        if initial.is_none() {
+            let workspace = self.workspace.clone();
+            let (id, path) = (resource.to_owned(), path.to_owned());
+            let opened = blocking(gate.clone(), move || {
+                workspace.open_reader(&id, &path)?.position()
             })
+            .await;
+            let position = match opened {
+                Ok(position) => position,
+                Err(FilesystemError::Recovery(error)) if preflight_refusal(&error) => {
+                    self.journal
+                        .reject_reader(&self.id, resource, error.to_string())
+                        .await?;
+                    return Err(FilesystemError::Rejected(error.to_string()));
+                }
+                Err(error) => return Err(error),
+            };
+            self.journal
+                .reader_opened(&self.id, resource, &position)
+                .await?;
+        }
+        checkpoint("reader-open");
+        Ok(FilesystemReader {
+            filesystem: self.clone(),
+            resource: resource.into(),
+            options,
         })
-        .await
     }
 
     /// Open one output-in-progress. Chunk receipts contain fingerprints only.
@@ -148,7 +251,9 @@ impl DurableFilesystem {
         }
         self.journal
             .writer_chunk(&self.id, resource, chunk, &content)
-            .await
+            .await?;
+        checkpoint("writer-chunk-receipt");
+        Ok(())
     }
 
     pub async fn close_writer(
@@ -201,9 +306,12 @@ impl DurableFilesystem {
             path: writer.path,
             content: input.content(),
         };
-        let result = self.execute_held(gate, effect, request, Some(input)).await;
+        let result = self
+            .execute_held(gate, effect, request, Some(input), Some(resource))
+            .await;
         if result.is_ok() || matches!(&result, Err(FilesystemError::Rejected(_))) {
             self.journal.writer_closed(&self.id, resource).await?;
+            checkpoint("writer-closed");
         }
         result
     }

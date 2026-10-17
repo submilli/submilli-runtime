@@ -3,7 +3,8 @@ use super::*;
 use crate::recovery::paths;
 use interpreter::runtime::filesystem::{
     DirectoryEntry, DirectoryReader, FileReader, FileWriter, Filesystem,
-    FilesystemError as PortError, FilesystemInfo, Invocation,
+    FilesystemError as PortError, FilesystemInfo, Invocation, ReaderOptions, ResourceDescriptor,
+    ResourceKind,
 };
 use interpreter::runtime::{fs, vfs::Placement};
 
@@ -28,12 +29,15 @@ impl Filesystem for DurableFilesystem {
                 .clone(),
         )
     }
-    async fn metadata(&self, path: &str, follow: bool) -> Result<cap_std::fs::Metadata, PortError> {
+    async fn metadata(
+        &self,
+        _invocation: &Invocation,
+        path: &str,
+        follow: bool,
+    ) -> Result<cap_std::fs::Metadata, PortError> {
         let vfs = self.workspace.vfs().clone();
         let path = path.to_owned();
-        let access = self.context.filesystem_resources.clone().read_owned().await;
         tokio::task::spawn_blocking(move || {
-            let _access = access;
             if follow {
                 paths::resolve_content(&vfs, vfs.cwd(), &path)?.metadata()
             } else {
@@ -47,15 +51,14 @@ impl Filesystem for DurableFilesystem {
     }
     async fn read(
         &self,
+        _invocation: &Invocation,
         path: &str,
         offset: u64,
         maximum_bytes: u64,
     ) -> Result<Vec<u8>, PortError> {
         let vfs = self.workspace.vfs().clone();
         let path = path.to_owned();
-        let access = self.context.filesystem_resources.clone().read_owned().await;
         tokio::task::spawn_blocking(move || {
-            let _access = access;
             let file = paths::resolve_content(&vfs, vfs.cwd(), &path)?.open()?;
             interpreter::runtime::filesystem::bounded_read(file, offset, maximum_bytes)
         })
@@ -104,7 +107,7 @@ impl Filesystem for DurableFilesystem {
         let id = operation(invocation)?;
         if recursive {
             return Err(PortError::Unsupported(
-                "recursive directory creation requires a prepared plan",
+                "recursive directory creation requires caller-orchestrated primitive operations",
             ));
         }
         filesystem
@@ -124,7 +127,7 @@ impl Filesystem for DurableFilesystem {
         let id = operation(invocation)?;
         if recursive {
             return Err(PortError::Unsupported(
-                "recursive removal requires a prepared plan",
+                "recursive removal requires caller-orchestrated primitive operations",
             ));
         }
         filesystem
@@ -165,17 +168,18 @@ impl Filesystem for DurableFilesystem {
         _: &mut dyn interpreter::runtime::filesystem::MutationBudget,
     ) -> Result<(), PortError> {
         Err(PortError::Unsupported(
-            "copy requires captured sources and a prepared plan",
+            "copy requires caller-supplied reads and writes",
         ))
     }
     async fn open_reader(
         &self,
         invocation: &Invocation,
         path: &str,
+        options: ReaderOptions,
     ) -> Result<Box<dyn FileReader>, PortError> {
         let filesystem = self.metered(invocation);
         Ok(Box::new(
-            DurableFilesystem::open_reader(&filesystem, operation(invocation)?, path)
+            DurableFilesystem::open_reader(&filesystem, operation(invocation)?, path, options)
                 .await
                 .map_err(backend)?,
         ))
@@ -185,23 +189,76 @@ impl Filesystem for DurableFilesystem {
         invocation: &Invocation,
         path: &str,
         recursive: bool,
+        limits: &interpreter::runtime::limits::TenantLimits,
     ) -> Result<Box<dyn DirectoryReader>, PortError> {
+        // Enumeration has a fixed 4 MiB encoded ceiling. Admit its worst-case
+        // working set before SQL decoding or native enumeration. The guard also
+        // covers codec/validation copies until the snapshot has been committed.
+        let memory = Arc::new(
+            interpreter::runtime::limits::HostBytes::new(
+                limits,
+                (crate::recovery::MAX_LISTING_BYTES as u64) * 8 + 8192,
+            )
+            .map_err(|error| PortError::Execution(error.into()))?,
+        );
         let filesystem = self.metered(invocation);
-        let snapshot = DurableFilesystem::open_directory(
-            &filesystem,
-            operation(invocation)?,
-            path,
-            recursive,
-            0,
-        )
+        let id = operation(invocation)?;
+        let resource = id.to_owned();
+        let path = path.to_owned();
+        finish_owned(async move {
+            let _memory = memory.clone();
+            filesystem
+                .open_directory_reserved(&resource, &path, recursive, 0, Some(memory))
+                .await
+                .map(|_| ())
+        })
         .await
         .map_err(backend)?;
-        if let Some(work) = &invocation.work {
-            work.charge_fuel(interpreter::runtime::fuel::sort_cost(
-                snapshot.remaining_entries() as u64,
-            ))?;
+        Ok(Box::new(DurableDirectory {
+            filesystem: self.clone(),
+            resource: id.into(),
+        }))
+    }
+    fn restore_reader(
+        &self,
+        descriptor: ResourceDescriptor,
+    ) -> Result<Box<dyn FileReader>, PortError> {
+        check_descriptor(self, &descriptor)?;
+        let ResourceKind::Reader(options) = descriptor.kind else {
+            return Err(backend(RecoveryError::Conflict.into()));
+        };
+        Ok(Box::new(FilesystemReader {
+            filesystem: self.clone(),
+            resource: descriptor.id,
+            options,
+        }))
+    }
+    fn restore_directory(
+        &self,
+        descriptor: ResourceDescriptor,
+    ) -> Result<Box<dyn DirectoryReader>, PortError> {
+        check_descriptor(self, &descriptor)?;
+        if descriptor.kind != ResourceKind::Directory {
+            return Err(backend(RecoveryError::Conflict.into()));
         }
-        Ok(Box::new(DurableDirectory(Some(snapshot.depth_first()))))
+        Ok(Box::new(DurableDirectory {
+            filesystem: self.clone(),
+            resource: descriptor.id,
+        }))
+    }
+    fn restore_writer(
+        &self,
+        descriptor: ResourceDescriptor,
+    ) -> Result<Box<dyn FileWriter>, PortError> {
+        check_descriptor(self, &descriptor)?;
+        if descriptor.kind != ResourceKind::Writer {
+            return Err(backend(RecoveryError::Conflict.into()));
+        }
+        Ok(Box::new(DurableWriter {
+            filesystem: self.clone(),
+            resource: descriptor.id,
+            closed: false,
+        }))
     }
     async fn open_writer(
         &self,
@@ -226,15 +283,19 @@ struct DurableWriter {
 }
 #[async_trait::async_trait]
 impl FileWriter for DurableWriter {
+    fn descriptor(&self) -> Option<ResourceDescriptor> {
+        Some(ResourceDescriptor {
+            scope: self.filesystem.id.clone(),
+            id: self.resource.clone(),
+            kind: ResourceKind::Writer,
+        })
+    }
     fn is_closed(&self) -> bool {
         self.closed
     }
     async fn write(&mut self, invocation: &Invocation, bytes: Vec<u8>) -> Result<(), PortError> {
         let id = operation(invocation)?;
         let filesystem = self.filesystem.metered(invocation);
-        if self.closed {
-            return Err(PortError::Unsupported("writer is closed"));
-        }
         filesystem
             .write_chunk(&self.resource, id, bytes)
             .await
@@ -243,53 +304,80 @@ impl FileWriter for DurableWriter {
     async fn close(&mut self, invocation: &Invocation) -> Result<(), PortError> {
         let id = operation(invocation)?;
         let filesystem = self.filesystem.metered(invocation);
-        filesystem
-            .close_writer(&self.resource, id)
+        let result = filesystem.close_writer(&self.resource, id).await;
+        // SQL remains authoritative after either a successful close or a saved
+        // refusal, and after an acknowledgement is lost.
+        self.closed = filesystem
+            .journal
+            .writer_is_closed(&filesystem.id, &self.resource)
             .await
             .map_err(backend)?;
-        self.closed = true;
-        Ok(())
+        result.map(|_| ()).map_err(backend)
     }
 }
-fn operation(invocation: &Invocation) -> Result<&str, PortError> {
+pub(super) fn operation(invocation: &Invocation) -> Result<&str, PortError> {
     invocation.operation.as_deref().ok_or_else(|| {
         PortError::Backend(Box::new(FilesystemError::Configuration(
             "durable filesystem operation requires a stable operation identity",
         )))
     })
 }
-fn backend(error: FilesystemError) -> PortError {
+pub(super) fn backend(error: FilesystemError) -> PortError {
     match error {
         FilesystemError::Rejected(reason) => PortError::Rejected(reason),
+        FilesystemError::Memory(error) => PortError::Execution(error.into()),
         FilesystemError::Recovery(RecoveryError::Fuel(error)) => PortError::Exhausted(error),
         other => PortError::Backend(Box::new(other)),
     }
 }
 
-struct DurableDirectory(Option<DirectorySnapshot>);
+fn check_descriptor(
+    filesystem: &DurableFilesystem,
+    descriptor: &ResourceDescriptor,
+) -> Result<(), PortError> {
+    validate_id(&descriptor.id).map_err(backend)?;
+    if descriptor.scope != filesystem.id {
+        return Err(backend(RecoveryError::Conflict.into()));
+    }
+    Ok(())
+}
+struct DurableDirectory {
+    filesystem: DurableFilesystem,
+    resource: String,
+}
+#[async_trait::async_trait]
 impl DirectoryReader for DurableDirectory {
-    fn next_entry(&mut self) -> Option<DirectoryEntry> {
-        self.0.as_mut()?.next().map(|entry| DirectoryEntry {
-            name: entry.path.rsplit('/').next().unwrap_or_default().into(),
-            path: entry.path,
-            kind: if entry.directory {
-                "directory"
-            } else if entry.symlink {
-                "symlink"
-            } else {
-                "file"
-            },
-            bytes: if entry.directory || entry.symlink {
-                0
-            } else {
-                entry.bytes
-            },
+    fn descriptor(&self) -> Option<ResourceDescriptor> {
+        Some(ResourceDescriptor {
+            scope: self.filesystem.id.clone(),
+            id: self.resource.clone(),
+            kind: ResourceKind::Directory,
         })
     }
-    fn retained_bytes(&self) -> u64 {
-        self.0.as_ref().map_or(0, DirectorySnapshot::retained_bytes)
+    async fn next_entry(
+        &mut self,
+        invocation: &Invocation,
+        limits: &interpreter::runtime::limits::TenantLimits,
+    ) -> Result<Option<DirectoryEntry>, PortError> {
+        self.filesystem
+            .metered(invocation)
+            .listing_step(&self.resource, operation(invocation)?, false, limits)
+            .await
+            .map_err(backend)
     }
-    fn close(&mut self) {
-        self.0 = None;
+    fn retained_bytes(&self) -> u64 {
+        0
+    }
+    async fn close(
+        &mut self,
+        invocation: &Invocation,
+        limits: &interpreter::runtime::limits::TenantLimits,
+    ) -> Result<(), PortError> {
+        self.filesystem
+            .metered(invocation)
+            .listing_step(&self.resource, operation(invocation)?, true, limits)
+            .await
+            .map(|_| ())
+            .map_err(backend)
     }
 }

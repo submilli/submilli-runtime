@@ -2,11 +2,10 @@
 //!
 //! The caller persists a request, then the prepared intent, before calling
 //! `apply`. It persists the returned outcome before admitting another mutation.
-//! Completed effects are answered by that journal, never by calling `apply`
-//! again. One logical run exclusively owns every backing volume; this module
+//! Completed operations are answered by that journal, never by calling `apply`
+//! again. One logical scope exclusively owns every backing volume; this module
 //! does not supply cross-process leases or fencing.
 
-mod layout;
 mod listing;
 mod mutation;
 pub(crate) mod paths;
@@ -14,7 +13,6 @@ mod plan;
 mod resources;
 mod writer;
 
-pub use layout::{EphemeralReservation, WorkspaceLayout};
 pub use listing::{DirectoryEntry, MAX_LISTING_BYTES};
 pub use plan::{Content, Intent, Mutation, Outcome, VolumeIdentity, WorkspaceIdentity};
 pub use resources::{ReaderPosition, RetainedReader};
@@ -29,8 +27,6 @@ use std::sync::Arc;
 /// Private artifacts are hidden by this backend. Git's stage namespace also
 /// prevents checkout/publication from installing this name.
 pub(crate) const PRIVATE: &str = ".git-submilli-recovery";
-/// Retained by SQL run ownership, never by the scratch boot sweep.
-pub const RETAINED_PREFIX: &str = "submilli-vfs-run-";
 const MAX_ENTRIES: usize = 10_000;
 const MAX_DEPTH: usize = 64;
 
@@ -81,28 +77,8 @@ struct Volume {
 }
 
 impl Workspace {
-    /// The run reservation must already be committed. A restart with a stored
-    /// identity uses `create=false` so a lost volume is never replaced by an
-    /// empty directory.
-    pub fn retained_ephemeral(
-        parent: &std::path::Path,
-        id: &str,
-        create: bool,
-    ) -> Result<Vfs, RecoveryError> {
-        paths::validate_id(id)?;
-        let name = format!("{}{id}", crate::recovery::RETAINED_PREFIX);
-        let root = Dir::open_ambient_dir(parent, cap_std::ambient_authority())?;
-        let dir = paths::private_dir(&root, &name, create)?;
-        paths::sync(&dir)?;
-        Ok(Vfs::external_with_mode(
-            parent.join(name),
-            interpreter::runtime::vfs::VfsMode::Ephemeral,
-        )?)
-    }
-
-    /// Open retained roots and create private recovery directories. The caller
-    /// must persist `identity()` before any public filesystem mutation. On
-    /// restart pass that identity to `reopen`, never adopt a replacement root.
+    /// Open caller-owned roots and create private recovery directories.
+    /// The journal binds requests to these roots before any public mutation.
     pub fn create(vfs: Vfs, id: &str) -> Result<Self, RecoveryError> {
         paths::validate_id(id)?;
         if vfs.dir().is_none() {
@@ -203,7 +179,7 @@ impl Workspace {
         result
     }
 
-    /// Remove private artifacts only after the logical run is terminal and all
+    /// Remove private artifacts only after the logical scope is terminal and all
     /// of its workers and resources have drained. A failed cleanup
     /// is retryable; journal tombstones must outlive this operation.
     pub fn release_effect(&self, effect: &str) -> Result<(), RecoveryError> {

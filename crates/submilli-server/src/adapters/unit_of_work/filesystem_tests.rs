@@ -1,10 +1,10 @@
 use crate::{adapters::unit_of_work::durable::units, database::ServerDatabase};
 use std::sync::Arc;
-use submilli_durable::{UnitFactory, effects::*, unit_of_work::StoreError};
+use submilli_durable::{UnitFactory, operations::*, unit_of_work::StoreError};
 use submilli_shared::secret_store::SecretCipher;
-fn key(effect: &str) -> EffectKey<'_> {
-    EffectKey {
-        run: "run",
+fn key(effect: &str) -> OperationKey<'_> {
+    OperationKey {
+        scope: "scope",
         effect,
         operation: "test.operation",
         version: 1,
@@ -12,15 +12,11 @@ fn key(effect: &str) -> EffectKey<'_> {
 }
 async fn database(path: &std::path::Path) -> (Arc<ServerDatabase>, UnitFactory) {
     let db = Arc::new(ServerDatabase::open(path).await.unwrap());
-    db.transaction(|connection| Box::pin(async move {
-        sqlx::query("INSERT OR IGNORE INTO runs(run_id,reservation_id,session_id,fingerprint,owner_generation,admission_order,created_at_unix_ms,state) VALUES('run','reservation','session','request','startup',1,0,'running')").execute(connection).await?;
-        Ok(())
-    })).await.unwrap();
     let factory = units(db.clone(), Arc::new(SecretCipher::from_key([7; 32])));
     (db, factory)
 }
 #[tokio::test]
-async fn shared_records_survive_reopen_and_lost_ack_without_a_workspace() {
+async fn filesystem_records_survive_reopen_without_run_or_workspace_tables() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("db");
     let (db, factory) = database(&path).await;
@@ -61,15 +57,15 @@ async fn shared_records_survive_reopen_and_lost_ack_without_a_workspace() {
             .await
             .is_err()
     );
-    assert_eq!(unit.effect_count("run").await.unwrap(), 1);
+    assert_eq!(unit.operation_count("scope").await.unwrap(), 1);
 }
 #[tokio::test]
-async fn identity_and_pending_exclusion_are_shared_across_operation_adapters() {
+async fn filesystem_operation_identity_and_pending_exclusion() {
     let root = tempfile::tempdir().unwrap();
     let (_db, factory) = database(&root.path().join("db")).await;
     let mut unit = factory().await.unwrap();
     admit(unit.as_mut(), &key("one"), b"request").await.unwrap();
-    let other = EffectKey {
+    let other = OperationKey {
         operation: "other.operation",
         ..key("one")
     };
@@ -77,7 +73,7 @@ async fn identity_and_pending_exclusion_are_shared_across_operation_adapters() {
     assert!(
         load(
             unit.as_mut(),
-            &EffectKey {
+            &OperationKey {
                 version: 2,
                 ..key("one")
             }
@@ -86,7 +82,7 @@ async fn identity_and_pending_exclusion_are_shared_across_operation_adapters() {
         .is_err()
     );
     assert!(admit(unit.as_mut(), &key("one"), b"changed").await.is_err());
-    let other_slot = EffectKey {
+    let other_slot = OperationKey {
         operation: "other.operation",
         ..key("two")
     };
@@ -129,7 +125,7 @@ async fn dropped_unit_discards_effect_and_pending_slot() {
     drop(unit);
     let mut unit = factory().await.unwrap();
     assert!(load(unit.as_mut(), &key("one")).await.unwrap().is_none());
-    assert!(unit.pending_effect("run").await.unwrap().is_none());
+    assert!(unit.pending_operation("scope").await.unwrap().is_none());
     admit(unit.as_mut(), &key("two"), b"request").await.unwrap();
     unit.commit().await.unwrap();
 }
@@ -164,7 +160,7 @@ async fn records_are_bounded_and_sealed_to_field_row_operation_and_version() {
         .read(|connection| {
             Box::pin(async move {
                 Ok(sqlx::query_as(
-                    "SELECT recovery_payload,outcome FROM durable_effects WHERE effect_id='one'",
+                    "SELECT recovery_payload,outcome FROM durable_filesystem_operations WHERE operation_id='one'",
                 )
                 .fetch_one(connection)
                 .await?)
@@ -173,11 +169,11 @@ async fn records_are_bounded_and_sealed_to_field_row_operation_and_version() {
         .await
         .unwrap();
     for attack in [
-        "UPDATE durable_effects SET operation='other'",
-        "UPDATE durable_effects SET version=2",
-        "UPDATE durable_effects SET effect_id='two'",
-        "UPDATE durable_effects SET recovery_payload=request",
-        "UPDATE durable_effects SET outcome=request",
+        "UPDATE durable_filesystem_operations SET operation='other'",
+        "UPDATE durable_filesystem_operations SET version=2",
+        "UPDATE durable_filesystem_operations SET operation_id='two'",
+        "UPDATE durable_filesystem_operations SET recovery_payload=request",
+        "UPDATE durable_filesystem_operations SET outcome=request",
     ] {
         let changed_row = attack_is_row(attack);
         let attack = attack.to_owned();
@@ -193,31 +189,31 @@ async fn records_are_bounded_and_sealed_to_field_row_operation_and_version() {
         .unwrap();
         let mut unit = factory().await.unwrap();
         assert!(
-            unit.get_effect("run", if changed_row { "two" } else { "one" })
+            unit.get_operation("scope", if changed_row { "two" } else { "one" })
                 .await
                 .is_err()
         );
         drop(unit);
         let original = original.clone();
         db.transaction(move |connection| Box::pin(async move {
-            sqlx::query("UPDATE durable_effects SET operation='test.operation',version=1,effect_id='one',recovery_payload=?,outcome=?")
+            sqlx::query("UPDATE durable_filesystem_operations SET operation='test.operation',version=1,operation_id='one',recovery_payload=?,outcome=?")
                 .bind(original.0).bind(original.1).execute(connection).await?;
             Ok(())
         })).await.unwrap();
     }
 }
 fn attack_is_row(attack: &str) -> bool {
-    attack.contains("effect_id")
+    attack.contains("operation_id")
 }
 #[tokio::test]
-async fn direct_persistence_refuses_rewriting_committed_effect_identity() {
+async fn direct_persistence_refuses_rewriting_committed_operation_identity() {
     let root = tempfile::tempdir().unwrap();
     let (_db, factory) = database(&root.path().join("db")).await;
     let mut unit = factory().await.unwrap();
     let mut record = admit(unit.as_mut(), &key("one"), b"request").await.unwrap();
     record.request = b"changed".to_vec();
     assert!(matches!(
-        unit.save_effect(record).await,
+        unit.save_operation(record).await,
         Err(StoreError::Io(_) | StoreError::Database(_) | StoreError::Conflict)
     ));
 }

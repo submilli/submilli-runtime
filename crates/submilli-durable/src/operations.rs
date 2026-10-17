@@ -1,9 +1,9 @@
-//! Shared effect lifecycle. Admission records metadata and argument fingerprints, not input bytes.
+//! Filesystem-only mutation receipts. Admission records fingerprints, not input bytes.
 pub use crate::codec::MAX_RECORD;
-use crate::{UnitOfWork, state::Effect, unit_of_work::StoreError};
-pub const MAX_EFFECTS: u64 = 10_000;
-pub struct EffectKey<'a> {
-    pub run: &'a str,
+use crate::{UnitOfWork, state::Operation, unit_of_work::StoreError};
+pub const MAX_OPERATIONS: u64 = 10_000;
+pub struct OperationKey<'a> {
+    pub scope: &'a str,
     pub effect: &'a str,
     pub operation: &'a str,
     pub version: u32,
@@ -11,9 +11,9 @@ pub struct EffectKey<'a> {
 
 pub async fn load(
     unit: &mut dyn UnitOfWork,
-    key: &EffectKey<'_>,
-) -> Result<Option<Effect>, StoreError> {
-    let record = unit.get_effect(key.run, key.effect).await?;
+    key: &OperationKey<'_>,
+) -> Result<Option<Operation>, StoreError> {
+    let record = unit.get_operation(key.scope, key.effect).await?;
     if record
         .as_ref()
         .is_some_and(|r| r.operation != key.operation || r.version != key.version)
@@ -24,9 +24,9 @@ pub async fn load(
 }
 pub async fn admit(
     unit: &mut dyn UnitOfWork,
-    key: &EffectKey<'_>,
+    key: &OperationKey<'_>,
     request: &[u8],
-) -> Result<Effect, StoreError> {
+) -> Result<Operation, StoreError> {
     if let Some(prior) = load(unit, key).await? {
         return if prior.request == request {
             Ok(prior)
@@ -34,14 +34,14 @@ pub async fn admit(
             Err(StoreError::Conflict)
         };
     }
-    if unit.effect_count(key.run).await? >= MAX_EFFECTS
-        || unit.pending_effect(key.run).await?.is_some()
+    if unit.operation_count(key.scope).await? >= MAX_OPERATIONS
+        || unit.pending_operation(key.scope).await?.is_some()
     {
         return Err(StoreError::Conflict);
     }
-    let record = Effect {
+    let record = Operation {
         id: key.effect.into(),
-        run: key.run.into(),
+        scope: key.scope.into(),
         operation: key.operation.into(),
         version: key.version,
         request: request.into(),
@@ -50,12 +50,12 @@ pub async fn admit(
         rejected: false,
     };
     record.validate_successor(None)?;
-    unit.save_effect(record.clone()).await?;
+    unit.save_operation(record.clone()).await?;
     Ok(record)
 }
 pub async fn prepare(
     unit: &mut dyn UnitOfWork,
-    key: &EffectKey<'_>,
+    key: &OperationKey<'_>,
     payload: &[u8],
 ) -> Result<(), StoreError> {
     let mut record = load(unit, key).await?.ok_or(StoreError::Conflict)?;
@@ -65,11 +65,11 @@ pub async fn prepare(
     let prior = record.clone();
     record.recovery_payload = Some(payload.into());
     record.validate_successor(Some(&prior))?;
-    unit.save_effect(record).await
+    unit.save_operation(record).await
 }
 pub async fn complete(
     unit: &mut dyn UnitOfWork,
-    key: &EffectKey<'_>,
+    key: &OperationKey<'_>,
     outcome: &[u8],
     rejected: bool,
 ) -> Result<(), StoreError> {
@@ -78,5 +78,5 @@ pub async fn complete(
     record.outcome = Some(outcome.into());
     record.rejected = rejected;
     record.validate_successor(Some(&prior))?;
-    unit.save_effect(record).await
+    unit.save_operation(record).await
 }

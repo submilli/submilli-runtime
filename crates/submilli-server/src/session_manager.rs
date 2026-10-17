@@ -749,14 +749,6 @@ impl SessionManager {
         // idempotency entries are purged. One still going after the drain
         // writes no outcome back when it ends (`RunEntry::cancel_unrecorded`).
         self.runs.end_session(id, RUN_DRAIN).await;
-        {
-            let mut unit = self.unit_of_work.begin().await?;
-            if unit.session_has_retained_workspace(id).await? {
-                // Keep the cleanup obligation until the terminal run's own
-                // recovery artifacts and workers have been drained and retired.
-                return Ok(());
-            }
-        }
         self.resources.evict(id);
         self.last_runs.remove_session_files(id).await;
         let Some(task) = self.store.cleanup_task(id).await? else {
@@ -994,10 +986,10 @@ impl EphemeralRoot {
                     break;
                 }
             };
-            let is_scratch = entry.file_name().to_str().is_some_and(|name| {
-                name.starts_with(interpreter::runtime::vfs::TEMPDIR_PREFIX)
-                    && !name.starts_with(submilli_durable::recovery::RETAINED_PREFIX)
-            });
+            let is_scratch = entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(interpreter::runtime::vfs::TEMPDIR_PREFIX));
             if !is_scratch {
                 continue;
             }
@@ -2922,58 +2914,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retained_workspace_prevents_boot_and_idle_session_cleanup() {
-        let store_dir = tempfile::tempdir().unwrap();
-        let root = tempfile::tempdir().unwrap();
-        let store = file_store(store_dir.path());
-        store
-            .put(SessionRecord {
-                session_id: "retained".into(),
-                blueprint_name: "p".into(),
-                idle_timeout: TINY,
-                last_activity: UNIX_EPOCH,
-                root_vfs_type: crate::session_store::RootVfsType::PerSession,
-                ..SessionRecord::default()
-            })
-            .await
-            .unwrap();
-        let manager = SessionManager::new(
-            &test_root(root.path()),
-            Arc::default(),
-            no_http(),
-            store,
-            CapabilitySettings::default(),
-        );
-        let directory = root.path().join("sessions/retained");
-        std::fs::create_dir_all(&directory).unwrap();
-        std::fs::write(directory.join("file"), b"retained").unwrap();
-        manager.database.transaction(|connection| Box::pin(async move {
-            sqlx::query("INSERT INTO runs(run_id,reservation_id,session_id,fingerprint,owner_generation,admission_order,created_at_unix_ms,state) VALUES('retained-run','retained-run','retained','request','startup',1,0,'running')").execute(&mut *connection).await?;
-            sqlx::query("INSERT INTO durable_workspaces(workspace_id,run_id,session_id,owner,state) VALUES('retained-workspace','retained-run','retained','owner','preparing')").execute(connection).await?;
-            Ok(())
-        })).await.unwrap();
-        manager.boot().await.unwrap();
-        assert_eq!(
-            manager
-                .store
-                .load("retained")
-                .await
-                .unwrap()
-                .unwrap()
-                .status,
-            SessionStatus::Active
-        );
-        assert_eq!(manager.reap_now().await.unwrap(), 0);
-        assert!(directory.join("file").exists());
-        manager.database.transaction(|connection| Box::pin(async move {
-            sqlx::query("UPDATE durable_workspaces SET state='gone' WHERE workspace_id='retained-workspace'").execute(connection).await?;
-            Ok(())
-        })).await.unwrap();
-        assert_eq!(manager.reap_now().await.unwrap(), 1);
-        assert!(!directory.exists());
-    }
-
-    #[tokio::test]
     async fn boot_removes_leftover_scratch_and_nothing_else() {
         let root = tempfile::tempdir().unwrap();
         let ephemeral = root.path().join("ephemeral");
@@ -2985,12 +2925,6 @@ mod tests {
         std::fs::write(leftover.join("deep/a.txt"), b"x").unwrap();
         let foreign = ephemeral.join("not-scratch");
         std::fs::create_dir(&foreign).unwrap();
-        let retained = ephemeral.join(format!(
-            "{}logical-run",
-            submilli_durable::recovery::RETAINED_PREFIX
-        ));
-        std::fs::create_dir(&retained).unwrap();
-        std::fs::write(retained.join("kept"), b"durable").unwrap();
         let stray_file =
             ephemeral.join(format!("{}file", interpreter::runtime::vfs::TEMPDIR_PREFIX));
         std::fs::write(&stray_file, b"x").unwrap();
@@ -3009,7 +2943,6 @@ mod tests {
         assert!(!leftover.exists());
         assert!(!stray_file.exists());
         assert!(foreign.exists());
-        assert!(retained.join("kept").exists());
         #[cfg(unix)]
         {
             assert!(std::fs::symlink_metadata(&link).is_err());
