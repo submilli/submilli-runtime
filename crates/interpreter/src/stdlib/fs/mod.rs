@@ -1572,9 +1572,7 @@ fn begin_invocation(
     caller: &mut Caller<'_, StoreData>,
 ) -> wasmtime::Result<crate::runtime::filesystem::Invocation> {
     let mut invocation = caller.data().filesystem_invocation.clone();
-    let remaining = caller
-        .get_fuel()?
-        .saturating_sub(caller.data().host_fuel_pending);
+    let remaining = fuel::remaining_fuel(&mut *caller)?;
     invocation.work = Some(std::sync::Arc::new(crate::runtime::fuel::WorkBudget::new(
         remaining,
     )));
@@ -1585,7 +1583,7 @@ fn settle_invocation(
     invocation: &crate::runtime::filesystem::Invocation,
 ) -> wasmtime::Result<()> {
     if let Some(work) = &invocation.work {
-        fuel::settle_host_fuel(caller, work.spent())?;
+        work.settle(caller)?;
     }
     Ok(())
 }

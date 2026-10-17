@@ -1589,6 +1589,8 @@ Every function calls `invoke` (`stdlib/git/mod.rs:369`). Three phases:
 2. **Blocking pool** (`worker::run`, `stdlib/git/worker.rs:19`), no access to the store. All real work.
 3. **Store thread, after the worker returns.** `encode_result` (`:503`): `Uint8Array` copy, string copy, or `serde_json::to_string` + `value::deserialize`.
 
+Git and durable filesystem workers share `fuel::WorkBudget` for the remaining-fuel ceiling, admission, effect transition, cooperative cancellation of reported work, and final settlement. `fuel::remaining_fuel` subtracts pending host charges before dispatch. Git retains category counters and records only the change in each category's cumulative cost, preserving rounding across small chunks; its algorithm charges use the same budget. The default filesystem continues charging its caller directly. Cost formulas and effect boundaries are unchanged.
+
 SUB-1292 algorithm admission shares the worker's existing meter. Before an externally visible creation, remote request or publication, it switches to settlement: later work cannot replace an effect's outcome with a fuel refusal. After the blocking worker drains, the combined meter settles on both success and failure; result and error conversion also run within settlement scope.
 
 **Index read**, when an operation reads it (`Snapshot::index`): `SYSCALL(2) + IO(i) + HASH(i) + PARSE(i)`, `i` = index bytes.
