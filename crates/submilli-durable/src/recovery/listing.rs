@@ -89,7 +89,7 @@ impl Workspace {
         if let Some(work) = work {
             work.charge_fuel(fuel::sort_cost(entries.len() as u64))?;
         }
-        entries.sort_by(|left, right| left.path.cmp(&right.path));
+        entries.sort_by(|left, right| left.path.split('/').cmp(right.path.split('/')));
         Ok(entries)
     }
 }

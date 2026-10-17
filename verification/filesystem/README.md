@@ -1,7 +1,12 @@
 # Mutable filesystem recovery
 
-This directory contains bounded append, namespace, directory, reader, writer and
-compound-operation models. The filesystem has no durable-object dependency;
+Recovery actions in these models represent a caller retrying the same operation
+after a crash. They do not model a startup scanner or autonomous recovery worker.
+Liveness assumes the caller eventually retries; this PR provides idempotent
+filesystem operations, not execution scheduling or program resumption.
+
+This directory contains bounded append, namespace, directory, reader, listing, writer and
+caller-sequence models. The filesystem has no durable-object dependency;
 input payloads are supplied by execution replay, while the filesystem retains
 only its own mutation evidence. See [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
@@ -101,5 +106,5 @@ mechanisms are not established by this finite model.
 
 The implementation lives in `crates/submilli-durable/src/recovery/`, `filesystems/` and `journal/`. The server implements the durable
 unit of work and maps records to SQLite. The [unit-of-work model](../unit-of-work/README.md)
-checks the atomic admission-and-retention assumption at this boundary. Existing
-protocol actions, record versions and encryption associated data are unchanged.
+checks the atomic admission-and-retention assumption at this boundary. The primitive protocols remain unchanged; the journal now uses filesystem-owned
+rows and authenticates their scope and configuration binding.

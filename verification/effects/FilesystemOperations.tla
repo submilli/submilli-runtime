@@ -1,4 +1,4 @@
-------------------------- MODULE SharedEffects -------------------------
+------------------------- MODULE FilesystemOperations -------------------------
 EXTENDS Naturals, FiniteSets
 CONSTANTS Fault, Witness
 VARIABLES rows, first, prepared, completed, online, crashes, acknowledged, lost, witnessed

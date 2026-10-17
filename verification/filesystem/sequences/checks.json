@@ -3,12 +3,10 @@
   "constants": {
     "MaxCrashes": 1,
     "Fault": "none",
-    "Witness": "prefix",
-    "Completion": "prefix"
+    "Witness": "prefix"
   },
   "invariants": [
     "TypeOK",
-    "ImmutablePlan",
     "DurablePrefix",
     "Evidence",
     "Completed",
@@ -27,32 +25,6 @@
       "properties": [
         "Progress"
       ]
-    },
-    {
-      "name": "git-publication-safety",
-      "kind": "safety",
-      "constants": {
-        "Completion": "publication"
-      }
-    },
-    {
-      "name": "git-publication-progress",
-      "kind": "liveness",
-      "specification": "LiveSpec",
-      "properties": [
-        "Progress"
-      ],
-      "constants": {
-        "Completion": "publication"
-      }
-    },
-    {
-      "name": "negative-fresh-plan",
-      "kind": "negative",
-      "invariant": "ImmutablePlan",
-      "constants": {
-        "Fault": "fresh-plan"
-      }
     },
     {
       "name": "negative-skip-receipt",
@@ -92,6 +64,14 @@
       "invariant": "NeverWitness",
       "constants": {
         "Witness": "failure"
+      }
+    },
+    {
+      "name": "witness-completion-gap",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "gap"
       }
     }
   ]

@@ -176,7 +176,7 @@ impl Workspace {
         let destination = self.entry(guest, false)?;
         if destination.mount != intent.source.mount {
             return Err(RecoveryError::Unsupported(
-                "cross-volume move requires a compound plan",
+                "cross-volume move requires caller-orchestrated copy and remove",
             ));
         }
         if destination == intent.source {

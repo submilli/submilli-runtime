@@ -1,4 +1,4 @@
-//! Server composition for durable workspace storage.
+//! Server composition for the idempotent filesystem journal.
 use crate::database::ServerDatabase;
 use interpreter::runtime::Vfs;
 use std::sync::Arc;
@@ -19,70 +19,19 @@ impl std::ops::Deref for DurableFilesystem {
 impl DurableFilesystem {
     pub async fn open(
         vfs: Vfs,
-        run: &str,
-        owner: &str,
+        scope: &str,
         database: Arc<ServerDatabase>,
         context: FilesystemContext,
     ) -> Result<Self, FilesystemError> {
         let units = context.units(database);
         submilli_durable::filesystems::DurableFilesystem::open(
             vfs,
-            run,
-            owner,
+            scope,
             units,
             context.inner.clone(),
         )
         .await
         .map(Self)
-    }
-    pub async fn retained_ephemeral(
-        parent: &std::path::Path,
-        run: &str,
-        owner: &str,
-        database: Arc<ServerDatabase>,
-        context: FilesystemContext,
-    ) -> Result<Self, FilesystemError> {
-        let units = context.units(database);
-        submilli_durable::filesystems::DurableFilesystem::retained_ephemeral(
-            parent,
-            run,
-            owner,
-            units,
-            context.inner.clone(),
-        )
-        .await
-        .map(Self)
-    }
-    pub async fn resume(
-        workspace: &str,
-        owner: &str,
-        database: Arc<ServerDatabase>,
-        context: FilesystemContext,
-    ) -> Result<Self, FilesystemError> {
-        let units = context.units(database);
-        submilli_durable::filesystems::DurableFilesystem::resume(
-            workspace,
-            owner,
-            units,
-            context.inner.clone(),
-        )
-        .await
-        .map(Self)
-    }
-    pub async fn recover_cleanup(
-        workspace: &str,
-        owner: &str,
-        database: Arc<ServerDatabase>,
-        context: FilesystemContext,
-    ) -> Result<(), FilesystemError> {
-        let units = context.units(database);
-        submilli_durable::filesystems::DurableFilesystem::recover_cleanup(
-            workspace,
-            owner,
-            units,
-            context.inner.clone(),
-        )
-        .await
     }
 }
 #[cfg(test)]
@@ -96,13 +45,11 @@ pub struct FilesystemContext {
     cipher: Arc<SecretCipher>,
 }
 impl FilesystemContext {
-    pub async fn open(
-        database: Arc<ServerDatabase>,
-        cipher: Arc<SecretCipher>,
-    ) -> Result<Self, FilesystemError> {
-        let units = crate::adapters::unit_of_work::durable::units(database, cipher.clone());
-        let inner = submilli_durable::filesystems::FilesystemContext::open(units).await?;
-        Ok(Self { inner, cipher })
+    pub fn new(cipher: Arc<SecretCipher>) -> Self {
+        Self {
+            inner: Default::default(),
+            cipher,
+        }
     }
     fn units(&self, database: Arc<ServerDatabase>) -> submilli_durable::UnitFactory {
         crate::adapters::unit_of_work::durable::units(database, self.cipher.clone())
@@ -110,8 +57,5 @@ impl FilesystemContext {
     #[cfg(test)]
     fn test_gate(&self) -> &Arc<tokio::sync::Mutex<()>> {
         self.inner.test_gate()
-    }
-    pub fn store_identity(&self) -> &str {
-        self.inner.store_identity()
     }
 }

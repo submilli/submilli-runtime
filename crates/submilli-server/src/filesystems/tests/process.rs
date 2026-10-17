@@ -23,10 +23,7 @@ pub(crate) fn checkpoint(point: &str) {
 
 async fn open(root: &Path) -> (Arc<ServerDatabase>, FilesystemContext) {
     let database = Arc::new(ServerDatabase::open(&root.join("state.db")).await.unwrap());
-    let context =
-        FilesystemContext::open(database.clone(), Arc::new(SecretCipher::from_key([7; 32])))
-            .await
-            .unwrap();
+    let context = FilesystemContext::new(Arc::new(SecretCipher::from_key([7; 32])));
     (database, context)
 }
 
@@ -38,21 +35,62 @@ async fn crash_child() {
     };
     let root = PathBuf::from(root);
     let (database, context) = open(&root).await;
-    database.transaction(|connection| Box::pin(async move {
-        sqlx::query("INSERT INTO runs(run_id,reservation_id,session_id,fingerprint,owner_generation,admission_order,created_at_unix_ms,state) VALUES(?,?,'session','request','startup',1,0,'running')")
-            .bind(RUN).bind(RUN).execute(connection).await?;
-        Ok(())
-    })).await.unwrap();
-    let filesystem = DurableFilesystem::retained_ephemeral(
-        &root.join("ephemeral"),
+    let filesystem = DurableFilesystem::open(
+        Vfs::external(root.join("workspace")).unwrap(),
         RUN,
-        "owner",
-        database.clone(),
-        context.clone(),
+        database,
+        context,
     )
     .await
     .unwrap();
-    if std::env::var("SUBMILLI_FILESYSTEM_CRASH_KIND").as_deref() == Ok("writer") {
+    let kind = std::env::var("SUBMILLI_FILESYSTEM_CRASH_KIND").unwrap_or_default();
+    if kind == "reader" {
+        use interpreter::runtime::filesystem::FileReader;
+        std::fs::write(filesystem.vfs().root().join("file"), b"abcdef").unwrap();
+        let mut reader = filesystem
+            .open_reader(RUN, "/file", byte_options())
+            .await
+            .unwrap();
+        let invocation = interpreter::runtime::filesystem::Invocation {
+            operation: Some(EFFECT.to_owned().into()),
+            work: None,
+        };
+        reader
+            .next(
+                &invocation,
+                &interpreter::runtime::limits::TenantLimits::new(1 << 20),
+            )
+            .await
+            .unwrap();
+    } else if kind == "listing" {
+        use interpreter::runtime::filesystem::Filesystem;
+        std::fs::write(filesystem.vfs().root().join("a"), b"a").unwrap();
+        std::fs::write(filesystem.vfs().root().join("b"), b"b").unwrap();
+        let opening = interpreter::runtime::filesystem::Invocation {
+            operation: Some(RUN.to_owned().into()),
+            work: None,
+        };
+        let mut listing = Filesystem::open_directory(
+            &filesystem.0,
+            &opening,
+            "/",
+            false,
+            &interpreter::runtime::limits::TenantLimits::new(64 << 20),
+        )
+        .await
+        .unwrap();
+        let invocation = interpreter::runtime::filesystem::Invocation {
+            operation: Some(EFFECT.to_owned().into()),
+            work: None,
+        };
+        listing
+            .next_entry(
+                &invocation,
+                &interpreter::runtime::limits::TenantLimits::new(64 << 20),
+            )
+            .await
+            .unwrap();
+    } else if std::env::var("SUBMILLI_FILESYSTEM_CRASH_KIND").as_deref() == Ok("writer") {
         filesystem.open_writer(RUN, "/file").await.unwrap();
         filesystem
             .write_chunk(RUN, RUN, b"suffix".to_vec())
@@ -72,21 +110,6 @@ async fn crash_child() {
             .await
             .unwrap();
     }
-    database
-        .transaction(|connection| {
-            Box::pin(async move {
-                sqlx::query(
-                    "UPDATE runs SET state='finished',completed_at_unix_ms=1 WHERE run_id=?",
-                )
-                .bind(RUN)
-                .execute(connection)
-                .await?;
-                Ok(())
-            })
-        })
-        .await
-        .unwrap();
-    filesystem.retire("owner").await.unwrap();
     panic!("crash checkpoint not reached");
 }
 
@@ -125,59 +148,33 @@ fn kill_at_mode(root: &Path, point: &str, kind: &str) {
 }
 
 #[tokio::test]
-async fn process_restart_recovers_sql_filesystem_and_cleanup_boundaries() {
+async fn explicit_retries_after_process_restart_finish_filesystem_operations() {
     for point in [
-        "workspace-reserved",
-        "workspace-root",
-        "workspace-layout",
-        "workspace-active",
         "effect-request",
         "effect-intent",
         "effect-applied",
         "effect-receipt",
-        "retirement",
-        "filesystem-removed",
-        "retired",
     ] {
         let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir(root.path().join("ephemeral")).unwrap();
+        std::fs::create_dir(root.path().join("workspace")).unwrap();
         let child_root = root.path().to_owned();
         tokio::task::spawn_blocking(move || kill_at(&child_root, point))
             .await
             .unwrap();
         let (database, context) = open(root.path()).await;
-        let id = workspace_id(RUN, context.store_identity());
-        if ["retirement", "filesystem-removed", "retired"].contains(&point) {
-            DurableFilesystem::recover_cleanup(&id, "owner", database, context)
-                .await
-                .unwrap();
-            assert!(
-                !root
-                    .path()
-                    .join("ephemeral")
-                    .join(format!("submilli-vfs-run-{id}"))
-                    .exists()
-            );
-            continue;
-        }
-        let filesystem = DurableFilesystem::retained_ephemeral(
-            &root.path().join("ephemeral"),
+        let filesystem = DurableFilesystem::open(
+            Vfs::external(root.path().join("workspace")).unwrap(),
             RUN,
-            "owner",
             database,
             context,
         )
         .await
         .unwrap();
-        if point.starts_with("workspace-") {
-            assert!(filesystem.vfs().root().is_dir());
-            continue;
-        }
         let request: Mutation =
             serde_json::from_slice(&std::fs::read(root.path().join("request")).unwrap()).unwrap();
         if point != "effect-receipt" {
             assert!(matches!(
-                filesystem.recover().await,
+                filesystem.execute(EFFECT, request.clone()).await,
                 Err(FilesystemError::Recovery(RecoveryError::ReplayRequired))
             ));
         }
@@ -197,22 +194,23 @@ async fn process_restart_recovers_sql_filesystem_and_cleanup_boundaries() {
 async fn writer_restart_repairs_unacknowledged_output_tail_and_close() {
     for point in [
         "writer-staged",
+        "writer-chunk-receipt",
+        "writer-closed",
         "effect-request",
         "effect-intent",
         "effect-applied",
         "effect-receipt",
     ] {
         let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir(root.path().join("ephemeral")).unwrap();
+        std::fs::create_dir(root.path().join("workspace")).unwrap();
         let child_root = root.path().to_owned();
         tokio::task::spawn_blocking(move || kill_at_mode(&child_root, point, "writer"))
             .await
             .unwrap();
         let (database, context) = open(root.path()).await;
-        let filesystem = DurableFilesystem::retained_ephemeral(
-            &root.path().join("ephemeral"),
+        let filesystem = DurableFilesystem::open(
+            Vfs::external(root.path().join("workspace")).unwrap(),
             RUN,
-            "owner",
             database,
             context,
         )
@@ -235,5 +233,92 @@ async fn writer_restart_repairs_unacknowledged_output_tail_and_close() {
             std::fs::read(filesystem.vfs().root().join("file")).unwrap(),
             b"later"
         );
+    }
+}
+
+#[tokio::test]
+async fn resource_progress_survives_process_death_before_framework_completion() {
+    use interpreter::runtime::filesystem::{
+        Filesystem, Invocation, ResourceDescriptor, ResourceKind,
+    };
+    for (kind, points) in [
+        ("reader", ["reader-open", "reader-read", "reader-progress"]),
+        (
+            "listing",
+            ["listing-open", "listing-next", "listing-progress"],
+        ),
+    ] {
+        for point in points {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir(root.path().join("workspace")).unwrap();
+            let child_root = root.path().to_owned();
+            tokio::task::spawn_blocking(move || kill_at_mode(&child_root, point, kind))
+                .await
+                .unwrap();
+            let (database, context) = open(root.path()).await;
+            let filesystem = DurableFilesystem::open(
+                Vfs::external(root.path().join("workspace")).unwrap(),
+                RUN,
+                database,
+                context,
+            )
+            .await
+            .unwrap();
+            let invocation = Invocation {
+                operation: Some(EFFECT.to_owned().into()),
+                work: None,
+            };
+            if kind == "reader" {
+                let descriptor = ResourceDescriptor {
+                    scope: RUN.into(),
+                    id: RUN.into(),
+                    kind: ResourceKind::Reader(byte_options()),
+                };
+                let mut reader = Filesystem::restore_reader(&filesystem.0, descriptor).unwrap();
+                let limits = interpreter::runtime::limits::TenantLimits::new(1 << 20);
+                assert_eq!(
+                    read_bytes(reader.next(&invocation, &limits).await.unwrap()).unwrap(),
+                    b"abc",
+                    "{point}"
+                );
+                assert_eq!(
+                    read_bytes(reader.next(&resource_invocation(), &limits).await.unwrap())
+                        .unwrap(),
+                    b"def"
+                );
+            } else {
+                let descriptor = ResourceDescriptor {
+                    scope: RUN.into(),
+                    id: RUN.into(),
+                    kind: ResourceKind::Directory,
+                };
+                let mut listing = Filesystem::restore_directory(&filesystem.0, descriptor).unwrap();
+                assert_eq!(
+                    listing
+                        .next_entry(
+                            &invocation,
+                            &interpreter::runtime::limits::TenantLimits::new(64 << 20)
+                        )
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .path,
+                    "/a",
+                    "{point}"
+                );
+                assert_eq!(
+                    listing
+                        .next_entry(
+                            &resource_invocation(),
+                            &interpreter::runtime::limits::TenantLimits::new(64 << 20)
+                        )
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .path,
+                    "/b"
+                );
+            }
+        }
     }
 }

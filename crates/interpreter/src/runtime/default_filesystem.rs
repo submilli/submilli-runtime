@@ -1,7 +1,8 @@
 //! Default filesystem implementation over the contained VFS.
 use super::filesystem::{
     DirectoryEntry, DirectoryReader, FileReader, FileWriter, Filesystem, FilesystemError,
-    FilesystemInfo, Invocation, MutationBudget, bounded_read,
+    FilesystemInfo, Invocation, MutationBudget, ReadItem, ReadOutput, ReadPosition, ReaderOptions,
+    bounded_read,
 };
 use super::fs::{self, ContainError, ContentPath, FileIdentity, LinkPath, MAX_REMOVE_ENTRIES};
 use super::vfs::Placement;
@@ -38,6 +39,7 @@ impl Filesystem for DefaultFilesystem {
     }
     async fn metadata(
         &self,
+        _invocation: &Invocation,
         path: &str,
         follow: bool,
     ) -> Result<cap_std::fs::Metadata, FilesystemError> {
@@ -49,6 +51,7 @@ impl Filesystem for DefaultFilesystem {
     }
     async fn read(
         &self,
+        _invocation: &Invocation,
         path: &str,
         offset: u64,
         maximum_bytes: u64,
@@ -135,6 +138,7 @@ impl Filesystem for DefaultFilesystem {
         &self,
         _: &Invocation,
         path: &str,
+        options: ReaderOptions,
     ) -> Result<Box<dyn FileReader>, FilesystemError> {
         let path = fs::resolve_content(&self.vfs, self.vfs.cwd(), path)?;
         let file = path.open()?;
@@ -143,7 +147,9 @@ impl Filesystem for DefaultFilesystem {
             Some(quota.hold(fs::FileIdentity::of(&metadata).ok()?, super::Holder::Reader))
         });
         Ok(Box::new(DefaultReader {
-            file: file.into_std(),
+            file: Some(file.into_std()),
+            options,
+            position: ReadPosition::default(),
             _held: held,
         }))
     }
@@ -152,6 +158,7 @@ impl Filesystem for DefaultFilesystem {
         _: &Invocation,
         path: &str,
         recursive: bool,
+        _: &super::limits::TenantLimits,
     ) -> Result<Box<dyn DirectoryReader>, FilesystemError> {
         let resolved = fs::resolve_content(&self.vfs, self.vfs.cwd(), path)?;
         if !resolved.metadata()?.is_dir() {
@@ -214,30 +221,233 @@ fn append_bytes(path: &fs::ContentPath, bytes: &[u8]) -> Result<(), FilesystemEr
 }
 
 struct DefaultReader {
-    file: std::fs::File,
+    file: Option<std::fs::File>,
+    options: ReaderOptions,
+    position: ReadPosition,
     _held: Option<super::OpenFileGuard>,
 }
-impl Read for DefaultReader {
-    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
-        self.file.read(bytes)
+#[async_trait::async_trait]
+impl FileReader for DefaultReader {
+    async fn next(
+        &mut self,
+        invocation: &Invocation,
+        limits: &super::limits::TenantLimits,
+    ) -> Result<ReadOutput, FilesystemError> {
+        let Some(file) = &mut self.file else {
+            return empty_read(limits);
+        };
+        read_item(file, &self.options, &mut self.position, invocation, limits)
     }
-}
-impl Seek for DefaultReader {
-    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
-        self.file.seek(position)
+    async fn close(&mut self, _: &Invocation) -> Result<(), FilesystemError> {
+        self.file = None;
+        self._held = None;
+        self.position.closed = true;
+        Ok(())
     }
 }
 
+/// Read one logical item, anchoring every attempt at the supplied position.
+/// Read-ahead is local only. Errors leave the logical position unchanged.
+/// Durable backends commit the returned position before exposing the result.
+pub fn read_item(
+    file: &mut (impl Read + Seek),
+    options: &ReaderOptions,
+    position: &mut ReadPosition,
+    invocation: &Invocation,
+    limits: &super::limits::TenantLimits,
+) -> Result<ReadOutput, FilesystemError> {
+    if position.closed {
+        return empty_read(limits);
+    }
+    file.seek(SeekFrom::Start(position.offset))?;
+    let mut next = position.clone();
+    let result = match options {
+        ReaderOptions::Bytes { chunk_size } => {
+            read_chunk(file, *chunk_size, &mut next, invocation, limits)
+        }
+        ReaderOptions::Lines { maximum_bytes } => {
+            read_line(file, *maximum_bytes, &mut next, invocation, limits)
+        }
+    }?;
+    *position = next;
+    Ok(result)
+}
+fn empty_read(limits: &super::limits::TenantLimits) -> Result<ReadOutput, FilesystemError> {
+    Ok(ReadOutput {
+        item: None,
+        _charge: memory(limits, 0)?,
+    })
+}
+fn memory(
+    limits: &super::limits::TenantLimits,
+    bytes: u64,
+) -> Result<super::limits::HostBytes, FilesystemError> {
+    super::limits::HostBytes::new(limits, bytes)
+        .map_err(|e| FilesystemError::Execution(wasmtime::Error::new(e)))
+}
+fn read_cost(
+    invocation: &Invocation,
+    rate: super::fuel::Rate,
+    bytes: usize,
+) -> Result<(), FilesystemError> {
+    if let Some(work) = &invocation.work {
+        // The read has happened; exhaustion cannot discard its result.
+        work.before_effect();
+        work.charge(rate, bytes as u64)?;
+    }
+    Ok(())
+}
+fn read_chunk(
+    file: &mut impl Read,
+    size: usize,
+    position: &mut ReadPosition,
+    invocation: &Invocation,
+    limits: &super::limits::TenantLimits,
+) -> Result<ReadOutput, FilesystemError> {
+    if size == 0 {
+        return Err(FilesystemError::Rejected(
+            "chunk size must be positive".into(),
+        ));
+    }
+    if let Some(work) = &invocation.work {
+        work.charge(super::fuel::COPY, size as u64)?;
+    }
+    let charge = memory(limits, size as u64)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(size)
+        .map_err(|e| FilesystemError::Backend(Box::new(e)))?;
+    bytes.resize(size, 0);
+    let mut filled = 0;
+    while filled < size {
+        let count = file.read(&mut bytes[filled..])?;
+        read_cost(invocation, super::fuel::IO, count)?;
+        if count == 0 {
+            break;
+        }
+        filled += count;
+    }
+    position.offset = position
+        .offset
+        .checked_add(filled as u64)
+        .ok_or_else(|| FilesystemError::Rejected("reader offset overflow".into()))?;
+    bytes.truncate(filled);
+    Ok(ReadOutput {
+        item: (filled > 0).then_some(ReadItem::Bytes(bytes)),
+        _charge: charge,
+    })
+}
+fn read_line(
+    file: &mut impl Read,
+    maximum: u64,
+    position: &mut ReadPosition,
+    invocation: &Invocation,
+    limits: &super::limits::TenantLimits,
+) -> Result<ReadOutput, FilesystemError> {
+    use std::io::BufRead;
+    let mut charge = memory(limits, 8192)?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut bytes = Vec::new();
+    loop {
+        let needs_read = reader.buffer().is_empty();
+        let available = reader.fill_buf()?;
+        if needs_read {
+            read_cost(invocation, super::fuel::IO, available.len())?;
+        }
+        if available.is_empty() {
+            break;
+        }
+        let newline = available.iter().position(|&b| b == b'\n');
+        let count = newline.map_or(available.len(), |i| i + 1);
+        read_cost(invocation, super::fuel::SCAN, count)?;
+        let length = bytes.len().checked_add(count).ok_or_else(|| {
+            FilesystemError::Execution(super::host::range_error(
+                "fs.lines: line length exceeds host capacity",
+            ))
+        })?;
+        if length as u64 > maximum {
+            return Err(FilesystemError::Execution(super::host::range_error(
+                format!(
+                    "fs.lines: line exceeds maxReadSize of {maximum} bytes; read smaller chunks with fs.bytes"
+                ),
+            )));
+        }
+        if length > bytes.capacity() {
+            let capacity = length
+                .max(bytes.capacity().saturating_mul(2))
+                .min(usize::try_from(maximum).unwrap_or(usize::MAX));
+            charge
+                .grow(limits, (capacity - bytes.capacity()) as u64)
+                .map_err(|e| FilesystemError::Execution(wasmtime::Error::new(e)))?;
+            bytes
+                .try_reserve_exact(capacity - bytes.len())
+                .map_err(|e| FilesystemError::Backend(Box::new(e)))?;
+        }
+        bytes.extend_from_slice(&available[..count]);
+        reader.consume(count);
+        if newline.is_some() {
+            break;
+        }
+    }
+    if bytes.is_empty() {
+        return empty_read(limits);
+    }
+    position.offset = position
+        .offset
+        .checked_add(bytes.len() as u64)
+        .ok_or_else(|| FilesystemError::Rejected("reader offset overflow".into()))?;
+    if bytes.last() == Some(&b'\n') {
+        bytes.pop();
+        if bytes.last() == Some(&b'\r') {
+            bytes.pop();
+        }
+    }
+    let capacity = bytes
+        .len()
+        .checked_mul(3)
+        .ok_or_else(|| FilesystemError::Rejected("line capacity overflow".into()))?;
+    let output_charge = memory(limits, capacity as u64)?;
+    let mut text = String::new();
+    text.try_reserve_exact(capacity)
+        .map_err(|e| FilesystemError::Backend(Box::new(e)))?;
+    for part in bytes.utf8_chunks() {
+        text.push_str(part.valid());
+        if !part.invalid().is_empty() {
+            text.push('\u{fffd}');
+        }
+    }
+    if !position.bom_handled {
+        position.bom_handled = true;
+        if text.starts_with('\u{feff}') {
+            text.drain(..'\u{feff}'.len_utf8());
+        }
+    }
+    Ok(ReadOutput {
+        item: Some(ReadItem::Line(text)),
+        _charge: output_charge,
+    })
+}
+
 struct DefaultDirectory(Option<ContainedWalk>);
+#[async_trait::async_trait]
 impl DirectoryReader for DefaultDirectory {
-    fn next_entry(&mut self) -> Option<DirectoryEntry> {
-        self.0.as_mut()?.next_entry()
+    async fn next_entry(
+        &mut self,
+        _: &Invocation,
+        _: &super::limits::TenantLimits,
+    ) -> Result<Option<DirectoryEntry>, FilesystemError> {
+        Ok(self.0.as_mut().and_then(ContainedWalk::next_entry))
     }
     fn retained_bytes(&self) -> u64 {
         8192
     }
-    fn close(&mut self) {
+    async fn close(
+        &mut self,
+        _: &Invocation,
+        _: &super::limits::TenantLimits,
+    ) -> Result<(), FilesystemError> {
         self.0 = None;
+        Ok(())
     }
 }
 
@@ -1187,6 +1397,143 @@ fn copy_entry(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn logical_lines_bound_memory_and_restore_without_buffered_read_ahead() {
+        use super::*;
+        use crate::runtime::limits::TenantLimits;
+        let limits = TenantLimits::new(1 << 20);
+        let invocation = Invocation {
+            work: Some(Arc::new(crate::runtime::fuel::WorkBudget::new(u64::MAX))),
+            ..Default::default()
+        };
+        let mut file = std::io::Cursor::new(b"\xef\xbb\xbfhi\r\n\xff\n");
+        let options = ReaderOptions::Lines { maximum_bytes: 32 };
+        let mut position = ReadPosition::default();
+        let output = read_item(&mut file, &options, &mut position, &invocation, &limits).unwrap();
+        assert!(matches!(&output.item, Some(ReadItem::Line(line)) if line == "hi"));
+        assert_eq!(position.offset, 7);
+        assert!(limits.host_attached_bytes() > 0);
+        drop(output);
+        let output = read_item(&mut file, &options, &mut position, &invocation, &limits).unwrap();
+        assert!(matches!(&output.item, Some(ReadItem::Line(line)) if line == "\u{fffd}"));
+        drop(output);
+        assert!(
+            read_item(&mut file, &options, &mut position, &invocation, &limits)
+                .unwrap()
+                .item
+                .is_none()
+        );
+        assert_eq!(limits.host_attached_bytes(), 0);
+    }
+
+    #[test]
+    fn line_limit_and_memory_refusal_leave_progress_retryable() {
+        use super::*;
+        use crate::runtime::limits::TenantLimits;
+        let limits = TenantLimits::new(1 << 20);
+        let mut position = ReadPosition::default();
+        let mut file = std::io::Cursor::new(b"abcde");
+        let options = ReaderOptions::Lines { maximum_bytes: 4 };
+        for _ in 0..2 {
+            let error = read_item(
+                &mut file,
+                &options,
+                &mut position,
+                &Invocation::default(),
+                &limits,
+            )
+            .err()
+            .unwrap();
+            assert!(error.to_string().contains("maxReadSize"));
+            assert_eq!(position.offset, 0);
+            assert_eq!(limits.host_attached_bytes(), 0);
+        }
+        let limits = TenantLimits::new(8192 + 4);
+        let mut file = std::io::Cursor::new(b"abcd");
+        let error = read_item(
+            &mut file,
+            &options,
+            &mut position,
+            &Invocation::default(),
+            &limits,
+        )
+        .err()
+        .unwrap();
+        assert!(
+            matches!(error, FilesystemError::Execution(ref e) if e.is::<crate::runtime::limits::MemoryCapExceeded>())
+        );
+        assert_eq!(position.offset, 0);
+        assert_eq!(limits.host_attached_bytes(), 0);
+    }
+
+    #[test]
+    fn read_failures_refund_buffers_and_charge_consumed_io_without_advancing_progress() {
+        use super::*;
+        use crate::runtime::limits::TenantLimits;
+        struct FailsAfterOne(std::io::Cursor<[u8; 2]>);
+        impl Read for FailsAfterOne {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                if self.0.position() > 0 {
+                    return Err(std::io::Error::other("injected read failure"));
+                }
+                self.0.read(&mut bytes[..1])
+            }
+        }
+        impl Seek for FailsAfterOne {
+            fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+                self.0.seek(position)
+            }
+        }
+        let limits = TenantLimits::new(1 << 20);
+        let work = Arc::new(crate::runtime::fuel::WorkBudget::new(u64::MAX));
+        let invocation = Invocation {
+            work: Some(work.clone()),
+            ..Default::default()
+        };
+        let mut file = FailsAfterOne(std::io::Cursor::new(*b"ab"));
+        let mut position = ReadPosition::default();
+        assert!(
+            read_item(
+                &mut file,
+                &ReaderOptions::Bytes { chunk_size: 2 },
+                &mut position,
+                &invocation,
+                &limits
+            )
+            .is_err()
+        );
+        assert_eq!(position.offset, 0);
+        assert_eq!(limits.host_attached_bytes(), 0);
+        assert!(work.spent() >= crate::runtime::fuel::IO.cost(1));
+    }
+
+    #[test]
+    fn unknown_read_cost_settles_after_read_even_when_fuel_is_spent() {
+        use super::*;
+        let limits = crate::runtime::limits::TenantLimits::new(1 << 20);
+        let work = Arc::new(crate::runtime::fuel::WorkBudget::new(0));
+        let invocation = Invocation {
+            work: Some(work.clone()),
+            ..Default::default()
+        };
+        let mut file = std::io::Cursor::new(b"line\n");
+        let mut position = ReadPosition::default();
+        assert!(
+            read_item(
+                &mut file,
+                &ReaderOptions::Lines { maximum_bytes: 32 },
+                &mut position,
+                &invocation,
+                &limits
+            )
+            .unwrap()
+            .item
+            .is_some()
+        );
+        assert_eq!(position.offset, 5);
+        assert!(work.spent() > 0);
+    }
+
     use super::*;
     use crate::runtime::fs::resolve_link;
     #[test]

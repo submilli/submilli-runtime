@@ -16,7 +16,6 @@ pub mod declaration;
 pub mod handles;
 
 use crate::runtime::filesystem::FilesystemError as PortError;
-use std::io::BufReader;
 
 use wasmtime::{
     Caller, ExternRef, FieldType, Finality, FuncType, HeapType, Linker, Mutability, RefType,
@@ -27,7 +26,7 @@ use crate::runtime::StoreData;
 use crate::runtime::call_log::{Payload, Side, record_payload};
 use crate::runtime::decision::CallTicket;
 use crate::runtime::fs::ContainError;
-use crate::runtime::fuel::{self, host_func};
+use crate::runtime::fuel::{self, host_func_async};
 use crate::runtime::gc_singleton::singleton_struct;
 use crate::runtime::host::{
     read_string_arg, read_uint8_array_arg, register_host_fn, register_host_fn_async,
@@ -43,7 +42,7 @@ use crate::stdlib::abi::{
 use crate::stdlib::shared::{
     check_security_call, quota_refusal, require_writable, write_target_trap,
 };
-use handles::{BackendFileWriter, ChargedByteReader, ChargedDirIter, ChargedLineReader, kind_of};
+use handles::{BackendFileWriter, BackendReader, ChargedDirIter, kind_of};
 
 pub const MODULE_NAME: &str = "submilli:fs";
 
@@ -264,7 +263,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 // sandbox, missing, a file used as a directory component, a symlink cycle. A
                 // guard clause written as `if (!exists(p))` is exactly what an LLM writes, and it
                 // must not abort on the malformed-path case it exists to handle.
-                let found = match filesystem.metadata(&path, true).await {
+                let invocation = begin_invocation(caller)?;
+                let found = match filesystem.metadata(&invocation, &path, true).await {
                     Ok(_) => true,
                     Err(
                         PortError::Containment(ContainError::Escape | ContainError::Io(_))
@@ -295,10 +295,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     "fs.stat",
                     serde_json::json!({ "path": &path }),
                 )?;
+                let invocation = begin_invocation(caller)?;
                 let meta = caller
                     .data()
                     .filesystem
-                    .metadata(&path, true)
+                    .metadata(&invocation, &path, true)
                     .await
                     .map_err(|e| backend_error("fs.size", &path, e))?;
                 if meta.is_dir() {
@@ -508,7 +509,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     .map_err(|e| backend_error("fs.mkdir", &path, e))?;
                 if !(recursive
                     && filesystem
-                        .metadata(&path, true)
+                        .metadata(&invocation, &path, true)
                         .await
                         .is_ok_and(|m| m.is_dir()))
                 {
@@ -687,21 +688,23 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 )?;
                 let filesystem = caller.data().filesystem.clone();
                 let invocation = begin_invocation(caller)?;
-                let reader = filesystem.open_reader(&invocation, &path).await;
+                let reader = filesystem
+                    .open_reader(
+                        &invocation,
+                        &path,
+                        crate::runtime::filesystem::ReaderOptions::Lines {
+                            maximum_bytes: caller.data().fs_max_read_size,
+                        },
+                    )
+                    .await;
                 settle_invocation(caller, &invocation)?;
                 let reader = reader.map_err(|e| backend_error("fs.lines", &path, e))?;
-                let reader = ChargedLineReader::new(
-                    BufReader::new(reader),
-                    &caller.data().tenant_limits,
-                    None,
-                )
-                .map_err(|e| wasmtime::Error::new(e).context(format!("fs.lines {path}")))?;
-                *abi_result(results, 0)? = make_handle_iterator(
-                    caller,
-                    Some(reader),
-                    lines_next,
-                    close_handle_of::<Option<ChargedLineReader>>,
-                )?;
+                let reader = BackendReader::new(reader, &caller.data().tenant_limits)
+                    .map_err(wasmtime::Error::new)?;
+                *abi_result(results, 0)? =
+                    make_handle_iterator(caller, reader, |mut caller, params, results| {
+                        Box::new(async move { reader_next(&mut caller, params, results).await })
+                    })?;
                 Ok(())
             })
         },
@@ -733,22 +736,23 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 )?;
                 let filesystem = caller.data().filesystem.clone();
                 let invocation = begin_invocation(caller)?;
-                let reader = filesystem.open_reader(&invocation, &path).await;
+                let reader = filesystem
+                    .open_reader(
+                        &invocation,
+                        &path,
+                        crate::runtime::filesystem::ReaderOptions::Bytes {
+                            chunk_size: chunk_size as usize,
+                        },
+                    )
+                    .await;
                 settle_invocation(caller, &invocation)?;
                 let reader = reader.map_err(|e| backend_error("fs.bytes", &path, e))?;
-                let reader = ChargedByteReader::new(
-                    reader,
-                    chunk_size as usize,
-                    &caller.data().tenant_limits,
-                    None,
-                )
-                .map_err(|e| wasmtime::Error::new(e).context(format!("fs.bytes {path}")))?;
-                *abi_result(results, 0)? = make_handle_iterator(
-                    caller,
-                    reader,
-                    bytes_next,
-                    close_handle_of::<ChargedByteReader>,
-                )?;
+                let reader = BackendReader::new(reader, &caller.data().tenant_limits)
+                    .map_err(wasmtime::Error::new)?;
+                *abi_result(results, 0)? =
+                    make_handle_iterator(caller, reader, |mut caller, params, results| {
+                        Box::new(async move { reader_next(&mut caller, params, results).await })
+                    })?;
                 Ok(())
             })
         },
@@ -776,18 +780,16 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let filesystem = caller.data().filesystem.clone();
                 let invocation = begin_invocation(caller)?;
                 let walk = filesystem
-                    .open_directory(&invocation, &path, recursive)
+                    .open_directory(&invocation, &path, recursive, &caller.data().tenant_limits)
                     .await;
                 settle_invocation(caller, &invocation)?;
                 let walk = walk.map_err(|e| backend_error("fs.list", &path, e))?;
                 let dir = ChargedDirIter::new(walk, &caller.data().tenant_limits)
                     .map_err(|e| wasmtime::Error::new(e).context(format!("fs.list {path}")))?;
-                *abi_result(results, 0)? = make_handle_iterator(
-                    caller,
-                    dir,
-                    list_next,
-                    close_handle_of::<ChargedDirIter>,
-                )?;
+                *abi_result(results, 0)? =
+                    make_handle_iterator(caller, dir, |mut caller, params, results| {
+                        Box::new(async move { list_next(&mut caller, params, results).await })
+                    })?;
                 Ok(())
             })
         },
@@ -881,7 +883,13 @@ async fn stat_entry(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime:
     // opens the parent, so a missing *ancestor* fails here rather than at the metadata call
     // below — and answering that with a trap would break the contract every caller branches
     // on. Escapes still trap: unreachable-because-outside is not the same as absent.
-    let meta = match caller.data().filesystem.metadata(path, false).await {
+    let invocation = begin_invocation(caller)?;
+    let meta = match caller
+        .data()
+        .filesystem
+        .metadata(&invocation, path, false)
+        .await
+    {
         Ok(meta) => meta,
         Err(PortError::Containment(ContainError::Io(e)) | PortError::Io(e)) if is_absent(&e) => {
             return crate::runtime::prelude::undefined::value(caller);
@@ -911,15 +919,16 @@ async fn stat_entry(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime:
 /// `peek(path)`: sniff the first ~256 bytes into a `$PeekBacking`.
 async fn peek_file(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::Result<Val> {
     let filesystem = caller.data().filesystem.clone();
+    let invocation = begin_invocation(caller)?;
     let meta = filesystem
-        .metadata(path, true)
+        .metadata(&invocation, path, true)
         .await
         .map_err(|e| backend_error("fs.peek", path, e))?;
     if !meta.is_file() {
         wasmtime::bail!("fs.peek {}: path is not a regular file", path);
     }
     let buf = filesystem
-        .read(path, 0, 256)
+        .read(&invocation, path, 0, 256)
         .await
         .map_err(|e| backend_error("fs.peek", path, e))?;
 
@@ -975,8 +984,9 @@ async fn read_whole_capped(
     let ctx = format!("fs.{op}");
     let ticket = gate(&mut *caller, "fs.read", serde_json::json!({ "path": path }))?;
     let filesystem = caller.data().filesystem.clone();
+    let invocation = begin_invocation(caller)?;
     let meta = filesystem
-        .metadata(path, true)
+        .metadata(&invocation, path, true)
         .await
         .map_err(|e| backend_error(&ctx, path, e))?;
     if meta.is_dir() {
@@ -991,7 +1001,7 @@ async fn read_whole_capped(
     // The size is known before the read, so the charge comes first.
     fuel::charge(&mut *caller, fuel::IO, meta.len())?;
     let bytes = filesystem
-        .read(path, 0, caller.data().fs_max_read_size)
+        .read(&invocation, path, 0, caller.data().fs_max_read_size)
         .await
         .map_err(|e| backend_error(&ctx, path, e))?;
     record_payload(&*caller, ticket, Side::Response, || {
@@ -1024,10 +1034,11 @@ async fn read_byte_range(
         )));
     }
     fuel::charge(&mut *caller, fuel::IO, length as u64)?;
+    let invocation = begin_invocation(caller)?;
     caller
         .data()
         .filesystem
-        .read(path, offset as u64, length as u64)
+        .read(&invocation, path, offset as u64, length as u64)
         .await
         .map_err(|e| backend_error("fs.readBytes", path, e))
 }
@@ -1059,18 +1070,22 @@ async fn open_writer(
 // Iterators
 // ---------------------------------------------------------------------------
 
-type IterCallback = fn(&mut Caller<'_, StoreData>, &[Val], &mut [Val]) -> wasmtime::Result<()>;
+type IterCallback =
+    for<'a> fn(
+        Caller<'a, StoreData>,
+        &'a [Val],
+        &'a mut [Val],
+    ) -> Box<dyn std::future::Future<Output = wasmtime::Result<()>> + Send + 'a>;
 
 /// Wrap a charged handle in a closable iterator: the handle rides an
 /// `externref` inside a host-private env struct; `next_step` / `close_step`
 /// are the per-kind callbacks.
-fn make_handle_iterator(
+fn make_handle_iterator<T: handles::Closable + 'static>(
     caller: &mut Caller<'_, StoreData>,
-    payload: impl Send + Sync + 'static,
+    payload: T,
     next_step: IterCallback,
-    close_step: IterCallback,
 ) -> wasmtime::Result<Val> {
-    let handle = ExternRef::new(&mut *caller, payload)?;
+    let handle = ExternRef::new(&mut *caller, Some(payload))?;
     let env_ty = handle_env_struct(caller.engine())?;
     let pre = StructRefPre::new(&mut *caller, env_ty);
     let env = StructRef::new(&mut *caller, &pre, &[Val::ExternRef(Some(handle))])?;
@@ -1078,8 +1093,10 @@ fn make_handle_iterator(
     let intr = intrinsic_types(&mut *caller)?;
     let (next_ty, _) = next_closure_type(caller.engine(), &intr)?;
     let (close_ty, _) = void_closure_type(caller.engine(), &intr)?;
-    let next_fn = host_func(&mut *caller, next_ty, next_step);
-    let close_fn = host_func(&mut *caller, close_ty, close_step);
+    let next_fn = host_func_async(&mut *caller, next_ty, next_step);
+    let close_fn = host_func_async(&mut *caller, close_ty, |mut caller, params, results| {
+        Box::new(async move { close_handle_of::<T>(&mut caller, params, results).await })
+    });
     build_closable_iterator(
         caller,
         next_fn,
@@ -1116,48 +1133,41 @@ fn handle_payload<'a, T: 'static>(
         .ok_or_else(|| wasmtime::Error::msg(format!("{ctx}: unexpected externref payload")))
 }
 
-fn lines_next(
+async fn reader_next(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    let [environment] = params else {
-        return Err(crate::runtime::host::fatal_host_error(
-            "fs.lines.next: invalid argument count",
-        ));
-    };
-    let [result] = results else {
-        return Err(crate::runtime::host::fatal_host_error(
-            "fs.lines.next: invalid result count",
-        ));
-    };
-    let Some(handle) = env_handle(caller, environment)? else {
-        *result = iter_done(caller)?;
+    use crate::runtime::filesystem::ReadItem;
+    let Some(handle) = env_handle(caller, abi_arg(params, 0)?)? else {
+        *abi_result(results, 0)? = iter_done(caller)?;
         return Ok(());
     };
-    // Take the payload temporarily so memory admission can read the current
-    // store limits without aliasing the externref's mutable borrow.
+    let invocation = begin_invocation(caller)?;
     let Some(mut reader) =
-        handle_payload::<Option<ChargedLineReader>>(caller, &handle, "fs.lines.next")?.take()
+        handle_payload::<Option<BackendReader>>(caller, &handle, "fs.next")?.take()
     else {
-        *result = iter_done(caller)?;
+        *abi_result(results, 0)? = iter_done(caller)?;
         return Ok(());
     };
-    let before = reader.bytes_read;
-    let scanned_before = reader.bytes_scanned;
-    let line = reader.read_next(&caller.data().tenant_limits, caller.data().fs_max_read_size);
-    let received = reader.bytes_read.saturating_sub(before);
-    let scanned = reader.bytes_scanned.saturating_sub(scanned_before);
-    *handle_payload::<Option<ChargedLineReader>>(caller, &handle, "fs.lines.next")? = Some(reader);
-    // Reading advances the iterator even if a later chunk or allocation fails.
-    fuel::settle(&mut *caller, fuel::IO, received)?;
-    fuel::settle(&mut *caller, fuel::SCAN, scanned)?;
-    *result = fuel::settle_result(caller, |caller| {
-        let line = line.map_err(|error| crate::runtime::host::throw_host_error(caller, error))?;
-        match line {
-            Some(line) => {
-                let st = write_submilli_string_struct(caller, &line.text)?;
-                iter_yield(caller, Val::AnyRef(Some(st.to_anyref())))
+    let output = reader
+        .reader
+        .next(&invocation, &caller.data().tenant_limits)
+        .await;
+    *handle_payload::<Option<BackendReader>>(caller, &handle, "fs.next")? = Some(reader);
+    settle_invocation(caller, &invocation)?;
+    *abi_result(results, 0)? = fuel::settle_result(caller, |caller| {
+        let output = output.map_err(|error| {
+            crate::runtime::host::throw_host_error(caller, backend_error("fs.next", "", error))
+        })?;
+        match &output.item {
+            Some(ReadItem::Line(text)) => {
+                let value = write_submilli_string_struct(caller, text)?;
+                iter_yield(caller, Val::AnyRef(Some(value.to_anyref())))
+            }
+            Some(ReadItem::Bytes(bytes)) => {
+                let value = write_submilli_uint8array_struct(caller, bytes)?;
+                iter_yield(caller, Val::AnyRef(Some(value.to_anyref())))
             }
             None => iter_done(caller),
         }
@@ -1165,30 +1175,7 @@ fn lines_next(
     Ok(())
 }
 
-fn bytes_next(
-    caller: &mut Caller<'_, StoreData>,
-    params: &[Val],
-    results: &mut [Val],
-) -> wasmtime::Result<()> {
-    let Some(handle) = env_handle(caller, abi_arg(params, 0)?)? else {
-        *abi_result(results, 0)? = iter_done(caller)?;
-        return Ok(());
-    };
-    let chunk = handle_payload::<ChargedByteReader>(caller, &handle, "fs.bytes.next")?
-        .read_next()
-        .map_err(|e| wasmtime::Error::msg(format!("fs.bytes.next: {e}")))?;
-    *abi_result(results, 0)? = fuel::settle_result(caller, |caller| match chunk {
-        Some(bytes) => {
-            fuel::settle(&mut *caller, fuel::IO, bytes.len() as u64)?;
-            let arr = write_submilli_uint8array_struct(caller, &bytes)?;
-            iter_yield(caller, Val::AnyRef(Some(arr.to_anyref())))
-        }
-        None => iter_done(caller),
-    })?;
-    Ok(())
-}
-
-fn list_next(
+async fn list_next(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
     results: &mut [Val],
@@ -1198,7 +1185,22 @@ fn list_next(
         return Ok(());
     };
     fuel::charge(&mut *caller, fuel::SYSCALL, 1)?;
-    let entry = handle_payload::<ChargedDirIter>(caller, &handle, "fs.list.next")?.next_entry();
+    let invocation = begin_invocation(caller)?;
+    let Some(mut directory) =
+        handle_payload::<Option<ChargedDirIter>>(caller, &handle, "fs.list.next")?.take()
+    else {
+        *abi_result(results, 0)? = iter_done(caller)?;
+        return Ok(());
+    };
+    let entry = directory
+        .walk
+        .next_entry(&invocation, &caller.data().tenant_limits)
+        .await;
+    *handle_payload::<Option<ChargedDirIter>>(caller, &handle, "fs.list.next")? = Some(directory);
+    settle_invocation(caller, &invocation)?;
+    let entry = entry.map_err(|error| {
+        crate::runtime::host::throw_host_error(caller, backend_error("fs.list.next", "", error))
+    })?;
     let Some(entry) = entry else {
         *abi_result(results, 0)? = iter_done(caller)?;
         return Ok(());
@@ -1228,17 +1230,25 @@ fn list_next(
 /// Eager close: drops the OS handle and refunds bytes now. A reclaimed
 /// externref is a no-op — `for…of` fires `close` unconditionally, so a
 /// double close must not trap.
-fn close_handle_of<T: handles::Closable + 'static>(
+async fn close_handle_of<T: handles::Closable + 'static>(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
-    if let Some(handle) = env_handle(caller, abi_arg(params, 0)?)?
-        && let Some(payload) = handle
-            .data_mut(&mut *caller)?
-            .and_then(|d| d.downcast_mut::<T>())
-    {
-        payload.close();
+    if let Some(handle) = env_handle(caller, abi_arg(params, 0)?)? {
+        let invocation = begin_invocation(caller)?;
+        if let Some(mut payload) = handle_payload::<Option<T>>(caller, &handle, "fs.close")?.take()
+        {
+            let result = payload
+                .close(&invocation, &caller.data().tenant_limits)
+                .await;
+            // Keep the logical ID after close: retries must still consult the backend.
+            *handle_payload::<Option<T>>(caller, &handle, "fs.close")? = Some(payload);
+            settle_invocation(caller, &invocation)?;
+            result.map_err(|error| {
+                crate::runtime::host::throw_host_error(caller, backend_error("fs.close", "", error))
+            })?;
+        }
     }
     *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
     Ok(())
@@ -1565,7 +1575,16 @@ impl crate::runtime::filesystem::MutationBudget for HostMutationBudget<'_, '_> {
 fn begin_invocation(
     caller: &mut Caller<'_, StoreData>,
 ) -> wasmtime::Result<crate::runtime::filesystem::Invocation> {
-    let mut invocation = caller.data().filesystem_invocation.clone();
+    let mut invocation = crate::runtime::filesystem::Invocation {
+        operation: Some(
+            caller
+                .data()
+                .filesystem_effect_ids
+                .next()
+                .map_err(crate::runtime::host::fatal_host_error)?,
+        ),
+        work: None,
+    };
     let remaining = fuel::remaining_fuel(&mut *caller)?;
     invocation.work = Some(std::sync::Arc::new(crate::runtime::fuel::WorkBudget::new(
         remaining,
@@ -1591,6 +1610,39 @@ mod tests {
     use crate::runtime::{
         RuntimeConfig, StoreData, Vfs, VfsInfo, VfsMode, dispatch_main_async, install_runtime_async,
     };
+
+    #[tokio::test]
+    async fn effect_id_failure_is_fatal_before_filesystem_access() {
+        use crate::runtime::filesystem::{EffectId, EffectIds, FilesystemError};
+        struct FailedIds;
+        impl EffectIds for FailedIds {
+            fn next(&self) -> Result<EffectId, FilesystemError> {
+                Err(std::io::Error::other("injected entropy failure").into())
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let vfs = Vfs::external(root.path().to_owned()).unwrap();
+        let mut data = StoreData::with_vfs(vfs);
+        data.filesystem_effect_ids = Arc::new(FailedIds);
+        let error = run_with(
+            r#"
+            import { writeText } from "submilli:fs";
+            function main(): void {
+                try { writeText("/output", "bytes"); } catch { }
+            }
+        "#,
+            data,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.is::<crate::runtime::host::FatalHostError>(),
+            "{error:#}"
+        );
+        assert!(error.to_string().contains("injected entropy failure"));
+        assert!(root.path().exists());
+        assert!(!root.path().join("output").exists());
+    }
 
     #[tokio::test]
     async fn subpath_aliases_move_copy_and_cwd() {

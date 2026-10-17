@@ -1,5 +1,5 @@
 {
-  "module": "SharedEffects",
+  "module": "FilesystemOperations",
   "constants": {
     "Fault": "none",
     "Witness": "none"
@@ -16,7 +16,7 @@
   "properties": [],
   "cases": [
     {
-      "name": "shared-effect-safety",
+      "name": "filesystem-operation-safety",
       "kind": "safety"
     },
     {

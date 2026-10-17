@@ -17,7 +17,6 @@ pub(crate) trait UnitOfWorkFactory: Send + Sync {
 /// the transaction's connection.
 #[async_trait::async_trait]
 pub(crate) trait UnitOfWork: Send {
-    async fn session_has_retained_workspace(&mut self, session: &str) -> Result<bool, StoreError>;
     async fn get_session(&mut self, id: &str) -> Result<Option<Session>, StoreError>;
     async fn sessions_due_for_expiry(
         &mut self,

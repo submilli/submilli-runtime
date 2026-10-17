@@ -16,7 +16,7 @@ pending, rather than becoming a definitive failed outcome after a mutation.
 Completed calls replay from SQL even when a later operation reused the path.
 
 No directory handles, concurrent writers or tree rename are proved here. A
-recursive operation must persist its ordered plan and each child receipt, using
+recursive operation follows the caller code and each child receipt, using
 these empty-directory operations and the separately verified file primitives.
 Progress assumes eventual successful storage operations and finite crashes.
 

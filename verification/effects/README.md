@@ -1,79 +1,59 @@
-# Shared effect storage
+# Filesystem operation journal
 
-This is the storage subset of SUB-1837 used by filesystem recovery. It replaces
-`durable_filesystem_effects` with `durable_effects` keyed by `(run_id, effect_id)`.
-The table has no filesystem-specific columns. `operation` and `version` identify
-the adapter codec; `request`, `recovery_payload` and `outcome` are sealed separately
-with authenticated run/effect/operation/version/field identity. The existing
-sealer includes its format and encryption-key identity.
+This model checks the filesystem's own operation journal. It is not shared with
+future execution effects. The runner path `effects` is retained for existing CI
+commands. `FilesystemOperations.tla` maps to `submilli-durable/src/operations.rs`
+and the server's `durable_filesystem_operations` table.
 
-The shared lifecycle in `crates/submilli-durable/src/effects.rs` operates inside
-a caller-owned `UnitOfWork`. The server maps its records through
-`crates/submilli-server/src/adapters/unit_of_work/durable_state.rs`. Callers perform admission and
-resource checks in that same transaction. The current
-filesystem caller retains its single-run exclusion, plan/cursor/writer gates and
-run-lifecycle checks. The storage helper alone is not permission to dispatch an
-effect, supersede a pending compound plan or write from a stale execution attempt.
+Rows are keyed by caller-supplied scope and operation ID. Operation/version select
+the codec. The immutable request includes the mutation and a fingerprint of the
+configured filesystem. Request, recovery intent and outcome are independently
+sealed with scope/operation/version/field identity. No file input bytes are
+stored: requests contain lengths and hashes; retries supply matching bytes.
 
-| Transition | Shared storage | Filesystem caller |
-| --- | --- | --- |
-| Admit | Immutable request; at most one unfinished effect per run | Record input fingerprint with request admission |
-| Prepare | Write recovery payload once | Record prepared intent before public mutation |
-| Complete | Commit immutable outcome after preparation | First finish file/directory persistence barriers |
-| Reject | Commit definitive refusal only before preparation | Preflight refusal before public mutation |
-| Retry | Same identity/request/payload/outcome reconciles; conflicts fail | Return recorded outcome without filesystem mutation |
+| Transition | Filesystem journal |
+| --- | --- |
+| Admit | Immutable request; at most one unfinished mutation per scope. |
+| Prepare | Store recovery intent once, before public mutation. |
+| Complete | Store immutable outcome after file/directory persistence barriers. |
+| Reject | Store a definitive refusal only before preparation. |
+| Retry | Same identity and arguments return the recorded outcome; changes fail. |
 
-The payload format for `filesystem.mutation`, version 1, includes the workspace,
-optional compound plan and mutation in the request, a durable filesystem `Intent` as recovery
-payload, and a completed/refused outcome. It validates intent-to-request identity
-when reading. File input bytes are supplied by replay and are not persisted here. Records have a 64 KiB
-plaintext bound and a run has at most 10,000 effect rows. These are the existing
-filesystem bounds, now enforced by the common storage helper; configurable
-history byte/replay budgets remain future work. No truncation is allowed.
+The caller handles resource admission in the same transaction. There are no
+workspace, run-state or plan lookups. Records have a 64 KiB plaintext bound and
+a scope has at most 10,000 operation rows. Future history budgets and large
+outputs remain separate work.
 
 ## Verification
 
-`SharedEffects.tla` models one run with two effect slots and two operation/version
-identities. Two request values independently vary the immutable arguments;
-recovery data and outcome bytes each have two abstract values. Admission, preparation and completion are separate atomic SQL commits.
-A process crash can lose a completion acknowledgement without losing its row.
-Checks cover immutable identity/payload/outcome, one unfinished effect, refusal
-before preparation and receipt-before-return. Negative variants remove each of
-those guards; witnesses require a conflicting adapter, changed request and replay
-of an outcome that was unacknowledged at the crash.
-This is a bounded safety model, not a liveness or end-to-end execution proof.
+The model has two operation slots, two codec identities, two immutable request
+values, and two values each for recovery data and outcomes. Requests abstract
+both arguments and filesystem configuration binding. Admission, preparation and
+completion are separate SQL commits. Crashes may lose acknowledgement without
+losing the row. Checks cover immutable identity/request/intent/outcome, one
+unfinished operation, refusal before preparation and receipt-before-return.
+Negative variants remove guards. Witnesses require changed identities, changed
+requests and replay of an outcome unacknowledged at the crash.
 
 ```sh
 python3 verification/check.py --model effects
 ```
 
-Filesystem persistence ordering remains covered by the append, namespace,
-directory, resource and sequence models. Their SQL intent/receipt actions map to
-fields on the shared row; no second filesystem receipt is required. Their
-exclusive-run and durable-storage assumptions are unchanged. Rust tests verify
-cross-adapter identity conflicts, field/row/version authentication, byte bounds,
-transaction rollback, reopen/lost acknowledgement and the existing filesystem
-process-kill/reconciliation cases. TLA+ does not prove the Rust implementation,
-encryption, SQL isolation or storage barriers.
+This bounded model does not prove Rust, encryption, SQL isolation or filesystem
+barriers. Primitive filesystem models establish the barrier ordering. The
+caller-sequence model checks that code can replay receipts and finish a pending
+operation without a stored plan, including a crash after filesystem completion
+but before an outer completion record. SQL tests cover field authentication,
+size bounds, rollback and reopen; filesystem tests exercise explicit retries.
 
-## Remaining SUB-1837 work
+## Future execution history
 
-These rows represent effect state, not the append-only `DurableExecution.tla`
-history. That model's `Commit` must additionally check expected sequence, attempt
-generation and run state, and atomically append the event, advance committed
-history and settle accounting. Outputs can initially be stored in SQLite;
-large-object storage is a later enhancement. Observation events and terminal
-evidence are not implemented here. An observation-only effect need not use this
-prepared-mutation lifecycle; its eventual representation requires an explicit
-model mapping rather than a fabricated filesystem preparation.
+SUB-1837 will own ordered execution history, observation outputs, accounting,
+run state and resumption. It may wrap filesystem calls in separate execution
+effects. If its completion is missing, it must retry the same filesystem scope
+and operation ID: the filesystem receipt prevents repeating the mutation.
+This PR does not implement that bridge or prove end-to-end execution composition.
+Neither component requires durable-object storage; outputs can start in SQLite.
 
-The future history bridge must use these shared rows as the authority for
-primitive effect identity and outcome. Linking a filesystem result to ordered
-history and exposing it to guest execution remains to be implemented and verified;
-this change does not claim `AppendOnly` or `NoStaleWrites` from the complete
-execution model. Resource cursors and compound parent outcomes remain separate
-protocol state until that bridge supplies logical checkpoints and event ordering.
-
-Migration 10 is being revised within the unmerged filesystem PR. Existing main
-schemas upgrade normally; databases created with the earlier PR-only migration
-have a different checksum and are intentionally rejected, not silently rewritten.
+Migration 10 is revised within the unmerged filesystem PR. Main schemas upgrade
+normally; earlier PR-only migration checksums are intentionally incompatible.
