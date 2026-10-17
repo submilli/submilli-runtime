@@ -5,6 +5,7 @@ pub(crate) mod array_storage;
 pub mod blocking;
 pub mod call_log;
 pub mod decision;
+pub mod default_filesystem;
 pub mod disk_quota;
 pub mod embedding;
 pub mod exec;
@@ -294,7 +295,7 @@ impl StoreData {
             #[cfg(test)]
             array_growth: array_storage::GrowthStats::default(),
             console: Box::new(std::io::stderr()),
-            filesystem: Arc::new(filesystem::NativeFilesystem::new(vfs.clone())),
+            filesystem: Arc::new(default_filesystem::DefaultFilesystem::new(vfs.clone())),
             vfs,
             filesystem_invocation: filesystem::Invocation::default(),
             vfs_info,

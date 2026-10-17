@@ -1,7 +1,9 @@
 # Durable filesystem services
 
-The interpreter defines the filesystem interface and supplies its ordinary
-native implementation. This crate implements that interface and owns immutable
+The interpreter defines its filesystem traits in `runtime/filesystem.rs` and
+supplies `DefaultFilesystem` in `runtime/default_filesystem.rs`, including its
+reader, writer and directory implementations. This crate implements the same
+interface and owns immutable
 payload publication, filesystem intents, receipts, resource retention, recovery,
 and cleanup. It has no dependency on the server or SQLx.
 
