@@ -1476,6 +1476,8 @@ The new formulas should replace these ad-hoc units with rated classes rather tha
 
 ### `submilli:fs` — operations
 
+The filesystem backend supplies its additional path admission cost through `Filesystem::path_cost`; the host gate charges it before calling the backend. The native backend adds zero. The durable backend adds `SCAN(p) + SYSCALL(d)` before resolving aliases into private recovery state. Durable directory traversal charges entries that it skips, including recovery directories. The async filesystem recovery adapter is below the host ABI; its caller admits work before effects and settles publication work before returning a durable result.
+
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
 | `submilli:fs#maxReadSize` | Returns a number from store data (`stdlib/fs/mod.rs:210`) | `CALL` | before | |
@@ -1500,13 +1502,37 @@ The new formulas should replace these ad-hoc units with rated classes rather tha
 | `submilli:fs#bytes` | Same, with a chunk size (`stdlib/fs/mod.rs:654`) | `CALL + SCAN(p) + SYSCALL(d) + ELEM(1)` | before | `chunkSize` is not capped by `maxReadSize`; only the memory charge `8 KiB + chunkSize` bounds it. |
 | `submilli:fs#list` | Stats, opens the directory, collects mounts below when recursive, starts a `ContainedWalk` (`stdlib/fs/mod.rs:699`) | `CALL + SCAN(p) + SYSCALL(d) + ELEM(1)` | before | Lazy: entries are paid in `next`. |
 
+Filesystem dispatch uses `runtime::filesystem::Filesystem`. Default tree and
+writer algorithms live in `runtime/default_filesystem.rs`; `MutationBudget`
+preserves incremental admission and post-effect settlement. The formulas above
+remain at the host boundary. Iterators settle result construction after advancing.
+Durable preparation admits `HASH(2 * original + 3 * payload) +
+IO(2 * original + 3 * payload)` for baseline/candidate verification and input
+passes. Constructing a replay input admits `HASH(input bytes)`. Writer staging
+admits `HASH(chunk bytes) + IO(chunk bytes)` before writing. Close verifies the
+staged output with `ELEM(chunks) + HASH(2 * bytes) + IO(bytes)`, then pays ordinary
+write preparation. Directory enumeration charges `SYSCALL(1)` per directory,
+`SYSCALL(2) + ELEM(1) + PARSE(path bytes)` per entry, `sort_cost(entries)`, and
+`PARSE(2 * data bytes) + COPY(data bytes)` for bounded serialization and its
+journal copy, followed by `HASH(encoded bytes)` before sealing the SQLite output.
+Replay settles `HASH(data bytes) + PARSE(data bytes)` for loading and decoding the
+committed output; data bytes include each entry's fixed fields and path bytes.
+Port ordering settles `sort_cost(entries)` after the receipt. A per-call
+`WorkBudget` shares the caller's remaining fuel with blocking workers; admission
+can refuse before mutation, then work settles after publication starts.
+Quota growth/reconciliation and retained-reader hard-link validation charge
+`SYSCALL(2) + ELEM(1)` for the root and each entry through the shared bounded
+regular-file walker. No general object publication or input archive is involved.
+Durable operation IDs and read-result replay are supplied by future execution
+history; this extraction does not install the durable backend for ordinary runs.
+
 ### `submilli:fs` — `FileWriter` methods
 
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
-| `submilli:fs#FileWriter#writeLine` | Converts the string to UTF-8, reserves quota, `writeln!` into an 8 KiB `BufWriter` (`stdlib/fs/handles.rs:560`) | `CALL + SCAN(len(s)) + IO(b + 1)` | before | Streaming handle: this is the per-chunk charge. |
-| `submilli:fs#FileWriter#writeBytes` | Copies the array out, reserves quota, `write_all` (`stdlib/fs/handles.rs:565`) | `CALL + COPY(b) + IO(b)` | before | |
-| `submilli:fs#FileWriter#close` | Flushes at most 8 KiB, `fsync`, checks the temp file identity, covers the replaced file in the quota, renames (`stdlib/fs/handles.rs:579`, `:627`) | `CALL` | before | Idempotent; a second call is a no-op. The bytes were charged at write time. SUB-1292: ordinary metadata prefixes now use O(d) one-component operations. The old implementation never billed the research d² term literally, so there is no quadratic fuel term to lower. Existing input/byte charges are unchanged; detailed native metering is added on remove/move paths. |
+| `submilli:fs#FileWriter#writeLine` | Converts the string to UTF-8, reserves quota, `writeln!` into an 8 KiB `BufWriter` (`stdlib/fs/handles.rs`) | `CALL + SCAN(len(s)) + IO(b + 1)` | before | Streaming handle: this is the per-chunk charge. |
+| `submilli:fs#FileWriter#writeBytes` | Copies the array out, reserves quota, `write_all` (`stdlib/fs/handles.rs`) | `CALL + COPY(b) + IO(b)` | before | |
+| `submilli:fs#FileWriter#close` | Flushes at most 8 KiB, `fsync`, checks the temp file identity, covers the replaced file in the quota, renames (`stdlib/fs/handles.rs`) | `CALL` | before | Idempotent; a second call is a no-op. The bytes were charged at write time. SUB-1292: ordinary metadata prefixes now use O(d) one-component operations. The old implementation never billed the research d² term literally, so there is no quadratic fuel term to lower. Existing input/byte charges are unchanged; detailed native metering is added on remove/move paths. |
 
 ### `submilli:fs` — field getters
 
@@ -1563,6 +1589,10 @@ Every function calls `invoke` (`stdlib/git/mod.rs:369`). Three phases:
 1. **Store thread, before dispatch.** Reserve memory, then `decode_arguments` (`:469`): each argument is serialized by calling the guest value's `toJSON` vtable slot (`stdlib/session/value.rs:32`; this re-enters guest code, which pays its own fuel), converted UTF-16 to UTF-8 and parsed with `serde_json`. Cost: `PARSE(len(args))`. Argument charges occur here; the remaining fuel is handed to the worker for admission of selected algorithm steps.
 2. **Blocking pool** (`worker::run`, `stdlib/git/worker.rs:19`), no access to the store. All real work.
 3. **Store thread, after the worker returns.** `encode_result` (`:503`): `Uint8Array` copy, string copy, or `serde_json::to_string` + `value::deserialize`.
+
+Code tools, Git and HTTP downloads retain their existing native VFS execution and their existing fuel formulas; selecting a filesystem backend does not route these calls through it. Their durability adapters are separate work.
+
+Git and durable filesystem workers share `fuel::WorkBudget` for the remaining-fuel ceiling, admission, effect transition, cooperative cancellation of reported work, and final settlement. `fuel::remaining_fuel` subtracts pending host charges before dispatch. Git retains category counters and records only the change in each category's cumulative cost, preserving rounding across small chunks; its algorithm charges use the same budget. The default filesystem continues charging its caller directly. Its implementation, directory traversal, copy/move/remove helpers and writer publication live in `runtime/default_filesystem.rs`; guest handles in `stdlib/fs/handles.rs` retain host-memory accounting. Cost formulas and effect boundaries are unchanged.
 
 SUB-1292 algorithm admission shares the worker's existing meter. Before an externally visible creation, remote request or publication, it switches to settlement: later work cannot replace an effect's outcome with a fuel refusal. After the blocking worker drains, the combined meter settles on both success and failure; result and error conversion also run within settlement scope.
 
@@ -1621,9 +1651,9 @@ Other counted work:
 
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
-| fs `lines` iterator `next` (`lines_next`) | Read a capped line in buffered chunks; strip BOM/line ending; decode lossy UTF-8; marshal result to UTF-16 | `CALL + IO(bytes read, including read-ahead) + SCAN(line bytes scanned) + SCAN(text bytes) + COPY(output units)` plus iterator-result allocation | settle read/scanned bytes on success or failure; settle result marshalling after reading | SUB-1292: raw line bytes, including BOM and delimiters, are capped by `maxReadSize`. Retained buffer and returned native text are admitted against current tenant memory. Oversized lines raise `RangeError`; memory exhaustion remains fatal. No refusing fuel charge after the read advances the iterator. The old implementation charged only successful returned text bytes and output marshalling. |
-| fs `bytes` iterator `next` (`bytes_next`, `stdlib/fs/mod.rs:1096`) | Allocates and zero-fills a fresh `chunkSize` buffer, reads until full or EOF, copies into a GC `Uint8Array` (`stdlib/fs/handles.rs:156`) | `CALL + COPY(chunkSize) + IO(n) + COPY(n) + ELEM(1)`, `n <= chunkSize` | per chunk (before: `chunkSize` is known) | The zero-fill costs `chunkSize` even on the final empty read. The reader would need to expose `chunk_size`, or charge the maximum and settle after. |
-| fs `list` iterator `next` (`list_next`, `stdlib/fs/mod.rs:1119`) | Advances `ContainedWalk` (`stdlib/fs/handles.rs:309`): readdir, `file_type`, a `metadata` call for files, an `open_dir` + `entries` when descending; then 3 GC strings and a struct | `CALL + SYSCALL(3 * v) + SCAN(len(name) + len(path)) + ELEM(1)`, `v = entries visited by this call` | incremental (per entry yielded) | `v` is normally 1 but the loop skips unreadable entries, pops finished levels and reopens postponed directories without yielding, so one call can do more. The walk holds at most 32 open directories and 16,384 postponed names. The `kind` string is re-allocated per entry. |
+| fs `lines` iterator `next` (`reader_next`) | Backend reads one bounded logical line, strips BOM/CRLF and decodes UTF-8; interpreter marshals output | `CALL + IO(OS bytes including read-ahead) + SCAN(line bytes) + SCAN(text bytes) + COPY(output units)` plus result allocation | Backend settles read/scanned work even on errors; interpreter settles result marshalling | Backend owns buffering and logical progress. Errors leave the logical position unchanged; durable retries anchor at the saved before-state. Input/output allocations use current tenant limits. |
+| fs `bytes` iterator `next` (`reader_next`) | Backend allocates a chunk and reads to its bound; interpreter marshals bytes | `CALL + COPY(chunkSize) + IO(n) + COPY(n) + ELEM(1)` | Zero-fill admitted before allocation; IO and result marshalling settle after reading, including errors | Logical progress advances only after the full step; failed partial reads remain retryable. |
+| fs `list` iterator `next` (`list_next`) | Advance default walker or durable snapshot cursor; marshal entry | `CALL + SYSCALL(1) + backend work + string SCAN/COPY + result allocation`; durable backend adds `HASH(4S) + PARSE(4S)` for sealed snapshot transactions | Syscall and snapshot decoding before progress; marshalling settles after progress commit | `S` is encoded snapshot size. Restored snapshots admit bounded working memory before decoding; no fresh enumeration on replay. |
 | fs iterator `close` for all three kinds (`close_handle_of`, `stdlib/fs/mod.rs:1157`) | Drops the OS handle, refunds the memory charge, releases the quota hold | `CALL` | before | Idempotent. For `list`, drops up to 32 directory handles. |
 | git `Repository` vtable slots `toString` / `toJSON` / `equals` / `hash` (`stdlib/git/class.rs:158-164`) | Not new host functions: slots 0, 2, 3 are copied from the prelude's opaque vtable and slot 1 (`toJSON`) from the object vtable | priced by whoever owns those prelude functions | n/a | `toJSON` serializes the one `path` field. Nothing in `stdlib/git` creates a `Func::new`; the 14 method slots are the linker-registered functions above. |
 | git `new_instance` (`stdlib/git/class.rs:388`) | Helper, not a function: one array and one struct allocation | included as `ELEM(1)` in the constructor rows | n/a | |

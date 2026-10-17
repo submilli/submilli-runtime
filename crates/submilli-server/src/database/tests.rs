@@ -669,6 +669,11 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
                 "_sqlx_migrations",
                 "blueprint_revisions",
                 "blueprints",
+                "durable_filesystem_chunks",
+                "durable_filesystem_listings",
+                "durable_filesystem_operations",
+                "durable_filesystem_readers",
+                "durable_filesystem_writers",
                 "last_runs",
                 "mcp_grants",
                 "runs",
@@ -694,7 +699,70 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
             })
             .await
             .unwrap();
-        assert_eq!(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        database.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn durability_migrations_preserve_existing_session_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    let mut connection = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .foreign_keys(true),
+    )
+    .await
+    .unwrap();
+    let before = MIGRATOR
+        .iter()
+        .filter(|migration| migration.version <= 9)
+        .cloned()
+        .collect();
+    sqlx::migrate::Migrator::with_migrations(before)
+        .run_direct(None, &mut connection, false)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO sessions(session_id,record_version,status,blueprint_name,idle_timeout_ms,last_activity_unix_ms,root_vfs_type) VALUES ('s',1,'active','test',0,0,'none');
+         INSERT INTO session_kv(session_id,key,payload,value_bytes,retained_bytes) VALUES ('s',X'006b',X'0076',2,4);
+         INSERT INTO last_runs(session_id,run_id,completed_at_unix_ms,storage,encoded_bytes,payload) VALUES ('s','run',1,'inline',2,X'7b7d');",
+    )
+    .execute(&mut connection)
+    .await
+    .unwrap();
+    connection.close().await.unwrap();
+
+    for _ in 0..2 {
+        let database = ServerDatabase::open(&path).await.unwrap();
+        let payload: Vec<u8> = database
+            .read(|connection| {
+                Box::pin(async move {
+                    Ok(sqlx::query_scalar(
+                        "SELECT payload FROM session_kv WHERE session_id='s' AND key=X'006b'",
+                    )
+                    .fetch_one(connection)
+                    .await?)
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(payload, [0, b'v']);
+        let last_run: (String, Vec<u8>) = database
+            .read(|connection| {
+                Box::pin(async move {
+                    Ok(
+                        sqlx::query_as("SELECT run_id,payload FROM last_runs WHERE session_id='s'")
+                            .fetch_one(connection)
+                            .await?,
+                    )
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(last_run, ("run".into(), b"{}".to_vec()));
         database.close().await.unwrap();
     }
 }

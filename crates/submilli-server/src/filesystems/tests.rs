@@ -1,0 +1,1243 @@
+use super::*;
+
+use std::io::Read;
+use submilli_shared::secret_store::SecretCipher;
+mod boundaries;
+pub(crate) mod process;
+mod resources;
+
+struct Fixture {
+    root: tempfile::TempDir,
+    database: Arc<ServerDatabase>,
+    context: FilesystemContext,
+    run: String,
+    filesystem: DurableFilesystem,
+}
+
+impl Fixture {
+    async fn new() -> Self {
+        Self::with_filesystem_limit(None).await
+    }
+    async fn with_filesystem_limit(maximum_bytes: Option<u64>) -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("workspace");
+        std::fs::create_dir(&directory).unwrap();
+        let database = Arc::new(
+            ServerDatabase::open(&root.path().join("state.db"))
+                .await
+                .unwrap(),
+        );
+        let context = FilesystemContext::new(Arc::new(SecretCipher::from_key([7; 32])));
+        let run = uuid::Uuid::new_v4().to_string();
+        let mut vfs = Vfs::external(directory).unwrap();
+        if let Some(limit) = maximum_bytes {
+            vfs = vfs.with_size_limit(limit);
+        }
+        let filesystem = DurableFilesystem::open(vfs, &run, database.clone(), context.clone())
+            .await
+            .unwrap();
+        Self {
+            root,
+            database,
+            context,
+            run,
+            filesystem,
+        }
+    }
+
+    async fn assert_no_pending_work(&self) {
+        let mut unit = (self.context.units(self.database.clone()))().await.unwrap();
+        assert!(unit.pending_operation(&self.run).await.unwrap().is_none());
+        assert!(
+            unit.closing_writer(self.filesystem.id())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            unit.pending_resource(self.filesystem.id())
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    async fn input(&self, bytes: &[u8]) -> Content {
+        remember_input(bytes)
+    }
+}
+
+async fn publication_without_receipt(
+    filesystem: &DurableFilesystem,
+    effect: &str,
+    request: Mutation,
+) {
+    let gate = Arc::new(
+        filesystem
+            .test_context()
+            .test_gate()
+            .clone()
+            .lock_owned()
+            .await,
+    );
+    filesystem
+        .test_journal()
+        .admit(filesystem.id(), effect, &request)
+        .await
+        .unwrap();
+    let workspace = filesystem.test_workspace().clone();
+    let mut source = filesystem.test_content(&request).unwrap();
+    let effect = effect.to_owned();
+    let intent = blocking(gate.clone(), move || {
+        workspace.prepare(&effect, request, &mut source)
+    })
+    .await
+    .unwrap();
+    filesystem
+        .test_journal()
+        .prepared(filesystem.id(), &intent)
+        .await
+        .unwrap();
+    let workspace = filesystem.test_workspace().clone();
+    let mut source = filesystem.test_content(intent.mutation()).unwrap();
+    blocking(gate, move || workspace.apply(&intent, &mut source))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn sqlite_receipt_suppresses_completed_mutation_after_path_reuse() {
+    let fixture = Fixture::new().await;
+    let content = fixture.input(b"original").await;
+    let effect = uuid::Uuid::new_v4().to_string();
+    let request = Mutation::Write {
+        path: "/file".into(),
+        content,
+    };
+    fixture
+        .filesystem
+        .execute_replayed(&effect, request.clone())
+        .await
+        .unwrap();
+    let replacement = fixture.input(b"newer").await;
+    fixture
+        .filesystem
+        .execute_replayed(
+            &uuid::Uuid::new_v4().to_string(),
+            Mutation::Write {
+                path: "/file".into(),
+                content: replacement,
+            },
+        )
+        .await
+        .unwrap();
+    let restored = DurableFilesystem::open(
+        fixture.filesystem.vfs().clone(),
+        fixture.filesystem.id(),
+        fixture.database.clone(),
+        fixture.context.clone(),
+    )
+    .await
+    .unwrap();
+    restored
+        .execute_replayed(&effect, request.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read(restored.vfs().root().join("file")).unwrap(),
+        b"newer"
+    );
+    assert!(
+        restored
+            .execute_replayed(
+                &effect,
+                Mutation::Remove {
+                    path: "/file".into()
+                }
+            )
+            .await
+            .is_err()
+    );
+    fixture.assert_no_pending_work().await;
+}
+
+#[tokio::test]
+async fn append_publication_gap_recovers_once_and_blocks_other_mutations() {
+    let fixture = Fixture::new().await;
+    let initial = fixture.input(b"before").await;
+    fixture
+        .filesystem
+        .execute_replayed(
+            &uuid::Uuid::new_v4().to_string(),
+            Mutation::Write {
+                path: "/file".into(),
+                content: initial,
+            },
+        )
+        .await
+        .unwrap();
+    let content = fixture.input(b" suffix").await;
+    let effect = uuid::Uuid::new_v4().to_string();
+    let request = Mutation::Append {
+        path: "/file".into(),
+        content,
+    };
+    publication_without_receipt(&fixture.filesystem, &effect, request.clone()).await;
+    assert!(
+        fixture
+            .filesystem
+            .execute_replayed(
+                &uuid::Uuid::new_v4().to_string(),
+                Mutation::Remove {
+                    path: "/file".into()
+                }
+            )
+            .await
+            .is_err()
+    );
+    let restored = DurableFilesystem::open(
+        fixture.filesystem.vfs().clone(),
+        fixture.filesystem.id(),
+        fixture.database.clone(),
+        fixture.context.clone(),
+    )
+    .await
+    .unwrap();
+    restored
+        .execute_replayed(&effect, request.clone())
+        .await
+        .unwrap();
+    restored.execute_replayed(&effect, request).await.unwrap();
+    assert_eq!(
+        std::fs::read(restored.vfs().root().join("file")).unwrap(),
+        b"before suffix"
+    );
+}
+
+#[tokio::test]
+async fn rejected_preflight_is_replayed_even_when_the_path_later_exists() {
+    let fixture = Fixture::new().await;
+    let effect = uuid::Uuid::new_v4().to_string();
+    let request = Mutation::Remove {
+        path: "/missing".into(),
+    };
+    assert!(matches!(
+        fixture
+            .filesystem
+            .execute_replayed(&effect, request.clone())
+            .await,
+        Err(FilesystemError::Rejected(_))
+    ));
+    let content = fixture.input(b"later").await;
+    fixture
+        .filesystem
+        .execute_replayed(
+            &uuid::Uuid::new_v4().to_string(),
+            Mutation::Write {
+                path: "/missing".into(),
+                content,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        fixture.filesystem.execute_replayed(&effect, request).await,
+        Err(FilesystemError::Rejected(_))
+    ));
+    assert_eq!(
+        std::fs::read(fixture.filesystem.vfs().root().join("missing")).unwrap(),
+        b"later"
+    );
+}
+
+#[tokio::test]
+async fn writer_chunks_survive_pause_and_duplicate_close_never_republishes() {
+    let fixture = Fixture::new().await;
+    let resource = uuid::Uuid::new_v4().to_string();
+    let chunk = uuid::Uuid::new_v4().to_string();
+    let close = uuid::Uuid::new_v4().to_string();
+    fixture
+        .filesystem
+        .open_writer(&resource, "/out")
+        .await
+        .unwrap();
+    let first = fixture.input(b"first").await;
+    fixture
+        .filesystem
+        .write_replayed_chunk(&resource, &chunk, first.clone())
+        .await
+        .unwrap();
+    let resumed = DurableFilesystem::open(
+        fixture.filesystem.vfs().clone(),
+        fixture.filesystem.id(),
+        fixture.database.clone(),
+        fixture.context.clone(),
+    )
+    .await
+    .unwrap();
+    resumed
+        .write_replayed_chunk(&resource, &chunk, first)
+        .await
+        .unwrap();
+    let second = fixture.input(b" second").await;
+    resumed
+        .write_replayed_chunk(&resource, &uuid::Uuid::new_v4().to_string(), second)
+        .await
+        .unwrap();
+    resumed
+        .test_journal()
+        .closing_writer(resumed.id(), &resource, &close, i64::MAX as u64)
+        .await
+        .unwrap();
+    assert!(
+        resumed
+            .execute_replayed(
+                &uuid::Uuid::new_v4().to_string(),
+                Mutation::Remove {
+                    path: "/out".into()
+                }
+            )
+            .await
+            .is_err()
+    );
+    let resumed = DurableFilesystem::open(
+        fixture.filesystem.vfs().clone(),
+        fixture.filesystem.id(),
+        fixture.database.clone(),
+        fixture.context.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resumed.vfs().root().join("out").exists());
+    resumed.close_writer(&resource, &close).await.unwrap();
+    assert_eq!(
+        std::fs::read(resumed.vfs().root().join("out")).unwrap(),
+        b"first second"
+    );
+    let newer = fixture.input(b"newer").await;
+    resumed
+        .execute_replayed(
+            &uuid::Uuid::new_v4().to_string(),
+            Mutation::Write {
+                path: "/out".into(),
+                content: newer,
+            },
+        )
+        .await
+        .unwrap();
+    resumed.close_writer(&resource, &close).await.unwrap();
+    assert_eq!(
+        std::fs::read(resumed.vfs().root().join("out")).unwrap(),
+        b"newer"
+    );
+}
+
+fn byte_options() -> interpreter::runtime::filesystem::ReaderOptions {
+    interpreter::runtime::filesystem::ReaderOptions::Bytes { chunk_size: 3 }
+}
+fn resource_invocation() -> interpreter::runtime::filesystem::Invocation {
+    interpreter::runtime::filesystem::Invocation {
+        operation: Some(uuid::Uuid::new_v4().to_string().into()),
+        work: None,
+    }
+}
+fn read_bytes(output: interpreter::runtime::filesystem::ReadOutput) -> Option<Vec<u8>> {
+    match output.item {
+        Some(interpreter::runtime::filesystem::ReadItem::Bytes(bytes)) => Some(bytes),
+        None => None,
+        _ => panic!("expected bytes"),
+    }
+}
+
+#[tokio::test]
+async fn reader_reopen_refuses_a_replaced_path() {
+    use interpreter::runtime::filesystem::{FileReader, Filesystem};
+    let fixture = Fixture::new().await;
+    let root = fixture.filesystem.vfs().root();
+    std::fs::write(root.join("file"), b"original").unwrap();
+    let mut reader = fixture
+        .filesystem
+        .open_reader(&uuid::Uuid::new_v4().to_string(), "/file", byte_options())
+        .await
+        .unwrap();
+    let descriptor = reader.descriptor().unwrap();
+    let limits = interpreter::runtime::limits::TenantLimits::new(1 << 20);
+    assert_eq!(
+        read_bytes(reader.next(&resource_invocation(), &limits).await.unwrap()).unwrap(),
+        b"ori"
+    );
+    drop(reader);
+    std::fs::rename(root.join("file"), root.join("old")).unwrap();
+    std::fs::write(root.join("file"), b"replacement").unwrap();
+    let mut restored = Filesystem::restore_reader(&fixture.filesystem.0, descriptor).unwrap();
+    assert!(
+        restored
+            .next(&resource_invocation(), &limits)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn directory_snapshot_restores_order_after_directory_changes() {
+    let fixture = Fixture::new().await;
+    std::fs::create_dir(fixture.filesystem.vfs().root().join("tree")).unwrap();
+    std::fs::write(fixture.filesystem.vfs().root().join("tree/a"), b"a").unwrap();
+    std::fs::write(fixture.filesystem.vfs().root().join("tree/b"), b"b").unwrap();
+    let resource = uuid::Uuid::new_v4().to_string();
+    let mut listing = fixture
+        .filesystem
+        .open_directory(&resource, "/tree", true, 0)
+        .await
+        .unwrap();
+    assert_eq!(listing.next().unwrap().path, "/tree/a");
+    let offset = listing.position();
+    drop(listing);
+    std::fs::remove_file(fixture.filesystem.vfs().root().join("tree/b")).unwrap();
+    std::fs::write(fixture.filesystem.vfs().root().join("tree/c"), b"c").unwrap();
+    let resumed = DurableFilesystem::open(
+        fixture.filesystem.vfs().clone(),
+        fixture.filesystem.id(),
+        fixture.database.clone(),
+        fixture.context.clone(),
+    )
+    .await
+    .unwrap();
+    let mut listing = resumed
+        .open_directory(&resource, "/tree", true, offset)
+        .await
+        .unwrap();
+    assert_eq!(listing.next().unwrap().path, "/tree/b");
+    assert!(listing.next().is_none());
+    assert!(
+        resumed
+            .open_directory(&resource, "/tree", false, 0)
+            .await
+            .is_err()
+    );
+}
+
+async fn blocking<T: Send + 'static>(
+    guard: Arc<tokio::sync::OwnedMutexGuard<()>>,
+    operation: impl FnOnce() -> Result<T, RecoveryError> + Send + 'static,
+) -> Result<T, FilesystemError> {
+    tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        operation()
+    })
+    .await
+    .map_err(|e| FilesystemError::Worker(e.to_string()))?
+    .map_err(Into::into)
+}
+
+#[tokio::test]
+async fn interpreter_uses_durable_backend_and_replay_does_not_repeat_append() {
+    let fixture = Fixture::new().await;
+    let source = r#"import { appendText } from "submilli:fs";
+        function main(): void { appendText("/port.txt", "once"); }"#;
+    run_backend(
+        &fixture,
+        source,
+        Some("00000000-0000-4000-8000-000000000031"),
+    )
+    .await
+    .unwrap();
+    run_backend(
+        &fixture,
+        source,
+        Some("00000000-0000-4000-8000-000000000031"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read(fixture.filesystem.vfs().root().join("port.txt")).unwrap(),
+        b"once"
+    );
+    let factory = fixture.context.units(fixture.database.clone());
+    let mut unit = factory().await.unwrap();
+    assert_eq!(unit.operation_count(&fixture.run).await.unwrap(), 1);
+    let effect = unit
+        .get_operation(&fixture.run, "00000000-0000-4000-8000-000000000031")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(effect.state(), "done");
+    drop(unit);
+    run_backend(&fixture, source, None).await.unwrap();
+    assert_eq!(
+        std::fs::read(fixture.filesystem.vfs().root().join("port.txt")).unwrap(),
+        b"onceonce"
+    );
+}
+
+#[tokio::test]
+async fn code_tools_remain_native_with_a_durable_filesystem_backend() {
+    let fixture = Fixture::new().await;
+    std::fs::write(fixture.filesystem.vfs().root().join("note.ts"), b"before\n").unwrap();
+    let source = r#"import { edit, read, glob } from "submilli:code";
+        function main(): void {
+            assert(edit("/note.ts", "before", "after").changed);
+            assert(read("/note.ts").lines[0].text === "after");
+            assert(glob("/*.ts").entries.length === 1);
+        }"#;
+    run_backend(&fixture, source, None).await.unwrap();
+    assert_eq!(
+        std::fs::read(fixture.filesystem.vfs().root().join("note.ts")).unwrap(),
+        b"after\n"
+    );
+    let mut unit = fixture.context.units(fixture.database.clone())()
+        .await
+        .unwrap();
+    assert_eq!(unit.operation_count(&fixture.run).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn durable_backend_refuses_unprepared_recursive_mutations() {
+    let fixture = Fixture::new().await;
+    let source = r#"import { mkdir } from "submilli:fs";
+        function main(): void { mkdir("/unprepared/child", true); }"#;
+    assert!(
+        run_backend(
+            &fixture,
+            source,
+            Some("00000000-0000-4000-8000-000000000032")
+        )
+        .await
+        .is_err()
+    );
+    assert!(std::fs::read(fixture.filesystem.vfs().root().join("unprepared/child")).is_err());
+    let mut unit = fixture.context.units(fixture.database.clone())()
+        .await
+        .unwrap();
+    assert_eq!(unit.operation_count(&fixture.run).await.unwrap(), 0);
+}
+
+async fn run_backend(
+    fixture: &Fixture,
+    source: &str,
+    operation: Option<&str>,
+) -> wasmtime::Result<Option<String>> {
+    run_backend_fueled(fixture, source, operation, None).await
+}
+
+async fn run_backend_fueled(
+    fixture: &Fixture,
+    source: &str,
+    operation: Option<&str>,
+    fuel: Option<u64>,
+) -> wasmtime::Result<Option<String>> {
+    use interpreter::runtime::{
+        RuntimeConfig, StoreData, dispatch_main_async, install_runtime_async,
+    };
+    let compiled =
+        interpreter::compile_script(source, "backend.ts", interpreter::FileId(0), &[], &[])
+            .unwrap();
+    let config = RuntimeConfig::default();
+    let engine = config.engine().unwrap();
+    let mut data = StoreData::with_vfs_and_cap(fixture.filesystem.vfs().clone(), 64 << 20);
+    data.filesystem = Arc::new(fixture.filesystem.0.clone());
+    if let Some(operation) = operation {
+        struct FirstId(std::sync::Mutex<Option<String>>);
+        impl interpreter::runtime::filesystem::EffectIds for FirstId {
+            fn next(
+                &self,
+            ) -> Result<
+                interpreter::runtime::filesystem::EffectId,
+                interpreter::runtime::filesystem::FilesystemError,
+            > {
+                Ok(self
+                    .0
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+                    .into())
+            }
+        }
+        data.filesystem_effect_ids =
+            Arc::new(FirstId(std::sync::Mutex::new(Some(operation.into()))));
+    }
+    let mut store = config.store(&engine, data).unwrap();
+    let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
+    let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
+    install_runtime_async(&mut linker, &mut store)
+        .await
+        .unwrap();
+    let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+    if let Some(fuel) = fuel {
+        store.set_fuel(fuel).unwrap();
+    }
+    dispatch_main_async(&mut store, &instance).await
+}
+
+#[tokio::test]
+async fn durable_refusals_remain_catchable_in_guest_code() {
+    let fixture = Fixture::new().await;
+    std::fs::write(fixture.filesystem.vfs().root().join("existing"), b"keep").unwrap();
+    let source = r#"import { mkdir } from "submilli:fs";
+        function main(): void {
+            let caught = false;
+            try { mkdir("/existing", false); } catch (error: Error) { caught = true; }
+            assert(caught, "a recorded preflight refusal is catchable");
+        }"#;
+    run_backend(
+        &fixture,
+        source,
+        Some("00000000-0000-4000-8000-000000000041"),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn durable_listing_keeps_native_sizes_and_consecutive_subtrees() {
+    let fixture = Fixture::new().await;
+    let root = fixture.filesystem.vfs().root();
+    std::fs::create_dir(root.join("a")).unwrap();
+    std::fs::write(root.join("a/z"), "child").unwrap();
+    std::fs::write(root.join("a.txt"), "sibling").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("a.txt", root.join("link")).unwrap();
+    let source = r#"import { list } from "submilli:fs";
+        function main(): void {
+            let sequence = "";
+            for (const entry of list("/", true)) {
+                if (entry.kind !== "file") { assert(entry.size === 0, "non-file size"); }
+                sequence += entry.name + ",";
+            }
+            assert(sequence.indexOf("a,z,") >= 0, "directory subtree stays consecutive");
+        }"#;
+    run_backend(
+        &fixture,
+        source,
+        Some("00000000-0000-4000-8000-000000000042"),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn durable_append_and_eager_listing_admit_their_own_fuel() {
+    let fixture = Fixture::new().await;
+    let root = fixture.filesystem.vfs().root();
+    let original = vec![b'x'; 64 * 1024];
+    std::fs::write(root.join("large"), &original).unwrap();
+    let append = r#"import { appendText } from "submilli:fs";
+        function main(): void { appendText("/large", ""); }"#;
+    let error = run_backend_fueled(
+        &fixture,
+        append,
+        Some("00000000-0000-4000-8000-000000000043"),
+        Some(10_000),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.is::<wasmtime::Trap>(), "{error}");
+    assert_eq!(std::fs::read(root.join("large")).unwrap(), original);
+    // The admitted identity is still resumable after fuel is replenished.
+    run_backend(
+        &fixture,
+        append,
+        Some("00000000-0000-4000-8000-000000000043"),
+    )
+    .await
+    .unwrap();
+    for index in 0..100 {
+        std::fs::write(root.join(format!("entry-{index}")), "").unwrap();
+    }
+    let listing = r#"import { list } from "submilli:fs";
+        function main(): void { list("/", false); }"#;
+    let error = run_backend_fueled(
+        &fixture,
+        listing,
+        Some("00000000-0000-4000-8000-000000000044"),
+        Some(10_000),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.is::<wasmtime::Trap>(), "{error}");
+}
+
+#[tokio::test]
+async fn durable_quota_scan_stops_before_mutation_and_resumes_with_fuel() {
+    let fixture = Fixture::with_filesystem_limit(Some(1 << 20)).await;
+    let root = fixture.filesystem.vfs().root();
+    for index in 0..100 {
+        std::fs::write(root.join(format!("entry-{index}")), "").unwrap();
+    }
+    let source = r#"import { mkdir } from "submilli:fs";
+        function main(): void { mkdir("/created", false); }"#;
+    let operation = Some("00000000-0000-4000-8000-000000000045");
+    let error = run_backend_fueled(&fixture, source, operation, Some(10_000))
+        .await
+        .unwrap_err();
+    assert!(error.is::<wasmtime::Trap>(), "{error}");
+    assert!(!root.join("created").exists());
+    run_backend(&fixture, source, operation).await.unwrap();
+    assert!(root.join("created").is_dir());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
+    use interpreter::runtime::default_filesystem::DefaultFilesystem;
+    use interpreter::runtime::filesystem::{Filesystem, Invocation};
+    let fixture = Fixture::new().await;
+    let backend = &fixture.filesystem.0;
+    let root = fixture.filesystem.vfs().root();
+    let private = ".git-submilli-recovery";
+    std::fs::write(root.join(private).join("secret"), b"private").unwrap();
+    std::fs::write(root.join("public"), b"public").unwrap();
+    std::os::unix::fs::symlink(private, root.join("alias")).unwrap();
+    for path in [
+        "/.git-submilli-recovery/secret",
+        "/alias/secret",
+        "/alias/missing/child",
+    ] {
+        assert!(
+            Filesystem::metadata(backend, &resource_invocation(), path, true)
+                .await
+                .is_err()
+        );
+        assert!(
+            Filesystem::metadata(backend, &resource_invocation(), path, false)
+                .await
+                .is_err()
+        );
+        assert!(
+            Filesystem::read(backend, &resource_invocation(), path, 0, 100)
+                .await
+                .is_err()
+        );
+        let invocation = Invocation {
+            operation: Some(uuid::Uuid::new_v4().to_string().into()),
+            ..Default::default()
+        };
+        assert!(
+            Filesystem::open_reader(backend, &invocation, path, byte_options())
+                .await
+                .is_err()
+        );
+        let invocation = Invocation {
+            operation: Some(uuid::Uuid::new_v4().to_string().into()),
+            ..Default::default()
+        };
+        assert!(
+            Filesystem::write(backend, &invocation, path, b"overwrite".to_vec(), false)
+                .await
+                .is_err()
+        );
+    }
+    for path in ["/.git-submilli-recovery", "/alias"] {
+        let invocation = Invocation {
+            operation: Some(uuid::Uuid::new_v4().to_string().into()),
+            ..Default::default()
+        };
+        assert!(
+            Filesystem::open_directory(
+                backend,
+                &invocation,
+                path,
+                true,
+                &interpreter::runtime::limits::TenantLimits::new(64 << 20)
+            )
+            .await
+            .is_err()
+        );
+    }
+    let invocation = Invocation {
+        operation: Some(uuid::Uuid::new_v4().to_string().into()),
+        ..Default::default()
+    };
+    let mut listing = Filesystem::open_directory(
+        backend,
+        &invocation,
+        "/",
+        true,
+        &interpreter::runtime::limits::TenantLimits::new(64 << 20),
+    )
+    .await
+    .unwrap();
+    while let Some(entry) = listing
+        .next_entry(
+            &resource_invocation(),
+            &interpreter::runtime::limits::TenantLimits::new(64 << 20),
+        )
+        .await
+        .unwrap()
+    {
+        assert!(!entry.path.contains(private));
+    }
+    assert_eq!(
+        Filesystem::read(backend, &resource_invocation(), "/public", 0, 100)
+            .await
+            .unwrap(),
+        b"public"
+    );
+    assert_eq!(
+        std::fs::read(root.join(private).join("secret")).unwrap(),
+        b"private"
+    );
+
+    // Preflight cost estimation must not inspect protected contents either.
+    std::fs::write(root.join(private).join("large"), vec![0; 1024 * 1024]).unwrap();
+    let invocation = Invocation {
+        operation: Some(uuid::Uuid::new_v4().to_string().into()),
+        work: Some(Arc::new(interpreter::runtime::fuel::WorkBudget::new(
+            10_000,
+        ))),
+    };
+    let error = Filesystem::mkdir(backend, &invocation, "/alias/large", false)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            interpreter::runtime::filesystem::FilesystemError::Rejected(_)
+        ),
+        "{error}"
+    );
+
+    // Backend policy must not leak into the interpreter's ordinary implementation.
+    // Production callers must keep retained volumes assigned to their durable backend.
+    let native = DefaultFilesystem::new(Vfs::external(root.to_owned()).unwrap());
+    assert_eq!(
+        Filesystem::read(&native, &resource_invocation(), "/alias/secret", 0, 100)
+            .await
+            .unwrap(),
+        b"private"
+    );
+    let mut listing = Filesystem::open_directory(
+        &native,
+        &Invocation::default(),
+        "/",
+        false,
+        &interpreter::runtime::limits::TenantLimits::new(64 << 20),
+    )
+    .await
+    .unwrap();
+    let mut found = false;
+    while let Some(entry) = listing
+        .next_entry(
+            &resource_invocation(),
+            &interpreter::runtime::limits::TenantLimits::new(64 << 20),
+        )
+        .await
+        .unwrap()
+    {
+        found |= entry.name == private;
+    }
+    assert!(found);
+}
+
+fn replay_inputs() -> &'static std::sync::Mutex<std::collections::HashMap<String, ReplayInput>> {
+    static INPUTS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, ReplayInput>>,
+    > = std::sync::OnceLock::new();
+    INPUTS.get_or_init(Default::default)
+}
+fn remember_input(bytes: &[u8]) -> Content {
+    let input = ReplayInput::bytes(uuid::Uuid::new_v4().to_string(), bytes.to_vec()).unwrap();
+    let content = input.content();
+    replay_inputs()
+        .lock()
+        .unwrap()
+        .insert(content.id.clone(), input);
+    content
+}
+fn supplied(request: &Mutation) -> Option<ReplayInput> {
+    request
+        .content()
+        .and_then(|content| replay_inputs().lock().unwrap().get(&content.id).cloned())
+}
+impl DurableFilesystem {
+    async fn execute_replayed(
+        &self,
+        id: &str,
+        request: Mutation,
+    ) -> Result<Outcome, FilesystemError> {
+        match supplied(&request) {
+            Some(input) => self.execute_with_input(id, request, input).await,
+            None => self.execute(id, request).await,
+        }
+    }
+
+    async fn write_replayed_chunk(
+        &self,
+        resource: &str,
+        chunk: &str,
+        content: Content,
+    ) -> Result<(), FilesystemError> {
+        use submilli_durable::recovery::InputBytes;
+        let mut input = replay_inputs().lock().unwrap().get(&content.id).cloned();
+        let mut bytes = Vec::new();
+        input.open(&content)?.read_to_end(&mut bytes).unwrap();
+        self.write_chunk(resource, chunk, bytes).await
+    }
+    fn test_context(&self) -> &submilli_durable::filesystems::FilesystemContext {
+        self.0.test_context()
+    }
+    fn test_content(&self, request: &Mutation) -> Result<Option<ReplayInput>, FilesystemError> {
+        Ok(supplied(request))
+    }
+}
+
+#[tokio::test]
+async fn pending_write_requires_replay_bytes_and_rejects_changed_input() {
+    let fixture = Fixture::new().await;
+    let effect = uuid::Uuid::new_v4().to_string();
+    let input = ReplayInput::bytes(effect.clone(), b"original input payload".to_vec()).unwrap();
+    let request = Mutation::Write {
+        path: "/output".into(),
+        content: input.content(),
+    };
+    fixture
+        .filesystem
+        .test_journal()
+        .admit(fixture.filesystem.id(), &effect, &request)
+        .await
+        .unwrap();
+    let restarted = DurableFilesystem::open(
+        fixture.filesystem.vfs().clone(),
+        fixture.filesystem.id(),
+        fixture.database.clone(),
+        fixture.context.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        restarted.execute(&effect, request.clone()).await,
+        Err(FilesystemError::Recovery(RecoveryError::ReplayRequired))
+    ));
+    assert!(!restarted.vfs().root().join("output").exists());
+    let wrong = ReplayInput::bytes(effect.clone(), b"changed input payload".to_vec()).unwrap();
+    assert!(
+        restarted
+            .execute_with_input(&effect, request.clone(), wrong)
+            .await
+            .is_err()
+    );
+    assert!(!restarted.vfs().root().join("output").exists());
+    restarted
+        .execute_with_input(&effect, request.clone(), input)
+        .await
+        .unwrap();
+    // A completed receipt needs neither input bytes nor the current pathname.
+    std::fs::write(restarted.vfs().root().join("output"), b"later").unwrap();
+    restarted.execute(&effect, request).await.unwrap();
+    assert_eq!(
+        std::fs::read(restarted.vfs().root().join("output")).unwrap(),
+        b"later"
+    );
+    let mut unit = fixture.context.units(fixture.database.clone())()
+        .await
+        .unwrap();
+    let record = unit
+        .get_operation(&fixture.run, &effect)
+        .await
+        .unwrap()
+        .unwrap();
+    for bytes in [
+        &record.request,
+        record.recovery_payload.as_ref().unwrap(),
+        record.outcome.as_ref().unwrap(),
+    ] {
+        assert!(!String::from_utf8_lossy(bytes).contains("original input payload"));
+    }
+    let fingerprint = String::from_utf8(record.request).unwrap();
+    assert!(fingerprint.contains("sha256"));
+    drop(unit);
+    let tables: Vec<String> = fixture
+        .database
+        .read(|connection| {
+            Box::pin(async move {
+                Ok(sqlx::query_scalar(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%object%'",
+                )
+                .fetch_all(connection)
+                .await?)
+            })
+        })
+        .await
+        .unwrap();
+    assert!(
+        tables.is_empty(),
+        "filesystem storage must not create object tables: {tables:?}"
+    );
+}
+
+#[tokio::test]
+async fn directory_outputs_larger_than_metadata_limit_are_stored_in_sqlite() {
+    use interpreter::runtime::{
+        filesystem::{Filesystem, Invocation},
+        fuel,
+    };
+    let fixture = Fixture::new().await;
+    for i in 0..1100 {
+        std::fs::write(
+            fixture
+                .filesystem
+                .vfs()
+                .root()
+                .join(format!("entry-{i:04}-{}", "x".repeat(60))),
+            b"",
+        )
+        .unwrap();
+    }
+    let resource = uuid::Uuid::new_v4().to_string();
+    let entries: Vec<_> = fixture
+        .filesystem
+        .open_directory(&resource, "/", false, 0)
+        .await
+        .unwrap()
+        .collect();
+    assert!(serde_json::to_vec(&entries).unwrap().len() > submilli_durable::codec::MAX_RECORD);
+    std::fs::write(fixture.filesystem.vfs().root().join("later"), b"").unwrap();
+    let replay: Vec<_> = fixture
+        .filesystem
+        .open_directory(&resource, "/", false, 0)
+        .await
+        .unwrap()
+        .collect();
+    assert_eq!(entries, replay);
+    // Replay must pay for long path strings, even when the committed observation
+    // exceeds the remaining budget. Return it and settle; do not lose the result.
+    let work = Arc::new(fuel::WorkBudget::new(1));
+    let invocation = Invocation {
+        operation: Some(resource.into()),
+        work: Some(work.clone()),
+    };
+    Filesystem::open_directory(
+        &fixture.filesystem.0,
+        &invocation,
+        "/",
+        false,
+        &interpreter::runtime::limits::TenantLimits::new(64 << 20),
+    )
+    .await
+    .unwrap();
+    let path_bytes = entries.iter().map(|entry| entry.path.len() as u64).sum();
+    assert!(work.spent() >= fuel::PARSE.cost(path_bytes) + fuel::HASH.cost(path_bytes));
+}
+
+#[tokio::test]
+async fn writer_rejects_changed_chunks_and_corrupt_staging_before_publication() {
+    let fixture = Fixture::new().await;
+    let resource = uuid::Uuid::new_v4().to_string();
+    let chunk = uuid::Uuid::new_v4().to_string();
+    fixture
+        .filesystem
+        .open_writer(&resource, "/output")
+        .await
+        .unwrap();
+    fixture
+        .filesystem
+        .write_chunk(&resource, &chunk, b"original".to_vec())
+        .await
+        .unwrap();
+    assert!(
+        fixture
+            .filesystem
+            .write_chunk(&resource, &chunk, b"changed".to_vec())
+            .await
+            .is_err()
+    );
+    let staged = fixture
+        .filesystem
+        .vfs()
+        .root()
+        .join(".git-submilli-recovery")
+        .join(fixture.filesystem.id())
+        .join(format!("writer-{resource}/output"));
+    std::fs::write(&staged, b"corrupt!").unwrap();
+    assert!(
+        fixture
+            .filesystem
+            .close_writer(&resource, &uuid::Uuid::new_v4().to_string())
+            .await
+            .is_err()
+    );
+    assert!(!fixture.filesystem.vfs().root().join("output").exists());
+}
+
+#[tokio::test]
+async fn failed_admission_does_not_stage_input_or_mutate_public_files() {
+    let fixture = Fixture::new().await;
+    fixture.database.transaction(|connection| Box::pin(async move {
+        sqlx::query("CREATE TRIGGER refuse_effect BEFORE INSERT ON durable_filesystem_operations BEGIN SELECT RAISE(FAIL, 'injected admission failure'); END").execute(connection).await?;
+        Ok(())
+    })).await.unwrap();
+    let effect = uuid::Uuid::new_v4().to_string();
+    let input = ReplayInput::bytes(effect.clone(), b"private input".to_vec()).unwrap();
+    assert!(
+        fixture
+            .filesystem
+            .execute_with_input(
+                &effect,
+                Mutation::Write {
+                    path: "/output".into(),
+                    content: input.content()
+                },
+                input
+            )
+            .await
+            .is_err()
+    );
+    assert!(!fixture.filesystem.vfs().root().join("output").exists());
+    assert!(
+        !fixture
+            .filesystem
+            .vfs()
+            .root()
+            .join(".git-submilli-recovery")
+            .join(fixture.filesystem.id())
+            .join(effect)
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn writer_close_records_target_refusals_and_replays_them() {
+    let fixture = Fixture::new().await;
+    let root = fixture.filesystem.vfs().root();
+    std::fs::create_dir(root.join("parent")).unwrap();
+    let resource = uuid::Uuid::new_v4().to_string();
+    fixture
+        .filesystem
+        .open_writer(&resource, "/parent/out")
+        .await
+        .unwrap();
+    fixture
+        .filesystem
+        .write_chunk(
+            &resource,
+            &uuid::Uuid::new_v4().to_string(),
+            b"output".to_vec(),
+        )
+        .await
+        .unwrap();
+    std::fs::remove_dir(root.join("parent")).unwrap();
+    let effect = uuid::Uuid::new_v4().to_string();
+    let error = fixture
+        .filesystem
+        .close_writer(&resource, &effect)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, FilesystemError::Rejected(_)), "{error}");
+    std::fs::create_dir(root.join("parent")).unwrap();
+    let replay = fixture
+        .filesystem
+        .close_writer(&resource, &effect)
+        .await
+        .unwrap_err();
+    assert_eq!(error.to_string(), replay.to_string());
+    assert!(!root.join("parent/out").exists());
+    let resource = uuid::Uuid::new_v4().to_string();
+    fixture
+        .filesystem
+        .open_writer(&resource, "/")
+        .await
+        .unwrap();
+    let error = fixture
+        .filesystem
+        .close_writer(&resource, &uuid::Uuid::new_v4().to_string())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, FilesystemError::Rejected(_)), "{error}");
+}
+
+#[tokio::test]
+async fn writer_quota_refusal_leaves_acknowledged_prefix_retryable() {
+    let fixture = Fixture::with_filesystem_limit(Some(8)).await;
+    let resource = uuid::Uuid::new_v4().to_string();
+    fixture
+        .filesystem
+        .open_writer(&resource, "/out")
+        .await
+        .unwrap();
+    fixture
+        .filesystem
+        .write_chunk(
+            &resource,
+            &uuid::Uuid::new_v4().to_string(),
+            b"abc".to_vec(),
+        )
+        .await
+        .unwrap();
+    let chunk = uuid::Uuid::new_v4().to_string();
+    let error = fixture
+        .filesystem
+        .write_chunk(&resource, &chunk, b"too large".to_vec())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, FilesystemError::Rejected(_)), "{error}");
+    // A refused chunk has no receipt; a smaller retry can still be acknowledged.
+    fixture
+        .filesystem
+        .write_chunk(&resource, &chunk, b"d".to_vec())
+        .await
+        .unwrap();
+    fixture
+        .filesystem
+        .close_writer(&resource, &uuid::Uuid::new_v4().to_string())
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read(fixture.filesystem.vfs().root().join("out")).unwrap(),
+        b"abcd"
+    );
+}
+
+#[tokio::test]
+async fn opening_existing_workspace_leaves_pending_mutation_for_explicit_retry() {
+    let fixture = Fixture::new().await;
+    let effect = uuid::Uuid::new_v4().to_string();
+    let request = Mutation::CreateDirectory {
+        path: "/pending".into(),
+    };
+    fixture
+        .filesystem
+        .test_journal()
+        .admit(fixture.filesystem.id(), &effect, &request)
+        .await
+        .unwrap();
+    let opened = DurableFilesystem::open(
+        fixture.filesystem.vfs().clone(),
+        &fixture.run,
+        fixture.database.clone(),
+        fixture.context.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!opened.vfs().root().join("pending").exists());
+    drop(opened);
+    let reopened = DurableFilesystem::open(
+        fixture.filesystem.vfs().clone(),
+        fixture.filesystem.id(),
+        fixture.database.clone(),
+        fixture.context.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!reopened.vfs().root().join("pending").exists());
+    let mut unit = (fixture.context.units(fixture.database.clone()))()
+        .await
+        .unwrap();
+    let pending = unit
+        .get_operation(&fixture.run, &effect)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(pending.recovery_payload.is_none());
+    assert!(pending.outcome.is_none());
+    drop(unit);
+    reopened.execute(&effect, request.clone()).await.unwrap();
+    assert!(reopened.vfs().root().join("pending").is_dir());
+    // A repeated completed call also leaves later directory contents alone.
+    std::fs::write(reopened.vfs().root().join("pending/later"), b"later").unwrap();
+    reopened.execute(&effect, request).await.unwrap();
+    assert_eq!(
+        std::fs::read(reopened.vfs().root().join("pending/later")).unwrap(),
+        b"later"
+    );
+}

@@ -29,6 +29,24 @@ jobs:
         run: python3 verification/check.py --output "$RUNNER_TEMP/durability-model"
       - name: Check run preparation and admission
         run: python3 verification/check.py --model admission --output "$RUNNER_TEMP/admission-model"
+      - name: Check filesystem operation journal
+        run: python3 verification/check.py --model effects --output "$RUNNER_TEMP/effects-model"
+      - name: Durable unit of work model
+        run: python3 verification/check.py --model unit-of-work --output "$RUNNER_TEMP/unit-of-work-model"
+      - name: Check fixed-offset append recovery
+        run: python3 verification/check.py --model filesystem --output "$RUNNER_TEMP/filesystem-model"
+      - name: Check regular-file namespace recovery
+        run: python3 verification/check.py --model filesystem/namespace --output "$RUNNER_TEMP/namespace-model"
+      - name: Check directory recovery
+        run: python3 verification/check.py --model filesystem/directories --output "$RUNNER_TEMP/directories-model"
+      - name: Check staged writer outputs without input storage
+        run: python3 verification/check.py --model filesystem/writers --output "$RUNNER_TEMP/writers-model"
+      - name: Check listing handles across execution replay
+        run: python3 verification/check.py --model filesystem/listings --output "$RUNNER_TEMP/listings-model"
+      - name: Check reader handles across execution replay
+        run: python3 verification/check.py --model filesystem/resources --output "$RUNNER_TEMP/resources-model"
+      - name: Check caller-code filesystem replay
+        run: python3 verification/check.py --model filesystem/sequences --output "$RUNNER_TEMP/sequences-model"
       - name: Preserve model-checking evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -37,5 +55,14 @@ jobs:
           path: |
             ${{ runner.temp }}/durability-model
             ${{ runner.temp }}/admission-model
+            ${{ runner.temp }}/effects-model
+            ${{ runner.temp }}/unit-of-work-model
+            ${{ runner.temp }}/filesystem-model
+            ${{ runner.temp }}/namespace-model
+            ${{ runner.temp }}/directories-model
+            ${{ runner.temp }}/writers-model
+            ${{ runner.temp }}/resources-model
+            ${{ runner.temp }}/listings-model
+            ${{ runner.temp }}/sequences-model
           if-no-files-found: ignore
           retention-days: 14

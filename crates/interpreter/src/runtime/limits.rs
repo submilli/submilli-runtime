@@ -63,18 +63,27 @@ pub(crate) fn name_memory_exhaustion(err: wasmtime::Error) -> wasmtime::Error {
 }
 
 /// Native working memory admitted before allocating and refunded on every exit.
-pub(crate) struct HostBytes {
+pub struct HostBytes {
     counter: Arc<AtomicU64>,
     bytes: u64,
 }
 
 impl HostBytes {
-    pub(crate) fn new(limits: &TenantLimits, bytes: u64) -> Result<Self, MemoryCapExceeded> {
+    pub fn new(limits: &TenantLimits, bytes: u64) -> Result<Self, MemoryCapExceeded> {
         limits.charge_host_bytes(bytes)?;
         Ok(Self {
             counter: limits.host_attached_counter(),
             bytes,
         })
+    }
+    pub(crate) fn grow(
+        &mut self,
+        limits: &TenantLimits,
+        bytes: u64,
+    ) -> Result<(), MemoryCapExceeded> {
+        limits.charge_host_bytes(bytes)?;
+        self.bytes = self.bytes.saturating_add(bytes);
+        Ok(())
     }
 }
 

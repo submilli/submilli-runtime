@@ -9,6 +9,7 @@ members = [
     "crates/submilli-policy",
     "crates/submilli-shared",
     "crates/submilli-server",
+    "crates/submilli-durable",
 ]
 
 [workspace.package]

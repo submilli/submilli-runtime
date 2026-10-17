@@ -5,9 +5,11 @@ pub(crate) mod array_storage;
 pub mod blocking;
 pub mod call_log;
 pub mod decision;
+pub mod default_filesystem;
 pub mod disk_quota;
 pub mod embedding;
 pub mod exec;
+pub mod filesystem;
 pub mod fs;
 pub mod fuel;
 pub mod gc_singleton;
@@ -130,6 +132,8 @@ pub struct StoreData {
     pub(crate) git_history: Option<Arc<crate::stdlib::git::log_cache::Cache>>,
     pub console: Box<dyn Write + Send>,
     pub vfs: Vfs,
+    pub filesystem: Arc<dyn filesystem::Filesystem>,
+    pub filesystem_effect_ids: std::sync::Arc<dyn filesystem::EffectIds>,
     pub vfs_info: VfsInfo,
     pub security_check: Arc<dyn SecurityCheck>,
     pub fs_max_read_size: u64,
@@ -287,7 +291,9 @@ impl StoreData {
             #[cfg(test)]
             array_growth: array_storage::GrowthStats::default(),
             console: Box::new(std::io::stderr()),
+            filesystem: Arc::new(default_filesystem::DefaultFilesystem::new(vfs.clone())),
             vfs,
+            filesystem_effect_ids: std::sync::Arc::new(filesystem::TemporaryEffectIds),
             vfs_info,
             security_check: security::default_check(),
             git: None,
