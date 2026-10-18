@@ -18,12 +18,13 @@ Apply == /\ s.up /\ s.sql = "pending" /\ s.name = Initial
          /\ s' = [s EXCEPT !.name = Desired, !.parentSynced = FALSE,
                            !.seen = @ \cup {"applied"}]
 SyncDirectory == /\ s.up /\ s.sql = "pending" /\ s.name = Desired
+                 /\ Operation = "mkdir"
                  /\ s' = [s EXCEPT !.directorySynced = TRUE]
 SyncParent == /\ s.up /\ s.sql = "pending" /\ s.name = Desired
-              /\ s.directorySynced
+              /\ (Operation = "rmdir" \/ s.directorySynced)
               /\ s' = [s EXCEPT !.disk = s.name, !.parentSynced = TRUE]
 Receipt == /\ s.up /\ s.sql = "pending" /\ s.name = Desired
-           /\ ((s.parentSynced /\ s.directorySynced) \/ Fault = "early-receipt")
+           /\ ((s.parentSynced /\ (Operation = "rmdir" \/ s.directorySynced)) \/ Fault = "early-receipt")
            /\ s' = [s EXCEPT !.sql = "done"]
 Error == /\ s.up /\ s.sql = "pending" /\ "applied" \in s.seen
          /\ Fault = "early-error"
@@ -44,7 +45,12 @@ Crash == /\ s.up /\ s.crashes < MaxCrashes
                              (IF s.sql = "pending" /\ s.disk = Desired THEN {"gap"} ELSE {})
                              \cup (IF s.sql = "done" /\ ~s.returned THEN {"lost-ack"} ELSE {})]
 Restart == /\ ~s.up /\ s' = [s EXCEPT !.up = TRUE]
-(* Intent abstracts Initial -> Prepared. Applying a name, syncing the directory
+(* One owner keeps the path unchanged by other calls while this operation is
+   pending. Prepared mkdir may accept its own created directory; prepared rmdir
+   may accept absence. Prepared carries no fields: replay supplies the path,
+   and an existing removal target supplies its file/directory kind. No recorded
+   path, inode identity, type or private link is needed.
+   Intent abstracts Initial -> Prepared. Applying a name, syncing the directory
    and parent, and saving Completed remain separate crashable steps. *)
 DecodeState == CASE s.sql = "absent" -> "Initial"
                  [] s.sql = "pending" -> "Prepared"

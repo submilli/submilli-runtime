@@ -2,7 +2,7 @@
 use super::{
     DurableFilesystem, FilesystemError, conflict, require_capacity, require_ready, serialize,
 };
-use crate::io::{self as paths, RecoveryError};
+use crate::io::RecoveryError;
 use crate::unit_of_work::*;
 use interpreter::runtime::durable::EffectId;
 use interpreter::runtime::fuel::WorkBudget;
@@ -27,26 +27,12 @@ impl FilesystemOperation {
         }
         Ok(())
     }
-    pub(super) fn charge_preparation(
-        &self,
-        path: &str,
-        payload: u64,
-    ) -> Result<(), FilesystemError> {
+    /// Candidate preparation and validation visit only the replacement bytes.
+    /// Namespace-only operations do not scan or hash the old destination.
+    pub(super) fn charge_preparation(&self, bytes: u64) -> Result<(), FilesystemError> {
         use interpreter::runtime::fuel;
-        if self.work.is_none() {
-            return Ok(());
-        }
-        let original =
-            paths::resolve_content(self.filesystem.vfs(), self.filesystem.vfs().cwd(), path)
-                .and_then(|p| p.metadata())
-                .ok()
-                .filter(cap_std::fs::Metadata::is_file)
-                .map_or(0, |m| m.len());
-        let bytes = original
-            .saturating_mul(2)
-            .saturating_add(payload.saturating_mul(3));
-        self.charge(fuel::HASH, bytes)?;
-        self.charge(fuel::IO, bytes)
+        self.charge(fuel::HASH, bytes.saturating_mul(2))?;
+        self.charge(fuel::IO, bytes.saturating_mul(2))
     }
     pub(super) async fn create_initial_or_get_last_journal_entry<T: Serialize>(
         &self,
@@ -62,7 +48,7 @@ impl FilesystemOperation {
             .await?
         {
             if journal_entry.operation != kind
-                || journal_entry.version != 2
+                || journal_entry.version != 4
                 || journal_entry.request != fingerprint
             {
                 return conflict();
@@ -89,11 +75,9 @@ impl FilesystemOperation {
             id: effect.clone(),
             run_id: self.filesystem.run_id.clone(),
             operation: kind.into(),
-            version: 2,
+            version: 4,
             request: fingerprint,
-            recovery_payload: None,
-            outcome: None,
-            rejected: false,
+            state: None,
         };
         unit.save_journal_entry(journal_entry.clone()).await?;
         Ok(journal_entry)

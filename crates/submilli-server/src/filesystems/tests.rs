@@ -78,7 +78,7 @@ impl Fixture {
 }
 
 async fn publication_without_receipt(fixture: &Fixture, effect: &EffectId, request: TestCall) {
-    fail_operation_updates(fixture, "NEW.state='done'").await;
+    fail_operation_updates(fixture, "NEW.status='done'").await;
     assert!(fixture.filesystem.call(effect, request).await.is_err());
     clear_operation_failure(fixture).await;
 }
@@ -120,7 +120,7 @@ async fn sqlite_receipt_suppresses_completed_mutation_after_path_reuse() {
     let fixture = Fixture::new().await;
     let content = fixture.input(b"original").await;
     let effect: EffectId = uuid::Uuid::new_v4().to_string().into();
-    let request = TestCall::Write {
+    let request = TestCall::Append {
         path: "/file".into(),
         content,
     };
@@ -191,6 +191,17 @@ async fn append_publication_gap_recovers_once_and_blocks_other_mutations() {
         content,
     };
     publication_without_receipt(&fixture, &effect, request.clone()).await;
+    let journal_entry = {
+        let mut unit = fixture.units()().await.unwrap();
+        unit.get_journal_entry(&fixture.run, &effect)
+            .await
+            .unwrap()
+            .unwrap()
+    };
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&journal_entry.state.unwrap()).unwrap(),
+        serde_json::json!({"Prepared": {"offset": 6}})
+    );
     assert!(
         fixture
             .filesystem
@@ -212,6 +223,19 @@ async fn append_publication_gap_recovers_once_and_blocks_other_mutations() {
         )
         .await
         .unwrap();
+    assert!(
+        restored
+            .call(
+                &effect,
+                TestCall::Append {
+                    path: "/other".into(),
+                    content: fixture.input(b" suffix").await,
+                },
+            )
+            .await
+            .is_err()
+    );
+    assert!(!restored.vfs().root().join("other").exists());
     restored.call(&effect, request.clone()).await.unwrap();
     restored.call(&effect, request).await.unwrap();
     assert_eq!(
@@ -483,7 +507,7 @@ async fn interpreter_uses_durable_backend_and_replay_does_not_repeat_append() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(effect.state(), "done");
+    assert_eq!(effect.status().unwrap(), "done");
     drop(unit);
     run_backend(&fixture, source).await.unwrap();
     assert_eq!(
@@ -616,23 +640,34 @@ async fn durable_append_and_eager_listing_admit_their_own_fuel() {
     std::fs::write(root.join("large"), &original).unwrap();
     let append = r#"import { appendText } from "submilli:fs";
         function main(): void { appendText("/large", ""); }"#;
-    let error = run_backend_fueled(&fixture, append, Some(10_000))
+    // Empty append no longer hashes the large existing file.
+    run_backend_fueled(&fixture, append, Some(10_000))
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(root.join("large")).unwrap(), original);
+    let effect_id: EffectId = uuid::Uuid::new_v4().to_string().into();
+    let work = Arc::new(interpreter::runtime::fuel::WorkBudget::new(1_000));
+    let error = fixture
+        .filesystem
+        .operation(Some(work))
+        .append_bytes(&effect_id, "/large", vec![b'y'; 64 * 1024])
         .await
         .unwrap_err();
-    assert!(error.is::<wasmtime::Trap>(), "{error}");
+    assert!(matches!(
+        error,
+        submilli_durable::FilesystemError::Recovery(submilli_durable::RecoveryError::Fuel(_))
+    ));
     assert_eq!(std::fs::read(root.join("large")).unwrap(), original);
-    // Retry the admitted effect directly; the interpreter stub does not replay IDs.
-    let effect_id: EffectId = sole_operation_id(&fixture).await;
-    interpreter::runtime::filesystem::Filesystem::write(
-        &fixture.filesystem,
-        &effect_id,
-        None,
-        "/large",
-        Vec::new(),
-        true,
-    )
-    .await
-    .unwrap();
+    fixture
+        .filesystem
+        .operation(None)
+        .append_bytes(&effect_id, "/large", vec![b'y'; 64 * 1024])
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::metadata(root.join("large")).unwrap().len(),
+        128 * 1024
+    );
     for index in 0..100 {
         std::fs::write(root.join(format!("entry-{index}")), "").unwrap();
     }
@@ -645,7 +680,7 @@ async fn durable_append_and_eager_listing_admit_their_own_fuel() {
 }
 
 #[tokio::test]
-async fn durable_quota_scan_stops_before_mutation_and_resumes_with_fuel() {
+async fn durable_mutations_do_not_scan_unrelated_files_for_quota() {
     let fixture = Fixture::with_filesystem_limit(Some(1 << 20)).await;
     let root = fixture.filesystem.vfs().root();
     for index in 0..100 {
@@ -653,22 +688,11 @@ async fn durable_quota_scan_stops_before_mutation_and_resumes_with_fuel() {
     }
     let source = r#"import { mkdir } from "submilli:fs";
         function main(): void { mkdir("/created", false); }"#;
-    let error = run_backend_fueled(&fixture, source, Some(10_000))
+    run_backend_fueled(&fixture, source, Some(10_000))
         .await
-        .unwrap_err();
-    assert!(error.is::<wasmtime::Trap>(), "{error}");
-    assert!(!root.join("created").exists());
-    let effect_id: EffectId = sole_operation_id(&fixture).await;
-    interpreter::runtime::filesystem::Filesystem::mkdir(
-        &fixture.filesystem,
-        &effect_id,
-        None,
-        "/created",
-        false,
-    )
-    .await
-    .unwrap();
+        .unwrap();
     assert!(root.join("created").is_dir());
+    assert_eq!(fixture.filesystem.vfs().quota().unwrap().used(), 0);
 }
 
 #[cfg(unix)]
@@ -890,15 +914,15 @@ impl CallTestCase for DurableFilesystem {
 }
 
 #[tokio::test]
-async fn pending_write_requires_replay_bytes_and_rejects_changed_input() {
+async fn pending_append_requires_replay_bytes_and_rejects_changed_input() {
     let fixture = Fixture::new().await;
     let effect: EffectId = uuid::Uuid::new_v4().to_string().into();
-    fail_operation_updates(&fixture, "NEW.recovery_payload IS NOT NULL").await;
+    fail_operation_updates(&fixture, "NEW.status='pending'").await;
     assert!(
         fixture
             .filesystem
             .operation(None)
-            .write_bytes(&effect, "/output", b"original input payload".to_vec())
+            .append_bytes(&effect, "/output", b"original input payload".to_vec())
             .await
             .is_err()
     );
@@ -916,20 +940,20 @@ async fn pending_write_requires_replay_bytes_and_rejects_changed_input() {
     assert!(
         restarted
             .operation(None)
-            .write_bytes(&effect, "/output", b"changed input payload".to_vec())
+            .append_bytes(&effect, "/output", b"changed input payload".to_vec())
             .await
             .is_err()
     );
     assert!(!restarted.vfs().root().join("output").exists());
     restarted
         .operation(None)
-        .write_bytes(&effect, "/output", b"original input payload".to_vec())
+        .append_bytes(&effect, "/output", b"original input payload".to_vec())
         .await
         .unwrap();
     std::fs::write(restarted.vfs().root().join("output"), b"later").unwrap();
     restarted
         .operation(None)
-        .write_bytes(&effect, "/output", b"original input payload".to_vec())
+        .append_bytes(&effect, "/output", b"original input payload".to_vec())
         .await
         .unwrap();
     assert_eq!(
@@ -942,11 +966,7 @@ async fn pending_write_requires_replay_bytes_and_rejects_changed_input() {
         .await
         .unwrap()
         .unwrap();
-    for bytes in [
-        &record.request,
-        record.recovery_payload.as_ref().unwrap(),
-        record.outcome.as_ref().unwrap(),
-    ] {
+    for bytes in [&record.request, record.state.as_ref().unwrap()] {
         assert!(!String::from_utf8_lossy(bytes).contains("original input payload"));
     }
     assert_eq!(
@@ -1084,7 +1104,7 @@ async fn writer_rejects_changed_chunks_and_corrupt_staging_before_publication() 
 }
 
 #[tokio::test]
-async fn failed_admission_does_not_stage_input_or_mutate_public_files() {
+async fn failed_append_admission_does_not_stage_input_or_mutate_public_files() {
     let fixture = Fixture::new().await;
     fixture.database.transaction(|connection| Box::pin(async move {
         sqlx::query("CREATE TRIGGER refuse_effect BEFORE INSERT ON durable_filesystem_operations BEGIN SELECT RAISE(FAIL, 'injected admission failure'); END").execute(connection).await?;
@@ -1095,7 +1115,7 @@ async fn failed_admission_does_not_stage_input_or_mutate_public_files() {
         fixture
             .filesystem
             .operation(None)
-            .write_bytes(&effect, "/output", b"private input".to_vec())
+            .append_bytes(&effect, "/output", b"private input".to_vec())
             .await
             .is_err()
     );
@@ -1169,50 +1189,46 @@ async fn writer_close_records_target_refusals_and_replays_them() {
 }
 
 #[tokio::test]
-async fn writer_quota_refusal_leaves_acknowledged_prefix_retryable() {
+async fn writer_staging_is_free_and_close_checks_only_the_public_size() {
     let fixture = Fixture::with_filesystem_limit(Some(8)).await;
-    let resource: EffectId = uuid::Uuid::new_v4().to_string().into();
-    fixture
-        .filesystem
-        .operation(None)
-        .open_writer(&resource, "/out")
+    let operation = fixture.filesystem.operation(None);
+    let quota = fixture.filesystem.vfs().quota().unwrap();
+    operation
+        .write_bytes(&resource_effect_id(), "/out", b"original".to_vec())
         .await
         .unwrap();
-    fixture
-        .filesystem
-        .operation(None)
-        .write_chunk(
-            &resource,
-            &uuid::Uuid::new_v4().to_string().into(),
-            b"abc".to_vec(),
-        )
-        .await
-        .unwrap();
-    let chunk: EffectId = uuid::Uuid::new_v4().to_string().into();
-    let error = fixture
-        .filesystem
-        .operation(None)
-        .write_chunk(&resource, &chunk, b"too large".to_vec())
-        .await
-        .unwrap_err();
-    assert!(matches!(error, FilesystemError::Rejected(_)), "{error}");
-    // A refused chunk has no receipt; a smaller retry can still be acknowledged.
-    fixture
-        .filesystem
-        .operation(None)
-        .write_chunk(&resource, &chunk, b"d".to_vec())
-        .await
-        .unwrap();
-    fixture
-        .filesystem
-        .operation(None)
-        .close_writer(&resource, &uuid::Uuid::new_v4().to_string().into())
-        .await
-        .unwrap();
-    assert_eq!(
-        std::fs::read(fixture.filesystem.vfs().root().join("out")).unwrap(),
-        b"abcd"
-    );
+    for bytes in [
+        b"replaced".as_slice(),
+        b"smaller",
+        b"too large for the quota",
+    ] {
+        let resource = resource_effect_id();
+        operation.open_writer(&resource, "/out").await.unwrap();
+        let previous = std::fs::read(fixture.filesystem.vfs().root().join("out")).unwrap();
+        operation
+            .write_chunk(&resource, &resource_effect_id(), bytes.to_vec())
+            .await
+            .unwrap();
+        assert_eq!(
+            quota.used(),
+            previous.len() as u64,
+            "private staging changed quota"
+        );
+        let close = resource_effect_id();
+        let result = operation.close_writer(&resource, &close).await;
+        if bytes.len() <= 8 {
+            result.unwrap();
+            operation.close_writer(&resource, &close).await.unwrap();
+            assert_eq!(quota.used(), bytes.len() as u64);
+        } else {
+            assert!(matches!(result, Err(FilesystemError::Rejected(_))));
+            assert_eq!(quota.used(), previous.len() as u64);
+            assert_eq!(
+                std::fs::read(fixture.filesystem.vfs().root().join("out")).unwrap(),
+                previous
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -1222,7 +1238,7 @@ async fn opening_existing_workspace_leaves_pending_mutation_for_explicit_retry()
     let request = TestCall::CreateDirectory {
         path: "/pending".into(),
     };
-    fail_operation_updates(&fixture, "NEW.recovery_payload IS NOT NULL").await;
+    fail_operation_updates(&fixture, "NEW.status='pending'").await;
     assert!(
         fixture
             .filesystem
@@ -1258,8 +1274,7 @@ async fn opening_existing_workspace_leaves_pending_mutation_for_explicit_retry()
         .await
         .unwrap()
         .unwrap();
-    assert!(pending.recovery_payload.is_none());
-    assert!(pending.outcome.is_none());
+    assert!(pending.state.is_none());
     drop(unit);
     reopened.call(&effect, request.clone()).await.unwrap();
     assert!(reopened.vfs().root().join("pending").is_dir());
@@ -1280,13 +1295,25 @@ async fn direct_namespace_calls_reconcile_sql_gaps_and_preserve_later_paths() {
         std::fs::write(root.join("source"), b"original").unwrap();
         std::fs::write(root.join("destination"), b"old destination").unwrap();
         let effect: EffectId = uuid::Uuid::new_v4().to_string().into();
-        fail_operation_updates(&fixture, "NEW.state='done'").await;
+        fail_operation_updates(&fixture, "NEW.status='done'").await;
         assert!(
             namespace_call(&fixture.filesystem, kind, &effect)
                 .await
                 .is_err()
         );
         clear_operation_failure(&fixture).await;
+        let journal_entry = {
+            let mut unit = fixture.units()().await.unwrap();
+            unit.get_journal_entry(&fixture.run, &effect)
+                .await
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&journal_entry.state.unwrap()).unwrap(),
+            serde_json::json!({"Prepared": {}}),
+            "{kind} stores no path or file identity"
+        );
         let reopened = fixture
             .filesystem
             .reopen(
@@ -1296,6 +1323,15 @@ async fn direct_namespace_calls_reconcile_sql_gaps_and_preserve_later_paths() {
             )
             .await
             .unwrap();
+        let operation = reopened.operation(None);
+        let changed_path = match kind {
+            "move" => operation.move_path(&effect, "/source", "/other").await,
+            "remove" => operation.remove_path(&effect, "/other").await,
+            "mkdir" => operation.create_directory(&effect, "/other").await,
+            _ => unreachable!(),
+        };
+        assert!(changed_path.is_err());
+        assert!(!root.join("other").exists());
         namespace_call(&reopened, kind, &effect).await.unwrap();
         match kind {
             "move" => {
@@ -1323,7 +1359,7 @@ async fn direct_namespace_calls_reconcile_sql_gaps_and_preserve_later_paths() {
         assert!(
             reopened
                 .operation(None)
-                .write_bytes(&effect, "/source", b"collision".to_vec())
+                .append_bytes(&effect, "/source", b"collision".to_vec())
                 .await
                 .is_err()
         );
@@ -1423,4 +1459,48 @@ async fn empty_writer_close_records_read_only_refusal_without_staging() {
         b""
     );
     fixture.assert_no_pending_work().await;
+}
+
+#[tokio::test]
+async fn byte_writes_and_retries_do_not_use_the_filesystem_journal() {
+    let fixture = Fixture::with_filesystem_limit(Some(8)).await;
+    fixture.database.transaction(|connection| Box::pin(async move {
+        sqlx::query("CREATE TRIGGER refuse_effect BEFORE INSERT ON durable_filesystem_operations BEGIN SELECT RAISE(FAIL, 'byte writes must not journal'); END").execute(connection).await?;
+        Ok(())
+    })).await.unwrap();
+    let effect = resource_effect_id();
+    for _ in 0..2 {
+        fixture
+            .filesystem
+            .operation(None)
+            .write_bytes(&effect, "/file", b"original".to_vec())
+            .await
+            .unwrap();
+    }
+    let reopened = fixture
+        .filesystem
+        .reopen(
+            fixture.filesystem.vfs().clone(),
+            &fixture.run,
+            fixture.units(),
+        )
+        .await
+        .unwrap();
+    reopened
+        .operation(None)
+        .write_bytes(&effect, "/file", b"original".to_vec())
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read(reopened.vfs().root().join("file")).unwrap(),
+        b"original"
+    );
+    assert_eq!(reopened.vfs().quota().unwrap().used(), 8);
+    let mut unit = fixture.units()().await.unwrap();
+    assert!(
+        unit.get_journal_entry(&fixture.run, &effect)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

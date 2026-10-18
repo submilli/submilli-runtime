@@ -314,7 +314,7 @@ async fn operation_limit_preserves_replay_and_does_not_fence_a_writer() {
     let run_id = fs.run_id().to_owned();
     // Count-only boundary injection: the padding records are never decoded.
     fixture.database.transaction(move |connection| Box::pin(async move {
-        sqlx::query("WITH RECURSIVE padding(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM padding WHERE n<9999) INSERT INTO durable_filesystem_operations(scope_id,operation_id,operation,version,request,outcome,state) SELECT ?, 'padding-'||n, 'test', 1, X'', X'', 'rejected' FROM padding")
+        sqlx::query("WITH RECURSIVE padding(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM padding WHERE n<9999) INSERT INTO durable_filesystem_operations(scope_id,operation_id,operation,version,request,state,status) SELECT ?, 'padding-'||n, 'test', 1, X'', X'', 'rejected' FROM padding")
             .bind(run_id.as_str()).execute(connection).await?;
         Ok(())
     })).await.unwrap();
@@ -424,39 +424,179 @@ async fn reopen_shares_live_quota_reservations_and_rejects_changed_limits() {
 }
 
 #[tokio::test]
-async fn write_and_append_cannot_reuse_each_others_effect_ids() {
+async fn mkdir_and_append_cannot_reuse_each_others_effect_ids() {
     let fixture = Fixture::new().await;
     let filesystem = fixture.filesystem.operation(None);
-    let write = id();
+    let mkdir = id();
     filesystem
-        .write_bytes(&write, "/file", b"bytes".to_vec())
+        .create_directory(&mkdir, "/directory")
         .await
         .unwrap();
     assert!(
         filesystem
-            .append_bytes(&write, "/file", b"bytes".to_vec())
+            .append_bytes(&mkdir, "/file", b"bytes".to_vec())
             .await
             .is_err()
     );
+    assert!(!fixture.filesystem.vfs().root().join("file").exists());
+    let append = id();
+    filesystem
+        .append_bytes(&append, "/file", b"bytes".to_vec())
+        .await
+        .unwrap();
+    assert!(
+        filesystem
+            .create_directory(&append, "/other")
+            .await
+            .is_err()
+    );
+    assert!(!fixture.filesystem.vfs().root().join("other").exists());
     assert_eq!(
         std::fs::read(fixture.filesystem.vfs().root().join("file")).unwrap(),
         b"bytes"
     );
+    fixture.assert_no_pending_work().await;
+}
 
-    let append = id();
-    filesystem
-        .append_bytes(&append, "/file", b"more".to_vec())
+#[tokio::test]
+async fn durable_quota_changes_stay_on_the_affected_mount() {
+    use interpreter::runtime::DiskQuota;
+    use interpreter::runtime::vfs::{Access, MountSpec};
+    let fixture = Fixture::new().await;
+    let mounted = fixture.root.path().join("mounted");
+    std::fs::create_dir(&mounted).unwrap();
+    std::fs::write(mounted.join("file"), b"old!").unwrap();
+    let mount_quota = Arc::new(DiskQuota::new(4, 4));
+    let vfs = Vfs::external(fixture.filesystem.vfs().root().to_owned())
+        .unwrap()
+        .with_size_limit(4)
+        .with_mount(MountSpec {
+            guest_path: "/mounted".into(),
+            host: mounted,
+            volume: "mounted".into(),
+            access: Access::ReadWrite,
+            quota: Some(mount_quota.clone()),
+        })
+        .unwrap();
+    let filesystem = fixture
+        .filesystem
+        .reopen(vfs, &fixture.run, fixture.units())
         .await
         .unwrap();
-    assert!(
-        filesystem
-            .write_bytes(&append, "/file", b"more".to_vec())
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        std::fs::read(fixture.filesystem.vfs().root().join("file")).unwrap(),
-        b"bytesmore"
-    );
-    fixture.assert_no_pending_work().await;
+    let operation = filesystem.operation(None);
+    operation
+        .write_bytes(&id(), "/root", b"root".to_vec())
+        .await
+        .unwrap();
+    operation
+        .write_bytes(&id(), "/mounted/file", b"new!".to_vec())
+        .await
+        .unwrap();
+    assert_eq!(filesystem.vfs().quota().unwrap().used(), 4);
+    assert_eq!(mount_quota.used(), 4);
+    operation
+        .write_bytes(&id(), "/root", b"hi".to_vec())
+        .await
+        .unwrap();
+    assert_eq!(filesystem.vfs().quota().unwrap().used(), 2);
+    assert_eq!(mount_quota.used(), 4);
+    assert!(matches!(
+        operation
+            .write_bytes(&id(), "/mounted/file", b"large".to_vec())
+            .await,
+        Err(FilesystemError::Rejected(_))
+    ));
+    assert_eq!(filesystem.vfs().quota().unwrap().used(), 2);
+    assert_eq!(mount_quota.used(), 4);
+}
+
+#[tokio::test]
+async fn durable_filesystem_rejects_overlapping_backing_roots_before_quota_setup() {
+    use interpreter::runtime::DiskQuota;
+    use interpreter::runtime::vfs::{Access, MountSpec};
+    for mode in [
+        "root-contains-mount",
+        "mount-contains-root",
+        "nested-mounts",
+    ] {
+        let fixture = Fixture::new().await;
+        let outer = fixture.root.path().join("outer");
+        let inner = outer.join("inner");
+        std::fs::create_dir_all(&inner).unwrap();
+        let root = match mode {
+            "root-contains-mount" => outer.clone(),
+            "mount-contains-root" => inner.clone(),
+            _ => fixture.filesystem.vfs().root().to_owned(),
+        };
+        let mut vfs = Vfs::external(root.clone()).unwrap().with_size_limit(4);
+        let hosts = if mode == "root-contains-mount" {
+            vec![inner]
+        } else if mode == "mount-contains-root" {
+            vec![outer.clone()]
+        } else {
+            vec![outer.clone(), inner]
+        };
+        for (index, host) in hosts.into_iter().enumerate() {
+            vfs = vfs
+                .with_mount(MountSpec {
+                    guest_path: format!("/mount-{index}"),
+                    host,
+                    volume: format!("volume-{index}"),
+                    access: Access::ReadWrite,
+                    quota: Some(Arc::new(DiskQuota::new(4, 0))),
+                })
+                .unwrap();
+        }
+        let result = open(
+            vfs,
+            &fixture.run,
+            fixture.database.clone(),
+            fixture.cipher.clone(),
+        )
+        .await;
+        assert!(
+            matches!(
+                result,
+                Err(FilesystemError::Recovery(
+                    submilli_durable::RecoveryError::Unsupported("overlapping writable volumes")
+                ))
+            ),
+            "{mode}"
+        );
+        assert!(!outer.join(".git-submilli-recovery").exists());
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn overlapping_backing_roots_are_detected_through_symlink_spelling() {
+    use interpreter::runtime::vfs::{Access, MountSpec};
+    let fixture = Fixture::new().await;
+    let outer = fixture.root.path().join("outer");
+    std::fs::create_dir_all(outer.join("inner")).unwrap();
+    let alias = fixture.root.path().join("alias");
+    std::os::unix::fs::symlink(&outer, &alias).unwrap();
+    let vfs = Vfs::external(outer)
+        .unwrap()
+        .with_mount(MountSpec {
+            guest_path: "/mounted".into(),
+            host: alias.join("inner"),
+            volume: "alias".into(),
+            access: Access::ReadWrite,
+            quota: None,
+        })
+        .unwrap();
+    let result = open(
+        vfs,
+        &fixture.run,
+        fixture.database.clone(),
+        fixture.cipher.clone(),
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(FilesystemError::Recovery(
+            submilli_durable::RecoveryError::Unsupported("overlapping writable volumes")
+        ))
+    ));
 }

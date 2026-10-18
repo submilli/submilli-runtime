@@ -1,21 +1,20 @@
 use super::operation::FilesystemOperation;
-use super::{
-    CaptureOptions, FilesystemError, WriteCheckpoint, blocking, decode_checkpoint, decode_outcome,
-    fingerprint, preflight_refusal, serialize, test_checkpoint,
+use super::{FilesystemError, blocking, preflight_refusal};
+use crate::io::{
+    self as paths, Files, RecoveryError, existing, sync, validate_guest_path, validate_id,
 };
-use crate::io::{self as paths, RecoveryError, validate_guest_path};
-use crate::unit_of_work::{JournalEntry, Outcome, RecordedOutcome};
+use crate::unit_of_work::Outcome;
+use cap_std::fs::OpenOptions;
 use interpreter::runtime::durable::EffectId;
+use interpreter::runtime::fuel::{self, WorkBudget};
+use std::io::Write;
 use std::sync::Arc;
 
-/// Saved progress for this operation. Every unfinished stage is safe to repeat.
-enum WriteState {
-    Initial,
-    Prepared(WriteCheckpoint),
-    Completed(Result<Outcome, String>),
-}
-
 impl FilesystemOperation {
+    /// Repeat an unfinished write with the same path and bytes. The execution
+    /// framework owns completion: it must skip completed effects and must not
+    /// advance to another effect until this one's completion is durable.
+    /// No filesystem journal or input fingerprint is needed for this operation.
     pub async fn write_bytes(
         &self,
         effect: &EffectId,
@@ -23,151 +22,91 @@ impl FilesystemOperation {
         bytes: Vec<u8>,
     ) -> Result<Outcome, FilesystemError> {
         validate_guest_path(path)?;
-        let input_fingerprint = fingerprint(effect, &bytes)?;
-        let bytes = Arc::new(bytes);
+        validate_id(effect)?;
+        self.charge(fuel::IO, bytes.len() as u64)?;
         let gate = Arc::new(self.filesystem.filesystem_gate.clone().lock_owned().await);
-        let mut unit = (self.filesystem.units)().await?;
-        let mut journal_entry = self
-            .create_initial_or_get_last_journal_entry(
-                unit.as_mut(),
-                effect,
-                "write",
-                &(path, &input_fingerprint),
+        let files = self.filesystem.files.clone();
+        let work = self.work.clone();
+        let effect = effect.clone();
+        let path = path.to_owned();
+        blocking(gate, move || {
+            Ok(files.write_bytes(&effect, &path, &bytes, work.as_deref()))
+        })
+        .await?
+    }
+}
+
+impl Files {
+    fn write_bytes(
+        &self,
+        effect: &EffectId,
+        path: &str,
+        bytes: &[u8],
+        work: Option<&WorkBudget>,
+    ) -> Result<Outcome, FilesystemError> {
+        let entry = self.entry(path, false).map_err(reject_before_write)?;
+        let parent = self.parent(&entry).map_err(reject_before_write)?;
+        let volume = self.volume(&entry.mount)?;
+        let replacement_name = format!("{effect}.replacement");
+
+        // The name is stable across attempts; the inode must be fresh. A crash
+        // during rename can leave this name pointing at the public file. Remove
+        // our alias before validating public link counts, without a tree scan.
+        match volume.recovery.remove_file(&replacement_name) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(RecoveryError::from(error).into()),
+        }
+        let destination = existing(&parent, &entry.name).map_err(reject_before_write)?;
+        if let Some(metadata) = &destination {
+            self.require_regular(&entry, metadata, work)
+                .map_err(reject_before_write)?;
+        }
+        let previous_bytes = destination.map_or(0, |metadata| metadata.len());
+        let written_bytes = bytes.len() as u64;
+        volume
+            .check_growth(written_bytes.saturating_sub(previous_bytes))
+            .map_err(reject_before_write)?;
+        let mut replacement_file = volume
+            .recovery
+            .open_with(
+                &replacement_name,
+                OpenOptions::new().write(true).create_new(true),
             )
-            .await?;
-        unit.commit().await?;
+            .map_err(RecoveryError::from)?;
+        paths::test_checkpoint("write-temp-created")?;
+        replacement_file
+            .write_all(bytes)
+            .map_err(RecoveryError::from)?;
+        paths::test_checkpoint("write-temp-written")?;
+        replacement_file.sync_all().map_err(RecoveryError::from)?;
+        paths::test_checkpoint("candidate-sync")?;
 
-        let mut state = decode_state(
-            &journal_entry,
-            self.filesystem.filesystem_config_fingerprint,
-        )?;
-        if !matches!(state, WriteState::Completed(_)) {
-            self.charge_preparation(path, input_fingerprint.bytes)?;
-            test_checkpoint("effect-request");
+        if let Some(work) = work {
+            work.before_effect();
         }
-        loop {
-            state = match state {
-                WriteState::Initial => {
-                    let prepared = {
-                        let bytes = bytes.clone();
-                        let input_fingerprint = input_fingerprint.clone();
-                        let files = self.filesystem.files.clone();
-                        let work = self.work.clone();
-                        let (effect, path) = (effect.clone(), path.to_owned());
-                        blocking(gate.clone(), move || {
-                            let mut input = std::io::Cursor::new(bytes.as_slice());
-                            let prepared = (|| {
-                                let target = files.capture_target(
-                                    &effect,
-                                    &path,
-                                    CaptureOptions::default(),
-                                    work.as_deref(),
-                                )?;
-                                let artifacts = files.artifacts(&target.source, &effect, true)?;
-                                let candidate = Some(files.prepare_candidate(
-                                    &target.source,
-                                    &artifacts,
-                                    &input_fingerprint,
-                                    &mut input,
-                                    work.as_deref(),
-                                )?);
-                                paths::sync(&artifacts)?;
-                                paths::test_checkpoint("prepared")?;
-                                Ok(WriteCheckpoint { target, candidate })
-                            })();
-                            files.reconcile_quotas(work.as_deref())?;
-                            prepared
-                        })
-                        .await
-                    };
-                    match prepared {
-                        Ok(checkpoint) => WriteState::Prepared(checkpoint),
-                        Err(FilesystemError::Recovery(error)) if preflight_refusal(&error) => {
-                            WriteState::Completed(Err(error.to_string()))
-                        }
-                        Err(error) => return Err(error),
-                    }
-                }
-                WriteState::Prepared(checkpoint) => {
-                    let written_bytes = input_fingerprint.bytes;
-                    let input_fingerprint = input_fingerprint.clone();
-                    checkpoint.target.validate()?;
-                    if checkpoint.target.original_directory || checkpoint.candidate.is_none() {
-                        return Err(RecoveryError::InvalidRecord.into());
-                    }
-                    if let Some(work) = &self.work {
-                        work.before_effect();
-                    }
-                    let files = self.filesystem.files.clone();
-                    let work = self.work.clone();
-                    let effect = effect.clone();
-                    let bytes = bytes.clone();
-                    blocking(gate.clone(), move || {
-                        let mut input = std::io::Cursor::new(bytes.as_slice());
-                        let artifacts =
-                            files.artifacts(&checkpoint.target.source, &effect, false)?;
-                        let result = files.publish_candidate(
-                            &checkpoint,
-                            &artifacts,
-                            &input_fingerprint,
-                            &mut input,
-                            work.as_deref(),
-                        );
-                        files.reconcile_quotas(work.as_deref())?;
-                        result?;
-                        paths::test_checkpoint("before-receipt")?;
-                        Ok(())
-                    })
-                    .await?;
-                    test_checkpoint("effect-applied");
-                    WriteState::Completed(Ok(Outcome {
-                        bytes: written_bytes,
-                    }))
-                }
-                WriteState::Completed(result) => return result.map_err(FilesystemError::Rejected),
-            };
-            encode_state(&mut journal_entry, &state)?;
-            self.save_journal_entry(&journal_entry).await?;
-            match &state {
-                WriteState::Prepared(_) => test_checkpoint("effect-intent"),
-                WriteState::Completed(Ok(_)) => test_checkpoint("effect-receipt"),
-                _ => {}
-            }
-        }
+        volume
+            .recovery
+            .rename(&replacement_name, &parent, &entry.name)
+            .map_err(RecoveryError::from)?;
+        crate::test_checkpoint("replacement-published-unaccounted");
+        volume.record_size_change(previous_bytes, written_bytes);
+        paths::test_checkpoint("published")?;
+        sync(&parent)?;
+        sync(&volume.recovery)?;
+        paths::test_checkpoint("write-synced")?;
+        Ok(Outcome {
+            bytes: written_bytes,
+        })
     }
 }
 
-fn decode_state(
-    journal_entry: &JournalEntry,
-    config: [u8; 32],
-) -> Result<WriteState, FilesystemError> {
-    if let Some(result) = decode_outcome(journal_entry, config)? {
-        return Ok(WriteState::Completed(result));
+// Only errors known to precede public mutation can be guest-visible refusals.
+// Errors during publication or its sync barriers leave completion uncertain.
+fn reject_before_write(error: RecoveryError) -> FilesystemError {
+    if preflight_refusal(&error) {
+        FilesystemError::Rejected(error.to_string())
+    } else {
+        error.into()
     }
-    match &journal_entry.recovery_payload {
-        Some(bytes) => Ok(WriteState::Prepared(decode_checkpoint(bytes)?)),
-        None => Ok(WriteState::Initial),
-    }
-}
-
-// The operation owns this mapping; SQL keeps its existing immutable intent and receipt columns.
-fn encode_state(
-    journal_entry: &mut JournalEntry,
-    state: &WriteState,
-) -> Result<(), FilesystemError> {
-    match state {
-        WriteState::Initial => {}
-        WriteState::Prepared(checkpoint) => {
-            journal_entry.recovery_payload = Some(serialize(checkpoint)?);
-        }
-        WriteState::Completed(result) => {
-            let outcome = match result {
-                Ok(outcome) => RecordedOutcome::Completed(outcome.clone()),
-                Err(reason) => RecordedOutcome::Rejected(reason.clone()),
-            };
-            journal_entry.rejected = result.is_err();
-            journal_entry.outcome = Some(serialize(&outcome)?);
-        }
-    }
-    Ok(())
 }

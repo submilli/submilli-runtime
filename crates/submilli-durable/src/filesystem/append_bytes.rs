@@ -1,21 +1,25 @@
 use super::operation::FilesystemOperation;
 use super::{
-    CaptureOptions, FilesystemError, WriteCheckpoint, blocking, decode_checkpoint, decode_outcome,
-    fingerprint, preflight_refusal, serialize, test_checkpoint,
+    FilesystemError, blocking, deserialize, fingerprint, preflight_refusal, serialize,
+    test_checkpoint, validate_journal_configuration,
 };
-use super::{copy_exact, hash, require_pin};
-use crate::io::{self as paths, RecoveryError, validate_guest_path};
-use crate::io::{current, sync};
-use crate::unit_of_work::{JournalEntry, Outcome, RecordedOutcome};
+use crate::io::{self as paths, Files, RecoveryError, existing, sync, validate_guest_path};
+use crate::unit_of_work::{JournalEntry, Outcome};
 use cap_std::fs::OpenOptions;
 use interpreter::runtime::durable::EffectId;
-use std::io::{Seek, SeekFrom};
+use serde::{Deserialize, Serialize};
+use std::io::{Seek, SeekFrom, Write};
 use std::sync::Arc;
 
 /// Saved progress for this operation. Every unfinished stage is safe to repeat.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 enum AppendState {
+    #[serde(skip)]
     Initial,
-    Prepared(WriteCheckpoint),
+    Prepared {
+        offset: u64,
+    },
     Completed(Result<Outcome, String>),
 }
 
@@ -27,6 +31,7 @@ impl FilesystemOperation {
         bytes: Vec<u8>,
     ) -> Result<Outcome, FilesystemError> {
         validate_guest_path(path)?;
+        self.charge(interpreter::runtime::fuel::HASH, bytes.len() as u64)?;
         let input_fingerprint = fingerprint(effect, &bytes)?;
         let bytes = Arc::new(bytes);
         let gate = Arc::new(self.filesystem.filesystem_gate.clone().lock_owned().await);
@@ -46,144 +51,47 @@ impl FilesystemOperation {
             self.filesystem.filesystem_config_fingerprint,
         )?;
         if !matches!(state, AppendState::Completed(_)) {
-            self.charge_preparation(path, input_fingerprint.bytes)?;
+            self.charge(interpreter::runtime::fuel::IO, input_fingerprint.bytes)?;
             test_checkpoint("effect-request");
         }
         loop {
             state = match state {
                 AppendState::Initial => {
                     let prepared = {
-                        let bytes = bytes.clone();
-                        let input_fingerprint = input_fingerprint.clone();
+                        let appended_bytes = input_fingerprint.bytes;
                         let files = self.filesystem.files.clone();
                         let work = self.work.clone();
-                        let (effect, path) = (effect.clone(), path.to_owned());
+                        let path = path.to_owned();
                         blocking(gate.clone(), move || {
-                            let mut input = std::io::Cursor::new(bytes.as_slice());
-                            let prepared = (|| {
-                                let target = files.capture_target(
-                                    &effect,
-                                    &path,
-                                    CaptureOptions {
-                                        follow_final: true,
-                                        ..Default::default()
-                                    },
-                                    work.as_deref(),
-                                )?;
-                                let artifacts = files.artifacts(&target.source, &effect, true)?;
-                                let candidate = if target.original.is_some() {
-                                    target
-                                        .original_bytes
-                                        .checked_add(input_fingerprint.bytes)
-                                        .filter(|n| *n <= i64::MAX as u64)
-                                        .ok_or(RecoveryError::Limit)?;
-                                    files
-                                        .volume(&target.source.mount)?
-                                        .check_growth(input_fingerprint.bytes, work.as_deref())?;
-                                    None
-                                } else {
-                                    Some(files.prepare_candidate(
-                                        &target.source,
-                                        &artifacts,
-                                        &input_fingerprint,
-                                        &mut input,
-                                        work.as_deref(),
-                                    )?)
-                                };
-                                paths::sync(&artifacts)?;
-                                paths::test_checkpoint("prepared")?;
-                                Ok(WriteCheckpoint { target, candidate })
-                            })();
-                            files.reconcile_quotas(work.as_deref())?;
-                            prepared
+                            let offset = files.size(&path, work.as_deref())?;
+                            offset
+                                .checked_add(appended_bytes)
+                                .filter(|end| *end <= i64::MAX as u64)
+                                .ok_or(RecoveryError::Limit)?;
+                            files.check_growth(&path, appended_bytes)?;
+                            paths::test_checkpoint("prepared")?;
+                            Ok(offset)
                         })
                         .await
                     };
                     match prepared {
-                        Ok(checkpoint) => AppendState::Prepared(checkpoint),
+                        Ok(offset) => AppendState::Prepared { offset },
                         Err(FilesystemError::Recovery(error)) if preflight_refusal(&error) => {
                             AppendState::Completed(Err(error.to_string()))
                         }
                         Err(error) => return Err(error),
                     }
                 }
-                AppendState::Prepared(checkpoint) => {
+                AppendState::Prepared { offset } => {
                     let written_bytes = input_fingerprint.bytes;
-                    let input_fingerprint = input_fingerprint.clone();
-                    checkpoint.target.validate()?;
-                    if checkpoint.target.original_directory
-                        || (checkpoint.target.original.is_none() && checkpoint.candidate.is_none())
-                    {
-                        return Err(RecoveryError::InvalidRecord.into());
-                    }
                     if let Some(work) = &self.work {
                         work.before_effect();
                     }
                     let files = self.filesystem.files.clone();
-                    let work = self.work.clone();
-                    let effect = effect.clone();
                     let bytes = bytes.clone();
+                    let path = path.to_owned();
                     blocking(gate.clone(), move || {
-                        let mut input = std::io::Cursor::new(bytes.as_slice());
-                        let artifacts =
-                            files.artifacts(&checkpoint.target.source, &effect, false)?;
-                        let result = if checkpoint.target.original.is_some() {
-                            (|| -> Result<_, RecoveryError> {
-                                let target = &checkpoint.target;
-                                let artifacts = &artifacts;
-                                let payload = &input_fingerprint;
-                                let content = &mut input;
-                                let work = work.as_deref();
-                                let original =
-                                    target.original.ok_or(RecoveryError::InvalidRecord)?;
-                                require_pin(artifacts, "original", original)?;
-                                let parent = files.parent(&target.source)?;
-                                if current(&parent, &target.source.name)? != Some(original) {
-                                    return Err(RecoveryError::Conflict);
-                                }
-                                let final_length = target
-                                    .original_bytes
-                                    .checked_add(payload.bytes)
-                                    .filter(|bytes| *bytes <= i64::MAX as u64)
-                                    .ok_or(RecoveryError::Limit)?;
-                                // Deliberately omit O_APPEND: every retry repairs the original interval.
-                                let mut file = artifacts.open_with(
-                                    "original",
-                                    OpenOptions::new().read(true).write(true),
-                                )?;
-                                let length = file.metadata()?.len();
-                                if length < target.original_bytes
-                                    || length > final_length
-                                    || Some(hash(&mut file, target.original_bytes)?)
-                                        != target.original_sha256
-                                {
-                                    return Err(RecoveryError::Conflict);
-                                }
-                                files
-                                    .volume(&target.source.mount)?
-                                    .check_growth(final_length - length, work)?;
-                                file.seek(SeekFrom::Start(target.original_bytes))?;
-                                copy_exact(content, &mut file, payload)?;
-                                file.set_len(final_length)?;
-                                paths::test_checkpoint("append-written")?;
-                                file.sync_all()?;
-                                paths::test_checkpoint("append-sync")?;
-                                sync(&parent)?;
-                                Ok(())
-                            })()
-                        } else {
-                            files.publish_candidate(
-                                &checkpoint,
-                                &artifacts,
-                                &input_fingerprint,
-                                &mut input,
-                                work.as_deref(),
-                            )
-                        };
-                        files.reconcile_quotas(work.as_deref())?;
-                        result?;
-                        paths::test_checkpoint("before-receipt")?;
-                        Ok(())
+                        files.append_at_saved_offset(&path, offset, &bytes)
                     })
                     .await?;
                     test_checkpoint("effect-applied");
@@ -196,7 +104,7 @@ impl FilesystemOperation {
             encode_state(&mut journal_entry, &state)?;
             self.save_journal_entry(&journal_entry).await?;
             match &state {
-                AppendState::Prepared(_) => test_checkpoint("effect-intent"),
+                AppendState::Prepared { .. } => test_checkpoint("effect-intent"),
                 AppendState::Completed(Ok(_)) => test_checkpoint("effect-receipt"),
                 _ => {}
             }
@@ -208,33 +116,126 @@ fn decode_state(
     journal_entry: &JournalEntry,
     config: [u8; 32],
 ) -> Result<AppendState, FilesystemError> {
-    if let Some(result) = decode_outcome(journal_entry, config)? {
-        return Ok(AppendState::Completed(result));
-    }
-    match &journal_entry.recovery_payload {
-        Some(bytes) => Ok(AppendState::Prepared(decode_checkpoint(bytes)?)),
+    validate_journal_configuration(journal_entry, config)?;
+    match &journal_entry.state {
+        Some(bytes) => deserialize(bytes),
         None => Ok(AppendState::Initial),
     }
 }
 
-// The operation owns this mapping; SQL keeps its existing immutable intent and receipt columns.
 fn encode_state(
     journal_entry: &mut JournalEntry,
     state: &AppendState,
 ) -> Result<(), FilesystemError> {
-    match state {
-        AppendState::Initial => {}
-        AppendState::Prepared(checkpoint) => {
-            journal_entry.recovery_payload = Some(serialize(checkpoint)?);
-        }
-        AppendState::Completed(result) => {
-            let outcome = match result {
-                Ok(outcome) => RecordedOutcome::Completed(outcome.clone()),
-                Err(reason) => RecordedOutcome::Rejected(reason.clone()),
-            };
-            journal_entry.rejected = result.is_err();
-            journal_entry.outcome = Some(serialize(&outcome)?);
-        }
-    }
+    journal_entry.state = match state {
+        AppendState::Initial => None,
+        _ => Some(serialize(state)?),
+    };
     Ok(())
+}
+
+impl Files {
+    fn append_at_saved_offset(
+        &self,
+        path: &str,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), RecoveryError> {
+        let end = offset
+            .checked_add(bytes.len() as u64)
+            .filter(|end| *end <= i64::MAX as u64)
+            .ok_or(RecoveryError::InvalidRecord)?;
+        let entry = self.entry(path, true)?;
+        let parent = self.parent(&entry)?;
+        let mut length = existing(&parent, &entry.name)?.map_or(0, |metadata| metadata.len());
+        if length < offset || length > end {
+            return Err(RecoveryError::Conflict);
+        }
+        let volume = self.volume(&entry.mount)?;
+        volume.check_growth(end - length)?;
+        // Do not use O_APPEND: a partial retry overwrites the original range.
+        let mut file = parent.open_with(
+            &entry.name,
+            OpenOptions::new().read(true).write(true).create(true),
+        )?;
+        file.seek(SeekFrom::Start(offset))?;
+        let mut position = offset;
+        for chunk in bytes.chunks(64 * 1024) {
+            let mut remaining = chunk;
+            while !remaining.is_empty() {
+                let written = match file.write(remaining) {
+                    Ok(0) => return Err(std::io::Error::from(std::io::ErrorKind::WriteZero).into()),
+                    Ok(written) => written,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error.into()),
+                };
+                // File::write returns at most remaining.len(); the checked end
+                // above bounds position. Count partial public writes as well.
+                position += written as u64;
+                let next_length = length.max(position);
+                crate::test_checkpoint("append-written-unaccounted");
+                volume.record_size_change(length, next_length);
+                length = next_length;
+                remaining = &remaining[written..];
+            }
+            paths::test_checkpoint("write-chunk")?;
+        }
+        file.set_len(end)?;
+        paths::test_checkpoint("append-written")?;
+        file.sync_all()?;
+        paths::test_checkpoint("append-sync")?;
+        sync(&parent)?;
+        paths::test_checkpoint("before-receipt")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_missing_state_decodes_as_initial() {
+        let mut entry = JournalEntry {
+            run_id: "run".into(),
+            id: "effect".into(),
+            operation: "append".into(),
+            version: 4,
+            request: vec![0; 64],
+            state: None,
+        };
+        assert!(matches!(
+            decode_state(&entry, [0; 32]).unwrap(),
+            AppendState::Initial
+        ));
+        for bytes in [
+            b"broken".as_slice(),
+            br#""Unknown""#,
+            br#""Initial""#,
+            br#"{"Prepared":null}"#,
+            br#"{"Prepared":{}}"#,
+            br#"{"Prepared":{"offset":-1}}"#,
+            br#"{"Prepared":{"offset":0,"entry":{}}}"#,
+        ] {
+            entry.state = Some(bytes.to_vec());
+            assert!(decode_state(&entry, [0; 32]).is_err());
+        }
+        encode_state(&mut entry, &AppendState::Prepared { offset: 6 }).unwrap();
+        assert!(matches!(
+            decode_state(&entry, [0; 32]).unwrap(),
+            AppendState::Prepared { offset: 6 }
+        ));
+        encode_state(
+            &mut entry,
+            &AppendState::Completed(Ok(Outcome { bytes: 3 })),
+        )
+        .unwrap();
+        assert!(matches!(
+            decode_state(&entry, [0; 32]).unwrap(),
+            AppendState::Completed(Ok(Outcome { bytes: 3 }))
+        ));
+        encode_state(&mut entry, &AppendState::Completed(Err("refused".into()))).unwrap();
+        assert!(
+            matches!(decode_state(&entry, [0; 32]).unwrap(), AppendState::Completed(Err(reason)) if reason == "refused")
+        );
+    }
 }

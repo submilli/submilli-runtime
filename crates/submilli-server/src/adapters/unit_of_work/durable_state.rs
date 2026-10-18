@@ -251,20 +251,21 @@ fn decode_journal_entry(row: SqliteRow, sealer: &Sealer) -> Result<JournalEntry,
             .try_into()
             .map_err(invalid)?,
         request: vec![],
-        recovery_payload: None,
-        outcome: None,
-        rejected: row.try_get::<&str, _>("state").map_err(database)? == "rejected",
+        state: None,
     };
-    record_codec::decode_journal_entry(
+    let decoded = record_codec::decode_journal_entry(
         sealer,
         journal_entry,
         JournalEntryColumns {
             request: row.try_get("request").map_err(database)?,
-            recovery: row.try_get("recovery_payload").map_err(database)?,
-            outcome: row.try_get("outcome").map_err(database)?,
+            state: row.try_get("state").map_err(database)?,
         },
     )
-    .map_err(invalid)
+    .map_err(invalid)?;
+    if decoded.status().map_err(invalid)? != row.try_get::<&str, _>("status").map_err(database)? {
+        return Err(StoreError::Conflict);
+    }
+    Ok(decoded)
 }
 pub(super) async fn get_journal_entry(
     connection: &mut SqliteConnection,
@@ -292,9 +293,13 @@ pub(super) async fn save_journal_entry(
         .validate_successor(prior.as_ref())
         .map_err(invalid)?;
     let columns = record_codec::encode_journal_entry(sealer, &journal_entry).map_err(invalid)?;
-    let previous = prior.as_ref().map(JournalEntry::state);
-    let result = sqlx::query("INSERT INTO durable_filesystem_operations(scope_id,operation_id,operation,version,request,recovery_payload,outcome,state) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(scope_id,operation_id) DO UPDATE SET recovery_payload=excluded.recovery_payload,outcome=excluded.outcome,state=excluded.state WHERE durable_filesystem_operations.state=?")
-        .bind(journal_entry.run_id.as_str()).bind(journal_entry.id.as_str()).bind(&journal_entry.operation).bind(journal_entry.version).bind(columns.request).bind(columns.recovery).bind(columns.outcome).bind(journal_entry.state()).bind(previous).execute(connection).await.map_err(database)?;
+    let previous = prior
+        .as_ref()
+        .map(JournalEntry::status)
+        .transpose()
+        .map_err(invalid)?;
+    let result = sqlx::query("INSERT INTO durable_filesystem_operations(scope_id,operation_id,operation,version,request,state,status) VALUES(?,?,?,?,?,?,?) ON CONFLICT(scope_id,operation_id) DO UPDATE SET state=excluded.state,status=excluded.status WHERE durable_filesystem_operations.status=?")
+        .bind(journal_entry.run_id.as_str()).bind(journal_entry.id.as_str()).bind(&journal_entry.operation).bind(journal_entry.version).bind(columns.request).bind(columns.state).bind(journal_entry.status().map_err(invalid)?).bind(previous).execute(connection).await.map_err(database)?;
     if result.rows_affected() != 1 {
         return Err(StoreError::Conflict);
     }
@@ -306,7 +311,7 @@ pub(super) async fn pending_journal_entry(
     run_id: &RunId,
 ) -> Result<Option<EffectId>, StoreError> {
     sqlx::query_scalar::<_, String>(
-        "SELECT operation_id FROM durable_filesystem_operations WHERE scope_id=? AND state IN ('preparing','pending')",
+        "SELECT operation_id FROM durable_filesystem_operations WHERE scope_id=? AND status IN ('preparing','pending')",
     )
     .bind(run_id.as_str())
     .fetch_optional(connection)

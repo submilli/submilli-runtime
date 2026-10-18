@@ -56,7 +56,7 @@ impl UnitOfWork for MemoryUnit {
             .pending
             .operations
             .values()
-            .find(|e| &e.run_id == run_id && e.outcome.is_none())
+            .find(|e| &e.run_id == run_id && matches!(e.status().unwrap(), "preparing" | "pending"))
             .map(|e| e.id.clone()))
     }
     async fn journal_entry_count(&mut self, run_id: &RunId) -> Result<u64, StoreError> {
@@ -167,7 +167,7 @@ impl UnitOfWork for MemoryUnit {
                 .pending
                 .operations
                 .values()
-                .any(|entry| entry.outcome.is_some())
+                .any(|entry| matches!(entry.status().unwrap(), "done" | "rejected"))
         {
             store.refuse_receipt = false;
             return Err(StoreError::Io("injected receipt failure".into()));
@@ -177,7 +177,7 @@ impl UnitOfWork for MemoryUnit {
                 .pending
                 .operations
                 .values()
-                .any(|entry| entry.recovery_payload.is_some() && entry.outcome.is_none());
+                .any(|entry| entry.status().unwrap() == "pending");
         *store = self.pending;
         if stop {
             store.stop_after_prepared = false;
@@ -200,9 +200,7 @@ fn journal_entry() -> JournalEntry {
         operation: "write".into(),
         version: 2,
         request: b"fingerprint".to_vec(),
-        recovery_payload: None,
-        outcome: None,
-        rejected: false,
+        state: None,
     }
 }
 #[tokio::test]
@@ -241,9 +239,9 @@ async fn lost_ack_is_reread_without_duplicate_effect() {
         retry.journal_entry_count(&"run_id".into()).await.unwrap(),
         1
     );
-    row.recovery_payload = Some(b"checkpoint".to_vec());
+    row.state = Some(br#"{"Prepared":"checkpoint"}"#.to_vec());
     retry.save_journal_entry(row.clone()).await.unwrap();
-    row.outcome = Some(b"result".to_vec());
+    row.state = Some(br#"{"Completed":{"Ok":{"bytes":6}}}"#.to_vec());
     retry.save_journal_entry(row).await.unwrap();
     retry.commit().await.unwrap();
     let mut replay = MemoryUnit::begin(&store, false);
@@ -252,8 +250,11 @@ async fn lost_ack_is_reread_without_duplicate_effect() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(row.outcome.as_deref(), Some(b"result".as_slice()));
-    row.outcome = Some(b"different".to_vec());
+    assert_eq!(
+        row.state.as_deref(),
+        Some(br#"{"Completed":{"Ok":{"bytes":6}}}"#.as_slice())
+    );
+    row.state = Some(br#"{"Completed":{"Ok":{"bytes":9}}}"#.to_vec());
     assert!(replay.save_journal_entry(row).await.is_err());
 }
 

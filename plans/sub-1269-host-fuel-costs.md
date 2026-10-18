@@ -1508,12 +1508,15 @@ Filesystem dispatch uses `runtime::filesystem::Filesystem`. Default tree and
 writer algorithms live in `runtime/default_filesystem.rs`; `MutationBudget`
 preserves incremental admission and post-effect settlement. The formulas above
 remain at the host boundary. Iterators settle result construction after advancing.
-Durable preparation admits `HASH(2 * original + 3 * payload) +
-IO(2 * original + 3 * payload)` for baseline/candidate verification and input
-passes. Constructing a replay input admits `HASH(input bytes)`. Writer staging
+Durable byte writes admit `IO(payload)` before creating and writing a fresh
+replacement file. They do not hash input or journal local progress. Appends admit
+`HASH(payload)` before fingerprinting and `IO(payload)` before their fixed-range
+write. Writer-close replacement preparation admits
+`HASH(2 * payload) + IO(2 * payload)` for candidate copying and validation. Namespace-only mutations do not scan or hash old contents.
+The host boundary above pays path/syscall overhead. Writer staging
 admits `HASH(chunk bytes) + IO(chunk bytes)` before writing. Close verifies the
-staged output with `ELEM(chunks) + HASH(2 * bytes) + IO(bytes)`, then pays ordinary
-write preparation. Directory enumeration charges `SYSCALL(1)` per directory,
+staged output with `ELEM(chunks) + HASH(2 * bytes) + IO(bytes)`, then pays
+writer-close replacement preparation. Directory enumeration charges `SYSCALL(1)` per directory,
 `SYSCALL(2) + ELEM(1) + PARSE(path bytes)` per entry, `sort_cost(entries)`, and
 `PARSE(2 * data bytes) + COPY(data bytes)` for bounded serialization and its
 journal copy, followed by `HASH(encoded bytes)` before sealing the SQLite output.
@@ -1522,9 +1525,12 @@ committed output; data bytes include each entry's fixed fields and path bytes.
 Port ordering settles `sort_cost(entries)` after the receipt. A per-call
 `WorkBudget` shares the caller's remaining fuel with blocking workers; admission
 can refuse before mutation, then work settles after publication starts.
-Quota growth/reconciliation and retained-reader hard-link validation charge
-`SYSCALL(2) + ELEM(1)` for the root and each entry through the shared bounded
-regular-file walker. No general object publication or input archive is involved.
+Disk quota counts public bytes only and changes by the successful mutation's net
+delta; temporary durability files are uncharged. There are no per-operation quota
+scans. Fresh filesystem setup measures public files once outside guest execution;
+reopen shares live counters. Private-alias validation still charges
+`SYSCALL(2) + ELEM(1)` for the root and each visited recovery entry through the
+bounded regular-file walker. No general object publication or input archive is involved.
 Durable operation IDs and read-result replay are supplied by future execution
 history; this extraction does not install the durable backend for ordinary runs.
 

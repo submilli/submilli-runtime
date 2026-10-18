@@ -17,9 +17,7 @@ fn filesystem_operation_associated_data_bind_scope_and_codec() {
         operation: "write".into(),
         version: 2,
         request: b"request".to_vec(),
-        recovery_payload: None,
-        outcome: None,
-        rejected: false,
+        state: None,
     };
     let aad = r#"["filesystem-operation","scope","effect","write",2,"request"]"#;
     assert_eq!(codec::journal_entry_owner(&effect, "request").unwrap(), aad);

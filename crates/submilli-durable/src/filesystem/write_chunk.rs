@@ -1,11 +1,11 @@
 use super::operation::FilesystemOperation;
 use super::{FilesystemError, blocking, fingerprint, test_checkpoint, validate_id};
 use super::{conflict, invalid, require_idle};
-use crate::io::RecoveryError;
+use crate::io::{Files, RecoveryError};
 use crate::unit_of_work::*;
 use cap_std::fs::OpenOptions;
 use interpreter::runtime::durable::EffectId;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom, Write};
 use std::sync::Arc;
 
 enum WriteChunkState {
@@ -32,61 +32,17 @@ impl FilesystemOperation {
             state = match state {
                 WriteChunkState::Initial { path, offset } => {
                     let workspace = self.filesystem.files.clone();
-                    let work = self.work.clone();
                     let resource_owned = resource.to_owned();
-                    let fingerprint = content.clone();
                     let bytes = bytes.clone();
                     let staged = blocking(gate.clone(), move || {
-                        let resource = &resource_owned;
-                        let path = path.as_str();
-                        let content = &fingerprint;
-                        let bytes = bytes.as_slice();
-                        let work = work.as_deref();
-
-                        let (directory, volume) =
-                            workspace.writer_directory(resource, path, true)?;
-                        let result = (|| {
-                            let mut file = directory.open_with(
-                                "output",
-                                OpenOptions::new().read(true).write(true).create(true),
-                            )?;
-                            let length = file.metadata()?.len();
-                            if length < offset {
-                                return Err(RecoveryError::Conflict);
-                            }
-                            let end = offset
-                                .checked_add(content.bytes)
-                                .filter(|n| *n <= i64::MAX as u64)
-                                .ok_or(RecoveryError::Limit)?;
-                            volume.check_growth(end.saturating_sub(length), work)?;
-                            file.seek(SeekFrom::Start(offset))?;
-                            let mut source = std::io::Cursor::new(bytes);
-                            let mut buffer = [0; 64 * 1024];
-                            let mut remaining = content.bytes;
-                            while remaining != 0 {
-                                let count = usize::try_from(remaining.min(buffer.len() as u64))
-                                    .map_err(|_| RecoveryError::Limit)?;
-                                source.read_exact(&mut buffer[..count])?;
-                                file.write_all(&buffer[..count])?;
-                                remaining -= count as u64;
-                            }
-                            file.set_len(end)?;
-                            file.sync_all()?;
-                            crate::io::sync(&directory)?;
-                            crate::test_checkpoint("writer-staged");
-                            Ok(())
-                        })();
-                        workspace.reconcile_quotas(work)?;
-                        result
+                        workspace.stage_writer_chunk(&resource_owned, &path, offset, &bytes)
                     })
                     .await;
                     match staged {
                         // These refusals precede acknowledging the chunk. The private tail
                         // remains retryable; corruption and uncertain storage I/O stay fatal.
                         Err(FilesystemError::Recovery(
-                            error @ (RecoveryError::Quota
-                            | RecoveryError::Limit
-                            | RecoveryError::Containment(_)),
+                            error @ (RecoveryError::Limit | RecoveryError::Containment(_)),
                         )) => {
                             return Err(FilesystemError::Rejected(error.to_string()));
                         }
@@ -191,4 +147,35 @@ async fn encode_state(
     .await?;
     owned.commit().await?;
     Ok(())
+}
+
+impl Files {
+    fn stage_writer_chunk(
+        &self,
+        resource: &EffectId,
+        path: &str,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), RecoveryError> {
+        let (directory, _) = self.writer_directory(resource, path, true)?;
+        let mut file = directory.open_with(
+            "output",
+            OpenOptions::new().read(true).write(true).create(true),
+        )?;
+        let length = file.metadata()?.len();
+        if length < offset {
+            return Err(RecoveryError::Conflict);
+        }
+        let end = offset
+            .checked_add(bytes.len() as u64)
+            .filter(|end| *end <= i64::MAX as u64)
+            .ok_or(RecoveryError::Limit)?;
+        file.seek(SeekFrom::Start(offset))?;
+        file.write_all(bytes)?;
+        file.set_len(end)?;
+        file.sync_all()?;
+        crate::io::sync(&directory)?;
+        crate::test_checkpoint("writer-staged");
+        Ok(())
+    }
 }

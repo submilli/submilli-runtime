@@ -4,9 +4,10 @@ This model covers one admitted `mkdir` or empty `rmdir`, under exclusive access
 until its SQL receipt commits. A new directory has no children until that
 receipt. If a crash loses an unacknowledged `mkdir`, recovery creates it again;
 its physical inode number need not survive that failed attempt. If it exists,
-recovery checks that it is a plain empty directory. `rmdir` records the original
-identity and accepts only that identity or absence. Neither operation follows
-a final symlink. Existing-directory `mkdir` is an observation of that identity.
+recovery checks that it is a plain empty directory. Both operations save only a
+prepared marker; replay supplies the path. Removal inspects the type if the
+target still exists and accepts absence on retry. Neither operation follows a
+final symlink. Existing-directory `mkdir` accepts the same path under exclusive ownership.
 
 File contents are absent in this model. It separates the visible name, persisted
 name, new-directory synchronization, parent synchronization and SQL receipt.
@@ -23,5 +24,5 @@ Progress assumes eventual successful storage operations and finite crashes.
 Run `python3 verification/check.py --model filesystem/directories`. Negative
 variants expose early receipts, stale path retries and uncertain errors. The
 witnesses require publication before receipt, a lost receipt acknowledgement,
-and replay after path reuse. Rust tests must additionally check identity/type
+and replay after path reuse. Rust tests must additionally check type/path
 validation, nonempty targets, symlinks, sync failures and process restart.

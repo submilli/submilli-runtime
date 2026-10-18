@@ -39,10 +39,17 @@ to `closed` and returns the same success/refusal without needing to republish.
 Framework completion happens after that. A duplicate close cannot overwrite a
 later file at the target pathname. Local `closed` flags are caches, not authority.
 
-`Publish` abstracts identity-safe reconciliation supplied by the separate
+`Publish` abstracts exclusive-owner replacement publication supplied by the separate
 namespace model. It must revalidate/reconcile after a crash before synchronizing
 and committing an outcome; an earlier attempt's publication flag is insufficient.
-This composition does not reproduce every rename/candidate/inode detail.
+This composition does not reproduce every rename/candidate detail. The replacement keeps only its new candidate,
+not an original-destination backup or hash. Staging and chunk receipts remain
+necessary because execution replay may skip already-recorded chunk calls.
+The close journal's `Prepared` state is a marker with no fields: the writer row
+supplies its target path, and the close effect ID locates the synchronized
+candidate. Retry resolves those locations again. It does not need saved parent
+or candidate inode identities. Writer rows and chunk receipts still retain the
+resource information needed when framework replay skips earlier calls.
 
 Cancellation drains owned work before retry. It can leave an unacknowledged tail,
 a receipt without framework completion, or a pending close. The same IDs and

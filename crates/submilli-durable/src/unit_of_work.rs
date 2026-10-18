@@ -116,31 +116,20 @@ pub struct Outcome {
     pub bytes: u64,
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub enum RecordedOutcome {
-    Completed(Outcome),
-    Rejected(String),
-}
-
-/// One effect's mutation journal. Its optional fields describe progress:
-/// request only = preparing; retry facts present = pending; outcome present = done
-/// or rejected. A crash can leave disk ahead of the journal, so pending is not proof
-/// that the public mutation has not happened yet.
+/// One effect's journal. Each operation serializes its own state enum into
+/// `state`; absence means Initial. A prepared state can coexist with an already
+/// applied public mutation when a crash interrupts completion recording.
 #[derive(Clone)]
 pub struct JournalEntry {
     pub id: EffectId,
     pub run_id: RunId,
-    /// Mutation kind, such as write, append or move; part of the effect identity.
+    /// Mutation kind, such as append, move or writer close; part of the effect identity.
     pub operation: String,
     pub version: u32,
     /// Filesystem configuration fingerprint plus the hash of the arguments, not their payload bytes.
     pub request: Vec<u8>,
-    /// Original file identities, lengths and prepared artifacts needed on retry.
-    pub recovery_payload: Option<Vec<u8>>,
-    /// Serialized RecordedOutcome; once present, retry returns it without mutating.
-    pub outcome: Option<Vec<u8>>,
-    pub rejected: bool,
+    /// Encoded operation state, including its result when Completed.
+    pub state: Option<Vec<u8>>,
 }
 
 /// The last dispatched effect only. Earlier completed effects are replayed by
@@ -245,37 +234,37 @@ pub struct ResourceCounts {
 }
 
 impl JournalEntry {
-    pub fn state(&self) -> &'static str {
-        if self.outcome.is_some() {
-            if self.rejected { "rejected" } else { "done" }
-        } else if self.recovery_payload.is_some() {
-            "pending"
-        } else {
-            "preparing"
+    /// Derived index value, never an independent source of execution state.
+    /// Mutation enums share Prepared/Completed tags; each operation decodes its
+    /// own prepared data. Unknown or malformed states must never become Initial.
+    pub fn status(&self) -> Result<&'static str, StoreError> {
+        let Some(bytes) = &self.state else {
+            return Ok("preparing");
+        };
+        if bytes.len() > crate::codec::MAX_RECORD {
+            return Err(StoreError::Conflict);
         }
+        let state: StoredMutationState =
+            serde_json::from_slice(bytes).map_err(|_| StoreError::Conflict)?;
+        Ok(match state {
+            StoredMutationState::Prepared(_) => "pending",
+            StoredMutationState::Completed(Ok(_)) => "done",
+            StoredMutationState::Completed(Err(_)) => "rejected",
+        })
     }
+
     pub fn validate_successor(&self, prior: Option<&Self>) -> Result<(), StoreError> {
-        use StoreError;
         if self.run_id.is_empty()
             || self.id.is_empty()
             || self.operation.is_empty()
             || self.version == 0
             || self.request.len() > crate::codec::MAX_RECORD
-            || self
-                .recovery_payload
-                .as_ref()
-                .is_some_and(|v| v.len() > crate::codec::MAX_RECORD)
-            || self
-                .outcome
-                .as_ref()
-                .is_some_and(|v| v.len() > crate::codec::MAX_RECORD)
-            || self.rejected && (self.outcome.is_none() || self.recovery_payload.is_some())
-            || self.outcome.is_some() && !self.rejected && self.recovery_payload.is_none()
         {
             return Err(StoreError::Conflict);
         }
+        let status = self.status()?;
         let Some(prior) = prior else {
-            return if self.state() == "preparing" {
+            return if status == "preparing" {
                 Ok(())
             } else {
                 Err(StoreError::Conflict)
@@ -286,19 +275,28 @@ impl JournalEntry {
             || self.operation != prior.operation
             || self.version != prior.version
             || self.request != prior.request
-            || prior
-                .recovery_payload
-                .as_ref()
-                .is_some_and(|v| self.recovery_payload.as_ref() != Some(v))
-            || prior.outcome.as_ref().is_some_and(|v| {
-                self.outcome.as_ref() != Some(v) || self.rejected != prior.rejected
-            })
-            || prior.state() == "preparing" && self.state() == "done"
         {
             return Err(StoreError::Conflict);
         }
-        Ok(())
+        // Re-saving identical state is safe after a lost acknowledgement.
+        // Prepared facts and completed results cannot be rewritten in place.
+        if self.state == prior.state {
+            return Ok(());
+        }
+        match (prior.status()?, status) {
+            ("preparing", "pending" | "rejected") | ("pending", "done") => Ok(()),
+            _ => Err(StoreError::Conflict),
+        }
     }
+}
+
+/// Read only the common state shape for indexing and transition validation.
+/// Native operations deserialize the same bytes into their specific enum.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+enum StoredMutationState {
+    Prepared(serde::de::IgnoredAny),
+    Completed(Result<Outcome, String>),
 }
 
 fn unchanged<T: PartialEq>(prior: &Option<T>, next: &Option<T>) -> bool {

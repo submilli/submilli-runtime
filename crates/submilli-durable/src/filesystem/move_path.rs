@@ -1,31 +1,23 @@
-use crate::io::Entry;
-use interpreter::runtime::fs::FileIdentity;
-use serde::{Deserialize, Serialize};
-/// Original source and destination identities used to recognize a rename's progress.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MoveCheckpoint {
-    target: Target,
-    destination: Entry,
-    destination_original: Option<FileIdentity>,
-}
-
 use super::operation::FilesystemOperation;
 use super::{
-    CaptureOptions, FilesystemError, Target, blocking, decode_checkpoint, decode_outcome,
-    preflight_refusal, serialize, test_checkpoint, validate_id,
+    FilesystemError, blocking, deserialize, preflight_refusal, serialize, test_checkpoint,
+    validate_id, validate_journal_configuration,
 };
-use super::{pin, require_pin};
-use crate::io::{self as paths, RecoveryError, validate_guest_path};
-use crate::io::{current, existing, identity, sync};
-use crate::unit_of_work::{JournalEntry, Outcome, RecordedOutcome};
+use crate::io::{
+    self as paths, Files, RecoveryError, current, existing, identity, sync, validate_guest_path,
+};
+use crate::unit_of_work::{JournalEntry, Outcome};
 use interpreter::runtime::durable::EffectId;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Saved progress for this operation. Every unfinished stage is safe to repeat.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 enum MoveState {
+    #[serde(skip)]
     Initial,
-    Prepared(Box<MoveCheckpoint>),
+    Prepared {},
     Completed(Result<Outcome, String>),
 }
 
@@ -56,7 +48,6 @@ impl FilesystemOperation {
             self.filesystem.filesystem_config_fingerprint,
         )?;
         if !matches!(state, MoveState::Completed(_)) {
-            self.charge_preparation(source, 0)?;
             test_checkpoint("effect-request");
         }
         loop {
@@ -64,123 +55,59 @@ impl FilesystemOperation {
                 MoveState::Initial => {
                     let files = self.filesystem.files.clone();
                     let work = self.work.clone();
-                    let (effect, source, destination) =
-                        (effect.to_owned(), source.to_owned(), destination.to_owned());
+                    let source = source.to_owned();
+                    let destination = destination.to_owned();
                     let result = blocking(gate.clone(), move || {
-                        let target = files.capture_target(
-                            &effect,
-                            &source,
-                            CaptureOptions::default(),
-                            work.as_deref(),
-                        )?;
-                        let artifacts = files.artifacts(&target.source, &effect, true)?;
-                        if target.original.is_none() {
-                            return Err(std::io::Error::from(std::io::ErrorKind::NotFound).into());
-                        }
+                        let source = files.entry(&source, false)?;
                         let destination = files.entry(&destination, false)?;
-                        if destination.mount != target.source.mount {
+                        if source.mount != destination.mount {
                             return Err(RecoveryError::Unsupported(
                                 "cross-volume move requires caller-orchestrated copy and remove",
                             ));
                         }
-                        if destination == target.source {
+                        if source == destination {
                             return Err(RecoveryError::Unsupported(
                                 "move source equals destination",
                             ));
                         }
-                        let parent = files.parent(&destination)?;
-                        let mut destination_original = None;
-                        if let Some(metadata) = existing(&parent, &destination.name)? {
+                        let source_parent = files.parent(&source)?;
+                        let source_metadata = existing(&source_parent, &source.name)?
+                            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+                        files.require_regular(&source, &source_metadata, work.as_deref())?;
+                        let destination_parent = files.parent(&destination)?;
+                        if let Some(metadata) = existing(&destination_parent, &destination.name)? {
                             files.require_regular(&destination, &metadata, work.as_deref())?;
-                            let original = identity(&metadata)?;
-                            if Some(original) == target.original {
+                            if identity(&metadata)? == identity(&source_metadata)? {
                                 return Err(RecoveryError::Unsupported("aliased move destination"));
                             }
-                            parent.open(&destination.name)?.sync_all()?;
-                            sync(&parent)?;
-                            pin(
-                                &parent,
-                                &destination.name,
-                                &artifacts,
-                                "destination",
-                                original,
-                            )?;
-                            destination_original = Some(original);
                         }
-                        paths::sync(&artifacts)?;
+                        // Keep the original data durable at its source name until
+                        // publication of the destination has been synchronized.
+                        source_parent.open(&source.name)?.sync_all()?;
+                        sync(&source_parent)?;
+
                         paths::test_checkpoint("prepared")?;
-                        Ok(MoveCheckpoint {
-                            target,
-                            destination,
-                            destination_original,
-                        })
+                        Ok(())
                     })
                     .await;
                     match result {
-                        Ok(checkpoint) => MoveState::Prepared(Box::new(checkpoint)),
+                        Ok(()) => MoveState::Prepared {},
                         Err(FilesystemError::Recovery(error)) if preflight_refusal(&error) => {
                             MoveState::Completed(Err(error.to_string()))
                         }
                         Err(error) => return Err(error),
                     }
                 }
-                MoveState::Prepared(checkpoint) => {
-                    checkpoint.target.validate()?;
-                    checkpoint.destination.validate()?;
-                    if checkpoint.target.original.is_none()
-                        || checkpoint.target.original_directory
-                        || checkpoint.destination.mount != checkpoint.target.source.mount
-                    {
-                        return Err(RecoveryError::InvalidRecord.into());
-                    }
+                MoveState::Prepared {} => {
                     if let Some(work) = &self.work {
                         work.before_effect();
                     }
                     let files = self.filesystem.files.clone();
-                    let work = self.work.clone();
                     let effect = effect.to_owned();
+                    let source = source.to_owned();
+                    let destination = destination.to_owned();
                     blocking(gate.clone(), move || {
-                        let artifacts =
-                            files.artifacts(&checkpoint.target.source, &effect, false)?;
-                        {
-                            let state = &checkpoint;
-                            let artifacts = &artifacts;
-
-                            let target = &state.target;
-                            let original = target.original.ok_or(RecoveryError::InvalidRecord)?;
-                            require_pin(artifacts, "original", original)?;
-                            let destination = &state.destination;
-                            let source_parent = files.parent(&target.source)?;
-                            let destination_parent = files.parent(destination)?;
-                            let source = current(&source_parent, &target.source.name)?;
-                            let present = current(&destination_parent, &destination.name)?;
-                            if ![None, Some(original)].contains(&source)
-                                || ![state.destination_original, Some(original)].contains(&present)
-                            {
-                                return Err(RecoveryError::Conflict);
-                            }
-                            if present != Some(original) {
-                                pin(artifacts, "original", artifacts, "publish", original)?;
-                                artifacts.rename(
-                                    "publish",
-                                    &destination_parent,
-                                    &destination.name,
-                                )?;
-                                paths::test_checkpoint("destination-published")?;
-                            }
-                            // A destination found on retry may be visible but not yet durable.
-                            // Persist it before unlinking the source on every attempt.
-                            sync(&destination_parent)?;
-                            if source.is_some() {
-                                source_parent.remove_file(&target.source.name)?;
-                                paths::test_checkpoint("source-removed")?;
-                            }
-                            sync(&source_parent)?;
-                            sync(&destination_parent)?;
-                            sync(artifacts)?;
-                        }
-                        files.reconcile_quotas(work.as_deref())?;
-                        paths::test_checkpoint("before-receipt")
+                        files.move_path(&effect, &source, &destination)
                     })
                     .await?;
 
@@ -192,7 +119,7 @@ impl FilesystemOperation {
             encode_state(&mut journal_entry, &state)?;
             self.save_journal_entry(&journal_entry).await?;
             match &state {
-                MoveState::Prepared(_) => test_checkpoint("effect-intent"),
+                MoveState::Prepared {} => test_checkpoint("effect-intent"),
                 MoveState::Completed(Ok(_)) => test_checkpoint("effect-receipt"),
                 _ => {}
             }
@@ -204,33 +131,69 @@ fn decode_state(
     journal_entry: &JournalEntry,
     config: [u8; 32],
 ) -> Result<MoveState, FilesystemError> {
-    if let Some(result) = decode_outcome(journal_entry, config)? {
-        return Ok(MoveState::Completed(result));
-    }
-    match &journal_entry.recovery_payload {
-        Some(bytes) => Ok(MoveState::Prepared(decode_checkpoint(bytes)?)),
+    validate_journal_configuration(journal_entry, config)?;
+    match &journal_entry.state {
+        Some(bytes) => deserialize(bytes),
         None => Ok(MoveState::Initial),
     }
 }
 
-// The operation owns this mapping; SQL keeps its existing immutable intent and receipt columns.
 fn encode_state(
     journal_entry: &mut JournalEntry,
     state: &MoveState,
 ) -> Result<(), FilesystemError> {
-    match state {
-        MoveState::Initial => {}
-        MoveState::Prepared(checkpoint) => {
-            journal_entry.recovery_payload = Some(serialize(checkpoint)?);
-        }
-        MoveState::Completed(result) => {
-            let outcome = match result {
-                Ok(outcome) => RecordedOutcome::Completed(outcome.clone()),
-                Err(reason) => RecordedOutcome::Rejected(reason.clone()),
-            };
-            journal_entry.rejected = result.is_err();
-            journal_entry.outcome = Some(serialize(&outcome)?);
-        }
-    }
+    journal_entry.state = match state {
+        MoveState::Initial => None,
+        _ => Some(serialize(state)?),
+    };
     Ok(())
+}
+
+impl Files {
+    fn move_path(
+        &self,
+        effect: &EffectId,
+        source: &str,
+        destination: &str,
+    ) -> Result<(), RecoveryError> {
+        let source = self.entry(source, false)?;
+        let destination = self.entry(destination, false)?;
+        if source.mount != destination.mount || source == destination {
+            return Err(RecoveryError::InvalidRecord);
+        }
+        let source_parent = self.parent(&source)?;
+        let destination_parent = self.parent(&destination)?;
+        let volume = self.volume(&source.mount)?;
+        if let Some(source_identity) = current(&source_parent, &source.name)? {
+            let destination_metadata = existing(&destination_parent, &destination.name)?;
+            if destination_metadata.as_ref().map(identity).transpose()? != Some(source_identity) {
+                let replaced_bytes = destination_metadata.map_or(0, |metadata| metadata.len());
+                let artifacts = self.artifacts(&source, effect, true)?;
+                if existing(&artifacts, "publish")?.is_some() {
+                    artifacts.remove_file("publish")?;
+                }
+                source_parent.hard_link(&source.name, &artifacts, "publish")?;
+                artifacts.rename("publish", &destination_parent, &destination.name)?;
+                crate::test_checkpoint("move-published-unaccounted");
+                // The source inode was already counted. Its temporary second
+                // public name costs nothing; only the replaced inode is freed.
+                volume.record_size_change(replaced_bytes, 0);
+                paths::test_checkpoint("destination-published")?;
+            }
+            // These are separate persistence steps. Removing the source before
+            // the destination is durable could lose the only copy on power loss.
+            sync(&destination_parent)?;
+            source_parent.remove_file(&source.name)?;
+            paths::test_checkpoint("source-removed")?;
+        } else {
+            // Only this effect can have removed the prepared source. Its
+            // destination was synchronized before that removal was attempted.
+            if existing(&destination_parent, &destination.name)?.is_none() {
+                return Err(RecoveryError::Conflict);
+            }
+            sync(&destination_parent)?;
+        }
+        sync(&source_parent)?;
+        paths::test_checkpoint("before-receipt")
+    }
 }

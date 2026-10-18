@@ -1,19 +1,21 @@
 use super::operation::FilesystemOperation;
 use super::{
-    CaptureOptions, FilesystemError, Target, blocking, decode_checkpoint, decode_outcome,
-    preflight_refusal, serialize, test_checkpoint, validate_id,
+    FilesystemError, blocking, deserialize, preflight_refusal, require_empty, serialize,
+    test_checkpoint, validate_id, validate_journal_configuration,
 };
-use super::{require_empty, require_pin};
-use crate::io::{self as paths, RecoveryError, validate_guest_path};
-use crate::io::{current, existing, identity, sync};
-use crate::unit_of_work::{JournalEntry, Outcome, RecordedOutcome};
+use crate::io::{self as paths, Files, RecoveryError, existing, sync, validate_guest_path};
+use crate::unit_of_work::{JournalEntry, Outcome};
 use interpreter::runtime::durable::EffectId;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Saved progress for this operation. Every unfinished stage is safe to repeat.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 enum RemoveState {
+    #[serde(skip)]
     Initial,
-    Prepared(Target),
+    Prepared {},
     Completed(Result<Outcome, String>),
 }
 
@@ -37,7 +39,6 @@ impl FilesystemOperation {
             self.filesystem.filesystem_config_fingerprint,
         )?;
         if !matches!(state, RemoveState::Completed(_)) {
-            self.charge_preparation(path, 0)?;
             test_checkpoint("effect-request");
         }
         loop {
@@ -45,83 +46,38 @@ impl FilesystemOperation {
                 RemoveState::Initial => {
                     let files = self.filesystem.files.clone();
                     let work = self.work.clone();
-                    let (path, effect) = (path.to_owned(), effect.to_owned());
+                    let path = path.to_owned();
                     let result = blocking(gate.clone(), move || {
-                        let target = files.capture_target(
-                            &effect,
-                            &path,
-                            CaptureOptions {
-                                allow_directory: true,
-                                require_empty: true,
-                                ..Default::default()
-                            },
-                            work.as_deref(),
-                        )?;
-                        if target.original.is_none() {
-                            return Err(std::io::Error::from(std::io::ErrorKind::NotFound).into());
+                        let entry = files.entry(&path, false)?;
+                        let parent = files.parent(&entry)?;
+                        let metadata = existing(&parent, &entry.name)?
+                            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+                        let directory = metadata.is_dir() && !metadata.file_type().is_symlink();
+                        if directory {
+                            require_empty(&parent.open_dir(&entry.name)?)?;
+                        } else {
+                            files.require_regular(&entry, &metadata, work.as_deref())?;
                         }
+
                         paths::test_checkpoint("prepared")?;
-                        Ok(target)
+                        Ok(())
                     })
                     .await;
                     match result {
-                        Ok(checkpoint) => RemoveState::Prepared(checkpoint),
+                        Ok(()) => RemoveState::Prepared {},
                         Err(FilesystemError::Recovery(error)) if preflight_refusal(&error) => {
                             RemoveState::Completed(Err(error.to_string()))
                         }
                         Err(error) => return Err(error),
                     }
                 }
-                RemoveState::Prepared(checkpoint) => {
-                    checkpoint.validate()?;
+                RemoveState::Prepared {} => {
                     if let Some(work) = &self.work {
                         work.before_effect();
                     }
                     let files = self.filesystem.files.clone();
-                    let work = self.work.clone();
-                    let effect = effect.to_owned();
-                    blocking(gate.clone(), move || {
-                        if checkpoint.original_directory {
-                            {
-                                let target = &checkpoint;
-                                let parent = files.parent(&target.source)?;
-                                if let Some(metadata) = existing(&parent, &target.source.name)? {
-                                    if Some(identity(&metadata)?) != target.original
-                                        || !metadata.is_dir()
-                                        || metadata.file_type().is_symlink()
-                                    {
-                                        return Err(RecoveryError::Conflict);
-                                    }
-                                    require_empty(&parent.open_dir(&target.source.name)?)?;
-                                    parent.remove_dir(&target.source.name)?;
-                                    paths::test_checkpoint("directory-removed")?;
-                                }
-                                sync(&parent)?;
-                            }
-                        } else {
-                            let artifacts = files.artifacts(&checkpoint.source, &effect, false)?;
-                            {
-                                let target = &checkpoint;
-                                let artifacts = &artifacts;
-                                let original =
-                                    target.original.ok_or(RecoveryError::InvalidRecord)?;
-                                require_pin(artifacts, "original", original)?;
-                                let parent = files.parent(&target.source)?;
-                                match current(&parent, &target.source.name)? {
-                                    None => {}
-                                    Some(current) if current == original => {
-                                        parent.remove_file(&target.source.name)?;
-                                        paths::test_checkpoint("source-removed")?;
-                                    }
-                                    Some(_) => return Err(RecoveryError::Conflict),
-                                }
-                                sync(&parent)?;
-                            }
-                        }
-                        files.reconcile_quotas(work.as_deref())?;
-                        paths::test_checkpoint("before-receipt")
-                    })
-                    .await?;
+                    let path = path.to_owned();
+                    blocking(gate.clone(), move || files.remove_path(&path)).await?;
 
                     test_checkpoint("effect-applied");
                     RemoveState::Completed(Ok(Outcome { bytes: 0 }))
@@ -131,7 +87,7 @@ impl FilesystemOperation {
             encode_state(&mut journal_entry, &state)?;
             self.save_journal_entry(&journal_entry).await?;
             match &state {
-                RemoveState::Prepared(_) => test_checkpoint("effect-intent"),
+                RemoveState::Prepared {} => test_checkpoint("effect-intent"),
                 RemoveState::Completed(Ok(_)) => test_checkpoint("effect-receipt"),
                 _ => {}
             }
@@ -143,33 +99,47 @@ fn decode_state(
     journal_entry: &JournalEntry,
     config: [u8; 32],
 ) -> Result<RemoveState, FilesystemError> {
-    if let Some(result) = decode_outcome(journal_entry, config)? {
-        return Ok(RemoveState::Completed(result));
-    }
-    match &journal_entry.recovery_payload {
-        Some(bytes) => Ok(RemoveState::Prepared(decode_checkpoint(bytes)?)),
+    validate_journal_configuration(journal_entry, config)?;
+    match &journal_entry.state {
+        Some(bytes) => deserialize(bytes),
         None => Ok(RemoveState::Initial),
     }
 }
 
-// The operation owns this mapping; SQL keeps its existing immutable intent and receipt columns.
 fn encode_state(
     journal_entry: &mut JournalEntry,
     state: &RemoveState,
 ) -> Result<(), FilesystemError> {
-    match state {
-        RemoveState::Initial => {}
-        RemoveState::Prepared(checkpoint) => {
-            journal_entry.recovery_payload = Some(serialize(checkpoint)?);
-        }
-        RemoveState::Completed(result) => {
-            let outcome = match result {
-                Ok(outcome) => RecordedOutcome::Completed(outcome.clone()),
-                Err(reason) => RecordedOutcome::Rejected(reason.clone()),
-            };
-            journal_entry.rejected = result.is_err();
-            journal_entry.outcome = Some(serialize(&outcome)?);
-        }
-    }
+    journal_entry.state = match state {
+        RemoveState::Initial => None,
+        _ => Some(serialize(state)?),
+    };
     Ok(())
+}
+
+impl Files {
+    fn remove_path(&self, path: &str) -> Result<(), RecoveryError> {
+        let entry = self.entry(path, false)?;
+        let volume = self.volume(&entry.mount)?;
+        let parent = self.parent(&entry)?;
+        if let Some(metadata) = existing(&parent, &entry.name)? {
+            if metadata.is_dir() && !metadata.file_type().is_symlink() {
+                require_empty(&parent.open_dir(&entry.name)?)?;
+                parent.remove_dir(&entry.name)?;
+                paths::test_checkpoint("directory-removed")?;
+            } else {
+                if !metadata.is_file() || metadata.file_type().is_symlink() {
+                    return Err(RecoveryError::Conflict);
+                }
+                parent.remove_file(&entry.name)?;
+                crate::test_checkpoint("remove-unlinked-unaccounted");
+                volume.record_size_change(metadata.len(), 0);
+                paths::test_checkpoint("source-removed")?;
+            }
+        }
+        // Prepared was saved while the path existed. Absence on retry means
+        // this same removal already happened; no later mutation is admitted.
+        sync(&parent)?;
+        paths::test_checkpoint("before-receipt")
+    }
 }

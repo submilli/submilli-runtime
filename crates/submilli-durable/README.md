@@ -20,18 +20,33 @@ persistence contracts.
 
 ## Reading an operation
 
-Start with `src/filesystem/write_bytes.rs`. Each journaled operation has its own
-file, state enum, execution loop, and state encoding/decoding. Mutation loops
+Start with `src/filesystem/write_bytes.rs`: it creates a fresh temporary file at
+a deterministic run/effect path, writes and syncs it, renames it over the target,
+updates public disk usage and syncs both directories. It has no journal, state
+enum or input fingerprint. Retrying an unfinished effect repeats those steps
+with identical bytes. The execution framework must skip completed effects,
+keep arguments and configuration unchanged, and durably record completion before
+starting another effect. A direct call always writes, even with an old effect ID.
+The framework integration is future work; the adapter does not enforce that ordering.
+
+Next read `append_bytes.rs`. Each journaled operation has its own file, state enum, execution loop, and state encoding/decoding. Mutation loops
 advance `Initial -> Prepared -> Completed`, with terminal preflight refusals
 also represented by `Completed`. Each arm performs its native work, then the
 operation saves the next state before continuing. A retry decodes the latest
 journal entry for the same run/effect and enters that state again.
 
-`encode_state` maps those variants onto the existing SQL intent/receipt columns;
-this refactor does not change the database format. Prepared evidence and completed
-results remain immutable. `operation.rs` contains only shared per-call accounting
-and journal admission/commit. Shared evidence primitives stay in `filesystem.rs`;
-operation-specific steps are inline in their state arms.
+Each operation's `encode_state` serializes its enum into one optional `state`
+payload. `None` decodes as `Initial`; malformed saved bytes fail. `Prepared`
+contains only facts that cannot be recovered from the arguments and filesystem,
+and `Completed` replaces it with the result. There are no
+separate recovery/outcome payloads or rejection flag. A derived SQL `status`
+maintains the one-pending-operation index; reads verify it matches the decoded
+state. Journal format version 4 rejects previous unmerged formats. Prepared
+facts cannot change while pending, and completed states remain immutable. `operation.rs` contains only shared per-call accounting
+and journal admission/commit. Writer-close replacement helpers live in `filesystem/replacement.rs`;
+operation-specific disk steps stay alongside their state machines. Workers
+apply the public size delta immediately after each successful native mutation.
+Only fresh filesystem setup measures public usage; private output is uncharged.
 
 Resource calls have their own state machines too. A chunk advances through
 `Initial -> Staged -> Completed`; only its fingerprint receipt is persisted.
@@ -40,6 +55,18 @@ only effect ID and before/after cursor progress, not the returned bytes. Retryin
 the same effect decodes its before position and reconstructs the result; the next
 effect starts at after. Explicit close has its own loop. File metadata and direct
 reads remain observations; their result recording belongs to execution history.
+
+Mutation preparation retains only what retry needs. Append uses `Files::size`
+to obtain and synchronize the original length, saves `Prepared { offset }`, and
+rewrites the same range on retry; a missing file starts at zero. Other mutations
+save `Prepared {}` with no fields. Paths come from the replayed call or writer
+row, and each pending attempt resolves them again. Writer close retains its new
+candidate at a deterministic effect-derived location, never a backup/hash of the
+old destination; its journal stores no candidate inode. Remove infers the type
+from an existing target and accepts absence after preparation. Move keeps its
+source name until the destination is durable, then removes the source. Later operations
+can reuse paths after completion, so every completed journaled retry still returns its
+receipt without touching those paths.
 
 ## Interpreter boundary
 
@@ -51,7 +78,8 @@ work and settlement after the first effect. Readers, writers and directory
 iterators hold backend resources. Only explicit writer close publishes output.
 
 Durable mutation and resource calls require canonical UUID operation identities
-from the caller. Reusing an identity with different arguments fails. A trace
+from the caller. Journaled calls reject identity reuse with different arguments;
+byte writes rely on the framework to validate their identity and input. A trace
 identifier is not an operation identity. The embedding runtime still needs the
 execution-history sequencer before it can assign identities to successive guest
 calls; a fixed effect ID is useful only for an isolated operation and its retry.
@@ -65,7 +93,23 @@ private recovery artifacts within those roots, not a new public run directory.
 `DurableFilesystem` owns its mutation gate and shared quota registry. Use its
 `reopen(vfs, run_id, units)` method when existing handles or cancelled workers may
 still access the roots: it shares their coordination and waits for outstanding
-work. A fresh `open` requires exclusive ownership of the roots.
+work. A fresh `open` requires exclusive ownership of the roots. Writable backing roots
+must be physically disjoint: setup rejects aliases and ancestor/descendant roots
+so one file cannot participate in two independent quota counters. No competing call
+may modify a pending operation's paths, including during restart. SUB-1295 will
+enforce this contract with separately verified locks.
+Disk quota counts public file contents only. Replacement candidates, writer
+staging and retained recovery links are free of disk-quota charges; their host
+work still costs fuel. A write checks the final size change against the limit
+and applies that change when it publishes. Writer chunks are admitted to private
+staging without quota charges; close checks the eventual destination size.
+Partial public appends count their actual written bytes. Retries apply only
+changes they make, so neither lost acknowledgements nor repeated receipts charge
+twice. Fresh open measures public files once, excluding recovery artifacts;
+same-process reopen keeps the live counter. No operation rescans volumes for quota.
+The [quota model](../../verification/filesystem/quotas/README.md) checks these
+accounting boundaries and crash gaps.
+
 The caller retains the same roots, journal, run ID and effect IDs across
 retries. Every journal record binds its request to a fingerprint of the configured
 roots, mounts, working directory, access modes and quotas. A changed filesystem configuration fingerprint
@@ -75,10 +119,11 @@ registry to detect it.
 
 The code determines the sequence. There is no persisted compound plan or parent
 outcome. A caller retries primitives in the same order with their original IDs:
-completed operations return their receipts, and an interrupted operation
-reconciles its own intent. Filesystem receipts are independent of future execution
-history. If execution history has not yet recorded a completed filesystem call,
-retrying that call still returns its filesystem receipt without repeating it.
+journaled operations return completed receipts or reconcile their pending intent.
+Byte writes instead repeat from scratch until the framework records completion.
+The framework must skip them thereafter, preserving later effects. Other
+filesystem receipts are independent of future execution history: retrying those
+calls reuses the receipt even before outer completion is recorded.
 The later execution layer owns replay, retry scheduling and run completion.
 
 The port supports replay-supplied writes/appends, primitive directory creation,

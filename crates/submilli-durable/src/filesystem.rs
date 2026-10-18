@@ -1,9 +1,10 @@
 //! Shared filesystem state and the interpreter-facing filesystem implementation.
 //!
-//! The trait methods create a per-call `FilesystemOperation`. The lower half of
-//! this file contains shared evidence helpers: they compare recorded file
-//! identities with disk state to distinguish an unfinished mutation from one
-//! that already happened. They never select or schedule another effect.
+//! The trait methods create a per-call `FilesystemOperation`. Its state machines
+//! assume exclusive root ownership and no later mutation before a pending call
+//! finishes. Shared replacement helpers retain only the new bytes; namespace
+//! operations never preserve or hash the old destination. No retry is scheduled
+//! here: the caller supplies the same effect ID and input again.
 mod append_bytes;
 mod close_listing;
 mod close_reader;
@@ -17,9 +18,10 @@ mod open_reader;
 mod open_writer;
 mod operation;
 mod remove_path;
+mod replacement;
 mod write_bytes;
 mod write_chunk;
-use crate::io::{self as paths, Entry, Files, RecoveryError};
+use crate::io::{self as paths, Files, RecoveryError};
 use crate::readers::{DurableDirectory, FilesystemReader, MAX_LISTING_BYTES};
 use crate::unit_of_work::*;
 use crate::writers::DurableWriter;
@@ -30,11 +32,10 @@ use interpreter::runtime::filesystem::{
     DirectoryReader, FileReader, FileWriter, Filesystem, FilesystemError as PortError,
     FilesystemInfo, ReaderOptions, ResourceDescriptor, ResourceKind,
 };
-use interpreter::runtime::fs::FileIdentity;
 use interpreter::runtime::fuel::WorkBudget;
 use interpreter::runtime::{fs, vfs::Placement};
 pub use operation::FilesystemOperation;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
@@ -110,11 +111,16 @@ impl DurableFilesystem {
     ) -> Result<Self, FilesystemError> {
         validate_id(run_id)?;
         let gate = Arc::new(filesystem_gate.clone().lock_owned().await);
-        let vfs = paths::share_quotas(&filesystem_quotas, vfs).await?;
+        let mut quotas = filesystem_quotas.clone().lock_owned().await;
         let filesystem_config_fingerprint = paths::filesystem_config_fingerprint(&vfs)?;
         let run_id = run_id.clone();
         let worker_id = run_id.clone();
-        let workspace = blocking(gate, move || Files::create(vfs, &worker_id)).await?;
+        let workspace = blocking(gate, move || {
+            paths::require_disjoint_volumes(&vfs)?;
+            let vfs = paths::share_quotas(&mut quotas, vfs)?;
+            Files::create(vfs, &worker_id)
+        })
+        .await?;
         Ok(Self {
             files: Arc::new(workspace),
             units,
@@ -561,70 +567,21 @@ pub(crate) fn conflict<T>() -> Result<T, FilesystemError> {
     Err(StoreError::Conflict.into())
 }
 
-// These records describe the original disk state; they are not executable plans.
-// The operation code decides what to do from these facts on every attempt.
-/// The original entry and append baseline, captured before changing its name or bytes.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Target {
-    source: Entry,
-    original: Option<FileIdentity>,
-    original_bytes: u64,
-    original_sha256: Option<[u8; 32]>,
-    original_directory: bool,
-}
-/// Replacement writes retain a candidate inode; existing-file appends use the baseline.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WriteCheckpoint {
-    target: Target,
-    candidate: Option<FileIdentity>,
-}
-impl Target {
-    fn validate(&self) -> Result<(), RecoveryError> {
-        self.source.validate()?;
-        if self.original_bytes > i64::MAX as u64
-            || (self.original_directory
-                && (self.original.is_none() || self.original_sha256.is_some()))
-            || (self.original.is_some()
-                && !self.original_directory
-                && self.original_sha256.is_none())
-        {
-            return Err(RecoveryError::InvalidRecord);
-        }
-        Ok(())
-    }
-}
-
-/// Return a saved call result, keeping invalid records in the outer error.
-/// A saved rejection is still a completed call, including for writer cleanup.
-pub(crate) fn decode_outcome(
+/// Refuse a state recorded for a different format or filesystem configuration.
+pub(crate) fn validate_journal_configuration(
     journal_entry: &JournalEntry,
     filesystem_config_fingerprint: [u8; 32],
-) -> Result<Option<Result<Outcome, String>>, FilesystemError> {
-    if journal_entry.version != 2
+) -> Result<(), FilesystemError> {
+    if journal_entry.version != 4
         || journal_entry.request.len() != 64
         || journal_entry.request.get(..32) != Some(filesystem_config_fingerprint.as_slice())
     {
         return conflict();
     }
-    let outcome: Option<RecordedOutcome> = journal_entry
-        .outcome
-        .as_deref()
-        .map(decode_checkpoint)
-        .transpose()?;
-    if outcome
-        .as_ref()
-        .is_some_and(|o| matches!(o, RecordedOutcome::Rejected(_)) != journal_entry.rejected)
-    {
-        return conflict();
-    }
-    Ok(outcome.map(|outcome| match outcome {
-        RecordedOutcome::Completed(outcome) => Ok(outcome),
-        RecordedOutcome::Rejected(reason) => Err(reason),
-    }))
+    Ok(())
 }
-fn decode_checkpoint<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, FilesystemError> {
+
+fn deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, FilesystemError> {
     if bytes.len() > crate::codec::MAX_RECORD {
         return Err(RecoveryError::Limit.into());
     }
@@ -639,183 +596,13 @@ pub(crate) fn fingerprint(id: &EffectId, bytes: &[u8]) -> Result<Content, Recove
     })
 }
 
-use crate::io::{current, existing, identity, sync};
-use cap_std::fs::{Dir, File, OpenOptions};
+use cap_std::fs::{Dir, File};
 use std::io::Write;
-#[derive(Default)]
-struct CaptureOptions {
-    follow_final: bool,
-    allow_directory: bool,
-    require_empty: bool,
-}
-
-impl Files {
-    fn capture_target(
-        &self,
-        effect: &EffectId,
-        path: &str,
-        options: CaptureOptions,
-        work: Option<&interpreter::runtime::fuel::WorkBudget>,
-    ) -> Result<Target, RecoveryError> {
-        let source = self.entry(path, options.follow_final)?;
-        let parent = self.parent(&source)?;
-        let metadata = existing(&parent, &source.name)?;
-        let original_directory = metadata
-            .as_ref()
-            .is_some_and(|m| m.is_dir() && !m.file_type().is_symlink());
-        if let Some(metadata) = &metadata {
-            if original_directory && options.allow_directory {
-                if options.require_empty {
-                    require_empty(&parent.open_dir(&source.name)?)?;
-                }
-            } else {
-                self.require_regular(&source, metadata, work)?;
-            }
-        }
-        let artifacts = self.artifacts(&source, effect, true)?;
-        let mut target = Target {
-            original: metadata.as_ref().map(identity).transpose()?,
-            original_bytes: metadata
-                .as_ref()
-                .filter(|m| m.is_file())
-                .map_or(0, cap_std::fs::Metadata::len),
-            original_sha256: None,
-            original_directory,
-            source,
-        };
-        if original_directory {
-            sync(&parent.open_dir(&target.source.name)?)?;
-            sync(&parent)?;
-        } else if let Some(original) = target.original {
-            let mut file = parent.open(&target.source.name)?;
-            file.sync_all()?;
-            sync(&parent)?;
-            target.original_sha256 = Some(hash(&mut file, target.original_bytes)?);
-            pin(
-                &parent,
-                &target.source.name,
-                &artifacts,
-                "original",
-                original,
-            )?;
-        }
-        sync(&artifacts)?;
-        self.reconcile_quotas(work)?;
-        Ok(target)
-    }
-    fn prepare_candidate(
-        &self,
-        entry: &Entry,
-        artifacts: &Dir,
-        payload: &Content,
-        content: &mut dyn Read,
-        work: Option<&interpreter::runtime::fuel::WorkBudget>,
-    ) -> Result<FileIdentity, RecoveryError> {
-        let present = existing(artifacts, "candidate")?;
-        if present
-            .as_ref()
-            .is_some_and(|m| !m.is_file() || interpreter::runtime::fs::link_count(m) != Some(1))
-        {
-            return Err(RecoveryError::Conflict);
-        }
-        self.volume(&entry.mount)?.check_growth(
-            payload.bytes.saturating_sub(present.map_or(0, |m| m.len())),
-            work,
-        )?;
-        let mut file = artifacts.open_with(
-            "candidate",
-            OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(true),
-        )?;
-        copy_exact(content, &mut file, payload)?;
-        file.sync_all()?;
-        paths::test_checkpoint("candidate-sync")?;
-        sync(artifacts)?;
-        identity(&file.metadata()?)
-    }
-
-    /// Publish the prepared inode, or recognize it at the destination on retry.
-    /// A third inode is a conflict: retry must not overwrite someone else's file.
-    fn publish_candidate(
-        &self,
-        state: &WriteCheckpoint,
-        artifacts: &Dir,
-        payload: &Content,
-        content: &mut dyn Read,
-        work: Option<&interpreter::runtime::fuel::WorkBudget>,
-    ) -> Result<(), RecoveryError> {
-        let target = &state.target;
-        let candidate = state.candidate.ok_or(RecoveryError::InvalidRecord)?;
-        if current(artifacts, "candidate")? != Some(candidate) {
-            return Err(RecoveryError::Conflict);
-        }
-        let parent = self.parent(&target.source)?;
-        let present = current(&parent, &target.source.name)?;
-        if present != target.original && present != Some(candidate) {
-            return Err(RecoveryError::Conflict);
-        }
-        if let Some(original) = target.original {
-            require_pin(artifacts, "original", original)?;
-        }
-        // An uncommitted candidate may have suffered dirty writeback. Repair the
-        // same inode, including when the rename reached disk before the receipt.
-        let mut file =
-            artifacts.open_with("candidate", OpenOptions::new().read(true).write(true))?;
-        let length = file.metadata()?.len();
-        if length != payload.bytes || hash(&mut file, length)? != payload.sha256 {
-            self.volume(&target.source.mount)?
-                .check_growth(payload.bytes.saturating_sub(length), work)?;
-            file.seek(SeekFrom::Start(0))?;
-            copy_exact(content, &mut file, payload)?;
-            file.set_len(payload.bytes)?;
-        }
-        file.sync_all()?;
-        paths::test_checkpoint("candidate-sync")?;
-        if present != Some(candidate) {
-            pin(artifacts, "candidate", artifacts, "publish", candidate)?;
-            artifacts.rename("publish", &parent, &target.source.name)?;
-            paths::test_checkpoint("published")?;
-        }
-        sync(&parent)?;
-        sync(artifacts)?;
-        Ok(())
-    }
-}
 
 fn require_empty(dir: &Dir) -> Result<(), RecoveryError> {
     if let Some(entry) = dir.entries()?.next() {
         entry?;
         return Err(std::io::Error::from(std::io::ErrorKind::DirectoryNotEmpty).into());
-    }
-    Ok(())
-}
-
-fn pin(
-    source: &Dir,
-    name: &str,
-    artifacts: &Dir,
-    retained: &str,
-    expected: FileIdentity,
-) -> Result<(), RecoveryError> {
-    if current(source, name)? != Some(expected) {
-        return Err(RecoveryError::Conflict);
-    }
-    match current(artifacts, retained)? {
-        Some(actual) if actual != expected => return Err(RecoveryError::Conflict),
-        Some(_) => {}
-        None => source.hard_link(name, artifacts, retained)?,
-    }
-    paths::test_checkpoint("pin-created")?;
-    sync(artifacts)?;
-    Ok(())
-}
-
-fn require_pin(artifacts: &Dir, name: &str, expected: FileIdentity) -> Result<(), RecoveryError> {
-    if current(artifacts, name)? != Some(expected) {
-        return Err(RecoveryError::Conflict);
     }
     Ok(())
 }

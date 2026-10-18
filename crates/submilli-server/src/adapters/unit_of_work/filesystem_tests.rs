@@ -9,9 +9,7 @@ fn journal_entry(id: &str) -> JournalEntry {
         operation: "test.operation".into(),
         version: 1,
         request: b"secret request".to_vec(),
-        recovery_payload: None,
-        outcome: None,
-        rejected: false,
+        state: None,
     }
 }
 async fn database(path: &std::path::Path) -> (Arc<ServerDatabase>, UnitFactory) {
@@ -27,9 +25,9 @@ async fn filesystem_records_survive_reopen_without_run_or_workspace_tables() {
     let mut unit = factory().await.unwrap();
     let mut row = journal_entry("one");
     unit.save_journal_entry(row.clone()).await.unwrap();
-    row.recovery_payload = Some(b"recovery data".to_vec());
+    row.state = Some(br#"{"Prepared":"recovery data"}"#.to_vec());
     unit.save_journal_entry(row.clone()).await.unwrap();
-    row.outcome = Some(b"result".to_vec());
+    row.state = Some(br#"{"Completed":{"Ok":{"bytes":6}}}"#.to_vec());
     unit.save_journal_entry(row.clone()).await.unwrap();
     unit.commit().await.unwrap();
     drop(factory);
@@ -42,13 +40,13 @@ async fn filesystem_records_survive_reopen_without_run_or_workspace_tables() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(record.outcome.as_deref(), Some(b"result".as_slice()));
     assert_eq!(
-        record.recovery_payload.as_deref(),
-        Some(b"recovery data".as_slice())
+        record.state.as_deref(),
+        Some(br#"{"Completed":{"Ok":{"bytes":6}}}"#.as_slice())
     );
+    assert!(!String::from_utf8_lossy(record.state.as_ref().unwrap()).contains("recovery data"));
     unit.save_journal_entry(record.clone()).await.unwrap();
-    record.outcome = Some(b"changed".to_vec());
+    record.state = Some(br#"{"Completed":{"Ok":{"bytes":7}}}"#.to_vec());
     assert!(unit.save_journal_entry(record).await.is_err());
     assert_eq!(unit.journal_entry_count(&"scope".into()).await.unwrap(), 1);
 }
@@ -81,22 +79,20 @@ async fn filesystem_operation_identity_and_pending_exclusion() {
     drop(collision);
     let mut unit = factory().await.unwrap();
     let mut early = row.clone();
-    early.outcome = Some(b"too soon".to_vec());
+    early.state = Some(br#"{"Completed":{"Ok":{"bytes":8}}}"#.to_vec());
     assert!(unit.save_journal_entry(early).await.is_err());
     let mut refused = row;
-    refused.outcome = Some(b"refusal".to_vec());
-    refused.rejected = true;
+    refused.state = Some(br#"{"Completed":{"Err":"refusal"}}"#.to_vec());
     unit.save_journal_entry(refused).await.unwrap();
     let mut row = journal_entry("two");
     unit.save_journal_entry(row.clone()).await.unwrap();
-    row.recovery_payload = Some(b"checkpoint".to_vec());
+    row.state = Some(br#"{"Prepared":"checkpoint"}"#.to_vec());
     unit.save_journal_entry(row.clone()).await.unwrap();
     unit.save_journal_entry(row.clone()).await.unwrap();
     let mut changed = row.clone();
-    changed.recovery_payload = Some(b"changed".to_vec());
+    changed.state = Some(br#"{"Prepared":"changed"}"#.to_vec());
     assert!(unit.save_journal_entry(changed).await.is_err());
-    row.outcome = Some(b"uncertain".to_vec());
-    row.rejected = true;
+    row.state = Some(br#"{"Completed":{"Err":"uncertain"}}"#.to_vec());
     assert!(unit.save_journal_entry(row).await.is_err());
 }
 #[tokio::test]
@@ -106,7 +102,7 @@ async fn dropped_unit_discards_effect_and_pending_slot() {
     let mut unit = factory().await.unwrap();
     let mut row = journal_entry("one");
     unit.save_journal_entry(row.clone()).await.unwrap();
-    row.recovery_payload = Some(b"checkpoint".to_vec());
+    row.state = Some(br#"{"Prepared":"checkpoint"}"#.to_vec());
     unit.save_journal_entry(row).await.unwrap();
     assert!(
         unit.get_journal_entry(&"scope".into(), &"one".into())
@@ -142,21 +138,21 @@ async fn records_are_bounded_and_sealed_to_field_row_operation_and_version() {
     let mut row = journal_entry("one");
     unit.save_journal_entry(row.clone()).await.unwrap();
     let mut oversized = row.clone();
-    oversized.recovery_payload = Some(vec![0; MAX_RECORD + 1]);
+    oversized.state = Some(vec![0; MAX_RECORD + 1]);
     assert!(unit.save_journal_entry(oversized).await.is_err());
-    row.recovery_payload = Some(b"secret intent".to_vec());
+    row.state = Some(br#"{"Prepared":"secret intent"}"#.to_vec());
     unit.save_journal_entry(row.clone()).await.unwrap();
     let mut oversized = row.clone();
-    oversized.outcome = Some(vec![0; MAX_RECORD + 1]);
+    oversized.state = Some(vec![0; MAX_RECORD + 1]);
     assert!(unit.save_journal_entry(oversized).await.is_err());
-    row.outcome = Some(b"secret outcome".to_vec());
+    row.state = Some(br#"{"Completed":{"Ok":{"bytes":14}}}"#.to_vec());
     unit.save_journal_entry(row).await.unwrap();
     unit.commit().await.unwrap();
-    let original: (Vec<u8>, Vec<u8>) = db
+    let original: Vec<u8> = db
         .read(|connection| {
             Box::pin(async move {
-                Ok(sqlx::query_as(
-                    "SELECT recovery_payload,outcome FROM durable_filesystem_operations WHERE operation_id='one'",
+                Ok(sqlx::query_scalar(
+                    "SELECT state FROM durable_filesystem_operations WHERE operation_id='one'",
                 )
                 .fetch_one(connection)
                 .await?)
@@ -168,8 +164,8 @@ async fn records_are_bounded_and_sealed_to_field_row_operation_and_version() {
         "UPDATE durable_filesystem_operations SET operation='other'",
         "UPDATE durable_filesystem_operations SET version=2",
         "UPDATE durable_filesystem_operations SET operation_id='two'",
-        "UPDATE durable_filesystem_operations SET recovery_payload=request",
-        "UPDATE durable_filesystem_operations SET outcome=request",
+        "UPDATE durable_filesystem_operations SET state=request",
+        "UPDATE durable_filesystem_operations SET status='pending'",
     ] {
         let changed_row = attack_is_row(attack);
         let attack = attack.to_owned();
@@ -195,8 +191,8 @@ async fn records_are_bounded_and_sealed_to_field_row_operation_and_version() {
         drop(unit);
         let original = original.clone();
         db.transaction(move |connection| Box::pin(async move {
-            sqlx::query("UPDATE durable_filesystem_operations SET operation='test.operation',version=1,operation_id='one',recovery_payload=?,outcome=?")
-                .bind(original.0).bind(original.1).execute(connection).await?;
+            sqlx::query("UPDATE durable_filesystem_operations SET operation='test.operation',version=1,operation_id='one',state=?,status='done'")
+                .bind(original).execute(connection).await?;
             Ok(())
         })).await.unwrap();
     }
@@ -214,4 +210,37 @@ async fn direct_persistence_refuses_rewriting_committed_operation_identity() {
     unit.save_journal_entry(row.clone()).await.unwrap();
     row.request = b"changed".to_vec();
     assert!(unit.save_journal_entry(row).await.is_err());
+}
+
+#[tokio::test]
+async fn malformed_state_and_backward_transitions_are_rejected() {
+    let root = tempfile::tempdir().unwrap();
+    let (_db, factory) = database(&root.path().join("db")).await;
+    let mut unit = factory().await.unwrap();
+    let mut entry = journal_entry("one");
+    unit.save_journal_entry(entry.clone()).await.unwrap();
+    for encoded in [
+        b"not json".as_slice(),
+        br#""Unknown""#,
+        br#""Initial""#,
+        br#"{"Completed":{"Ok":{"bytes":-1}}}"#,
+        br#"{"Completed":{"Err":123}}"#,
+        br#"{"Prepared":{},"Completed":{"Ok":{"bytes":0}}}"#,
+    ] {
+        let mut malformed = entry.clone();
+        malformed.state = Some(encoded.to_vec());
+        assert!(unit.save_journal_entry(malformed).await.is_err());
+    }
+    entry.state = Some(br#"{"Prepared":{"offset":7}}"#.to_vec());
+    unit.save_journal_entry(entry.clone()).await.unwrap();
+    let mut reset = entry.clone();
+    reset.state = None;
+    assert!(unit.save_journal_entry(reset).await.is_err());
+    entry.state = Some(br#"{"Completed":{"Ok":{"bytes":3}}}"#.to_vec());
+    unit.save_journal_entry(entry.clone()).await.unwrap();
+    let mut reset = entry.clone();
+    reset.state = None;
+    assert!(unit.save_journal_entry(reset).await.is_err());
+    entry.state = Some(br#"{"Prepared":{"offset":7}}"#.to_vec());
+    assert!(unit.save_journal_entry(entry).await.is_err());
 }

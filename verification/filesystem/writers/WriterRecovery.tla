@@ -143,6 +143,9 @@ OpenWriterState == IF s.row THEN "Completed" ELSE "Initial"
 WriteChunkState == CASE s.cursor < Len(s.receipts) -> "Completed"
                        [] s.written /\ s.synced -> "Staged"
                        [] OTHER -> "Initial"
+(* Close retains only a Prepared marker. Its writer row supplies the target
+   path and the reserved close ID locates the private candidate; neither a
+   resolved Entry nor the candidate inode is persisted in the close journal. *)
 CloseWriterState == CASE s.outcome # "none" -> "Completed"
                         [] s.intent -> "Prepared"
                         [] OTHER -> "Initial"

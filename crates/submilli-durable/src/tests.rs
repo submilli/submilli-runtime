@@ -3,7 +3,7 @@ use crate::io::{Files, PRIVATE, Roots};
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::io;
-use std::io::{Read, Write};
+use std::io::Read;
 
 #[test]
 fn typed_run_id_preserves_stored_roots_encoding() {
@@ -109,7 +109,7 @@ fn append_repairs_partial_range_on_the_original_inode() {
 }
 
 #[test]
-fn replacement_repairs_corruption_without_aliasing_immutable_capture() {
+fn write_recreates_temporary_output_from_replay_input() {
     let root = tempfile::tempdir().unwrap();
     let workspace = workspace(root.path());
     let mut payload = Payload::new(b"captured");
@@ -136,8 +136,8 @@ fn replacement_repairs_corruption_without_aliasing_immutable_capture() {
 }
 
 #[test]
-fn move_recovers_all_four_persisted_namespace_states() {
-    for state in 0..4 {
+fn move_recovers_prepared_published_and_unlinked_states() {
+    for state in 0..3 {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("a")).unwrap();
         std::fs::create_dir(root.path().join("b")).unwrap();
@@ -173,7 +173,7 @@ fn move_recovers_all_four_persisted_namespace_states() {
 }
 
 #[test]
-fn remove_refuses_a_new_file_at_a_reused_path() {
+fn remove_retries_absence_then_preserves_a_later_file() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("file"), b"old").unwrap();
     let workspace = workspace(root.path());
@@ -189,11 +189,12 @@ fn remove_refuses_a_new_file_at_a_reused_path() {
         .unwrap();
     workspace.store.lock().unwrap().refuse_receipt = true;
     assert!(workspace.apply(&intent, &mut payload).is_err());
+    assert!(!root.path().join("file").exists());
+    workspace.store.lock().unwrap().refuse_receipt = false;
+    workspace.apply(&intent, &mut payload).unwrap();
+    // Only after completion can the same owner reuse the path.
     std::fs::write(root.path().join("file"), b"newer").unwrap();
-    assert!(matches!(
-        workspace.apply(&intent, &mut payload),
-        Err(FilesystemError::Recovery(RecoveryError::Conflict))
-    ));
+    workspace.apply(&intent, &mut payload).unwrap();
     assert_eq!(std::fs::read(root.path().join("file")).unwrap(), b"newer");
 }
 
@@ -246,7 +247,7 @@ fn restored_reader_refuses_path_replacement() {
 }
 
 #[test]
-fn lost_pin_changed_prefix_and_foreign_identity_fail_closed() {
+fn append_keeps_only_progress_and_rejects_another_mutation_while_pending() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("file"), b"original").unwrap();
     let workspace = workspace(root.path());
@@ -261,28 +262,26 @@ fn lost_pin_changed_prefix_and_foreign_identity_fail_closed() {
             &mut payload,
         )
         .unwrap();
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(root.path().join("file"))
-        .unwrap()
-        .write_all(b"X")
-        .unwrap();
-    assert!(matches!(
-        workspace.apply(&intent, &mut payload),
-        Err(FilesystemError::Recovery(RecoveryError::Conflict))
-    ));
-    std::fs::remove_file(
-        root.path()
-            .join(PRIVATE)
-            .join(workspace.identity().run_id.as_str())
-            .join(intent.effect().as_str())
-            .join("original"),
-    )
-    .unwrap();
-    assert!(matches!(
-        workspace.apply(&intent, &mut payload),
-        Err(FilesystemError::Recovery(RecoveryError::Conflict))
-    ));
+    assert!(
+        !workspace
+            .volume("/")
+            .unwrap()
+            .recovery
+            .exists(intent.effect().as_str())
+    );
+    let later = Case::Remove {
+        path: "/file".into(),
+    };
+    assert!(
+        workspace
+            .call(&uuid::Uuid::new_v4().to_string().into(), &later, &payload)
+            .is_err()
+    );
+    workspace.apply(&intent, &mut payload).unwrap();
+    assert_eq!(
+        std::fs::read(root.path().join("file")).unwrap(),
+        b"original suffix"
+    );
     let foreign = tempfile::tempdir().unwrap();
     assert!(
         workspace
@@ -295,22 +294,15 @@ fn lost_pin_changed_prefix_and_foreign_identity_fail_closed() {
 }
 
 #[test]
-fn checkpoint_size_bound_and_invalid_paths_are_rejected() {
+fn state_size_bound_and_invalid_paths_are_rejected() {
     let bytes = vec![b' '; crate::codec::MAX_RECORD + 1];
-    assert!(decode_checkpoint::<Target>(&bytes).is_err());
+    assert!(deserialize::<Outcome>(&bytes).is_err());
     assert!(serialize(&"x".repeat(crate::codec::MAX_RECORD)).is_err());
     let root = tempfile::tempdir().unwrap();
     let files = workspace(root.path());
-    let mut target = files
-        .capture_target(
-            &uuid::Uuid::new_v4().to_string().into(),
-            "/file",
-            CaptureOptions::default(),
-            None,
-        )
-        .unwrap();
-    target.source.parent = "../escape".into();
-    assert!(target.validate().is_err());
+    assert!(crate::io::validate_guest_path("/../escape").is_err());
+    assert!(files.entry("/.git/config", false).is_err());
+    assert!(files.entry(&format!("/{PRIVATE}/file"), false).is_err());
     assert!(!root.path().join("file").exists());
 }
 
@@ -431,7 +423,7 @@ fn failed_mutation_barriers_remain_reconcilable() {
 }
 
 #[test]
-fn retained_bytes_are_charged_once_and_failed_growth_does_not_change_the_file() {
+fn appended_bytes_are_charged_once_and_failed_growth_does_not_change_the_file() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("file"), b"original").unwrap();
     let quota = Arc::new(interpreter::runtime::DiskQuota::new(12, 8));
@@ -570,6 +562,22 @@ impl TestFilesystem {
         case: Case,
         payload: &mut Payload,
     ) -> Result<Prepared, FilesystemError> {
+        if matches!(case, Case::Write { .. }) {
+            // Byte writes have no journal. Stop after syncing their private file.
+            fail("candidate-sync");
+            return match self.call(effect, &case, payload) {
+                Err(FilesystemError::Recovery(RecoveryError::Io(error)))
+                    if error.to_string() == "injected candidate-sync" =>
+                {
+                    Ok(Prepared {
+                        effect: effect.clone(),
+                        case,
+                    })
+                }
+                Err(error) => Err(error),
+                Ok(_) => panic!("write passed its injected file-sync failure"),
+            };
+        }
         self.store.lock().unwrap().stop_after_prepared = true;
         let result = self.call(effect, &case, payload);
         self.store.lock().unwrap().stop_after_prepared = false;
@@ -672,4 +680,309 @@ async fn cancelled_blocking_work_holds_admission_until_it_drains() {
         &filesystem.filesystem_gate,
         &reopened.filesystem_gate
     ));
+}
+
+#[test]
+fn new_append_repairs_a_partial_file_without_private_backups() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = workspace(root.path());
+    let mut payload = Payload::new(&vec![b'x'; 131_073]);
+    let intent = workspace
+        .prepare(
+            &uuid::Uuid::new_v4().to_string().into(),
+            Case::Append {
+                path: "/file".into(),
+                content: payload.reference.clone(),
+            },
+            &mut payload,
+        )
+        .unwrap();
+    assert!(!root.path().join("file").exists());
+    fail("write-chunk");
+    assert!(workspace.apply(&intent, &mut payload).is_err());
+    assert_eq!(
+        std::fs::metadata(root.path().join("file")).unwrap().len(),
+        65_536
+    );
+    let restored = workspace
+        .reopen(
+            Vfs::external(root.path().to_owned()).unwrap(),
+            &workspace.identity(),
+        )
+        .unwrap();
+    restored.apply(&intent, &mut payload).unwrap();
+    restored.apply(&intent, &mut payload).unwrap();
+    assert_eq!(
+        std::fs::read(root.path().join("file")).unwrap(),
+        payload.bytes
+    );
+    assert!(
+        !workspace
+            .volume("/")
+            .unwrap()
+            .recovery
+            .exists(intent.effect().as_str())
+    );
+}
+
+#[test]
+fn remove_releases_content_quota_without_retaining_the_old_file() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("file"), b"old data").unwrap();
+    let quota = Arc::new(interpreter::runtime::DiskQuota::new(8, 8));
+    let workspace = TestFilesystem::new(
+        Vfs::external(root.path().to_owned())
+            .unwrap()
+            .with_shared_quota(quota.clone()),
+    );
+    let mut payload = Payload::new(b"");
+    let intent = workspace
+        .prepare(
+            &uuid::Uuid::new_v4().to_string().into(),
+            Case::Remove {
+                path: "/file".into(),
+            },
+            &mut payload,
+        )
+        .unwrap();
+    workspace.apply(&intent, &mut payload).unwrap();
+    assert_eq!(quota.used(), 0);
+    assert!(
+        !workspace
+            .volume("/")
+            .unwrap()
+            .recovery
+            .exists(intent.effect().as_str())
+    );
+}
+
+#[test]
+fn write_retry_at_full_quota_recreates_the_temporary_file() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("file"), b"old!").unwrap();
+    let quota = Arc::new(interpreter::runtime::DiskQuota::new(4, 4));
+    let workspace = TestFilesystem::new(
+        Vfs::external(root.path().to_owned())
+            .unwrap()
+            .with_shared_quota(quota.clone()),
+    );
+    let mut payload = Payload::new(b"four");
+    let intent = workspace
+        .prepare(
+            &uuid::Uuid::new_v4().to_string().into(),
+            Case::Write {
+                path: "/file".into(),
+                content: payload.reference.clone(),
+            },
+            &mut payload,
+        )
+        .unwrap();
+    assert_eq!(quota.used(), 4, "prepared replacement is free");
+    fail("published");
+    assert!(workspace.apply(&intent, &mut payload).is_err());
+    assert_eq!(quota.used(), 4);
+    workspace.apply(&intent, &mut payload).unwrap();
+    assert_eq!(quota.used(), 4);
+    assert_eq!(std::fs::read(root.path().join("file")).unwrap(), b"four");
+}
+
+#[test]
+fn replacement_and_removal_apply_only_the_public_size_delta() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("file"), b"original").unwrap();
+    let quota = Arc::new(interpreter::runtime::DiskQuota::new(8, 8));
+    let workspace = TestFilesystem::new(
+        Vfs::external(root.path().to_owned())
+            .unwrap()
+            .with_shared_quota(quota.clone()),
+    );
+    for bytes in [b"replaced".as_slice(), b"small", b"sixsix"] {
+        let mut payload = Payload::new(bytes);
+        let previous = quota.used();
+        let intent = workspace
+            .prepare(
+                &uuid::Uuid::new_v4().to_string().into(),
+                Case::Write {
+                    path: "/file".into(),
+                    content: payload.reference.clone(),
+                },
+                &mut payload,
+            )
+            .unwrap();
+        assert_eq!(
+            quota.used(),
+            previous,
+            "preparation counted temporary output"
+        );
+        workspace.apply(&intent, &mut payload).unwrap();
+        workspace.apply(&intent, &mut payload).unwrap();
+        assert_eq!(quota.used(), bytes.len() as u64);
+    }
+    assert_eq!(std::fs::read(root.path().join("file")).unwrap(), b"sixsix");
+    let mut payload = Payload::new(b"too large");
+    assert!(matches!(
+        workspace.prepare(
+            &uuid::Uuid::new_v4().to_string().into(),
+            Case::Write {
+                path: "/file".into(),
+                content: payload.reference.clone()
+            },
+            &mut payload,
+        ),
+        Err(FilesystemError::Rejected(_))
+    ));
+    assert_eq!(quota.used(), 6);
+    let mut payload = Payload::new(b"");
+    let removal = workspace
+        .prepare(
+            &uuid::Uuid::new_v4().to_string().into(),
+            Case::Remove {
+                path: "/file".into(),
+            },
+            &mut payload,
+        )
+        .unwrap();
+    fail("source-removed");
+    assert!(workspace.apply(&removal, &mut payload).is_err());
+    assert_eq!(quota.used(), 0);
+    workspace.apply(&removal, &mut payload).unwrap();
+    assert_eq!(quota.used(), 0);
+}
+
+#[test]
+fn partial_append_counts_only_new_public_bytes_across_retry() {
+    let root = tempfile::tempdir().unwrap();
+    let quota = Arc::new(interpreter::runtime::DiskQuota::new(131_073, 0));
+    let workspace = TestFilesystem::new(
+        Vfs::external(root.path().to_owned())
+            .unwrap()
+            .with_shared_quota(quota.clone()),
+    );
+    let mut payload = Payload::new(&vec![b'x'; 131_073]);
+    let intent = workspace
+        .prepare(
+            &uuid::Uuid::new_v4().to_string().into(),
+            Case::Append {
+                path: "/file".into(),
+                content: payload.reference.clone(),
+            },
+            &mut payload,
+        )
+        .unwrap();
+    assert_eq!(quota.used(), 0);
+    fail("write-chunk");
+    assert!(workspace.apply(&intent, &mut payload).is_err());
+    assert_eq!(quota.used(), 65_536);
+    workspace.apply(&intent, &mut payload).unwrap();
+    workspace.apply(&intent, &mut payload).unwrap();
+    assert_eq!(quota.used(), 131_073);
+}
+
+#[test]
+fn move_releases_the_destination_once_even_before_source_unlink() {
+    for point in ["destination-published", "source-removed", "before-receipt"] {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("source"), b"source").unwrap();
+        std::fs::write(root.path().join("destination"), b"old").unwrap();
+        let quota = Arc::new(interpreter::runtime::DiskQuota::new(9, 9));
+        let workspace = TestFilesystem::new(
+            Vfs::external(root.path().to_owned())
+                .unwrap()
+                .with_shared_quota(quota.clone()),
+        );
+        let mut payload = Payload::new(b"");
+        let intent = workspace
+            .prepare(
+                &uuid::Uuid::new_v4().to_string().into(),
+                Case::Move {
+                    source: "/source".into(),
+                    destination: "/destination".into(),
+                },
+                &mut payload,
+            )
+            .unwrap();
+        fail(point);
+        assert!(workspace.apply(&intent, &mut payload).is_err());
+        assert_eq!(quota.used(), 6, "{point}");
+        workspace.apply(&intent, &mut payload).unwrap();
+        workspace.apply(&intent, &mut payload).unwrap();
+        assert_eq!(quota.used(), 6, "{point}");
+    }
+}
+
+#[test]
+fn write_retry_unlinks_a_stale_private_alias_before_creating_the_next_file() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = workspace(root.path());
+    let effect: EffectId = uuid::Uuid::new_v4().to_string().into();
+    let payload = Payload::new(b"replacement");
+    let call = Case::Write {
+        path: "/file".into(),
+        content: payload.reference.clone(),
+    };
+    fail("published");
+    assert!(workspace.call(&effect, &call, &payload).is_err());
+    let recovery = root
+        .path()
+        .join(PRIVATE)
+        .join(workspace.filesystem.run_id().as_str());
+    let replacement_path = recovery.join(format!("{effect}.replacement"));
+    // Known temporary aliases must not force an unrelated recovery-tree scan.
+    // The journal/resource protocols can leave many private entries behind.
+    for index in 0..=crate::io::MAX_ENTRIES {
+        std::fs::create_dir(recovery.join(format!("unrelated-{index}"))).unwrap();
+    }
+    // Emulate a power crash persisting the destination rename but retaining the
+    // old private directory entry. The two names then identify the same inode.
+    std::fs::hard_link(root.path().join("file"), &replacement_path).unwrap();
+    fail("write-temp-created");
+    assert!(workspace.call(&effect, &call, &payload).is_err());
+    assert_eq!(
+        std::fs::read(root.path().join("file")).unwrap(),
+        b"replacement"
+    );
+    assert!(std::fs::read(&replacement_path).unwrap().is_empty());
+    workspace.call(&effect, &call, &payload).unwrap();
+    assert_eq!(
+        std::fs::read(root.path().join("file")).unwrap(),
+        b"replacement"
+    );
+    assert!(!replacement_path.exists());
+    assert!(
+        !recovery.join(effect.as_str()).exists(),
+        "write left an empty effect directory"
+    );
+    workspace.runtime.block_on(async {
+        let mut unit = (workspace.filesystem.units)().await.unwrap();
+        assert_eq!(
+            unit.journal_entry_count(workspace.filesystem.run_id())
+                .await
+                .unwrap(),
+            0
+        );
+    });
+}
+
+#[test]
+fn empty_write_retries_release_only_public_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("file"), b"original").unwrap();
+    let quota = Arc::new(interpreter::runtime::DiskQuota::new(8, 8));
+    let workspace = TestFilesystem::new(
+        Vfs::external(root.path().to_owned())
+            .unwrap()
+            .with_shared_quota(quota.clone()),
+    );
+    let effect = uuid::Uuid::new_v4().to_string().into();
+    let payload = Payload::new(b"");
+    let call = Case::Write {
+        path: "/file".into(),
+        content: payload.reference.clone(),
+    };
+    fail("published");
+    assert!(workspace.call(&effect, &call, &payload).is_err());
+    assert_eq!(quota.used(), 0);
+    workspace.call(&effect, &call, &payload).unwrap();
+    assert_eq!(quota.used(), 0);
+    assert!(std::fs::read(root.path().join("file")).unwrap().is_empty());
 }

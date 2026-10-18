@@ -11,7 +11,10 @@
     "ImmutableOutcome",
     "OnePending",
     "RefuseBeforePrepare",
-    "ReceiptBeforeReturn"
+    "ReceiptBeforeReturn",
+    "ProgressNeverResets",
+    "IndexMatchesState",
+    "PrepareBeforeComplete"
   ],
   "properties": [],
   "cases": [
@@ -97,6 +100,38 @@
       "invariant": "ImmutableIdentity",
       "constants": {
         "Fault": "request"
+      }
+    },
+    {
+      "name": "negative-forget-state",
+      "kind": "negative",
+      "invariant": "ProgressNeverResets",
+      "constants": {
+        "Fault": "forget-state"
+      }
+    },
+    {
+      "name": "negative-wrong-index",
+      "kind": "negative",
+      "invariant": "IndexMatchesState",
+      "constants": {
+        "Fault": "wrong-index"
+      }
+    },
+    {
+      "name": "negative-early-completion",
+      "kind": "negative",
+      "invariant": "PrepareBeforeComplete",
+      "constants": {
+        "Fault": "early-completion"
+      }
+    },
+    {
+      "name": "witness-empty-prepared",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "empty-prepared"
       }
     }
   ]

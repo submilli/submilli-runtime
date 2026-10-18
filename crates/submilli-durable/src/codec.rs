@@ -189,8 +189,7 @@ pub struct ResourceColumns {
 }
 pub struct JournalEntryColumns {
     pub request: Vec<u8>,
-    pub recovery: Option<Vec<u8>>,
-    pub outcome: Option<Vec<u8>>,
+    pub state: Option<Vec<u8>>,
 }
 fn encode_optional<T: Serialize>(
     sealer: &Sealer,
@@ -388,15 +387,10 @@ pub fn encode_journal_entry(
             &journal_entry_owner(journal_entry, "request")?,
             &journal_entry.request,
         )?,
-        recovery: journal_entry
-            .recovery_payload
+        state: journal_entry
+            .state
             .as_ref()
-            .map(|v| seal(sealer, &journal_entry_owner(journal_entry, "recovery")?, v))
-            .transpose()?,
-        outcome: journal_entry
-            .outcome
-            .as_ref()
-            .map(|v| seal(sealer, &journal_entry_owner(journal_entry, "outcome")?, v))
+            .map(|v| seal(sealer, &journal_entry_owner(journal_entry, "state")?, v))
             .transpose()?,
     })
 }
@@ -410,19 +404,10 @@ pub fn decode_journal_entry(
         &journal_entry_owner(&journal_entry, "request")?,
         &columns.request,
     )?;
-    journal_entry.recovery_payload = columns
-        .recovery
-        .map(|v| {
-            open(
-                sealer,
-                &journal_entry_owner(&journal_entry, "recovery")?,
-                &v,
-            )
-        })
+    journal_entry.state = columns
+        .state
+        .map(|v| open(sealer, &journal_entry_owner(&journal_entry, "state")?, &v))
         .transpose()?;
-    journal_entry.outcome = columns
-        .outcome
-        .map(|v| open(sealer, &journal_entry_owner(&journal_entry, "outcome")?, &v))
-        .transpose()?;
+    journal_entry.status()?;
     Ok(journal_entry)
 }

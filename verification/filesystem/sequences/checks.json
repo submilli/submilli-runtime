@@ -8,7 +8,7 @@
   "invariants": [
     "TypeOK",
     "DurablePrefix",
-    "Evidence",
+    "JournalRetained",
     "Completed",
     "NoRepeat"
   ],
@@ -45,7 +45,7 @@
     {
       "name": "negative-early-cleanup",
       "kind": "negative",
-      "invariant": "Evidence",
+      "invariant": "JournalRetained",
       "constants": {
         "Fault": "early-cleanup"
       }

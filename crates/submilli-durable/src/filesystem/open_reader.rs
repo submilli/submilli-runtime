@@ -62,7 +62,8 @@ impl FilesystemOperation {
                 OpenReaderState::Initial => {
                     let files = self.filesystem.files.clone();
                     let work = self.work.clone();
-                    let (id, path) = (resource.clone(), path.to_owned());
+                    let id = resource.clone();
+                    let path = path.to_owned();
                     let result = blocking(gate.clone(), move || {
                         files.open_reader(&id, &path, work.as_deref())?.position()
                     })

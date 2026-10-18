@@ -4,7 +4,8 @@
     "MaxCrashes": 1,
     "CrashMode": "power",
     "Fault": "none",
-    "Witness": ""
+    "Witness": "",
+    "InitiallyExists": true
   },
   "invariants": [
     "TypeOK",
@@ -12,10 +13,11 @@
     "AppendExactlyOnce",
     "NewPathUntouched",
     "ReplayReadStable",
-    "RecoveryEvidenceRetained",
+    "JournalRetained",
     "SuccessAfterReceipt",
     "OriginalPrefixPreserved",
-    "InputMatches"
+    "InputMatches",
+    "OriginalOffsetRetained"
   ],
   "properties": [],
   "cases": [
@@ -65,7 +67,7 @@
     {
       "name": "negative-early-cleanup",
       "kind": "negative",
-      "invariant": "RecoveryEvidenceRetained",
+      "invariant": "JournalRetained",
       "constants": {
         "Fault": "early-cleanup"
       }
@@ -125,6 +127,59 @@
       "invariant": "InputMatches",
       "constants": {
         "Fault": "unchecked-input"
+      }
+    },
+    {
+      "name": "append-new-file-power",
+      "kind": "safety",
+      "constants": {
+        "InitiallyExists": false,
+        "CrashMode": "power"
+      }
+    },
+    {
+      "name": "append-new-file-process",
+      "kind": "safety",
+      "constants": {
+        "InitiallyExists": false,
+        "CrashMode": "process"
+      }
+    },
+    {
+      "name": "append-new-file-progress",
+      "kind": "liveness",
+      "specification": "LiveSpec",
+      "properties": [
+        "Progress"
+      ],
+      "constants": {
+        "InitiallyExists": false
+      }
+    },
+    {
+      "name": "negative-new-file-without-parent-sync",
+      "kind": "negative",
+      "invariant": "ReceiptIsDurable",
+      "constants": {
+        "InitiallyExists": false,
+        "Fault": "skip-parent-sync"
+      }
+    },
+    {
+      "name": "witness-new-file-name-before-complete-bytes",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "InitiallyExists": false,
+        "Witness": "new-name-partial"
+      }
+    },
+    {
+      "name": "negative-refresh-saved-offset",
+      "kind": "negative",
+      "invariant": "OriginalOffsetRetained",
+      "constants": {
+        "Fault": "refresh-offset"
       }
     }
   ]

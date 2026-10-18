@@ -10,8 +10,7 @@
   "invariants": [
     "TypeOK",
     "ReceiptDurable",
-    "OriginalRecoverable",
-    "EvidenceRetained",
+    "MoveSourceSurvives",
     "NewerPathsUntouched",
     "SuccessAfterReceipt"
   ],
@@ -81,12 +80,12 @@
       }
     },
     {
-      "name": "negative-unsynced-backup",
+      "name": "negative-unlink-before-destination-sync",
       "kind": "negative",
-      "invariant": "OriginalRecoverable",
+      "invariant": "MoveSourceSurvives",
       "constants": {
-        "Fault": "no-backup-sync",
-        "Operation": "remove"
+        "Fault": "early-unlink",
+        "Operation": "move"
       }
     },
     {
@@ -107,9 +106,9 @@
       }
     },
     {
-      "name": "negative-early-cleanup",
+      "name": "negative-forgotten-receipt",
       "kind": "negative",
-      "invariant": "EvidenceRetained",
+      "invariant": "SuccessAfterReceipt",
       "constants": {
         "Fault": "early-cleanup"
       }

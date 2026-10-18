@@ -35,16 +35,15 @@ async fn crash_child() {
     };
     let root = PathBuf::from(root);
     let (database, cipher) = open_database(&root).await;
-    let filesystem = open(
-        Vfs::external(root.join("workspace")).unwrap(),
-        &RUN.into(),
-        database,
-        cipher,
-    )
-    .await
-    .unwrap();
     let kind = std::env::var("SUBMILLI_FILESYSTEM_CRASH_KIND").unwrap_or_default();
-    if kind == "reader" {
+    let mut vfs = Vfs::external(root.join("workspace")).unwrap();
+    if kind.starts_with("quota-") {
+        vfs = vfs.with_size_limit(if kind == "quota-append" { 131_073 } else { 8 });
+    }
+    let filesystem = open(vfs, &RUN.into(), database, cipher).await.unwrap();
+    if let Some(operation) = kind.strip_prefix("quota-") {
+        retry_quota_operation(&filesystem, operation).await;
+    } else if kind == "reader" {
         use interpreter::runtime::filesystem::FileReader;
         std::fs::write(filesystem.vfs().root().join("file"), b"abcdef").unwrap();
         let mut reader = filesystem
@@ -101,6 +100,15 @@ async fn crash_child() {
             .close_writer(&RUN.into(), &EFFECT.into())
             .await
             .unwrap();
+    } else if matches!(kind.as_str(), "move" | "remove" | "mkdir" | "rmdir") {
+        let workspace = filesystem.vfs().root();
+        std::fs::create_dir(workspace.join("a")).unwrap();
+        std::fs::create_dir(workspace.join("b")).unwrap();
+        std::fs::create_dir(workspace.join("empty")).unwrap();
+        std::fs::write(workspace.join("a/source"), b"source").unwrap();
+        std::fs::write(workspace.join("b/destination"), b"old").unwrap();
+        std::fs::write(workspace.join("file"), b"remove").unwrap();
+        retry_namespace(&filesystem, &kind).await;
     } else if kind == "write" {
         std::fs::write(filesystem.vfs().root().join("file"), b"initial").unwrap();
         filesystem
@@ -155,8 +163,7 @@ fn kill_at_mode(root: &Path, point: &str, kind: &str) {
 #[tokio::test]
 async fn explicit_retries_after_process_restart_finish_filesystem_operations() {
     for (kind, expected) in [
-        ("write", b"replacement".as_slice()),
-        ("append", b"initialsuffix"),
+        ("append", b"initialsuffix".as_slice()),
         ("append-create", b"suffix"),
     ] {
         for point in [
@@ -182,35 +189,21 @@ async fn explicit_retries_after_process_restart_finish_filesystem_operations() {
             .unwrap();
             let operation = filesystem.operation(None);
             let effect = EFFECT.into();
-            if kind == "write" {
-                operation
-                    .write_bytes(&effect, "/file", b"replacement".to_vec())
-                    .await
-                    .unwrap();
-            } else {
-                operation
-                    .append_bytes(&effect, "/file", b"suffix".to_vec())
-                    .await
-                    .unwrap();
-            }
+            operation
+                .append_bytes(&effect, "/file", b"suffix".to_vec())
+                .await
+                .unwrap();
             assert_eq!(
                 std::fs::read(filesystem.vfs().root().join("file")).unwrap(),
                 expected,
                 "{kind} at {point}"
             );
-            // Once completed, neither flow may overwrite or append to a later file.
+            // Once completed, append must not add bytes to a later file.
             std::fs::write(filesystem.vfs().root().join("file"), b"later").unwrap();
-            if kind == "write" {
-                operation
-                    .write_bytes(&effect, "/file", b"replacement".to_vec())
-                    .await
-                    .unwrap();
-            } else {
-                operation
-                    .append_bytes(&effect, "/file", b"suffix".to_vec())
-                    .await
-                    .unwrap();
-            }
+            operation
+                .append_bytes(&effect, "/file", b"suffix".to_vec())
+                .await
+                .unwrap();
             assert_eq!(
                 std::fs::read(filesystem.vfs().root().join("file")).unwrap(),
                 b"later",
@@ -238,6 +231,20 @@ async fn writer_restart_repairs_unacknowledged_output_tail_and_close() {
             .await
             .unwrap();
         let (database, cipher) = open_database(root.path()).await;
+        if matches!(point, "effect-intent" | "effect-applied") {
+            let units =
+                crate::adapters::unit_of_work::durable::units(database.clone(), cipher.clone());
+            let mut unit = units().await.unwrap();
+            let journal_entry = unit
+                .get_journal_entry(&RUN.into(), &EFFECT.into())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&journal_entry.state.unwrap()).unwrap(),
+                serde_json::json!({"Prepared": {}})
+            );
+        }
         let filesystem = open(
             Vfs::external(root.path().join("workspace")).unwrap(),
             &RUN.into(),
@@ -364,6 +371,276 @@ async fn resource_progress_survives_process_death_before_framework_completion() 
                     "/b"
                 );
             }
+        }
+    }
+}
+
+async fn retry_namespace(filesystem: &DurableFilesystem, kind: &str) {
+    let operation = filesystem.operation(None);
+    let effect = EFFECT.into();
+    match kind {
+        "move" => operation
+            .move_path(&effect, "/a/source", "/b/destination")
+            .await
+            .unwrap(),
+        "remove" => operation.remove_path(&effect, "/file").await.unwrap(),
+        "mkdir" => operation
+            .create_directory(&effect, "/created")
+            .await
+            .unwrap(),
+        "rmdir" => operation.remove_path(&effect, "/empty").await.unwrap(),
+        _ => panic!("unknown namespace test operation"),
+    };
+}
+
+#[tokio::test]
+async fn namespace_retries_survive_process_death_without_original_backups() {
+    for (kind, points) in [
+        (
+            "move",
+            &[
+                "effect-intent",
+                "destination-published",
+                "source-removed",
+                "effect-receipt",
+            ][..],
+        ),
+        (
+            "remove",
+            &["effect-intent", "source-removed", "effect-receipt"][..],
+        ),
+        (
+            "mkdir",
+            &["effect-intent", "directory-created", "effect-receipt"][..],
+        ),
+        (
+            "rmdir",
+            &["effect-intent", "directory-removed", "effect-receipt"][..],
+        ),
+    ] {
+        for &point in points {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir(root.path().join("workspace")).unwrap();
+            let child_root = root.path().to_owned();
+            tokio::task::spawn_blocking(move || kill_at_mode(&child_root, point, kind))
+                .await
+                .unwrap();
+            let (database, cipher) = open_database(root.path()).await;
+            let filesystem = open(
+                Vfs::external(root.path().join("workspace")).unwrap(),
+                &RUN.into(),
+                database,
+                cipher,
+            )
+            .await
+            .unwrap();
+            retry_namespace(&filesystem, kind).await;
+            let workspace = filesystem.vfs().root();
+            match kind {
+                "move" => {
+                    assert!(!workspace.join("a/source").exists());
+                    assert_eq!(
+                        std::fs::read(workspace.join("b/destination")).unwrap(),
+                        b"source"
+                    );
+                    std::fs::write(workspace.join("a/source"), b"later source").unwrap();
+                    std::fs::write(workspace.join("b/destination"), b"later destination").unwrap();
+                    retry_namespace(&filesystem, kind).await;
+                    assert_eq!(
+                        std::fs::read(workspace.join("a/source")).unwrap(),
+                        b"later source"
+                    );
+                    assert_eq!(
+                        std::fs::read(workspace.join("b/destination")).unwrap(),
+                        b"later destination"
+                    );
+                }
+                "mkdir" => {
+                    assert!(workspace.join("created").is_dir());
+                    std::fs::remove_dir(workspace.join("created")).unwrap();
+                    std::fs::write(workspace.join("created"), b"later file").unwrap();
+                    retry_namespace(&filesystem, kind).await;
+                    assert_eq!(
+                        std::fs::read(workspace.join("created")).unwrap(),
+                        b"later file"
+                    );
+                }
+                "remove" | "rmdir" => {
+                    let path = if kind == "remove" { "file" } else { "empty" };
+                    assert!(!workspace.join(path).exists());
+                    std::fs::write(workspace.join(path), b"later file").unwrap();
+                    retry_namespace(&filesystem, kind).await;
+                    assert_eq!(std::fs::read(workspace.join(path)).unwrap(), b"later file");
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+}
+
+async fn retry_quota_operation(filesystem: &DurableFilesystem, kind: &str) {
+    let operation = filesystem.operation(None);
+    let effect = EFFECT.into();
+    match kind {
+        "write" => {
+            operation
+                .write_bytes(&effect, "/file", b"replaced".to_vec())
+                .await
+                .unwrap();
+        }
+        "append" => {
+            operation
+                .append_bytes(&effect, "/file", vec![b'x'; 131_073])
+                .await
+                .unwrap();
+        }
+        "move" => {
+            operation
+                .move_path(&effect, "/source", "/destination")
+                .await
+                .unwrap();
+        }
+        "remove" => {
+            operation.remove_path(&effect, "/file").await.unwrap();
+        }
+        "writer" => {
+            let writer = RUN.into();
+            operation.open_writer(&writer, "/file").await.unwrap();
+            operation
+                .write_chunk(&writer, &writer, b"replaced".to_vec())
+                .await
+                .unwrap();
+            operation.close_writer(&writer, &effect).await.unwrap();
+        }
+        _ => panic!("unknown quota case: {kind}"),
+    }
+}
+
+#[tokio::test]
+async fn quota_restart_ignores_private_files_and_repairs_unaccounted_public_changes() {
+    for (kind, points, expected) in [
+        (
+            "write",
+            vec![
+                "candidate-sync",
+                "replacement-published-unaccounted",
+                "write-synced",
+            ],
+            8,
+        ),
+        (
+            "append",
+            vec!["append-written-unaccounted", "effect-receipt"],
+            131_073,
+        ),
+        (
+            "move",
+            vec![
+                "move-published-unaccounted",
+                "source-removed",
+                "effect-receipt",
+            ],
+            6,
+        ),
+        (
+            "remove",
+            vec!["remove-unlinked-unaccounted", "effect-receipt"],
+            0,
+        ),
+        (
+            "writer",
+            vec![
+                "writer-staged",
+                "effect-intent",
+                "replacement-published-unaccounted",
+                "effect-receipt",
+            ],
+            8,
+        ),
+    ] {
+        for point in points {
+            let root = tempfile::tempdir().unwrap();
+            let workspace = root.path().join("workspace");
+            std::fs::create_dir(&workspace).unwrap();
+            if kind == "move" {
+                std::fs::write(workspace.join("source"), b"source").unwrap();
+                std::fs::write(workspace.join("destination"), b"xx").unwrap();
+            } else if kind != "append" {
+                std::fs::write(workspace.join("file"), b"old").unwrap();
+            }
+            let child_root = root.path().to_owned();
+            tokio::task::spawn_blocking(move || {
+                kill_at_mode(&child_root, point, &format!("quota-{kind}"));
+            })
+            .await
+            .unwrap();
+            let public_bytes = if kind == "move" {
+                6 // Every selected move point has replaced the old destination.
+            } else {
+                match std::fs::metadata(workspace.join("file")) {
+                    Ok(metadata) => metadata.len(),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+                    Err(error) => panic!("read public file size: {error}"),
+                }
+            };
+            let (database, cipher) = open_database(root.path()).await;
+            let limit = if kind == "append" { 131_073 } else { 8 };
+            let filesystem = open(
+                Vfs::external(workspace).unwrap().with_size_limit(limit),
+                &RUN.into(),
+                database,
+                cipher,
+            )
+            .await
+            .unwrap();
+            let quota = filesystem.vfs().quota().unwrap();
+            assert_eq!(quota.used(), public_bytes, "rebuild {kind} at {point}");
+            retry_quota_operation(&filesystem, kind).await;
+            assert_eq!(quota.used(), expected, "retry {kind} at {point}");
+            retry_quota_operation(&filesystem, kind).await;
+            assert_eq!(quota.used(), expected, "duplicate {kind} at {point}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn byte_write_restarts_from_scratch_without_a_filesystem_receipt() {
+    for point in [
+        "write-temp-created",
+        "write-temp-written",
+        "candidate-sync",
+        "replacement-published-unaccounted",
+        "published",
+        "write-synced",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("workspace")).unwrap();
+        let child_root = root.path().to_owned();
+        tokio::task::spawn_blocking(move || kill_at_mode(&child_root, point, "write"))
+            .await
+            .unwrap();
+        let (database, cipher) = open_database(root.path()).await;
+        let filesystem = open(
+            Vfs::external(root.path().join("workspace")).unwrap(),
+            &RUN.into(),
+            database,
+            cipher,
+        )
+        .await
+        .unwrap();
+        // The outer completion is still missing, so replay supplies the same input.
+        // Completed effects would be skipped by the framework (WriteRecovery.tla).
+        for _ in 0..2 {
+            filesystem
+                .operation(None)
+                .write_bytes(&EFFECT.into(), "/file", b"replacement".to_vec())
+                .await
+                .unwrap();
+            assert_eq!(
+                std::fs::read(filesystem.vfs().root().join("file")).unwrap(),
+                b"replacement",
+                "{point}"
+            );
         }
     }
 }

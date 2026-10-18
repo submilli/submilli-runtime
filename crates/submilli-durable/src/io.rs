@@ -1,8 +1,8 @@
 //! Contained disk access and private artifacts used to retry filesystem work.
 //!
 //! `Files` retains the configured VFS; `Volume` maps each writable mount to its
-//! private recovery directory. Entry records name paths relative to those roots
-//! and carry parent identities, so replay cannot silently target a replaced tree.
+//! private recovery directory. Transient entries resolve paths relative to those
+//! roots and validate the parent before opening it; journal states do not store them.
 //!
 //! This layer knows nothing about SQL transactions or which effect to run next.
 //! Its callers supply retry facts and retain the mutation gate while disk work
@@ -57,13 +57,13 @@ pub(crate) struct Volume {
     root: Arc<Dir>,
     pub(crate) recovery: Dir,
     identity: FileIdentity,
-    maximum_bytes: Option<u64>,
     quota: Option<Arc<interpreter::runtime::DiskQuota>>,
 }
 
 impl Files {
     /// Open caller-owned roots and create private recovery directories.
-    /// The journal binds requests to these roots before any public mutation.
+    /// Journaled operations bind requests to these roots; byte writes rely on
+    /// the execution framework to preserve configuration across retries.
     pub(crate) fn create(vfs: Vfs, run_id: &RunId) -> Result<Self, RecoveryError> {
         validate_id(run_id)?;
         if vfs.dir().is_none() {
@@ -105,18 +105,6 @@ impl Files {
     pub(crate) fn volume(&self, mount: &str) -> Result<&Volume, RecoveryError> {
         self.volumes.get(mount).ok_or(RecoveryError::Conflict)
     }
-
-    pub(crate) fn reconcile_quotas(
-        &self,
-        work: Option<&interpreter::runtime::fuel::WorkBudget>,
-    ) -> Result<(), RecoveryError> {
-        for volume in self.volumes.values() {
-            if let Some(quota) = &volume.quota {
-                quota.set_used(volume.used_bytes(work)?);
-            }
-        }
-        Ok(())
-    }
 }
 
 use cap_fs_ext::DirExt;
@@ -126,7 +114,7 @@ use interpreter::runtime::vfs::{Access, Placement};
 use interpreter::runtime::{fuel, fuel::WorkBudget};
 use std::collections::HashSet;
 
-use std::path::{Component, Path};
+use std::path::Path;
 
 pub(crate) fn resolve_content(
     vfs: &Vfs,
@@ -213,18 +201,51 @@ pub(crate) fn validate_guest_path(path: &str) -> Result<(), RecoveryError> {
     Ok(())
 }
 
-pub(crate) fn validate_relative(path: &str, parent: bool) -> Result<(), RecoveryError> {
-    if parent && path == "." {
+/// Independent counters require physically disjoint writable roots. Check held
+/// directory identities, so symlink spellings and renamed host paths cannot
+/// bypass this setup requirement. This never runs on the mutation path.
+pub(crate) fn require_disjoint_volumes(vfs: &Vfs) -> Result<(), RecoveryError> {
+    let mut roots = Vec::new();
+    if let Some(root) = vfs.dir().filter(|_| vfs.access() == Access::ReadWrite) {
+        roots.push(root);
+    }
+    roots.extend(
+        vfs.mounts()
+            .iter()
+            .filter(|mount| mount.access() == Access::ReadWrite)
+            .map(interpreter::runtime::vfs::Mount::dir),
+    );
+    if roots.len() < 2 {
         return Ok(());
     }
-    if path.is_empty()
-        || path.len() > 4096
-        || path.contains(['\0', '\\'])
-        || Path::new(path)
-            .components()
-            .any(|part| !matches!(part, Component::Normal(_)))
-    {
-        return Err(RecoveryError::InvalidRecord);
+    let mut identities = HashSet::new();
+    for root in &roots {
+        if !identities.insert(identity(&root.dir_metadata()?)?) {
+            return Err(RecoveryError::Unsupported("overlapping writable volumes"));
+        }
+    }
+    for root in roots {
+        let mut directory = root.try_clone()?;
+        let mut directory_id = identity(&directory.dir_metadata()?)?;
+        let mut depth = 0;
+        loop {
+            if depth == MAX_DEPTH {
+                return Err(RecoveryError::Limit);
+            }
+            depth += 1;
+            // Setup inspects ancestry of trusted configured handles, never a
+            // guest path. Ambient authority is limited to parent metadata here.
+            let parent = directory.open_parent_dir(cap_std::ambient_authority())?;
+            let parent_id = identity(&parent.dir_metadata()?)?;
+            if parent_id == directory_id {
+                break;
+            }
+            if identities.contains(&parent_id) {
+                return Err(RecoveryError::Unsupported("overlapping writable volumes"));
+            }
+            directory = parent;
+            directory_id = parent_id;
+        }
     }
     Ok(())
 }
@@ -247,12 +268,6 @@ pub(crate) fn open_volumes(
         .filter(|m| m.access() == Access::ReadWrite)
     {
         let volume = open_volume(mount.dir(), run_id, create, mount.quota().cloned())?;
-        if volumes
-            .values()
-            .any(|other| other.identity == volume.identity)
-        {
-            return Err(RecoveryError::Unsupported("aliased writable volumes"));
-        }
         volumes.insert(mount.guest_path().into(), volume);
     }
     if volumes.is_empty() {
@@ -278,7 +293,6 @@ fn open_volume(
         root: root.clone(),
         recovery,
         identity: identity(&root.dir_metadata()?)?,
-        maximum_bytes: quota.as_ref().map(|quota| quota.limit()),
         quota,
     })
 }
@@ -324,6 +338,29 @@ pub(crate) fn current(dir: &Dir, name: &str) -> Result<Option<FileIdentity>, Rec
 }
 
 impl Files {
+    /// Size of a writable regular file, or zero when it is absent. Flush its
+    /// current bytes and parent before the caller saves this size as an offset.
+    pub(crate) fn size(&self, path: &str, work: Option<&WorkBudget>) -> Result<u64, RecoveryError> {
+        let entry = self.entry(path, true)?;
+        let parent = self.parent(&entry)?;
+        let size = match existing(&parent, &entry.name)? {
+            Some(metadata) => {
+                self.require_regular(&entry, &metadata, work)?;
+                parent.open(&entry.name)?.sync_all()?;
+                metadata.len()
+            }
+            None => 0,
+        };
+        sync(&parent)?;
+        Ok(size)
+    }
+
+    pub(crate) fn check_growth(&self, path: &str, bytes: u64) -> Result<(), RecoveryError> {
+        let location = locate(&self.vfs, self.vfs.cwd(), path)?;
+        self.volume(location.placement.mount_point())?
+            .check_growth(bytes)
+    }
+
     pub(crate) fn entry(&self, guest: &str, follow_final: bool) -> Result<Entry, RecoveryError> {
         let location = locate(&self.vfs, self.vfs.cwd(), guest)?;
         let Location {
@@ -370,7 +407,7 @@ impl Files {
             .ok_or(RecoveryError::Unsupported("non-UTF-8 path"))?;
         let parent_identity = identity(&root.open_dir(parent)?.dir_metadata()?)?;
         // The primitive models assume the starting namespace survives a crash.
-        // Establish that before recording the mutation's intent.
+        // Establish that before preparing a public mutation.
         for ancestor in parent.ancestors() {
             let ancestor = if ancestor.as_os_str().is_empty() {
                 Path::new(".")
@@ -435,36 +472,39 @@ impl Files {
 }
 
 impl Volume {
-    pub(crate) fn check_growth(
-        &self,
-        growth: u64,
-        work: Option<&WorkBudget>,
-    ) -> Result<(), RecoveryError> {
-        let Some(limit) = self.maximum_bytes else {
+    /// Admission uses only public bytes. The caller holds exclusive mutation
+    /// ownership, so temporary files need neither reservations nor a rescan.
+    pub(crate) fn check_growth(&self, growth: u64) -> Result<(), RecoveryError> {
+        let Some(quota) = &self.quota else {
             return Ok(());
         };
-        if self
-            .quota
-            .as_ref()
-            .is_some_and(|quota| quota.is_unmeasured())
-            && growth > 0
+        if growth != 0
+            && (quota.is_unmeasured()
+                || quota
+                    .used()
+                    .checked_add(growth)
+                    .is_none_or(|used| used > quota.limit()))
         {
-            return Err(RecoveryError::Quota);
-        }
-        let used = self.used_bytes(work)?;
-        if used.checked_add(growth).is_none_or(|next| next > limit) && growth != 0 {
             return Err(RecoveryError::Quota);
         }
         Ok(())
     }
 
-    pub(crate) fn used_bytes(&self, work: Option<&WorkBudget>) -> Result<u64, RecoveryError> {
-        measured_bytes(&self.root, work)
+    /// Apply a successful public mutation before releasing admission or running
+    /// another fallible step. A retry measures the current path, not a saved delta.
+    pub(crate) fn record_size_change(&self, before: u64, after: u64) {
+        if let Some(quota) = &self.quota {
+            if after >= before {
+                quota.record(after - before);
+            } else {
+                quota.release(before - after);
+            }
+        }
     }
 }
 
-fn measured_bytes(root: &Dir, work: Option<&WorkBudget>) -> Result<u64, RecoveryError> {
-    let files = regular_files(root, work)?;
+fn public_bytes(root: &Dir) -> Result<u64, RecoveryError> {
+    let files = regular_files(root, None)?;
     let mut seen = HashSet::new();
     files
         .into_iter()
@@ -496,6 +536,11 @@ fn regular_files(
         };
         charge()?;
         let entry = entry?;
+        // Public usage ignores the recovery tree. Ownership checks start inside
+        // that tree instead, and still enumerate its candidate files.
+        if private_recovery_path(Path::new(&entry.file_name())) {
+            continue;
+        }
         count += 1;
         if count > MAX_ENTRIES {
             return Err(RecoveryError::Limit);
@@ -528,7 +573,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Weak;
-use tokio::sync::Mutex;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Roots {
@@ -544,31 +588,12 @@ pub(crate) struct RootIdentity {
     pub root: FileIdentity,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Entry {
     pub mount: String,
     pub parent: String,
     pub parent_identity: FileIdentity,
     pub name: String,
-}
-
-impl Entry {
-    pub(crate) fn validate(&self) -> Result<(), RecoveryError> {
-        validate_relative(&self.parent, true)?;
-        validate_relative(&self.name, false)?;
-        let parent = std::path::Path::new(&self.parent);
-        let name = std::path::Path::new(&self.name);
-        if self.name.contains('/')
-            || private_recovery_path(parent)
-            || private_recovery_path(name)
-            || (interpreter::runtime::fs::protected_metadata(parent)
-                || interpreter::runtime::fs::protected_metadata(name))
-        {
-            return Err(RecoveryError::InvalidRecord);
-        }
-        validate_guest_path(&self.mount)
-    }
 }
 
 // A retry must resolve the same guest paths against the same configured roots.
@@ -607,16 +632,12 @@ pub(crate) type SharedQuotas = HashMap<FileIdentity, Weak<DiskQuota>>;
 
 // Reopening a logical workspace in the same process must keep the counter used
 // by its existing VFS owners. Weak entries do not retain completed workspaces.
-pub(crate) async fn share_quotas(
-    quotas: &Mutex<SharedQuotas>,
-    mut vfs: Vfs,
-) -> Result<Vfs, FilesystemError> {
-    let mut shared = quotas.lock().await;
+pub(crate) fn share_quotas(shared: &mut SharedQuotas, mut vfs: Vfs) -> Result<Vfs, RecoveryError> {
     shared.retain(|_, quota| quota.strong_count() != 0);
     if let (Some(root), Some(quota)) = (vfs.dir(), vfs.quota()) {
         let identity = FileIdentity::of(&root.dir_metadata().map_err(RecoveryError::from)?)
             .map_err(RecoveryError::from)?;
-        let quota = reuse(&mut shared, identity, quota)?;
+        let quota = reuse(shared, identity, root, quota)?;
         vfs = vfs.with_shared_quota(quota);
     }
     let mounts = vfs.mounts().to_vec();
@@ -626,7 +647,7 @@ pub(crate) async fn share_quotas(
                 .map_err(RecoveryError::from)?;
             let identity = FileIdentity::of(&path.metadata().map_err(RecoveryError::from)?)
                 .map_err(RecoveryError::from)?;
-            let quota = reuse(&mut shared, identity, quota)?;
+            let quota = reuse(shared, identity, mount.dir(), quota)?;
             vfs = vfs.with_mount_quota(mount.guest_path(), quota);
         }
     }
@@ -636,14 +657,24 @@ pub(crate) async fn share_quotas(
 fn reuse(
     shared: &mut SharedQuotas,
     id: FileIdentity,
+    root: &Dir,
     quota: &Arc<DiskQuota>,
-) -> Result<Arc<DiskQuota>, FilesystemError> {
+) -> Result<Arc<DiskQuota>, RecoveryError> {
     if let Some(existing) = shared.get(&id).and_then(Weak::upgrade) {
         if existing.limit() != quota.limit() {
-            return Err(RecoveryError::Conflict.into());
+            return Err(RecoveryError::Conflict);
         }
         return Ok(existing);
     }
-    shared.insert(id, Arc::downgrade(quota));
-    Ok(quota.clone())
+    // Only a fresh owner measures disk. Reopen reuses the live counter above,
+    // preserving reservations and avoiding any per-operation directory walk.
+    let bytes = public_bytes(root)?;
+    let quota = if quota.is_unmeasured() {
+        Arc::new(DiskQuota::new(quota.limit(), bytes))
+    } else {
+        quota.set_used(bytes);
+        quota.clone()
+    };
+    shared.insert(id, Arc::downgrade(&quota));
+    Ok(quota)
 }
