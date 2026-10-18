@@ -251,12 +251,14 @@ async fn writer_chunks_survive_pause_and_duplicate_close_never_republishes() {
     let close = uuid::Uuid::new_v4().to_string();
     fixture
         .filesystem
+        .operation(None)
         .open_writer(&resource, "/out")
         .await
         .unwrap();
     let first = fixture.input(b"first").await;
     fixture
         .filesystem
+        .operation(None)
         .write_chunk(&resource, &chunk, first.clone())
         .await
         .unwrap();
@@ -268,9 +270,14 @@ async fn writer_chunks_survive_pause_and_duplicate_close_never_republishes() {
     )
     .await
     .unwrap();
-    resumed.write_chunk(&resource, &chunk, first).await.unwrap();
+    resumed
+        .operation(None)
+        .write_chunk(&resource, &chunk, first)
+        .await
+        .unwrap();
     let second = fixture.input(b" second").await;
     resumed
+        .operation(None)
         .write_chunk(&resource, &uuid::Uuid::new_v4().to_string(), second)
         .await
         .unwrap();
@@ -295,7 +302,11 @@ async fn writer_chunks_survive_pause_and_duplicate_close_never_republishes() {
     .await
     .unwrap();
     assert!(!resumed.vfs().root().join("out").exists());
-    resumed.close_writer(&resource, &close).await.unwrap();
+    resumed
+        .operation(None)
+        .close_writer(&resource, &close)
+        .await
+        .unwrap();
     assert_eq!(
         std::fs::read(resumed.vfs().root().join("out")).unwrap(),
         b"first second"
@@ -311,7 +322,11 @@ async fn writer_chunks_survive_pause_and_duplicate_close_never_republishes() {
         )
         .await
         .unwrap();
-    resumed.close_writer(&resource, &close).await.unwrap();
+    resumed
+        .operation(None)
+        .close_writer(&resource, &close)
+        .await
+        .unwrap();
     assert_eq!(
         std::fs::read(resumed.vfs().root().join("out")).unwrap(),
         b"newer"
@@ -343,6 +358,7 @@ async fn reader_reopen_refuses_a_replaced_path() {
     std::fs::write(root.join("file"), b"original").unwrap();
     let mut reader = fixture
         .filesystem
+        .operation(None)
         .open_reader(&uuid::Uuid::new_v4().to_string(), "/file", byte_options())
         .await
         .unwrap();
@@ -846,10 +862,20 @@ impl CallTestCase for DurableFilesystem {
 
     async fn call(&self, id: &str, call: TestCall) -> Result<Outcome, FilesystemError> {
         match call {
-            TestCall::Write { path, content } => self.write_bytes(id, &path, content, false).await,
-            TestCall::Append { path, content } => self.write_bytes(id, &path, content, true).await,
-            TestCall::Remove { path } => self.remove_path(id, &path).await,
-            TestCall::CreateDirectory { path } => self.create_directory(id, &path).await,
+            TestCall::Write { path, content } => {
+                self.operation(None)
+                    .write_bytes(id, &path, content, false)
+                    .await
+            }
+            TestCall::Append { path, content } => {
+                self.operation(None)
+                    .write_bytes(id, &path, content, true)
+                    .await
+            }
+            TestCall::Remove { path } => self.operation(None).remove_path(id, &path).await,
+            TestCall::CreateDirectory { path } => {
+                self.operation(None).create_directory(id, &path).await
+            }
         }
     }
 }
@@ -862,6 +888,7 @@ async fn pending_write_requires_replay_bytes_and_rejects_changed_input() {
     assert!(
         fixture
             .filesystem
+            .operation(None)
             .write_bytes(
                 &effect,
                 "/output",
@@ -883,12 +910,14 @@ async fn pending_write_requires_replay_bytes_and_rejects_changed_input() {
     assert!(!restarted.vfs().root().join("output").exists());
     assert!(
         restarted
+            .operation(None)
             .write_bytes(&effect, "/output", b"changed input payload".to_vec(), false)
             .await
             .is_err()
     );
     assert!(!restarted.vfs().root().join("output").exists());
     restarted
+        .operation(None)
         .write_bytes(
             &effect,
             "/output",
@@ -899,6 +928,7 @@ async fn pending_write_requires_replay_bytes_and_rejects_changed_input() {
         .unwrap();
     std::fs::write(restarted.vfs().root().join("output"), b"later").unwrap();
     restarted
+        .operation(None)
         .write_bytes(
             &effect,
             "/output",
@@ -1028,17 +1058,20 @@ async fn writer_rejects_changed_chunks_and_corrupt_staging_before_publication() 
     let chunk = uuid::Uuid::new_v4().to_string();
     fixture
         .filesystem
+        .operation(None)
         .open_writer(&resource, "/output")
         .await
         .unwrap();
     fixture
         .filesystem
+        .operation(None)
         .write_chunk(&resource, &chunk, b"original".to_vec())
         .await
         .unwrap();
     assert!(
         fixture
             .filesystem
+            .operation(None)
             .write_chunk(&resource, &chunk, b"changed".to_vec())
             .await
             .is_err()
@@ -1054,6 +1087,7 @@ async fn writer_rejects_changed_chunks_and_corrupt_staging_before_publication() 
     assert!(
         fixture
             .filesystem
+            .operation(None)
             .close_writer(&resource, &uuid::Uuid::new_v4().to_string())
             .await
             .is_err()
@@ -1072,6 +1106,7 @@ async fn failed_admission_does_not_stage_input_or_mutate_public_files() {
     assert!(
         fixture
             .filesystem
+            .operation(None)
             .write_bytes(&effect, "/output", b"private input".to_vec(), false)
             .await
             .is_err()
@@ -1097,11 +1132,13 @@ async fn writer_close_records_target_refusals_and_replays_them() {
     let resource = uuid::Uuid::new_v4().to_string();
     fixture
         .filesystem
+        .operation(None)
         .open_writer(&resource, "/parent/out")
         .await
         .unwrap();
     fixture
         .filesystem
+        .operation(None)
         .write_chunk(
             &resource,
             &uuid::Uuid::new_v4().to_string(),
@@ -1113,6 +1150,7 @@ async fn writer_close_records_target_refusals_and_replays_them() {
     let effect = uuid::Uuid::new_v4().to_string();
     let error = fixture
         .filesystem
+        .operation(None)
         .close_writer(&resource, &effect)
         .await
         .unwrap_err();
@@ -1120,6 +1158,7 @@ async fn writer_close_records_target_refusals_and_replays_them() {
     std::fs::create_dir(root.join("parent")).unwrap();
     let replay = fixture
         .filesystem
+        .operation(None)
         .close_writer(&resource, &effect)
         .await
         .unwrap_err();
@@ -1128,11 +1167,13 @@ async fn writer_close_records_target_refusals_and_replays_them() {
     let resource = uuid::Uuid::new_v4().to_string();
     fixture
         .filesystem
+        .operation(None)
         .open_writer(&resource, "/")
         .await
         .unwrap();
     let error = fixture
         .filesystem
+        .operation(None)
         .close_writer(&resource, &uuid::Uuid::new_v4().to_string())
         .await
         .unwrap_err();
@@ -1145,11 +1186,13 @@ async fn writer_quota_refusal_leaves_acknowledged_prefix_retryable() {
     let resource = uuid::Uuid::new_v4().to_string();
     fixture
         .filesystem
+        .operation(None)
         .open_writer(&resource, "/out")
         .await
         .unwrap();
     fixture
         .filesystem
+        .operation(None)
         .write_chunk(
             &resource,
             &uuid::Uuid::new_v4().to_string(),
@@ -1160,6 +1203,7 @@ async fn writer_quota_refusal_leaves_acknowledged_prefix_retryable() {
     let chunk = uuid::Uuid::new_v4().to_string();
     let error = fixture
         .filesystem
+        .operation(None)
         .write_chunk(&resource, &chunk, b"too large".to_vec())
         .await
         .unwrap_err();
@@ -1167,11 +1211,13 @@ async fn writer_quota_refusal_leaves_acknowledged_prefix_retryable() {
     // A refused chunk has no receipt; a smaller retry can still be acknowledged.
     fixture
         .filesystem
+        .operation(None)
         .write_chunk(&resource, &chunk, b"d".to_vec())
         .await
         .unwrap();
     fixture
         .filesystem
+        .operation(None)
         .close_writer(&resource, &uuid::Uuid::new_v4().to_string())
         .await
         .unwrap();
@@ -1287,6 +1333,7 @@ async fn direct_namespace_calls_reconcile_sql_gaps_and_preserve_later_paths() {
         );
         assert!(
             reopened
+                .operation(None)
                 .write_bytes(&effect, "/source", b"collision".to_vec(), false)
                 .await
                 .is_err()
@@ -1303,11 +1350,22 @@ async fn namespace_call(
     match kind {
         "move" => {
             filesystem
+                .operation(None)
                 .move_path(effect, "/source", "/destination")
                 .await
         }
-        "remove" => filesystem.remove_path(effect, "/source").await,
-        "mkdir" => filesystem.create_directory(effect, "/directory").await,
+        "remove" => {
+            filesystem
+                .operation(None)
+                .remove_path(effect, "/source")
+                .await
+        }
+        "mkdir" => {
+            filesystem
+                .operation(None)
+                .create_directory(effect, "/directory")
+                .await
+        }
         _ => unreachable!(),
     }
 }

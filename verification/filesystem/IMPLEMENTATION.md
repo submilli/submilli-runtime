@@ -68,6 +68,12 @@ not a second input-payload store.
 
 The production crate has six implementation files and `lib.rs`:
 
+`DurableFilesystem` holds shared storage and mount state. Each call constructs a
+`FilesystemOperation` with its work budget; direct operations such as `write_bytes`
+live on that value. Native IO helpers receive the budget explicitly, and owned
+workers retain it until they finish. Reader and writer handles keep only the
+shared filesystem and take a fresh budget from each invocation.
+
 - `filesystem.rs`: interpreter port and direct write/append, move, remove and
   mkdir operations. `attach` checks identity and admission within the caller's
   unit; `save_checkpoint` and `save_outcome` make the two subsequent commits.

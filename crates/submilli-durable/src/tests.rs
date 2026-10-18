@@ -197,7 +197,7 @@ fn restored_reader_refuses_path_replacement() {
     std::fs::write(root.path().join("file"), b"first").unwrap();
     let workspace = workspace(root.path());
     let mut reader = workspace
-        .open_reader(&uuid::Uuid::new_v4().to_string(), "/file")
+        .open_reader(&uuid::Uuid::new_v4().to_string(), "/file", None)
         .unwrap();
     let mut prefix = [0; 2];
     reader.read_exact(&mut prefix).unwrap();
@@ -233,7 +233,7 @@ fn restored_reader_refuses_path_replacement() {
     )
     .unwrap();
     assert!(matches!(
-        recovered.restore_reader(position),
+        recovered.restore_reader(position, None),
         Err(RecoveryError::Conflict)
     ));
 }
@@ -298,6 +298,7 @@ fn checkpoint_size_bound_and_invalid_paths_are_rejected() {
             &uuid::Uuid::new_v4().to_string(),
             "/file",
             CaptureOptions::default(),
+            None,
         )
         .unwrap();
     target.source.parent = "../escape".into();
@@ -329,7 +330,7 @@ fn reopened_workspace_cannot_read_private_aliases() {
     assert!(crate::io::resolve_content(restored.vfs(), "/", "/alias").is_err());
     assert!(
         restored
-            .open_reader(&uuid::Uuid::new_v4().to_string(), "/alias")
+            .open_reader(&uuid::Uuid::new_v4().to_string(), "/alias", None)
             .is_err()
     );
 }
@@ -464,15 +465,16 @@ fn reader_open_does_not_pin_or_scan_unrelated_recovery_artifacts() {
     std::fs::write(root.path().join("file"), "content").unwrap();
     let workspace = workspace(root.path());
     let first = uuid::Uuid::new_v4().to_string();
-    let _reader = workspace.open_reader(&first, "/file").unwrap();
+    let _reader = workspace.open_reader(&first, "/file", None).unwrap();
     let recovery = &workspace.volume("/").unwrap().recovery;
     for index in 0..100 {
         recovery.write(format!("artifact-{index}"), b"").unwrap();
     }
     let work = Arc::new(WorkBudget::new(fuel::SYSCALL.cost(10)));
-    let metered = workspace.metered(Some(work));
     let second = uuid::Uuid::new_v4().to_string();
-    let mut reader = metered.open_reader(&second, "/file").unwrap();
+    let mut reader = workspace
+        .open_reader(&second, "/file", Some(&work))
+        .unwrap();
     assert!(!recovery.exists("readers"));
     let mut content = String::new();
     reader.read_to_string(&mut content).unwrap();
@@ -520,13 +522,15 @@ impl Files {
         let result = (|| {
             let checkpoint = match case {
                 Case::Write { path, content } => {
-                    let target = self.capture_target(effect, &path, CaptureOptions::default())?;
+                    let target =
+                        self.capture_target(effect, &path, CaptureOptions::default(), None)?;
                     let dir = self.artifacts(&target.source, effect, true)?;
                     let candidate = Some(self.prepare_candidate(
                         &target.source,
                         &dir,
                         &content,
                         &mut Cursor::new(&payload.bytes),
+                        None,
                     )?);
                     Checkpoint::Write(WriteCheckpoint { target, candidate }, content, false)
                 }
@@ -538,6 +542,7 @@ impl Files {
                             follow_final: true,
                             ..Default::default()
                         },
+                        None,
                     )?;
                     let dir = self.artifacts(&target.source, effect, true)?;
                     let candidate = if target.original.is_none() {
@@ -546,10 +551,11 @@ impl Files {
                             &dir,
                             &content,
                             &mut Cursor::new(&payload.bytes),
+                            None,
                         )?)
                     } else {
                         self.volume(&target.source.mount)?
-                            .check_growth(content.bytes, self.work.as_deref())?;
+                            .check_growth(content.bytes, None)?;
                         None
                     };
                     Checkpoint::Write(WriteCheckpoint { target, candidate }, content, true)
@@ -558,10 +564,11 @@ impl Files {
                     source,
                     destination,
                 } => {
-                    let target = self.capture_target(effect, &source, CaptureOptions::default())?;
+                    let target =
+                        self.capture_target(effect, &source, CaptureOptions::default(), None)?;
                     let dir = self.artifacts(&target.source, effect, true)?;
                     let (destination, destination_original) =
-                        self.capture_destination(&target, &dir, &destination)?;
+                        self.capture_destination(&target, &dir, &destination, None)?;
                     Checkpoint::Move(MoveCheckpoint {
                         target,
                         destination,
@@ -576,6 +583,7 @@ impl Files {
                         require_empty: true,
                         ..Default::default()
                     },
+                    None,
                 )?),
                 Case::CreateDirectory { path } => Checkpoint::Directory(self.capture_target(
                     effect,
@@ -584,6 +592,7 @@ impl Files {
                         allow_directory: true,
                         ..Default::default()
                     },
+                    None,
                 )?),
             };
             Ok(Prepared {
@@ -591,7 +600,7 @@ impl Files {
                 checkpoint,
             })
         })();
-        self.reconcile_quotas()?;
+        self.reconcile_quotas(None)?;
         result
     }
     fn apply(&self, prepared: &Prepared, payload: &mut Payload) -> Result<(), RecoveryError> {
@@ -601,9 +610,9 @@ impl Files {
                     let dir = self.artifacts(&state.target.source, &prepared.effect, false)?;
                     let mut input = Cursor::new(&payload.bytes);
                     if *append && state.target.original.is_some() {
-                        self.append_range(&state.target, &dir, content, &mut input)?;
+                        self.append_range(&state.target, &dir, content, &mut input, None)?;
                     } else {
-                        self.publish_candidate(state, &dir, content, &mut input)?;
+                        self.publish_candidate(state, &dir, content, &mut input, None)?;
                     }
                 }
                 Checkpoint::Move(state) => self.move_entry(
@@ -621,7 +630,7 @@ impl Files {
             }
             crate::io::checkpoint("before-receipt")
         })();
-        self.reconcile_quotas()?;
+        self.reconcile_quotas(None)?;
         result
     }
 }

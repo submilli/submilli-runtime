@@ -11,6 +11,7 @@ use interpreter::runtime::filesystem::{
     FilesystemInfo, Invocation, ReaderOptions, ResourceDescriptor, ResourceKind,
 };
 use interpreter::runtime::fs::FileIdentity;
+use interpreter::runtime::fuel::WorkBudget;
 use interpreter::runtime::{fs, vfs::Placement};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -34,7 +35,6 @@ pub enum FilesystemError {
 
 #[derive(Clone)]
 pub struct DurableFilesystem {
-    pub(crate) work: Option<Arc<interpreter::runtime::fuel::WorkBudget>>,
     pub(crate) files: Arc<Files>,
     pub(crate) units: UnitFactory,
     pub(crate) binding: [u8; 32],
@@ -46,6 +46,7 @@ impl DurableFilesystem {
     /// The caller supplies the configured mounts and a stable UUID scope for
     /// operation IDs. It must retain these roots and this journal across retries,
     /// exclusively own writable roots, and drain work before replacing access.
+    /// `context` shares mutation admission and disk quotas across these instances.
     pub async fn open(
         vfs: Vfs,
         scope: &str,
@@ -60,7 +61,6 @@ impl DurableFilesystem {
         let worker_id = id.clone();
         let workspace = blocking(gate, move || Files::create(vfs, &worker_id)).await?;
         Ok(Self {
-            work: None,
             files: Arc::new(workspace),
             units,
             binding,
@@ -140,16 +140,24 @@ pub(crate) fn checkpoint(_point: &str) {
     crate::checkpoint(_point);
 }
 
+/// One call's accounting, separate from the shared filesystem and durable handles.
+#[derive(Clone)]
+pub struct FilesystemOperation {
+    pub(crate) filesystem: DurableFilesystem,
+    pub(crate) work: Option<Arc<WorkBudget>>,
+}
+
 impl DurableFilesystem {
-    pub(crate) fn metered(
-        &self,
-        invocation: &interpreter::runtime::filesystem::Invocation,
-    ) -> Self {
-        let mut filesystem = self.clone();
-        filesystem.work = invocation.work.clone();
-        filesystem.files = Arc::new(self.files.metered(invocation.work.clone()));
-        filesystem
+    /// Start a call with its own budget; handles retain only the shared filesystem.
+    pub fn operation(&self, work: Option<Arc<WorkBudget>>) -> FilesystemOperation {
+        FilesystemOperation {
+            filesystem: self.clone(),
+            work,
+        }
     }
+}
+
+impl FilesystemOperation {
     pub(crate) fn charge(
         &self,
         rate: interpreter::runtime::fuel::Rate,
@@ -165,11 +173,12 @@ impl DurableFilesystem {
         if self.work.is_none() {
             return Ok(());
         }
-        let original = paths::resolve_content(self.vfs(), self.vfs().cwd(), path)
-            .and_then(|p| p.metadata())
-            .ok()
-            .filter(cap_std::fs::Metadata::is_file)
-            .map_or(0, |m| m.len());
+        let original =
+            paths::resolve_content(self.filesystem.vfs(), self.filesystem.vfs().cwd(), path)
+                .and_then(|p| p.metadata())
+                .ok()
+                .filter(cap_std::fs::Metadata::is_file)
+                .map_or(0, |m| m.len());
         let bytes = original
             .saturating_mul(2)
             .saturating_add(payload.saturating_mul(3));
@@ -239,7 +248,7 @@ impl Filesystem for DurableFilesystem {
         bytes: Vec<u8>,
         append: bool,
     ) -> Result<(), PortError> {
-        let filesystem = self.metered(invocation);
+        let filesystem = self.operation(invocation.work.clone());
         let id = operation(invocation)?;
         filesystem
             .charge(interpreter::runtime::fuel::HASH, bytes.len() as u64)
@@ -256,7 +265,7 @@ impl Filesystem for DurableFilesystem {
         path: &str,
         recursive: bool,
     ) -> Result<(), PortError> {
-        let filesystem = self.metered(invocation);
+        let filesystem = self.operation(invocation.work.clone());
         let id = operation(invocation)?;
         if recursive {
             return Err(PortError::Unsupported(
@@ -276,7 +285,7 @@ impl Filesystem for DurableFilesystem {
         recursive: bool,
         budget: &mut dyn interpreter::runtime::filesystem::MutationBudget,
     ) -> Result<(), PortError> {
-        let filesystem = self.metered(invocation);
+        let filesystem = self.operation(invocation.work.clone());
         let id = operation(invocation)?;
         if recursive {
             return Err(PortError::Unsupported(
@@ -294,7 +303,7 @@ impl Filesystem for DurableFilesystem {
         to: &str,
         budget: &mut dyn interpreter::runtime::filesystem::MutationBudget,
     ) -> Result<(), PortError> {
-        let filesystem = self.metered(invocation);
+        let filesystem = self.operation(invocation.work.clone());
         let id = operation(invocation)?;
         filesystem.move_path(id, from, to).await.map_err(backend)?;
         budget.effect();
@@ -318,9 +327,9 @@ impl Filesystem for DurableFilesystem {
         path: &str,
         options: ReaderOptions,
     ) -> Result<Box<dyn FileReader>, PortError> {
-        let filesystem = self.metered(invocation);
+        let filesystem = self.operation(invocation.work.clone());
         Ok(Box::new(
-            DurableFilesystem::open_reader(&filesystem, operation(invocation)?, path, options)
+            FilesystemOperation::open_reader(&filesystem, operation(invocation)?, path, options)
                 .await
                 .map_err(backend)?,
         ))
@@ -342,7 +351,7 @@ impl Filesystem for DurableFilesystem {
             )
             .map_err(|error| PortError::Execution(error.into()))?,
         );
-        let filesystem = self.metered(invocation);
+        let filesystem = self.operation(invocation.work.clone());
         let id = operation(invocation)?;
         let resource = id.to_owned();
         let path = path.to_owned();
@@ -407,7 +416,8 @@ impl Filesystem for DurableFilesystem {
         path: &str,
     ) -> Result<Box<dyn FileWriter>, PortError> {
         let id = operation(invocation)?;
-        DurableFilesystem::open_writer(self, id, path)
+        self.operation(invocation.work.clone())
+            .open_writer(id, path)
             .await
             .map_err(backend)?;
         Ok(Box::new(DurableWriter {
@@ -562,7 +572,7 @@ impl Target {
     }
 }
 
-impl DurableFilesystem {
+impl FilesystemOperation {
     pub async fn write_bytes(
         &self,
         effect: &str,
@@ -571,7 +581,14 @@ impl DurableFilesystem {
         append: bool,
     ) -> Result<Outcome, FilesystemError> {
         let payload = fingerprint(effect, &bytes)?;
-        let gate = Arc::new(self.context.filesystem_gate.clone().lock_owned().await);
+        let gate = Arc::new(
+            self.filesystem
+                .context
+                .filesystem_gate
+                .clone()
+                .lock_owned()
+                .await,
+        );
         self.write_held(
             gate,
             effect,
@@ -594,7 +611,7 @@ impl DurableFilesystem {
     ) -> Result<Outcome, FilesystemError> {
         validate_id(effect)?;
         validate_guest_path(path)?;
-        let mut unit = (self.units)().await?;
+        let mut unit = (self.filesystem.units)().await?;
         let row = self
             .attach(
                 unit.as_mut(),
@@ -605,7 +622,7 @@ impl DurableFilesystem {
             )
             .await?;
         unit.commit().await?;
-        if let Some(outcome) = decode_outcome(&row, self.binding)? {
+        if let Some(outcome) = decode_outcome(&row, self.filesystem.binding)? {
             return unpack(outcome);
         }
         self.charge_preparation(path, payload.bytes)?;
@@ -613,7 +630,8 @@ impl DurableFilesystem {
         let state: WriteCheckpoint = if let Some(bytes) = &row.recovery_payload {
             decode_checkpoint(bytes)?
         } else {
-            let files = self.files.clone();
+            let files = self.filesystem.files.clone();
+            let work = self.work.clone();
             let (path, effect, payload) = (path.to_owned(), effect.to_owned(), payload.clone());
             let result = blocking(gate.clone(), move || {
                 let prepared = (|| {
@@ -624,6 +642,7 @@ impl DurableFilesystem {
                             follow_final: append,
                             ..Default::default()
                         },
+                        work.as_deref(),
                     )?;
                     let artifacts = files.artifacts(&target.source, &effect, true)?;
                     let candidate = if append && target.original.is_some() {
@@ -634,7 +653,7 @@ impl DurableFilesystem {
                             .ok_or(RecoveryError::Limit)?;
                         files
                             .volume(&target.source.mount)?
-                            .check_growth(payload.bytes, files.work.as_deref())?;
+                            .check_growth(payload.bytes, work.as_deref())?;
                         None
                     } else {
                         Some(files.prepare_candidate(
@@ -642,13 +661,14 @@ impl DurableFilesystem {
                             &artifacts,
                             &payload,
                             &mut input,
+                            work.as_deref(),
                         )?)
                     };
                     paths::sync(&artifacts)?;
                     paths::checkpoint("prepared")?;
                     Ok(WriteCheckpoint { target, candidate })
                 })();
-                files.reconcile_quotas()?;
+                files.reconcile_quotas(work.as_deref())?;
                 prepared.map(|state| (state, input))
             })
             .await;
@@ -673,18 +693,25 @@ impl DurableFilesystem {
         if let Some(work) = &self.work {
             work.before_effect();
         }
-        let files = self.files.clone();
+        let files = self.filesystem.files.clone();
+        let work = self.work.clone();
         let effect = effect.to_owned();
         let bytes = payload.bytes;
         blocking(gate.clone(), move || {
             input.seek(SeekFrom::Start(0))?;
             let artifacts = files.artifacts(&state.target.source, &effect, false)?;
             let result = if append && state.target.original.is_some() {
-                files.append_range(&state.target, &artifacts, &payload, &mut input)
+                files.append_range(
+                    &state.target,
+                    &artifacts,
+                    &payload,
+                    &mut input,
+                    work.as_deref(),
+                )
             } else {
-                files.publish_candidate(&state, &artifacts, &payload, &mut input)
+                files.publish_candidate(&state, &artifacts, &payload, &mut input, work.as_deref())
             };
-            files.reconcile_quotas()?;
+            files.reconcile_quotas(work.as_deref())?;
             result?;
             paths::checkpoint("before-receipt")
         })
@@ -701,13 +728,20 @@ impl DurableFilesystem {
         validate_id(effect)?;
         validate_guest_path(source)?;
         validate_guest_path(destination)?;
-        let gate = Arc::new(self.context.filesystem_gate.clone().lock_owned().await);
-        let mut unit = (self.units)().await?;
+        let gate = Arc::new(
+            self.filesystem
+                .context
+                .filesystem_gate
+                .clone()
+                .lock_owned()
+                .await,
+        );
+        let mut unit = (self.filesystem.units)().await?;
         let row = self
             .attach(unit.as_mut(), effect, "move", &(source, destination), None)
             .await?;
         unit.commit().await?;
-        if let Some(outcome) = decode_outcome(&row, self.binding)? {
+        if let Some(outcome) = decode_outcome(&row, self.filesystem.binding)? {
             return unpack(outcome);
         }
         self.charge_preparation(source, 0)?;
@@ -715,14 +749,24 @@ impl DurableFilesystem {
         let state: MoveCheckpoint = if let Some(bytes) = &row.recovery_payload {
             decode_checkpoint(bytes)?
         } else {
-            let files = self.files.clone();
+            let files = self.filesystem.files.clone();
+            let work = self.work.clone();
             let (effect, source, destination) =
                 (effect.to_owned(), source.to_owned(), destination.to_owned());
             let result = blocking(gate.clone(), move || {
-                let target = files.capture_target(&effect, &source, CaptureOptions::default())?;
+                let target = files.capture_target(
+                    &effect,
+                    &source,
+                    CaptureOptions::default(),
+                    work.as_deref(),
+                )?;
                 let artifacts = files.artifacts(&target.source, &effect, true)?;
-                let (destination, destination_original) =
-                    files.capture_destination(&target, &artifacts, &destination)?;
+                let (destination, destination_original) = files.capture_destination(
+                    &target,
+                    &artifacts,
+                    &destination,
+                    work.as_deref(),
+                )?;
                 paths::sync(&artifacts)?;
                 paths::checkpoint("prepared")?;
                 Ok(MoveCheckpoint {
@@ -753,12 +797,13 @@ impl DurableFilesystem {
         if let Some(work) = &self.work {
             work.before_effect();
         }
-        let files = self.files.clone();
+        let files = self.filesystem.files.clone();
+        let work = self.work.clone();
         let effect = effect.to_owned();
         blocking(gate.clone(), move || {
             let artifacts = files.artifacts(&state.target.source, &effect, false)?;
             files.move_entry(&state, &artifacts)?;
-            files.reconcile_quotas()?;
+            files.reconcile_quotas(work.as_deref())?;
             paths::checkpoint("before-receipt")
         })
         .await?;
@@ -768,13 +813,20 @@ impl DurableFilesystem {
     pub async fn remove_path(&self, effect: &str, path: &str) -> Result<Outcome, FilesystemError> {
         validate_id(effect)?;
         validate_guest_path(path)?;
-        let gate = Arc::new(self.context.filesystem_gate.clone().lock_owned().await);
-        let mut unit = (self.units)().await?;
+        let gate = Arc::new(
+            self.filesystem
+                .context
+                .filesystem_gate
+                .clone()
+                .lock_owned()
+                .await,
+        );
+        let mut unit = (self.filesystem.units)().await?;
         let row = self
             .attach(unit.as_mut(), effect, "remove", &path, None)
             .await?;
         unit.commit().await?;
-        if let Some(outcome) = decode_outcome(&row, self.binding)? {
+        if let Some(outcome) = decode_outcome(&row, self.filesystem.binding)? {
             return unpack(outcome);
         }
         self.charge_preparation(path, 0)?;
@@ -782,7 +834,8 @@ impl DurableFilesystem {
         let target: Target = if let Some(bytes) = &row.recovery_payload {
             decode_checkpoint(bytes)?
         } else {
-            let files = self.files.clone();
+            let files = self.filesystem.files.clone();
+            let work = self.work.clone();
             let (path, effect) = (path.to_owned(), effect.to_owned());
             let result = blocking(gate.clone(), move || {
                 let target = files.capture_target(
@@ -793,6 +846,7 @@ impl DurableFilesystem {
                         require_empty: true,
                         ..Default::default()
                     },
+                    work.as_deref(),
                 )?;
                 if target.original.is_none() {
                     return Err(std::io::Error::from(std::io::ErrorKind::NotFound).into());
@@ -815,7 +869,8 @@ impl DurableFilesystem {
         if let Some(work) = &self.work {
             work.before_effect();
         }
-        let files = self.files.clone();
+        let files = self.filesystem.files.clone();
+        let work = self.work.clone();
         let effect = effect.to_owned();
         blocking(gate.clone(), move || {
             if target.original_directory {
@@ -824,7 +879,7 @@ impl DurableFilesystem {
                 let artifacts = files.artifacts(&target.source, &effect, false)?;
                 files.remove_entry(&target, &artifacts)?;
             }
-            files.reconcile_quotas()?;
+            files.reconcile_quotas(work.as_deref())?;
             paths::checkpoint("before-receipt")
         })
         .await?;
@@ -838,13 +893,20 @@ impl DurableFilesystem {
     ) -> Result<Outcome, FilesystemError> {
         validate_id(effect)?;
         validate_guest_path(path)?;
-        let gate = Arc::new(self.context.filesystem_gate.clone().lock_owned().await);
-        let mut unit = (self.units)().await?;
+        let gate = Arc::new(
+            self.filesystem
+                .context
+                .filesystem_gate
+                .clone()
+                .lock_owned()
+                .await,
+        );
+        let mut unit = (self.filesystem.units)().await?;
         let row = self
             .attach(unit.as_mut(), effect, "mkdir", &path, None)
             .await?;
         unit.commit().await?;
-        if let Some(outcome) = decode_outcome(&row, self.binding)? {
+        if let Some(outcome) = decode_outcome(&row, self.filesystem.binding)? {
             return unpack(outcome);
         }
         self.charge_preparation(path, 0)?;
@@ -852,7 +914,8 @@ impl DurableFilesystem {
         let target: Target = if let Some(bytes) = &row.recovery_payload {
             decode_checkpoint(bytes)?
         } else {
-            let files = self.files.clone();
+            let files = self.filesystem.files.clone();
+            let work = self.work.clone();
             let (path, effect) = (path.to_owned(), effect.to_owned());
             let result = blocking(gate.clone(), move || {
                 let target = files.capture_target(
@@ -862,6 +925,7 @@ impl DurableFilesystem {
                         allow_directory: true,
                         ..Default::default()
                     },
+                    work.as_deref(),
                 )?;
                 if target.original.is_some() && !target.original_directory {
                     return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists).into());
@@ -884,10 +948,11 @@ impl DurableFilesystem {
         if let Some(work) = &self.work {
             work.before_effect();
         }
-        let files = self.files.clone();
+        let files = self.filesystem.files.clone();
+        let work = self.work.clone();
         blocking(gate.clone(), move || {
             files.create_directory(&target)?;
-            files.reconcile_quotas()?;
+            files.reconcile_quotas(work.as_deref())?;
             paths::checkpoint("before-receipt")
         })
         .await?;
@@ -903,27 +968,32 @@ impl DurableFilesystem {
         request: &T,
         writer: Option<&str>,
     ) -> Result<Operation, FilesystemError> {
-        let mut fingerprint = self.binding.to_vec();
+        let mut fingerprint = self.filesystem.binding.to_vec();
         fingerprint.extend_from_slice(&Sha256::digest(serialize(request)?));
-        if let Some(row) = unit.get_operation(&self.id, effect).await? {
+        if let Some(row) = unit.get_operation(&self.filesystem.id, effect).await? {
             if row.operation != kind || row.version != 2 || row.request != fingerprint {
                 return conflict();
             }
             return Ok(row);
         }
-        require_ready(unit, &self.id, writer.map(|writer| (writer, effect))).await?;
-        require_capacity(unit, &self.id).await?;
-        if unit.pending_operation(&self.id).await?.is_some() {
+        require_ready(
+            unit,
+            &self.filesystem.id,
+            writer.map(|writer| (writer, effect)),
+        )
+        .await?;
+        require_capacity(unit, &self.filesystem.id).await?;
+        if unit.pending_operation(&self.filesystem.id).await?.is_some() {
             return conflict();
         }
-        if let Some(owner) = unit.writer_for_effect(&self.id, effect).await?
+        if let Some(owner) = unit.writer_for_effect(&self.filesystem.id, effect).await?
             && writer != Some(owner.id.as_str())
         {
             return conflict();
         }
         let row = Operation {
             id: effect.into(),
-            scope: self.id.clone(),
+            scope: self.filesystem.id.clone(),
             operation: kind.into(),
             version: 2,
             request: fingerprint,
@@ -939,9 +1009,9 @@ impl DurableFilesystem {
         admitted: &Operation,
         state: &T,
     ) -> Result<(), FilesystemError> {
-        let mut unit = (self.units)().await?;
+        let mut unit = (self.filesystem.units)().await?;
         let mut row = unit
-            .get_operation(&self.id, &admitted.id)
+            .get_operation(&self.filesystem.id, &admitted.id)
             .await?
             .ok_or(StoreError::Conflict)?;
         if row.request != admitted.request
@@ -982,9 +1052,9 @@ impl DurableFilesystem {
         admitted: &Operation,
         outcome: RecordedOutcome,
     ) -> Result<(), FilesystemError> {
-        let mut unit = (self.units)().await?;
+        let mut unit = (self.filesystem.units)().await?;
         let mut row = unit
-            .get_operation(&self.id, &admitted.id)
+            .get_operation(&self.filesystem.id, &admitted.id)
             .await?
             .ok_or(StoreError::Conflict)?;
         if row.request != admitted.request || row.operation != admitted.operation {
@@ -1048,6 +1118,7 @@ impl Files {
         effect: &str,
         path: &str,
         options: CaptureOptions,
+        work: Option<&interpreter::runtime::fuel::WorkBudget>,
     ) -> Result<Target, RecoveryError> {
         let source = self.entry(path, options.follow_final)?;
         let parent = self.parent(&source)?;
@@ -1061,7 +1132,7 @@ impl Files {
                     require_empty(&parent.open_dir(&source.name)?)?;
                 }
             } else {
-                self.require_regular(&source, metadata)?;
+                self.require_regular(&source, metadata, work)?;
             }
         }
         let artifacts = self.artifacts(&source, effect, true)?;
@@ -1092,7 +1163,7 @@ impl Files {
             )?;
         }
         sync(&artifacts)?;
-        self.reconcile_quotas()?;
+        self.reconcile_quotas(work)?;
         Ok(target)
     }
     fn prepare_candidate(
@@ -1101,6 +1172,7 @@ impl Files {
         artifacts: &Dir,
         payload: &Content,
         content: &mut dyn Read,
+        work: Option<&interpreter::runtime::fuel::WorkBudget>,
     ) -> Result<FileIdentity, RecoveryError> {
         let present = existing(artifacts, "candidate")?;
         if present
@@ -1111,7 +1183,7 @@ impl Files {
         }
         self.volume(&entry.mount)?.check_growth(
             payload.bytes.saturating_sub(present.map_or(0, |m| m.len())),
-            self.work.as_deref(),
+            work,
         )?;
         let mut file = artifacts.open_with(
             "candidate",
@@ -1133,6 +1205,7 @@ impl Files {
         target: &Target,
         artifacts: &Dir,
         guest: &str,
+        work: Option<&interpreter::runtime::fuel::WorkBudget>,
     ) -> Result<(Entry, Option<FileIdentity>), RecoveryError> {
         if target.original.is_none() {
             return Err(std::io::Error::from(std::io::ErrorKind::NotFound).into());
@@ -1149,7 +1222,7 @@ impl Files {
         let parent = self.parent(&destination)?;
         let mut destination_original = None;
         if let Some(metadata) = existing(&parent, &destination.name)? {
-            self.require_regular(&destination, &metadata)?;
+            self.require_regular(&destination, &metadata, work)?;
             let original = identity(&metadata)?;
             if Some(original) == target.original {
                 return Err(RecoveryError::Unsupported("aliased move destination"));
@@ -1174,6 +1247,7 @@ impl Files {
         artifacts: &Dir,
         payload: &Content,
         content: &mut dyn Read,
+        work: Option<&interpreter::runtime::fuel::WorkBudget>,
     ) -> Result<(), RecoveryError> {
         let target = &state.target;
         let candidate = state.candidate.ok_or(RecoveryError::InvalidRecord)?;
@@ -1195,7 +1269,7 @@ impl Files {
         let length = file.metadata()?.len();
         if length != payload.bytes || hash(&mut file, length)? != payload.sha256 {
             self.volume(&target.source.mount)?
-                .check_growth(payload.bytes.saturating_sub(length), self.work.as_deref())?;
+                .check_growth(payload.bytes.saturating_sub(length), work)?;
             file.seek(SeekFrom::Start(0))?;
             copy_exact(content, &mut file, payload)?;
             file.set_len(payload.bytes)?;
@@ -1218,6 +1292,7 @@ impl Files {
         artifacts: &Dir,
         payload: &Content,
         content: &mut dyn Read,
+        work: Option<&interpreter::runtime::fuel::WorkBudget>,
     ) -> Result<(), RecoveryError> {
         let original = target.original.ok_or(RecoveryError::InvalidRecord)?;
         require_pin(artifacts, "original", original)?;
@@ -1241,7 +1316,7 @@ impl Files {
             return Err(RecoveryError::Conflict);
         }
         self.volume(&target.source.mount)?
-            .check_growth(final_length - length, self.work.as_deref())?;
+            .check_growth(final_length - length, work)?;
         file.seek(SeekFrom::Start(target.original_bytes))?;
         copy_exact(content, &mut file, payload)?;
         file.set_len(final_length)?;

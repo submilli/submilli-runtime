@@ -13,13 +13,13 @@ use interpreter::runtime::filesystem::{
 use sha2::{Digest, Sha256};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
-impl DurableFilesystem {
+impl FilesystemOperation {
     /// Open one output-in-progress. Chunk receipts contain fingerprints only.
     pub async fn open_writer(&self, resource: &str, path: &str) -> Result<(), FilesystemError> {
         validate_id(resource)?;
         validate_guest_path(path)?;
-        let _gate = self.context.filesystem_gate.lock().await;
-        self.stored_open_writer(resource, path).await
+        let _gate = self.filesystem.context.filesystem_gate.lock().await;
+        self.filesystem.stored_open_writer(resource, path).await
     }
 
     pub async fn write_chunk(
@@ -33,18 +33,34 @@ impl DurableFilesystem {
         self.charge(interpreter::runtime::fuel::HASH, bytes.len() as u64)?;
         self.charge(interpreter::runtime::fuel::IO, bytes.len() as u64)?;
         let content = fingerprint(chunk, &bytes)?;
-        let gate = Arc::new(self.context.filesystem_gate.clone().lock_owned().await);
+        let gate = Arc::new(
+            self.filesystem
+                .context
+                .filesystem_gate
+                .clone()
+                .lock_owned()
+                .await,
+        );
         let (path, prior, offset) = self
+            .filesystem
             .stored_chunk_position(resource, chunk, &content)
             .await?;
         if prior {
             return Ok(());
         }
-        let workspace = self.files.clone();
+        let workspace = self.filesystem.files.clone();
+        let work = self.work.clone();
         let resource_owned = resource.to_owned();
         let fingerprint = content.clone();
         let staged = blocking(gate.clone(), move || {
-            workspace.stage_writer_chunk(&resource_owned, &path, offset, &fingerprint, &bytes)
+            workspace.stage_writer_chunk(
+                &resource_owned,
+                &path,
+                offset,
+                &fingerprint,
+                &bytes,
+                work.as_deref(),
+            )
         })
         .await;
         match staged {
@@ -64,7 +80,9 @@ impl DurableFilesystem {
         if let Some(work) = &self.work {
             work.before_effect();
         }
-        self.stored_writer_chunk(resource, chunk, &content).await?;
+        self.filesystem
+            .stored_writer_chunk(resource, chunk, &content)
+            .await?;
         checkpoint("writer-chunk-receipt");
         Ok(())
     }
@@ -76,14 +94,22 @@ impl DurableFilesystem {
     ) -> Result<Outcome, FilesystemError> {
         validate_id(resource)?;
         validate_id(effect)?;
-        let gate = Arc::new(self.context.filesystem_gate.clone().lock_owned().await);
+        let gate = Arc::new(
+            self.filesystem
+                .context
+                .filesystem_gate
+                .clone()
+                .lock_owned()
+                .await,
+        );
         let writer = self
+            .filesystem
             .stored_writer_for_close(resource, effect, i64::MAX as u64)
             .await?;
         // A close receipt remains authoritative even after the destination is
         // replaced. Replaying close must not read or publish the output again.
-        if let Some(outcome) = self.stored_writer_outcome(effect).await? {
-            self.stored_writer_closed(resource).await?;
+        if let Some(outcome) = self.filesystem.stored_writer_outcome(effect).await? {
+            self.filesystem.stored_writer_closed(resource).await?;
             return unpack(outcome);
         }
         let bytes = writer
@@ -98,7 +124,8 @@ impl DurableFilesystem {
             // Empty output needs no staging volume. Let write preflight persist
             // ordinary target refusals, including a read-only mount.
             let content = fingerprint(resource, &[])?;
-            self.stored_closing_writer(resource, effect, i64::MAX as u64)
+            self.filesystem
+                .stored_closing_writer(resource, effect, i64::MAX as u64)
                 .await?;
             self.write_held(
                 gate.clone(),
@@ -110,15 +137,17 @@ impl DurableFilesystem {
             )
             .await
         } else {
-            let workspace = self.files.clone();
+            let workspace = self.filesystem.files.clone();
+            let work = self.work.clone();
             let resource_owned = resource.to_owned();
             let path = writer.path.clone();
             let chunks = writer.chunks.clone();
             let (input, content) = blocking(gate.clone(), move || {
-                workspace.writer_file(&resource_owned, &path, &chunks)
+                workspace.writer_file(&resource_owned, &path, &chunks, work.as_deref())
             })
             .await?;
-            self.stored_closing_writer(resource, effect, i64::MAX as u64)
+            self.filesystem
+                .stored_closing_writer(resource, effect, i64::MAX as u64)
                 .await?;
             self.write_held(
                 gate.clone(),
@@ -131,7 +160,7 @@ impl DurableFilesystem {
             .await
         };
         if result.is_ok() || matches!(&result, Err(FilesystemError::Rejected(_))) {
-            self.stored_writer_closed(resource).await?;
+            self.filesystem.stored_writer_closed(resource).await?;
             checkpoint("writer-closed");
         }
         result
@@ -156,7 +185,7 @@ impl FileWriter for DurableWriter {
     }
     async fn write(&mut self, invocation: &Invocation, bytes: Vec<u8>) -> Result<(), PortError> {
         let id = operation(invocation)?;
-        let filesystem = self.filesystem.metered(invocation);
+        let filesystem = self.filesystem.operation(invocation.work.clone());
         filesystem
             .write_chunk(&self.resource, id, bytes)
             .await
@@ -164,11 +193,12 @@ impl FileWriter for DurableWriter {
     }
     async fn close(&mut self, invocation: &Invocation) -> Result<(), PortError> {
         let id = operation(invocation)?;
-        let filesystem = self.filesystem.metered(invocation);
+        let filesystem = self.filesystem.operation(invocation.work.clone());
         let result = filesystem.close_writer(&self.resource, id).await;
         // SQL remains authoritative after either a successful close or a saved
         // refusal, and after an acknowledgement is lost.
-        self.closed = filesystem
+        self.closed = self
+            .filesystem
             .stored_writer_is_closed(&self.resource)
             .await
             .map_err(backend)?;
@@ -184,6 +214,7 @@ impl Files {
         offset: u64,
         content: &Content,
         bytes: &[u8],
+        work: Option<&interpreter::runtime::fuel::WorkBudget>,
     ) -> Result<(), RecoveryError> {
         let (directory, volume) = self.writer_directory(resource, path, true)?;
         let result = (|| {
@@ -199,7 +230,7 @@ impl Files {
                 .checked_add(content.bytes)
                 .filter(|n| *n <= i64::MAX as u64)
                 .ok_or(RecoveryError::Limit)?;
-            volume.check_growth(end.saturating_sub(length), self.work.as_deref())?;
+            volume.check_growth(end.saturating_sub(length), work)?;
             file.seek(SeekFrom::Start(offset))?;
             let mut source = std::io::Cursor::new(bytes);
             let mut buffer = [0; 64 * 1024];
@@ -217,7 +248,7 @@ impl Files {
             crate::checkpoint("writer-staged");
             Ok(())
         })();
-        self.reconcile_quotas()?;
+        self.reconcile_quotas(work)?;
         result
     }
     pub(crate) fn writer_file(
@@ -225,6 +256,7 @@ impl Files {
         resource: &str,
         path: &str,
         chunks: &[Content],
+        work: Option<&interpreter::runtime::fuel::WorkBudget>,
     ) -> Result<(File, Content), RecoveryError> {
         let (directory, _) = self.writer_directory(resource, path, true)?;
         let mut file = directory.open_with(
@@ -254,7 +286,7 @@ impl Files {
         file.set_len(bytes)?;
         file.sync_all()?;
         crate::io::sync(&directory)?;
-        self.reconcile_quotas()?;
+        self.reconcile_quotas(work)?;
         let content = Content {
             id: resource.into(),
             bytes,

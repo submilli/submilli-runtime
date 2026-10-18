@@ -14,7 +14,8 @@ async fn pending_resources_finish_on_explicit_retry_and_rejected_opens_replay() 
     // Capture a valid request using the real open, then seed its pre-observation
     // state in a new identity to exercise retry of a pending resource.
     let seed = id();
-    fs.open_reader(&seed, "/file", byte_options())
+    fs.operation(None)
+        .open_reader(&seed, "/file", byte_options())
         .await
         .unwrap();
     let mut unit = fixture.context.units(fixture.database.clone())()
@@ -26,6 +27,7 @@ async fn pending_resources_finish_on_explicit_retry_and_rejected_opens_replay() 
     unit.save_reader(&fixture.run, row).await.unwrap();
     unit.commit().await.unwrap();
     let mut handle = fs
+        .operation(None)
         .open_reader(&reader, "/file", byte_options())
         .await
         .unwrap();
@@ -68,12 +70,16 @@ async fn pending_resources_finish_on_explicit_retry_and_rejected_opens_replay() 
     );
     let missing = id();
     assert!(matches!(
-        fs.open_reader(&missing, "/missing", byte_options()).await,
+        fs.operation(None)
+            .open_reader(&missing, "/missing", byte_options())
+            .await,
         Err(FilesystemError::Rejected(_))
     ));
     std::fs::write(fs.vfs().root().join("missing"), b"later").unwrap();
     assert!(matches!(
-        fs.open_reader(&missing, "/missing", byte_options()).await,
+        fs.operation(None)
+            .open_reader(&missing, "/missing", byte_options())
+            .await,
         Err(FilesystemError::Rejected(_))
     ));
 }
@@ -91,7 +97,8 @@ async fn changed_filesystem_binding_rejects_mutation_and_resource_retries() {
     fs.call(&operation, request.clone()).await.unwrap();
     let reader = id();
     drop(
-        fs.open_reader(&reader, "/file", byte_options())
+        fs.operation(None)
+            .open_reader(&reader, "/file", byte_options())
             .await
             .unwrap(),
     );
@@ -100,11 +107,18 @@ async fn changed_filesystem_binding_rejects_mutation_and_resource_retries() {
     let writer = id();
     let chunk = id();
     let close = id();
-    fs.open_writer(&writer, "/output").await.unwrap();
-    fs.write_chunk(&writer, &chunk, b"output".to_vec())
+    fs.operation(None)
+        .open_writer(&writer, "/output")
         .await
         .unwrap();
-    fs.close_writer(&writer, &close).await.unwrap();
+    fs.operation(None)
+        .write_chunk(&writer, &chunk, b"output".to_vec())
+        .await
+        .unwrap();
+    fs.operation(None)
+        .close_writer(&writer, &close)
+        .await
+        .unwrap();
     let alternate = fixture.root.path().join("alternate");
     std::fs::create_dir(&alternate).unwrap();
     assert!(
@@ -143,19 +157,33 @@ async fn changed_filesystem_binding_rejects_mutation_and_resource_retries() {
         assert!(changed.call(&operation, request.clone()).await.is_err());
         assert!(
             changed
+                .operation(None)
                 .open_reader(&reader, "/file", byte_options())
                 .await
                 .is_err()
         );
         assert!(changed.listing(&listing, "/", false).await.is_err());
-        assert!(changed.open_writer(&writer, "/output").await.is_err());
         assert!(
             changed
+                .operation(None)
+                .open_writer(&writer, "/output")
+                .await
+                .is_err()
+        );
+        assert!(
+            changed
+                .operation(None)
                 .write_chunk(&writer, &chunk, b"output".to_vec())
                 .await
                 .is_err()
         );
-        assert!(changed.close_writer(&writer, &close).await.is_err());
+        assert!(
+            changed
+                .operation(None)
+                .close_writer(&writer, &close)
+                .await
+                .is_err()
+        );
     }
     assert!(!alternate.join("dir").exists());
     assert!(!alternate.join("output").exists());
@@ -239,13 +267,25 @@ async fn writer_close_cannot_reuse_a_completed_operation_id() {
     .await
     .unwrap();
     let writer = id();
-    fs.open_writer(&writer, "/output").await.unwrap();
-    fs.write_chunk(&writer, &id(), b"output".to_vec())
+    fs.operation(None)
+        .open_writer(&writer, "/output")
         .await
         .unwrap();
-    assert!(fs.close_writer(&writer, &operation).await.is_err());
+    fs.operation(None)
+        .write_chunk(&writer, &id(), b"output".to_vec())
+        .await
+        .unwrap();
+    assert!(
+        fs.operation(None)
+            .close_writer(&writer, &operation)
+            .await
+            .is_err()
+    );
     assert!(!fs.vfs().root().join("output").exists());
-    fs.close_writer(&writer, &id()).await.unwrap();
+    fs.operation(None)
+        .close_writer(&writer, &id())
+        .await
+        .unwrap();
     assert_eq!(
         std::fs::read(fs.vfs().root().join("output")).unwrap(),
         b"output"
@@ -262,8 +302,12 @@ async fn operation_limit_preserves_replay_and_does_not_fence_a_writer() {
     };
     fs.call(&operation, request.clone()).await.unwrap();
     let writer = id();
-    fs.open_writer(&writer, "/output").await.unwrap();
-    fs.write_chunk(&writer, &id(), b"output".to_vec())
+    fs.operation(None)
+        .open_writer(&writer, "/output")
+        .await
+        .unwrap();
+    fs.operation(None)
+        .write_chunk(&writer, &id(), b"output".to_vec())
         .await
         .unwrap();
     let scope = fs.id().to_owned();
@@ -284,11 +328,17 @@ async fn operation_limit_preserves_replay_and_does_not_fence_a_writer() {
         .await
         .is_err()
     );
-    assert!(fs.close_writer(&writer, &id()).await.is_err());
+    assert!(
+        fs.operation(None)
+            .close_writer(&writer, &id())
+            .await
+            .is_err()
+    );
     assert!(!fs.vfs().root().join("blocked").exists());
     assert!(!fs.vfs().root().join("output").exists());
     // Admission refusal has not moved this writer to the closing state.
-    fs.write_chunk(&writer, &id(), b" more".to_vec())
+    fs.operation(None)
+        .write_chunk(&writer, &id(), b" more".to_vec())
         .await
         .unwrap();
 }
@@ -299,8 +349,12 @@ async fn interrupted_writer_close_reserves_its_id_against_other_mutations() {
     let fs = &fixture.filesystem;
     let writer = id();
     let close = id();
-    fs.open_writer(&writer, "/output").await.unwrap();
-    fs.write_chunk(&writer, &id(), b"output".to_vec())
+    fs.operation(None)
+        .open_writer(&writer, "/output")
+        .await
+        .unwrap();
+    fs.operation(None)
+        .write_chunk(&writer, &id(), b"output".to_vec())
         .await
         .unwrap();
     reserve_close(&fixture, &writer, &close).await;
@@ -325,7 +379,11 @@ async fn interrupted_writer_close_reserves_its_id_against_other_mutations() {
     );
     assert!(!fs.vfs().root().join("unrelated").exists());
     assert!(!fs.vfs().root().join("output").exists());
-    reopened.close_writer(&writer, &close).await.unwrap();
+    reopened
+        .operation(None)
+        .close_writer(&writer, &close)
+        .await
+        .unwrap();
     assert_eq!(
         std::fs::read(fs.vfs().root().join("output")).unwrap(),
         b"output"

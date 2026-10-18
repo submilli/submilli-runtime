@@ -39,7 +39,6 @@ pub(crate) struct Files {
     pub(crate) vfs: Vfs,
     id: String,
     volumes: Arc<BTreeMap<String, Volume>>,
-    pub(crate) work: Option<Arc<interpreter::runtime::fuel::WorkBudget>>,
 }
 
 pub(crate) struct Volume {
@@ -68,17 +67,7 @@ impl Files {
             vfs,
             id: id.to_owned(),
             volumes: Arc::new(volumes),
-            work: None,
         })
-    }
-
-    pub(crate) fn metered(
-        &self,
-        work: Option<Arc<interpreter::runtime::fuel::WorkBudget>>,
-    ) -> Self {
-        let mut workspace = self.clone();
-        workspace.work = work;
-        workspace
     }
 
     pub fn identity(&self) -> Roots {
@@ -105,10 +94,13 @@ impl Files {
         self.volumes.get(mount).ok_or(RecoveryError::Conflict)
     }
 
-    pub(crate) fn reconcile_quotas(&self) -> Result<(), RecoveryError> {
+    pub(crate) fn reconcile_quotas(
+        &self,
+        work: Option<&interpreter::runtime::fuel::WorkBudget>,
+    ) -> Result<(), RecoveryError> {
         for volume in self.volumes.values() {
             if let Some(quota) = &volume.quota {
-                quota.set_used(volume.used_bytes(self.work.as_deref())?);
+                quota.set_used(volume.used_bytes(work)?);
             }
         }
         Ok(())
@@ -407,6 +399,7 @@ impl Files {
         &self,
         entry: &Entry,
         metadata: &Metadata,
+        work: Option<&interpreter::runtime::fuel::WorkBudget>,
     ) -> Result<(), RecoveryError> {
         if !metadata.is_file() || metadata.file_type().is_symlink() {
             return Err(RecoveryError::Unsupported("non-regular file"));
@@ -420,7 +413,7 @@ impl Files {
         // protected Git metadata. Only this run's private retention aliases are
         // allowed; every other alias still causes refusal.
         let id = identity(metadata)?;
-        let private = regular_files(&self.volume(&entry.mount)?.recovery, self.work.as_deref())?;
+        let private = regular_files(&self.volume(&entry.mount)?.recovery, work)?;
         let retained = private.iter().filter(|(file, _)| *file == id).count() as u64;
         if links != retained + 1 {
             return Err(RecoveryError::Unsupported("unowned hard-link alias"));

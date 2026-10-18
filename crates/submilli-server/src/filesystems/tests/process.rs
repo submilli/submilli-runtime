@@ -48,6 +48,7 @@ async fn crash_child() {
         use interpreter::runtime::filesystem::FileReader;
         std::fs::write(filesystem.vfs().root().join("file"), b"abcdef").unwrap();
         let mut reader = filesystem
+            .operation(None)
             .open_reader(RUN, "/file", byte_options())
             .await
             .unwrap();
@@ -91,15 +92,25 @@ async fn crash_child() {
             .await
             .unwrap();
     } else if std::env::var("SUBMILLI_FILESYSTEM_CRASH_KIND").as_deref() == Ok("writer") {
-        filesystem.open_writer(RUN, "/file").await.unwrap();
         filesystem
+            .operation(None)
+            .open_writer(RUN, "/file")
+            .await
+            .unwrap();
+        filesystem
+            .operation(None)
             .write_chunk(RUN, RUN, b"suffix".to_vec())
             .await
             .unwrap();
-        filesystem.close_writer(RUN, EFFECT).await.unwrap();
+        filesystem
+            .operation(None)
+            .close_writer(RUN, EFFECT)
+            .await
+            .unwrap();
     } else {
         std::fs::write(filesystem.vfs().root().join("file"), b"initial").unwrap();
         filesystem
+            .operation(None)
             .write_bytes(EFFECT, "/file", b"suffix".to_vec(), true)
             .await
             .unwrap();
@@ -165,6 +176,7 @@ async fn explicit_retries_after_process_restart_finish_filesystem_operations() {
         .await
         .unwrap();
         filesystem
+            .operation(None)
             .write_bytes(EFFECT, "/file", b"suffix".to_vec(), true)
             .await
             .unwrap();
@@ -201,19 +213,32 @@ async fn writer_restart_repairs_unacknowledged_output_tail_and_close() {
         )
         .await
         .unwrap();
-        filesystem.open_writer(RUN, "/file").await.unwrap();
         filesystem
+            .operation(None)
+            .open_writer(RUN, "/file")
+            .await
+            .unwrap();
+        filesystem
+            .operation(None)
             .write_chunk(RUN, RUN, b"suffix".to_vec())
             .await
             .unwrap();
-        filesystem.close_writer(RUN, EFFECT).await.unwrap();
+        filesystem
+            .operation(None)
+            .close_writer(RUN, EFFECT)
+            .await
+            .unwrap();
         assert_eq!(
             std::fs::read(filesystem.vfs().root().join("file")).unwrap(),
             b"suffix",
             "{point}"
         );
         std::fs::write(filesystem.vfs().root().join("file"), b"later").unwrap();
-        filesystem.close_writer(RUN, EFFECT).await.unwrap();
+        filesystem
+            .operation(None)
+            .close_writer(RUN, EFFECT)
+            .await
+            .unwrap();
         assert_eq!(
             std::fs::read(filesystem.vfs().root().join("file")).unwrap(),
             b"later"

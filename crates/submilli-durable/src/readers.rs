@@ -36,7 +36,7 @@ impl FileReader for FilesystemReader {
         invocation: &Invocation,
         limits: &TenantLimits,
     ) -> Result<ReadOutput, PortError> {
-        let fs = self.filesystem.metered(invocation);
+        let fs = &self.filesystem;
         let effect = operation(invocation)?;
         validate_id(effect).map_err(backend)?;
         if effect == self.resource {
@@ -68,7 +68,7 @@ impl FileReader for FilesystemReader {
         } else {
             let mut native = fs
                 .files
-                .restore_reader(initial)
+                .restore_reader(initial, invocation.work.as_deref())
                 .map_err(|e| backend(e.into()))?;
             interpreter::runtime::default_filesystem::read_item(
                 &mut native,
@@ -98,7 +98,7 @@ impl FileReader for FilesystemReader {
         Ok(output)
     }
     async fn close(&mut self, invocation: &Invocation) -> Result<(), PortError> {
-        let fs = self.filesystem.metered(invocation);
+        let fs = &self.filesystem;
         let effect = operation(invocation)?;
         validate_id(effect).map_err(backend)?;
         if effect == self.resource {
@@ -152,7 +152,7 @@ pub(crate) fn progress_start<T: Clone + Default>(
     }
 }
 
-impl DurableFilesystem {
+impl FilesystemOperation {
     pub async fn open_reader(
         &self,
         resource: &str,
@@ -164,35 +164,51 @@ impl DurableFilesystem {
         if matches!(options, ReaderOptions::Bytes { chunk_size: 0 }) {
             return Err(RecoveryError::InvalidRecord.into());
         }
-        let gate = Arc::new(self.context.filesystem_gate.clone().lock_owned().await);
-        let initial = self.stored_reader(resource, path, &options).await?;
+        let gate = Arc::new(
+            self.filesystem
+                .context
+                .filesystem_gate
+                .clone()
+                .lock_owned()
+                .await,
+        );
+        let initial = self
+            .filesystem
+            .stored_reader(resource, path, &options)
+            .await?;
         if initial.is_none() {
-            let workspace = self.files.clone();
+            let workspace = self.filesystem.files.clone();
+            let work = self.work.clone();
             let (id, path) = (resource.to_owned(), path.to_owned());
             let opened = blocking(gate.clone(), move || {
-                workspace.open_reader(&id, &path)?.position()
+                workspace
+                    .open_reader(&id, &path, work.as_deref())?
+                    .position()
             })
             .await;
             let position = match opened {
                 Ok(position) => position,
                 Err(FilesystemError::Recovery(error)) if preflight_refusal(&error) => {
-                    self.stored_reject_reader(resource, error.to_string())
+                    self.filesystem
+                        .stored_reject_reader(resource, error.to_string())
                         .await?;
                     return Err(FilesystemError::Rejected(error.to_string()));
                 }
                 Err(error) => return Err(error),
             };
-            self.stored_reader_opened(resource, &position).await?;
+            self.filesystem
+                .stored_reader_opened(resource, &position)
+                .await?;
         }
         checkpoint("reader-open");
         Ok(FilesystemReader {
-            filesystem: self.clone(),
+            filesystem: self.filesystem.clone(),
             resource: resource.into(),
             options,
         })
     }
 }
-impl DurableFilesystem {
+impl FilesystemOperation {
     pub(crate) async fn listing_step(
         &self,
         resource: &str,
@@ -205,8 +221,14 @@ impl DurableFilesystem {
         if resource == effect {
             return Err(RecoveryError::Conflict.into());
         }
-        let gate = self.context.filesystem_gate.clone().lock_owned().await;
-        let bytes = self.stored_listing_bytes(resource).await?;
+        let gate = self
+            .filesystem
+            .context
+            .filesystem_gate
+            .clone()
+            .lock_owned()
+            .await;
+        let bytes = self.filesystem.stored_listing_bytes(resource).await?;
         // Covers encrypted/plain JSON, decoded entries, validation copies and
         // re-encoding during the transaction. JSON includes every path byte and
         // fixed entry fields; Vec spare capacity and String capacity fit this bound.
@@ -233,7 +255,7 @@ impl DurableFilesystem {
         close: bool,
     ) -> Result<Option<interpreter::runtime::filesystem::DirectoryEntry>, FilesystemError> {
         use crate::unit_of_work::{ListingPosition, Progress};
-        let row = self.stored_listing_record(resource).await?;
+        let row = self.filesystem.stored_listing_record(resource).await?;
         let before = progress_start(&row.progress, effect, close)?;
         let entries = row.content.ok_or(RecoveryError::Conflict)?;
         if before.index > entries.len() {
@@ -252,17 +274,18 @@ impl DurableFilesystem {
         if let Some(work) = &self.work {
             work.before_effect();
         }
-        self.stored_listing_progress(
-            resource,
-            row.progress,
-            Progress {
-                effect: effect.into(),
-                close,
-                before,
-                after,
-            },
-        )
-        .await?;
+        self.filesystem
+            .stored_listing_progress(
+                resource,
+                row.progress,
+                Progress {
+                    effect: effect.into(),
+                    close,
+                    before,
+                    after,
+                },
+            )
+            .await?;
         checkpoint("listing-progress");
         Ok(
             entry.map(|entry| interpreter::runtime::filesystem::DirectoryEntry {
@@ -294,9 +317,18 @@ impl DurableFilesystem {
     ) -> Result<(), FilesystemError> {
         validate_id(resource)?;
         validate_guest_path(path)?;
-        let gate = Arc::new(self.context.filesystem_gate.clone().lock_owned().await);
-        let entries = if let Some(entries) =
-            self.stored_listing(resource, path, recursive, None).await?
+        let gate = Arc::new(
+            self.filesystem
+                .context
+                .filesystem_gate
+                .clone()
+                .lock_owned()
+                .await,
+        );
+        let entries = if let Some(entries) = self
+            .filesystem
+            .stored_listing(resource, path, recursive, None)
+            .await?
         {
             // This observation is already committed. Charge decoding and
             // authentication by its data size, settling even on exhausted fuel.
@@ -308,9 +340,9 @@ impl DurableFilesystem {
             self.charge(interpreter::runtime::fuel::PARSE, bytes)?;
             entries
         } else {
-            let workspace = self.files.clone();
-            let path_owned = path.to_owned();
+            let workspace = self.filesystem.files.clone();
             let work = self.work.clone();
+            let path_owned = path.to_owned();
             let worker_memory = memory.clone();
             let result = blocking(gate.clone(), move || {
                 // Cancellation cannot refund memory while enumeration still owns it.
@@ -322,7 +354,9 @@ impl DurableFilesystem {
                 Ok(entries) => entries,
                 Err(FilesystemError::Recovery(error)) if preflight_refusal(&error) => {
                     let reason = error.to_string();
-                    self.stored_reject_listing(resource, reason.clone()).await?;
+                    self.filesystem
+                        .stored_reject_listing(resource, reason.clone())
+                        .await?;
                     return Err(FilesystemError::Rejected(reason));
                 }
                 Err(error) => return Err(error),
@@ -334,11 +368,14 @@ impl DurableFilesystem {
             let encoded = serde_json::to_vec(&entries).map_err(|_| RecoveryError::InvalidRecord)?;
             if encoded.len() > MAX_LISTING_BYTES {
                 let reason = "directory snapshot exceeds the size limit".to_owned();
-                self.stored_reject_listing(resource, reason.clone()).await?;
+                self.filesystem
+                    .stored_reject_listing(resource, reason.clone())
+                    .await?;
                 return Err(FilesystemError::Rejected(reason));
             }
             self.charge(interpreter::runtime::fuel::HASH, encoded.len() as u64)?;
-            self.stored_listing(resource, path, recursive, Some(entries.clone()))
+            self.filesystem
+                .stored_listing(resource, path, recursive, Some(entries.clone()))
                 .await?;
             entries
         };
@@ -379,7 +416,7 @@ impl DirectoryReader for DurableDirectory {
         limits: &interpreter::runtime::limits::TenantLimits,
     ) -> Result<Option<interpreter::runtime::filesystem::DirectoryEntry>, PortError> {
         self.filesystem
-            .metered(invocation)
+            .operation(invocation.work.clone())
             .listing_step(&self.resource, operation(invocation)?, false, limits)
             .await
             .map_err(backend)
@@ -393,7 +430,7 @@ impl DirectoryReader for DurableDirectory {
         limits: &interpreter::runtime::limits::TenantLimits,
     ) -> Result<(), PortError> {
         self.filesystem
-            .metered(invocation)
+            .operation(invocation.work.clone())
             .listing_step(&self.resource, operation(invocation)?, true, limits)
             .await
             .map(|_| ())
@@ -422,13 +459,18 @@ pub struct RetainedReader {
 
 impl Files {
     /// Capture the configured pathname and file identity before returning a handle.
-    pub fn open_reader(&self, resource: &str, path: &str) -> Result<RetainedReader, RecoveryError> {
+    pub fn open_reader(
+        &self,
+        resource: &str,
+        path: &str,
+        work: Option<&interpreter::runtime::fuel::WorkBudget>,
+    ) -> Result<RetainedReader, RecoveryError> {
         crate::io::validate_id(resource)?;
         let entry = self.entry(path, true)?;
         let parent = self.parent(&entry)?;
         let mut file = parent.open(&entry.name)?;
         let metadata = file.metadata()?;
-        self.require_regular(&entry, &metadata)?;
+        self.require_regular(&entry, &metadata, work)?;
         let file_identity = identity(&metadata)?;
         file.seek(SeekFrom::Start(0))?;
         Ok(RetainedReader {
@@ -448,6 +490,7 @@ impl Files {
     pub fn restore_reader(
         &self,
         position: ReaderPosition,
+        work: Option<&interpreter::runtime::fuel::WorkBudget>,
     ) -> Result<RetainedReader, RecoveryError> {
         crate::io::validate_id(&position.resource)?;
         if position.workspace != self.identity() || position.offset > i64::MAX as u64 {
@@ -460,7 +503,7 @@ impl Files {
         let parent = self.parent(&entry)?;
         let mut file = parent.open(&entry.name)?;
         let metadata = file.metadata()?;
-        self.require_regular(&entry, &metadata)?;
+        self.require_regular(&entry, &metadata, work)?;
         if identity(&metadata)? != position.file {
             return Err(RecoveryError::Conflict);
         }
