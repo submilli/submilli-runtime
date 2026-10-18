@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "bd4e5d3bacc1a2b38c0637c2a1af507c67d81d936d3fb43b023d2b0fd4772a39"
+  contentHash: "72490588c29d250504b34b9623554ec6b9eafb1ca4637a2aec128b3345e77b91"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -267,8 +267,8 @@ and the value never leaves that process.
 
 A credential that belongs to the session, such as a customer's API token,
 is a `harness:` secret. The application supplies it when it opens the
-session, and the server keeps it in memory only. The [Connect a harness](/docs/tutorials/connect-a-harness)
-tutorials show how an application supplies it.
+session, and the server keeps it in memory only. Supply it in the
+`secrets` field when [opening an HTTP session](/docs/reference/http-api#sessions).
 
 ## Keep an audit trail
 

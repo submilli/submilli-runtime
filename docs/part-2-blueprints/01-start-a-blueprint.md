@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "70e8b03ae628d1ec453bf8f317f9dd7cd27930352453e92f573d05c0183e0b0a"
+  contentHash: "4ec686e894f183bcd819cf3621dcc7131f888dd44f03b384959c08a3277a7d88"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -277,8 +277,8 @@ secrets:
       required: true
 ```
 
-[Connect a harness](/docs/tutorials/connect-a-harness) shows how each
-harness supplies it.
+Supply the value in the `secrets` field when the application
+[opens an HTTP session](/docs/reference/http-api#sessions).
 
 ## Declare a variable
 

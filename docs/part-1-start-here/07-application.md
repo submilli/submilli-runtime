@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "642206f247e61e031fc6bd389e484c1a5b6de2d559b64c53958a1c1b72c3960d"
+  contentHash: "372dbd838682018b9c890e3bc46dff8eaa2b95368466f26ee09a5b87b41b69f6"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -73,8 +73,7 @@ The harness supplies no system prompt for Submilli. The instructions that
 teach a model the language arrive as the description of the execute tool,
 with this Blueprint's Packages and permissions already filled in. You supply
 the agent's brief: what it is for, and how to work. This is
-the brief the book's research agent runs with, from [Connect a
-harness](/docs/tutorials/connect-a-harness):
+the brief from the standalone [research agent example](https://github.com/submilli/submilli-runtime/blob/main/examples/harnesses/prompt.txt):
 
 ```text title="prompt.txt"
 You are a research assistant. You answer questions by searching the web
@@ -162,5 +161,5 @@ To go deeper into the three components:
   operate MCP servers, set limits, deploy.
 
 Or jump straight to embedding Submilli:
-[connect your harness](/docs/tutorials/connect-a-harness), then
+[connect your harness](/docs/how-to/connect-a-harness), then
 [deploy on Kubernetes](/docs/server/deploy-on-kubernetes).

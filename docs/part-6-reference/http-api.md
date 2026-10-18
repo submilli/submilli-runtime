@@ -7,16 +7,17 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a8109bc4b51727ce359eca45fa034e3d1fcfdd354fc5ddb8d4c905979bd20136"
+  contentHash: "ef7cdd4b4cd56987cd49a5a7d4ebcf63309dcd33365665945fc4201e536bd658"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
 This page describes the endpoints of `submilli-server` a harness calls to run
 an agent's programs over HTTP: sessions, the execute result, the
 descriptions a harness builds its tools from, and one-off runs.
-[Use the HTTP API](/docs/tutorials/use-the-http-api) walks through them. A
+[Connect Vercel AI SDK](/docs/how-to/use-the-http-api) shows how to build
+a code execution tool on this API. A
 harness that speaks MCP connects to `/mcp/<blueprint>` instead, as
-[Connect a harness](/docs/tutorials/connect-a-harness) shows. The server's
+[Connect a harness](/docs/how-to/connect-a-harness) shows. The server's
 other endpoints serve the `submilli server` commands. For the settings named
 here, see [Server settings](/docs/reference/server-settings).
 

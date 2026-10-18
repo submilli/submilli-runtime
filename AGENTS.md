@@ -411,9 +411,9 @@ key generation, retention, and reuse through mocked Kubernetes lookups.
 
 ## Documentation site
 
-The public user book lives in `docs/`, in six parts that follow
+The public user book lives in `docs/`, in sections that follow
 [Diátaxis](https://diataxis.fr/): Start here (explanation, with a quickstart
-tutorial), Blueprints, Packages, and Server (how-to guides), Tutorials, and
+tutorial), Blueprints, Packages, Server, How-to guides, Tutorials, and
 Reference.
 
 Before writing or reviewing any page in `docs/`, read

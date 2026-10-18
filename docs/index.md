@@ -18,7 +18,7 @@ nextSteps:
   - why
   - quickstart
   - blueprints
-  - tutorials/connect-a-harness
+  - how-to/connect-a-harness
 authorship:
   label: ai-assisted
   confirmed: true

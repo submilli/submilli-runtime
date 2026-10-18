@@ -25,6 +25,7 @@ Package, the customer `cus_northwind`, and the injected ticket.
 | 2 · Blueprints | `docs/part-2-blueprints/` | How-to | One page, for a task |
 | 3 · Packages | `docs/part-3-packages/` | How-to | One page, for a task |
 | 4 · Server | `docs/part-4-server/` | How-to | One page, for a task |
+| How-to guides | `docs/part-5-how-to-guides/` | How-to | One page, for a task |
 | 5 · Tutorials | `docs/part-5-tutorials/` | Tutorial | In order, by group |
 | 6 · Reference | `docs/part-6-reference/` | [Reference](https://diataxis.fr/reference/) | Looked up |
 

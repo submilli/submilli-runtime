@@ -11,7 +11,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "63e9d13a366a06bc15436d74fd4155fa0c7eeeb4d6f6d4d90154687fbeb27da3"
+  contentHash: "294e7fac27abcc2851a886665dea39e6a367325c494f963b06aa855fd27d4ada"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -208,4 +208,4 @@ data.
 You have seen a Package built from an API reference and tested against
 the service from both sides, read the four things that make an operation
 safe, and watched the assistant correct itself and say what it didn't
-prove. Next: [Connect a harness](/docs/tutorials/connect-a-harness).
+prove. Next: [Connect a harness](/docs/how-to/connect-a-harness).

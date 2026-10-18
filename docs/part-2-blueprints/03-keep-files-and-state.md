@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "70be5582ead46b73b55d6a0aca59324ae34a66c902c09202c8d295f2bafbd020"
+  contentHash: "aa815b3cbd61b617512f02f92dca98668fa8fdb71d530ba82acdda71221861ba"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -370,8 +370,8 @@ submilli server session close "$SESSION"
 closed session 468eb254-bb7c-43df-bbb6-032d58896acc
 ```
 
-[Connect a harness](/docs/tutorials/connect-a-harness) shows your
-application opening sessions over HTTP the same way.
+The [HTTP sessions reference](/docs/reference/http-api#sessions) gives
+the corresponding requests for your application.
 
 ## The result
 

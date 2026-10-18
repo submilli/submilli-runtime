@@ -101,12 +101,12 @@ the [Helm chart](https://submilli.ai/docs/server/deploy-on-kubernetes), or
 ## Connect your agent
 
 Submilli keeps your harness. Your agent gets tools to run programs, over MCP
-or HTTP. There are tutorials for
-[LangChain Deep Agents](https://submilli.ai/docs/tutorials/connect-deepagents),
-[Mastra](https://submilli.ai/docs/tutorials/connect-mastra),
-the [OpenAI Agents SDK](https://submilli.ai/docs/tutorials/connect-openai-agents),
-the [Claude Agent SDK](https://submilli.ai/docs/tutorials/connect-claude-agent-sdk),
-and [plain HTTP](https://submilli.ai/docs/tutorials/use-the-http-api).
+or HTTP. There are how-to guides for
+[LangChain Deep Agents](https://submilli.ai/docs/how-to/connect-deepagents),
+[Mastra](https://submilli.ai/docs/how-to/connect-mastra),
+the [OpenAI Agents SDK](https://submilli.ai/docs/how-to/connect-openai-agents),
+the [Claude Agent SDK](https://submilli.ai/docs/how-to/connect-claude-agent-sdk),
+and [Vercel AI SDK over HTTP](https://submilli.ai/docs/how-to/use-the-http-api).
 
 ## Features
 

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1611f0bd14ad229abda51c8ecf36eddf72ed96ec5296f438e1a5cee121e9501a"
+  contentHash: "34ee8870fbb1cab6ce8003304001fc31d16729ffb99e10756d8253f9f0d0fd1a"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -311,8 +311,7 @@ blueprints:      research
 ```
 
 With a Blueprint that has users, the proof is per user. The book's run
-of this request used the research Blueprint from [Connect a
-harness](/docs/tutorials/connect-a-harness), which adds to the Jina
+of this request used the standalone [research Blueprint](https://github.com/submilli/submilli-runtime/blob/main/examples/harnesses/blueprint.yaml), which adds to the Jina
 grant a `userId` variable and file rules that give each user a
 directory. As `alice`, a search and a page read returned real results,
 and a note written in one run was read back in the next. Writing to
