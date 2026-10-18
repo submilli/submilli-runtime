@@ -435,17 +435,18 @@ async fn interpreter_uses_durable_backend_and_replay_does_not_repeat_append() {
     let fixture = Fixture::new().await;
     let source = r#"import { appendText } from "submilli:fs";
         function main(): void { appendText("/port.txt", "once"); }"#;
-    run_backend(
-        &fixture,
-        source,
-        Some("00000000-0000-4000-8000-000000000031"),
-    )
-    .await
-    .unwrap();
-    run_backend(
-        &fixture,
-        source,
-        Some("00000000-0000-4000-8000-000000000031"),
+    run_backend(&fixture, source).await.unwrap();
+    let operation = sole_operation_id(&fixture).await;
+    let invocation = interpreter::runtime::filesystem::Invocation {
+        operation: Some(operation.clone().into()),
+        ..Default::default()
+    };
+    interpreter::runtime::filesystem::Filesystem::write(
+        &fixture.filesystem.0,
+        &invocation,
+        "/port.txt",
+        b"once".to_vec(),
+        true,
     )
     .await
     .unwrap();
@@ -457,13 +458,13 @@ async fn interpreter_uses_durable_backend_and_replay_does_not_repeat_append() {
     let mut unit = factory().await.unwrap();
     assert_eq!(unit.operation_count(&fixture.run).await.unwrap(), 1);
     let effect = unit
-        .get_operation(&fixture.run, "00000000-0000-4000-8000-000000000031")
+        .get_operation(&fixture.run, &operation)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(effect.state(), "done");
     drop(unit);
-    run_backend(&fixture, source, None).await.unwrap();
+    run_backend(&fixture, source).await.unwrap();
     assert_eq!(
         std::fs::read(fixture.filesystem.vfs().root().join("port.txt")).unwrap(),
         b"onceonce"
@@ -480,7 +481,7 @@ async fn code_tools_remain_native_with_a_durable_filesystem_backend() {
             assert(read("/note.ts").lines[0].text === "after");
             assert(glob("/*.ts").entries.length === 1);
         }"#;
-    run_backend(&fixture, source, None).await.unwrap();
+    run_backend(&fixture, source).await.unwrap();
     assert_eq!(
         std::fs::read(fixture.filesystem.vfs().root().join("note.ts")).unwrap(),
         b"after\n"
@@ -496,15 +497,7 @@ async fn durable_backend_refuses_unprepared_recursive_mutations() {
     let fixture = Fixture::new().await;
     let source = r#"import { mkdir } from "submilli:fs";
         function main(): void { mkdir("/unprepared/child", true); }"#;
-    assert!(
-        run_backend(
-            &fixture,
-            source,
-            Some("00000000-0000-4000-8000-000000000032")
-        )
-        .await
-        .is_err()
-    );
+    assert!(run_backend(&fixture, source).await.is_err());
     assert!(std::fs::read(fixture.filesystem.vfs().root().join("unprepared/child")).is_err());
     let mut unit = fixture.context.units(fixture.database.clone())()
         .await
@@ -512,18 +505,33 @@ async fn durable_backend_refuses_unprepared_recursive_mutations() {
     assert_eq!(unit.operation_count(&fixture.run).await.unwrap(), 0);
 }
 
-async fn run_backend(
-    fixture: &Fixture,
-    source: &str,
-    operation: Option<&str>,
-) -> wasmtime::Result<Option<String>> {
-    run_backend_fueled(fixture, source, operation, None).await
+async fn sole_operation_id(fixture: &Fixture) -> String {
+    let scope = fixture.run.clone();
+    let ids: Vec<String> = fixture
+        .database
+        .read(move |connection| {
+            Box::pin(async move {
+                Ok(sqlx::query_scalar(
+                    "SELECT operation_id FROM durable_filesystem_operations WHERE scope_id=?",
+                )
+                .bind(scope)
+                .fetch_all(connection)
+                .await?)
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(ids.len(), 1);
+    ids.into_iter().next().unwrap()
+}
+
+async fn run_backend(fixture: &Fixture, source: &str) -> wasmtime::Result<Option<String>> {
+    run_backend_fueled(fixture, source, None).await
 }
 
 async fn run_backend_fueled(
     fixture: &Fixture,
     source: &str,
-    operation: Option<&str>,
     fuel: Option<u64>,
 ) -> wasmtime::Result<Option<String>> {
     use interpreter::runtime::{
@@ -536,27 +544,6 @@ async fn run_backend_fueled(
     let engine = config.engine().unwrap();
     let mut data = StoreData::with_vfs_and_cap(fixture.filesystem.vfs().clone(), 64 << 20);
     data.filesystem = Arc::new(fixture.filesystem.0.clone());
-    if let Some(operation) = operation {
-        struct FirstId(std::sync::Mutex<Option<String>>);
-        impl interpreter::runtime::filesystem::EffectIds for FirstId {
-            fn next(
-                &self,
-            ) -> Result<
-                interpreter::runtime::filesystem::EffectId,
-                interpreter::runtime::filesystem::FilesystemError,
-            > {
-                Ok(self
-                    .0
-                    .lock()
-                    .unwrap()
-                    .take()
-                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
-                    .into())
-            }
-        }
-        data.filesystem_effect_ids =
-            Arc::new(FirstId(std::sync::Mutex::new(Some(operation.into()))));
-    }
     let mut store = config.store(&engine, data).unwrap();
     let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
     let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
@@ -580,13 +567,7 @@ async fn durable_refusals_remain_catchable_in_guest_code() {
             try { mkdir("/existing", false); } catch (error: Error) { caught = true; }
             assert(caught, "a recorded preflight refusal is catchable");
         }"#;
-    run_backend(
-        &fixture,
-        source,
-        Some("00000000-0000-4000-8000-000000000041"),
-    )
-    .await
-    .unwrap();
+    run_backend(&fixture, source).await.unwrap();
 }
 
 #[tokio::test]
@@ -607,13 +588,7 @@ async fn durable_listing_keeps_native_sizes_and_consecutive_subtrees() {
             }
             assert(sequence.indexOf("a,z,") >= 0, "directory subtree stays consecutive");
         }"#;
-    run_backend(
-        &fixture,
-        source,
-        Some("00000000-0000-4000-8000-000000000042"),
-    )
-    .await
-    .unwrap();
+    run_backend(&fixture, source).await.unwrap();
 }
 
 #[tokio::test]
@@ -624,21 +599,22 @@ async fn durable_append_and_eager_listing_admit_their_own_fuel() {
     std::fs::write(root.join("large"), &original).unwrap();
     let append = r#"import { appendText } from "submilli:fs";
         function main(): void { appendText("/large", ""); }"#;
-    let error = run_backend_fueled(
-        &fixture,
-        append,
-        Some("00000000-0000-4000-8000-000000000043"),
-        Some(10_000),
-    )
-    .await
-    .unwrap_err();
+    let error = run_backend_fueled(&fixture, append, Some(10_000))
+        .await
+        .unwrap_err();
     assert!(error.is::<wasmtime::Trap>(), "{error}");
     assert_eq!(std::fs::read(root.join("large")).unwrap(), original);
-    // The admitted identity is still resumable after fuel is replenished.
-    run_backend(
-        &fixture,
-        append,
-        Some("00000000-0000-4000-8000-000000000043"),
+    // Retry the admitted effect directly; the interpreter stub does not replay IDs.
+    let invocation = interpreter::runtime::filesystem::Invocation {
+        operation: Some(sole_operation_id(&fixture).await.into()),
+        ..Default::default()
+    };
+    interpreter::runtime::filesystem::Filesystem::write(
+        &fixture.filesystem.0,
+        &invocation,
+        "/large",
+        Vec::new(),
+        true,
     )
     .await
     .unwrap();
@@ -647,14 +623,9 @@ async fn durable_append_and_eager_listing_admit_their_own_fuel() {
     }
     let listing = r#"import { list } from "submilli:fs";
         function main(): void { list("/", false); }"#;
-    let error = run_backend_fueled(
-        &fixture,
-        listing,
-        Some("00000000-0000-4000-8000-000000000044"),
-        Some(10_000),
-    )
-    .await
-    .unwrap_err();
+    let error = run_backend_fueled(&fixture, listing, Some(10_000))
+        .await
+        .unwrap_err();
     assert!(error.is::<wasmtime::Trap>(), "{error}");
 }
 
@@ -667,13 +638,23 @@ async fn durable_quota_scan_stops_before_mutation_and_resumes_with_fuel() {
     }
     let source = r#"import { mkdir } from "submilli:fs";
         function main(): void { mkdir("/created", false); }"#;
-    let operation = Some("00000000-0000-4000-8000-000000000045");
-    let error = run_backend_fueled(&fixture, source, operation, Some(10_000))
+    let error = run_backend_fueled(&fixture, source, Some(10_000))
         .await
         .unwrap_err();
     assert!(error.is::<wasmtime::Trap>(), "{error}");
     assert!(!root.join("created").exists());
-    run_backend(&fixture, source, operation).await.unwrap();
+    let invocation = interpreter::runtime::filesystem::Invocation {
+        operation: Some(sole_operation_id(&fixture).await.into()),
+        ..Default::default()
+    };
+    interpreter::runtime::filesystem::Filesystem::mkdir(
+        &fixture.filesystem.0,
+        &invocation,
+        "/created",
+        false,
+    )
+    .await
+    .unwrap();
     assert!(root.join("created").is_dir());
 }
 

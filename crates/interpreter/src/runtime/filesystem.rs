@@ -23,13 +23,10 @@ impl std::ops::Deref for EffectId {
     }
 }
 
-/// The execution layer replaces this provider with its history-backed IDs.
-pub trait EffectIds: Send + Sync {
-    fn next(&self) -> Result<EffectId, FilesystemError>;
-}
-pub struct TemporaryEffectIds;
-impl EffectIds for TemporaryEffectIds {
-    fn next(&self) -> Result<EffectId, FilesystemError> {
+impl EffectId {
+    /// Temporary per-call identity until durable execution supplies stable IDs.
+    /// This stub is not replay-stable; backend retries must retain their ID.
+    pub fn stub() -> Result<Self, FilesystemError> {
         let mut bytes = [0; 16];
         getrandom::getrandom(&mut bytes).map_err(|error| {
             FilesystemError::Io(std::io::Error::other(format!("effect ID entropy: {error}")))

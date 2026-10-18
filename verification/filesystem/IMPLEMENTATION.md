@@ -84,7 +84,7 @@ order before restoring any index.
 constructs ID-only handles without I/O; the first dispatched call loads durable
 state. Writer restoration preserves staging and existing chunk receipts. Explicit
 reader/listing close checkpoints closed state; finalization only drops local
-resources. The temporary per-call ID provider is not a history/replay engine.
+resources. `EffectId::stub()` supplies temporary IDs without prescribing the future history/replay implementation.
 See the [resource protocol and test mapping](resources/README.md).
 
 The caller owns retention and eventual cleanup. It must retain journal rows and

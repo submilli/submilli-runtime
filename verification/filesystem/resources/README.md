@@ -77,7 +77,7 @@ alone can detect a changed input; they cannot reconstruct the original bytes.
 1. **Make effect identity explicit at the interpreter boundary.** Use the existing
    `Invocation` context to carry a typed effect ID for filesystem I/O and resource
    steps, including reader/listing `next` and explicit close. Configuration-only
-   methods such as `info` need no effect ID. The per-host-call `EffectIds` provider replaces the old fixed per-store identity. The temporary provider assigns fresh UUIDs; a caller retrying a backend call must retain its `Invocation`. This provider is not restart-stable. DefaultFilesystem ignores persistence identity. Ordinary runs
+   methods such as `info` need no effect ID. `EffectId::stub()` supplies a fresh temporary ID per host call; a caller retrying a backend call must retain its `Invocation`. The stub is not restart-stable and does not prescribe how future durability will supply IDs. DefaultFilesystem ignores persistence identity. Ordinary runs
    keep using the default backend until SUB-1837 supplies stable history IDs.
 2. **Expose logical reads through the filesystem traits.** Replace the reader's
    bare `Read + Seek` boundary with async, effect-aware logical byte-chunk/line

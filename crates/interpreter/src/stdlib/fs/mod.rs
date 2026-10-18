@@ -1577,10 +1577,7 @@ fn begin_invocation(
 ) -> wasmtime::Result<crate::runtime::filesystem::Invocation> {
     let mut invocation = crate::runtime::filesystem::Invocation {
         operation: Some(
-            caller
-                .data()
-                .filesystem_effect_ids
-                .next()
+            crate::runtime::filesystem::EffectId::stub()
                 .map_err(crate::runtime::host::fatal_host_error)?,
         ),
         work: None,
@@ -1610,39 +1607,6 @@ mod tests {
     use crate::runtime::{
         RuntimeConfig, StoreData, Vfs, VfsInfo, VfsMode, dispatch_main_async, install_runtime_async,
     };
-
-    #[tokio::test]
-    async fn effect_id_failure_is_fatal_before_filesystem_access() {
-        use crate::runtime::filesystem::{EffectId, EffectIds, FilesystemError};
-        struct FailedIds;
-        impl EffectIds for FailedIds {
-            fn next(&self) -> Result<EffectId, FilesystemError> {
-                Err(std::io::Error::other("injected entropy failure").into())
-            }
-        }
-        let root = tempfile::tempdir().unwrap();
-        let vfs = Vfs::external(root.path().to_owned()).unwrap();
-        let mut data = StoreData::with_vfs(vfs);
-        data.filesystem_effect_ids = Arc::new(FailedIds);
-        let error = run_with(
-            r#"
-            import { writeText } from "submilli:fs";
-            function main(): void {
-                try { writeText("/output", "bytes"); } catch { }
-            }
-        "#,
-            data,
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            error.is::<crate::runtime::host::FatalHostError>(),
-            "{error:#}"
-        );
-        assert!(error.to_string().contains("injected entropy failure"));
-        assert!(root.path().exists());
-        assert!(!root.path().join("output").exists());
-    }
 
     #[tokio::test]
     async fn subpath_aliases_move_copy_and_cwd() {

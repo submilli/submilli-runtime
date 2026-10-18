@@ -525,7 +525,6 @@ async fn durable_interpreter_passes_distinct_ids_for_each_resource_call() {
             assert(entries === 1);
         }
     "#,
-        None,
     )
     .await
     .unwrap();
