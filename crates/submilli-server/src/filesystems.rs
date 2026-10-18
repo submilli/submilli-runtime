@@ -2,37 +2,17 @@
 use crate::database::ServerDatabase;
 use interpreter::runtime::Vfs;
 use std::sync::Arc;
-pub use submilli_durable::filesystems::{
-    Content, DirectorySnapshot, FilesystemError, FilesystemReader, Mutation, Outcome,
-    RecoveryError, ReplayInput,
-};
+pub use submilli_durable::{DurableFilesystem, FilesystemError};
 use submilli_shared::secret_store::SecretCipher;
 
-#[derive(Clone)]
-pub struct DurableFilesystem(submilli_durable::filesystems::DurableFilesystem);
-impl std::ops::Deref for DurableFilesystem {
-    type Target = submilli_durable::filesystems::DurableFilesystem;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl DurableFilesystem {
-    pub async fn open(
-        vfs: Vfs,
-        scope: &str,
-        database: Arc<ServerDatabase>,
-        context: FilesystemContext,
-    ) -> Result<Self, FilesystemError> {
-        let units = context.units(database);
-        submilli_durable::filesystems::DurableFilesystem::open(
-            vfs,
-            scope,
-            units,
-            context.inner.clone(),
-        )
-        .await
-        .map(Self)
-    }
+pub async fn open(
+    vfs: Vfs,
+    scope: &str,
+    database: Arc<ServerDatabase>,
+    context: FilesystemContext,
+) -> Result<DurableFilesystem, FilesystemError> {
+    let units = context.units(database);
+    DurableFilesystem::open(vfs, scope, units, context.inner).await
 }
 #[cfg(test)]
 mod tests;
@@ -41,7 +21,7 @@ mod tests;
 /// payload directory and never serializes filesystem input bytes.
 #[derive(Clone)]
 pub struct FilesystemContext {
-    inner: submilli_durable::filesystems::FilesystemContext,
+    inner: submilli_durable::filesystem::FilesystemContext,
     cipher: Arc<SecretCipher>,
 }
 impl FilesystemContext {
@@ -53,9 +33,5 @@ impl FilesystemContext {
     }
     fn units(&self, database: Arc<ServerDatabase>) -> submilli_durable::UnitFactory {
         crate::adapters::unit_of_work::durable::units(database, self.cipher.clone())
-    }
-    #[cfg(test)]
-    fn test_gate(&self) -> &Arc<tokio::sync::Mutex<()>> {
-        self.inner.test_gate()
     }
 }

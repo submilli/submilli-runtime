@@ -104,7 +104,7 @@ mechanisms are not established by this finite model.
 
 ## Extracted implementation boundary
 
-The implementation lives in `crates/submilli-durable/src/recovery/`, `filesystems/` and `journal/`. The server implements the durable
+The implementation lives in `crates/submilli-durable/src/filesystem.rs`, `readers.rs`, `writers.rs` and `io.rs`. The server implements the durable
 unit of work and maps records to SQLite. The [unit-of-work model](../unit-of-work/README.md)
 checks the atomic admission-and-retention assumption at this boundary. The primitive protocols remain unchanged; the journal now uses filesystem-owned
 rows and authenticates their scope and configuration binding.

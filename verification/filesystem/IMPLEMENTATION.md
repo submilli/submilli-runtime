@@ -1,6 +1,6 @@
 # Idempotent filesystem adapter
 
-`submilli-durable::filesystems::DurableFilesystem` implements the interpreter's
+`submilli-durable::DurableFilesystem` implements the interpreter's
 filesystem interface. The server supplies its SQLite `UnitOfWork`. Filesystem
 operations have their own journal, independent of execution history and durable
 objects. No pending-work dispatcher or filesystem startup recovery is installed.
@@ -19,7 +19,7 @@ entire journal cannot be detected by this component and violates its contract.
 
 There is no workspace registry, database identity table or stored program plan.
 The caller's code determines operation order. It repeats calls with stable IDs;
-completed calls return their receipts and a pending call reconciles its intent.
+completed calls return their receipts and a pending call reconciles its checkpoint.
 Even if an outer execution effect remains pending after filesystem success, its
 retry cannot repeat that filesystem operation. Ordered execution history,
 resumption and the bridge assigning these IDs remain future work.
@@ -30,7 +30,7 @@ Migration 10 creates only filesystem-owned tables. None references a run row.
 
 | Table | Purpose |
 | --- | --- |
-| `durable_filesystem_operations` | Immutable request and binding, prepared intent, and completed/refused outcome, keyed by scope and operation ID. |
+| `durable_filesystem_operations` | Request and binding digests, operation-specific checkpoint, and completed/refused outcome, keyed by scope and operation ID. |
 | `durable_filesystem_readers` | Bound path/file identity and options, open error, last effect ID and before/after logical read/close state. |
 | `durable_filesystem_listings` | Open request, immutable ordered snapshot, last effect ID and before/after next/close index. |
 | `durable_filesystem_writers` | Resource ID, bound open request and close state. |
@@ -45,21 +45,46 @@ concern, behind the same byte interface. There is no durable-object dependency.
 
 1. Commit the immutable request, input fingerprint and filesystem binding.
 2. Prepare private evidence: sync the baseline, pin the original inode, and build
-   a replacement candidate when needed. Commit the prepared intent.
+   a replacement candidate when needed. Commit the operation-specific checkpoint.
 3. Apply against expected inode identities and fixed append offsets; sync files
    and containing directories.
 4. Commit the filesystem outcome before returning success.
 5. On retry, validate the same request and binding. Return a completed receipt;
    otherwise reconcile the prepared operation using matching replay input.
 
-`execute_with_input` receives bytes reconstructed by execution replay.
-`execute` without those bytes returns `ReplayRequired` for an unfinished write
-or append. An uncertain SQL commit is resolved by reading the same identity.
+`write_bytes`, `move_path`, `remove_path` and `create_directory` attach or load
+an operation row through `UnitOfWork`, perform their own IO steps, and commit the
+outcome. Writes receive bytes on every invocation. They store fingerprints, not
+inputs. Writer close streams its validated staging file through the same write
+path; there is no replay-input provider or generic mutation dispatcher. An
+uncertain SQL commit is resolved by reading the same identity.
 After public mutation starts, operational failures remain pending; only a
 preflight refusal can become a definitive rejected outcome. No SQL transaction
 spans filesystem mutation. Cancellation keeps the gate held until a blocking
 worker drains. Recovery candidates and inode pins are filesystem evidence,
 not a second input-payload store.
+
+## Implementation map
+
+The production crate has six implementation files and `lib.rs`:
+
+- `filesystem.rs`: interpreter port and direct write/append, move, remove and
+  mkdir operations. `attach` checks identity and admission within the caller's
+  unit; `save_checkpoint` and `save_outcome` make the two subsequent commits.
+- `readers.rs`: reader/listing handles, immutable listing outputs, and the last
+  effect's before/after cursor. Native handles are reopened only when dispatched.
+- `writers.rs`: staged output, fixed-offset chunks, and close reservation/publication.
+- `io.rs`: capability-relative paths, inode validation, barriers and shared quotas.
+- `unit_of_work.rs`: the persistence port, record types and transition validation.
+- `codec.rs`: bounded encodings, encryption and associated-data binding.
+
+`Target` saves the original entry identity, type and append baseline;
+`WriteCheckpoint` adds the candidate inode and `MoveCheckpoint` adds the
+expected destination. These are persisted facts used by the operation's code,
+not instructions interpreted by a recovery engine. No SQL transaction spans IO.
+Operation format version 2 uses distinct write/append/move/remove/mkdir kinds
+and two digests for the request. The earlier, unmerged PR format is not a
+compatibility target. Existing main-branch application tables are unchanged.
 
 ## Resources and retention
 
@@ -90,8 +115,8 @@ See the [resource protocol and test mapping](resources/README.md).
 The caller owns retention and eventual cleanup. It must retain journal rows and
 private evidence while retries or resources remain possible and drain work and
 handles before disposal. There is no run-lifecycle check, terminal-workspace
-cleanup or automatic row deletion. Low-level cleanup helpers have this explicit
-caller precondition; the model's eligible cleanup actions describe that contract.
+cleanup or automatic row deletion. The model's eligible cleanup actions describe this future caller contract;
+this crate exposes no cleanup or startup-recovery API.
 
 Code tools, Git and HTTP downloads retain their existing direct VFS access and
 are outside this adapter's guarantees. Recursive mutations and copies require

@@ -21,7 +21,7 @@ pub(crate) fn checkpoint(point: &str) {
     }
 }
 
-async fn open(root: &Path) -> (Arc<ServerDatabase>, FilesystemContext) {
+async fn open_database(root: &Path) -> (Arc<ServerDatabase>, FilesystemContext) {
     let database = Arc::new(ServerDatabase::open(&root.join("state.db")).await.unwrap());
     let context = FilesystemContext::new(Arc::new(SecretCipher::from_key([7; 32])));
     (database, context)
@@ -34,8 +34,8 @@ async fn crash_child() {
         return;
     };
     let root = PathBuf::from(root);
-    let (database, context) = open(&root).await;
-    let filesystem = DurableFilesystem::open(
+    let (database, context) = open_database(&root).await;
+    let filesystem = open(
         Vfs::external(root.join("workspace")).unwrap(),
         RUN,
         database,
@@ -71,7 +71,7 @@ async fn crash_child() {
             work: None,
         };
         let mut listing = Filesystem::open_directory(
-            &filesystem.0,
+            &filesystem,
             &opening,
             "/",
             false,
@@ -99,14 +99,8 @@ async fn crash_child() {
         filesystem.close_writer(RUN, EFFECT).await.unwrap();
     } else {
         std::fs::write(filesystem.vfs().root().join("file"), b"initial").unwrap();
-        let input = ReplayInput::bytes(EFFECT.into(), b"suffix".to_vec()).unwrap();
-        let request = Mutation::Append {
-            path: "/file".into(),
-            content: input.content(),
-        };
-        std::fs::write(root.join("request"), serde_json::to_vec(&request).unwrap()).unwrap();
         filesystem
-            .execute_with_input(EFFECT, request, input)
+            .write_bytes(EFFECT, "/file", b"suffix".to_vec(), true)
             .await
             .unwrap();
     }
@@ -161,8 +155,8 @@ async fn explicit_retries_after_process_restart_finish_filesystem_operations() {
         tokio::task::spawn_blocking(move || kill_at(&child_root, point))
             .await
             .unwrap();
-        let (database, context) = open(root.path()).await;
-        let filesystem = DurableFilesystem::open(
+        let (database, context) = open_database(root.path()).await;
+        let filesystem = open(
             Vfs::external(root.path().join("workspace")).unwrap(),
             RUN,
             database,
@@ -170,17 +164,8 @@ async fn explicit_retries_after_process_restart_finish_filesystem_operations() {
         )
         .await
         .unwrap();
-        let request: Mutation =
-            serde_json::from_slice(&std::fs::read(root.path().join("request")).unwrap()).unwrap();
-        if point != "effect-receipt" {
-            assert!(matches!(
-                filesystem.execute(EFFECT, request.clone()).await,
-                Err(FilesystemError::Recovery(RecoveryError::ReplayRequired))
-            ));
-        }
-        let input = ReplayInput::bytes(EFFECT.into(), b"suffix".to_vec()).unwrap();
         filesystem
-            .execute_with_input(EFFECT, request, input)
+            .write_bytes(EFFECT, "/file", b"suffix".to_vec(), true)
             .await
             .unwrap();
         assert_eq!(
@@ -207,8 +192,8 @@ async fn writer_restart_repairs_unacknowledged_output_tail_and_close() {
         tokio::task::spawn_blocking(move || kill_at_mode(&child_root, point, "writer"))
             .await
             .unwrap();
-        let (database, context) = open(root.path()).await;
-        let filesystem = DurableFilesystem::open(
+        let (database, context) = open_database(root.path()).await;
+        let filesystem = open(
             Vfs::external(root.path().join("workspace")).unwrap(),
             RUN,
             database,
@@ -255,8 +240,8 @@ async fn resource_progress_survives_process_death_before_framework_completion() 
             tokio::task::spawn_blocking(move || kill_at_mode(&child_root, point, kind))
                 .await
                 .unwrap();
-            let (database, context) = open(root.path()).await;
-            let filesystem = DurableFilesystem::open(
+            let (database, context) = open_database(root.path()).await;
+            let filesystem = open(
                 Vfs::external(root.path().join("workspace")).unwrap(),
                 RUN,
                 database,
@@ -274,7 +259,7 @@ async fn resource_progress_survives_process_death_before_framework_completion() 
                     id: RUN.into(),
                     kind: ResourceKind::Reader(byte_options()),
                 };
-                let mut reader = Filesystem::restore_reader(&filesystem.0, descriptor).unwrap();
+                let mut reader = Filesystem::restore_reader(&filesystem, descriptor).unwrap();
                 let limits = interpreter::runtime::limits::TenantLimits::new(1 << 20);
                 assert_eq!(
                     read_bytes(reader.next(&invocation, &limits).await.unwrap()).unwrap(),
@@ -292,7 +277,7 @@ async fn resource_progress_survives_process_death_before_framework_completion() 
                     id: RUN.into(),
                     kind: ResourceKind::Directory,
                 };
-                let mut listing = Filesystem::restore_directory(&filesystem.0, descriptor).unwrap();
+                let mut listing = Filesystem::restore_directory(&filesystem, descriptor).unwrap();
                 assert_eq!(
                     listing
                         .next_entry(

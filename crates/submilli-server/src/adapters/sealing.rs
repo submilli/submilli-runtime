@@ -3,16 +3,16 @@ use crate::application::error::StoreError;
 use std::sync::Arc;
 use submilli_shared::secret_store::{KEY_ID_LEN, SecretCipher};
 #[derive(Clone, Default)]
-pub(crate) struct Sealer(submilli_durable::sealing::Sealer);
+pub(crate) struct Sealer(submilli_durable::codec::Sealer);
 impl Sealer {
     pub fn new(cipher: Option<Arc<SecretCipher>>) -> Self {
-        Self(submilli_durable::sealing::Sealer::new(cipher))
+        Self(submilli_durable::codec::Sealer::new(cipher))
     }
     pub fn key_id(&self) -> Option<[u8; KEY_ID_LEN]> {
         self.0.key_id()
     }
     pub fn sealed_key_id(blob: &[u8]) -> Option<&[u8]> {
-        submilli_durable::sealing::Sealer::sealed_key_id(blob)
+        submilli_durable::codec::Sealer::sealed_key_id(blob)
     }
     pub fn seal(&self, owner: &str, plaintext: &[u8]) -> Result<Vec<u8>, StoreError> {
         self.0.seal(owner, plaintext).map_err(map_error)

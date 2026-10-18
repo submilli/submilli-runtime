@@ -17,7 +17,7 @@ Multi-node transaction concurrency, leases and fencing are outside this model.
 | Model action | Implementation |
 | --- | --- |
 | Begin | `UnitFactory` and `SqliteTransaction::begin` |
-| WriteIntent / Fingerprint | `FilesystemJournal::admit` and `save_operation`; both metadata fields are stored in one filesystem operation row |
+| WriteIntent / Fingerprint | `DurableFilesystem::attach` and `UnitOfWork::save_operation`; both metadata fields are stored in one filesystem operation row |
 | Read | Direct unit operations, using the held transaction connection |
 | Commit | Consuming `UnitOfWork::commit` |
 | Drop / Crash | Drop the driver; SQLite transaction rollback; retained filesystem artifacts remain governed by the filesystem models |

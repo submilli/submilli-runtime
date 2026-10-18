@@ -21,7 +21,7 @@ async fn reopen(fixture: Fixture) -> Fixture {
             .unwrap(),
     );
     let context = FilesystemContext::new(Arc::new(SecretCipher::from_key([7; 32])));
-    let filesystem = DurableFilesystem::open(
+    let filesystem = open(
         Vfs::external(root.path().join("workspace")).unwrap(),
         &run,
         database.clone(),
@@ -54,7 +54,7 @@ async fn reader_progress_precedes_history_and_replay_skips_recorded_calls() {
     std::fs::write(fixture.filesystem.vfs().root().join("file"), b"abcdefghi").unwrap();
     let limits = TenantLimits::new(1 << 20);
     let mut reader = Filesystem::open_reader(
-        &fixture.filesystem.0,
+        &fixture.filesystem,
         &resource_invocation(),
         "/file",
         byte_options(),
@@ -79,14 +79,14 @@ async fn reader_progress_precedes_history_and_replay_skips_recorded_calls() {
     drop(reader); // Pause/finalization cannot delete the row.
     let fixture = reopen(fixture).await;
     let restarted = &fixture.filesystem;
-    let mut reader = Filesystem::restore_reader(&restarted.0, descriptor.clone()).unwrap();
+    let mut reader = Filesystem::restore_reader(restarted, descriptor.clone()).unwrap();
     // Replay reads history[0], never invokes the backend for `first`.
     assert_eq!(
         read_bytes(reader.next(&second, &limits).await.unwrap()).unwrap(),
         b"def"
     );
     drop(reader); // Now the framework has committed `second` too.
-    let mut reader = Filesystem::restore_reader(&restarted.0, descriptor.clone()).unwrap();
+    let mut reader = Filesystem::restore_reader(restarted, descriptor.clone()).unwrap();
     assert_eq!(
         read_bytes(reader.next(&third, &limits).await.unwrap()).unwrap(),
         b"ghi"
@@ -97,7 +97,7 @@ async fn reader_progress_precedes_history_and_replay_skips_recorded_calls() {
     let close = resource_invocation();
     reader.close(&close).await.unwrap();
     drop(reader);
-    let mut reader = Filesystem::restore_reader(&restarted.0, descriptor.clone()).unwrap();
+    let mut reader = Filesystem::restore_reader(restarted, descriptor.clone()).unwrap();
     reader.close(&close).await.unwrap();
     assert!(
         reader.next(&close, &limits).await.is_err(),
@@ -121,12 +121,12 @@ async fn reader_progress_precedes_history_and_replay_skips_recorded_calls() {
     drop(unit);
     let mut foreign = descriptor.clone();
     foreign.scope = uuid::Uuid::new_v4().to_string();
-    assert!(Filesystem::restore_reader(&restarted.0, foreign).is_err());
+    assert!(Filesystem::restore_reader(restarted, foreign).is_err());
     let mut changed = descriptor;
     changed.kind = interpreter::runtime::filesystem::ResourceKind::Reader(ReaderOptions::Bytes {
         chunk_size: 2,
     });
-    let mut changed = Filesystem::restore_reader(&restarted.0, changed).unwrap();
+    let mut changed = Filesystem::restore_reader(restarted, changed).unwrap();
     assert!(changed.next(&resource_invocation(), &limits).await.is_err());
 }
 
@@ -140,7 +140,7 @@ async fn lines_restore_logical_offset_bom_and_crlf_without_storing_input() {
     .unwrap();
     let limits = TenantLimits::new(1 << 20);
     let mut reader = Filesystem::open_reader(
-        &fixture.filesystem.0,
+        &fixture.filesystem,
         &resource_invocation(),
         "/file",
         ReaderOptions::Lines { maximum_bytes: 32 },
@@ -160,7 +160,7 @@ async fn lines_restore_logical_offset_bom_and_crlf_without_storing_input() {
     drop(reader);
     let fixture = reopen(fixture).await;
     let restarted = &fixture.filesystem;
-    let mut reader = Filesystem::restore_reader(&restarted.0, descriptor.clone()).unwrap();
+    let mut reader = Filesystem::restore_reader(restarted, descriptor.clone()).unwrap();
     let second = resource_invocation();
     assert_eq!(
         line(reader.next(&second, &limits).await.unwrap()).unwrap(),
@@ -196,7 +196,7 @@ async fn failed_line_read_does_not_commit_partial_progress() {
     std::fs::write(fixture.filesystem.vfs().root().join("file"), b"toolong\n").unwrap();
     let limits = TenantLimits::new(1 << 20);
     let mut reader = Filesystem::open_reader(
-        &fixture.filesystem.0,
+        &fixture.filesystem,
         &resource_invocation(),
         "/file",
         ReaderOptions::Lines { maximum_bytes: 4 },
@@ -238,7 +238,7 @@ async fn listing_replay_uses_final_snapshot_order_and_effect_progress() {
     std::fs::write(root.join("a/z"), b"z").unwrap();
     std::fs::write(root.join("a-"), b"dash").unwrap();
     let mut listing = Filesystem::open_directory(
-        &fixture.filesystem.0,
+        &fixture.filesystem,
         &resource_invocation(),
         "/",
         true,
@@ -290,7 +290,7 @@ async fn listing_replay_uses_final_snapshot_order_and_effect_progress() {
     std::fs::write(root.join("new"), b"new").unwrap();
     let fixture = reopen(fixture).await;
     let restarted = &fixture.filesystem;
-    let mut listing = Filesystem::restore_directory(&restarted.0, descriptor.clone()).unwrap();
+    let mut listing = Filesystem::restore_directory(restarted, descriptor.clone()).unwrap();
     // Framework skips first+second; new third call must use the saved after-index.
     let third = resource_invocation();
     assert_eq!(
@@ -306,7 +306,7 @@ async fn listing_replay_uses_final_snapshot_order_and_effect_progress() {
         "/a-"
     );
     drop(listing);
-    let mut listing = Filesystem::restore_directory(&restarted.0, descriptor.clone()).unwrap();
+    let mut listing = Filesystem::restore_directory(restarted, descriptor.clone()).unwrap();
     assert_eq!(
         listing
             .next_entry(
@@ -349,7 +349,7 @@ async fn listing_replay_uses_final_snapshot_order_and_effect_progress() {
         .await
         .unwrap();
     drop(listing);
-    let mut listing = Filesystem::restore_directory(&restarted.0, descriptor).unwrap();
+    let mut listing = Filesystem::restore_directory(restarted, descriptor).unwrap();
     listing
         .close(
             &close,
@@ -371,10 +371,9 @@ async fn listing_replay_uses_final_snapshot_order_and_effect_progress() {
 #[tokio::test]
 async fn writer_id_restore_skips_chunks_and_retries_receipts_without_republication() {
     let fixture = Fixture::new().await;
-    let mut writer =
-        Filesystem::open_writer(&fixture.filesystem.0, &resource_invocation(), "/file")
-            .await
-            .unwrap();
+    let mut writer = Filesystem::open_writer(&fixture.filesystem, &resource_invocation(), "/file")
+        .await
+        .unwrap();
     let descriptor = recorded_id(writer.descriptor().unwrap());
     let first = resource_invocation();
     let second = resource_invocation();
@@ -387,7 +386,7 @@ async fn writer_id_restore_skips_chunks_and_retries_receipts_without_republicati
     );
     let fixture = reopen(fixture).await;
     let restarted = &fixture.filesystem;
-    let mut writer = Filesystem::restore_writer(&restarted.0, descriptor.clone()).unwrap();
+    let mut writer = Filesystem::restore_writer(restarted, descriptor.clone()).unwrap();
     // Skip first via framework history; retry second's receipt, then continue.
     assert!(writer.write(&second, b"wrong".to_vec()).await.is_err());
     writer.write(&second, b"def".to_vec()).await.unwrap();
@@ -404,7 +403,7 @@ async fn writer_id_restore_skips_chunks_and_retries_receipts_without_republicati
         b"abcdefghi"
     );
     std::fs::write(restarted.vfs().root().join("file"), b"later").unwrap();
-    let mut writer = Filesystem::restore_writer(&restarted.0, descriptor).unwrap();
+    let mut writer = Filesystem::restore_writer(restarted, descriptor).unwrap();
     writer.close(&close).await.unwrap();
     assert!(writer.is_closed());
     assert_eq!(
@@ -417,10 +416,9 @@ async fn writer_id_restore_skips_chunks_and_retries_receipts_without_republicati
 #[tokio::test]
 async fn writer_refused_close_is_terminal_and_replayed_from_sql() {
     let fixture = Fixture::new().await;
-    let mut writer =
-        Filesystem::open_writer(&fixture.filesystem.0, &resource_invocation(), "/file")
-            .await
-            .unwrap();
+    let mut writer = Filesystem::open_writer(&fixture.filesystem, &resource_invocation(), "/file")
+        .await
+        .unwrap();
     let descriptor = writer.descriptor().unwrap();
     writer
         .write(&resource_invocation(), b"data".to_vec())
@@ -434,7 +432,7 @@ async fn writer_refused_close_is_terminal_and_replayed_from_sql() {
     std::fs::remove_dir(fixture.filesystem.vfs().root().join("file")).unwrap();
     let fixture = reopen(fixture).await;
     let restarted = &fixture.filesystem;
-    let mut writer = Filesystem::restore_writer(&restarted.0, descriptor).unwrap();
+    let mut writer = Filesystem::restore_writer(restarted, descriptor).unwrap();
     assert!(writer.close(&close).await.is_err());
     assert!(writer.is_closed());
     assert!(!restarted.vfs().root().join("file").exists());
@@ -446,7 +444,7 @@ async fn cancelling_before_checkpoint_does_not_advance_the_next_attempt() {
     let fixture = Fixture::new().await;
     std::fs::write(fixture.filesystem.vfs().root().join("file"), b"abcdef").unwrap();
     let reader = Filesystem::open_reader(
-        &fixture.filesystem.0,
+        &fixture.filesystem,
         &resource_invocation(),
         "/file",
         byte_options(),
@@ -473,7 +471,7 @@ async fn cancelling_before_checkpoint_does_not_advance_the_next_attempt() {
             })
         })
     };
-    let backend = submilli_durable::filesystems::DurableFilesystem::open(
+    let backend = submilli_durable::DurableFilesystem::open(
         fixture.filesystem.vfs().clone(),
         &fixture.run,
         units,
@@ -490,7 +488,7 @@ async fn cancelling_before_checkpoint_does_not_advance_the_next_attempt() {
         .unwrap();
     task.abort();
     assert!(matches!(task.await, Err(error) if error.is_cancelled()));
-    let mut reader = Filesystem::restore_reader(&fixture.filesystem.0, descriptor).unwrap();
+    let mut reader = Filesystem::restore_reader(&fixture.filesystem, descriptor).unwrap();
     let limits = TenantLimits::new(1 << 20);
     assert_eq!(
         read_bytes(reader.next(&retry, &limits).await.unwrap()).unwrap(),
@@ -536,7 +534,7 @@ async fn listing_open_admits_memory_before_enumeration_or_replay() {
     std::fs::write(fixture.filesystem.vfs().root().join("file"), b"x").unwrap();
     let opening = resource_invocation();
     let small = TenantLimits::new(8192);
-    let backend = &fixture.filesystem.0;
+    let backend = &fixture.filesystem;
     assert!(
         matches!(Filesystem::open_directory(backend, &opening, "/", false, &small).await,
         Err(interpreter::runtime::filesystem::FilesystemError::Execution(error))
@@ -595,7 +593,7 @@ async fn cancelled_listing_calls_retain_memory_until_sql_work_finishes() {
         let limits = Arc::new(TenantLimits::new(128 << 20));
         let opening = resource_invocation();
         let descriptor =
-            Filesystem::open_directory(&fixture.filesystem.0, &opening, "/", false, &limits)
+            Filesystem::open_directory(&fixture.filesystem, &opening, "/", false, &limits)
                 .await
                 .unwrap()
                 .descriptor()
@@ -610,7 +608,7 @@ async fn cancelled_listing_calls_retain_memory_until_sql_work_finishes() {
             entered.clone(),
             release.clone(),
         );
-        let backend = submilli_durable::filesystems::DurableFilesystem::open(
+        let backend = submilli_durable::DurableFilesystem::open(
             fixture.filesystem.vfs().clone(),
             &fixture.run,
             units,
@@ -649,11 +647,11 @@ async fn cancelled_listing_calls_retain_memory_until_sql_work_finishes() {
         );
         release.notify_one();
         let mut listing = if opening_call {
-            Filesystem::open_directory(&fixture.filesystem.0, &opening, "/", false, &limits)
+            Filesystem::open_directory(&fixture.filesystem, &opening, "/", false, &limits)
                 .await
                 .unwrap()
         } else {
-            Filesystem::restore_directory(&fixture.filesystem.0, descriptor).unwrap()
+            Filesystem::restore_directory(&fixture.filesystem, descriptor).unwrap()
         };
         let retry = if opening_call {
             resource_invocation()

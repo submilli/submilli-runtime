@@ -3,9 +3,9 @@ use crate::application::error::StoreError;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 use submilli_durable::{
-    record_codec::{self, OperationColumns, ResourceColumns},
-    sealing::Sealer,
-    state::*,
+    codec::Sealer,
+    codec::{self as record_codec, OperationColumns, ResourceColumns},
+    unit_of_work::*,
 };
 fn invalid(error: impl std::fmt::Display) -> StoreError {
     StoreError::Io(error.to_string())

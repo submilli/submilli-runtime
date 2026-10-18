@@ -1,14 +1,128 @@
-use super::plan::Entry;
-use super::{FileIdentity, MAX_DEPTH, MAX_ENTRIES, PRIVATE, RecoveryError, Vfs, Volume, Workspace};
+//! Capability-relative IO, private artifacts, and shared resource accounting.
+use cap_std::fs::Dir;
+use interpreter::runtime::Vfs;
+use interpreter::runtime::fs::{ContainError, FileIdentity};
+use std::collections::BTreeMap;
+use std::io;
+use std::sync::Arc;
+
+/// Private artifacts are hidden by this backend. Git's stage namespace also
+/// prevents checkout/publication from installing this name.
+pub(crate) const PRIVATE: &str = ".git-submilli-recovery";
+pub(crate) const MAX_ENTRIES: usize = 10_000;
+pub(crate) const MAX_DEPTH: usize = 64;
+
+#[derive(Debug, thiserror::Error)]
+pub enum RecoveryError {
+    #[error(transparent)]
+    Fuel(#[from] interpreter::runtime::fuel::Exhausted),
+    #[error("filesystem recovery I/O failed: {0}")]
+    Io(#[from] io::Error),
+    #[error("filesystem containment refused recovery: {0}")]
+    Containment(#[from] ContainError),
+    #[error("filesystem recovery identity or content does not match the intent")]
+    Conflict,
+    #[error("unsupported durable filesystem operation: {0}")]
+    Unsupported(&'static str),
+    #[error("invalid filesystem recovery record")]
+    InvalidRecord,
+    #[error("durable filesystem size limit exceeded")]
+    Quota,
+    #[error("filesystem recovery traversal limit exceeded")]
+    Limit,
+}
+
+/// Capability-relative recovery access. Keep this value (and its VFS) alive
+/// until all blocking work has drained, including when a request is cancelled.
+#[derive(Clone)]
+pub(crate) struct Files {
+    pub(crate) vfs: Vfs,
+    id: String,
+    volumes: Arc<BTreeMap<String, Volume>>,
+    pub(crate) work: Option<Arc<interpreter::runtime::fuel::WorkBudget>>,
+}
+
+pub(crate) struct Volume {
+    root: Arc<Dir>,
+    pub(crate) recovery: Dir,
+    identity: FileIdentity,
+    maximum_bytes: Option<u64>,
+    quota: Option<Arc<interpreter::runtime::DiskQuota>>,
+}
+
+impl Files {
+    /// Open caller-owned roots and create private recovery directories.
+    /// The journal binds requests to these roots before any public mutation.
+    pub(crate) fn create(vfs: Vfs, id: &str) -> Result<Self, RecoveryError> {
+        validate_id(id)?;
+        if vfs.dir().is_none() {
+            return Err(RecoveryError::Unsupported("filesystem is disabled"));
+        }
+        if vfs.is_disposable() {
+            return Err(RecoveryError::Unsupported(
+                "workspace is owned by a TempDir",
+            ));
+        }
+        let volumes = open_volumes(&vfs, id, true)?;
+        Ok(Self {
+            vfs,
+            id: id.to_owned(),
+            volumes: Arc::new(volumes),
+            work: None,
+        })
+    }
+
+    pub(crate) fn metered(
+        &self,
+        work: Option<Arc<interpreter::runtime::fuel::WorkBudget>>,
+    ) -> Self {
+        let mut workspace = self.clone();
+        workspace.work = work;
+        workspace
+    }
+
+    pub fn identity(&self) -> Roots {
+        Roots {
+            id: self.id.clone(),
+            volumes: self
+                .volumes
+                .iter()
+                .map(|(mount, volume)| RootIdentity {
+                    mount: mount.clone(),
+                    root: volume.identity,
+                })
+                .collect(),
+        }
+    }
+
+    /// Backing storage for trusted host integration. Guest access must go
+    /// through the durable backend, which protects its private artifacts.
+    pub fn vfs(&self) -> &Vfs {
+        &self.vfs
+    }
+
+    pub(crate) fn volume(&self, mount: &str) -> Result<&Volume, RecoveryError> {
+        self.volumes.get(mount).ok_or(RecoveryError::Conflict)
+    }
+
+    pub(crate) fn reconcile_quotas(&self) -> Result<(), RecoveryError> {
+        for volume in self.volumes.values() {
+            if let Some(quota) = &volume.quota {
+                quota.set_used(volume.used_bytes(self.work.as_deref())?);
+            }
+        }
+        Ok(())
+    }
+}
+
 use cap_fs_ext::DirExt;
-use cap_std::fs::{Dir, Metadata};
+use cap_std::fs::Metadata;
 use interpreter::runtime::fs::{self, ContentPath};
 use interpreter::runtime::vfs::{Access, Placement};
 use interpreter::runtime::{fuel, fuel::WorkBudget};
-use std::collections::{BTreeMap, HashSet};
-use std::io;
+use std::collections::HashSet;
+
 use std::path::{Component, Path};
-use std::sync::Arc;
 
 pub(crate) fn resolve_content(
     vfs: &Vfs,
@@ -48,7 +162,7 @@ fn locate(vfs: &Vfs, cwd: &str, guest: &str) -> Result<Location, fs::ContainErro
     })
 }
 
-pub(super) fn private_recovery_path(path: &Path) -> bool {
+pub(crate) fn private_recovery_path(path: &Path) -> bool {
     path.components().any(|part| {
         part.as_os_str()
             .to_string_lossy()
@@ -87,7 +201,7 @@ pub(crate) fn validate_id(id: &str) -> Result<(), RecoveryError> {
     }
 }
 
-pub(super) fn validate_guest_path(path: &str) -> Result<(), RecoveryError> {
+pub(crate) fn validate_guest_path(path: &str) -> Result<(), RecoveryError> {
     if path.len() > 4096 || path.is_empty() || path.contains('\0') {
         return Err(RecoveryError::InvalidRecord);
     }
@@ -95,7 +209,7 @@ pub(super) fn validate_guest_path(path: &str) -> Result<(), RecoveryError> {
     Ok(())
 }
 
-pub(super) fn validate_relative(path: &str, parent: bool) -> Result<(), RecoveryError> {
+pub(crate) fn validate_relative(path: &str, parent: bool) -> Result<(), RecoveryError> {
     if parent && path == "." {
         return Ok(());
     }
@@ -111,7 +225,7 @@ pub(super) fn validate_relative(path: &str, parent: bool) -> Result<(), Recovery
     Ok(())
 }
 
-pub(super) fn open_volumes(
+pub(crate) fn open_volumes(
     vfs: &Vfs,
     id: &str,
     create: bool,
@@ -165,7 +279,7 @@ fn open_volume(
     })
 }
 
-pub(super) fn private_dir(parent: &Dir, name: &str, create: bool) -> Result<Dir, RecoveryError> {
+pub(crate) fn private_dir(parent: &Dir, name: &str, create: bool) -> Result<Dir, RecoveryError> {
     if create {
         match parent.create_dir(name) {
             Ok(()) => {}
@@ -179,7 +293,7 @@ pub(super) fn private_dir(parent: &Dir, name: &str, create: bool) -> Result<Dir,
     Ok(dir)
 }
 
-pub(super) fn sync(dir: &Dir) -> Result<(), RecoveryError> {
+pub(crate) fn sync(dir: &Dir) -> Result<(), RecoveryError> {
     checkpoint("before-directory-sync")?;
     // A Dir may carry O_PATH on Linux, which cannot be fsynced. Open a
     // readable handle relative to the held directory, preserving its identity
@@ -189,11 +303,11 @@ pub(super) fn sync(dir: &Dir) -> Result<(), RecoveryError> {
     Ok(())
 }
 
-pub(super) fn identity(metadata: &Metadata) -> Result<FileIdentity, RecoveryError> {
+pub(crate) fn identity(metadata: &Metadata) -> Result<FileIdentity, RecoveryError> {
     Ok(FileIdentity::of(metadata)?)
 }
 
-pub(super) fn existing(dir: &Dir, name: &str) -> Result<Option<Metadata>, RecoveryError> {
+pub(crate) fn existing(dir: &Dir, name: &str) -> Result<Option<Metadata>, RecoveryError> {
     match dir.symlink_metadata(name) {
         Ok(metadata) => Ok(Some(metadata)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -201,21 +315,12 @@ pub(super) fn existing(dir: &Dir, name: &str) -> Result<Option<Metadata>, Recove
     }
 }
 
-pub(super) fn current(dir: &Dir, name: &str) -> Result<Option<FileIdentity>, RecoveryError> {
+pub(crate) fn current(dir: &Dir, name: &str) -> Result<Option<FileIdentity>, RecoveryError> {
     existing(dir, name)?.as_ref().map(identity).transpose()
 }
 
-impl Workspace {
-    pub(super) fn entry(&self, guest: &str, follow_final: bool) -> Result<Entry, RecoveryError> {
-        self.entry_access(guest, follow_final, false)
-    }
-
-    pub(super) fn entry_access(
-        &self,
-        guest: &str,
-        follow_final: bool,
-        git: bool,
-    ) -> Result<Entry, RecoveryError> {
+impl Files {
+    pub(crate) fn entry(&self, guest: &str, follow_final: bool) -> Result<Entry, RecoveryError> {
         let location = locate(&self.vfs, self.vfs.cwd(), guest)?;
         let Location {
             root,
@@ -236,7 +341,7 @@ impl Workspace {
         {
             relative = root.canonicalize(&relative)?;
         }
-        if !git && fs::protected_metadata(&relative) {
+        if fs::protected_metadata(&relative) {
             return Err(RecoveryError::Unsupported("protected metadata"));
         }
         let parent = relative
@@ -244,13 +349,7 @@ impl Workspace {
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
         let resolved = root.canonicalize(parent)?;
-        if git
-            && resolved != parent
-            && !(resolved.as_os_str().is_empty() && parent == Path::new("."))
-        {
-            return Err(RecoveryError::Unsupported("Git metadata aliases"));
-        }
-        if !git && fs::protected_metadata(&resolved) {
+        if fs::protected_metadata(&resolved) {
             return Err(RecoveryError::Unsupported("protected metadata alias"));
         }
         let parent = if resolved.as_os_str().is_empty() {
@@ -286,7 +385,7 @@ impl Workspace {
         Ok(entry)
     }
 
-    pub(super) fn parent(&self, entry: &Entry) -> Result<Dir, RecoveryError> {
+    pub(crate) fn parent(&self, entry: &Entry) -> Result<Dir, RecoveryError> {
         let volume = self.volume(&entry.mount)?;
         let parent = volume.root.open_dir(&entry.parent)?;
         if identity(&parent.dir_metadata()?)? != entry.parent_identity {
@@ -295,7 +394,7 @@ impl Workspace {
         Ok(parent)
     }
 
-    pub(super) fn artifacts(
+    pub(crate) fn artifacts(
         &self,
         entry: &Entry,
         effect: &str,
@@ -304,7 +403,7 @@ impl Workspace {
         private_dir(&self.volume(&entry.mount)?.recovery, effect, create)
     }
 
-    pub(super) fn require_regular(
+    pub(crate) fn require_regular(
         &self,
         entry: &Entry,
         metadata: &Metadata,
@@ -331,7 +430,7 @@ impl Workspace {
 }
 
 impl Volume {
-    pub(super) fn check_growth(
+    pub(crate) fn check_growth(
         &self,
         growth: u64,
         work: Option<&WorkBudget>,
@@ -354,7 +453,7 @@ impl Volume {
         Ok(())
     }
 
-    pub(super) fn used_bytes(&self, work: Option<&WorkBudget>) -> Result<u64, RecoveryError> {
+    pub(crate) fn used_bytes(&self, work: Option<&WorkBudget>) -> Result<u64, RecoveryError> {
         measured_bytes(&self.root, work)
     }
 }
@@ -410,42 +509,149 @@ fn regular_files(
     Ok(files)
 }
 
-pub(super) fn remove_private_tree(parent: &Dir, name: &str) -> Result<(), RecoveryError> {
-    if let Some(metadata) = existing(parent, name)? {
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Err(RecoveryError::Conflict);
-        }
-        let dir = parent.open_dir_nofollow(name)?;
-        remove_contents(&dir, &mut 0, 0)?;
-        parent.remove_dir(name)?;
-    }
-    sync(parent)
-}
-
-fn remove_contents(dir: &Dir, count: &mut usize, depth: usize) -> Result<(), RecoveryError> {
-    if depth > MAX_DEPTH {
-        return Err(RecoveryError::Limit);
-    }
-    for entry in dir.entries()? {
-        *count += 1;
-        if *count > MAX_ENTRIES {
-            return Err(RecoveryError::Limit);
-        }
-        let entry = entry?;
-        let name = entry.file_name();
-        let metadata = dir.symlink_metadata(&name)?;
-        if metadata.is_dir() && !metadata.file_type().is_symlink() {
-            remove_contents(&dir.open_dir_nofollow(&name)?, count, depth + 1)?;
-            dir.remove_dir(&name)?;
-        } else {
-            dir.remove_file(&name)?;
-        }
-    }
-    sync(dir)
-}
-
-pub(super) fn checkpoint(_point: &str) -> Result<(), RecoveryError> {
+pub(crate) fn checkpoint(point: &str) -> Result<(), RecoveryError> {
+    crate::checkpoint(point);
     #[cfg(test)]
-    super::tests::checkpoint(_point)?;
+    crate::filesystem::tests::checkpoint(point)?;
     Ok(())
+}
+
+use crate::filesystem::FilesystemError;
+use crate::unit_of_work::StoreError;
+use interpreter::runtime::DiskQuota;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::sync::Weak;
+use tokio::sync::Mutex;
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Roots {
+    pub id: String,
+    pub volumes: Vec<RootIdentity>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RootIdentity {
+    pub mount: String,
+    pub root: FileIdentity,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Entry {
+    pub mount: String,
+    pub parent: String,
+    pub parent_identity: FileIdentity,
+    pub name: String,
+}
+
+impl Entry {
+    pub(crate) fn validate(&self) -> Result<(), RecoveryError> {
+        validate_relative(&self.parent, true)?;
+        validate_relative(&self.name, false)?;
+        let parent = std::path::Path::new(&self.parent);
+        let name = std::path::Path::new(&self.name);
+        if self.name.contains('/')
+            || private_recovery_path(parent)
+            || private_recovery_path(name)
+            || (interpreter::runtime::fs::protected_metadata(parent)
+                || interpreter::runtime::fs::protected_metadata(name))
+        {
+            return Err(RecoveryError::InvalidRecord);
+        }
+        validate_guest_path(&self.mount)
+    }
+}
+
+/// Shared same-process coordination for access to the same backing roots.
+/// The caller retains this context across filesystem handles; it is not a lease.
+#[derive(Clone, Default)]
+pub struct FilesystemContext {
+    pub(crate) filesystem_gate: Arc<Mutex<()>>,
+    pub(crate) filesystem_quotas: Arc<Mutex<SharedQuotas>>,
+}
+impl FilesystemContext {
+    #[cfg(feature = "test-support")]
+    pub fn test_gate(&self) -> &Arc<Mutex<()>> {
+        &self.filesystem_gate
+    }
+}
+
+// A retry must resolve the same guest paths against the same configured roots.
+// Keep only a fingerprint in each record, not a second persisted mount catalog.
+pub(crate) fn binding(vfs: &Vfs) -> Result<[u8; 32], FilesystemError> {
+    let root = vfs
+        .dir()
+        .ok_or(RecoveryError::Unsupported("filesystem disabled"))?;
+    let root_id = FileIdentity::of(&root.dir_metadata().map_err(RecoveryError::from)?)
+        .map_err(RecoveryError::from)?;
+    let mounts = vfs
+        .mounts()
+        .iter()
+        .map(|mount| {
+            let id = FileIdentity::of(&mount.dir().dir_metadata()?)?;
+            Ok((
+                mount.guest_path(),
+                mount.access(),
+                id,
+                mount.quota().map(|q| q.limit()),
+            ))
+        })
+        .collect::<Result<Vec<_>, RecoveryError>>()?;
+    let bytes = serde_json::to_vec(&(
+        vfs.cwd(),
+        vfs.access(),
+        root_id,
+        vfs.quota().map(|q| q.limit()),
+        mounts,
+    ))
+    .map_err(|e| StoreError::Io(e.to_string()))?;
+    Ok(Sha256::digest(bytes).into())
+}
+
+pub(crate) type SharedQuotas = HashMap<FileIdentity, Weak<DiskQuota>>;
+
+// Reopening a logical workspace in the same process must keep the counter used
+// by its existing VFS owners. Weak entries do not retain completed workspaces.
+pub(crate) async fn share_quotas(
+    context: &FilesystemContext,
+    mut vfs: Vfs,
+) -> Result<Vfs, FilesystemError> {
+    let mut shared = context.filesystem_quotas.lock().await;
+    shared.retain(|_, quota| quota.strong_count() != 0);
+    if let (Some(root), Some(quota)) = (vfs.dir(), vfs.quota()) {
+        let identity = FileIdentity::of(&root.dir_metadata().map_err(RecoveryError::from)?)
+            .map_err(RecoveryError::from)?;
+        let quota = reuse(&mut shared, identity, quota)?;
+        vfs = vfs.with_shared_quota(quota);
+    }
+    let mounts = vfs.mounts().to_vec();
+    for mount in mounts {
+        if let Some(quota) = mount.quota() {
+            let path = interpreter::runtime::fs::resolve_content(&vfs, "/", mount.guest_path())
+                .map_err(RecoveryError::from)?;
+            let identity = FileIdentity::of(&path.metadata().map_err(RecoveryError::from)?)
+                .map_err(RecoveryError::from)?;
+            let quota = reuse(&mut shared, identity, quota)?;
+            vfs = vfs.with_mount_quota(mount.guest_path(), quota);
+        }
+    }
+    Ok(vfs)
+}
+
+fn reuse(
+    shared: &mut SharedQuotas,
+    id: FileIdentity,
+    quota: &Arc<DiskQuota>,
+) -> Result<Arc<DiskQuota>, FilesystemError> {
+    if let Some(existing) = shared.get(&id).and_then(Weak::upgrade) {
+        if existing.limit() != quota.limit() {
+            return Err(RecoveryError::Conflict.into());
+        }
+        return Ok(existing);
+    }
+    shared.insert(id, Arc::downgrade(quota));
+    Ok(quota.clone())
 }

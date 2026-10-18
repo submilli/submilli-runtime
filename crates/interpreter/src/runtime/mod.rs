@@ -7,6 +7,7 @@ pub mod call_log;
 pub mod decision;
 pub mod default_filesystem;
 pub mod disk_quota;
+pub mod durable;
 pub mod embedding;
 pub mod exec;
 pub mod filesystem;

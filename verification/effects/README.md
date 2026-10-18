@@ -2,14 +2,14 @@
 
 This model checks the filesystem's own operation journal. It is not shared with
 future execution effects. The runner path `effects` is retained for existing CI
-commands. `FilesystemOperations.tla` maps to `submilli-durable/src/operations.rs`
+commands. `FilesystemOperations.tla` maps to the direct operations in `submilli-durable/src/filesystem.rs`
 and the server's `durable_filesystem_operations` table.
 
 Rows are keyed by caller-supplied scope and operation ID. Operation/version select
-the codec. The immutable request includes the mutation and a fingerprint of the
+the codec. The immutable request includes digests of the arguments and the
 configured filesystem. Request, recovery intent and outcome are independently
 sealed with scope/operation/version/field identity. No file input bytes are
-stored: requests contain lengths and hashes; retries supply matching bytes.
+stored: requests contain digests; checkpoints retain only required identities and offsets; retries supply matching bytes.
 
 | Transition | Filesystem journal |
 | --- | --- |

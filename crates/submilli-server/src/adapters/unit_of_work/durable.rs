@@ -3,8 +3,8 @@ use super::transaction::SqliteTransaction;
 use crate::application::error::StoreError;
 use crate::database::ServerDatabase;
 use std::sync::Arc;
-use submilli_durable::sealing::Sealer;
-use submilli_durable::state::*;
+use submilli_durable::codec::Sealer;
+use submilli_durable::unit_of_work::*;
 use submilli_durable::unit_of_work::{StoreError as DurableStoreError, UnitFactory, UnitOfWork};
 use submilli_shared::secret_store::SecretCipher;
 

@@ -1,11 +1,13 @@
 use super::*;
+use crate::io::{Files, PRIVATE, Roots};
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
+use std::io;
 use std::io::{Cursor, Read, Write};
 
 thread_local! { static FAILURE: RefCell<Option<(&'static str, usize)>> = const { RefCell::new(None) }; }
 
-pub(super) fn checkpoint(point: &str) -> Result<(), RecoveryError> {
+pub(crate) fn checkpoint(point: &str) -> Result<(), RecoveryError> {
     FAILURE.with(|slot| {
         let mut failure = slot.borrow_mut();
         if let Some((name, count)) = failure.as_mut().filter(|(name, _)| *name == point) {
@@ -40,17 +42,8 @@ impl Payload {
         }
     }
 }
-impl InputBytes for Payload {
-    fn open(&mut self, reference: &Content) -> Result<Box<dyn Read + Send>, RecoveryError> {
-        if *reference != self.reference {
-            return Err(RecoveryError::Conflict);
-        }
-        Ok(Box::new(Cursor::new(self.bytes.clone())))
-    }
-}
-
-fn workspace(root: &std::path::Path) -> Workspace {
-    Workspace::create(
+fn workspace(root: &std::path::Path) -> Files {
+    Files::create(
         Vfs::external(root.to_path_buf()).unwrap(),
         &uuid::Uuid::new_v4().to_string(),
     )
@@ -71,8 +64,8 @@ fn directory_sync_uses_open_directory_after_rename() {
     std::fs::rename(&original, root.path().join("moved")).unwrap();
     std::fs::write(&original, b"replacement is not a directory").unwrap();
 
-    paths::sync(&directory).unwrap();
-    paths::sync(&child).unwrap();
+    crate::io::sync(&directory).unwrap();
+    crate::io::sync(&child).unwrap();
 }
 
 #[test]
@@ -84,7 +77,7 @@ fn append_repairs_partial_range_on_the_original_inode() {
     let intent = workspace
         .prepare(
             &uuid::Uuid::new_v4().to_string(),
-            Mutation::Append {
+            Case::Append {
                 path: "/file".into(),
                 content: payload.reference.clone(),
             },
@@ -97,7 +90,7 @@ fn append_repairs_partial_range_on_the_original_inode() {
         std::fs::metadata(root.path().join("file")).unwrap().len(),
         6 + 65_536
     );
-    let recovered = Workspace::reopen(
+    let recovered = Files::reopen(
         Vfs::external(root.path().to_path_buf()).unwrap(),
         &workspace.identity(),
     )
@@ -118,7 +111,7 @@ fn replacement_repairs_corruption_without_aliasing_immutable_capture() {
     let intent = workspace
         .prepare(
             &uuid::Uuid::new_v4().to_string(),
-            Mutation::Write {
+            Case::Write {
                 path: "/file".into(),
                 content: payload.reference.clone(),
             },
@@ -150,7 +143,7 @@ fn move_recovers_all_four_persisted_namespace_states() {
         let intent = workspace
             .prepare(
                 &uuid::Uuid::new_v4().to_string(),
-                Mutation::Move {
+                Case::Move {
                     source: "/a/source".into(),
                     destination: "/b/dest".into(),
                 },
@@ -183,7 +176,7 @@ fn remove_refuses_a_new_file_at_a_reused_path() {
     let intent = workspace
         .prepare(
             &uuid::Uuid::new_v4().to_string(),
-            Mutation::Remove {
+            Case::Remove {
                 path: "/file".into(),
             },
             &mut payload,
@@ -214,7 +207,7 @@ fn restored_reader_refuses_path_replacement() {
     let intent = workspace
         .prepare(
             &uuid::Uuid::new_v4().to_string(),
-            Mutation::Append {
+            Case::Append {
                 path: "/file".into(),
                 content: payload.reference.clone(),
             },
@@ -226,7 +219,7 @@ fn restored_reader_refuses_path_replacement() {
     let replace = workspace
         .prepare(
             &uuid::Uuid::new_v4().to_string(),
-            Mutation::Write {
+            Case::Write {
                 path: "/file".into(),
                 content: replacement.reference.clone(),
             },
@@ -234,7 +227,7 @@ fn restored_reader_refuses_path_replacement() {
         )
         .unwrap();
     workspace.apply(&replace, &mut replacement).unwrap();
-    let recovered = Workspace::reopen(
+    let recovered = Files::reopen(
         Vfs::external(root.path().to_path_buf()).unwrap(),
         &workspace.identity(),
     )
@@ -254,7 +247,7 @@ fn lost_pin_changed_prefix_and_foreign_identity_fail_closed() {
     let intent = workspace
         .prepare(
             &uuid::Uuid::new_v4().to_string(),
-            Mutation::Append {
+            Case::Append {
                 path: "/file".into(),
                 content: payload.reference.clone(),
             },
@@ -274,7 +267,7 @@ fn lost_pin_changed_prefix_and_foreign_identity_fail_closed() {
     std::fs::remove_file(
         root.path()
             .join(PRIVATE)
-            .join(&workspace.id)
+            .join(&workspace.identity().id)
             .join(intent.effect())
             .join("original"),
     )
@@ -285,7 +278,7 @@ fn lost_pin_changed_prefix_and_foreign_identity_fail_closed() {
     ));
     let foreign = tempfile::tempdir().unwrap();
     assert!(
-        Workspace::reopen(
+        Files::reopen(
             Vfs::external(foreign.path().to_path_buf()).unwrap(),
             &workspace.identity()
         )
@@ -294,37 +287,21 @@ fn lost_pin_changed_prefix_and_foreign_identity_fail_closed() {
 }
 
 #[test]
-fn intent_size_bound_is_checked_before_publication() {
+fn checkpoint_size_bound_and_invalid_paths_are_rejected() {
+    let bytes = vec![b' '; crate::codec::MAX_RECORD + 1];
+    assert!(decode_checkpoint::<Target>(&bytes).is_err());
+    assert!(serialize(&"x".repeat(crate::codec::MAX_RECORD)).is_err());
     let root = tempfile::tempdir().unwrap();
-    let workspace = workspace(root.path());
-    let mut payload = Payload::new(b"captured");
-    let mut intent = workspace
-        .prepare(
+    let files = workspace(root.path());
+    let mut target = files
+        .capture_target(
             &uuid::Uuid::new_v4().to_string(),
-            Mutation::Write {
-                path: "/file".into(),
-                content: payload.reference.clone(),
-            },
-            &mut payload,
+            "/file",
+            CaptureOptions::default(),
         )
         .unwrap();
-    let encoded = intent.encode().unwrap();
-    assert_eq!(Intent::decode(&encoded).unwrap(), intent);
-    intent.workspace.volumes = (0..17)
-        .map(|index| VolumeIdentity {
-            mount: if index == 0 {
-                "/".into()
-            } else {
-                format!("/{index}/{}", "a".repeat(4090))
-            },
-            root: intent.workspace.volumes[0].root,
-        })
-        .collect();
-    assert!(matches!(intent.encode(), Err(RecoveryError::Limit)));
-    assert!(matches!(
-        Intent::decode(&serde_json::to_vec(&intent).unwrap()),
-        Err(RecoveryError::Limit)
-    ));
+    target.source.parent = "../escape".into();
+    assert!(target.validate().is_err());
     assert!(!root.path().join("file").exists());
 }
 
@@ -333,19 +310,23 @@ fn intent_size_bound_is_checked_before_publication() {
 fn reopened_workspace_cannot_read_private_aliases() {
     let root = tempfile::tempdir().unwrap();
     let workspace = workspace(root.path());
-    let secret = root.path().join(PRIVATE).join(&workspace.id).join("secret");
+    let secret = root
+        .path()
+        .join(PRIVATE)
+        .join(&workspace.identity().id)
+        .join("secret");
     std::fs::write(&secret, b"private").unwrap();
     std::os::unix::fs::symlink(
-        format!("{PRIVATE}/{}/secret", workspace.id),
+        format!("{PRIVATE}/{}/secret", workspace.identity().id),
         root.path().join("alias"),
     )
     .unwrap();
-    let restored = Workspace::reopen(
+    let restored = Files::reopen(
         Vfs::external(root.path().to_owned()).unwrap(),
         &workspace.identity(),
     )
     .unwrap();
-    assert!(super::paths::resolve_content(restored.vfs(), "/", "/alias").is_err());
+    assert!(crate::io::resolve_content(restored.vfs(), "/", "/alias").is_err());
     assert!(
         restored
             .open_reader(&uuid::Uuid::new_v4().to_string(), "/alias")
@@ -375,25 +356,25 @@ fn failed_mutation_barriers_remain_reconcilable() {
         let workspace = workspace(root.path());
         let mut payload = Payload::new(b"payload");
         let mutation = match kind {
-            "append" => Mutation::Append {
+            "append" => Case::Append {
                 path: "/file".into(),
                 content: payload.reference.clone(),
             },
-            "write" => Mutation::Write {
+            "write" => Case::Write {
                 path: "/file".into(),
                 content: payload.reference.clone(),
             },
-            "move" => Mutation::Move {
+            "move" => Case::Move {
                 source: "/file".into(),
                 destination: "/moved".into(),
             },
-            "remove" => Mutation::Remove {
+            "remove" => Case::Remove {
                 path: "/file".into(),
             },
-            "mkdir" => Mutation::CreateDirectory {
+            "mkdir" => Case::CreateDirectory {
                 path: "/new".into(),
             },
-            "rmdir" => Mutation::Remove {
+            "rmdir" => Case::Remove {
                 path: "/empty".into(),
             },
             _ => unreachable!(),
@@ -406,7 +387,7 @@ fn failed_mutation_barriers_remain_reconcilable() {
             workspace.apply(&intent, &mut payload).is_err(),
             "{kind} at {point}"
         );
-        let restored = Workspace::reopen(
+        let restored = Files::reopen(
             Vfs::external(root.path().to_owned()).unwrap(),
             &workspace.identity(),
         )
@@ -442,12 +423,12 @@ fn retained_bytes_are_charged_once_and_failed_growth_does_not_change_the_file() 
     let vfs = Vfs::external(root.path().to_owned())
         .unwrap()
         .with_shared_quota(quota.clone());
-    let workspace = Workspace::create(vfs, &uuid::Uuid::new_v4().to_string()).unwrap();
+    let workspace = Files::create(vfs, &uuid::Uuid::new_v4().to_string()).unwrap();
     let mut payload = Payload::new(b"four");
     let intent = workspace
         .prepare(
             &uuid::Uuid::new_v4().to_string(),
-            Mutation::Append {
+            Case::Append {
                 path: "/file".into(),
                 content: payload.reference.clone(),
             },
@@ -461,7 +442,7 @@ fn retained_bytes_are_charged_once_and_failed_growth_does_not_change_the_file() 
     assert!(matches!(
         workspace.prepare(
             &uuid::Uuid::new_v4().to_string(),
-            Mutation::Append {
+            Case::Append {
                 path: "/file".into(),
                 content: excess.reference.clone()
             },
@@ -496,4 +477,176 @@ fn reader_open_does_not_pin_or_scan_unrelated_recovery_artifacts() {
     let mut content = String::new();
     reader.read_to_string(&mut content).unwrap();
     assert_eq!(content, "content");
+}
+
+// Matrix adapters are test-only: each case calls the concrete native primitive.
+// Production callers attach and commit their checkpoint through UnitOfWork.
+enum Case {
+    Write { path: String, content: Content },
+    Append { path: String, content: Content },
+    Move { source: String, destination: String },
+    Remove { path: String },
+    CreateDirectory { path: String },
+}
+enum Checkpoint {
+    Write(WriteCheckpoint, Content, bool),
+    Move(MoveCheckpoint),
+    Remove(Target),
+    Directory(Target),
+}
+struct Prepared {
+    effect: String,
+    checkpoint: Checkpoint,
+}
+impl Prepared {
+    fn effect(&self) -> &str {
+        &self.effect
+    }
+}
+impl Files {
+    fn reopen(vfs: Vfs, roots: &Roots) -> Result<Self, RecoveryError> {
+        let files = Self::create(vfs, &roots.id)?;
+        if files.identity() != *roots {
+            return Err(RecoveryError::Conflict);
+        }
+        Ok(files)
+    }
+    fn prepare(
+        &self,
+        effect: &str,
+        case: Case,
+        payload: &mut Payload,
+    ) -> Result<Prepared, RecoveryError> {
+        let result = (|| {
+            let checkpoint = match case {
+                Case::Write { path, content } => {
+                    let target = self.capture_target(effect, &path, CaptureOptions::default())?;
+                    let dir = self.artifacts(&target.source, effect, true)?;
+                    let candidate = Some(self.prepare_candidate(
+                        &target.source,
+                        &dir,
+                        &content,
+                        &mut Cursor::new(&payload.bytes),
+                    )?);
+                    Checkpoint::Write(WriteCheckpoint { target, candidate }, content, false)
+                }
+                Case::Append { path, content } => {
+                    let target = self.capture_target(
+                        effect,
+                        &path,
+                        CaptureOptions {
+                            follow_final: true,
+                            ..Default::default()
+                        },
+                    )?;
+                    let dir = self.artifacts(&target.source, effect, true)?;
+                    let candidate = if target.original.is_none() {
+                        Some(self.prepare_candidate(
+                            &target.source,
+                            &dir,
+                            &content,
+                            &mut Cursor::new(&payload.bytes),
+                        )?)
+                    } else {
+                        self.volume(&target.source.mount)?
+                            .check_growth(content.bytes, self.work.as_deref())?;
+                        None
+                    };
+                    Checkpoint::Write(WriteCheckpoint { target, candidate }, content, true)
+                }
+                Case::Move {
+                    source,
+                    destination,
+                } => {
+                    let target = self.capture_target(effect, &source, CaptureOptions::default())?;
+                    let dir = self.artifacts(&target.source, effect, true)?;
+                    let (destination, destination_original) =
+                        self.capture_destination(&target, &dir, &destination)?;
+                    Checkpoint::Move(MoveCheckpoint {
+                        target,
+                        destination,
+                        destination_original,
+                    })
+                }
+                Case::Remove { path } => Checkpoint::Remove(self.capture_target(
+                    effect,
+                    &path,
+                    CaptureOptions {
+                        allow_directory: true,
+                        require_empty: true,
+                        ..Default::default()
+                    },
+                )?),
+                Case::CreateDirectory { path } => Checkpoint::Directory(self.capture_target(
+                    effect,
+                    &path,
+                    CaptureOptions {
+                        allow_directory: true,
+                        ..Default::default()
+                    },
+                )?),
+            };
+            Ok(Prepared {
+                effect: effect.into(),
+                checkpoint,
+            })
+        })();
+        self.reconcile_quotas()?;
+        result
+    }
+    fn apply(&self, prepared: &Prepared, payload: &mut Payload) -> Result<(), RecoveryError> {
+        let result = (|| {
+            match &prepared.checkpoint {
+                Checkpoint::Write(state, content, append) => {
+                    let dir = self.artifacts(&state.target.source, &prepared.effect, false)?;
+                    let mut input = Cursor::new(&payload.bytes);
+                    if *append && state.target.original.is_some() {
+                        self.append_range(&state.target, &dir, content, &mut input)?;
+                    } else {
+                        self.publish_candidate(state, &dir, content, &mut input)?;
+                    }
+                }
+                Checkpoint::Move(state) => self.move_entry(
+                    state,
+                    &self.artifacts(&state.target.source, &prepared.effect, false)?,
+                )?,
+                Checkpoint::Remove(target) if target.original_directory => {
+                    self.remove_directory(target)?;
+                }
+                Checkpoint::Remove(target) => self.remove_entry(
+                    target,
+                    &self.artifacts(&target.source, &prepared.effect, false)?,
+                )?,
+                Checkpoint::Directory(target) => self.create_directory(target)?,
+            }
+            crate::io::checkpoint("before-receipt")
+        })();
+        self.reconcile_quotas()?;
+        result
+    }
+}
+
+#[tokio::test]
+async fn cancelled_blocking_work_holds_admission_until_it_drains() {
+    let context = FilesystemContext::default();
+    let gate = Arc::new(context.filesystem_gate.clone().lock_owned().await);
+    let (started, entered) = tokio::sync::oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let worker = tokio::spawn(blocking(gate, move || {
+        started.send(()).unwrap();
+        wait.recv().unwrap();
+        Ok(())
+    }));
+    entered.await.unwrap();
+    worker.abort();
+    assert!(worker.await.unwrap_err().is_cancelled());
+    assert!(context.filesystem_gate.try_lock().is_err());
+    release.send(()).unwrap();
+    let drained = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        context.filesystem_gate.lock(),
+    )
+    .await
+    .unwrap();
+    drop(drained);
 }

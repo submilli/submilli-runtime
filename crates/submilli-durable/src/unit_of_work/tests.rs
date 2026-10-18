@@ -1,7 +1,7 @@
 //! In-memory implementation of the same transactional contract as SQL.
 //! Unused ports fail loudly, so a test cannot accidentally depend on a database.
 use super::*;
-use crate::operations::{self, OperationKey};
+
 use std::{collections::BTreeMap, sync::Mutex};
 #[derive(Default, Clone)]
 struct State {
@@ -158,24 +158,24 @@ impl UnitOfWork for MemoryUnit {
         }
     }
 }
-fn key() -> OperationKey<'static> {
-    OperationKey {
-        scope: "scope",
-        effect: "effect",
-        operation: "filesystem.mutation",
-        version: 1,
+
+fn operation() -> Operation {
+    Operation {
+        scope: "scope".into(),
+        id: "effect".into(),
+        operation: "write".into(),
+        version: 2,
+        request: b"fingerprint".to_vec(),
+        recovery_payload: None,
+        outcome: None,
+        rejected: false,
     }
-}
-fn store() -> Arc<Mutex<State>> {
-    Arc::default()
 }
 #[tokio::test]
 async fn staged_effect_reads_its_writes_and_drop_rolls_back() {
-    let store = store();
+    let store = Arc::default();
     let mut unit = MemoryUnit::begin(&store, false);
-    operations::admit(unit.as_mut(), &key(), b"fingerprint")
-        .await
-        .unwrap();
+    unit.save_operation(operation()).await.unwrap();
     assert!(
         unit.get_operation("scope", "effect")
             .await
@@ -193,37 +193,29 @@ async fn staged_effect_reads_its_writes_and_drop_rolls_back() {
 }
 #[tokio::test]
 async fn lost_ack_is_reread_without_duplicate_effect() {
-    let store = store();
+    let store = Arc::default();
     let mut unit = MemoryUnit::begin(&store, true);
-    operations::admit(unit.as_mut(), &key(), b"fingerprint")
-        .await
-        .unwrap();
+    unit.save_operation(operation()).await.unwrap();
     assert!(unit.commit().await.is_err());
     let mut retry = MemoryUnit::begin(&store, false);
-    operations::admit(retry.as_mut(), &key(), b"fingerprint")
+    let mut row = retry
+        .get_operation("scope", "effect")
         .await
+        .unwrap()
         .unwrap();
     assert_eq!(retry.operation_count("scope").await.unwrap(), 1);
-    operations::prepare(retry.as_mut(), &key(), b"recovery metadata")
-        .await
-        .unwrap();
-    operations::complete(retry.as_mut(), &key(), b"result", false)
-        .await
-        .unwrap();
+    row.recovery_payload = Some(b"checkpoint".to_vec());
+    retry.save_operation(row.clone()).await.unwrap();
+    row.outcome = Some(b"result".to_vec());
+    retry.save_operation(row).await.unwrap();
     retry.commit().await.unwrap();
     let mut replay = MemoryUnit::begin(&store, false);
-    assert_eq!(
-        operations::load(replay.as_mut(), &key())
-            .await
-            .unwrap()
-            .unwrap()
-            .outcome
-            .unwrap(),
-        b"result"
-    );
-    assert!(
-        operations::complete(replay.as_mut(), &key(), b"different", false)
-            .await
-            .is_err()
-    );
+    let mut row = replay
+        .get_operation("scope", "effect")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.outcome.as_deref(), Some(b"result".as_slice()));
+    row.outcome = Some(b"different".to_vec());
+    assert!(replay.save_operation(row).await.is_err());
 }

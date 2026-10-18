@@ -1,6 +1,6 @@
 use super::*;
 
-use std::io::Read;
+use submilli_durable::unit_of_work::Outcome;
 use submilli_shared::secret_store::SecretCipher;
 mod boundaries;
 pub(crate) mod process;
@@ -33,7 +33,7 @@ impl Fixture {
         if let Some(limit) = maximum_bytes {
             vfs = vfs.with_size_limit(limit);
         }
-        let filesystem = DurableFilesystem::open(vfs, &run, database.clone(), context.clone())
+        let filesystem = open(vfs, &run, database.clone(), context.clone())
             .await
             .unwrap();
         Self {
@@ -62,76 +62,78 @@ impl Fixture {
         );
     }
 
-    async fn input(&self, bytes: &[u8]) -> Content {
-        remember_input(bytes)
+    async fn input(&self, bytes: &[u8]) -> Vec<u8> {
+        bytes.to_vec()
     }
 }
 
-async fn publication_without_receipt(
-    filesystem: &DurableFilesystem,
-    effect: &str,
-    request: Mutation,
-) {
-    let gate = Arc::new(
-        filesystem
-            .test_context()
-            .test_gate()
-            .clone()
-            .lock_owned()
-            .await,
-    );
-    filesystem
-        .test_journal()
-        .admit(filesystem.id(), effect, &request)
-        .await
-        .unwrap();
-    let workspace = filesystem.test_workspace().clone();
-    let mut source = filesystem.test_content(&request).unwrap();
-    let effect = effect.to_owned();
-    let intent = blocking(gate.clone(), move || {
-        workspace.prepare(&effect, request, &mut source)
-    })
-    .await
-    .unwrap();
-    filesystem
-        .test_journal()
-        .prepared(filesystem.id(), &intent)
-        .await
-        .unwrap();
-    let workspace = filesystem.test_workspace().clone();
-    let mut source = filesystem.test_content(intent.mutation()).unwrap();
-    blocking(gate, move || workspace.apply(&intent, &mut source))
+async fn publication_without_receipt(fixture: &Fixture, effect: &str, request: TestCall) {
+    fail_operation_updates(fixture, "NEW.state='done'").await;
+    assert!(fixture.filesystem.call(effect, request).await.is_err());
+    clear_operation_failure(fixture).await;
+}
+async fn fail_operation_updates(fixture: &Fixture, condition: &'static str) {
+    fixture.database.transaction(move |connection| Box::pin(async move {
+        let statement = format!("CREATE TRIGGER refuse_operation_update BEFORE UPDATE ON durable_filesystem_operations WHEN {condition} BEGIN SELECT RAISE(FAIL, 'injected update failure'); END");
+        sqlx::query(sqlx::AssertSqlSafe(statement.as_str())).execute(connection).await?;
+        Ok(())
+    })).await.unwrap();
+}
+async fn clear_operation_failure(fixture: &Fixture) {
+    fixture
+        .database
+        .transaction(|connection| {
+            Box::pin(async move {
+                sqlx::query("DROP TRIGGER refuse_operation_update")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
         .await
         .unwrap();
 }
-
+async fn reserve_close(fixture: &Fixture, resource: &str, effect: &str) {
+    let mut unit = fixture.context.units(fixture.database.clone())()
+        .await
+        .unwrap();
+    let mut writer = unit
+        .get_writer(&fixture.run, resource)
+        .await
+        .unwrap()
+        .unwrap();
+    writer.state = "closing".into();
+    writer.close_effect = Some(effect.into());
+    unit.save_writer(&fixture.run, writer).await.unwrap();
+    unit.commit().await.unwrap();
+}
 #[tokio::test]
 async fn sqlite_receipt_suppresses_completed_mutation_after_path_reuse() {
     let fixture = Fixture::new().await;
     let content = fixture.input(b"original").await;
     let effect = uuid::Uuid::new_v4().to_string();
-    let request = Mutation::Write {
+    let request = TestCall::Write {
         path: "/file".into(),
         content,
     };
     fixture
         .filesystem
-        .execute_replayed(&effect, request.clone())
+        .call(&effect, request.clone())
         .await
         .unwrap();
     let replacement = fixture.input(b"newer").await;
     fixture
         .filesystem
-        .execute_replayed(
+        .call(
             &uuid::Uuid::new_v4().to_string(),
-            Mutation::Write {
+            TestCall::Write {
                 path: "/file".into(),
                 content: replacement,
             },
         )
         .await
         .unwrap();
-    let restored = DurableFilesystem::open(
+    let restored = open(
         fixture.filesystem.vfs().clone(),
         fixture.filesystem.id(),
         fixture.database.clone(),
@@ -139,19 +141,16 @@ async fn sqlite_receipt_suppresses_completed_mutation_after_path_reuse() {
     )
     .await
     .unwrap();
-    restored
-        .execute_replayed(&effect, request.clone())
-        .await
-        .unwrap();
+    restored.call(&effect, request.clone()).await.unwrap();
     assert_eq!(
         std::fs::read(restored.vfs().root().join("file")).unwrap(),
         b"newer"
     );
     assert!(
         restored
-            .execute_replayed(
+            .call(
                 &effect,
-                Mutation::Remove {
+                TestCall::Remove {
                     path: "/file".into()
                 }
             )
@@ -167,9 +166,9 @@ async fn append_publication_gap_recovers_once_and_blocks_other_mutations() {
     let initial = fixture.input(b"before").await;
     fixture
         .filesystem
-        .execute_replayed(
+        .call(
             &uuid::Uuid::new_v4().to_string(),
-            Mutation::Write {
+            TestCall::Write {
                 path: "/file".into(),
                 content: initial,
             },
@@ -178,24 +177,24 @@ async fn append_publication_gap_recovers_once_and_blocks_other_mutations() {
         .unwrap();
     let content = fixture.input(b" suffix").await;
     let effect = uuid::Uuid::new_v4().to_string();
-    let request = Mutation::Append {
+    let request = TestCall::Append {
         path: "/file".into(),
         content,
     };
-    publication_without_receipt(&fixture.filesystem, &effect, request.clone()).await;
+    publication_without_receipt(&fixture, &effect, request.clone()).await;
     assert!(
         fixture
             .filesystem
-            .execute_replayed(
+            .call(
                 &uuid::Uuid::new_v4().to_string(),
-                Mutation::Remove {
+                TestCall::Remove {
                     path: "/file".into()
                 }
             )
             .await
             .is_err()
     );
-    let restored = DurableFilesystem::open(
+    let restored = open(
         fixture.filesystem.vfs().clone(),
         fixture.filesystem.id(),
         fixture.database.clone(),
@@ -203,11 +202,8 @@ async fn append_publication_gap_recovers_once_and_blocks_other_mutations() {
     )
     .await
     .unwrap();
-    restored
-        .execute_replayed(&effect, request.clone())
-        .await
-        .unwrap();
-    restored.execute_replayed(&effect, request).await.unwrap();
+    restored.call(&effect, request.clone()).await.unwrap();
+    restored.call(&effect, request).await.unwrap();
     assert_eq!(
         std::fs::read(restored.vfs().root().join("file")).unwrap(),
         b"before suffix"
@@ -218,22 +214,19 @@ async fn append_publication_gap_recovers_once_and_blocks_other_mutations() {
 async fn rejected_preflight_is_replayed_even_when_the_path_later_exists() {
     let fixture = Fixture::new().await;
     let effect = uuid::Uuid::new_v4().to_string();
-    let request = Mutation::Remove {
+    let request = TestCall::Remove {
         path: "/missing".into(),
     };
     assert!(matches!(
-        fixture
-            .filesystem
-            .execute_replayed(&effect, request.clone())
-            .await,
+        fixture.filesystem.call(&effect, request.clone()).await,
         Err(FilesystemError::Rejected(_))
     ));
     let content = fixture.input(b"later").await;
     fixture
         .filesystem
-        .execute_replayed(
+        .call(
             &uuid::Uuid::new_v4().to_string(),
-            Mutation::Write {
+            TestCall::Write {
                 path: "/missing".into(),
                 content,
             },
@@ -241,7 +234,7 @@ async fn rejected_preflight_is_replayed_even_when_the_path_later_exists() {
         .await
         .unwrap();
     assert!(matches!(
-        fixture.filesystem.execute_replayed(&effect, request).await,
+        fixture.filesystem.call(&effect, request).await,
         Err(FilesystemError::Rejected(_))
     ));
     assert_eq!(
@@ -264,10 +257,10 @@ async fn writer_chunks_survive_pause_and_duplicate_close_never_republishes() {
     let first = fixture.input(b"first").await;
     fixture
         .filesystem
-        .write_replayed_chunk(&resource, &chunk, first.clone())
+        .write_chunk(&resource, &chunk, first.clone())
         .await
         .unwrap();
-    let resumed = DurableFilesystem::open(
+    let resumed = open(
         fixture.filesystem.vfs().clone(),
         fixture.filesystem.id(),
         fixture.database.clone(),
@@ -275,32 +268,25 @@ async fn writer_chunks_survive_pause_and_duplicate_close_never_republishes() {
     )
     .await
     .unwrap();
-    resumed
-        .write_replayed_chunk(&resource, &chunk, first)
-        .await
-        .unwrap();
+    resumed.write_chunk(&resource, &chunk, first).await.unwrap();
     let second = fixture.input(b" second").await;
     resumed
-        .write_replayed_chunk(&resource, &uuid::Uuid::new_v4().to_string(), second)
+        .write_chunk(&resource, &uuid::Uuid::new_v4().to_string(), second)
         .await
         .unwrap();
-    resumed
-        .test_journal()
-        .closing_writer(resumed.id(), &resource, &close, i64::MAX as u64)
-        .await
-        .unwrap();
+    reserve_close(&fixture, &resource, &close).await;
     assert!(
         resumed
-            .execute_replayed(
+            .call(
                 &uuid::Uuid::new_v4().to_string(),
-                Mutation::Remove {
+                TestCall::Remove {
                     path: "/out".into()
                 }
             )
             .await
             .is_err()
     );
-    let resumed = DurableFilesystem::open(
+    let resumed = open(
         fixture.filesystem.vfs().clone(),
         fixture.filesystem.id(),
         fixture.database.clone(),
@@ -316,9 +302,9 @@ async fn writer_chunks_survive_pause_and_duplicate_close_never_republishes() {
     );
     let newer = fixture.input(b"newer").await;
     resumed
-        .execute_replayed(
+        .call(
             &uuid::Uuid::new_v4().to_string(),
-            Mutation::Write {
+            TestCall::Write {
                 path: "/out".into(),
                 content: newer,
             },
@@ -369,7 +355,7 @@ async fn reader_reopen_refuses_a_replaced_path() {
     drop(reader);
     std::fs::rename(root.join("file"), root.join("old")).unwrap();
     std::fs::write(root.join("file"), b"replacement").unwrap();
-    let mut restored = Filesystem::restore_reader(&fixture.filesystem.0, descriptor).unwrap();
+    let mut restored = Filesystem::restore_reader(&fixture.filesystem, descriptor).unwrap();
     assert!(
         restored
             .next(&resource_invocation(), &limits)
@@ -387,15 +373,23 @@ async fn directory_snapshot_restores_order_after_directory_changes() {
     let resource = uuid::Uuid::new_v4().to_string();
     let mut listing = fixture
         .filesystem
-        .open_directory(&resource, "/tree", true, 0)
+        .listing(&resource, "/tree", true)
         .await
         .unwrap();
-    assert_eq!(listing.next().unwrap().path, "/tree/a");
-    let offset = listing.position();
+    let limits = interpreter::runtime::limits::TenantLimits::new(64 << 20);
+    assert_eq!(
+        listing
+            .next_entry(&resource_invocation(), &limits)
+            .await
+            .unwrap()
+            .unwrap()
+            .path,
+        "/tree/a"
+    );
     drop(listing);
     std::fs::remove_file(fixture.filesystem.vfs().root().join("tree/b")).unwrap();
     std::fs::write(fixture.filesystem.vfs().root().join("tree/c"), b"c").unwrap();
-    let resumed = DurableFilesystem::open(
+    let resumed = open(
         fixture.filesystem.vfs().clone(),
         fixture.filesystem.id(),
         fixture.database.clone(),
@@ -403,31 +397,24 @@ async fn directory_snapshot_restores_order_after_directory_changes() {
     )
     .await
     .unwrap();
-    let mut listing = resumed
-        .open_directory(&resource, "/tree", true, offset)
-        .await
-        .unwrap();
-    assert_eq!(listing.next().unwrap().path, "/tree/b");
-    assert!(listing.next().is_none());
-    assert!(
-        resumed
-            .open_directory(&resource, "/tree", false, 0)
+    let mut listing = resumed.listing(&resource, "/tree", true).await.unwrap();
+    assert_eq!(
+        listing
+            .next_entry(&resource_invocation(), &limits)
             .await
-            .is_err()
+            .unwrap()
+            .unwrap()
+            .path,
+        "/tree/b"
     );
-}
-
-async fn blocking<T: Send + 'static>(
-    guard: Arc<tokio::sync::OwnedMutexGuard<()>>,
-    operation: impl FnOnce() -> Result<T, RecoveryError> + Send + 'static,
-) -> Result<T, FilesystemError> {
-    tokio::task::spawn_blocking(move || {
-        let _guard = guard;
-        operation()
-    })
-    .await
-    .map_err(|e| FilesystemError::Worker(e.to_string()))?
-    .map_err(Into::into)
+    assert!(
+        listing
+            .next_entry(&resource_invocation(), &limits)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(resumed.listing(&resource, "/tree", false).await.is_err());
 }
 
 #[tokio::test]
@@ -442,7 +429,7 @@ async fn interpreter_uses_durable_backend_and_replay_does_not_repeat_append() {
         ..Default::default()
     };
     interpreter::runtime::filesystem::Filesystem::write(
-        &fixture.filesystem.0,
+        &fixture.filesystem,
         &invocation,
         "/port.txt",
         b"once".to_vec(),
@@ -543,7 +530,7 @@ async fn run_backend_fueled(
     let config = RuntimeConfig::default();
     let engine = config.engine().unwrap();
     let mut data = StoreData::with_vfs_and_cap(fixture.filesystem.vfs().clone(), 64 << 20);
-    data.filesystem = Arc::new(fixture.filesystem.0.clone());
+    data.filesystem = Arc::new(fixture.filesystem.clone());
     let mut store = config.store(&engine, data).unwrap();
     let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
     let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
@@ -610,7 +597,7 @@ async fn durable_append_and_eager_listing_admit_their_own_fuel() {
         ..Default::default()
     };
     interpreter::runtime::filesystem::Filesystem::write(
-        &fixture.filesystem.0,
+        &fixture.filesystem,
         &invocation,
         "/large",
         Vec::new(),
@@ -648,7 +635,7 @@ async fn durable_quota_scan_stops_before_mutation_and_resumes_with_fuel() {
         ..Default::default()
     };
     interpreter::runtime::filesystem::Filesystem::mkdir(
-        &fixture.filesystem.0,
+        &fixture.filesystem,
         &invocation,
         "/created",
         false,
@@ -664,7 +651,7 @@ async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
     use interpreter::runtime::default_filesystem::DefaultFilesystem;
     use interpreter::runtime::filesystem::{Filesystem, Invocation};
     let fixture = Fixture::new().await;
-    let backend = &fixture.filesystem.0;
+    let backend = &fixture.filesystem;
     let root = fixture.filesystem.vfs().root();
     let private = ".git-submilli-recovery";
     std::fs::write(root.join(private).join("secret"), b"private").unwrap();
@@ -811,55 +798,59 @@ async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
     assert!(found);
 }
 
-fn replay_inputs() -> &'static std::sync::Mutex<std::collections::HashMap<String, ReplayInput>> {
-    static INPUTS: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<String, ReplayInput>>,
-    > = std::sync::OnceLock::new();
-    INPUTS.get_or_init(Default::default)
+// A compact test-case matrix; production operations have no dispatcher.
+#[derive(Clone)]
+enum TestCall {
+    Write { path: String, content: Vec<u8> },
+    Append { path: String, content: Vec<u8> },
+    Remove { path: String },
+    CreateDirectory { path: String },
 }
-fn remember_input(bytes: &[u8]) -> Content {
-    let input = ReplayInput::bytes(uuid::Uuid::new_v4().to_string(), bytes.to_vec()).unwrap();
-    let content = input.content();
-    replay_inputs()
-        .lock()
-        .unwrap()
-        .insert(content.id.clone(), input);
-    content
-}
-fn supplied(request: &Mutation) -> Option<ReplayInput> {
-    request
-        .content()
-        .and_then(|content| replay_inputs().lock().unwrap().get(&content.id).cloned())
-}
-impl DurableFilesystem {
-    async fn execute_replayed(
+#[async_trait::async_trait]
+trait CallTestCase {
+    async fn call(&self, id: &str, call: TestCall) -> Result<Outcome, FilesystemError>;
+    async fn listing(
         &self,
         id: &str,
-        request: Mutation,
-    ) -> Result<Outcome, FilesystemError> {
-        match supplied(&request) {
-            Some(input) => self.execute_with_input(id, request, input).await,
-            None => self.execute(id, request).await,
-        }
+        path: &str,
+        recursive: bool,
+    ) -> Result<
+        Box<dyn interpreter::runtime::filesystem::DirectoryReader>,
+        interpreter::runtime::filesystem::FilesystemError,
+    >;
+}
+#[async_trait::async_trait]
+impl CallTestCase for DurableFilesystem {
+    async fn listing(
+        &self,
+        id: &str,
+        path: &str,
+        recursive: bool,
+    ) -> Result<
+        Box<dyn interpreter::runtime::filesystem::DirectoryReader>,
+        interpreter::runtime::filesystem::FilesystemError,
+    > {
+        let invocation = interpreter::runtime::filesystem::Invocation {
+            operation: Some(id.to_owned().into()),
+            ..Default::default()
+        };
+        interpreter::runtime::filesystem::Filesystem::open_directory(
+            self,
+            &invocation,
+            path,
+            recursive,
+            &interpreter::runtime::limits::TenantLimits::new(64 << 20),
+        )
+        .await
     }
 
-    async fn write_replayed_chunk(
-        &self,
-        resource: &str,
-        chunk: &str,
-        content: Content,
-    ) -> Result<(), FilesystemError> {
-        use submilli_durable::recovery::InputBytes;
-        let mut input = replay_inputs().lock().unwrap().get(&content.id).cloned();
-        let mut bytes = Vec::new();
-        input.open(&content)?.read_to_end(&mut bytes).unwrap();
-        self.write_chunk(resource, chunk, bytes).await
-    }
-    fn test_context(&self) -> &submilli_durable::filesystems::FilesystemContext {
-        self.0.test_context()
-    }
-    fn test_content(&self, request: &Mutation) -> Result<Option<ReplayInput>, FilesystemError> {
-        Ok(supplied(request))
+    async fn call(&self, id: &str, call: TestCall) -> Result<Outcome, FilesystemError> {
+        match call {
+            TestCall::Write { path, content } => self.write_bytes(id, &path, content, false).await,
+            TestCall::Append { path, content } => self.write_bytes(id, &path, content, true).await,
+            TestCall::Remove { path } => self.remove_path(id, &path).await,
+            TestCall::CreateDirectory { path } => self.create_directory(id, &path).await,
+        }
     }
 }
 
@@ -867,45 +858,55 @@ impl DurableFilesystem {
 async fn pending_write_requires_replay_bytes_and_rejects_changed_input() {
     let fixture = Fixture::new().await;
     let effect = uuid::Uuid::new_v4().to_string();
-    let input = ReplayInput::bytes(effect.clone(), b"original input payload".to_vec()).unwrap();
-    let request = Mutation::Write {
-        path: "/output".into(),
-        content: input.content(),
-    };
-    fixture
-        .filesystem
-        .test_journal()
-        .admit(fixture.filesystem.id(), &effect, &request)
-        .await
-        .unwrap();
-    let restarted = DurableFilesystem::open(
+    fail_operation_updates(&fixture, "NEW.recovery_payload IS NOT NULL").await;
+    assert!(
+        fixture
+            .filesystem
+            .write_bytes(
+                &effect,
+                "/output",
+                b"original input payload".to_vec(),
+                false
+            )
+            .await
+            .is_err()
+    );
+    clear_operation_failure(&fixture).await;
+    let restarted = open(
         fixture.filesystem.vfs().clone(),
-        fixture.filesystem.id(),
+        &fixture.run,
         fixture.database.clone(),
         fixture.context.clone(),
     )
     .await
     .unwrap();
-    assert!(matches!(
-        restarted.execute(&effect, request.clone()).await,
-        Err(FilesystemError::Recovery(RecoveryError::ReplayRequired))
-    ));
     assert!(!restarted.vfs().root().join("output").exists());
-    let wrong = ReplayInput::bytes(effect.clone(), b"changed input payload".to_vec()).unwrap();
     assert!(
         restarted
-            .execute_with_input(&effect, request.clone(), wrong)
+            .write_bytes(&effect, "/output", b"changed input payload".to_vec(), false)
             .await
             .is_err()
     );
     assert!(!restarted.vfs().root().join("output").exists());
     restarted
-        .execute_with_input(&effect, request.clone(), input)
+        .write_bytes(
+            &effect,
+            "/output",
+            b"original input payload".to_vec(),
+            false,
+        )
         .await
         .unwrap();
-    // A completed receipt needs neither input bytes nor the current pathname.
     std::fs::write(restarted.vfs().root().join("output"), b"later").unwrap();
-    restarted.execute(&effect, request).await.unwrap();
+    restarted
+        .write_bytes(
+            &effect,
+            "/output",
+            b"original input payload".to_vec(),
+            false,
+        )
+        .await
+        .unwrap();
     assert_eq!(
         std::fs::read(restarted.vfs().root().join("output")).unwrap(),
         b"later"
@@ -925,8 +926,7 @@ async fn pending_write_requires_replay_bytes_and_rejects_changed_input() {
     ] {
         assert!(!String::from_utf8_lossy(bytes).contains("original input payload"));
     }
-    let fingerprint = String::from_utf8(record.request).unwrap();
-    assert!(fingerprint.contains("sha256"));
+    assert_eq!(record.request.len(), 64, "binding and request digests only");
     drop(unit);
     let tables: Vec<String> = fixture
         .database
@@ -966,20 +966,40 @@ async fn directory_outputs_larger_than_metadata_limit_are_stored_in_sqlite() {
         .unwrap();
     }
     let resource = uuid::Uuid::new_v4().to_string();
-    let entries: Vec<_> = fixture
+    fixture
         .filesystem
-        .open_directory(&resource, "/", false, 0)
+        .listing(&resource, "/", false)
+        .await
+        .unwrap();
+    let mut unit = fixture.context.units(fixture.database.clone())()
+        .await
+        .unwrap();
+    let entries = unit
+        .get_listing(&fixture.run, &resource)
         .await
         .unwrap()
-        .collect();
+        .unwrap()
+        .content
+        .unwrap();
+    drop(unit);
     assert!(serde_json::to_vec(&entries).unwrap().len() > submilli_durable::codec::MAX_RECORD);
     std::fs::write(fixture.filesystem.vfs().root().join("later"), b"").unwrap();
-    let replay: Vec<_> = fixture
+    fixture
         .filesystem
-        .open_directory(&resource, "/", false, 0)
+        .listing(&resource, "/", false)
+        .await
+        .unwrap();
+    let mut unit = fixture.context.units(fixture.database.clone())()
+        .await
+        .unwrap();
+    let replay = unit
+        .get_listing(&fixture.run, &resource)
         .await
         .unwrap()
-        .collect();
+        .unwrap()
+        .content
+        .unwrap();
+    drop(unit);
     assert_eq!(entries, replay);
     // Replay must pay for long path strings, even when the committed observation
     // exceeds the remaining budget. Return it and settle; do not lose the result.
@@ -989,7 +1009,7 @@ async fn directory_outputs_larger_than_metadata_limit_are_stored_in_sqlite() {
         work: Some(work.clone()),
     };
     Filesystem::open_directory(
-        &fixture.filesystem.0,
+        &fixture.filesystem,
         &invocation,
         "/",
         false,
@@ -1049,18 +1069,10 @@ async fn failed_admission_does_not_stage_input_or_mutate_public_files() {
         Ok(())
     })).await.unwrap();
     let effect = uuid::Uuid::new_v4().to_string();
-    let input = ReplayInput::bytes(effect.clone(), b"private input".to_vec()).unwrap();
     assert!(
         fixture
             .filesystem
-            .execute_with_input(
-                &effect,
-                Mutation::Write {
-                    path: "/output".into(),
-                    content: input.content()
-                },
-                input
-            )
+            .write_bytes(&effect, "/output", b"private input".to_vec(), false)
             .await
             .is_err()
     );
@@ -1173,16 +1185,19 @@ async fn writer_quota_refusal_leaves_acknowledged_prefix_retryable() {
 async fn opening_existing_workspace_leaves_pending_mutation_for_explicit_retry() {
     let fixture = Fixture::new().await;
     let effect = uuid::Uuid::new_v4().to_string();
-    let request = Mutation::CreateDirectory {
+    let request = TestCall::CreateDirectory {
         path: "/pending".into(),
     };
-    fixture
-        .filesystem
-        .test_journal()
-        .admit(fixture.filesystem.id(), &effect, &request)
-        .await
-        .unwrap();
-    let opened = DurableFilesystem::open(
+    fail_operation_updates(&fixture, "NEW.recovery_payload IS NOT NULL").await;
+    assert!(
+        fixture
+            .filesystem
+            .call(&effect, request.clone())
+            .await
+            .is_err()
+    );
+    clear_operation_failure(&fixture).await;
+    let opened = open(
         fixture.filesystem.vfs().clone(),
         &fixture.run,
         fixture.database.clone(),
@@ -1192,7 +1207,7 @@ async fn opening_existing_workspace_leaves_pending_mutation_for_explicit_retry()
     .unwrap();
     assert!(!opened.vfs().root().join("pending").exists());
     drop(opened);
-    let reopened = DurableFilesystem::open(
+    let reopened = open(
         fixture.filesystem.vfs().clone(),
         fixture.filesystem.id(),
         fixture.database.clone(),
@@ -1212,13 +1227,159 @@ async fn opening_existing_workspace_leaves_pending_mutation_for_explicit_retry()
     assert!(pending.recovery_payload.is_none());
     assert!(pending.outcome.is_none());
     drop(unit);
-    reopened.execute(&effect, request.clone()).await.unwrap();
+    reopened.call(&effect, request.clone()).await.unwrap();
     assert!(reopened.vfs().root().join("pending").is_dir());
     // A repeated completed call also leaves later directory contents alone.
     std::fs::write(reopened.vfs().root().join("pending/later"), b"later").unwrap();
-    reopened.execute(&effect, request).await.unwrap();
+    reopened.call(&effect, request).await.unwrap();
     assert_eq!(
         std::fs::read(reopened.vfs().root().join("pending/later")).unwrap(),
         b"later"
     );
+}
+
+#[tokio::test]
+async fn direct_namespace_calls_reconcile_sql_gaps_and_preserve_later_paths() {
+    for kind in ["move", "remove", "mkdir"] {
+        let fixture = Fixture::new().await;
+        let root = fixture.filesystem.vfs().root();
+        std::fs::write(root.join("source"), b"original").unwrap();
+        std::fs::write(root.join("destination"), b"old destination").unwrap();
+        let effect = uuid::Uuid::new_v4().to_string();
+        fail_operation_updates(&fixture, "NEW.state='done'").await;
+        assert!(
+            namespace_call(&fixture.filesystem, kind, &effect)
+                .await
+                .is_err()
+        );
+        clear_operation_failure(&fixture).await;
+        let reopened = open(
+            fixture.filesystem.vfs().clone(),
+            &fixture.run,
+            fixture.database.clone(),
+            fixture.context.clone(),
+        )
+        .await
+        .unwrap();
+        namespace_call(&reopened, kind, &effect).await.unwrap();
+        match kind {
+            "move" => {
+                assert!(!root.join("source").exists());
+                assert_eq!(
+                    std::fs::read(root.join("destination")).unwrap(),
+                    b"original"
+                );
+            }
+            "remove" => assert!(!root.join("source").exists()),
+            "mkdir" => assert!(root.join("directory").is_dir()),
+            _ => unreachable!(),
+        }
+        std::fs::write(root.join("source"), b"later source").unwrap();
+        std::fs::write(root.join("destination"), b"later destination").unwrap();
+        if kind == "mkdir" {
+            std::fs::write(root.join("directory/child"), b"later child").unwrap();
+        }
+        namespace_call(&reopened, kind, &effect).await.unwrap();
+        assert_eq!(std::fs::read(root.join("source")).unwrap(), b"later source");
+        assert_eq!(
+            std::fs::read(root.join("destination")).unwrap(),
+            b"later destination"
+        );
+        assert!(
+            reopened
+                .write_bytes(&effect, "/source", b"collision".to_vec(), false)
+                .await
+                .is_err()
+        );
+        fixture.assert_no_pending_work().await;
+    }
+}
+
+async fn namespace_call(
+    filesystem: &DurableFilesystem,
+    kind: &str,
+    effect: &str,
+) -> Result<Outcome, FilesystemError> {
+    match kind {
+        "move" => {
+            filesystem
+                .move_path(effect, "/source", "/destination")
+                .await
+        }
+        "remove" => filesystem.remove_path(effect, "/source").await,
+        "mkdir" => filesystem.create_directory(effect, "/directory").await,
+        _ => unreachable!(),
+    }
+}
+
+#[tokio::test]
+async fn empty_writer_close_records_read_only_refusal_without_staging() {
+    use interpreter::runtime::filesystem::{Filesystem, FilesystemError as PortError};
+    use interpreter::runtime::vfs::{Access, MountSpec};
+    let fixture = Fixture::new().await;
+    let read_only = fixture.root.path().join("read-only");
+    std::fs::create_dir(&read_only).unwrap();
+    let vfs = fixture
+        .filesystem
+        .vfs()
+        .clone()
+        .with_mount(MountSpec {
+            guest_path: "/read-only".into(),
+            host: read_only.clone(),
+            volume: "read-only".into(),
+            access: Access::ReadOnly,
+            quota: None,
+        })
+        .unwrap();
+    let filesystem = open(
+        vfs.clone(),
+        &fixture.run,
+        fixture.database.clone(),
+        fixture.context.clone(),
+    )
+    .await
+    .unwrap();
+    let opening = resource_invocation();
+    let closing = resource_invocation();
+    let mut writer = Filesystem::open_writer(&filesystem, &opening, "/read-only/file")
+        .await
+        .unwrap();
+    let descriptor = writer.descriptor().unwrap();
+    let first = writer.close(&closing).await.unwrap_err();
+    assert!(matches!(first, PortError::Rejected(_)), "{first}");
+    assert!(writer.is_closed());
+    drop(writer);
+    drop(filesystem);
+    let reopened = open(
+        vfs,
+        &fixture.run,
+        fixture.database.clone(),
+        fixture.context.clone(),
+    )
+    .await
+    .unwrap();
+    let mut writer = Filesystem::restore_writer(&reopened, descriptor.clone()).unwrap();
+    let replay = writer.close(&closing).await.unwrap_err();
+    assert_eq!(first.to_string(), replay.to_string());
+    assert!(writer.is_closed());
+    assert!(!read_only.join("file").exists());
+    let staging = fixture
+        .filesystem
+        .vfs()
+        .root()
+        .join(".git-submilli-recovery")
+        .join(&fixture.run)
+        .join(format!("writer-{}", descriptor.id));
+    assert!(!staging.exists());
+    let empty = resource_invocation();
+    let mut writer = Filesystem::open_writer(&reopened, &empty, "/empty")
+        .await
+        .unwrap();
+    writer.close(&resource_invocation()).await.unwrap();
+    assert!(writer.is_closed());
+    assert_eq!(
+        std::fs::read(reopened.vfs().root().join("empty")).unwrap(),
+        b""
+    );
+    fixture.assert_no_pending_work().await;
 }

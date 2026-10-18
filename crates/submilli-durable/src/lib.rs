@@ -1,10 +1,14 @@
-//! Durable filesystem operations with replay-supplied inputs.
-//! Persistence is supplied by the embedding application.
-pub mod recovery;
-pub mod sealing;
+//! Idempotent filesystem operations with application-owned persistence.
+pub mod codec;
+pub mod filesystem;
+mod io;
+mod readers;
 pub mod unit_of_work;
+mod writers;
+pub use filesystem::{DurableFilesystem, FilesystemContext, FilesystemError};
+pub use io::RecoveryError;
+pub use readers::{DirectoryEntry, FilesystemReader, ReaderPosition};
 pub use unit_of_work::{UnitFactory, UnitOfWork};
-
 #[cfg(feature = "test-support")]
 static CHECKPOINT: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
 #[cfg(feature = "test-support")]
@@ -17,10 +21,3 @@ pub(crate) fn checkpoint(_point: &str) {
         callback(_point);
     }
 }
-pub mod codec;
-pub mod filesystems;
-pub mod journal;
-pub mod operations;
-pub mod state;
-
-pub mod record_codec;

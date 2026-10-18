@@ -1577,7 +1577,7 @@ fn begin_invocation(
 ) -> wasmtime::Result<crate::runtime::filesystem::Invocation> {
     let mut invocation = crate::runtime::filesystem::Invocation {
         operation: Some(
-            crate::runtime::filesystem::EffectId::stub()
+            crate::runtime::durable::EffectId::stub()
                 .map_err(crate::runtime::host::fatal_host_error)?,
         ),
         work: None,
