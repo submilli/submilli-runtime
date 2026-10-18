@@ -31,7 +31,7 @@ Durable mutation and resource calls require canonical UUID operation identities
 from the caller. Reusing an identity with different arguments fails. A trace
 identifier is not an operation identity. The embedding runtime still needs the
 execution-history sequencer before it can assign identities to successive guest
-calls; a fixed invocation is useful only for an isolated operation and its retry.
+calls; a fixed effect ID is useful only for an isolated operation and its retry.
 Ordinary server and CLI runs continue to use the native backend.
 
 This component does not discover pending work or run recovery at server startup.

@@ -1,10 +1,12 @@
 //! Default filesystem implementation over the contained VFS.
+use super::durable::EffectId;
 use super::filesystem::{
     DirectoryEntry, DirectoryReader, FileReader, FileWriter, Filesystem, FilesystemError,
-    FilesystemInfo, Invocation, MutationBudget, ReadItem, ReadOutput, ReadPosition, ReaderOptions,
+    FilesystemInfo, MutationBudget, ReadItem, ReadOutput, ReadPosition, ReaderOptions,
     bounded_read,
 };
 use super::fs::{self, ContainError, ContentPath, FileIdentity, LinkPath, MAX_REMOVE_ENTRIES};
+use super::fuel::WorkBudget;
 use super::vfs::Placement;
 use super::{DiskQuota, Holder, OpenFileGuard, QuotaCharge, QuotaExceeded, Vfs};
 use crate::stdlib::shared::{contain_trap, quota_refusal, write_target_trap};
@@ -39,7 +41,8 @@ impl Filesystem for DefaultFilesystem {
     }
     async fn metadata(
         &self,
-        _invocation: &Invocation,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
         path: &str,
         follow: bool,
     ) -> Result<cap_std::fs::Metadata, FilesystemError> {
@@ -51,7 +54,8 @@ impl Filesystem for DefaultFilesystem {
     }
     async fn read(
         &self,
-        _invocation: &Invocation,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
         path: &str,
         offset: u64,
         maximum_bytes: u64,
@@ -61,7 +65,8 @@ impl Filesystem for DefaultFilesystem {
     }
     async fn write(
         &self,
-        _: &Invocation,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
         path: &str,
         bytes: Vec<u8>,
         append: bool,
@@ -96,7 +101,8 @@ impl Filesystem for DefaultFilesystem {
     }
     async fn mkdir(
         &self,
-        _: &Invocation,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
         path: &str,
         recursive: bool,
     ) -> Result<(), FilesystemError> {
@@ -110,7 +116,8 @@ impl Filesystem for DefaultFilesystem {
     }
     async fn remove(
         &self,
-        _: &Invocation,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
         path: &str,
         recursive: bool,
         budget: &mut dyn MutationBudget,
@@ -119,7 +126,8 @@ impl Filesystem for DefaultFilesystem {
     }
     async fn move_entry(
         &self,
-        _: &Invocation,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
         from: &str,
         to: &str,
         budget: &mut dyn MutationBudget,
@@ -128,7 +136,8 @@ impl Filesystem for DefaultFilesystem {
     }
     async fn copy(
         &self,
-        _: &Invocation,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
         from: &str,
         to: &str,
         recursive: bool,
@@ -138,7 +147,8 @@ impl Filesystem for DefaultFilesystem {
     }
     async fn open_reader(
         &self,
-        _: &Invocation,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
         path: &str,
         options: ReaderOptions,
     ) -> Result<Box<dyn FileReader>, FilesystemError> {
@@ -157,7 +167,8 @@ impl Filesystem for DefaultFilesystem {
     }
     async fn open_directory(
         &self,
-        _: &Invocation,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
         path: &str,
         recursive: bool,
         _: &super::limits::TenantLimits,
@@ -183,7 +194,8 @@ impl Filesystem for DefaultFilesystem {
     }
     async fn open_writer(
         &self,
-        _: &Invocation,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
         path: &str,
     ) -> Result<Box<dyn FileWriter>, FilesystemError> {
         let path = fs::resolve_content(&self.vfs, self.vfs.cwd(), path)?;
@@ -234,15 +246,26 @@ struct DefaultReader {
 impl FileReader for DefaultReader {
     async fn next(
         &mut self,
-        invocation: &Invocation,
+        _effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         limits: &super::limits::TenantLimits,
     ) -> Result<ReadOutput, FilesystemError> {
         let Some(file) = &mut self.file else {
             return empty_read(limits);
         };
-        read_item(file, &self.options, &mut self.position, invocation, limits)
+        read_item(
+            file,
+            &self.options,
+            &mut self.position,
+            work.as_deref(),
+            limits,
+        )
     }
-    async fn close(&mut self, _: &Invocation) -> Result<(), FilesystemError> {
+    async fn close(
+        &mut self,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
+    ) -> Result<(), FilesystemError> {
         self.file = None;
         self._held = None;
         self.position.closed = true;
@@ -257,7 +280,7 @@ pub fn read_item(
     file: &mut (impl Read + Seek),
     options: &ReaderOptions,
     position: &mut ReadPosition,
-    invocation: &Invocation,
+    work: Option<&WorkBudget>,
     limits: &super::limits::TenantLimits,
 ) -> Result<ReadOutput, FilesystemError> {
     if position.closed {
@@ -267,10 +290,10 @@ pub fn read_item(
     let mut next = position.clone();
     let result = match options {
         ReaderOptions::Bytes { chunk_size } => {
-            read_chunk(file, *chunk_size, &mut next, invocation, limits)
+            read_chunk(file, *chunk_size, &mut next, work, limits)
         }
         ReaderOptions::Lines { maximum_bytes } => {
-            read_line(file, *maximum_bytes, &mut next, invocation, limits)
+            read_line(file, *maximum_bytes, &mut next, work, limits)
         }
     }?;
     *position = next;
@@ -290,11 +313,11 @@ fn memory(
         .map_err(|e| FilesystemError::Execution(wasmtime::Error::new(e)))
 }
 fn read_cost(
-    invocation: &Invocation,
+    work: Option<&WorkBudget>,
     rate: super::fuel::Rate,
     bytes: usize,
 ) -> Result<(), FilesystemError> {
-    if let Some(work) = &invocation.work {
+    if let Some(work) = work {
         // The read has happened; exhaustion cannot discard its result.
         work.before_effect();
         work.charge(rate, bytes as u64)?;
@@ -305,7 +328,7 @@ fn read_chunk(
     file: &mut impl Read,
     size: usize,
     position: &mut ReadPosition,
-    invocation: &Invocation,
+    work: Option<&WorkBudget>,
     limits: &super::limits::TenantLimits,
 ) -> Result<ReadOutput, FilesystemError> {
     if size == 0 {
@@ -313,7 +336,7 @@ fn read_chunk(
             "chunk size must be positive".into(),
         ));
     }
-    if let Some(work) = &invocation.work {
+    if let Some(work) = work {
         work.charge(super::fuel::COPY, size as u64)?;
     }
     let charge = memory(limits, size as u64)?;
@@ -325,7 +348,7 @@ fn read_chunk(
     let mut filled = 0;
     while filled < size {
         let count = file.read(&mut bytes[filled..])?;
-        read_cost(invocation, super::fuel::IO, count)?;
+        read_cost(work, super::fuel::IO, count)?;
         if count == 0 {
             break;
         }
@@ -345,7 +368,7 @@ fn read_line(
     file: &mut impl Read,
     maximum: u64,
     position: &mut ReadPosition,
-    invocation: &Invocation,
+    work: Option<&WorkBudget>,
     limits: &super::limits::TenantLimits,
 ) -> Result<ReadOutput, FilesystemError> {
     use std::io::BufRead;
@@ -356,14 +379,14 @@ fn read_line(
         let needs_read = reader.buffer().is_empty();
         let available = reader.fill_buf()?;
         if needs_read {
-            read_cost(invocation, super::fuel::IO, available.len())?;
+            read_cost(work, super::fuel::IO, available.len())?;
         }
         if available.is_empty() {
             break;
         }
         let newline = available.iter().position(|&b| b == b'\n');
         let count = newline.map_or(available.len(), |i| i + 1);
-        read_cost(invocation, super::fuel::SCAN, count)?;
+        read_cost(work, super::fuel::SCAN, count)?;
         let length = bytes.len().checked_add(count).ok_or_else(|| {
             FilesystemError::Execution(super::host::range_error(
                 "fs.lines: line length exceeds host capacity",
@@ -437,7 +460,8 @@ struct DefaultDirectory(Option<ContainedWalk>);
 impl DirectoryReader for DefaultDirectory {
     async fn next_entry(
         &mut self,
-        _: &Invocation,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
         _: &super::limits::TenantLimits,
     ) -> Result<Option<DirectoryEntry>, FilesystemError> {
         Ok(self.0.as_mut().and_then(ContainedWalk::next_entry))
@@ -447,7 +471,8 @@ impl DirectoryReader for DefaultDirectory {
     }
     async fn close(
         &mut self,
-        _: &Invocation,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
         _: &super::limits::TenantLimits,
     ) -> Result<(), FilesystemError> {
         self.0 = None;
@@ -908,10 +933,19 @@ impl FileWriter for DefaultWriter {
     fn is_closed(&self) -> bool {
         self.open.is_none()
     }
-    async fn write(&mut self, _: &Invocation, bytes: Vec<u8>) -> Result<(), FilesystemError> {
+    async fn write(
+        &mut self,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
+        bytes: Vec<u8>,
+    ) -> Result<(), FilesystemError> {
         self.write_bytes(&bytes).map_err(Into::into)
     }
-    async fn close(&mut self, _: &Invocation) -> Result<(), FilesystemError> {
+    async fn close(
+        &mut self,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
+    ) -> Result<(), FilesystemError> {
         DefaultWriter::close(self).map_err(Into::into)
     }
 }
@@ -1406,26 +1440,43 @@ mod tests {
         use super::*;
         use crate::runtime::limits::TenantLimits;
         let limits = TenantLimits::new(1 << 20);
-        let invocation = Invocation {
-            work: Some(Arc::new(crate::runtime::fuel::WorkBudget::new(u64::MAX))),
-            ..Default::default()
-        };
+        let work = Arc::new(WorkBudget::new(u64::MAX));
         let mut file = std::io::Cursor::new(b"\xef\xbb\xbfhi\r\n\xff\n");
         let options = ReaderOptions::Lines { maximum_bytes: 32 };
         let mut position = ReadPosition::default();
-        let output = read_item(&mut file, &options, &mut position, &invocation, &limits).unwrap();
+        let output = read_item(
+            &mut file,
+            &options,
+            &mut position,
+            Some(work.as_ref()),
+            &limits,
+        )
+        .unwrap();
         assert!(matches!(&output.item, Some(ReadItem::Line(line)) if line == "hi"));
         assert_eq!(position.offset, 7);
         assert!(limits.host_attached_bytes() > 0);
         drop(output);
-        let output = read_item(&mut file, &options, &mut position, &invocation, &limits).unwrap();
+        let output = read_item(
+            &mut file,
+            &options,
+            &mut position,
+            Some(work.as_ref()),
+            &limits,
+        )
+        .unwrap();
         assert!(matches!(&output.item, Some(ReadItem::Line(line)) if line == "\u{fffd}"));
         drop(output);
         assert!(
-            read_item(&mut file, &options, &mut position, &invocation, &limits)
-                .unwrap()
-                .item
-                .is_none()
+            read_item(
+                &mut file,
+                &options,
+                &mut position,
+                Some(work.as_ref()),
+                &limits
+            )
+            .unwrap()
+            .item
+            .is_none()
         );
         assert_eq!(limits.host_attached_bytes(), 0);
     }
@@ -1439,30 +1490,18 @@ mod tests {
         let mut file = std::io::Cursor::new(b"abcde");
         let options = ReaderOptions::Lines { maximum_bytes: 4 };
         for _ in 0..2 {
-            let error = read_item(
-                &mut file,
-                &options,
-                &mut position,
-                &Invocation::default(),
-                &limits,
-            )
-            .err()
-            .unwrap();
+            let error = read_item(&mut file, &options, &mut position, None, &limits)
+                .err()
+                .unwrap();
             assert!(error.to_string().contains("maxReadSize"));
             assert_eq!(position.offset, 0);
             assert_eq!(limits.host_attached_bytes(), 0);
         }
         let limits = TenantLimits::new(8192 + 4);
         let mut file = std::io::Cursor::new(b"abcd");
-        let error = read_item(
-            &mut file,
-            &options,
-            &mut position,
-            &Invocation::default(),
-            &limits,
-        )
-        .err()
-        .unwrap();
+        let error = read_item(&mut file, &options, &mut position, None, &limits)
+            .err()
+            .unwrap();
         assert!(
             matches!(error, FilesystemError::Execution(ref e) if e.is::<crate::runtime::limits::MemoryCapExceeded>())
         );
@@ -1490,10 +1529,6 @@ mod tests {
         }
         let limits = TenantLimits::new(1 << 20);
         let work = Arc::new(crate::runtime::fuel::WorkBudget::new(u64::MAX));
-        let invocation = Invocation {
-            work: Some(work.clone()),
-            ..Default::default()
-        };
         let mut file = FailsAfterOne(std::io::Cursor::new(*b"ab"));
         let mut position = ReadPosition::default();
         assert!(
@@ -1501,7 +1536,7 @@ mod tests {
                 &mut file,
                 &ReaderOptions::Bytes { chunk_size: 2 },
                 &mut position,
-                &invocation,
+                Some(work.as_ref()),
                 &limits
             )
             .is_err()
@@ -1516,10 +1551,6 @@ mod tests {
         use super::*;
         let limits = crate::runtime::limits::TenantLimits::new(1 << 20);
         let work = Arc::new(crate::runtime::fuel::WorkBudget::new(0));
-        let invocation = Invocation {
-            work: Some(work.clone()),
-            ..Default::default()
-        };
         let mut file = std::io::Cursor::new(b"line\n");
         let mut position = ReadPosition::default();
         assert!(
@@ -1527,7 +1558,7 @@ mod tests {
                 &mut file,
                 &ReaderOptions::Lines { maximum_bytes: 32 },
                 &mut position,
-                &invocation,
+                Some(work.as_ref()),
                 &limits
             )
             .unwrap()

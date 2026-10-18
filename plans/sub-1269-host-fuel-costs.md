@@ -1476,6 +1476,8 @@ The new formulas should replace these ad-hoc units with rated classes rather tha
 
 ### `submilli:fs` — operations
 
+Filesystem and resource calls pass `effect_id` and optional `work` directly. Host callers create a `WorkBudget` from the remaining fuel and settle the same budget after effectful calls, including failures. The default logical-read helpers borrow that budget; durable workers retain an `Arc` while they finish owned work. This interface change preserves the formulas and admission/settlement timing below.
+
 The filesystem backend supplies its additional path admission cost through `Filesystem::path_cost`; the host gate charges it before calling the backend. The native backend adds zero. The durable backend adds `SCAN(p) + SYSCALL(d)` before resolving aliases into private recovery state. Durable directory traversal charges entries that it skips, including recovery directories. The async filesystem recovery adapter is below the host ABI; its caller admits work before effects and settles publication work before returning a durable result.
 
 | Function | What the host does | Formula | Charge point | Notes |

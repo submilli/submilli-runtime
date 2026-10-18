@@ -52,13 +52,11 @@ async fn crash_child() {
             .open_reader(&RUN.into(), "/file", byte_options())
             .await
             .unwrap();
-        let invocation = interpreter::runtime::filesystem::Invocation {
-            operation: Some(EFFECT.to_owned().into()),
-            work: None,
-        };
+        let effect_id: EffectId = EFFECT.to_owned().into();
         reader
             .next(
-                &invocation,
+                &effect_id,
+                None,
                 &interpreter::runtime::limits::TenantLimits::new(1 << 20),
             )
             .await
@@ -67,26 +65,22 @@ async fn crash_child() {
         use interpreter::runtime::filesystem::Filesystem;
         std::fs::write(filesystem.vfs().root().join("a"), b"a").unwrap();
         std::fs::write(filesystem.vfs().root().join("b"), b"b").unwrap();
-        let opening = interpreter::runtime::filesystem::Invocation {
-            operation: Some(RUN.to_owned().into()),
-            work: None,
-        };
+        let opening: EffectId = RUN.to_owned().into();
         let mut listing = Filesystem::open_directory(
             &filesystem,
             &opening,
+            None,
             "/",
             false,
             &interpreter::runtime::limits::TenantLimits::new(64 << 20),
         )
         .await
         .unwrap();
-        let invocation = interpreter::runtime::filesystem::Invocation {
-            operation: Some(EFFECT.to_owned().into()),
-            work: None,
-        };
+        let effect_id: EffectId = EFFECT.to_owned().into();
         listing
             .next_entry(
-                &invocation,
+                &effect_id,
+                None,
                 &interpreter::runtime::limits::TenantLimits::new(64 << 20),
             )
             .await
@@ -248,9 +242,7 @@ async fn writer_restart_repairs_unacknowledged_output_tail_and_close() {
 
 #[tokio::test]
 async fn resource_progress_survives_process_death_before_framework_completion() {
-    use interpreter::runtime::filesystem::{
-        Filesystem, Invocation, ResourceDescriptor, ResourceKind,
-    };
+    use interpreter::runtime::filesystem::{Filesystem, ResourceDescriptor, ResourceKind};
     for (kind, points) in [
         ("reader", ["reader-open", "reader-read", "reader-progress"]),
         (
@@ -274,10 +266,7 @@ async fn resource_progress_survives_process_death_before_framework_completion() 
             )
             .await
             .unwrap();
-            let invocation = Invocation {
-                operation: Some(EFFECT.to_owned().into()),
-                work: None,
-            };
+            let effect_id: EffectId = EFFECT.to_owned().into();
             if kind == "reader" {
                 let descriptor = ResourceDescriptor {
                     run_id: RUN.into(),
@@ -287,13 +276,18 @@ async fn resource_progress_survives_process_death_before_framework_completion() 
                 let mut reader = Filesystem::restore_reader(&filesystem, descriptor).unwrap();
                 let limits = interpreter::runtime::limits::TenantLimits::new(1 << 20);
                 assert_eq!(
-                    read_bytes(reader.next(&invocation, &limits).await.unwrap()).unwrap(),
+                    read_bytes(reader.next(&effect_id, None, &limits).await.unwrap()).unwrap(),
                     b"abc",
                     "{point}"
                 );
                 assert_eq!(
-                    read_bytes(reader.next(&resource_invocation(), &limits).await.unwrap())
-                        .unwrap(),
+                    read_bytes(
+                        reader
+                            .next(&resource_effect_id(), None, &limits)
+                            .await
+                            .unwrap()
+                    )
+                    .unwrap(),
                     b"def"
                 );
             } else {
@@ -306,7 +300,8 @@ async fn resource_progress_survives_process_death_before_framework_completion() 
                 assert_eq!(
                     listing
                         .next_entry(
-                            &invocation,
+                            &effect_id,
+                            None,
                             &interpreter::runtime::limits::TenantLimits::new(64 << 20)
                         )
                         .await
@@ -319,7 +314,8 @@ async fn resource_progress_survives_process_death_before_framework_completion() 
                 assert_eq!(
                     listing
                         .next_entry(
-                            &resource_invocation(),
+                            &resource_effect_id(),
+                            None,
                             &interpreter::runtime::limits::TenantLimits::new(64 << 20)
                         )
                         .await

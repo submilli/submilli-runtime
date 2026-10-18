@@ -337,11 +337,8 @@ async fn writer_chunks_survive_pause_and_duplicate_close_never_republishes() {
 fn byte_options() -> interpreter::runtime::filesystem::ReaderOptions {
     interpreter::runtime::filesystem::ReaderOptions::Bytes { chunk_size: 3 }
 }
-fn resource_invocation() -> interpreter::runtime::filesystem::Invocation {
-    interpreter::runtime::filesystem::Invocation {
-        operation: Some(uuid::Uuid::new_v4().to_string().into()),
-        work: None,
-    }
+fn resource_effect_id() -> EffectId {
+    EffectId::stub().unwrap()
 }
 fn read_bytes(output: interpreter::runtime::filesystem::ReadOutput) -> Option<Vec<u8>> {
     match output.item {
@@ -370,7 +367,13 @@ async fn reader_reopen_refuses_a_replaced_path() {
     let descriptor = reader.descriptor().unwrap();
     let limits = interpreter::runtime::limits::TenantLimits::new(1 << 20);
     assert_eq!(
-        read_bytes(reader.next(&resource_invocation(), &limits).await.unwrap()).unwrap(),
+        read_bytes(
+            reader
+                .next(&resource_effect_id(), None, &limits)
+                .await
+                .unwrap()
+        )
+        .unwrap(),
         b"ori"
     );
     drop(reader);
@@ -379,7 +382,7 @@ async fn reader_reopen_refuses_a_replaced_path() {
     let mut restored = Filesystem::restore_reader(&fixture.filesystem, descriptor).unwrap();
     assert!(
         restored
-            .next(&resource_invocation(), &limits)
+            .next(&resource_effect_id(), None, &limits)
             .await
             .is_err()
     );
@@ -400,7 +403,7 @@ async fn directory_snapshot_restores_order_after_directory_changes() {
     let limits = interpreter::runtime::limits::TenantLimits::new(64 << 20);
     assert_eq!(
         listing
-            .next_entry(&resource_invocation(), &limits)
+            .next_entry(&resource_effect_id(), None, &limits)
             .await
             .unwrap()
             .unwrap()
@@ -421,7 +424,7 @@ async fn directory_snapshot_restores_order_after_directory_changes() {
     let mut listing = resumed.listing(&resource, "/tree", true).await.unwrap();
     assert_eq!(
         listing
-            .next_entry(&resource_invocation(), &limits)
+            .next_entry(&resource_effect_id(), None, &limits)
             .await
             .unwrap()
             .unwrap()
@@ -430,7 +433,7 @@ async fn directory_snapshot_restores_order_after_directory_changes() {
     );
     assert!(
         listing
-            .next_entry(&resource_invocation(), &limits)
+            .next_entry(&resource_effect_id(), None, &limits)
             .await
             .unwrap()
             .is_none()
@@ -445,13 +448,11 @@ async fn interpreter_uses_durable_backend_and_replay_does_not_repeat_append() {
         function main(): void { appendText("/port.txt", "once"); }"#;
     run_backend(&fixture, source).await.unwrap();
     let operation = sole_operation_id(&fixture).await;
-    let invocation = interpreter::runtime::filesystem::Invocation {
-        operation: Some(operation.clone()),
-        ..Default::default()
-    };
+    let effect_id: EffectId = operation.clone();
     interpreter::runtime::filesystem::Filesystem::write(
         &fixture.filesystem,
-        &invocation,
+        &effect_id,
+        None,
         "/port.txt",
         b"once".to_vec(),
         true,
@@ -613,13 +614,11 @@ async fn durable_append_and_eager_listing_admit_their_own_fuel() {
     assert!(error.is::<wasmtime::Trap>(), "{error}");
     assert_eq!(std::fs::read(root.join("large")).unwrap(), original);
     // Retry the admitted effect directly; the interpreter stub does not replay IDs.
-    let invocation = interpreter::runtime::filesystem::Invocation {
-        operation: Some(sole_operation_id(&fixture).await),
-        ..Default::default()
-    };
+    let effect_id: EffectId = sole_operation_id(&fixture).await;
     interpreter::runtime::filesystem::Filesystem::write(
         &fixture.filesystem,
-        &invocation,
+        &effect_id,
+        None,
         "/large",
         Vec::new(),
         true,
@@ -651,13 +650,11 @@ async fn durable_quota_scan_stops_before_mutation_and_resumes_with_fuel() {
         .unwrap_err();
     assert!(error.is::<wasmtime::Trap>(), "{error}");
     assert!(!root.join("created").exists());
-    let invocation = interpreter::runtime::filesystem::Invocation {
-        operation: Some(sole_operation_id(&fixture).await),
-        ..Default::default()
-    };
+    let effect_id: EffectId = sole_operation_id(&fixture).await;
     interpreter::runtime::filesystem::Filesystem::mkdir(
         &fixture.filesystem,
-        &invocation,
+        &effect_id,
+        None,
         "/created",
         false,
     )
@@ -670,7 +667,7 @@ async fn durable_quota_scan_stops_before_mutation_and_resumes_with_fuel() {
 #[tokio::test]
 async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
     use interpreter::runtime::default_filesystem::DefaultFilesystem;
-    use interpreter::runtime::filesystem::{Filesystem, Invocation};
+    use interpreter::runtime::filesystem::Filesystem;
     let fixture = Fixture::new().await;
     let backend = &fixture.filesystem;
     let root = fixture.filesystem.vfs().root();
@@ -684,48 +681,47 @@ async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
         "/alias/missing/child",
     ] {
         assert!(
-            Filesystem::metadata(backend, &resource_invocation(), path, true)
+            Filesystem::metadata(backend, &resource_effect_id(), None, path, true)
                 .await
                 .is_err()
         );
         assert!(
-            Filesystem::metadata(backend, &resource_invocation(), path, false)
+            Filesystem::metadata(backend, &resource_effect_id(), None, path, false)
                 .await
                 .is_err()
         );
         assert!(
-            Filesystem::read(backend, &resource_invocation(), path, 0, 100)
+            Filesystem::read(backend, &resource_effect_id(), None, path, 0, 100)
                 .await
                 .is_err()
         );
-        let invocation = Invocation {
-            operation: Some(uuid::Uuid::new_v4().to_string().into()),
-            ..Default::default()
-        };
+        let effect_id: EffectId = uuid::Uuid::new_v4().to_string().into();
         assert!(
-            Filesystem::open_reader(backend, &invocation, path, byte_options())
+            Filesystem::open_reader(backend, &effect_id, None, path, byte_options())
                 .await
                 .is_err()
         );
-        let invocation = Invocation {
-            operation: Some(uuid::Uuid::new_v4().to_string().into()),
-            ..Default::default()
-        };
+        let effect_id: EffectId = uuid::Uuid::new_v4().to_string().into();
         assert!(
-            Filesystem::write(backend, &invocation, path, b"overwrite".to_vec(), false)
-                .await
-                .is_err()
+            Filesystem::write(
+                backend,
+                &effect_id,
+                None,
+                path,
+                b"overwrite".to_vec(),
+                false
+            )
+            .await
+            .is_err()
         );
     }
     for path in ["/.git-submilli-recovery", "/alias"] {
-        let invocation = Invocation {
-            operation: Some(uuid::Uuid::new_v4().to_string().into()),
-            ..Default::default()
-        };
+        let effect_id: EffectId = uuid::Uuid::new_v4().to_string().into();
         assert!(
             Filesystem::open_directory(
                 backend,
-                &invocation,
+                &effect_id,
+                None,
                 path,
                 true,
                 &interpreter::runtime::limits::TenantLimits::new(64 << 20)
@@ -734,13 +730,11 @@ async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
             .is_err()
         );
     }
-    let invocation = Invocation {
-        operation: Some(uuid::Uuid::new_v4().to_string().into()),
-        ..Default::default()
-    };
+    let effect_id: EffectId = uuid::Uuid::new_v4().to_string().into();
     let mut listing = Filesystem::open_directory(
         backend,
-        &invocation,
+        &effect_id,
+        None,
         "/",
         true,
         &interpreter::runtime::limits::TenantLimits::new(64 << 20),
@@ -749,7 +743,8 @@ async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
     .unwrap();
     while let Some(entry) = listing
         .next_entry(
-            &resource_invocation(),
+            &resource_effect_id(),
+            None,
             &interpreter::runtime::limits::TenantLimits::new(64 << 20),
         )
         .await
@@ -758,7 +753,7 @@ async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
         assert!(!entry.path.contains(private));
     }
     assert_eq!(
-        Filesystem::read(backend, &resource_invocation(), "/public", 0, 100)
+        Filesystem::read(backend, &resource_effect_id(), None, "/public", 0, 100)
             .await
             .unwrap(),
         b"public"
@@ -770,13 +765,11 @@ async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
 
     // Preflight cost estimation must not inspect protected contents either.
     std::fs::write(root.join(private).join("large"), vec![0; 1024 * 1024]).unwrap();
-    let invocation = Invocation {
-        operation: Some(uuid::Uuid::new_v4().to_string().into()),
-        work: Some(Arc::new(interpreter::runtime::fuel::WorkBudget::new(
-            10_000,
-        ))),
-    };
-    let error = Filesystem::mkdir(backend, &invocation, "/alias/large", false)
+    let effect_id: EffectId = uuid::Uuid::new_v4().to_string().into();
+    let work_budget = Some(Arc::new(interpreter::runtime::fuel::WorkBudget::new(
+        10_000,
+    )));
+    let error = Filesystem::mkdir(backend, &effect_id, work_budget, "/alias/large", false)
         .await
         .unwrap_err();
     assert!(
@@ -791,14 +784,22 @@ async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
     // Production callers must keep retained volumes assigned to their durable backend.
     let native = DefaultFilesystem::new(Vfs::external(root.to_owned()).unwrap());
     assert_eq!(
-        Filesystem::read(&native, &resource_invocation(), "/alias/secret", 0, 100)
-            .await
-            .unwrap(),
+        Filesystem::read(
+            &native,
+            &resource_effect_id(),
+            None,
+            "/alias/secret",
+            0,
+            100
+        )
+        .await
+        .unwrap(),
         b"private"
     );
     let mut listing = Filesystem::open_directory(
         &native,
-        &Invocation::default(),
+        &EffectId::stub().unwrap(),
+        None,
         "/",
         false,
         &interpreter::runtime::limits::TenantLimits::new(64 << 20),
@@ -808,7 +809,8 @@ async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
     let mut found = false;
     while let Some(entry) = listing
         .next_entry(
-            &resource_invocation(),
+            &resource_effect_id(),
+            None,
             &interpreter::runtime::limits::TenantLimits::new(64 << 20),
         )
         .await
@@ -851,13 +853,11 @@ impl CallTestCase for DurableFilesystem {
         Box<dyn interpreter::runtime::filesystem::DirectoryReader>,
         interpreter::runtime::filesystem::FilesystemError,
     > {
-        let invocation = interpreter::runtime::filesystem::Invocation {
-            operation: Some(id.clone()),
-            ..Default::default()
-        };
+        let effect_id: EffectId = id.clone();
         interpreter::runtime::filesystem::Filesystem::open_directory(
             self,
-            &invocation,
+            &effect_id,
+            None,
             path,
             recursive,
             &interpreter::runtime::limits::TenantLimits::new(64 << 20),
@@ -984,10 +984,7 @@ async fn pending_write_requires_replay_bytes_and_rejects_changed_input() {
 
 #[tokio::test]
 async fn directory_outputs_larger_than_metadata_limit_are_stored_in_sqlite() {
-    use interpreter::runtime::{
-        filesystem::{Filesystem, Invocation},
-        fuel,
-    };
+    use interpreter::runtime::{filesystem::Filesystem, fuel};
     let fixture = Fixture::new().await;
     for i in 0..1100 {
         std::fs::write(
@@ -1039,13 +1036,11 @@ async fn directory_outputs_larger_than_metadata_limit_are_stored_in_sqlite() {
     // Replay must pay for long path strings, even when the committed observation
     // exceeds the remaining budget. Return it and settle; do not lose the result.
     let work = Arc::new(fuel::WorkBudget::new(1));
-    let invocation = Invocation {
-        operation: Some(resource),
-        work: Some(work.clone()),
-    };
+    let effect_id: EffectId = resource;
     Filesystem::open_directory(
         &fixture.filesystem,
-        &invocation,
+        &effect_id,
+        Some(work.clone()),
         "/",
         false,
         &interpreter::runtime::limits::TenantLimits::new(64 << 20),
@@ -1402,13 +1397,13 @@ async fn empty_writer_close_records_read_only_refusal_without_staging() {
     )
     .await
     .unwrap();
-    let opening = resource_invocation();
-    let closing = resource_invocation();
-    let mut writer = Filesystem::open_writer(&filesystem, &opening, "/read-only/file")
+    let opening = resource_effect_id();
+    let closing = resource_effect_id();
+    let mut writer = Filesystem::open_writer(&filesystem, &opening, None, "/read-only/file")
         .await
         .unwrap();
     let descriptor = writer.descriptor().unwrap();
-    let first = writer.close(&closing).await.unwrap_err();
+    let first = writer.close(&closing, None).await.unwrap_err();
     assert!(matches!(first, PortError::Rejected(_)), "{first}");
     assert!(writer.is_closed());
     drop(writer);
@@ -1422,7 +1417,7 @@ async fn empty_writer_close_records_read_only_refusal_without_staging() {
     .await
     .unwrap();
     let mut writer = Filesystem::restore_writer(&reopened, descriptor.clone()).unwrap();
-    let replay = writer.close(&closing).await.unwrap_err();
+    let replay = writer.close(&closing, None).await.unwrap_err();
     assert_eq!(first.to_string(), replay.to_string());
     assert!(writer.is_closed());
     assert!(!read_only.join("file").exists());
@@ -1434,11 +1429,11 @@ async fn empty_writer_close_records_read_only_refusal_without_staging() {
         .join(fixture.run.as_str())
         .join(format!("writer-{}", descriptor.id));
     assert!(!staging.exists());
-    let empty = resource_invocation();
-    let mut writer = Filesystem::open_writer(&reopened, &empty, "/empty")
+    let empty = resource_effect_id();
+    let mut writer = Filesystem::open_writer(&reopened, &empty, None, "/empty")
         .await
         .unwrap();
-    writer.close(&resource_invocation()).await.unwrap();
+    writer.close(&resource_effect_id(), None).await.unwrap();
     assert!(writer.is_closed());
     assert_eq!(
         std::fs::read(reopened.vfs().root().join("empty")).unwrap(),

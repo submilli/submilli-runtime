@@ -9,7 +9,7 @@ use interpreter::runtime::Vfs;
 use interpreter::runtime::durable::{EffectId, RunId};
 use interpreter::runtime::filesystem::{
     DirectoryReader, FileReader, FileWriter, Filesystem, FilesystemError as PortError,
-    FilesystemInfo, Invocation, ReaderOptions, ResourceDescriptor, ResourceKind,
+    FilesystemInfo, ReaderOptions, ResourceDescriptor, ResourceKind,
 };
 use interpreter::runtime::fs::FileIdentity;
 use interpreter::runtime::fuel::WorkBudget;
@@ -208,7 +208,8 @@ impl Filesystem for DurableFilesystem {
     }
     async fn metadata(
         &self,
-        _invocation: &Invocation,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
         path: &str,
         follow: bool,
     ) -> Result<cap_std::fs::Metadata, PortError> {
@@ -228,7 +229,8 @@ impl Filesystem for DurableFilesystem {
     }
     async fn read(
         &self,
-        _invocation: &Invocation,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
         path: &str,
         offset: u64,
         maximum_bytes: u64,
@@ -244,13 +246,13 @@ impl Filesystem for DurableFilesystem {
     }
     async fn write(
         &self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         path: &str,
         bytes: Vec<u8>,
         append: bool,
     ) -> Result<(), PortError> {
-        let effect_id = require_effect_id(invocation)?;
-        let operation = self.operation(invocation.work.clone());
+        let operation = self.operation(work);
         operation
             .charge(interpreter::runtime::fuel::HASH, bytes.len() as u64)
             .map_err(backend)?;
@@ -262,12 +264,12 @@ impl Filesystem for DurableFilesystem {
     }
     async fn mkdir(
         &self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         path: &str,
         recursive: bool,
     ) -> Result<(), PortError> {
-        let effect_id = require_effect_id(invocation)?;
-        let operation = self.operation(invocation.work.clone());
+        let operation = self.operation(work);
         if recursive {
             return Err(PortError::Unsupported(
                 "recursive directory creation requires caller-orchestrated primitive operations",
@@ -281,13 +283,13 @@ impl Filesystem for DurableFilesystem {
     }
     async fn remove(
         &self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         path: &str,
         recursive: bool,
         budget: &mut dyn interpreter::runtime::filesystem::MutationBudget,
     ) -> Result<(), PortError> {
-        let effect_id = require_effect_id(invocation)?;
-        let operation = self.operation(invocation.work.clone());
+        let operation = self.operation(work);
         if recursive {
             return Err(PortError::Unsupported(
                 "recursive removal requires caller-orchestrated primitive operations",
@@ -302,13 +304,13 @@ impl Filesystem for DurableFilesystem {
     }
     async fn move_entry(
         &self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         from: &str,
         to: &str,
         budget: &mut dyn interpreter::runtime::filesystem::MutationBudget,
     ) -> Result<(), PortError> {
-        let effect_id = require_effect_id(invocation)?;
-        let operation = self.operation(invocation.work.clone());
+        let operation = self.operation(work);
         operation
             .move_path(effect_id, from, to)
             .await
@@ -318,7 +320,8 @@ impl Filesystem for DurableFilesystem {
     }
     async fn copy(
         &self,
-        _: &Invocation,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
         _: &str,
         _: &str,
         _: bool,
@@ -330,21 +333,23 @@ impl Filesystem for DurableFilesystem {
     }
     async fn open_reader(
         &self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         path: &str,
         options: ReaderOptions,
     ) -> Result<Box<dyn FileReader>, PortError> {
-        let operation = self.operation(invocation.work.clone());
+        let operation = self.operation(work);
         Ok(Box::new(
             operation
-                .open_reader(require_effect_id(invocation)?, path, options)
+                .open_reader(effect_id, path, options)
                 .await
                 .map_err(backend)?,
         ))
     }
     async fn open_directory(
         &self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         path: &str,
         recursive: bool,
         limits: &interpreter::runtime::limits::TenantLimits,
@@ -359,8 +364,7 @@ impl Filesystem for DurableFilesystem {
             )
             .map_err(|error| PortError::Execution(error.into()))?,
         );
-        let effect_id = require_effect_id(invocation)?;
-        let operation = self.operation(invocation.work.clone());
+        let operation = self.operation(work);
         let resource = effect_id.to_owned();
         let path = path.to_owned();
         finish_owned(async move {
@@ -420,11 +424,11 @@ impl Filesystem for DurableFilesystem {
     }
     async fn open_writer(
         &self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         path: &str,
     ) -> Result<Box<dyn FileWriter>, PortError> {
-        let effect_id = require_effect_id(invocation)?;
-        self.operation(invocation.work.clone())
+        self.operation(work)
             .open_writer(effect_id, path)
             .await
             .map_err(backend)?;
@@ -434,13 +438,6 @@ impl Filesystem for DurableFilesystem {
             closed: false,
         }))
     }
-}
-pub(crate) fn require_effect_id(invocation: &Invocation) -> Result<&EffectId, PortError> {
-    invocation.operation.as_ref().ok_or_else(|| {
-        PortError::Backend(Box::new(FilesystemError::Configuration(
-            "durable filesystem operation requires a stable operation identity",
-        )))
-    })
 }
 pub(crate) fn backend(error: FilesystemError) -> PortError {
     match error {

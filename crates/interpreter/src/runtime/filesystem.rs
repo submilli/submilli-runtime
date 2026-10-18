@@ -1,12 +1,14 @@
 //! Filesystem services supplied by the embedding runtime.
 //!
 //! Capability checks and fuel admission belong to the host caller. Embedders
-//! may supply operation identities and a work budget with each invocation.
+//! supply an effect ID and optional work budget with each call.
 use super::durable::{EffectId, RunId};
 use super::fs::ContainError;
+use super::fuel::WorkBudget;
 use super::vfs::{Access, Placement, VfsMode};
 use super::{QuotaExceeded, Vfs};
 use std::io::{Read, Seek, SeekFrom};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ReaderOptions {
@@ -49,12 +51,6 @@ impl ReadOutput {
             _charge: reservation,
         }
     }
-}
-
-#[derive(Clone, Default)]
-pub struct Invocation {
-    pub operation: Option<EffectId>,
-    pub work: Option<std::sync::Arc<super::fuel::WorkBudget>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -122,10 +118,15 @@ pub trait FileReader: Send + Sync {
     }
     async fn next(
         &mut self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         limits: &super::limits::TenantLimits,
     ) -> Result<ReadOutput, FilesystemError>;
-    async fn close(&mut self, invocation: &Invocation) -> Result<(), FilesystemError>;
+    async fn close(
+        &mut self,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+    ) -> Result<(), FilesystemError>;
 }
 
 #[async_trait::async_trait]
@@ -136,11 +137,16 @@ pub trait FileWriter: Send + Sync {
     fn is_closed(&self) -> bool;
     async fn write(
         &mut self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         bytes: Vec<u8>,
     ) -> Result<(), FilesystemError>;
     /// Only explicit close publishes. Dropping a writer never publishes it.
-    async fn close(&mut self, invocation: &Invocation) -> Result<(), FilesystemError>;
+    async fn close(
+        &mut self,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+    ) -> Result<(), FilesystemError>;
 }
 
 #[derive(Clone)]
@@ -157,13 +163,15 @@ pub trait DirectoryReader: Send + Sync {
     }
     async fn next_entry(
         &mut self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         limits: &super::limits::TenantLimits,
     ) -> Result<Option<DirectoryEntry>, FilesystemError>;
     fn retained_bytes(&self) -> u64;
     async fn close(
         &mut self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         limits: &super::limits::TenantLimits,
     ) -> Result<(), FilesystemError>;
 }
@@ -179,47 +187,54 @@ pub trait Filesystem: Send + Sync {
     fn placement(&self, path: &str) -> Result<Placement, FilesystemError>;
     async fn metadata(
         &self,
-        _invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         path: &str,
         follow: bool,
     ) -> Result<cap_std::fs::Metadata, FilesystemError>;
     async fn read(
         &self,
-        _invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         path: &str,
         offset: u64,
         maximum_bytes: u64,
     ) -> Result<Vec<u8>, FilesystemError>;
     async fn write(
         &self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         path: &str,
         bytes: Vec<u8>,
         append: bool,
     ) -> Result<(), FilesystemError>;
     async fn mkdir(
         &self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         path: &str,
         recursive: bool,
     ) -> Result<(), FilesystemError>;
     async fn remove(
         &self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         path: &str,
         recursive: bool,
         budget: &mut dyn MutationBudget,
     ) -> Result<(), FilesystemError>;
     async fn move_entry(
         &self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         from: &str,
         to: &str,
         budget: &mut dyn MutationBudget,
     ) -> Result<(), FilesystemError>;
     async fn copy(
         &self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         from: &str,
         to: &str,
         recursive: bool,
@@ -246,20 +261,23 @@ pub trait Filesystem: Send + Sync {
     }
     async fn open_reader(
         &self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         path: &str,
         options: ReaderOptions,
     ) -> Result<Box<dyn FileReader>, FilesystemError>;
     async fn open_directory(
         &self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         path: &str,
         recursive: bool,
         limits: &super::limits::TenantLimits,
     ) -> Result<Box<dyn DirectoryReader>, FilesystemError>;
     async fn open_writer(
         &self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         path: &str,
     ) -> Result<Box<dyn FileWriter>, FilesystemError>;
 }

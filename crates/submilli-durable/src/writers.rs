@@ -9,8 +9,9 @@ use crate::unit_of_work::*;
 use cap_std::fs::{Dir, File, OpenOptions};
 use interpreter::runtime::durable::EffectId;
 use interpreter::runtime::filesystem::{
-    FileWriter, FilesystemError as PortError, Invocation, ResourceDescriptor, ResourceKind,
+    FileWriter, FilesystemError as PortError, ResourceDescriptor, ResourceKind,
 };
+use interpreter::runtime::fuel::WorkBudget;
 use sha2::{Digest, Sha256};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
@@ -188,17 +189,24 @@ impl FileWriter for DurableWriter {
     fn is_closed(&self) -> bool {
         self.closed
     }
-    async fn write(&mut self, invocation: &Invocation, bytes: Vec<u8>) -> Result<(), PortError> {
-        let effect_id = require_effect_id(invocation)?;
-        let operation = self.filesystem.operation(invocation.work.clone());
+    async fn write(
+        &mut self,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+        bytes: Vec<u8>,
+    ) -> Result<(), PortError> {
+        let operation = self.filesystem.operation(work);
         operation
             .write_chunk(&self.resource, effect_id, bytes)
             .await
             .map_err(backend)
     }
-    async fn close(&mut self, invocation: &Invocation) -> Result<(), PortError> {
-        let effect_id = require_effect_id(invocation)?;
-        let operation = self.filesystem.operation(invocation.work.clone());
+    async fn close(
+        &mut self,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+    ) -> Result<(), PortError> {
+        let operation = self.filesystem.operation(work);
         let result = operation.close_writer(&self.resource, effect_id).await;
         // SQL remains authoritative after either a successful close or a saved
         // refusal, and after an acknowledgement is lost.

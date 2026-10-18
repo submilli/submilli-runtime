@@ -10,7 +10,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::runtime::filesystem::{FilesystemError, Invocation};
+use crate::runtime::durable::EffectId;
+use crate::runtime::filesystem::FilesystemError;
+use crate::runtime::fuel::WorkBudget;
 use crate::runtime::limits::{MemoryCapExceeded, TenantLimits};
 
 pub use crate::runtime::default_filesystem::kind_of;
@@ -69,7 +71,8 @@ impl Drop for ByteCharge {
 pub trait Closable: Send + Sync {
     async fn close(
         &mut self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         limits: &TenantLimits,
     ) -> Result<(), FilesystemError>;
 }
@@ -96,10 +99,11 @@ impl BackendReader {
 impl Closable for BackendReader {
     async fn close(
         &mut self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         _limits: &TenantLimits,
     ) -> Result<(), FilesystemError> {
-        self.reader.close(invocation).await?;
+        self.reader.close(effect_id, work).await?;
         self.charge.release();
         Ok(())
     }
@@ -127,10 +131,11 @@ impl ChargedDirIter {
 impl Closable for ChargedDirIter {
     async fn close(
         &mut self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         _limits: &TenantLimits,
     ) -> Result<(), FilesystemError> {
-        self.walk.close(invocation, _limits).await?;
+        self.walk.close(effect_id, work, _limits).await?;
         self.charge.release();
         Ok(())
     }
@@ -156,13 +161,18 @@ impl BackendFileWriter {
     }
     pub async fn write(
         &mut self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         bytes: Vec<u8>,
     ) -> Result<(), FilesystemError> {
-        self.writer.write(invocation, bytes).await
+        self.writer.write(effect_id, work, bytes).await
     }
-    pub async fn close(&mut self, invocation: &Invocation) -> Result<(), FilesystemError> {
-        let result = self.writer.close(invocation).await;
+    pub async fn close(
+        &mut self,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+    ) -> Result<(), FilesystemError> {
+        let result = self.writer.close(effect_id, work).await;
         if self.writer.is_closed() {
             self.charge.release();
         }
@@ -177,30 +187,33 @@ mod tests {
     #[tokio::test]
     async fn failed_native_backend_close_refunds_a_discarded_buffer() {
         use crate::runtime::default_filesystem::DefaultFilesystem;
-        use crate::runtime::filesystem::{Filesystem, Invocation};
+        use crate::runtime::filesystem::Filesystem;
         let root = tempfile::tempdir().unwrap();
         let filesystem = DefaultFilesystem::new(
             crate::runtime::Vfs::external(root.path().to_path_buf()).unwrap(),
         );
-        let invocation = Invocation::default();
+        let effect_id = EffectId::stub().unwrap();
         let limits = TenantLimits::new(64 * 1024);
         let writer = filesystem
-            .open_writer(&invocation, "/target")
+            .open_writer(&effect_id, None, "/target")
             .await
             .unwrap();
         let mut handle = BackendFileWriter::new(writer, &limits).unwrap();
-        handle.write(&invocation, b"data".to_vec()).await.unwrap();
+        handle
+            .write(&effect_id, None, b"data".to_vec())
+            .await
+            .unwrap();
         std::fs::create_dir(root.path().join("target")).unwrap();
-        assert!(handle.close(&invocation).await.is_err());
+        assert!(handle.close(&effect_id, None).await.is_err());
         assert_eq!(limits.host_attached_bytes(), 0);
-        assert!(handle.close(&invocation).await.is_ok());
+        assert!(handle.close(&effect_id, None).await.is_ok());
     }
 
     async fn writer_over(vfs: &crate::runtime::Vfs, limits: &TenantLimits) -> BackendFileWriter {
         use crate::runtime::default_filesystem::DefaultFilesystem;
         use crate::runtime::filesystem::Filesystem;
         let writer = DefaultFilesystem::new(vfs.clone())
-            .open_writer(&Invocation::default(), "/out.txt")
+            .open_writer(&EffectId::stub().unwrap(), None, "/out.txt")
             .await
             .unwrap();
         BackendFileWriter::new(writer, limits).unwrap()
@@ -220,7 +233,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vfs = crate::runtime::Vfs::external(dir.path().to_path_buf()).unwrap();
         let mut w = writer_over(&vfs, &limits).await;
-        w.write(&Invocation::default(), b"hello\n".to_vec())
+        w.write(&EffectId::stub().unwrap(), None, b"hello\n".to_vec())
             .await
             .unwrap();
         assert!(limits.host_attached_bytes() > 0);
@@ -243,10 +256,10 @@ mod tests {
         let vfs = crate::runtime::Vfs::external(dir.path().to_path_buf()).unwrap();
         let final_path = dir.path().join("out.txt");
         let mut w = writer_over(&vfs, &limits).await;
-        w.write(&Invocation::default(), b"hello\n".to_vec())
+        w.write(&EffectId::stub().unwrap(), None, b"hello\n".to_vec())
             .await
             .unwrap();
-        w.close(&Invocation::default()).await.unwrap();
+        w.close(&EffectId::stub().unwrap(), None).await.unwrap();
         assert!(final_path.exists());
         assert!(temp_leftovers(dir.path()).is_empty());
         assert_eq!(limits.host_attached_bytes(), 0);

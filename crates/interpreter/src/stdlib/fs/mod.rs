@@ -11,10 +11,11 @@
 //! `externref`s; the iterators are closable (`for…of` releases the OS handle
 //! on every loop exit) and GC reclaim is the backstop.
 
-use crate::runtime::host::{abi_arg, abi_result};
+use crate::runtime::host::{abi_arg, abi_result, fatal_host_error};
 pub mod declaration;
 pub mod handles;
 
+use crate::runtime::durable::EffectId;
 use crate::runtime::filesystem::FilesystemError as PortError;
 
 use wasmtime::{
@@ -263,8 +264,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 // sandbox, missing, a file used as a directory component, a symlink cycle. A
                 // guard clause written as `if (!exists(p))` is exactly what an LLM writes, and it
                 // must not abort on the malformed-path case it exists to handle.
-                let invocation = begin_invocation(caller)?;
-                let found = match filesystem.metadata(&invocation, &path, true).await {
+                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+                let work = begin_work(caller)?;
+                let found = match filesystem
+                    .metadata(&effect_id, Some(work.clone()), &path, true)
+                    .await
+                {
                     Ok(_) => true,
                     Err(
                         PortError::Containment(ContainError::Escape | ContainError::Io(_))
@@ -295,11 +300,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     "fs.stat",
                     serde_json::json!({ "path": &path }),
                 )?;
-                let invocation = begin_invocation(caller)?;
+                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+                let work = begin_work(caller)?;
                 let meta = caller
                     .data()
                     .filesystem
-                    .metadata(&invocation, &path, true)
+                    .metadata(&effect_id, Some(work.clone()), &path, true)
                     .await
                     .map_err(|e| backend_error("fs.size", &path, e))?;
                 if meta.is_dir() {
@@ -478,9 +484,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         .map_err(|e| backend_error(&ctx, &path, e))?;
                     require_writable(&*caller, ticket, &placement, "fs.write", &path)?;
                     fuel::charge(&mut *caller, fuel::IO, bytes.len() as u64)?;
-                    let invocation = begin_invocation(caller)?;
-                    let result = filesystem.write(&invocation, &path, bytes, !atomic).await;
-                    settle_invocation(caller, &invocation)?;
+                    let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+                    let work = begin_work(caller)?;
+                    let result = filesystem
+                        .write(&effect_id, Some(work.clone()), &path, bytes, !atomic)
+                        .await;
+                    work.settle(&mut *caller)?;
                     result.map_err(|e| backend_error(&ctx, &path, e))
                 })
             },
@@ -503,20 +512,23 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     serde_json::json!({ "path": &path, "recursive": recursive }),
                 )?;
                 let filesystem = caller.data().filesystem.clone();
-                let invocation = begin_invocation(caller)?;
+                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+                let work = begin_work(caller)?;
                 let placement = filesystem
                     .placement(&path)
                     .map_err(|e| backend_error("fs.mkdir", &path, e))?;
                 if !(recursive
                     && filesystem
-                        .metadata(&invocation, &path, true)
+                        .metadata(&effect_id, Some(work.clone()), &path, true)
                         .await
                         .is_ok_and(|m| m.is_dir()))
                 {
                     require_writable(&*caller, ticket, &placement, "fs.mkdir", &path)?;
                 }
-                let result = filesystem.mkdir(&invocation, &path, recursive).await;
-                settle_invocation(caller, &invocation)?;
+                let result = filesystem
+                    .mkdir(&effect_id, Some(work.clone()), &path, recursive)
+                    .await;
+                work.settle(&mut *caller)?;
                 result.map_err(|e| backend_error("fs.mkdir", &path, e))?;
                 Ok(())
             })
@@ -539,18 +551,25 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     serde_json::json!({ "path": &path, "recursive": recursive }),
                 )?;
                 let filesystem = caller.data().filesystem.clone();
-                let invocation = begin_invocation(caller)?;
+                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+                let work = begin_work(caller)?;
                 let placement = filesystem
                     .placement(&path)
                     .map_err(|e| backend_error("fs.remove", &path, e))?;
                 require_writable(&*caller, ticket, &placement, "fs.remove", &path)?;
                 let mut budget = HostMutationBudget::new(caller);
                 let result = filesystem
-                    .remove(&invocation, &path, recursive, &mut budget)
+                    .remove(
+                        &effect_id,
+                        Some(work.clone()),
+                        &path,
+                        recursive,
+                        &mut budget,
+                    )
                     .await;
                 let changed = budget.changed;
                 drop(budget);
-                settle_invocation(caller, &invocation)?;
+                work.settle(&mut *caller)?;
                 let result = result.map_err(|e| backend_error("fs.remove", &path, e));
                 if changed {
                     fuel::settle_result(caller, |caller| {
@@ -579,7 +598,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     serde_json::json!({ "from": &from, "to": &to }),
                 )?;
                 let filesystem = caller.data().filesystem.clone();
-                let invocation = begin_invocation(caller)?;
+                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+                let work = begin_work(caller)?;
                 let placement = filesystem
                     .placement(&from)
                     .map_err(|e| backend_error("fs.move", &from, e))?;
@@ -590,11 +610,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 require_writable(&*caller, ticket, &placement, "fs.move", &to)?;
                 let mut budget = HostMutationBudget::new(caller);
                 let result = filesystem
-                    .move_entry(&invocation, &from, &to, &mut budget)
+                    .move_entry(&effect_id, Some(work.clone()), &from, &to, &mut budget)
                     .await;
                 let changed = budget.changed;
                 drop(budget);
-                settle_invocation(caller, &invocation)?;
+                work.settle(&mut *caller)?;
                 let result = result.map_err(|e| backend_error("fs.move", &to, e));
                 if changed {
                     fuel::settle_result(caller, |caller| {
@@ -628,18 +648,26 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     }),
                 )?;
                 let filesystem = caller.data().filesystem.clone();
-                let invocation = begin_invocation(caller)?;
+                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+                let work = begin_work(caller)?;
                 let placement = filesystem
                     .placement(&to)
                     .map_err(|e| backend_error("fs.copy", &to, e))?;
                 require_writable(&*caller, ticket, &placement, "fs.copy", &to)?;
                 let mut budget = HostMutationBudget::new(caller);
                 let result = filesystem
-                    .copy(&invocation, &from, &to, recursive, &mut budget)
+                    .copy(
+                        &effect_id,
+                        Some(work.clone()),
+                        &from,
+                        &to,
+                        recursive,
+                        &mut budget,
+                    )
                     .await;
                 let changed = budget.changed;
                 drop(budget);
-                settle_invocation(caller, &invocation)?;
+                work.settle(&mut *caller)?;
                 let result = result.map_err(|e| backend_error("fs.copy", &to, e));
                 if changed {
                     fuel::settle_result(caller, |caller| {
@@ -687,17 +715,19 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     serde_json::json!({ "path": &path }),
                 )?;
                 let filesystem = caller.data().filesystem.clone();
-                let invocation = begin_invocation(caller)?;
+                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+                let work = begin_work(caller)?;
                 let reader = filesystem
                     .open_reader(
-                        &invocation,
+                        &effect_id,
+                        Some(work.clone()),
                         &path,
                         crate::runtime::filesystem::ReaderOptions::Lines {
                             maximum_bytes: caller.data().fs_max_read_size,
                         },
                     )
                     .await;
-                settle_invocation(caller, &invocation)?;
+                work.settle(&mut *caller)?;
                 let reader = reader.map_err(|e| backend_error("fs.lines", &path, e))?;
                 let reader = BackendReader::new(reader, &caller.data().tenant_limits)
                     .map_err(wasmtime::Error::new)?;
@@ -735,17 +765,19 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     serde_json::json!({ "path": &path, "chunkSize": chunk_size }),
                 )?;
                 let filesystem = caller.data().filesystem.clone();
-                let invocation = begin_invocation(caller)?;
+                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+                let work = begin_work(caller)?;
                 let reader = filesystem
                     .open_reader(
-                        &invocation,
+                        &effect_id,
+                        Some(work.clone()),
                         &path,
                         crate::runtime::filesystem::ReaderOptions::Bytes {
                             chunk_size: chunk_size as usize,
                         },
                     )
                     .await;
-                settle_invocation(caller, &invocation)?;
+                work.settle(&mut *caller)?;
                 let reader = reader.map_err(|e| backend_error("fs.bytes", &path, e))?;
                 let reader = BackendReader::new(reader, &caller.data().tenant_limits)
                     .map_err(wasmtime::Error::new)?;
@@ -778,11 +810,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     serde_json::json!({ "path": &path, "recursive": recursive }),
                 )?;
                 let filesystem = caller.data().filesystem.clone();
-                let invocation = begin_invocation(caller)?;
+                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+                let work = begin_work(caller)?;
                 let walk = filesystem
-                    .open_directory(&invocation, &path, recursive, &caller.data().tenant_limits)
+                    .open_directory(
+                        &effect_id,
+                        Some(work.clone()),
+                        &path,
+                        recursive,
+                        &caller.data().tenant_limits,
+                    )
                     .await;
-                settle_invocation(caller, &invocation)?;
+                work.settle(&mut *caller)?;
                 let walk = walk.map_err(|e| backend_error("fs.list", &path, e))?;
                 let dir = ChargedDirIter::new(walk, &caller.data().tenant_limits)
                     .map_err(|e| wasmtime::Error::new(e).context(format!("fs.list {path}")))?;
@@ -883,11 +922,12 @@ async fn stat_entry(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime:
     // opens the parent, so a missing *ancestor* fails here rather than at the metadata call
     // below — and answering that with a trap would break the contract every caller branches
     // on. Escapes still trap: unreachable-because-outside is not the same as absent.
-    let invocation = begin_invocation(caller)?;
+    let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+    let work = begin_work(caller)?;
     let meta = match caller
         .data()
         .filesystem
-        .metadata(&invocation, path, false)
+        .metadata(&effect_id, Some(work.clone()), path, false)
         .await
     {
         Ok(meta) => meta,
@@ -919,16 +959,17 @@ async fn stat_entry(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime:
 /// `peek(path)`: sniff the first ~256 bytes into a `$PeekBacking`.
 async fn peek_file(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::Result<Val> {
     let filesystem = caller.data().filesystem.clone();
-    let invocation = begin_invocation(caller)?;
+    let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+    let work = begin_work(caller)?;
     let meta = filesystem
-        .metadata(&invocation, path, true)
+        .metadata(&effect_id, Some(work.clone()), path, true)
         .await
         .map_err(|e| backend_error("fs.peek", path, e))?;
     if !meta.is_file() {
         wasmtime::bail!("fs.peek {}: path is not a regular file", path);
     }
     let buf = filesystem
-        .read(&invocation, path, 0, 256)
+        .read(&effect_id, Some(work.clone()), path, 0, 256)
         .await
         .map_err(|e| backend_error("fs.peek", path, e))?;
 
@@ -984,9 +1025,10 @@ async fn read_whole_capped(
     let ctx = format!("fs.{op}");
     let ticket = gate(&mut *caller, "fs.read", serde_json::json!({ "path": path }))?;
     let filesystem = caller.data().filesystem.clone();
-    let invocation = begin_invocation(caller)?;
+    let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+    let work = begin_work(caller)?;
     let meta = filesystem
-        .metadata(&invocation, path, true)
+        .metadata(&effect_id, Some(work.clone()), path, true)
         .await
         .map_err(|e| backend_error(&ctx, path, e))?;
     if meta.is_dir() {
@@ -1001,7 +1043,13 @@ async fn read_whole_capped(
     // The size is known before the read, so the charge comes first.
     fuel::charge(&mut *caller, fuel::IO, meta.len())?;
     let bytes = filesystem
-        .read(&invocation, path, 0, caller.data().fs_max_read_size)
+        .read(
+            &effect_id,
+            Some(work.clone()),
+            path,
+            0,
+            caller.data().fs_max_read_size,
+        )
         .await
         .map_err(|e| backend_error(&ctx, path, e))?;
     record_payload(&*caller, ticket, Side::Response, || {
@@ -1034,11 +1082,18 @@ async fn read_byte_range(
         )));
     }
     fuel::charge(&mut *caller, fuel::IO, length as u64)?;
-    let invocation = begin_invocation(caller)?;
+    let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+    let work = begin_work(caller)?;
     caller
         .data()
         .filesystem
-        .read(&invocation, path, offset as u64, length as u64)
+        .read(
+            &effect_id,
+            Some(work.clone()),
+            path,
+            offset as u64,
+            length as u64,
+        )
         .await
         .map_err(|e| backend_error("fs.readBytes", path, e))
 }
@@ -1051,13 +1106,16 @@ async fn open_writer(
     path: &str,
 ) -> wasmtime::Result<Val> {
     let filesystem = caller.data().filesystem.clone();
-    let invocation = begin_invocation(caller)?;
+    let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+    let work = begin_work(caller)?;
     let placement = filesystem
         .placement(path)
         .map_err(|e| backend_error("fs.writer", path, e))?;
     require_writable(&*caller, ticket, &placement, "fs.write", path)?;
-    let writer = filesystem.open_writer(&invocation, path).await;
-    settle_invocation(caller, &invocation)?;
+    let writer = filesystem
+        .open_writer(&effect_id, Some(work.clone()), path)
+        .await;
+    work.settle(&mut *caller)?;
     let writer = writer.map_err(|e| backend_error("fs.writer", path, e))?;
     let writer = BackendFileWriter::new(writer, &caller.data().tenant_limits)
         .map_err(crate::runtime::host::fatal_host_error)?;
@@ -1143,7 +1201,8 @@ async fn reader_next(
         *abi_result(results, 0)? = iter_done(caller)?;
         return Ok(());
     };
-    let invocation = begin_invocation(caller)?;
+    let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+    let work = begin_work(caller)?;
     let Some(mut reader) =
         handle_payload::<Option<BackendReader>>(caller, &handle, "fs.next")?.take()
     else {
@@ -1152,10 +1211,10 @@ async fn reader_next(
     };
     let output = reader
         .reader
-        .next(&invocation, &caller.data().tenant_limits)
+        .next(&effect_id, Some(work.clone()), &caller.data().tenant_limits)
         .await;
     *handle_payload::<Option<BackendReader>>(caller, &handle, "fs.next")? = Some(reader);
-    settle_invocation(caller, &invocation)?;
+    work.settle(&mut *caller)?;
     *abi_result(results, 0)? = fuel::settle_result(caller, |caller| {
         let output = output.map_err(|error| {
             crate::runtime::host::throw_host_error(caller, backend_error("fs.next", "", error))
@@ -1185,7 +1244,8 @@ async fn list_next(
         return Ok(());
     };
     fuel::charge(&mut *caller, fuel::SYSCALL, 1)?;
-    let invocation = begin_invocation(caller)?;
+    let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+    let work = begin_work(caller)?;
     let Some(mut directory) =
         handle_payload::<Option<ChargedDirIter>>(caller, &handle, "fs.list.next")?.take()
     else {
@@ -1194,10 +1254,10 @@ async fn list_next(
     };
     let entry = directory
         .walk
-        .next_entry(&invocation, &caller.data().tenant_limits)
+        .next_entry(&effect_id, Some(work.clone()), &caller.data().tenant_limits)
         .await;
     *handle_payload::<Option<ChargedDirIter>>(caller, &handle, "fs.list.next")? = Some(directory);
-    settle_invocation(caller, &invocation)?;
+    work.settle(&mut *caller)?;
     let entry = entry.map_err(|error| {
         crate::runtime::host::throw_host_error(caller, backend_error("fs.list.next", "", error))
     })?;
@@ -1236,15 +1296,16 @@ async fn close_handle_of<T: handles::Closable + 'static>(
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
     if let Some(handle) = env_handle(caller, abi_arg(params, 0)?)? {
-        let invocation = begin_invocation(caller)?;
+        let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+        let work = begin_work(caller)?;
         if let Some(mut payload) = handle_payload::<Option<T>>(caller, &handle, "fs.close")?.take()
         {
             let result = payload
-                .close(&invocation, &caller.data().tenant_limits)
+                .close(&effect_id, Some(work.clone()), &caller.data().tenant_limits)
                 .await;
             // Keep the logical ID after close: retries must still consult the backend.
             *handle_payload::<Option<T>>(caller, &handle, "fs.close")? = Some(payload);
-            settle_invocation(caller, &invocation)?;
+            work.settle(&mut *caller)?;
             result.map_err(|error| {
                 crate::runtime::host::throw_host_error(caller, backend_error("fs.close", "", error))
             })?;
@@ -1367,11 +1428,12 @@ fn install_file_writer_methods(
         /* deterministic = */ false,
         |caller, params, _results| {
             Box::pin(async move {
-                let invocation = begin_invocation(caller)?;
+                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+                let work = begin_work(caller)?;
                 let result = writer_payload(caller, abi_arg(params, 0)?, "fs.writer.close")?
-                    .close(&invocation)
+                    .close(&effect_id, Some(work.clone()))
                     .await;
-                settle_invocation(caller, &invocation)?;
+                work.settle(&mut *caller)?;
                 result.map_err(|e| backend_error("fs.writer.close", "", e))
             })
         },
@@ -1388,13 +1450,14 @@ fn install_file_writer_methods(
                 let line =
                     read_string_arg(&mut *caller, abi_arg(params, 1)?, "fs.writer.writeLine")?;
                 fuel::charge(&mut *caller, fuel::IO, line.len() as u64 + 1)?;
-                let invocation = begin_invocation(caller)?;
+                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+                let work = begin_work(caller)?;
                 let mut bytes = line.into_bytes();
                 bytes.push(b'\n');
                 let result = writer_payload(caller, abi_arg(params, 0)?, "fs.writer.writeLine")?
-                    .write(&invocation, bytes)
+                    .write(&effect_id, Some(work.clone()), bytes)
                     .await;
-                settle_invocation(caller, &invocation)?;
+                work.settle(&mut *caller)?;
                 result.map_err(|e| backend_error("fs.writer.writeLine", "", e))
             })
         },
@@ -1414,11 +1477,12 @@ fn install_file_writer_methods(
                     "fs.writer.writeBytes",
                 )?;
                 fuel::charge(&mut *caller, fuel::IO, bytes.len() as u64)?;
-                let invocation = begin_invocation(caller)?;
+                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
+                let work = begin_work(caller)?;
                 let result = writer_payload(caller, abi_arg(params, 0)?, "fs.writer.writeBytes")?
-                    .write(&invocation, bytes)
+                    .write(&effect_id, Some(work.clone()), bytes)
                     .await;
-                settle_invocation(caller, &invocation)?;
+                work.settle(&mut *caller)?;
                 result.map_err(|e| backend_error("fs.writer.writeBytes", "", e))
             })
         },
@@ -1572,30 +1636,12 @@ impl crate::runtime::filesystem::MutationBudget for HostMutationBudget<'_, '_> {
     }
 }
 
-fn begin_invocation(
+fn begin_work(
     caller: &mut Caller<'_, StoreData>,
-) -> wasmtime::Result<crate::runtime::filesystem::Invocation> {
-    let mut invocation = crate::runtime::filesystem::Invocation {
-        operation: Some(
-            crate::runtime::durable::EffectId::stub()
-                .map_err(crate::runtime::host::fatal_host_error)?,
-        ),
-        work: None,
-    };
-    let remaining = fuel::remaining_fuel(&mut *caller)?;
-    invocation.work = Some(std::sync::Arc::new(crate::runtime::fuel::WorkBudget::new(
-        remaining,
-    )));
-    Ok(invocation)
-}
-fn settle_invocation(
-    caller: &mut Caller<'_, StoreData>,
-    invocation: &crate::runtime::filesystem::Invocation,
-) -> wasmtime::Result<()> {
-    if let Some(work) = &invocation.work {
-        work.settle(caller)?;
-    }
-    Ok(())
+) -> wasmtime::Result<std::sync::Arc<fuel::WorkBudget>> {
+    Ok(std::sync::Arc::new(fuel::WorkBudget::new(
+        fuel::remaining_fuel(caller)?,
+    )))
 }
 
 #[cfg(test)]

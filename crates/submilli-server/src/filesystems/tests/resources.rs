@@ -55,25 +55,26 @@ async fn reader_progress_precedes_history_and_replay_skips_recorded_calls() {
     let limits = TenantLimits::new(1 << 20);
     let mut reader = Filesystem::open_reader(
         &fixture.filesystem,
-        &resource_invocation(),
+        &resource_effect_id(),
+        None,
         "/file",
         byte_options(),
     )
     .await
     .unwrap();
     let descriptor = recorded_id(reader.descriptor().unwrap());
-    let first = resource_invocation();
-    let second = resource_invocation();
-    let third = resource_invocation();
+    let first = resource_effect_id();
+    let second = resource_effect_id();
+    let third = resource_effect_id();
     // The fake framework records the first result but loses the second result.
-    let history = [read_bytes(reader.next(&first, &limits).await.unwrap()).unwrap()];
+    let history = [read_bytes(reader.next(&first, None, &limits).await.unwrap()).unwrap()];
     assert_eq!(history[0], b"abc");
     assert_eq!(
-        read_bytes(reader.next(&second, &limits).await.unwrap()).unwrap(),
+        read_bytes(reader.next(&second, None, &limits).await.unwrap()).unwrap(),
         b"def"
     );
     assert_eq!(
-        read_bytes(reader.next(&second, &limits).await.unwrap()).unwrap(),
+        read_bytes(reader.next(&second, None, &limits).await.unwrap()).unwrap(),
         b"def"
     );
     drop(reader); // Pause/finalization cannot delete the row.
@@ -82,25 +83,39 @@ async fn reader_progress_precedes_history_and_replay_skips_recorded_calls() {
     let mut reader = Filesystem::restore_reader(restarted, descriptor.clone()).unwrap();
     // Replay reads history[0], never invokes the backend for `first`.
     assert_eq!(
-        read_bytes(reader.next(&second, &limits).await.unwrap()).unwrap(),
+        read_bytes(reader.next(&second, None, &limits).await.unwrap()).unwrap(),
         b"def"
     );
     drop(reader); // Now the framework has committed `second` too.
     let mut reader = Filesystem::restore_reader(restarted, descriptor.clone()).unwrap();
     assert_eq!(
-        read_bytes(reader.next(&third, &limits).await.unwrap()).unwrap(),
+        read_bytes(reader.next(&third, None, &limits).await.unwrap()).unwrap(),
         b"ghi"
     );
-    let eof = resource_invocation();
-    assert!(reader.next(&eof, &limits).await.unwrap().item.is_none());
-    assert!(reader.next(&eof, &limits).await.unwrap().item.is_none());
-    let close = resource_invocation();
-    reader.close(&close).await.unwrap();
+    let eof = resource_effect_id();
+    assert!(
+        reader
+            .next(&eof, None, &limits)
+            .await
+            .unwrap()
+            .item
+            .is_none()
+    );
+    assert!(
+        reader
+            .next(&eof, None, &limits)
+            .await
+            .unwrap()
+            .item
+            .is_none()
+    );
+    let close = resource_effect_id();
+    reader.close(&close, None).await.unwrap();
     drop(reader);
     let mut reader = Filesystem::restore_reader(restarted, descriptor.clone()).unwrap();
-    reader.close(&close).await.unwrap();
+    reader.close(&close, None).await.unwrap();
     assert!(
-        reader.next(&close, &limits).await.is_err(),
+        reader.next(&close, None, &limits).await.is_err(),
         "same ID cannot change from close to next"
     );
     let mut unit = fixture.context.units(fixture.database.clone())()
@@ -127,7 +142,12 @@ async fn reader_progress_precedes_history_and_replay_skips_recorded_calls() {
         chunk_size: 2,
     });
     let mut changed = Filesystem::restore_reader(restarted, changed).unwrap();
-    assert!(changed.next(&resource_invocation(), &limits).await.is_err());
+    assert!(
+        changed
+            .next(&resource_effect_id(), None, &limits)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -141,33 +161,34 @@ async fn lines_restore_logical_offset_bom_and_crlf_without_storing_input() {
     let limits = TenantLimits::new(1 << 20);
     let mut reader = Filesystem::open_reader(
         &fixture.filesystem,
-        &resource_invocation(),
+        &resource_effect_id(),
+        None,
         "/file",
         ReaderOptions::Lines { maximum_bytes: 32 },
     )
     .await
     .unwrap();
     let descriptor = recorded_id(reader.descriptor().unwrap());
-    let first = resource_invocation();
+    let first = resource_effect_id();
     assert_eq!(
-        line(reader.next(&first, &limits).await.unwrap()).unwrap(),
+        line(reader.next(&first, None, &limits).await.unwrap()).unwrap(),
         "hello"
     );
     assert_eq!(
-        line(reader.next(&first, &limits).await.unwrap()).unwrap(),
+        line(reader.next(&first, None, &limits).await.unwrap()).unwrap(),
         "hello"
     );
     drop(reader);
     let fixture = reopen(fixture).await;
     let restarted = &fixture.filesystem;
     let mut reader = Filesystem::restore_reader(restarted, descriptor.clone()).unwrap();
-    let second = resource_invocation();
+    let second = resource_effect_id();
     assert_eq!(
-        line(reader.next(&second, &limits).await.unwrap()).unwrap(),
+        line(reader.next(&second, None, &limits).await.unwrap()).unwrap(),
         "\u{feff}second"
     );
     assert_eq!(
-        line(reader.next(&second, &limits).await.unwrap()).unwrap(),
+        line(reader.next(&second, None, &limits).await.unwrap()).unwrap(),
         "\u{feff}second"
     );
     let mut unit = fixture.context.units(fixture.database.clone())()
@@ -184,7 +205,13 @@ async fn lines_restore_logical_offset_bom_and_crlf_without_storing_input() {
     assert!(progress.after.bom_handled);
     drop(unit);
     assert_eq!(
-        line(reader.next(&resource_invocation(), &limits).await.unwrap()).unwrap(),
+        line(
+            reader
+                .next(&resource_effect_id(), None, &limits)
+                .await
+                .unwrap()
+        )
+        .unwrap(),
         "\u{fffd}"
     );
     assert_eq!(limits.host_attached_bytes(), 0);
@@ -197,18 +224,19 @@ async fn failed_line_read_does_not_commit_partial_progress() {
     let limits = TenantLimits::new(1 << 20);
     let mut reader = Filesystem::open_reader(
         &fixture.filesystem,
-        &resource_invocation(),
+        &resource_effect_id(),
+        None,
         "/file",
         ReaderOptions::Lines { maximum_bytes: 4 },
     )
     .await
     .unwrap();
     let descriptor = reader.descriptor().unwrap();
-    let effect = resource_invocation();
+    let effect = resource_effect_id();
     for _ in 0..2 {
         assert!(
             reader
-                .next(&effect, &limits)
+                .next(&effect, None, &limits)
                 .await
                 .err()
                 .unwrap()
@@ -239,7 +267,8 @@ async fn listing_replay_uses_final_snapshot_order_and_effect_progress() {
     std::fs::write(root.join("a-"), b"dash").unwrap();
     let mut listing = Filesystem::open_directory(
         &fixture.filesystem,
-        &resource_invocation(),
+        &resource_effect_id(),
+        None,
         "/",
         true,
         &interpreter::runtime::limits::TenantLimits::new(64 << 20),
@@ -247,12 +276,13 @@ async fn listing_replay_uses_final_snapshot_order_and_effect_progress() {
     .await
     .unwrap();
     let descriptor = recorded_id(listing.descriptor().unwrap());
-    let first = resource_invocation();
-    let second = resource_invocation();
+    let first = resource_effect_id();
+    let second = resource_effect_id();
     assert_eq!(
         listing
             .next_entry(
                 &first,
+                None,
                 &interpreter::runtime::limits::TenantLimits::new(64 << 20)
             )
             .await
@@ -265,6 +295,7 @@ async fn listing_replay_uses_final_snapshot_order_and_effect_progress() {
         listing
             .next_entry(
                 &second,
+                None,
                 &interpreter::runtime::limits::TenantLimits::new(64 << 20)
             )
             .await
@@ -277,6 +308,7 @@ async fn listing_replay_uses_final_snapshot_order_and_effect_progress() {
         listing
             .next_entry(
                 &second,
+                None,
                 &interpreter::runtime::limits::TenantLimits::new(64 << 20)
             )
             .await
@@ -292,11 +324,12 @@ async fn listing_replay_uses_final_snapshot_order_and_effect_progress() {
     let restarted = &fixture.filesystem;
     let mut listing = Filesystem::restore_directory(restarted, descriptor.clone()).unwrap();
     // Framework skips first+second; new third call must use the saved after-index.
-    let third = resource_invocation();
+    let third = resource_effect_id();
     assert_eq!(
         listing
             .next_entry(
                 &third,
+                None,
                 &interpreter::runtime::limits::TenantLimits::new(64 << 20)
             )
             .await
@@ -311,6 +344,7 @@ async fn listing_replay_uses_final_snapshot_order_and_effect_progress() {
         listing
             .next_entry(
                 &third,
+                None,
                 &interpreter::runtime::limits::TenantLimits::new(64 << 20)
             )
             .await
@@ -319,11 +353,12 @@ async fn listing_replay_uses_final_snapshot_order_and_effect_progress() {
             .path,
         "/a-"
     );
-    let eof = resource_invocation();
+    let eof = resource_effect_id();
     assert!(
         listing
             .next_entry(
                 &eof,
+                None,
                 &interpreter::runtime::limits::TenantLimits::new(64 << 20)
             )
             .await
@@ -334,16 +369,18 @@ async fn listing_replay_uses_final_snapshot_order_and_effect_progress() {
         listing
             .next_entry(
                 &eof,
+                None,
                 &interpreter::runtime::limits::TenantLimits::new(64 << 20)
             )
             .await
             .unwrap()
             .is_none()
     );
-    let close = resource_invocation();
+    let close = resource_effect_id();
     listing
         .close(
             &close,
+            None,
             &interpreter::runtime::limits::TenantLimits::new(64 << 20),
         )
         .await
@@ -353,6 +390,7 @@ async fn listing_replay_uses_final_snapshot_order_and_effect_progress() {
     listing
         .close(
             &close,
+            None,
             &interpreter::runtime::limits::TenantLimits::new(64 << 20),
         )
         .await
@@ -361,6 +399,7 @@ async fn listing_replay_uses_final_snapshot_order_and_effect_progress() {
         listing
             .next_entry(
                 &close,
+                None,
                 &interpreter::runtime::limits::TenantLimits::new(64 << 20)
             )
             .await
@@ -371,14 +410,15 @@ async fn listing_replay_uses_final_snapshot_order_and_effect_progress() {
 #[tokio::test]
 async fn writer_id_restore_skips_chunks_and_retries_receipts_without_republication() {
     let fixture = Fixture::new().await;
-    let mut writer = Filesystem::open_writer(&fixture.filesystem, &resource_invocation(), "/file")
-        .await
-        .unwrap();
+    let mut writer =
+        Filesystem::open_writer(&fixture.filesystem, &resource_effect_id(), None, "/file")
+            .await
+            .unwrap();
     let descriptor = recorded_id(writer.descriptor().unwrap());
-    let first = resource_invocation();
-    let second = resource_invocation();
-    writer.write(&first, b"abc".to_vec()).await.unwrap();
-    writer.write(&second, b"def".to_vec()).await.unwrap();
+    let first = resource_effect_id();
+    let second = resource_effect_id();
+    writer.write(&first, None, b"abc".to_vec()).await.unwrap();
+    writer.write(&second, None, b"def".to_vec()).await.unwrap();
     drop(writer);
     assert!(
         !fixture.filesystem.vfs().root().join("file").exists(),
@@ -388,14 +428,19 @@ async fn writer_id_restore_skips_chunks_and_retries_receipts_without_republicati
     let restarted = &fixture.filesystem;
     let mut writer = Filesystem::restore_writer(restarted, descriptor.clone()).unwrap();
     // Skip first via framework history; retry second's receipt, then continue.
-    assert!(writer.write(&second, b"wrong".to_vec()).await.is_err());
-    writer.write(&second, b"def".to_vec()).await.unwrap();
+    assert!(
+        writer
+            .write(&second, None, b"wrong".to_vec())
+            .await
+            .is_err()
+    );
+    writer.write(&second, None, b"def".to_vec()).await.unwrap();
     writer
-        .write(&resource_invocation(), b"ghi".to_vec())
+        .write(&resource_effect_id(), None, b"ghi".to_vec())
         .await
         .unwrap();
-    let close = resource_invocation();
-    writer.close(&close).await.unwrap();
+    let close = resource_effect_id();
+    writer.close(&close, None).await.unwrap();
     assert!(writer.is_closed());
     drop(writer);
     assert_eq!(
@@ -404,36 +449,42 @@ async fn writer_id_restore_skips_chunks_and_retries_receipts_without_republicati
     );
     std::fs::write(restarted.vfs().root().join("file"), b"later").unwrap();
     let mut writer = Filesystem::restore_writer(restarted, descriptor).unwrap();
-    writer.close(&close).await.unwrap();
+    writer.close(&close, None).await.unwrap();
     assert!(writer.is_closed());
     assert_eq!(
         std::fs::read(restarted.vfs().root().join("file")).unwrap(),
         b"later"
     );
-    assert!(writer.write(&resource_invocation(), vec![]).await.is_err());
+    assert!(
+        writer
+            .write(&resource_effect_id(), None, vec![])
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
 async fn writer_refused_close_is_terminal_and_replayed_from_sql() {
     let fixture = Fixture::new().await;
-    let mut writer = Filesystem::open_writer(&fixture.filesystem, &resource_invocation(), "/file")
-        .await
-        .unwrap();
+    let mut writer =
+        Filesystem::open_writer(&fixture.filesystem, &resource_effect_id(), None, "/file")
+            .await
+            .unwrap();
     let descriptor = writer.descriptor().unwrap();
     writer
-        .write(&resource_invocation(), b"data".to_vec())
+        .write(&resource_effect_id(), None, b"data".to_vec())
         .await
         .unwrap();
     std::fs::create_dir(fixture.filesystem.vfs().root().join("file")).unwrap();
-    let close = resource_invocation();
-    assert!(writer.close(&close).await.is_err());
+    let close = resource_effect_id();
+    assert!(writer.close(&close, None).await.is_err());
     assert!(writer.is_closed());
     drop(writer);
     std::fs::remove_dir(fixture.filesystem.vfs().root().join("file")).unwrap();
     let fixture = reopen(fixture).await;
     let restarted = &fixture.filesystem;
     let mut writer = Filesystem::restore_writer(restarted, descriptor).unwrap();
-    assert!(writer.close(&close).await.is_err());
+    assert!(writer.close(&close, None).await.is_err());
     assert!(writer.is_closed());
     assert!(!restarted.vfs().root().join("file").exists());
 }
@@ -445,7 +496,8 @@ async fn cancelling_before_checkpoint_does_not_advance_the_next_attempt() {
     std::fs::write(fixture.filesystem.vfs().root().join("file"), b"abcdef").unwrap();
     let reader = Filesystem::open_reader(
         &fixture.filesystem,
-        &resource_invocation(),
+        &resource_effect_id(),
+        None,
         "/file",
         byte_options(),
     )
@@ -480,9 +532,13 @@ async fn cancelling_before_checkpoint_does_not_advance_the_next_attempt() {
     .await
     .unwrap();
     let mut reader = Filesystem::restore_reader(&backend, descriptor.clone()).unwrap();
-    let effect = resource_invocation();
+    let effect = resource_effect_id();
     let retry = effect.clone();
-    let task = tokio::spawn(async move { reader.next(&effect, &TenantLimits::new(1 << 20)).await });
+    let task = tokio::spawn(async move {
+        reader
+            .next(&effect, None, &TenantLimits::new(1 << 20))
+            .await
+    });
     tokio::time::timeout(std::time::Duration::from_secs(5), entered.notified())
         .await
         .unwrap();
@@ -491,11 +547,17 @@ async fn cancelling_before_checkpoint_does_not_advance_the_next_attempt() {
     let mut reader = Filesystem::restore_reader(&fixture.filesystem, descriptor).unwrap();
     let limits = TenantLimits::new(1 << 20);
     assert_eq!(
-        read_bytes(reader.next(&retry, &limits).await.unwrap()).unwrap(),
+        read_bytes(reader.next(&retry, None, &limits).await.unwrap()).unwrap(),
         b"abc"
     );
     assert_eq!(
-        read_bytes(reader.next(&resource_invocation(), &limits).await.unwrap()).unwrap(),
+        read_bytes(
+            reader
+                .next(&resource_effect_id(), None, &limits)
+                .await
+                .unwrap()
+        )
+        .unwrap(),
         b"def"
     );
 }
@@ -532,11 +594,11 @@ async fn durable_interpreter_passes_distinct_ids_for_each_resource_call() {
 async fn listing_open_admits_memory_before_enumeration_or_replay() {
     let fixture = Fixture::new().await;
     std::fs::write(fixture.filesystem.vfs().root().join("file"), b"x").unwrap();
-    let opening = resource_invocation();
+    let opening = resource_effect_id();
     let small = TenantLimits::new(8192);
     let backend = &fixture.filesystem;
     assert!(
-        matches!(Filesystem::open_directory(backend, &opening, "/", false, &small).await,
+        matches!(Filesystem::open_directory(backend, &opening, None, "/", false, &small).await,
         Err(interpreter::runtime::filesystem::FilesystemError::Execution(error))
         if error.is::<interpreter::runtime::limits::MemoryCapExceeded>())
     );
@@ -545,14 +607,14 @@ async fn listing_open_admits_memory_before_enumeration_or_replay() {
         .await
         .unwrap();
     assert!(
-        unit.get_listing(&fixture.run, opening.operation.as_ref().unwrap())
+        unit.get_listing(&fixture.run, &opening)
             .await
             .unwrap()
             .is_none()
     );
     drop(unit);
     let large = TenantLimits::new(64 << 20);
-    let descriptor = Filesystem::open_directory(backend, &opening, "/", false, &large)
+    let descriptor = Filesystem::open_directory(backend, &opening, None, "/", false, &large)
         .await
         .unwrap()
         .descriptor()
@@ -560,14 +622,14 @@ async fn listing_open_admits_memory_before_enumeration_or_replay() {
     assert_eq!(large.host_attached_bytes(), 0);
     std::fs::write(fixture.filesystem.vfs().root().join("later"), b"y").unwrap();
     assert!(
-        matches!(Filesystem::open_directory(backend, &opening, "/", false, &small).await,
+        matches!(Filesystem::open_directory(backend, &opening, None, "/", false, &small).await,
         Err(interpreter::runtime::filesystem::FilesystemError::Execution(error))
         if error.is::<interpreter::runtime::limits::MemoryCapExceeded>())
     );
     let mut listing = Filesystem::restore_directory(backend, descriptor).unwrap();
     assert_eq!(
         listing
-            .next_entry(&resource_invocation(), &large)
+            .next_entry(&resource_effect_id(), None, &large)
             .await
             .unwrap()
             .unwrap()
@@ -576,7 +638,7 @@ async fn listing_open_admits_memory_before_enumeration_or_replay() {
     );
     assert!(
         listing
-            .next_entry(&resource_invocation(), &large)
+            .next_entry(&resource_effect_id(), None, &large)
             .await
             .unwrap()
             .is_none()
@@ -591,9 +653,9 @@ async fn cancelled_listing_calls_retain_memory_until_sql_work_finishes() {
         std::fs::write(fixture.filesystem.vfs().root().join("a"), b"").unwrap();
         std::fs::write(fixture.filesystem.vfs().root().join("b"), b"").unwrap();
         let limits = Arc::new(TenantLimits::new(128 << 20));
-        let opening = resource_invocation();
+        let opening = resource_effect_id();
         let descriptor =
-            Filesystem::open_directory(&fixture.filesystem, &opening, "/", false, &limits)
+            Filesystem::open_directory(&fixture.filesystem, &opening, None, "/", false, &limits)
                 .await
                 .unwrap()
                 .descriptor()
@@ -619,7 +681,7 @@ async fn cancelled_listing_calls_retain_memory_until_sql_work_finishes() {
         let effect = if opening_call {
             opening.clone()
         } else {
-            resource_invocation()
+            resource_effect_id()
         };
         let task = {
             let limits = limits.clone();
@@ -627,12 +689,12 @@ async fn cancelled_listing_calls_retain_memory_until_sql_work_finishes() {
             let effect = effect.clone();
             tokio::spawn(async move {
                 if opening_call {
-                    Filesystem::open_directory(&backend, &effect, "/", false, &limits)
+                    Filesystem::open_directory(&backend, &effect, None, "/", false, &limits)
                         .await
                         .map(|_| ())
                 } else {
                     let mut listing = Filesystem::restore_directory(&backend, descriptor)?;
-                    listing.next_entry(&effect, &limits).await.map(|_| ())
+                    listing.next_entry(&effect, None, &limits).await.map(|_| ())
                 }
             })
         };
@@ -647,20 +709,20 @@ async fn cancelled_listing_calls_retain_memory_until_sql_work_finishes() {
         );
         release.notify_one();
         let mut listing = if opening_call {
-            Filesystem::open_directory(&fixture.filesystem, &opening, "/", false, &limits)
+            Filesystem::open_directory(&fixture.filesystem, &opening, None, "/", false, &limits)
                 .await
                 .unwrap()
         } else {
             Filesystem::restore_directory(&fixture.filesystem, descriptor).unwrap()
         };
         let retry = if opening_call {
-            resource_invocation()
+            resource_effect_id()
         } else {
             effect
         };
         assert_eq!(
             listing
-                .next_entry(&retry, &limits)
+                .next_entry(&retry, None, &limits)
                 .await
                 .unwrap()
                 .unwrap()
@@ -670,7 +732,7 @@ async fn cancelled_listing_calls_retain_memory_until_sql_work_finishes() {
         assert_eq!(limits.host_attached_bytes(), 0);
         assert_eq!(
             listing
-                .next_entry(&resource_invocation(), &limits)
+                .next_entry(&resource_effect_id(), None, &limits)
                 .await
                 .unwrap()
                 .unwrap()

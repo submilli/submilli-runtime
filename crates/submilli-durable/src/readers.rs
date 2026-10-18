@@ -7,11 +7,12 @@ use crate::unit_of_work::*;
 use cap_std::fs::File;
 use interpreter::runtime::durable::EffectId;
 use interpreter::runtime::filesystem::{
-    DirectoryReader, FileReader, FilesystemError as PortError, Invocation, ReadOutput,
-    ReadPosition, ReaderOptions, ResourceDescriptor, ResourceKind,
+    DirectoryReader, FileReader, FilesystemError as PortError, ReadOutput, ReadPosition,
+    ReaderOptions, ResourceDescriptor, ResourceKind,
 };
 use interpreter::runtime::fs;
 use interpreter::runtime::fs::FileIdentity;
+use interpreter::runtime::fuel::WorkBudget;
 use interpreter::runtime::limits::TenantLimits;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek, SeekFrom};
@@ -34,13 +35,13 @@ impl FileReader for FilesystemReader {
     }
     async fn next(
         &mut self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         limits: &TenantLimits,
     ) -> Result<ReadOutput, PortError> {
         let fs = &self.filesystem;
-        let effect = require_effect_id(invocation)?;
-        validate_id(effect).map_err(backend)?;
-        if effect == &self.resource {
+        validate_id(effect_id).map_err(backend)?;
+        if effect_id == &self.resource {
             return Err(backend(RecoveryError::Conflict.into()));
         }
         let _gate = fs.context.filesystem_gate.lock().await;
@@ -51,7 +52,7 @@ impl FileReader for FilesystemReader {
         if row.options != self.options {
             return Err(backend(RecoveryError::Conflict.into()));
         }
-        let before = progress_start(&row.progress, effect, false).map_err(backend)?;
+        let before = progress_start(&row.progress, effect_id, false).map_err(backend)?;
         let initial = row
             .position
             .ok_or_else(|| backend(RecoveryError::Conflict.into()))?;
@@ -63,31 +64,31 @@ impl FileReader for FilesystemReader {
                 &mut std::io::Cursor::new([]),
                 &self.options,
                 &mut after,
-                invocation,
+                work.as_deref(),
                 limits,
             )?
         } else {
             let mut native = fs
                 .files
-                .restore_reader(initial, invocation.work.as_deref())
+                .restore_reader(initial, work.as_deref())
                 .map_err(|e| backend(e.into()))?;
             interpreter::runtime::default_filesystem::read_item(
                 &mut native,
                 &self.options,
                 &mut after,
-                invocation,
+                work.as_deref(),
                 limits,
             )?
         };
         checkpoint("reader-read");
-        if let Some(work) = &invocation.work {
+        if let Some(work) = &work {
             work.before_effect();
         }
         fs.stored_reader_progress(
             &self.resource,
             row.progress,
             Progress {
-                effect: effect.clone(),
+                effect: effect_id.clone(),
                 close: false,
                 before,
                 after,
@@ -98,11 +99,14 @@ impl FileReader for FilesystemReader {
         checkpoint("reader-progress");
         Ok(output)
     }
-    async fn close(&mut self, invocation: &Invocation) -> Result<(), PortError> {
+    async fn close(
+        &mut self,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+    ) -> Result<(), PortError> {
         let fs = &self.filesystem;
-        let effect = require_effect_id(invocation)?;
-        validate_id(effect).map_err(backend)?;
-        if effect == &self.resource {
+        validate_id(effect_id).map_err(backend)?;
+        if effect_id == &self.resource {
             return Err(backend(RecoveryError::Conflict.into()));
         }
         let _gate = fs.context.filesystem_gate.lock().await;
@@ -113,19 +117,19 @@ impl FileReader for FilesystemReader {
         if row.options != self.options {
             return Err(backend(RecoveryError::Conflict.into()));
         }
-        let before = progress_start(&row.progress, effect, true).map_err(backend)?;
+        let before = progress_start(&row.progress, effect_id, true).map_err(backend)?;
         let after = ReadPosition {
             closed: true,
             ..before.clone()
         };
-        if let Some(work) = &invocation.work {
+        if let Some(work) = &work {
             work.before_effect();
         }
         fs.stored_reader_progress(
             &self.resource,
             row.progress,
             Progress {
-                effect: effect.clone(),
+                effect: effect_id.clone(),
                 close: true,
                 before,
                 after,
@@ -413,17 +417,13 @@ impl DirectoryReader for DurableDirectory {
     }
     async fn next_entry(
         &mut self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         limits: &interpreter::runtime::limits::TenantLimits,
     ) -> Result<Option<interpreter::runtime::filesystem::DirectoryEntry>, PortError> {
         self.filesystem
-            .operation(invocation.work.clone())
-            .listing_step(
-                &self.resource,
-                require_effect_id(invocation)?,
-                false,
-                limits,
-            )
+            .operation(work)
+            .listing_step(&self.resource, effect_id, false, limits)
             .await
             .map_err(backend)
     }
@@ -432,12 +432,13 @@ impl DirectoryReader for DurableDirectory {
     }
     async fn close(
         &mut self,
-        invocation: &Invocation,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
         limits: &interpreter::runtime::limits::TenantLimits,
     ) -> Result<(), PortError> {
         self.filesystem
-            .operation(invocation.work.clone())
-            .listing_step(&self.resource, require_effect_id(invocation)?, true, limits)
+            .operation(work)
+            .listing_step(&self.resource, effect_id, true, limits)
             .await
             .map(|_| ())
             .map_err(backend)

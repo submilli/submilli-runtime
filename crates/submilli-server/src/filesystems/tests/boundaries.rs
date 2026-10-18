@@ -33,7 +33,13 @@ async fn pending_resources_finish_on_explicit_retry_and_rejected_opens_replay() 
         .unwrap();
     let limits = interpreter::runtime::limits::TenantLimits::new(1 << 20);
     assert_eq!(
-        read_bytes(handle.next(&resource_invocation(), &limits).await.unwrap()).unwrap(),
+        read_bytes(
+            handle
+                .next(&resource_effect_id(), None, &limits)
+                .await
+                .unwrap()
+        )
+        .unwrap(),
         b"dat"
     );
     drop(handle);
@@ -56,14 +62,14 @@ async fn pending_resources_finish_on_explicit_retry_and_rejected_opens_replay() 
     let limits = interpreter::runtime::limits::TenantLimits::new(64 << 20);
     assert!(
         listing
-            .next_entry(&resource_invocation(), &limits)
+            .next_entry(&resource_effect_id(), None, &limits)
             .await
             .unwrap()
             .is_some()
     );
     assert!(
         listing
-            .next_entry(&resource_invocation(), &limits)
+            .next_entry(&resource_effect_id(), None, &limits)
             .await
             .unwrap()
             .is_none()

@@ -74,18 +74,18 @@ alone can detect a changed input; they cannot reconstruct the original bytes.
 
 ## Implementation mapping and remaining integration
 
-1. **Make effect identity explicit at the interpreter boundary.** Use the existing
-   `Invocation` context to carry a typed effect ID for filesystem I/O and resource
+1. **Make effect identity explicit at the interpreter boundary.** Pass a required
+   `effect_id: &EffectId` and optional `work: Option<Arc<WorkBudget>>` directly for filesystem I/O and resource
    steps, including reader/listing `next` and explicit close. Configuration-only
-   methods such as `info` need no effect ID. `EffectId::stub()` supplies a fresh temporary ID per host call; a caller retrying a backend call must retain its `Invocation`. The stub is not restart-stable and does not prescribe how future durability will supply IDs. DefaultFilesystem ignores persistence identity. Ordinary runs
+   methods such as `info` need no effect ID. `EffectId::stub()` supplies a fresh temporary ID per host call; a caller retrying a backend call must reuse its effect ID. The stub is not restart-stable and does not prescribe how future durability will supply IDs. DefaultFilesystem ignores persistence identity. Ordinary runs
    keep using the default backend until SUB-1837 supplies stable history IDs.
 2. **Expose logical reads through the filesystem traits.** Replace the reader's
    bare `Read + Seek` boundary with async, effect-aware logical byte-chunk/line
    steps and an identity accessor. Opening fixes its mode/options. Prefer a
-   `next(invocation)` operation returning an optional bytes/line item, so one
+   `next(effect_id, work, limits)` operation returning an optional bytes/line item, so one
    guest call is one checkpoint even if it needs multiple OS reads. Keep buffering
    and decoding in the backend's reader implementation/shared default helpers.
-   The interpreter only passes context, owns the externref, marshals results and
+   The interpreter only passes the effect ID and work budget, owns the externref, marshals results and
    preserves capability checks, caller attribution, fuel and memory accounting.
    Read-ahead must never become the saved logical position. EOF, BOM handling,
    CRLF, malformed UTF-8 and guest-visible failures that consume input need
@@ -257,7 +257,7 @@ The filesystem-side additions are implemented. They do not imply that production
 
 ## Implemented behavior and test mapping
 
-- `FileReader::next` receives an `Invocation` and current tenant limits. The
+- `FileReader::next` receives an effect ID, an optional work budget and current tenant limits. The
   default backend/shared read helper performs logical byte/line reads; the
   durable backend commits `Progress { effect, close, before, after }` before
   returning. Reader options are immutable, so effect ID plus operation kind is
