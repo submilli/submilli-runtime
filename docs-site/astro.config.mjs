@@ -133,6 +133,7 @@ export default defineConfig({
           items: [
             { label: "With your coding agent", collapsed: true, items: [{ autogenerate: { directory: "../docs/part-5-tutorials/with-your-coding-agent" } }] },
             { label: "Connect a harness", collapsed: true, items: [{ autogenerate: { directory: "../docs/part-5-tutorials/connect-a-harness" } }] },
+            "tutorials/follow-a-code-execution",
             "tutorials/diagnose-a-denial",
             "tutorials/verify-a-package-in-ci",
             "tutorials/manage-blueprints-in-git",
