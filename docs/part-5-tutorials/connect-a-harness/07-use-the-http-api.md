@@ -1,314 +1,250 @@
 ---
 title: "Use the HTTP API"
-description: "Run the research agent on the Vercel AI SDK with no MCP client: the tools built by hand on the server's HTTP API, the Blueprint and variables fixed in your code, then a real conversation."
+description: "Run a standalone Vercel AI SDK research agent, check its connection, and verify its saved notes."
 slug: tutorials/use-the-http-api
 sidebar:
   order: 7
 authorship:
-  label: ai-assisted
+  label: ai-generated
   confirmed: true
-  contentHash: "79afef72d271a57bf22500e24178145bf5ca5f8aa5e75722d717f00bede77189"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "78d40b06c4b4d85f2db41dd417da3107c40dfbf4281038751c898fe78fc42fb9"
+  confirmedAt: "2026-10-18T12:30:00Z"
+# Unpublished AI structural draft. Human rewrite required before publication.
+# Validation: fresh live-model replay is pending. Historical output is not a replay.
 ---
 
-The HTTP API offers the same operations as plain requests. Use it when
-your harness has no MCP client, or when you want to decide which tools
-the model gets and what they are called. The cost is that you build the
-tools yourself. The execute tool's description is not yours to write.
-That text teaches the model the language, with this Blueprint's
-Packages and rules filled in, and the server publishes it for you to
-fetch.
+In this tutorial we will run a research agent with Vercel AI SDK, execute
+its programs on a local Submilli server, and read its saved notes in a new
+session. The page includes the server setup.
 
-In this tutorial we will run the research agent on the Vercel AI SDK
-with tools built on the server's HTTP API, and the Blueprint and the
-signed-in user (`u_ada` in the examples) fixed in our own code. You need the server and the `research`
-Blueprint from [Connect a harness](/docs/tutorials/connect-a-harness),
-with `SUBMILLI_SERVER_TOKEN` still exported, Node.js 20 or later, and a
-key from your model provider for the conversation. The agent file
-imports `@ai-sdk/anthropic`. For Google or OpenAI, `@ai-sdk/google` or
-`@ai-sdk/openai` takes its place, with that provider's key in the
-environment.
+You need Node.js 26.8.1, a macOS or Linux terminal with Bash, `curl`
+and `openssl`, and the `submilli` and `submilli-server` binaries at version
+0.4.1 or later. [Install](/docs/install) covers the binaries. Keep port 18128
+free. Have Jina and Anthropic API keys ready for the conversation step.
+The setup checks use dummy keys and make no model calls.
 
-## Start the project
+## Download the example
 
-In `harnesses`, make a directory for this harness and install the
-dependencies. The files use top-level `await`, hence `type=module`. The
-full project is
-[`examples/harnesses/vercel-ai-sdk-http/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/vercel-ai-sdk-http).
+Open a Bash shell for this tutorial and create a new directory. Keep using
+this shell until the cleanup step.
 
 ```sh
-mkdir vercel-ai-sdk-http && cd vercel-ai-sdk-http
-npm init -y
-npm pkg set type=module
-npm install ai @ai-sdk/anthropic zod
-npm install --save-dev tsx typescript @types/node
+bash
+mkdir submilli-vercel-ai-sdk-http && cd submilli-vercel-ai-sdk-http || exit
+export HARNESS_ROOT="$PWD"
+example_ref=f281964f52da8581ea6766d5cacd27d32eca4639
+example_url="https://raw.githubusercontent.com/submilli/submilli-runtime/$example_ref/examples/harnesses"
+(
+  set -eu
+  for file in blueprint.yaml \
+      prompt.txt \
+      note.ts \
+      vercel-ai-sdk-http/agent.ts \
+      vercel-ai-sdk-http/check.ts \
+      vercel-ai-sdk-http/package.json \
+      vercel-ai-sdk-http/tsconfig.json \
+      vercel-ai-sdk-http/submilli.ts; do
+    mkdir -p "$(dirname "$file")"
+    curl -fsSL "$example_url/$file" -o "$file"
+  done
+)
 ```
 
-## The agent
+The root holds `blueprint.yaml`, `prompt.txt` and `note.ts`. Keep the
+`vercel-ai-sdk-http` directory beside them because the agent reads `../prompt.txt`
+and the check reads `../note.ts`. These downloads are pinned to one source
+revision. The dependency files still contain version ranges.
 
-The agent looks like the ones on the other pages, with `openSession` in
-place of an MCP client. Save it as `agent.ts`. It reads the brief from
-`../prompt.txt`:
+## Start the local server
 
-```typescript title="agent.ts"
-// A Vercel AI SDK agent that runs its programs on submilli-server, over HTTP.
-
-import { readFileSync } from "node:fs";
-import { anthropic } from "@ai-sdk/anthropic";
-import { generateText, stepCountIs, type LanguageModel } from "ai";
-import { openSession } from "./submilli.ts";
-
-const SUBMILLI_SERVER = process.env.SUBMILLI_SERVER ?? "http://127.0.0.1:8128";
-
-// The agent's brief, kept beside the blueprint.
-const INSTRUCTIONS = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
-
-export async function answer(
-  question: string,
-  userId: string,
-  model: LanguageModel = anthropic("claude-sonnet-5"),
-): Promise<string> {
-  const submilli = await openSession({
-    server: SUBMILLI_SERVER,
-    token: serverToken(),
-    blueprint: "research",
-    variables: { userId },
-  });
-
-  try {
-    const { text } = await generateText({
-      model,
-      system: INSTRUCTIONS,
-      tools: submilli.tools,
-      prompt: question,
-      stopWhen: stepCountIs(20),
-    });
-    return text;
-  } finally {
-    await submilli.close();
-  }
-}
-
-/** The API token this application was given for the server. */
-function serverToken(): string {
-  const token = process.env.SUBMILLI_SERVER_TOKEN;
-  if (!token) throw new Error("SUBMILLI_SERVER_TOKEN is not set: export the token the server was started with");
-  return token;
-}
-
-if (import.meta.filename === process.argv[1]) {
-  // In a real application the user comes from the signed-in session.
-  console.log(await answer("What is new in the latest stable release of Rust? Save a note with your sources.", "u_ada"));
-}
-```
-
-`stopWhen` matters, because the SDK stops after one step by default, which would
-end the run on the tool call, before the model has seen the result. The
-example is written for version 7 of the SDK.
-
-## The tools
-
-`openSession` is the part you write. It makes two requests, then builds
-six tools, one for each of the MCP tools the HTTP API can serve. Watch
-the first request, `GET /v1/blueprints/research/prompt`. Its answer is
-the execute tool's description, and the descriptions of the other five.
-Over MCP the server hands these to the harness. Over HTTP you fetch them
-and pass them through unchanged:
-
-```typescript title="submilli.ts"
-// The tools a model needs to write and run programs on submilli-server, built
-// on the server's HTTP API for the Vercel AI SDK.
-
-import { tool, type ToolSet } from "ai";
-import { z } from "zod";
-
-export interface SessionOptions {
-  /** Base URL of submilli-server. */
-  server: string;
-  /** An API token the server accepts. It stays in your application. */
-  token: string;
-  /** The registered blueprint every program in this session runs under. */
-  blueprint: string;
-  /** Values for the blueprint's variables, from your application's own state. */
-  variables?: Record<string, string>;
-}
-
-export interface Session {
-  /** Hand these to `generateText` or `streamText`. */
-  tools: ToolSet;
-  /** Ends the session and wipes its files. */
-  close(): Promise<void>;
-}
-
-/** The descriptions the server publishes for its MCP tools, fetched over HTTP. */
-interface Prompt {
-  prompt: string;
-  tools: {
-    search: string;
-    docs: string;
-    builtins_list: string;
-    builtins_docs: string;
-    last_run: string;
-  };
-}
-
-export async function openSession(options: SessionOptions): Promise<Session> {
-  // Every request carries the token, and a request with a body sends it as JSON.
-  const call = (url: string, method = "GET", body?: unknown): Promise<Response> =>
-    fetch(url, {
-      method,
-      headers: {
-        Authorization: `Bearer ${options.token}`,
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-
-  const blueprint = `${options.server}/v1/blueprints/${encodeURIComponent(options.blueprint)}`;
-  const describe: Prompt = await json(await call(`${blueprint}/prompt`));
-
-  const { session_id } = await json(
-    await call(`${options.server}/v1/sessions`, "POST", {
-      blueprint: options.blueprint,
-      variables: options.variables ?? {},
-    }),
-  );
-  const session = `${options.server}/v1/sessions/${session_id}`;
-
-  return {
-    tools: {
-      // The model supplies the code and nothing else. The blueprint and the
-      // variables were fixed above, where the model cannot reach them.
-      submilli__typescript__execute: tool({
-        description: describe.prompt,
-        inputSchema: z.object({ code: z.string() }),
-        execute: async ({ code }) => {
-          const run = await json(await call(`${session}/execute`, "POST", { code }));
-          // A denial or a compile error arrives here as `error`, for the model to read.
-          return { result: run.result, console: run.console, error: run.error };
-        },
-      }),
-      submilli__typescript__last_run: tool({
-        description: describe.tools.last_run,
-        inputSchema: z.object({}),
-        execute: async () => json(await call(`${session}/last-run`)),
-      }),
-      submilli__typescript__packages__search: tool({
-        description: describe.tools.search,
-        inputSchema: z.object({ query: z.string().default("") }),
-        execute: async ({ query }) =>
-          json(await call(`${blueprint}/packages/search?${new URLSearchParams({ q: query })}`)),
-      }),
-      submilli__typescript__packages__docs: tool({
-        description: describe.tools.docs,
-        inputSchema: z.object({ name: z.string() }),
-        execute: async ({ name }) => {
-          const docs = await call(`${blueprint}/packages/docs?${new URLSearchParams({ name })}`);
-          return docs.text();
-        },
-      }),
-      submilli__typescript__builtins__list: tool({
-        description: describe.tools.builtins_list,
-        inputSchema: z.object({}),
-        execute: async () => json(await call(`${blueprint}/builtins`)),
-      }),
-      submilli__typescript__builtins__docs: tool({
-        description: describe.tools.builtins_docs,
-        inputSchema: z.object({ names: z.array(z.string()) }),
-        execute: async ({ names }) => {
-          const query = new URLSearchParams(names.map((name) => ["name", name]));
-          return json(await call(`${blueprint}/builtins/docs?${query}`));
-        },
-      }),
-    },
-    close: async () => {
-      await call(session, "DELETE");
-    },
-  };
-}
-
-async function json(response: Response): Promise<any> {
-  const body = await response.json();
-  if (!response.ok) {
-    throw new Error(`submilli-server answered ${response.status}: ${body.message ?? body.error}`);
-  }
-  return body;
-}
-```
-
-Notice `description: describe.prompt` on the execute tool. That text is
-all the model is told about the language. It covers the subset of
-TypeScript it may write, the modules this Blueprint lets it import, its
-filesystem and hosts, and what to do with a denial. Write your own description
-there and the model writes Node.js, imports Packages the Blueprint
-doesn't list, and retries denials. Fetch it from the server, per
-Blueprint, and never cache it across Blueprint changes. The second
-request opens the session and fixes the Blueprint and the variables,
-the step the address and the header perform over MCP. A missing variable is refused there with HTTP 400, and an
-unknown Blueprint with 404.
-
-Notice the execute tool's schema. It takes `code` and nothing else. The model
-fills in the arguments of a tool, so an argument named `blueprint` or
-`userId` would hand the model that choice. Keep both in your own code, as
-here.
-
-A failed program still answers HTTP 200, with `error` set as it is over
-MCP and the session's id beside it. A request the server can't act
-on, such as an unknown session, gets an error status.
-
-| Request | Serves |
-| --- | --- |
-| `POST /v1/sessions` | Opens a session. Takes `blueprint`, `variables`, `secrets` |
-| `POST /v1/sessions/{id}/execute` | Runs `code` in the session |
-| `GET /v1/sessions/{id}/last-run` | The last run, with its logs |
-| `DELETE /v1/sessions/{id}` | Ends the session |
-| `GET /v1/blueprints/{name}/prompt` | The tool descriptions |
-| `GET /v1/blueprints/{name}/packages/search?q=` | Package search |
-| `GET /v1/blueprints/{name}/packages/docs?name=` | One Package's documentation |
-| `GET /v1/blueprints/{name}/builtins` | The list of built-ins |
-| `GET /v1/blueprints/{name}/builtins/docs?name=&name=` | Declarations of the built-ins named |
-
-A secret the Blueprint declares with a `harness` source goes in the
-request that opens the session, beside the variables:
-
-```json
-{ "blueprint": "research", "variables": { "userId": "u_ada" }, "secrets": { "USER_TOKEN": "tok_…" } }
-```
-
-Over MCP the same object goes base64url-encoded in a `submilli-secrets`
-header. A session opened without a required secret is refused with HTTP
-400. The server keeps these values in memory only, so a session outlives
-a server restart but its secrets don't. A program then answers HTTP 409
-with `session_requires_secrets` until the harness supplies them again,
-with `POST /v1/sessions/{id}/rebind`, or over MCP a new connection.
-
-The HTTP API has no counterpart to the two file tools. `POST
-/v1/execute`, which the quickstart used, takes the Blueprint and
-variables with the code and runs the program in a session that ends when
-the program returns. It suits a single run. An agent needs the session
-endpoints, so that one program can build on the state of the last.
-
-## One conversation
+Clear inherited Submilli settings in this tutorial shell so its state stays in
+this directory. The CLI reads `SUBMILLI_SERVER_URL` and the example reads
+`SUBMILLI_SERVER`, so set both.
 
 ```sh
-ANTHROPIC_API_KEY=... npx tsx agent.ts
+for name in ${!SUBMILLI_@}; do unset "$name"; done
+umask 077
+export SUBMILLI_HOME="$HARNESS_ROOT/.submilli"
+export SUBMILLI_SERVER="http://127.0.0.1:18128"
+export SUBMILLI_SERVER_URL="$SUBMILLI_SERVER"
+export SUBMILLI_SERVER_TOKEN="$(openssl rand -hex 32)"
+openssl rand -base64 32 > store.key
 ```
 
-This is one real run, with Claude Sonnet 5 as the model, made after the
-Mastra and deepagents tutorials' agents had answered the same question
-for the same user. The model's programs are its own, and another run
-writes different ones. Its first working program read today's date and the
-notes already in `/notes`, and the answer ended:
+Save this complete file as `server.yaml` in the current directory.
+
+```yaml title="server.yaml"
+telemetry: false
+secret_store:
+  key_file: store.key
+volumes:
+  notes:
+    kind: managed-local
+    size_limit: unlimited
+```
+
+Start the server, then check it with the new token.
+
+```sh
+submilli-server --config server.yaml --bind 127.0.0.1 --port 18128 > server.log 2>&1 &
+SUBMILLI_SERVER_PID=$!
+submilli server status
+```
+
+Continue when the status says `running` at `127.0.0.1:18128`. If startup is
+still in progress, run the status command again. For an error, read
+`server.log` before continuing. This token has admin access for the local
+exercise. [Application tokens](/docs/server/run-the-server#give-the-application-its-own-api-token)
+cover deployment.
+
+The Jina Package searches and reads web pages. The downloaded
+[Blueprint](https://github.com/submilli/submilli-runtime/blob/f281964f52da8581ea6766d5cacd27d32eca4639/examples/harnesses/blueprint.yaml)
+permits those operations, model calls and notebook access. Install the Package
+and register the Blueprint with two dummy secrets for the file-access check.
+
+```sh
+submilli server packages install submilli/submilli-runtime @submilli/jina --sha "$example_ref"
+printf 'check-only\n' | submilli server secret put jina_api_key
+printf 'check-only\n' | submilli server secret put anthropic_api_key
+submilli server blueprint apply blueprint.yaml
+```
+
+## Check the notebook
+
+`note.ts` lists the current user's notes, then writes `check.md`. Run it in
+three new sessions, first for Ada, then Grace, then Ada again.
+
+```sh
+submilli server run-code note.ts --blueprint research --var userId=u_ada
+submilli server run-code note.ts --blueprint research --var userId=u_grace
+submilli server run-code note.ts --blueprint research --var userId=u_ada
+```
+
+The returned values, in order, are:
 
 ```text
-Saved/updated note: `/notes/rust-latest-release.md`, which already had this from a prior session — this session re-confirmed it's still accurate and refreshed the verification timestamp.
+notes before: none
+notes before: none
+notes before: check.md
 ```
 
-The note is a file on the server's volume, there for the next
-conversation `u_ada` opens, on this harness or any other.
+Notice that Grace starts with an empty notebook and Ada's second session
+finds her file. The Blueprint mounts each user's directory at `/notes`.
+[Keep files and state](/docs/blueprints/keep-files-and-state) explains the
+mount.
 
-You have the research agent running on the Vercel AI SDK with your own
-tools on the HTTP API, the Blueprint and the user fixed where the
-model can't reach them, and the binding proved on the index before
-any model was involved. Project:
-[`examples/harnesses/vercel-ai-sdk-http/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/vercel-ai-sdk-http).
+## Check the framework connection
+
+```sh
+cd vercel-ai-sdk-http
+npm install
+ANTHROPIC_API_KEY=check-only npm run check
+```
+
+The check ends with:
+
+```text
+vercel-ai-sdk-http: ok
+```
+
+The scripted model checks that the connection can execute a program and
+that users retain separate notebooks across sessions.
+
+## Follow the HTTP adapter
+
+Open [agent.ts](https://github.com/submilli/submilli-runtime/blob/f281964f52da8581ea6766d5cacd27d32eca4639/examples/harnesses/vercel-ai-sdk-http/agent.ts) and
+[submilli.ts](https://github.com/submilli/submilli-runtime/blob/f281964f52da8581ea6766d5cacd27d32eca4639/examples/harnesses/vercel-ai-sdk-http/submilli.ts) in the downloaded example.
+The adapter opens a `research` session for `u_ada`, builds the Vercel tools
+and returns a `close` function. The agent calls that function in `finally`.
+Your application supplies the user from its signed-in session.
+
+Notice that the execute tool accepts only `code`. The application fixes the
+Blueprint and user before asking the model to write a program. Its tool
+description comes from the server's Blueprint prompt, which describes the
+language and permitted operations. Keep that description when adapting the
+example. The [HTTP API reference](/docs/reference/http-api) covers the
+endpoints and error responses.
+
+## Run a research question
+
+Replace the two dummy server secrets. Each command prompts for the value
+without putting the key in shell history.
+
+```sh
+submilli server secret put jina_api_key
+submilli server secret put anthropic_api_key
+```
+
+The server now holds the Jina and Anthropic keys for generated programs.
+The conversation also needs your Anthropic key in the agent process.
+
+Enter that key at the hidden prompt and start the agent.
+
+```sh
+read -rsp "ANTHROPIC_API_KEY: " ANTHROPIC_API_KEY; printf '\n'
+export ANTHROPIC_API_KEY
+npm run agent
+```
+
+The example asks on behalf of `u_ada`:
+
+```text
+What is new in the latest stable release of Rust? Save a note with your sources.
+```
+
+The previous tutorial's recorded run reused a notebook populated by other
+harnesses. Its answer included:
+
+```text
+Saved/updated note: `/notes/rust-latest-release.md`
+```
+
+This tutorial starts a separate notebook, so the model needs to create its
+research note on the first run.
+
+Your run will produce different wording. Watch for the research steps and a
+saved note with sources. A model answer alone does not verify that a file was written, so read it next.
+
+## Read the saved note in a new session
+
+Return to the tutorial root and save this complete program as
+`inspect-notes.ts`. It reads files without changing them.
+
+```sh
+cd "$HARNESS_ROOT"
+```
+
+```typescript title="inspect-notes.ts"
+import fs from "submilli:fs";
+
+function main(): string {
+  const notes: string[] = [];
+  for (const entry of fs.list(".", true)) {
+    if (entry.kind === "file") {
+      notes.push(entry.path + "\n" + (fs.readText(entry.path) ?? "(file too large to read)"));
+    }
+  }
+  return notes.join("\n\n");
+}
+```
+
+```sh
+submilli server run-code inspect-notes.ts --blueprint research --var userId=u_ada
+```
+
+Look for a research note with source links alongside `check.md`. Its name and
+contents depend on the model's run. Seeing it here confirms that a new
+session can read what the agent saved.
+
+## Stop the server
+
+```sh
+kill "$SUBMILLI_SERVER_PID"
+wait "$SUBMILLI_SERVER_PID"
+exit
+```
+
+The example files and `.submilli` directory remain in the tutorial directory.
+
+You have connected Vercel AI SDK to Submilli and checked the saved notebook.
+For adapting the storage policy, continue with [Keep files and state](/docs/blueprints/keep-files-and-state).

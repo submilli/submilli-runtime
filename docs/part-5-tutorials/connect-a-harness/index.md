@@ -1,243 +1,88 @@
 ---
 title: "Connect a harness"
-description: "Set up the server and the research Blueprint the five harness tutorials share, prove it with one program, and know the three things a harness decides when it opens a session."
+description: "Check a local server and user-bound notebooks, then choose a standalone harness tutorial."
 slug: tutorials/connect-a-harness
 sidebar:
   order: 0
 authorship:
-  label: ai-assisted
+  label: ai-generated
   confirmed: true
-  contentHash: "d294d0fe28100c86607cf48c9d57a5dc57b593388dfb9ccfe9a09997292b688e"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "d13af199717eb6b4f7ca3da4b6e5a813622adfcac4e118b0161570321da1dd9f"
+  confirmedAt: "2026-10-18T12:30:00Z"
+# Unpublished AI structural draft. Human rewrite required before publication.
+# Validation evidence is in the external authoring handoff. No model call is needed here.
 ---
 
-Your application, or the agent framework it uses, is the **harness**, the
-code that runs the agent's loop. Submilli replaces none of it. The harness
-keeps the model and the loop, and gains one tool that takes a program the
-model wrote and runs it on the server under your Blueprint.
+In this tutorial we will start a local Submilli server and prove that two
+users have separate notebooks. We will use a small program without a model
+or provider account.
 
-The tutorials in this part build the same research agent on five
-harnesses, one per page. This page sets up what they share, the server
-and the Blueprint, then says what every harness decides when it
-connects. Take the page for yours when you are done:
+Your agent framework is the harness. It runs the conversation and sends
+programs to Submilli for execution under a Blueprint. The five integrations
+below build a research agent that searches the web and saves notes.
 
-| Harness | Language | Connects over |
+| Harness | Language | Connection |
 | --- | --- | --- |
 | [Mastra](/docs/tutorials/connect-mastra) | TypeScript | MCP |
-| [LangChain deepagents](/docs/tutorials/connect-deepagents) | Python | `langchain-submilli`, on the HTTP API |
+| [LangChain deepagents](/docs/tutorials/connect-deepagents) | Python | `langchain-submilli` over HTTP |
 | [OpenAI Agents SDK](/docs/tutorials/connect-openai-agents) | Python | MCP |
 | [Claude Agent SDK](/docs/tutorials/connect-claude-agent-sdk) | TypeScript | MCP |
-| [Vercel AI SDK](/docs/tutorials/use-the-http-api) | TypeScript | The HTTP API |
+| [Vercel AI SDK](/docs/tutorials/use-the-http-api) | TypeScript | HTTP |
 
-The agent answers questions by searching the web and reading pages, and
-keeps notes so that the next conversation can start from what the last
-one learned. It runs on behalf of whoever is signed in to your
-application. The examples stand in for that person with one user id,
-`u_ada`.
+Each integration includes its own setup. You can start directly with the
+framework you use, or complete the server check here first.
 
-## 1. Save the Blueprint
+For this exercise, install the `submilli` and `submilli-server` binaries,
+version 0.4.1 or later, from [Install](/docs/install). Use a macOS or Linux
+terminal with Bash, `curl` and `openssl`. Keep port 18128 free.
 
-Make a directory for the tutorials, `harnesses`, and save this in it:
+## Download the example
 
-```yaml title="harnesses/blueprint.yaml"
-kind: blueprint
-name: research
-
-# Bound once per connection by the application, never by the model.
-variables:
-  userId:
-    required: true
-
-packages:
-- '@submilli/jina'
-
-secrets:
-  JINA_API_KEY:
-    store: jina_api_key
-  ANTHROPIC_API_KEY:
-    store: anthropic_api_key
-  # GOOGLE_API_KEY:
-  #   store: google_api_key
-  # OPENAI_API_KEY:
-  #   store: openai_api_key
-
-# A model the programs may call themselves, to summarize a page or sort
-# results without bringing the text back into the conversation. One
-# provider is enough; uncomment yours.
-llm:
-  providers:
-    anthropic:
-      type: anthropic
-      api_key: ${secrets.ANTHROPIC_API_KEY}
-    # google:
-    #   type: google
-    #   api_key: ${secrets.GOOGLE_API_KEY}
-    # openai:
-    #   type: openai
-    #   api_key: ${secrets.OPENAI_API_KEY}
-  models:
-    claude-haiku-4-5:
-      provider: anthropic
-      description: Fast and cheap; use for summarizing pages and ranking results.
-    # gemini-3.8-flash:
-    #   provider: google
-    #   description: Fast and cheap; use for summarizing pages and ranking results.
-    # gpt-4o-mini:
-    #   provider: openai
-    #   description: Fast and cheap; use for summarizing pages and ranking results.
-
-# Notes outlive the conversation. The `notes` volume keeps one directory
-# per user; a session sees only its own user's, at /notes, and starts
-# there. Everything else is scratch space that ends with the session.
-vfs:
-  mode: per_session
-  cwd: /notes
-  mounts:
-    /notes:
-      mode: named
-      volume: notes
-      subPath: ${vars.userId}
-
-default: deny
-
-permissions:
-  # What generated code may do.
-  main:
-  - capability: jina.ai/search
-    action: allow
-  - capability: jina.ai/read
-    action: allow
-  - capability: llm.call
-    action: allow
-  - capability: fs.read
-    action: allow
-  - capability: fs.write
-    action: allow
-  - capability: fs.list
-    action: allow
-  - capability: fs.stat
-    action: allow
-  - capability: fs.mkdir
-    action: allow
-
-  # What the package itself may do, as `add-package` wrote it: reach
-  # Jina, read its key, and save a download where the program asks.
-  '@submilli/jina':
-  - capability: fs.write
-    action: allow
-  - capability: http.download
-    filter: host == "r.jina.ai"
-    action: allow
-  - capability: http.download
-    filter: host == "s.jina.ai"
-    action: allow
-  - capability: http.post
-    filter: host == "r.jina.ai" and path == "/"
-    action: allow
-  - capability: http.post
-    filter: host == "s.jina.ai" and path == "/"
-    action: allow
-  - capability: secrets.get
-    filter: name == "JINA_API_KEY"
-    action: allow
-```
-
-In short, the agent may search and read through the curated
-`@submilli/jina` Package, call one model, and keep notes at `/notes`.
-That path is the same for each user, but what is behind it isn't. The
-`notes` volume holds a directory per user, and `subPath` mounts the one
-the session's `userId` names, so neither the program nor the Package
-can reach another user's notes, and no rule has to name a user. The file names Anthropic as the
-provider and keeps Google and OpenAI entries commented out. Uncomment
-yours. For what each block does, refer to [Keep files and
-state](/docs/blueprints/keep-files-and-state), [Allow model
-calls](/docs/blueprints/allow-model-calls), and [Mount a shared
-volume](/docs/server/mount-a-shared-volume).
-
-## 2. Save a test program
-
-Beside it, save a program to prove the setup with before any model is
-involved. It lists the notes already there, then writes one. A relative
-path is under `/notes`, where every program starts:
-
-```typescript title="harnesses/note.ts"
-import fs from "submilli:fs";
-
-function main(): string {
-    const before: string[] = [];
-    for (const entry of fs.list(".", false)) before.push(entry.name);
-    fs.writeText("check.md", "# Written by a check\n");
-    return `notes before: ${before.join(", ") || "none"}`;
-}
-```
-
-## 3. Save the agent's brief
-
-The harness supplies no system prompt for Submilli. The instructions
-that teach a model the language arrive as the execute tool's
-description, with this Blueprint's Packages and rules filled in. The
-harness does supply the agent's brief, and each tutorial's agent reads
-it from this file:
-
-```text title="harnesses/prompt.txt"
-You are a research assistant. You answer questions by searching the web
-and reading pages, and you keep a notebook so the next conversation can
-start from what this one learned.
-
-## Work in programs
-
-Do the work by writing and running TypeScript on Submilli. Read `docs`
-before using an unfamiliar package or API: the runtime is not Node.js,
-has no shell, and has no npm packages. Prefer one coherent program for
-related reads, filtering, and summaries, and return the evidence the
-answer needs, not whole pages. Keep predictable follow-up steps inside
-the same program: a URL or an id one call returns is used by the next
-call in code, not in another turn. When a program fails, read the
-diagnostic and repair it. A permission denial is final; do not look for
-another route to the same effect.
-
-## Resources
-
-- `@submilli/jina`: web search, and reading a page as clean text.
-- `submilli:llm`: a model you may call from a program, to summarize a
-  long page or rank results without bringing the text back here.
-- `submilli:fs`: your notebook, the directory /notes, where every
-  program starts. Your first program lists it, reads what is there, and
-  gets today's date from `Temporal.Now.plainDateISO()`, before any search. When you are done,
-  write what you learned, with its sources, updating an existing note
-  rather than replacing what it got right. Use no other file tool for it.
-
-## Answer
-
-Prefer the newest source and check its date against today's before you
-call something the latest. Lead with the answer and cite the pages you
-used. Distinguish what the
-evidence establishes from what you infer and what remains unknown. Never
-claim you read or saved something unless a program's result shows it.
-```
-
-Its shape works. It says what the agent is for, how to work in programs
-rather than one call at a time, what it may reach, and how to answer.
-Edit it for your agent.
-
-## 4. Install the Package
+Open a Bash shell for this tutorial and create a new directory. Keep using
+this shell until the cleanup step.
 
 ```sh
-submilli install submilli/submilli-runtime @submilli/jina
+bash
+mkdir submilli-harness-check && cd submilli-harness-check || exit
+export HARNESS_ROOT="$PWD"
+example_ref=f281964f52da8581ea6766d5cacd27d32eca4639
+example_url="https://raw.githubusercontent.com/submilli/submilli-runtime/$example_ref/examples/harnesses"
+(
+  set -eu
+  for file in blueprint.yaml \
+      prompt.txt \
+      note.ts; do
+    mkdir -p "$(dirname "$file")"
+    curl -fsSL "$example_url/$file" -o "$file"
+  done
+)
 ```
 
-```text
-fetched github.com/submilli/submilli-runtime at 528fd656c38a
-installed @submilli/jina v0.1.0 -> ~/.submilli/packages/@submilli/jina
+The three files are the [research Blueprint](https://github.com/submilli/submilli-runtime/blob/f281964f52da8581ea6766d5cacd27d32eca4639/examples/harnesses/blueprint.yaml), the
+[agent brief](https://github.com/submilli/submilli-runtime/blob/f281964f52da8581ea6766d5cacd27d32eca4639/examples/harnesses/prompt.txt), and the [test program](https://github.com/submilli/submilli-runtime/blob/f281964f52da8581ea6766d5cacd27d32eca4639/examples/harnesses/note.ts).
+The Blueprint permits the Jina Package, model calls and access to the mounted
+notebook. This exercise uses only the notebook.
+
+## Start the local server
+
+Clear inherited Submilli settings in this tutorial shell so its state stays in
+this directory. The CLI reads `SUBMILLI_SERVER_URL` and the example reads
+`SUBMILLI_SERVER`, so set both.
+
+```sh
+for name in ${!SUBMILLI_@}; do unset "$name"; done
+umask 077
+export SUBMILLI_HOME="$HARNESS_ROOT/.submilli"
+export SUBMILLI_SERVER="http://127.0.0.1:18128"
+export SUBMILLI_SERVER_URL="$SUBMILLI_SERVER"
+export SUBMILLI_SERVER_TOKEN="$(openssl rand -hex 32)"
+openssl rand -base64 32 > store.key
 ```
 
-A server on the same machine reads this store.
+Save this complete file as `server.yaml` in the current directory.
 
-## 5. Write the server's config file
-
-In `harnesses`:
-
-```yaml title="harnesses/server.yaml"
+```yaml title="server.yaml"
+telemetry: false
 secret_store:
   key_file: store.key
 volumes:
@@ -246,39 +91,34 @@ volumes:
     size_limit: unlimited
 ```
 
-## 6. Start the server, store the keys, register the Blueprint
+Start the server, then check it with the new token.
 
 ```sh
-head -c 32 /dev/urandom | base64 > store.key
-export SUBMILLI_SERVER_TOKEN=$(openssl rand -hex 32)
-submilli-server --config server.yaml &
+submilli-server --config server.yaml --bind 127.0.0.1 --port 18128 > server.log 2>&1 &
+SUBMILLI_SERVER_PID=$!
+submilli server status
+```
 
-submilli server secret put jina_api_key
-submilli server secret put anthropic_api_key
-# submilli server secret put google_api_key
-# submilli server secret put openai_api_key
+Continue when the status says `running` at `127.0.0.1:18128`. If startup is
+still in progress, run the status command again. For an error, read
+`server.log` before continuing. This token has admin access for the local
+exercise. [Application tokens](/docs/server/run-the-server#give-the-application-its-own-api-token)
+cover deployment.
+
+Install the Jina Package and register the downloaded Blueprint. The two dummy
+secrets let us check file access without contacting a provider.
+
+```sh
+submilli server packages install submilli/submilli-runtime @submilli/jina --sha "$example_ref"
+printf 'check-only\n' | submilli server secret put jina_api_key
+printf 'check-only\n' | submilli server secret put anthropic_api_key
 submilli server blueprint apply blueprint.yaml
 ```
 
-```text
-Value for 'jina_api_key': [hidden]
-Stored secret 'jina_api_key'
-Value for 'anthropic_api_key': [hidden]
-Stored secret 'anthropic_api_key'
-Added blueprint 'research'
-```
+## Check the notebook
 
-Jina issues a key at [jina.ai](https://jina.ai). The second key is your
-model provider's. The checks make no request to either, so any value
-will do for them, but the conversations need real ones. Keep
-`SUBMILLI_SERVER_TOKEN` exported and the server up. The agents send the
-token with every request, and the `submilli server` commands read it
-too.
-
-## 7. Prove it
-
-Run the test program the way an application would, as `u_ada`, then as
-another user, then as `u_ada` again:
+`note.ts` lists the current user's notes, then writes `check.md`. Run it in
+three new sessions, first for Ada, then Grace, then Ada again.
 
 ```sh
 submilli server run-code note.ts --blueprint research --var userId=u_ada
@@ -286,89 +126,28 @@ submilli server run-code note.ts --blueprint research --var userId=u_grace
 submilli server run-code note.ts --blueprint research --var userId=u_ada
 ```
 
-```text
-notes before: none
-```
+The returned values, in order, are:
 
 ```text
 notes before: none
-```
-
-```text
+notes before: none
 notes before: check.md
 ```
 
-Notice the second run. `u_ada` had already written `check.md`, and
-`u_grace`, running the same program at the same path, didn't see it.
-The binding, not the program, decides whose notes `/notes` holds,
-whichever harness opens the session.
+Notice that Grace starts with an empty notebook and Ada's second session
+finds her file. The Blueprint mounts each user's directory at `/notes`.
+[Keep files and state](/docs/blueprints/keep-files-and-state) explains the
+mount.
 
-Now the model. This program reads a page through the Package and asks
-the model to sum it up. `llm.models()` lists the models the Blueprint
-allows, so it works whichever provider you uncommented:
-
-```typescript title="harnesses/summarize.ts"
-import jina from "@submilli/jina";
-import llm from "submilli:llm";
-
-function main(): string {
-    const model = llm.models()[0].name;
-    const page = jina.read("https://blog.rust-lang.org/2026/10/01/Rust-1.99.0/");
-    return llm.call<string>(model, `In two sentences, what is new in this release?\n\n${page.slice(0, 20000)}`);
-}
-```
+## Stop the server
 
 ```sh
-submilli server run-code summarize.ts --blueprint research --var userId=u_ada
+kill "$SUBMILLI_SERVER_PID"
+wait "$SUBMILLI_SERVER_PID"
+exit
 ```
 
-```text
-Rust 1.99.0 stabilizes defining C-ABI variadic functions with "C" and "C-unwind" ABIs, allowing variadic functions to be written in Rust itself, as well as stabilizing functions for retrieving size and alignment information from raw pointers to both sized and unsized types. The release also includes updated documentation recommending against unsafe round-trip unleaking patterns after `Box::leak`, along with numerous other stabilized APIs and standard library improvements.
-```
+The example files and `.submilli` directory remain in the tutorial directory.
 
-The page never reached the conversation. The program fetched it, the
-model read it, and two sentences came back.
-
-## What every harness does
-
-Whatever the harness, three things are its decision, and the model has
-no part in them:
-
-- **The address names the Blueprint.** The MCP endpoint is
-  `http://127.0.0.1:8128/mcp/research`. Every program the harness sends
-  there runs under that Blueprint, and no tool takes a Blueprint as an
-  argument.
-- **A header binds the variables.** `submilli-variables: userId=u_ada`.
-  The server checks the values against the Blueprint before it accepts
-  the connection and refuses one that leaves out a required variable.
-  Take the value from what your application knows (the signed-in user),
-  never from the conversation.
-- **One connection is one session.** The variables, the session's state,
-  and its files outside `/notes` last as long as the connection. Open
-  one per user and close it when the conversation ends.
-
-A secret that belongs to the user, such as their own token for a
-service, is declared with a `harness` source and sent the same way, in
-a `submilli-secrets` header. [Start a
-Blueprint](/docs/blueprints/start-a-blueprint#declare-the-secret)
-shows the declaration, and the [HTTP API](/docs/tutorials/use-the-http-api)
-page shows the request. Connected, the model gets the tools [Your
-application](/docs/application#what-the-agent-gets) describes, with
-the execute tool's description already carrying this Blueprint's
-Packages and rules. The harness adds the brief from step 3 and nothing
-else.
-
-With `langchain-submilli`, the middleware the [deepagents
-tutorial](/docs/tutorials/connect-deepagents) uses, your application
-makes the same decisions over the HTTP API, with no
-`submilli-variables` or `submilli-secrets` header. The middleware's
-`blueprint` argument names the Blueprint, each run's context gives the
-variables, and its secrets when you ask for them, and each conversation
-thread keeps one session.
-
-Now take the tutorial for your harness:
-[Mastra](/docs/tutorials/connect-mastra),
-[deepagents](/docs/tutorials/connect-deepagents),
-[OpenAI Agents](/docs/tutorials/connect-openai-agents),
-[Claude Agent SDK](/docs/tutorials/connect-claude-agent-sdk), or
-[the HTTP API](/docs/tutorials/use-the-http-api).
+You have a working server and a notebook that persists across sessions. Choose
+your integration from the table above to connect a model.

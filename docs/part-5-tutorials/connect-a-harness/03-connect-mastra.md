@@ -1,238 +1,245 @@
 ---
 title: "Connect Mastra"
-description: "Run the research agent on Mastra: its programs executed on the server as the signed-in user, then one real conversation watched end to end."
+description: "Run a standalone Mastra research agent, check its connection, and verify its saved notes."
 slug: tutorials/connect-mastra
 sidebar:
   order: 3
 authorship:
-  label: ai-assisted
+  label: ai-generated
   confirmed: true
-  contentHash: "1f712e5720fff2c420fcc9a1356365c5e1f7d8492c889f78f60e2066d18646bf"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "ec6f70dc2c5451928b9b4193b9c011691ce0066deca51b0e95dc7dbf24292b93"
+  confirmedAt: "2026-10-18T12:30:00Z"
+# Unpublished AI structural draft. Human rewrite required before publication.
+# Validation: fresh live-model replay is pending. Historical output is not a replay.
 ---
 
-In this tutorial we will run the research agent on Mastra, with its programs
-executed on the server as the signed-in user (`u_ada` in the examples). You need the server and the `research`
-Blueprint from [Connect a harness](/docs/tutorials/connect-a-harness),
-with `SUBMILLI_SERVER_TOKEN` still exported, Node.js 20 or later, and a
-key from your model provider for the conversation. The agent file
-names Claude. For Google or OpenAI, the `model` argument takes
-`google/gemini-3.8-flash` or `openai/gpt-5.5` instead, with that
-provider's key in the environment.
+In this tutorial we will run a research agent with Mastra, execute
+its programs on a local Submilli server, and read its saved notes in a new
+session. The page includes the server setup.
 
-## Start the project
+You need Node.js 26.8.1, a macOS or Linux terminal with Bash, `curl`
+and `openssl`, and the `submilli` and `submilli-server` binaries at version
+0.4.1 or later. [Install](/docs/install) covers the binaries. Keep port 18128
+free. Have Jina and Anthropic API keys ready for the conversation step.
+The setup checks use dummy keys and make no model calls.
 
-In `harnesses`, make a directory for this harness and install the
-dependencies. The files use top-level `await`, hence `type=module`. The
-full project is
-[`examples/harnesses/mastra/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/mastra).
+## Download the example
 
-```sh
-mkdir mastra && cd mastra
-npm init -y
-npm pkg set type=module
-npm install @mastra/core @mastra/mcp
-npm install --save-dev tsx typescript @types/node
-```
-
-## The agent
-
-Save this as `agent.ts`. It reads the brief from `../prompt.txt`:
-
-```typescript title="agent.ts"
-// A Mastra agent that runs its programs on submilli-server, over MCP.
-
-import { readFileSync } from "node:fs";
-import { Agent } from "@mastra/core/agent";
-import { MCPClient } from "@mastra/mcp";
-
-const SUBMILLI_SERVER = process.env.SUBMILLI_SERVER ?? "http://127.0.0.1:8128";
-const BLUEPRINT = "research";
-
-type Model = ConstructorParameters<typeof Agent>[0]["model"];
-
-// The agent's brief, kept beside the blueprint.
-const INSTRUCTIONS = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
-
-export async function answer(
-  question: string,
-  userId: string,
-  model: Model = "anthropic/claude-sonnet-5",
-): Promise<string> {
-  const agent = new Agent({
-    id: "researcher",
-    name: "Researcher",
-    instructions: INSTRUCTIONS,
-    model,
-  });
-
-  // One client per user: the binding is fixed when the client connects.
-  const submilli = new MCPClient({
-    id: `submilli-${userId}`,
-    servers: {
-      submilli: {
-        url: new URL(`${SUBMILLI_SERVER}/mcp/${BLUEPRINT}`),
-        requestInit: {
-          headers: {
-            Authorization: `Bearer ${serverToken()}`,
-            "submilli-variables": `userId=${userId}`,
-          },
-        },
-      },
-    },
-  });
-
-  try {
-    const toolsets = await submilli.listToolsets();
-    // Mastra logs a refused connection and carries on with no tools.
-    if (toolsets.submilli === undefined) throw new Error("submilli-server refused the connection");
-
-    const result = await agent.generate(question, { toolsets, maxSteps: 20 });
-    return result.text;
-  } finally {
-    await submilli.disconnect();
-  }
-}
-
-/** The API token this application was given for the server. */
-function serverToken(): string {
-  const token = process.env.SUBMILLI_SERVER_TOKEN;
-  if (!token) throw new Error("SUBMILLI_SERVER_TOKEN is not set: export the token the server was started with");
-  return token;
-}
-
-if (import.meta.filename === process.argv[1]) {
-  // In a real application the user comes from the signed-in session.
-  console.log(await answer("What is new in the latest stable release of Rust? Save a note with your sources.", "u_ada"));
-}
-```
-
-Notice where the tools go. They go to `generate`, as `toolsets`, per
-request, and not to the agent when it is constructed. An agent is usually built
-once and shared, and tools given to it would carry one user's binding
-into another's conversation.
-
-Keep the check on `toolsets.submilli`. When the server refuses the
-connection, Mastra logs the error and returns no tools, and the model
-would answer without them. `maxSteps` bounds the loop. The agent stops
-after twenty rounds of tool calls whether or not it has an answer.
-
-## One conversation
-
-Now the real thing:
+Open a Bash shell for this tutorial and create a new directory. Keep using
+this shell until the cleanup step.
 
 ```sh
-ANTHROPIC_API_KEY=... npx tsx agent.ts
+bash
+mkdir submilli-mastra && cd submilli-mastra || exit
+export HARNESS_ROOT="$PWD"
+example_ref=f281964f52da8581ea6766d5cacd27d32eca4639
+example_url="https://raw.githubusercontent.com/submilli/submilli-runtime/$example_ref/examples/harnesses"
+(
+  set -eu
+  for file in blueprint.yaml \
+      prompt.txt \
+      note.ts \
+      mastra/agent.ts \
+      mastra/check.ts \
+      mastra/package.json \
+      mastra/tsconfig.json; do
+    mkdir -p "$(dirname "$file")"
+    curl -fsSL "$example_url/$file" -o "$file"
+  done
+)
 ```
 
-This is one real run, with Claude Sonnet 5 as the model. The programs
-are the model's own, unedited. Another run, or another model, writes
-different ones, so watch for the shape. The application asks, on behalf
-of `u_ada`:
+The root holds `blueprint.yaml`, `prompt.txt` and `note.ts`. Keep the
+`mastra` directory beside them because the agent reads `../prompt.txt`
+and the check reads `../note.ts`. These downloads are pinned to one source
+revision. The dependency files still contain version ranges.
+
+## Start the local server
+
+Clear inherited Submilli settings in this tutorial shell so its state stays in
+this directory. The CLI reads `SUBMILLI_SERVER_URL` and the example reads
+`SUBMILLI_SERVER`, so set both.
+
+```sh
+for name in ${!SUBMILLI_@}; do unset "$name"; done
+umask 077
+export SUBMILLI_HOME="$HARNESS_ROOT/.submilli"
+export SUBMILLI_SERVER="http://127.0.0.1:18128"
+export SUBMILLI_SERVER_URL="$SUBMILLI_SERVER"
+export SUBMILLI_SERVER_TOKEN="$(openssl rand -hex 32)"
+openssl rand -base64 32 > store.key
+```
+
+Save this complete file as `server.yaml` in the current directory.
+
+```yaml title="server.yaml"
+telemetry: false
+secret_store:
+  key_file: store.key
+volumes:
+  notes:
+    kind: managed-local
+    size_limit: unlimited
+```
+
+Start the server, then check it with the new token.
+
+```sh
+submilli-server --config server.yaml --bind 127.0.0.1 --port 18128 > server.log 2>&1 &
+SUBMILLI_SERVER_PID=$!
+submilli server status
+```
+
+Continue when the status says `running` at `127.0.0.1:18128`. If startup is
+still in progress, run the status command again. For an error, read
+`server.log` before continuing. This token has admin access for the local
+exercise. [Application tokens](/docs/server/run-the-server#give-the-application-its-own-api-token)
+cover deployment.
+
+The Jina Package searches and reads web pages. The downloaded
+[Blueprint](https://github.com/submilli/submilli-runtime/blob/f281964f52da8581ea6766d5cacd27d32eca4639/examples/harnesses/blueprint.yaml)
+permits those operations, model calls and notebook access. Install the Package
+and register the Blueprint with two dummy secrets for the file-access check.
+
+```sh
+submilli server packages install submilli/submilli-runtime @submilli/jina --sha "$example_ref"
+printf 'check-only\n' | submilli server secret put jina_api_key
+printf 'check-only\n' | submilli server secret put anthropic_api_key
+submilli server blueprint apply blueprint.yaml
+```
+
+## Check the notebook
+
+`note.ts` lists the current user's notes, then writes `check.md`. Run it in
+three new sessions, first for Ada, then Grace, then Ada again.
+
+```sh
+submilli server run-code note.ts --blueprint research --var userId=u_ada
+submilli server run-code note.ts --blueprint research --var userId=u_grace
+submilli server run-code note.ts --blueprint research --var userId=u_ada
+```
+
+The returned values, in order, are:
+
+```text
+notes before: none
+notes before: none
+notes before: check.md
+```
+
+Notice that Grace starts with an empty notebook and Ada's second session
+finds her file. The Blueprint mounts each user's directory at `/notes`.
+[Keep files and state](/docs/blueprints/keep-files-and-state) explains the
+mount.
+
+## Check the framework connection
+
+```sh
+cd mastra
+npm install
+ANTHROPIC_API_KEY=check-only npm run check
+```
+
+The check ends with:
+
+```text
+mastra: ok
+```
+
+The scripted model checks that the connection can execute a program and
+that users retain separate notebooks across sessions.
+
+## Follow the MCP connection
+
+Open the downloaded [agent.ts](https://github.com/submilli/submilli-runtime/blob/f281964f52da8581ea6766d5cacd27d32eca4639/examples/harnesses/mastra/agent.ts).
+`answer` opens an MCP client for the question, supplies the tools to Mastra,
+and disconnects in `finally`. The `submilli-variables` header binds
+`userId` before the model runs. The example uses `u_ada` as a stand-in for
+the signed-in user your application supplies.
+
+Notice the check for a missing Submilli toolset. The function stops if the
+connection fails, so the agent cannot continue with its research tools missing.
+The Blueprint governs the programs sent to Submilli. Any additional tools
+supplied by your application need their own controls.
+
+## Run a research question
+
+Replace the two dummy server secrets. Each command prompts for the value
+without putting the key in shell history.
+
+```sh
+submilli server secret put jina_api_key
+submilli server secret put anthropic_api_key
+```
+
+The server now holds the Jina and Anthropic keys for generated programs.
+The conversation also needs your Anthropic key in the agent process.
+
+Enter that key at the hidden prompt and start the agent.
+
+```sh
+read -rsp "ANTHROPIC_API_KEY: " ANTHROPIC_API_KEY; printf '\n'
+export ANTHROPIC_API_KEY
+npm run agent
+```
+
+The example asks on behalf of `u_ada`:
 
 ```text
 What is new in the latest stable release of Rust? Save a note with your sources.
 ```
 
-The model starts where the brief tells it to, with the files tool on
-`/notes`, which is empty, and a program that asks the server for
-today's date:
-
-```typescript
-function main(): string {
-  return Temporal.Now.plainDateISO().toString();
-}
-```
-
-```text
-2026-10-03
-```
-
-Then it reads the documentation of `@submilli/jina` and runs two small
-programs. One searches, and the other reads the release post it found.
-This is the first:
-
-```typescript
-import jina from "@submilli/jina";
-
-function main(): string {
-  const results = jina.searchJson("Rust 1. release notes blog.rust-lang.org 2025");
-  const lines: string[] = [];
-  for (const r of results) {
-    lines.push(r.title + " — " + r.url + " — " + r.description);
-  }
-  return lines.join("\n---\n");
-}
-```
-
-Its first draft of the note doesn't compile:
-
-```text
-error: `+` not defined for `string` and `number`
-  --> <execute>:61:10
-   |
-60 |   fs.writeText("/notes/rust-latest-release.md", content);
-61 |   return "Saved note to /notes/rust-latest-release.md (" + content.length + " chars)";
-   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-62 | }
-   |
-help: `+` does not coerce; wrap the number with `String(...)` before concatenating
-```
-
-A compile error is a result like any other. The model wraps the number
-in `String(...)`, as the diagnostic says, and the note is written:
+The previous tutorial recorded a Claude Sonnet 5 run on October 3, 2026. It
+searched, read a release announcement, corrected a compile error and saved a
+note. One returned value was:
 
 ```text
 Saved note to /notes/rust-latest-release.md (2695 chars)
 ```
 
-Then it answers the user:
+Your run will produce different wording. Watch for the research steps and a
+saved note with sources. A model answer alone does not verify that a file was written, so read it next.
 
-```text
-## Rust 1.99.0 — the latest stable release (shipped 2026‑10‑01)
-…
-Saved a note at `/notes/rust-latest-release.md` with these details and sources for future sessions.
+## Read the saved note in a new session
+
+Return to the tutorial root and save this complete program as
+`inspect-notes.ts`. It reads files without changing them.
+
+```sh
+cd "$HARNESS_ROOT"
 ```
 
-Notice a few things. The model can't know today's date, so it asked
-the server before searching, and the date lets it tell the newest
-release from an old announcement that ranks well. The programs never
-named the user. They wrote to `/notes`, and the session's binding
-decided that `/notes` is `u_ada`'s. And the note is a file on the
-server's volume, there for the next conversation `u_ada` opens, on this
-harness or another. The run took nine tool calls, within the twenty
-steps the agent allows.
+```typescript title="inspect-notes.ts"
+import fs from "submilli:fs";
 
-## With your coding agent
-
-With the [skill](/docs/install#the-skill) installed, your coding
-assistant does this for an application you already have. The project
-was a small Mastra app with no Submilli in it, made of an agent and an
-HTTP handler that takes the signed-in user from an `x-user-id` header set by
-the company's login proxy.
-
-```text
-Connect this app's Mastra agent to the research blueprint on my local Submilli server, so it does its research by running programs there, as the signed-in user.
+function main(): string {
+  const notes: string[] = [];
+  for (const entry of fs.list(".", true)) {
+    if (entry.kind === "file") {
+      notes.push(entry.path + "\n" + (fs.readText(entry.path) ?? "(file too large to read)"));
+    }
+  }
+  return notes.join("\n\n");
+}
 ```
 
-The assistant adds `@mastra/mcp` and writes a `research` function that
-follows this page. It opens a new `MCPClient` for each request, puts the
-user in the `submilli-variables` header, passes the tools to `generate`
-as `toolsets`, checks that the Submilli toolset loaded, and calls
-`disconnect` in a `finally`. The handler answers 502 when the tools are
-missing. The assistant noticed unprompted that the user id ends up in
-the Blueprint's path filters, so it accepts ids of letters, digits, and
-`_ . @ -` alone. Then it says it guessed that format and asks what your
-ids look like.
+```sh
+submilli server run-code inspect-notes.ts --blueprint research --var userId=u_ada
+```
 
-It tests with a real MCP client and no model. The eight tools load and
-the user's own directory can be read. Another user's directory, the
-volume's root, and a look-alike directory that starts with the user's id
-are refused, and a connection with no user gets no tools. It reports that
-it did not run a model. Run afterwards, the app answered the
-question above in about a minute and saved its note under `/u_ada`.
+Look for a research note with source links alongside `check.md`. Its name and
+contents depend on the model's run. Seeing it here confirms that a new
+session can read what the agent saved.
 
-You have the research agent running on Mastra, each program it writes
-executed on the server as the signed-in user, and the binding proved on the index
-before any model was involved. Project:
-[`examples/harnesses/mastra/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/mastra).
+## Stop the server
+
+```sh
+kill "$SUBMILLI_SERVER_PID"
+wait "$SUBMILLI_SERVER_PID"
+exit
+```
+
+The example files and `.submilli` directory remain in the tutorial directory.
+
+You have connected Mastra to Submilli and checked the saved notebook.
+For adapting the storage policy, continue with [Keep files and state](/docs/blueprints/keep-files-and-state).

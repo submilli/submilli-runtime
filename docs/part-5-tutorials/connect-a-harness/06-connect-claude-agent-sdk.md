@@ -1,147 +1,248 @@
 ---
 title: "Connect Claude Agent SDK"
-description: "Run the research agent on the Claude Agent SDK with every action going through Submilli: the SDK's own tools removed, only this server's tools allowed, then a real conversation."
+description: "Run a standalone Claude Agent SDK research agent, check its connection, and verify its saved notes."
 slug: tutorials/connect-claude-agent-sdk
 sidebar:
   order: 6
 authorship:
-  label: ai-assisted
+  label: ai-generated
   confirmed: true
-  contentHash: "9f635fdc1a1c66c7145624dd46478b1792bce822c5ef6729e26da468e9e8c784"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "04f6aa0502e7f3efd9ced5b1b39f9a02bc37a558f2d1b52b585ae7cfc7dd0cd3"
+  confirmedAt: "2026-10-18T12:30:00Z"
+# Unpublished AI structural draft. Human rewrite required before publication.
+# Validation: fresh live-model replay is pending. Historical output is not a replay.
 ---
 
-In this tutorial we will run the research agent on the Claude Agent SDK,
-with every action going through Submilli and its programs executed on the
-server as the signed-in user (`u_ada` in the examples).
-You need the server and the `research` Blueprint from [Connect a
-harness](/docs/tutorials/connect-a-harness), with
-`SUBMILLI_SERVER_TOKEN` still exported, Node.js 20 or later, and an
-Anthropic key for the conversation. This SDK speaks to Claude,
-whichever provider the Blueprint's model uses.
+In this tutorial we will run a research agent with Claude Agent SDK, execute
+its programs on a local Submilli server, and read its saved notes in a new
+session. The page includes the server setup.
 
-## Start the project
+You need Node.js 26.8.1, a macOS or Linux terminal with Bash, `curl`
+and `openssl`, and the `submilli` and `submilli-server` binaries at version
+0.4.1 or later. [Install](/docs/install) covers the binaries. Keep port 18128
+free. Have Jina and Anthropic API keys ready for the conversation step.
+The setup checks use dummy keys and make no model calls.
 
-In `harnesses`, make a directory for this harness and install the
-dependencies. The files use top-level `await`, hence `type=module`. The
-full project is
-[`examples/harnesses/claude-agent-sdk/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/claude-agent-sdk).
+## Download the example
 
-```sh
-mkdir claude-agent-sdk && cd claude-agent-sdk
-npm init -y
-npm pkg set type=module
-npm install @anthropic-ai/claude-agent-sdk
-npm install --save-dev tsx typescript @types/node
-```
-
-## The agent
-
-Save this as `agent.ts`. It reads the brief from `../prompt.txt`:
-
-```typescript title="agent.ts"
-// A Claude Agent SDK agent that runs its programs on submilli-server, over MCP.
-
-import { readFileSync } from "node:fs";
-import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
-
-const SUBMILLI_SERVER = process.env.SUBMILLI_SERVER ?? "http://127.0.0.1:8128";
-const BLUEPRINT = "research";
-
-// The agent's brief, kept beside the blueprint.
-const INSTRUCTIONS = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
-
-export function options(userId: string): Options {
-  return {
-    model: "claude-sonnet-5",
-    systemPrompt: INSTRUCTIONS,
-    mcpServers: {
-      // One entry per user: the binding is fixed when the agent connects.
-      submilli: {
-        type: "http",
-        url: `${SUBMILLI_SERVER}/mcp/${BLUEPRINT}`,
-        headers: {
-          Authorization: `Bearer ${serverToken()}`,
-          "submilli-variables": `userId=${userId}`,
-        },
-      },
-    },
-    // Only the server above, whatever else the account or machine has configured.
-    strictMcpConfig: true,
-    allowedTools: ["mcp__submilli__*"],
-    // No shell, no file tools, no web fetch: every action goes through Submilli.
-    tools: [],
-    settingSources: [],
-    maxTurns: 20,
-  };
-}
-
-export async function answer(question: string, userId: string): Promise<string> {
-  for await (const message of query({ prompt: question, options: options(userId) })) {
-    if (message.type === "result") {
-      return message.subtype === "success" ? message.result : `stopped: ${message.subtype}`;
-    }
-  }
-  throw new Error("the agent ended without a result");
-}
-
-/** The API token this application was given for the server. */
-function serverToken(): string {
-  const token = process.env.SUBMILLI_SERVER_TOKEN;
-  if (!token) throw new Error("SUBMILLI_SERVER_TOKEN is not set: export the token the server was started with");
-  return token;
-}
-
-if (import.meta.filename === process.argv[1]) {
-  // In a real application the user comes from the signed-in session.
-  console.log(await answer("What is new in the latest stable release of Rust? Save a note with your sources.", "u_ada"));
-}
-```
-
-Notice the four options after the server. This SDK gives its agent a
-shell, file access, and web fetch unless told otherwise, and those tools
-run outside Submilli, where no Blueprint applies. `tools: []` removes
-them, and `allowedTools` lets the agent call Submilli's without asking.
-The SDK also loads the MCP servers of whoever runs the process. Run under
-a Claude login that had two connectors attached, this agent started with
-84 tools, eight of them Submilli's. `strictMcpConfig` limits it to the
-server named here, and `settingSources: []` keeps that person's other
-settings out.
-
-The same caution holds for any harness. A Blueprint governs what
-programs do. It can't govern a tool the harness offers beside Submilli's.
-
-The SDK takes its credentials from `ANTHROPIC_API_KEY`, from Amazon
-Bedrock or Google Vertex AI when `CLAUDE_CODE_USE_BEDROCK` or
-`CLAUDE_CODE_USE_VERTEX` is set, or from a Claude Code login on the
-machine.
-
-## One conversation
+Open a Bash shell for this tutorial and create a new directory. Keep using
+this shell until the cleanup step.
 
 ```sh
-ANTHROPIC_API_KEY=... npx tsx agent.ts
+bash
+mkdir submilli-claude-agent-sdk && cd submilli-claude-agent-sdk || exit
+export HARNESS_ROOT="$PWD"
+example_ref=f281964f52da8581ea6766d5cacd27d32eca4639
+example_url="https://raw.githubusercontent.com/submilli/submilli-runtime/$example_ref/examples/harnesses"
+(
+  set -eu
+  for file in blueprint.yaml \
+      prompt.txt \
+      note.ts \
+      claude-agent-sdk/agent.ts \
+      claude-agent-sdk/check.ts \
+      claude-agent-sdk/package.json \
+      claude-agent-sdk/tsconfig.json; do
+    mkdir -p "$(dirname "$file")"
+    curl -fsSL "$example_url/$file" -o "$file"
+  done
+)
 ```
 
-This is one real run, with Claude Sonnet 5 as the model, made after
-three other tutorials' agents had answered the same question for the
-same user. The model's programs are its own, and another run writes
-different ones. The answer began and ended:
+The root holds `blueprint.yaml`, `prompt.txt` and `note.ts`. Keep the
+`claude-agent-sdk` directory beside them because the agent reads `../prompt.txt`
+and the CLI check uses `note.ts` from the root. These downloads are pinned to one source
+revision. The dependency files still contain version ranges.
+
+## Start the local server
+
+Clear inherited Submilli settings in this tutorial shell so its state stays in
+this directory. The CLI reads `SUBMILLI_SERVER_URL` and the example reads
+`SUBMILLI_SERVER`, so set both.
+
+```sh
+for name in ${!SUBMILLI_@}; do unset "$name"; done
+umask 077
+export SUBMILLI_HOME="$HARNESS_ROOT/.submilli"
+export SUBMILLI_SERVER="http://127.0.0.1:18128"
+export SUBMILLI_SERVER_URL="$SUBMILLI_SERVER"
+export SUBMILLI_SERVER_TOKEN="$(openssl rand -hex 32)"
+openssl rand -base64 32 > store.key
+```
+
+Save this complete file as `server.yaml` in the current directory.
+
+```yaml title="server.yaml"
+telemetry: false
+secret_store:
+  key_file: store.key
+volumes:
+  notes:
+    kind: managed-local
+    size_limit: unlimited
+```
+
+Start the server, then check it with the new token.
+
+```sh
+submilli-server --config server.yaml --bind 127.0.0.1 --port 18128 > server.log 2>&1 &
+SUBMILLI_SERVER_PID=$!
+submilli server status
+```
+
+Continue when the status says `running` at `127.0.0.1:18128`. If startup is
+still in progress, run the status command again. For an error, read
+`server.log` before continuing. This token has admin access for the local
+exercise. [Application tokens](/docs/server/run-the-server#give-the-application-its-own-api-token)
+cover deployment.
+
+The Jina Package searches and reads web pages. The downloaded
+[Blueprint](https://github.com/submilli/submilli-runtime/blob/f281964f52da8581ea6766d5cacd27d32eca4639/examples/harnesses/blueprint.yaml)
+permits those operations, model calls and notebook access. Install the Package
+and register the Blueprint with two dummy secrets for the file-access check.
+
+```sh
+submilli server packages install submilli/submilli-runtime @submilli/jina --sha "$example_ref"
+printf 'check-only\n' | submilli server secret put jina_api_key
+printf 'check-only\n' | submilli server secret put anthropic_api_key
+submilli server blueprint apply blueprint.yaml
+```
+
+## Check the notebook
+
+`note.ts` lists the current user's notes, then writes `check.md`. Run it in
+three new sessions, first for Ada, then Grace, then Ada again.
+
+```sh
+submilli server run-code note.ts --blueprint research --var userId=u_ada
+submilli server run-code note.ts --blueprint research --var userId=u_grace
+submilli server run-code note.ts --blueprint research --var userId=u_ada
+```
+
+The returned values, in order, are:
 
 ```text
-The latest stable Rust release is **1.99.0**, released 2026-10-01. I checked this against the official blog post and releases.rs today (2026-10-03), and no newer stable release has shipped.
-…
-**Notebook:** I updated the existing `/notes/rust-latest-release.md` (it already held a 1.99.0 note from an earlier session). I added a line recording today's verification and why the `/releases/latest/` redirect is not a usable source. The existing content is unchanged.
-
-**Not established:** I did not read the Cargo or Clippy changelogs or the full stable release notes, so the list above covers the blog post's highlights, not every change.
+notes before: none
+notes before: none
+notes before: check.md
 ```
 
-Notice the notebook paragraph. Another harness's agent wrote the note,
-in another conversation, under the same user. This one found it
-at `/notes`, read it before searching, and added to it. The notebook
-belongs to the user and the Blueprint, not to the harness.
+Notice that Grace starts with an empty notebook and Ada's second session
+finds her file. The Blueprint mounts each user's directory at `/notes`.
+[Keep files and state](/docs/blueprints/keep-files-and-state) explains the
+mount.
 
-You have the research agent running on the Claude Agent SDK with nothing
-beside Submilli's tools, each program it writes executed on the server
-as the signed-in user, and the binding proved on the index before
-any model was involved. Project:
-[`examples/harnesses/claude-agent-sdk/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/claude-agent-sdk).
+## Check the framework connection
+
+```sh
+cd claude-agent-sdk
+npm install
+ANTHROPIC_API_KEY=check-only npm run check
+```
+
+The check ends with:
+
+```text
+claude-agent-sdk: ok
+```
+
+This check connects and discovers the execute tool. It also checks failed
+connections. It does not execute a program or run a model. The earlier CLI
+check verified the notebook separately.
+
+## Inspect the tools the agent receives
+
+Open the downloaded [agent.ts](https://github.com/submilli/submilli-runtime/blob/f281964f52da8581ea6766d5cacd27d32eca4639/examples/harnesses/claude-agent-sdk/agent.ts).
+The MCP headers bind `userId` to `u_ada`, standing in for the signed-in user
+supplied by your application.
+
+Keep the four tool settings together. `strictMcpConfig: true` selects the
+configured server. `allowedTools` permits its tools, `tools: []` removes the
+SDK's built-in tools, and `settingSources: []` excludes local settings.
+A Blueprint governs Submilli programs. Shell or file tools added separately
+to the harness operate outside that policy.
+
+## Run a research question
+
+Replace the two dummy server secrets. Each command prompts for the value
+without putting the key in shell history.
+
+```sh
+submilli server secret put jina_api_key
+submilli server secret put anthropic_api_key
+```
+
+The server now holds the Jina and Anthropic keys for generated programs.
+The conversation also needs your Anthropic key in the agent process.
+
+Enter that key at the hidden prompt and start the agent.
+
+```sh
+unset CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
+read -rsp "ANTHROPIC_API_KEY: " ANTHROPIC_API_KEY; printf '\n'
+export ANTHROPIC_API_KEY
+npm run agent
+```
+
+The example asks on behalf of `u_ada`:
+
+```text
+What is new in the latest stable release of Rust? Save a note with your sources.
+```
+
+The previous tutorial recorded a Claude Sonnet 5 run on October 3, 2026,
+with a research note already written by another harness. Its answer included:
+
+```text
+**Notebook:** I updated the existing `/notes/rust-latest-release.md`
+```
+
+This tutorial starts a separate notebook, so the model needs to create its
+research note on the first run.
+
+Your run will produce different wording. Watch for the research steps and a
+saved note with sources. A model answer alone does not verify that a file was written, so read it next.
+
+## Read the saved note in a new session
+
+Return to the tutorial root and save this complete program as
+`inspect-notes.ts`. It reads files without changing them.
+
+```sh
+cd "$HARNESS_ROOT"
+```
+
+```typescript title="inspect-notes.ts"
+import fs from "submilli:fs";
+
+function main(): string {
+  const notes: string[] = [];
+  for (const entry of fs.list(".", true)) {
+    if (entry.kind === "file") {
+      notes.push(entry.path + "\n" + (fs.readText(entry.path) ?? "(file too large to read)"));
+    }
+  }
+  return notes.join("\n\n");
+}
+```
+
+```sh
+submilli server run-code inspect-notes.ts --blueprint research --var userId=u_ada
+```
+
+Look for a research note with source links alongside `check.md`. Its name and
+contents depend on the model's run. Seeing it here confirms that a new
+session can read what the agent saved.
+
+## Stop the server
+
+```sh
+kill "$SUBMILLI_SERVER_PID"
+wait "$SUBMILLI_SERVER_PID"
+exit
+```
+
+The example files and `.submilli` directory remain in the tutorial directory.
+
+You have connected Claude Agent SDK to Submilli and checked the saved notebook.
+For adapting the storage policy, continue with [Keep files and state](/docs/blueprints/keep-files-and-state).
