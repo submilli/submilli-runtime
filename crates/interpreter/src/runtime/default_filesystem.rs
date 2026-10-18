@@ -69,7 +69,9 @@ impl Filesystem for DefaultFilesystem {
         let path = fs::resolve_content(&self.vfs, self.vfs.cwd(), path)?;
         path.writable()?;
         if path.is_root() {
-            return Err(FilesystemError::Unsupported("volume root mutation"));
+            return Err(FilesystemError::Unsupported(
+                "cannot write to the VFS root or a mount point",
+            ));
         }
         if append {
             return append_bytes(&path, &bytes);
@@ -187,7 +189,9 @@ impl Filesystem for DefaultFilesystem {
         let path = fs::resolve_content(&self.vfs, self.vfs.cwd(), path)?;
         path.writable()?;
         if path.is_root() {
-            return Err(FilesystemError::Unsupported("volume root mutation"));
+            return Err(FilesystemError::Unsupported(
+                "cannot write to the VFS root or a mount point",
+            ));
         }
         let temp_path = path.temp_sibling();
         let file = temp_path.create_new()?;
