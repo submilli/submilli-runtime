@@ -96,6 +96,19 @@ pub fn infer_with_transitive_checked<'a>(
     packages: &'a [&'a PackageDeclaration],
     transitive: &'a [&'a PackageDeclaration],
 ) -> Result<(TypedAst, Vec<Diagnostic>), CompileError> {
+    infer_with_transitive_for_owner_checked(None, source, package_name, ast, packages, transitive)
+}
+
+/// Infer a script with the import access of its engine-assigned owner. Ordinary
+/// scripts and external package consumers cannot import lifecycle entry points.
+pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
+    owning_package: Option<&str>,
+    source: &'a str,
+    package_name: &'a str,
+    ast: &'a Ast,
+    packages: &'a [&'a PackageDeclaration],
+    transitive: &'a [&'a PackageDeclaration],
+) -> Result<(TypedAst, Vec<Diagnostic>), CompileError> {
     let file = ast
         .source_statements()
         .first()
@@ -109,7 +122,20 @@ pub fn infer_with_transitive_checked<'a>(
         .map_err(|failure| failure.with_stage(CompilerStage::Infer))?;
     validate_lowered_patterns(ast)?;
     check_declaration_types(packages.iter().chain(transitive).copied())?;
-    let packages_by_name: BTreeMap<&'a str, &'a PackageDeclaration> = packages
+    let visible: Vec<_> = packages
+        .iter()
+        .map(|declaration| {
+            if owning_package != Some(declaration.package_name.as_str())
+                && declaration.values.contains_key("finalizer")
+            {
+                std::borrow::Cow::Owned((*declaration).clone().without_finalizer())
+            } else {
+                std::borrow::Cow::Borrowed(*declaration)
+            }
+        })
+        .collect();
+    let packages: Vec<_> = visible.iter().map(std::borrow::Cow::as_ref).collect();
+    let packages_by_name: BTreeMap<&str, &PackageDeclaration> = packages
         .iter()
         .map(|d| (d.package_name.as_str(), *d))
         .collect();
@@ -324,6 +350,10 @@ pub fn infer_package_checked<'a>(
             .values()
             .chain(transitive_packages.values()),
     )?;
+    let external_packages: BTreeMap<_, _> = external_packages
+        .into_iter()
+        .map(|(name, declaration)| (name, declaration.without_finalizer()))
+        .collect();
     let mut diagnostics = Vec::new();
     let module_map: BTreeMap<ModulePath, (crate::FileId, &'a Ast)> = modules
         .into_iter()
@@ -1341,6 +1371,93 @@ mod tests {
     use crate::{Asi, Sources, Token, TokenKind, lower_patterns, parse};
 
     use super::*;
+
+    fn finalizer_dependency() -> PackageDeclaration {
+        crate::compile_package(
+            "@test/resource",
+            ModulePath::from("lib"),
+            &[crate::PackageSourceModule {
+                path: ModulePath::from("lib"),
+                source: "export function finalizer(key: string, value: number): void {}",
+            }],
+            &[],
+        )
+        .unwrap()
+        .declaration
+    }
+
+    #[test]
+    fn external_finalizers_are_visible_only_to_their_engine_assigned_owner() {
+        let dependency = finalizer_dependency();
+        let mut packages = runtime_external_packages();
+        packages.insert(dependency.package_name.clone(), dependency);
+        let declarations: Vec<_> = packages.values().collect();
+        for source in [
+            r#"import { finalizer as finish } from "@test/resource"; function main(): void { finish("k", 1); }"#,
+            r#"import * as resource from "@test/resource"; function main(): void { resource.finalizer("k", 1); }"#,
+        ] {
+            let mut sources = Sources::new();
+            let (_, _, ast) = parse_module(&mut sources, "main", source);
+            let (_, diagnostics) =
+                infer_with_transitive_checked(source, "main", &ast, &declarations, &[]).unwrap();
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|d| d.severity == crate::Severity::Error),
+                "{diagnostics:?}"
+            );
+            for owner in ["@test/resource", "@test/other"] {
+                let (_, diagnostics) = infer_with_transitive_for_owner_checked(
+                    Some(owner),
+                    source,
+                    "main",
+                    &ast,
+                    &declarations,
+                    &[],
+                )
+                .unwrap();
+                assert_eq!(
+                    diagnostics
+                        .iter()
+                        .any(|d| d.severity == crate::Severity::Error),
+                    owner != "@test/resource",
+                    "{owner}: {diagnostics:?}"
+                );
+            }
+        }
+        assert!(packages["@test/resource"].values.contains_key("finalizer"));
+    }
+
+    #[test]
+    fn packages_cannot_import_a_dependency_finalizer() {
+        let mut sources = Sources::new();
+        let (module, file, ast) = parse_module(
+            &mut sources,
+            "lib",
+            r#"
+            import { finalizer as finish } from "@test/resource";
+            export function misuse(): void { finish("k", 1); }
+        "#,
+        );
+        let mut dependencies = runtime_external_packages();
+        let dependency = finalizer_dependency();
+        dependencies.insert(dependency.package_name.clone(), dependency);
+        let (_, _, diagnostics) = infer_package_checked(
+            "@test/consumer",
+            ModulePath::from("lib"),
+            vec![(module, file, &ast)],
+            &sources,
+            dependencies,
+            BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("does not export `finalizer`")),
+            "{diagnostics:?}"
+        );
+    }
 
     #[test]
     fn finalizer_rule_propagates_type_budget_exhaustion() {

@@ -180,10 +180,11 @@ fn front_end(
     stdlib_defs: &[PackageDeclaration],
     packages: &[&PackageDeclaration],
 ) -> Result<(TypedAst, Vec<Diagnostic>, PhaseTimings), CompileError> {
-    front_end_with_transitive(source, parsed, stdlib_defs, packages, &[])
+    front_end_with_transitive(None, source, parsed, stdlib_defs, packages, &[])
 }
 
 fn front_end_with_transitive(
+    owning_package: Option<&str>,
     source: &str,
     parsed: &ParsedScript,
     stdlib_defs: &[PackageDeclaration],
@@ -209,7 +210,8 @@ fn front_end_with_transitive(
     infer_refs.extend(host_defs.iter());
     infer_refs.extend(stdlib_defs.iter());
     infer_refs.extend_from_slice(packages);
-    let (ta, infer_diags) = crate::typechecker::infer::infer_with_transitive_checked(
+    let (ta, infer_diags) = crate::typechecker::infer::infer_with_transitive_for_owner_checked(
+        owning_package,
         source,
         crate::mangle::USER_PACKAGE,
         &parsed.ast,
@@ -524,22 +526,8 @@ fn compile_parsed_script(
     external_declarations: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
 ) -> Result<CompiledScript, CompileError> {
-    crate::typechecker::infer::check_declaration_types(
-        external_declarations.iter().chain(transitive).copied(),
-    )?;
-    let visible: Vec<_> = external_declarations
-        .iter()
-        .map(|defs| {
-            let mut defs = (*defs).clone();
-            if owning_package != Some(defs.package_name.as_str()) {
-                defs.values.remove("finalizer");
-            }
-            defs
-        })
-        .collect();
-    let visible_refs: Vec<_> = visible.iter().collect();
-    let external_declarations = visible_refs.as_slice();
     let (mut ta, diags, mut timings) = front_end_with_transitive(
+        owning_package,
         source,
         parsed,
         stdlib_defs,
