@@ -8,12 +8,14 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "932cc0cfd535e1de29270ee240d0af2ca3e7c4022aa6f02bd684401aceee4ae3"
+  contentHash: "96307461e2bc675b0b31781db98a4cbb7f9c07ced55c2746b70529afdeb5351f"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
 
-Use the HTTP API to send code from a Vercel AI SDK tool to the Submilli runtime.
+Use the HTTP API to send code from a Vercel AI SDK
+[tool](https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling) to the Submilli runtime.
+A tool describes a function the model can call and the inputs it accepts.
 
 :::note[Before you start]
 - An existing Vercel AI SDK project with a configured model.
@@ -24,13 +26,36 @@ Use the HTTP API to send code from a Vercel AI SDK tool to the Submilli runtime.
 
 ## Set connection variables
 
-Set these environment variables in the process that runs your agent:
+Use the server address, token, and Blueprint name prepared in **Before you start**.
+Assign those values to these environment variables in the process that runs your agent:
 
 | Environment variable | Value |
 | --- | --- |
 | `SUBMILLI_SERVER` | Server address, such as `http://127.0.0.1:8128`, without a trailing slash |
 | `SUBMILLI_SERVER_TOKEN` | Server token |
 | `SUBMILLI_BLUEPRINT` | Registered Blueprint name |
+
+## Use your coding agent (optional)
+
+The [skill bundled with Submilli 0.4.1](https://github.com/submilli/submilli-runtime/blob/v0.4.1/skills/submilli/references/vercel.md)
+connects Vercel AI SDK over MCP (Model Context Protocol), which lets an agent
+call tools on a server. The manual steps below use the HTTP API directly.
+
+[Install the Submilli skill](/docs/install#the-skill), restart your coding agent,
+and open this project. Make the prepared values available to its terminal through
+your local environment or existing project configuration, then give it this prompt:
+
+```text title="Prompt for your coding agent"
+Use the Submilli skill to connect this existing Vercel AI SDK project
+to Submilli over MCP. Reuse the prepared server and Blueprint. Read
+SUBMILLI_SERVER, SUBMILLI_SERVER_TOKEN, and SUBMILLI_BLUEPRINT from the
+local environment or project configuration. Map those values to the
+integration's settings.
+Keep my model and existing agent configuration. Keep token values out of
+source code and responses. Verify the connection without a model request.
+```
+
+For manual setup, continue below.
 
 ## Install the tool dependencies
 

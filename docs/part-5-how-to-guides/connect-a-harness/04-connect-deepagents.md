@@ -8,12 +8,14 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "9e351ea3ebb6edbbd1bf69dcdad28bb6f74e98987544b3939b0b9a88a7a875da"
+  contentHash: "23944832279eac4935f16b3ce0c4243fc745e7a2e16f08a1ec331814d15ea9d4"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
 
 Use `SubmilliMiddleware` to connect your existing deepagents agent to the Submilli runtime.
+[Middleware](https://docs.langchain.com/oss/python/langchain/middleware/overview)
+lets you add code before or after an agent's model and tool calls.
 
 :::note[Before you start]
 - An existing deepagents project with a configured model.
@@ -24,13 +26,36 @@ Use `SubmilliMiddleware` to connect your existing deepagents agent to the Submil
 
 ## Set connection variables
 
-Set these environment variables in the process that runs your agent:
+Use the server address, token, and Blueprint name prepared in **Before you start**.
+Assign those values to these environment variables in the process that runs your agent:
 
 | Environment variable | Value |
 | --- | --- |
 | `SUBMILLI_SERVER` | Server address, such as `http://127.0.0.1:8128`, without a trailing slash |
 | `SUBMILLI_SERVER_TOKEN` | Server token |
 | `SUBMILLI_BLUEPRINT` | Registered Blueprint name |
+
+## Use your coding agent (optional)
+
+The [skill bundled with Submilli 0.4.1](https://github.com/submilli/submilli-runtime/blob/v0.4.1/skills/submilli/references/deepagents.md)
+connects deepagents over [MCP](https://docs.langchain.com/oss/python/langchain/mcp),
+a protocol for calling server tools. The manual steps below use native middleware.
+
+[Install the Submilli skill](/docs/install#the-skill), restart your coding agent,
+and open this project. Make the prepared values available to its terminal through
+your local environment or existing project configuration, then give it this prompt:
+
+```text title="Prompt for your coding agent"
+Use the Submilli skill to connect this existing deepagents project
+to Submilli over MCP. Reuse the prepared server and Blueprint. Read
+SUBMILLI_SERVER, SUBMILLI_SERVER_TOKEN, and SUBMILLI_BLUEPRINT from the
+local environment or project configuration. Map those values to the
+integration's settings.
+Keep my model and existing agent configuration. Keep token values out of
+source code and responses. Verify the connection without a model request.
+```
+
+For manual setup, continue below.
 
 ## Install the integration
 

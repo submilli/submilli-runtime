@@ -8,12 +8,14 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "a9a06150cbd9cced1ddc2a8e565a034253823987f95d5a5a4df82b538ee85c5d"
+  contentHash: "e8ef0eb24cbbcbbf0fd7a0fed8a9957066e27750739defd2b64188f6924d9ceb"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
 
-Use `MCPServerStreamableHttp` to connect your agent to the Submilli runtime over MCP.
+Use `MCPServerStreamableHttp` to connect your agent to the Submilli runtime over
+[MCP](https://openai.github.io/openai-agents-python/mcp/) (Model Context Protocol),
+which lets an agent discover and call tools on a server.
 
 :::note[Before you start]
 - An existing OpenAI Agents SDK project with a configured model.
@@ -24,13 +26,32 @@ Use `MCPServerStreamableHttp` to connect your agent to the Submilli runtime over
 
 ## Set connection variables
 
-Set these environment variables in the process that runs your agent:
+Use the server address, token, and Blueprint name prepared in **Before you start**.
+Assign those values to these environment variables in the process that runs your agent:
 
 | Environment variable | Value |
 | --- | --- |
 | `SUBMILLI_SERVER` | Server address, such as `http://127.0.0.1:8128`, without a trailing slash |
 | `SUBMILLI_SERVER_TOKEN` | Server token |
 | `SUBMILLI_BLUEPRINT` | Registered Blueprint name |
+
+## Use your coding agent (optional)
+
+[Install the Submilli skill](/docs/install#the-skill), restart your coding agent,
+and open this project. Make the prepared values available to its terminal through
+your local environment or existing project configuration, then give it this prompt:
+
+```text title="Prompt for your coding agent"
+Use the Submilli skill to connect this existing OpenAI Agents SDK project
+to Submilli over MCP. Reuse the prepared server and Blueprint. Read
+SUBMILLI_SERVER, SUBMILLI_SERVER_TOKEN, and SUBMILLI_BLUEPRINT from the
+local environment or project configuration. Map those values to the
+integration's settings.
+Keep my model and existing agent configuration. Keep token values out of
+source code and responses. Verify the connection without a model request.
+```
+
+For manual setup, continue below.
 
 ## Install OpenAI Agents SDK
 
