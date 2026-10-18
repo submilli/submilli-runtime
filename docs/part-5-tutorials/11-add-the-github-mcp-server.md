@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "15b586eb1184277c4495af88f134cb8d1d65413ea87b5a3f07966d6adbc34166"
+  contentHash: "fb231ecd5c8932a6e68a506fa9fbaa4f1614f99228e8886d9e3bfc2055190ca7"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -307,8 +307,8 @@ mcp:
 
 There is no provider and no `authenticate` step. The server sends whatever
 token the session was opened with, and a session opened without one is refused.
-[The HTTP session API](/docs/reference/http-api#post-v1sessions) accepts the
-token in its `secrets` object. The rules are the same either way.
+[The session creation request](/docs/reference/http-api#post-v1sessions)
+shows how to supply it. The rules are the same either way.
 What changes is whose account the call is made as.
 
 You have given an agent GitHub through its hosted MCP server, declared

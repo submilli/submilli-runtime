@@ -1,251 +1,244 @@
 ---
-title: "Connect OpenAI Agents"
-description: "Run a standalone OpenAI Agents SDK research agent, check its connection, and verify its saved notes."
+title: "Connect OpenAI Agents SDK"
+description: "Connect OpenAI Agents SDK to a local Submilli server without a model call."
 slug: tutorials/connect-openai-agents
 sidebar:
   order: 5
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "987f4ee5295a8238e588f8d42032711180de2847b8f147a4c11762b28db5d2b2"
-  confirmedAt: "2026-10-18T12:30:00Z"
-# Unpublished AI structural draft. Human rewrite required before publication.
-# Validation: fresh live-model replay is pending. Historical output is not a replay.
+  contentHash: "24f51d6f245b995309018e0d1151ef59b2089d63f5690e3950f7f10415808bca"
+  confirmedAt: "2026-10-18T13:09:05.218103+00:00"
+# Unpublished AI draft. Human prose rewrite required before publication.
 ---
 
-In this tutorial we will run a research agent with OpenAI Agents SDK, execute
-its programs on a local Submilli server, and read its saved notes in a new
-session. The page includes the server setup.
+In this tutorial we will connect OpenAI Agents SDK to a Submilli server on your
+computer. OpenAI Agents SDK is a Python library for building agent programs. SDK stands for software development kit.
+An agent program uses an AI model and calls tools on its behalf.
+A tool is an action the agent can request.
 
-You need Python 3.11 or later, a macOS or Linux terminal with Bash, `curl`
-and `openssl`, and the `submilli` and `submilli-server` binaries at version
-0.4.1 or later. [Install](/docs/install) covers the binaries. Keep port 18128
-free. Have Jina, Anthropic and OpenAI API keys ready for the conversation step.
-The setup checks use dummy keys and make no model calls.
+Submilli receives code from an agent and runs it. Here, we only check the
+connection. You will start the server, give it a small rules file, and run
+the connection code. Success prints `Connected to Submilli.`
 
-## Download the example
+The check asks Submilli which tools it offers. Success means the library
+can see the tool for running code.
 
-Open a Bash shell for this tutorial and create a new directory. Keep using
-this shell until the cleanup step.
+You do not need a model account or API key. This check uses no model credits.
+
+## What you need
+
+- Python 3.11 or later.
+- A macOS or Linux terminal with Bash, `curl`, and `openssl`.
+- The `submilli` and `submilli-server` programs, version 0.4.1 or later.
+  [Install](/docs/install) explains how to get them.
+
+The steps use port 18128, a local address number for the server.
+
+## Create a folder
+
+Open Bash, the command interpreter used by these steps.
 
 ```sh
 bash
-mkdir submilli-openai-agents && cd submilli-openai-agents || exit
-export HARNESS_ROOT="$PWD"
-example_ref=f281964f52da8581ea6766d5cacd27d32eca4639
-example_url="https://raw.githubusercontent.com/submilli/submilli-runtime/$example_ref/examples/harnesses"
-(
-  set -eu
-  for file in blueprint.yaml \
-      prompt.txt \
-      note.ts \
-      openai-agents/agent.py \
-      openai-agents/check.py \
-      openai-agents/requirements.txt; do
-    mkdir -p "$(dirname "$file")"
-    curl -fsSL "$example_url/$file" -o "$file"
-  done
-)
 ```
 
-The root holds `blueprint.yaml`, `prompt.txt` and `note.ts`. Keep the
-`openai-agents` directory beside them because the agent reads `../prompt.txt`
-and the check reads `../note.ts`. These downloads are pinned to one source
-revision. The dependency files still contain version ranges.
+Create a new folder. If this name already exists, use a new name. The command
+stops if it cannot create the folder.
 
-## Start the local server
+```sh
+mkdir submilli-openai-agents-connection && cd submilli-openai-agents-connection || exit
+```
 
-Clear inherited Submilli settings in this tutorial shell so its state stays in
-this directory. The CLI reads `SUBMILLI_SERVER_URL` and the example reads
-`SUBMILLI_SERVER`, so set both.
+Keep using this terminal until the last step. Save this folder's path so
+later commands can find it.
+
+```sh
+export TUTORIAL_ROOT="$PWD"
+```
+
+## Set up the server
+
+The server is the program that accepts the connection. These commands keep
+its data inside the tutorial folder. They create a random token, which acts
+as the password for this local server.
 
 ```sh
 for name in ${!SUBMILLI_@}; do unset "$name"; done
 umask 077
-export SUBMILLI_HOME="$HARNESS_ROOT/.submilli"
+export SUBMILLI_HOME="$TUTORIAL_ROOT/.submilli"
 export SUBMILLI_SERVER="http://127.0.0.1:18128"
 export SUBMILLI_SERVER_URL="$SUBMILLI_SERVER"
 export SUBMILLI_SERVER_TOKEN="$(openssl rand -hex 32)"
-openssl rand -base64 32 > store.key
 ```
 
-Save this complete file as `server.yaml` in the current directory.
+The first line clears old Submilli settings in this shell. `umask 077` makes
+new files private to your computer account. The connection code reads
+`SUBMILLI_SERVER`. The `submilli` command reads `SUBMILLI_SERVER_URL`.
+Both addresses point to this computer, at `127.0.0.1`.
+
+Save this file as `server.yaml`. It turns off usage reporting for the check.
 
 ```yaml title="server.yaml"
 telemetry: false
-secret_store:
-  key_file: store.key
-volumes:
-  notes:
-    kind: managed-local
-    size_limit: unlimited
 ```
 
-Start the server, then check it with the new token.
+Start the server. `--bind` keeps it on this computer. `--port` selects 18128.
+The `&` leaves it running while you use the same terminal. Messages go to
+`server.log`.
 
 ```sh
 submilli-server --config server.yaml --bind 127.0.0.1 --port 18128 > server.log 2>&1 &
 SUBMILLI_SERVER_PID=$!
+```
+
+`SUBMILLI_SERVER_PID` stores the process number so you can stop this server
+later. Check that it started.
+
+```sh
 submilli server status
 ```
 
-Continue when the status says `running` at `127.0.0.1:18128`. If startup is
-still in progress, run the status command again. For an error, read
-`server.log` before continuing. This token has admin access for the local
-exercise. [Application tokens](/docs/server/run-the-server#give-the-application-its-own-api-token)
-cover deployment.
-
-The Jina Package searches and reads web pages. The downloaded
-[Blueprint](https://github.com/submilli/submilli-runtime/blob/f281964f52da8581ea6766d5cacd27d32eca4639/examples/harnesses/blueprint.yaml)
-permits those operations, model calls and notebook access. Install the Package
-and register the Blueprint with two dummy secrets for the file-access check.
+Look for `running` and `127.0.0.1:18128`. If it says `stopped`, wait one
+second and run the status command again. If it still says `stopped`, read
+the server messages.
 
 ```sh
-submilli server packages install submilli/submilli-runtime @submilli/jina --sha "$example_ref"
-printf 'check-only\n' | submilli server secret put jina_api_key
-printf 'check-only\n' | submilli server secret put anthropic_api_key
+cat server.log
+```
+
+If the log says `Address already in use`, another program has port 18128.
+Change `18128` to `18129` in both the `SUBMILLI_SERVER` setting and the
+server command's `--port` value. Repeat the address settings and start command.
+The status should now show `running` at `127.0.0.1:18129`.
+
+## Add the rules file
+
+Submilli requires a Blueprint for the connection. A Blueprint is a file that
+sets the rules for code sent to Submilli. Save this as `blueprint.yaml`.
+
+```yaml title="blueprint.yaml"
+kind: blueprint
+name: connection-check
+default: deny
+```
+
+`name` gives these rules the name `connection-check`. `default: deny` blocks
+operations such as reading files and calling web services. This connection
+check needs neither operation.
+
+Load the rules into the server.
+
+```sh
 submilli server blueprint apply blueprint.yaml
 ```
 
-## Check the notebook
+The command prints `Added blueprint 'connection-check'`.
 
-`note.ts` lists the current user's notes, then writes `check.md`. Run it in
-three new sessions, first for Ada, then Grace, then Ada again.
+## Install OpenAI Agents SDK
 
-```sh
-submilli server run-code note.ts --blueprint research --var userId=u_ada
-submilli server run-code note.ts --blueprint research --var userId=u_grace
-submilli server run-code note.ts --blueprint research --var userId=u_ada
-```
-
-The returned values, in order, are:
-
-```text
-notes before: none
-notes before: none
-notes before: check.md
-```
-
-Notice that Grace starts with an empty notebook and Ada's second session
-finds her file. The Blueprint mounts each user's directory at `/notes`.
-[Keep files and state](/docs/blueprints/keep-files-and-state) explains the
-mount.
-
-## Check the framework connection
-
-Confirm that `python3 --version` reports Python 3.11 or later before creating
-the environment.
+Download the list of Python libraries this check needs.
 
 ```sh
-cd openai-agents
+curl -fsSL https://raw.githubusercontent.com/submilli/submilli-runtime/f281964f52da8581ea6766d5cacd27d32eca4639/examples/harnesses/openai-agents/requirements.txt -o requirements.txt
+```
+
+Check the Python version. Continue only if it is 3.11 or later.
+
+```sh
+python3 --version
+```
+
+Create a Python environment for this folder so its libraries stay separate.
+
+```sh
 python3 -m venv .venv
+```
+
+Activate it. Python commands in this shell will now use this folder's libraries.
+
+```sh
 . .venv/bin/activate
+```
+
+Install the libraries listed in `requirements.txt`.
+
+```sh
 python -m pip install -r requirements.txt
-OPENAI_API_KEY=check-only python check.py
 ```
 
-The check ends with:
+Wait for installation to finish without an error before continuing.
+
+## Save the connection code
+
+Save this complete file as `check.py` in the tutorial folder.
+Use it as written. It reads the server address and token set in your shell.
+
+```python title="check.py"
+import asyncio
+import os
+
+from agents.mcp import MCPServerStreamableHttp
+
+
+async def main():
+    async with MCPServerStreamableHttp(
+        name="submilli",
+        params={
+            "url": f"{os.environ['SUBMILLI_SERVER']}/mcp/connection-check",
+            "headers": {
+                "Authorization": f"Bearer {os.environ['SUBMILLI_SERVER_TOKEN']}",
+            },
+        },
+    ) as connection:
+        tools = await connection.list_tools()
+        if not any(tool.name == "submilli__typescript__execute" for tool in tools):
+            raise RuntimeError("Submilli's execute tool was not found")
+        print("Connected to Submilli.")
+
+
+asyncio.run(main())
+```
+
+MCP (Model Context Protocol) is a standard way for an agent library to
+connect to tools. `MCPServerStreamableHttp` manages that connection here.
+`list_tools()` asks Submilli for its available tools. The check looks for
+`submilli__typescript__execute`, the tool that runs code.
+
+The `async with` block closes the connection when the check ends.
+
+## Check the connection
+
+Run the file.
+
+```sh
+python check.py
+```
+
+Look for this output:
 
 ```text
-openai-agents: ok
+Connected to Submilli.
 ```
 
-The scripted model checks that the connection can execute a program and
-that users retain separate notebooks across sessions.
-
-## Follow the session
-
-Open the downloaded [agent.py](https://github.com/submilli/submilli-runtime/blob/f281964f52da8581ea6766d5cacd27d32eca4639/examples/harnesses/openai-agents/agent.py).
-The `MCPServerStreamableHttp` context manager opens a connection and closes
-it after the answer. Its `submilli-variables` header binds the session to
-`u_ada`, standing in for the signed-in user supplied by your application.
-
-Keep `client_session_timeout_seconds=120` when adapting this example. Search
-and page-reading programs can take longer than the SDK's default timeout.
-The conversation uses the OpenAI SDK's default model. The Anthropic model in
-the Blueprint is a separate model that generated programs may call to
-summarize pages.
-
-## Run a research question
-
-Replace the two dummy server secrets. Each command prompts for the value
-without putting the key in shell history.
-
-```sh
-submilli server secret put jina_api_key
-submilli server secret put anthropic_api_key
-```
-
-The server uses the Jina and Anthropic keys for generated programs. The
-conversation itself needs your OpenAI key in the Python process.
-
-Enter that key at the hidden prompt and start the agent.
-
-```sh
-read -rsp "OPENAI_API_KEY: " OPENAI_API_KEY; printf '\n'
-export OPENAI_API_KEY
-python agent.py
-```
-
-The example asks on behalf of `u_ada`:
-
-```text
-What is new in the latest stable release of Rust? Save a note with your sources.
-```
-
-The previous tutorial's recorded run reused a notebook populated by other
-harnesses. Its answer included:
-
-```text
-I saved and updated the research note at `/notes/rust-latest-release.md`.
-```
-
-This tutorial starts a separate notebook, so the model needs to create its
-research note on the first run.
-
-Your run will produce different wording. Watch for the research steps and a
-saved note with sources. A model answer alone does not verify that a file was written, so read it next.
-
-## Read the saved note in a new session
-
-Return to the tutorial root and save this complete program as
-`inspect-notes.ts`. It reads files without changing them.
-
-```sh
-cd "$HARNESS_ROOT"
-```
-
-```typescript title="inspect-notes.ts"
-import fs from "submilli:fs";
-
-function main(): string {
-  const notes: string[] = [];
-  for (const entry of fs.list(".", true)) {
-    if (entry.kind === "file") {
-      notes.push(entry.path + "\n" + (fs.readText(entry.path) ?? "(file too large to read)"));
-    }
-  }
-  return notes.join("\n\n");
-}
-```
-
-```sh
-submilli server run-code inspect-notes.ts --blueprint research --var userId=u_ada
-```
-
-Look for a research note with source links alongside `check.md`. Its name and
-contents depend on the model's run. Seeing it here confirms that a new
-session can read what the agent saved.
+An error means the check did not pass. Run `submilli server status` to check
+that the server is still running. Keep the same terminal open so the address
+and token are still set.
 
 ## Stop the server
+
+Stop the server that this tutorial started.
 
 ```sh
 kill "$SUBMILLI_SERVER_PID"
 wait "$SUBMILLI_SERVER_PID"
+```
+
+Close the tutorial shell to remove its temporary settings.
+
+```sh
 exit
 ```
 
-The example files and `.submilli` directory remain in the tutorial directory.
-
-You have connected OpenAI Agents SDK to Submilli and checked the saved notebook.
-For adapting the storage policy, continue with [Keep files and state](/docs/blueprints/keep-files-and-state).
+The files stay in the tutorial folder. You have checked the OpenAI Agents SDK
+connection to Submilli.
