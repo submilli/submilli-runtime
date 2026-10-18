@@ -26,11 +26,6 @@ pub(crate) struct RegistrationProvider {
 }
 
 impl SessionFinalizers for RegistrationProvider {
-    fn registration_bytes(&self, package: &str) -> u64 {
-        self.package_versions
-            .get(package)
-            .map_or(0, |versions| versions.len() as u64)
-    }
     fn register<'a>(
         &'a self,
         package: &'a str,

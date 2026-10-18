@@ -11,8 +11,6 @@ pub type FinalizerFuture<'a> =
 /// committed. Ownership is resolved by the engine, never
 /// accepted from a guest argument.
 pub trait SessionFinalizers: Send + Sync {
-    /// Bytes of package-version metadata copied into each registration.
-    fn registration_bytes(&self, package: &str) -> u64;
     fn register<'a>(
         &'a self,
         package: &'a str,
