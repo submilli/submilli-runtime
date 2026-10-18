@@ -1,18 +1,19 @@
 //! Server composition for the idempotent filesystem journal.
 use crate::database::ServerDatabase;
 use interpreter::runtime::Vfs;
+use interpreter::runtime::durable::RunId;
 use std::sync::Arc;
 pub use submilli_durable::{DurableFilesystem, FilesystemError};
 use submilli_shared::secret_store::SecretCipher;
 
 pub async fn open(
     vfs: Vfs,
-    scope: &str,
+    run_id: &RunId,
     database: Arc<ServerDatabase>,
     context: FilesystemContext,
 ) -> Result<DurableFilesystem, FilesystemError> {
     let units = context.units(database);
-    DurableFilesystem::open(vfs, scope, units, context.inner).await
+    DurableFilesystem::open(vfs, run_id, units, context.inner).await
 }
 #[cfg(test)]
 mod tests;

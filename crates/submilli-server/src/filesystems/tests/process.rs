@@ -37,7 +37,7 @@ async fn crash_child() {
     let (database, context) = open_database(&root).await;
     let filesystem = open(
         Vfs::external(root.join("workspace")).unwrap(),
-        RUN,
+        &RUN.into(),
         database,
         context,
     )
@@ -49,7 +49,7 @@ async fn crash_child() {
         std::fs::write(filesystem.vfs().root().join("file"), b"abcdef").unwrap();
         let mut reader = filesystem
             .operation(None)
-            .open_reader(RUN, "/file", byte_options())
+            .open_reader(&RUN.into(), "/file", byte_options())
             .await
             .unwrap();
         let invocation = interpreter::runtime::filesystem::Invocation {
@@ -94,24 +94,24 @@ async fn crash_child() {
     } else if std::env::var("SUBMILLI_FILESYSTEM_CRASH_KIND").as_deref() == Ok("writer") {
         filesystem
             .operation(None)
-            .open_writer(RUN, "/file")
+            .open_writer(&RUN.into(), "/file")
             .await
             .unwrap();
         filesystem
             .operation(None)
-            .write_chunk(RUN, RUN, b"suffix".to_vec())
+            .write_chunk(&RUN.into(), &RUN.into(), b"suffix".to_vec())
             .await
             .unwrap();
         filesystem
             .operation(None)
-            .close_writer(RUN, EFFECT)
+            .close_writer(&RUN.into(), &EFFECT.into())
             .await
             .unwrap();
     } else {
         std::fs::write(filesystem.vfs().root().join("file"), b"initial").unwrap();
         filesystem
             .operation(None)
-            .write_bytes(EFFECT, "/file", b"suffix".to_vec(), true)
+            .write_bytes(&EFFECT.into(), "/file", b"suffix".to_vec(), true)
             .await
             .unwrap();
     }
@@ -169,7 +169,7 @@ async fn explicit_retries_after_process_restart_finish_filesystem_operations() {
         let (database, context) = open_database(root.path()).await;
         let filesystem = open(
             Vfs::external(root.path().join("workspace")).unwrap(),
-            RUN,
+            &RUN.into(),
             database,
             context,
         )
@@ -177,7 +177,7 @@ async fn explicit_retries_after_process_restart_finish_filesystem_operations() {
         .unwrap();
         filesystem
             .operation(None)
-            .write_bytes(EFFECT, "/file", b"suffix".to_vec(), true)
+            .write_bytes(&EFFECT.into(), "/file", b"suffix".to_vec(), true)
             .await
             .unwrap();
         assert_eq!(
@@ -207,7 +207,7 @@ async fn writer_restart_repairs_unacknowledged_output_tail_and_close() {
         let (database, context) = open_database(root.path()).await;
         let filesystem = open(
             Vfs::external(root.path().join("workspace")).unwrap(),
-            RUN,
+            &RUN.into(),
             database,
             context,
         )
@@ -215,17 +215,17 @@ async fn writer_restart_repairs_unacknowledged_output_tail_and_close() {
         .unwrap();
         filesystem
             .operation(None)
-            .open_writer(RUN, "/file")
+            .open_writer(&RUN.into(), "/file")
             .await
             .unwrap();
         filesystem
             .operation(None)
-            .write_chunk(RUN, RUN, b"suffix".to_vec())
+            .write_chunk(&RUN.into(), &RUN.into(), b"suffix".to_vec())
             .await
             .unwrap();
         filesystem
             .operation(None)
-            .close_writer(RUN, EFFECT)
+            .close_writer(&RUN.into(), &EFFECT.into())
             .await
             .unwrap();
         assert_eq!(
@@ -236,7 +236,7 @@ async fn writer_restart_repairs_unacknowledged_output_tail_and_close() {
         std::fs::write(filesystem.vfs().root().join("file"), b"later").unwrap();
         filesystem
             .operation(None)
-            .close_writer(RUN, EFFECT)
+            .close_writer(&RUN.into(), &EFFECT.into())
             .await
             .unwrap();
         assert_eq!(
@@ -268,7 +268,7 @@ async fn resource_progress_survives_process_death_before_framework_completion() 
             let (database, context) = open_database(root.path()).await;
             let filesystem = open(
                 Vfs::external(root.path().join("workspace")).unwrap(),
-                RUN,
+                &RUN.into(),
                 database,
                 context,
             )
@@ -280,7 +280,7 @@ async fn resource_progress_survives_process_death_before_framework_completion() 
             };
             if kind == "reader" {
                 let descriptor = ResourceDescriptor {
-                    scope: RUN.into(),
+                    run_id: RUN.into(),
                     id: RUN.into(),
                     kind: ResourceKind::Reader(byte_options()),
                 };
@@ -298,7 +298,7 @@ async fn resource_progress_survives_process_death_before_framework_completion() 
                 );
             } else {
                 let descriptor = ResourceDescriptor {
-                    scope: RUN.into(),
+                    run_id: RUN.into(),
                     id: RUN.into(),
                     kind: ResourceKind::Directory,
                 };

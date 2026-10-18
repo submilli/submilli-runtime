@@ -4,7 +4,7 @@ use submilli_durable::{UnitFactory, codec::MAX_RECORD, unit_of_work::Operation};
 use submilli_shared::secret_store::SecretCipher;
 fn operation(id: &str) -> Operation {
     Operation {
-        scope: "scope".into(),
+        run_id: "scope".into(),
         id: id.into(),
         operation: "test.operation".into(),
         version: 1,
@@ -37,7 +37,11 @@ async fn filesystem_records_survive_reopen_without_run_or_workspace_tables() {
     drop(db);
     let (_db, factory) = database(&path).await;
     let mut unit = factory().await.unwrap();
-    let mut record = unit.get_operation("scope", "one").await.unwrap().unwrap();
+    let mut record = unit
+        .get_operation(&"scope".into(), &"one".into())
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(record.outcome.as_deref(), Some(b"result".as_slice()));
     assert_eq!(
         record.recovery_payload.as_deref(),
@@ -46,7 +50,7 @@ async fn filesystem_records_survive_reopen_without_run_or_workspace_tables() {
     unit.save_operation(record.clone()).await.unwrap();
     record.outcome = Some(b"changed".to_vec());
     assert!(unit.save_operation(record).await.is_err());
-    assert_eq!(unit.operation_count("scope").await.unwrap(), 1);
+    assert_eq!(unit.operation_count(&"scope".into()).await.unwrap(), 1);
 }
 #[tokio::test]
 async fn filesystem_operation_identity_and_pending_exclusion() {
@@ -99,11 +103,26 @@ async fn dropped_unit_discards_effect_and_pending_slot() {
     unit.save_operation(row.clone()).await.unwrap();
     row.recovery_payload = Some(b"checkpoint".to_vec());
     unit.save_operation(row).await.unwrap();
-    assert!(unit.get_operation("scope", "one").await.unwrap().is_some());
+    assert!(
+        unit.get_operation(&"scope".into(), &"one".into())
+            .await
+            .unwrap()
+            .is_some()
+    );
     drop(unit);
     let mut unit = factory().await.unwrap();
-    assert!(unit.get_operation("scope", "one").await.unwrap().is_none());
-    assert!(unit.pending_operation("scope").await.unwrap().is_none());
+    assert!(
+        unit.get_operation(&"scope".into(), &"one".into())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        unit.pending_operation(&"scope".into())
+            .await
+            .unwrap()
+            .is_none()
+    );
     unit.save_operation(operation("two")).await.unwrap();
     unit.commit().await.unwrap();
 }
@@ -161,9 +180,12 @@ async fn records_are_bounded_and_sealed_to_field_row_operation_and_version() {
         .unwrap();
         let mut unit = factory().await.unwrap();
         assert!(
-            unit.get_operation("scope", if changed_row { "two" } else { "one" })
-                .await
-                .is_err()
+            unit.get_operation(
+                &"scope".into(),
+                &if changed_row { "two" } else { "one" }.into()
+            )
+            .await
+            .is_err()
         );
         drop(unit);
         let original = original.clone();

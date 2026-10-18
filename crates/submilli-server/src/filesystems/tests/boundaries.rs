@@ -1,8 +1,8 @@
 use super::*;
 use interpreter::runtime::filesystem::FileReader;
 
-fn id() -> String {
-    uuid::Uuid::new_v4().to_string()
+fn id() -> EffectId {
+    uuid::Uuid::new_v4().to_string().into()
 }
 
 #[tokio::test]
@@ -124,7 +124,7 @@ async fn changed_filesystem_binding_rejects_mutation_and_resource_retries() {
     assert!(
         open(
             fs.vfs().clone().with_access(Access::ReadOnly),
-            fs.id(),
+            fs.run_id(),
             fixture.database.clone(),
             fixture.context.clone(),
         )
@@ -148,7 +148,7 @@ async fn changed_filesystem_binding_rejects_mutation_and_resource_retries() {
     for vfs in configurations {
         let changed = open(
             vfs,
-            fs.id(),
+            fs.run_id(),
             fixture.database.clone(),
             fixture.context.clone(),
         )
@@ -230,7 +230,7 @@ async fn caller_code_replays_completed_prefix_and_finishes_pending_suffix() {
     publication_without_receipt(&fixture, &requests[1].0, requests[1].1.clone()).await;
     let reopened = open(
         fixture.filesystem.vfs().clone(),
-        fixture.filesystem.id(),
+        fixture.filesystem.run_id(),
         fixture.database.clone(),
         fixture.context.clone(),
     )
@@ -310,11 +310,11 @@ async fn operation_limit_preserves_replay_and_does_not_fence_a_writer() {
         .write_chunk(&writer, &id(), b"output".to_vec())
         .await
         .unwrap();
-    let scope = fs.id().to_owned();
+    let run_id = fs.run_id().to_owned();
     // Count-only boundary injection: the padding records are never decoded.
     fixture.database.transaction(move |connection| Box::pin(async move {
         sqlx::query("WITH RECURSIVE padding(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM padding WHERE n<9999) INSERT INTO durable_filesystem_operations(scope_id,operation_id,operation,version,request,outcome,state) SELECT ?, 'padding-'||n, 'test', 1, X'', X'', 'rejected' FROM padding")
-            .bind(scope).execute(connection).await?;
+            .bind(run_id.as_str()).execute(connection).await?;
         Ok(())
     })).await.unwrap();
     fs.call(&operation, request).await.unwrap();
@@ -360,7 +360,7 @@ async fn interrupted_writer_close_reserves_its_id_against_other_mutations() {
     reserve_close(&fixture, &writer, &close).await;
     let reopened = open(
         fs.vfs().clone(),
-        fs.id(),
+        fs.run_id(),
         fixture.database.clone(),
         fixture.context.clone(),
     )

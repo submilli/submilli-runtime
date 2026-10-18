@@ -5,6 +5,7 @@ use crate::io::{Files, RecoveryError, Roots, identity, validate_guest_path};
 use crate::io::{MAX_DEPTH, MAX_ENTRIES};
 use crate::unit_of_work::*;
 use cap_std::fs::File;
+use interpreter::runtime::durable::EffectId;
 use interpreter::runtime::filesystem::{
     DirectoryReader, FileReader, FilesystemError as PortError, Invocation, ReadOutput,
     ReadPosition, ReaderOptions, ResourceDescriptor, ResourceKind,
@@ -19,14 +20,14 @@ use std::sync::Arc;
 /// backend call; dropping this object never retires its durable row.
 pub struct FilesystemReader {
     pub(crate) filesystem: DurableFilesystem,
-    pub(crate) resource: String,
+    pub(crate) resource: EffectId,
     pub(crate) options: ReaderOptions,
 }
 #[async_trait::async_trait]
 impl FileReader for FilesystemReader {
     fn descriptor(&self) -> Option<ResourceDescriptor> {
         Some(ResourceDescriptor {
-            scope: self.filesystem.id.clone(),
+            run_id: self.filesystem.run_id.clone(),
             id: self.resource.clone(),
             kind: ResourceKind::Reader(self.options.clone()),
         })
@@ -37,9 +38,9 @@ impl FileReader for FilesystemReader {
         limits: &TenantLimits,
     ) -> Result<ReadOutput, PortError> {
         let fs = &self.filesystem;
-        let effect = operation(invocation)?;
+        let effect = require_effect_id(invocation)?;
         validate_id(effect).map_err(backend)?;
-        if effect == self.resource {
+        if effect == &self.resource {
             return Err(backend(RecoveryError::Conflict.into()));
         }
         let _gate = fs.context.filesystem_gate.lock().await;
@@ -86,7 +87,7 @@ impl FileReader for FilesystemReader {
             &self.resource,
             row.progress,
             Progress {
-                effect: effect.into(),
+                effect: effect.clone(),
                 close: false,
                 before,
                 after,
@@ -99,9 +100,9 @@ impl FileReader for FilesystemReader {
     }
     async fn close(&mut self, invocation: &Invocation) -> Result<(), PortError> {
         let fs = &self.filesystem;
-        let effect = operation(invocation)?;
+        let effect = require_effect_id(invocation)?;
         validate_id(effect).map_err(backend)?;
-        if effect == self.resource {
+        if effect == &self.resource {
             return Err(backend(RecoveryError::Conflict.into()));
         }
         let _gate = fs.context.filesystem_gate.lock().await;
@@ -124,7 +125,7 @@ impl FileReader for FilesystemReader {
             &self.resource,
             row.progress,
             Progress {
-                effect: effect.into(),
+                effect: effect.clone(),
                 close: true,
                 before,
                 after,
@@ -137,11 +138,11 @@ impl FileReader for FilesystemReader {
 
 pub(crate) fn progress_start<T: Clone + Default>(
     progress: &Option<Progress<T>>,
-    effect: &str,
+    effect: &EffectId,
     close: bool,
 ) -> Result<T, FilesystemError> {
     match progress {
-        Some(prior) if prior.effect == effect => {
+        Some(prior) if &prior.effect == effect => {
             if prior.close != close {
                 return Err(RecoveryError::Conflict.into());
             }
@@ -155,7 +156,7 @@ pub(crate) fn progress_start<T: Clone + Default>(
 impl FilesystemOperation {
     pub async fn open_reader(
         &self,
-        resource: &str,
+        resource: &EffectId,
         path: &str,
         options: ReaderOptions,
     ) -> Result<FilesystemReader, FilesystemError> {
@@ -203,7 +204,7 @@ impl FilesystemOperation {
         checkpoint("reader-open");
         Ok(FilesystemReader {
             filesystem: self.filesystem.clone(),
-            resource: resource.into(),
+            resource: resource.clone(),
             options,
         })
     }
@@ -211,8 +212,8 @@ impl FilesystemOperation {
 impl FilesystemOperation {
     pub(crate) async fn listing_step(
         &self,
-        resource: &str,
-        effect: &str,
+        resource: &EffectId,
+        effect: &EffectId,
         close: bool,
         limits: &interpreter::runtime::limits::TenantLimits,
     ) -> Result<Option<interpreter::runtime::filesystem::DirectoryEntry>, FilesystemError> {
@@ -238,20 +239,20 @@ impl FilesystemOperation {
         )?;
         self.charge(interpreter::runtime::fuel::HASH, bytes.saturating_mul(4))?;
         self.charge(interpreter::runtime::fuel::PARSE, bytes.saturating_mul(4))?;
-        let filesystem = self.clone();
+        let operation = self.clone();
         let resource = resource.to_owned();
         let effect = effect.to_owned();
         finish_owned(async move {
             let _gate = gate;
             let _memory = memory;
-            filesystem.advance_listing(&resource, &effect, close).await
+            operation.advance_listing(&resource, &effect, close).await
         })
         .await
     }
     async fn advance_listing(
         &self,
-        resource: &str,
-        effect: &str,
+        resource: &EffectId,
+        effect: &EffectId,
         close: bool,
     ) -> Result<Option<interpreter::runtime::filesystem::DirectoryEntry>, FilesystemError> {
         use crate::unit_of_work::{ListingPosition, Progress};
@@ -279,7 +280,7 @@ impl FilesystemOperation {
                 resource,
                 row.progress,
                 Progress {
-                    effect: effect.into(),
+                    effect: effect.clone(),
                     close,
                     before,
                     after,
@@ -310,7 +311,7 @@ impl FilesystemOperation {
     /// re-enumerates a completed listing, even if the directory has changed.
     pub(crate) async fn open_directory_reserved(
         &self,
-        resource: &str,
+        resource: &EffectId,
         path: &str,
         recursive: bool,
         memory: Option<Arc<interpreter::runtime::limits::HostBytes>>,
@@ -399,13 +400,13 @@ fn listing_data_bytes(entries: &[DirectoryEntry]) -> u64 {
 }
 pub(crate) struct DurableDirectory {
     pub(crate) filesystem: DurableFilesystem,
-    pub(crate) resource: String,
+    pub(crate) resource: EffectId,
 }
 #[async_trait::async_trait]
 impl DirectoryReader for DurableDirectory {
     fn descriptor(&self) -> Option<ResourceDescriptor> {
         Some(ResourceDescriptor {
-            scope: self.filesystem.id.clone(),
+            run_id: self.filesystem.run_id.clone(),
             id: self.resource.clone(),
             kind: ResourceKind::Directory,
         })
@@ -417,7 +418,12 @@ impl DirectoryReader for DurableDirectory {
     ) -> Result<Option<interpreter::runtime::filesystem::DirectoryEntry>, PortError> {
         self.filesystem
             .operation(invocation.work.clone())
-            .listing_step(&self.resource, operation(invocation)?, false, limits)
+            .listing_step(
+                &self.resource,
+                require_effect_id(invocation)?,
+                false,
+                limits,
+            )
             .await
             .map_err(backend)
     }
@@ -431,7 +437,7 @@ impl DirectoryReader for DurableDirectory {
     ) -> Result<(), PortError> {
         self.filesystem
             .operation(invocation.work.clone())
-            .listing_step(&self.resource, operation(invocation)?, true, limits)
+            .listing_step(&self.resource, require_effect_id(invocation)?, true, limits)
             .await
             .map(|_| ())
             .map_err(backend)
@@ -445,7 +451,7 @@ impl DirectoryReader for DurableDirectory {
 #[serde(deny_unknown_fields)]
 pub struct ReaderPosition {
     workspace: Roots,
-    resource: String,
+    resource: EffectId,
     path: String,
     mount: String,
     file: FileIdentity,
@@ -461,7 +467,7 @@ impl Files {
     /// Capture the configured pathname and file identity before returning a handle.
     pub fn open_reader(
         &self,
-        resource: &str,
+        resource: &EffectId,
         path: &str,
         work: Option<&interpreter::runtime::fuel::WorkBudget>,
     ) -> Result<RetainedReader, RecoveryError> {
@@ -477,7 +483,7 @@ impl Files {
             file,
             position: ReaderPosition {
                 workspace: self.identity(),
-                resource: resource.into(),
+                resource: resource.clone(),
                 path: path.into(),
                 mount: entry.mount,
                 file: file_identity,
@@ -520,7 +526,7 @@ impl RetainedReader {
 }
 
 impl ReaderPosition {
-    pub fn resource(&self) -> &str {
+    pub fn resource(&self) -> &EffectId {
         &self.resource
     }
     pub fn offset(&self) -> u64 {
@@ -635,15 +641,15 @@ impl Files {
 impl DurableFilesystem {
     pub(crate) async fn stored_reader(
         &self,
-        resource: &str,
+        resource: &EffectId,
         path: &str,
         options: &ReaderOptions,
     ) -> Result<Option<ReaderPosition>, FilesystemError> {
-        let scope = self.id.as_str();
+        let run_id = &self.run_id;
         let binding = self.binding;
         let mut owned = (self.units)().await?;
         let unit = owned.as_mut();
-        if let Some(reader) = unit.get_reader(scope, resource).await? {
+        if let Some(reader) = unit.get_reader(run_id, resource).await? {
             if reader.binding != binding || reader.path != path || reader.options != *options {
                 return conflict();
             }
@@ -652,13 +658,13 @@ impl DurableFilesystem {
             }
             return Ok(reader.position);
         }
-        require_idle(unit, scope).await?;
-        require_resource_limit(unit, scope).await?;
+        require_idle(unit, run_id).await?;
+        require_resource_limit(unit, run_id).await?;
         unit.save_reader(
-            scope,
+            run_id,
             Reader {
                 binding,
-                id: resource.into(),
+                id: resource.clone(),
                 path: path.into(),
                 options: options.clone(),
                 progress: None,
@@ -672,15 +678,15 @@ impl DurableFilesystem {
     }
     pub(crate) async fn stored_reject_reader(
         &self,
-        resource: &str,
+        resource: &EffectId,
         error: String,
     ) -> Result<(), FilesystemError> {
-        let scope = self.id.as_str();
+        let run_id = &self.run_id;
         let binding = self.binding;
         let mut owned = (self.units)().await?;
         let unit = owned.as_mut();
         let mut reader = unit
-            .get_reader(scope, resource)
+            .get_reader(run_id, resource)
             .await?
             .ok_or(StoreError::Conflict)?;
         if reader.binding != binding {
@@ -688,22 +694,22 @@ impl DurableFilesystem {
         }
         if reader.position.is_none() {
             reader.error = Some(error);
-            unit.save_reader(scope, reader).await?;
+            unit.save_reader(run_id, reader).await?;
         }
         owned.commit().await?;
         Ok(())
     }
     pub(crate) async fn stored_reader_opened(
         &self,
-        resource: &str,
+        resource: &EffectId,
         position: &ReaderPosition,
     ) -> Result<(), FilesystemError> {
-        let scope = self.id.as_str();
+        let run_id = &self.run_id;
         let binding = self.binding;
         let mut owned = (self.units)().await?;
         let unit = owned.as_mut();
         let mut reader = unit
-            .get_reader(scope, resource)
+            .get_reader(run_id, resource)
             .await?
             .ok_or(StoreError::Conflict)?;
         if reader.binding != binding {
@@ -711,97 +717,97 @@ impl DurableFilesystem {
         }
         if reader.position.is_none() {
             reader.position = Some(position.clone());
-            unit.save_reader(scope, reader).await?;
+            unit.save_reader(run_id, reader).await?;
         }
         owned.commit().await?;
         Ok(())
     }
     pub(crate) async fn stored_reader_record(
         &self,
-        resource: &str,
+        resource: &EffectId,
     ) -> Result<Reader, FilesystemError> {
-        let scope = self.id.as_str();
+        let run_id = &self.run_id;
         let mut unit = (self.units)().await?;
-        unit.get_reader(scope, resource)
+        unit.get_reader(run_id, resource)
             .await?
             .filter(|r| r.binding == self.binding && r.position.is_some())
             .ok_or_else(|| StoreError::Conflict.into())
     }
     pub(crate) async fn stored_reader_progress(
         &self,
-        resource: &str,
+        resource: &EffectId,
         expected: Option<Progress<ReadPosition>>,
         progress: Progress<ReadPosition>,
     ) -> Result<(), FilesystemError> {
-        let scope = self.id.as_str();
+        let run_id = &self.run_id;
         let binding = self.binding;
         let mut owned = (self.units)().await?;
         let unit = owned.as_mut();
         let mut reader = unit
-            .get_reader(scope, resource)
+            .get_reader(run_id, resource)
             .await?
             .ok_or(StoreError::Conflict)?;
         if reader.binding != binding || reader.progress != expected {
             return conflict();
         }
         reader.progress = Some(progress);
-        unit.save_reader(scope, reader).await?;
+        unit.save_reader(run_id, reader).await?;
         owned.commit().await?;
         Ok(())
     }
     pub(crate) async fn stored_listing_bytes(
         &self,
-        resource: &str,
+        resource: &EffectId,
     ) -> Result<u64, FilesystemError> {
-        let scope = self.id.as_str();
+        let run_id = &self.run_id;
         let mut unit = (self.units)().await?;
-        Ok(unit.listing_bytes(scope, resource).await?)
+        Ok(unit.listing_bytes(run_id, resource).await?)
     }
     pub(crate) async fn stored_listing_record(
         &self,
-        resource: &str,
+        resource: &EffectId,
     ) -> Result<Listing, FilesystemError> {
-        let scope = self.id.as_str();
+        let run_id = &self.run_id;
         let mut unit = (self.units)().await?;
-        unit.get_listing(scope, resource)
+        unit.get_listing(run_id, resource)
             .await?
             .filter(|r| r.binding == self.binding && r.content.is_some())
             .ok_or_else(|| StoreError::Conflict.into())
     }
     pub(crate) async fn stored_listing_progress(
         &self,
-        resource: &str,
+        resource: &EffectId,
         expected: Option<Progress<ListingPosition>>,
         progress: Progress<ListingPosition>,
     ) -> Result<(), FilesystemError> {
-        let scope = self.id.as_str();
+        let run_id = &self.run_id;
         let binding = self.binding;
         let mut owned = (self.units)().await?;
         let unit = owned.as_mut();
         let mut listing = unit
-            .get_listing(scope, resource)
+            .get_listing(run_id, resource)
             .await?
             .ok_or(StoreError::Conflict)?;
         if listing.binding != binding || listing.progress != expected {
             return conflict();
         }
         listing.progress = Some(progress);
-        unit.save_listing(scope, listing).await?;
+        unit.save_listing(run_id, listing).await?;
         owned.commit().await?;
         Ok(())
     }
     pub(crate) async fn stored_listing(
         &self,
-        resource: &str,
+        resource: &EffectId,
         path: &str,
         recursive: bool,
         completed: Option<Vec<DirectoryEntry>>,
     ) -> Result<Option<Vec<DirectoryEntry>>, FilesystemError> {
-        let scope = self.id.as_str();
+        let run_id = &self.run_id;
         let binding = self.binding;
         let mut owned = (self.units)().await?;
         let unit = owned.as_mut();
-        if let Some(mut listing) = unit.get_listing(scope, resource).await? {
+        if let Some(mut listing) = unit.get_listing(run_id, resource).await? {
             if listing.binding != binding || listing.path != path || listing.recursive != recursive
             {
                 return conflict();
@@ -817,7 +823,7 @@ impl DurableFilesystem {
             }
             if let Some(content) = completed {
                 listing.content = Some(content.clone());
-                unit.save_listing(scope, listing).await?;
+                unit.save_listing(run_id, listing).await?;
                 owned.commit().await?;
                 return Ok(Some(content));
             }
@@ -826,13 +832,13 @@ impl DurableFilesystem {
         if completed.is_some() {
             return conflict();
         }
-        require_idle(unit, scope).await?;
-        require_resource_limit(unit, scope).await?;
+        require_idle(unit, run_id).await?;
+        require_resource_limit(unit, run_id).await?;
         unit.save_listing(
-            scope,
+            run_id,
             Listing {
                 binding,
-                id: resource.into(),
+                id: resource.clone(),
                 path: path.into(),
                 recursive,
                 progress: None,
@@ -846,15 +852,15 @@ impl DurableFilesystem {
     }
     pub(crate) async fn stored_reject_listing(
         &self,
-        resource: &str,
+        resource: &EffectId,
         reason: String,
     ) -> Result<(), FilesystemError> {
-        let scope = self.id.as_str();
+        let run_id = &self.run_id;
         let binding = self.binding;
         let mut owned = (self.units)().await?;
         let unit = owned.as_mut();
         let mut listing = unit
-            .get_listing(scope, resource)
+            .get_listing(run_id, resource)
             .await?
             .ok_or(StoreError::Conflict)?;
         if listing.binding != binding {
@@ -862,7 +868,7 @@ impl DurableFilesystem {
         }
         if listing.content.is_none() {
             listing.error = Some(reason);
-            unit.save_listing(scope, listing).await?;
+            unit.save_listing(run_id, listing).await?;
         }
         owned.commit().await?;
         Ok(())

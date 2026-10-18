@@ -1,6 +1,7 @@
 //! Capability-relative IO, private artifacts, and shared resource accounting.
 use cap_std::fs::Dir;
 use interpreter::runtime::Vfs;
+use interpreter::runtime::durable::{EffectId, RunId};
 use interpreter::runtime::fs::{ContainError, FileIdentity};
 use std::collections::BTreeMap;
 use std::io;
@@ -37,7 +38,7 @@ pub enum RecoveryError {
 #[derive(Clone)]
 pub(crate) struct Files {
     pub(crate) vfs: Vfs,
-    id: String,
+    run_id: RunId,
     volumes: Arc<BTreeMap<String, Volume>>,
 }
 
@@ -52,8 +53,8 @@ pub(crate) struct Volume {
 impl Files {
     /// Open caller-owned roots and create private recovery directories.
     /// The journal binds requests to these roots before any public mutation.
-    pub(crate) fn create(vfs: Vfs, id: &str) -> Result<Self, RecoveryError> {
-        validate_id(id)?;
+    pub(crate) fn create(vfs: Vfs, run_id: &RunId) -> Result<Self, RecoveryError> {
+        validate_id(run_id)?;
         if vfs.dir().is_none() {
             return Err(RecoveryError::Unsupported("filesystem is disabled"));
         }
@@ -62,17 +63,17 @@ impl Files {
                 "workspace is owned by a TempDir",
             ));
         }
-        let volumes = open_volumes(&vfs, id, true)?;
+        let volumes = open_volumes(&vfs, run_id, true)?;
         Ok(Self {
             vfs,
-            id: id.to_owned(),
+            run_id: run_id.clone(),
             volumes: Arc::new(volumes),
         })
     }
 
     pub fn identity(&self) -> Roots {
         Roots {
-            id: self.id.clone(),
+            run_id: self.run_id.clone(),
             volumes: self
                 .volumes
                 .iter()
@@ -219,14 +220,14 @@ pub(crate) fn validate_relative(path: &str, parent: bool) -> Result<(), Recovery
 
 pub(crate) fn open_volumes(
     vfs: &Vfs,
-    id: &str,
+    run_id: &RunId,
     create: bool,
 ) -> Result<BTreeMap<String, Volume>, RecoveryError> {
     let mut volumes = BTreeMap::new();
     if let Some(root) = vfs.dir().filter(|_| vfs.access() == Access::ReadWrite) {
         volumes.insert(
             "/".into(),
-            open_volume(root, id, create, vfs.quota().cloned())?,
+            open_volume(root, run_id, create, vfs.quota().cloned())?,
         );
     }
     for mount in vfs
@@ -234,7 +235,7 @@ pub(crate) fn open_volumes(
         .iter()
         .filter(|m| m.access() == Access::ReadWrite)
     {
-        let volume = open_volume(mount.dir(), id, create, mount.quota().cloned())?;
+        let volume = open_volume(mount.dir(), run_id, create, mount.quota().cloned())?;
         if volumes
             .values()
             .any(|other| other.identity == volume.identity)
@@ -251,7 +252,7 @@ pub(crate) fn open_volumes(
 
 fn open_volume(
     root: &Arc<Dir>,
-    id: &str,
+    run_id: &RunId,
     create: bool,
     quota: Option<Arc<interpreter::runtime::DiskQuota>>,
 ) -> Result<Volume, RecoveryError> {
@@ -259,7 +260,7 @@ fn open_volume(
     // that reject it fail explicitly instead of silently weakening durability.
     sync(root)?;
     let private = private_dir(root, PRIVATE, create)?;
-    let recovery = private_dir(&private, id, create)?;
+    let recovery = private_dir(&private, run_id, create)?;
     sync(&private)?;
     sync(root)?;
     Ok(Volume {
@@ -389,7 +390,7 @@ impl Files {
     pub(crate) fn artifacts(
         &self,
         entry: &Entry,
-        effect: &str,
+        effect: &EffectId,
         create: bool,
     ) -> Result<Dir, RecoveryError> {
         private_dir(&self.volume(&entry.mount)?.recovery, effect, create)
@@ -520,7 +521,8 @@ use tokio::sync::Mutex;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Roots {
-    pub id: String,
+    #[serde(rename = "id")]
+    pub run_id: RunId,
     pub volumes: Vec<RootIdentity>,
 }
 

@@ -2,7 +2,7 @@
 //!
 //! Capability checks and fuel admission belong to the host caller. Embedders
 //! may supply operation identities and a work budget with each invocation.
-use super::durable::EffectId;
+use super::durable::{EffectId, RunId};
 use super::fs::ContainError;
 use super::vfs::{Access, Placement, VfsMode};
 use super::{QuotaExceeded, Vfs};
@@ -28,8 +28,9 @@ pub enum ResourceKind {
 /// Only this descriptor crosses execution history. Native handles never do.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ResourceDescriptor {
-    pub scope: String,
-    pub id: String,
+    #[serde(rename = "scope")]
+    pub run_id: RunId,
+    pub id: EffectId,
     pub kind: ResourceKind,
 }
 pub enum ReadItem {

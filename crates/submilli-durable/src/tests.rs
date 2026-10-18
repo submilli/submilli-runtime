@@ -5,6 +5,14 @@ use std::cell::RefCell;
 use std::io;
 use std::io::{Cursor, Read, Write};
 
+#[test]
+fn typed_run_id_preserves_stored_roots_encoding() {
+    let stored = r#"{"id":"run","volumes":[]}"#;
+    let roots: Roots = serde_json::from_str(stored).unwrap();
+    assert_eq!(roots.run_id.as_str(), "run");
+    assert_eq!(serde_json::to_string(&roots).unwrap(), stored);
+}
+
 thread_local! { static FAILURE: RefCell<Option<(&'static str, usize)>> = const { RefCell::new(None) }; }
 
 pub(crate) fn checkpoint(point: &str) -> Result<(), RecoveryError> {
@@ -34,7 +42,7 @@ impl Payload {
     fn new(bytes: &[u8]) -> Self {
         Self {
             reference: Content {
-                id: uuid::Uuid::new_v4().to_string(),
+                id: uuid::Uuid::new_v4().to_string().into(),
                 bytes: bytes.len() as u64,
                 sha256: Sha256::digest(bytes).into(),
             },
@@ -45,7 +53,7 @@ impl Payload {
 fn workspace(root: &std::path::Path) -> Files {
     Files::create(
         Vfs::external(root.to_path_buf()).unwrap(),
-        &uuid::Uuid::new_v4().to_string(),
+        &uuid::Uuid::new_v4().to_string().into(),
     )
     .unwrap()
 }
@@ -76,7 +84,7 @@ fn append_repairs_partial_range_on_the_original_inode() {
     let mut payload = Payload::new(&vec![b'x'; 131_073]);
     let intent = workspace
         .prepare(
-            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string().into(),
             Case::Append {
                 path: "/file".into(),
                 content: payload.reference.clone(),
@@ -110,7 +118,7 @@ fn replacement_repairs_corruption_without_aliasing_immutable_capture() {
     let mut payload = Payload::new(b"captured");
     let intent = workspace
         .prepare(
-            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string().into(),
             Case::Write {
                 path: "/file".into(),
                 content: payload.reference.clone(),
@@ -142,7 +150,7 @@ fn move_recovers_all_four_persisted_namespace_states() {
         let mut payload = Payload::new(b"");
         let intent = workspace
             .prepare(
-                &uuid::Uuid::new_v4().to_string(),
+                &uuid::Uuid::new_v4().to_string().into(),
                 Case::Move {
                     source: "/a/source".into(),
                     destination: "/b/dest".into(),
@@ -175,7 +183,7 @@ fn remove_refuses_a_new_file_at_a_reused_path() {
     let mut payload = Payload::new(b"");
     let intent = workspace
         .prepare(
-            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string().into(),
             Case::Remove {
                 path: "/file".into(),
             },
@@ -197,7 +205,7 @@ fn restored_reader_refuses_path_replacement() {
     std::fs::write(root.path().join("file"), b"first").unwrap();
     let workspace = workspace(root.path());
     let mut reader = workspace
-        .open_reader(&uuid::Uuid::new_v4().to_string(), "/file", None)
+        .open_reader(&uuid::Uuid::new_v4().to_string().into(), "/file", None)
         .unwrap();
     let mut prefix = [0; 2];
     reader.read_exact(&mut prefix).unwrap();
@@ -206,7 +214,7 @@ fn restored_reader_refuses_path_replacement() {
     let mut payload = Payload::new(b" next");
     let intent = workspace
         .prepare(
-            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string().into(),
             Case::Append {
                 path: "/file".into(),
                 content: payload.reference.clone(),
@@ -218,7 +226,7 @@ fn restored_reader_refuses_path_replacement() {
     let mut replacement = Payload::new(b"replacement");
     let replace = workspace
         .prepare(
-            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string().into(),
             Case::Write {
                 path: "/file".into(),
                 content: replacement.reference.clone(),
@@ -246,7 +254,7 @@ fn lost_pin_changed_prefix_and_foreign_identity_fail_closed() {
     let mut payload = Payload::new(b" suffix");
     let intent = workspace
         .prepare(
-            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string().into(),
             Case::Append {
                 path: "/file".into(),
                 content: payload.reference.clone(),
@@ -267,8 +275,8 @@ fn lost_pin_changed_prefix_and_foreign_identity_fail_closed() {
     std::fs::remove_file(
         root.path()
             .join(PRIVATE)
-            .join(&workspace.identity().id)
-            .join(intent.effect())
+            .join(workspace.identity().run_id.as_str())
+            .join(intent.effect().as_str())
             .join("original"),
     )
     .unwrap();
@@ -295,7 +303,7 @@ fn checkpoint_size_bound_and_invalid_paths_are_rejected() {
     let files = workspace(root.path());
     let mut target = files
         .capture_target(
-            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string().into(),
             "/file",
             CaptureOptions::default(),
             None,
@@ -314,11 +322,11 @@ fn reopened_workspace_cannot_read_private_aliases() {
     let secret = root
         .path()
         .join(PRIVATE)
-        .join(&workspace.identity().id)
+        .join(workspace.identity().run_id.as_str())
         .join("secret");
     std::fs::write(&secret, b"private").unwrap();
     std::os::unix::fs::symlink(
-        format!("{PRIVATE}/{}/secret", workspace.identity().id),
+        format!("{PRIVATE}/{}/secret", workspace.identity().run_id),
         root.path().join("alias"),
     )
     .unwrap();
@@ -330,7 +338,7 @@ fn reopened_workspace_cannot_read_private_aliases() {
     assert!(crate::io::resolve_content(restored.vfs(), "/", "/alias").is_err());
     assert!(
         restored
-            .open_reader(&uuid::Uuid::new_v4().to_string(), "/alias", None)
+            .open_reader(&uuid::Uuid::new_v4().to_string().into(), "/alias", None)
             .is_err()
     );
 }
@@ -381,7 +389,11 @@ fn failed_mutation_barriers_remain_reconcilable() {
             _ => unreachable!(),
         };
         let intent = workspace
-            .prepare(&uuid::Uuid::new_v4().to_string(), mutation, &mut payload)
+            .prepare(
+                &uuid::Uuid::new_v4().to_string().into(),
+                mutation,
+                &mut payload,
+            )
             .unwrap();
         fail(point);
         assert!(
@@ -424,11 +436,11 @@ fn retained_bytes_are_charged_once_and_failed_growth_does_not_change_the_file() 
     let vfs = Vfs::external(root.path().to_owned())
         .unwrap()
         .with_shared_quota(quota.clone());
-    let workspace = Files::create(vfs, &uuid::Uuid::new_v4().to_string()).unwrap();
+    let workspace = Files::create(vfs, &uuid::Uuid::new_v4().to_string().into()).unwrap();
     let mut payload = Payload::new(b"four");
     let intent = workspace
         .prepare(
-            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string().into(),
             Case::Append {
                 path: "/file".into(),
                 content: payload.reference.clone(),
@@ -442,7 +454,7 @@ fn retained_bytes_are_charged_once_and_failed_growth_does_not_change_the_file() 
     let mut excess = Payload::new(b"x");
     assert!(matches!(
         workspace.prepare(
-            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string().into(),
             Case::Append {
                 path: "/file".into(),
                 content: excess.reference.clone()
@@ -464,14 +476,14 @@ fn reader_open_does_not_pin_or_scan_unrelated_recovery_artifacts() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("file"), "content").unwrap();
     let workspace = workspace(root.path());
-    let first = uuid::Uuid::new_v4().to_string();
+    let first: EffectId = uuid::Uuid::new_v4().to_string().into();
     let _reader = workspace.open_reader(&first, "/file", None).unwrap();
     let recovery = &workspace.volume("/").unwrap().recovery;
     for index in 0..100 {
         recovery.write(format!("artifact-{index}"), b"").unwrap();
     }
     let work = Arc::new(WorkBudget::new(fuel::SYSCALL.cost(10)));
-    let second = uuid::Uuid::new_v4().to_string();
+    let second: EffectId = uuid::Uuid::new_v4().to_string().into();
     let mut reader = workspace
         .open_reader(&second, "/file", Some(&work))
         .unwrap();
@@ -497,17 +509,17 @@ enum Checkpoint {
     Directory(Target),
 }
 struct Prepared {
-    effect: String,
+    effect: EffectId,
     checkpoint: Checkpoint,
 }
 impl Prepared {
-    fn effect(&self) -> &str {
+    fn effect(&self) -> &EffectId {
         &self.effect
     }
 }
 impl Files {
     fn reopen(vfs: Vfs, roots: &Roots) -> Result<Self, RecoveryError> {
-        let files = Self::create(vfs, &roots.id)?;
+        let files = Self::create(vfs, &roots.run_id)?;
         if files.identity() != *roots {
             return Err(RecoveryError::Conflict);
         }
@@ -515,7 +527,7 @@ impl Files {
     }
     fn prepare(
         &self,
-        effect: &str,
+        effect: &EffectId,
         case: Case,
         payload: &mut Payload,
     ) -> Result<Prepared, RecoveryError> {
@@ -596,7 +608,7 @@ impl Files {
                 )?),
             };
             Ok(Prepared {
-                effect: effect.into(),
+                effect: effect.clone(),
                 checkpoint,
             })
         })();

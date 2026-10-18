@@ -1,4 +1,5 @@
 use super::*;
+use interpreter::runtime::durable::{EffectId, RunId};
 
 use submilli_durable::unit_of_work::Outcome;
 use submilli_shared::secret_store::SecretCipher;
@@ -10,7 +11,7 @@ struct Fixture {
     root: tempfile::TempDir,
     database: Arc<ServerDatabase>,
     context: FilesystemContext,
-    run: String,
+    run: RunId,
     filesystem: DurableFilesystem,
 }
 
@@ -28,7 +29,7 @@ impl Fixture {
                 .unwrap(),
         );
         let context = FilesystemContext::new(Arc::new(SecretCipher::from_key([7; 32])));
-        let run = uuid::Uuid::new_v4().to_string();
+        let run: RunId = uuid::Uuid::new_v4().to_string().into();
         let mut vfs = Vfs::external(directory).unwrap();
         if let Some(limit) = maximum_bytes {
             vfs = vfs.with_size_limit(limit);
@@ -49,13 +50,13 @@ impl Fixture {
         let mut unit = (self.context.units(self.database.clone()))().await.unwrap();
         assert!(unit.pending_operation(&self.run).await.unwrap().is_none());
         assert!(
-            unit.closing_writer(self.filesystem.id())
+            unit.closing_writer(self.filesystem.run_id())
                 .await
                 .unwrap()
                 .is_none()
         );
         assert!(
-            unit.pending_resource(self.filesystem.id())
+            unit.pending_resource(self.filesystem.run_id())
                 .await
                 .unwrap()
                 .is_none()
@@ -67,7 +68,7 @@ impl Fixture {
     }
 }
 
-async fn publication_without_receipt(fixture: &Fixture, effect: &str, request: TestCall) {
+async fn publication_without_receipt(fixture: &Fixture, effect: &EffectId, request: TestCall) {
     fail_operation_updates(fixture, "NEW.state='done'").await;
     assert!(fixture.filesystem.call(effect, request).await.is_err());
     clear_operation_failure(fixture).await;
@@ -93,7 +94,7 @@ async fn clear_operation_failure(fixture: &Fixture) {
         .await
         .unwrap();
 }
-async fn reserve_close(fixture: &Fixture, resource: &str, effect: &str) {
+async fn reserve_close(fixture: &Fixture, resource: &EffectId, effect: &EffectId) {
     let mut unit = fixture.context.units(fixture.database.clone())()
         .await
         .unwrap();
@@ -103,7 +104,7 @@ async fn reserve_close(fixture: &Fixture, resource: &str, effect: &str) {
         .unwrap()
         .unwrap();
     writer.state = "closing".into();
-    writer.close_effect = Some(effect.into());
+    writer.close_effect = Some(effect.clone());
     unit.save_writer(&fixture.run, writer).await.unwrap();
     unit.commit().await.unwrap();
 }
@@ -111,7 +112,7 @@ async fn reserve_close(fixture: &Fixture, resource: &str, effect: &str) {
 async fn sqlite_receipt_suppresses_completed_mutation_after_path_reuse() {
     let fixture = Fixture::new().await;
     let content = fixture.input(b"original").await;
-    let effect = uuid::Uuid::new_v4().to_string();
+    let effect: EffectId = uuid::Uuid::new_v4().to_string().into();
     let request = TestCall::Write {
         path: "/file".into(),
         content,
@@ -125,7 +126,7 @@ async fn sqlite_receipt_suppresses_completed_mutation_after_path_reuse() {
     fixture
         .filesystem
         .call(
-            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string().into(),
             TestCall::Write {
                 path: "/file".into(),
                 content: replacement,
@@ -135,7 +136,7 @@ async fn sqlite_receipt_suppresses_completed_mutation_after_path_reuse() {
         .unwrap();
     let restored = open(
         fixture.filesystem.vfs().clone(),
-        fixture.filesystem.id(),
+        fixture.filesystem.run_id(),
         fixture.database.clone(),
         fixture.context.clone(),
     )
@@ -167,7 +168,7 @@ async fn append_publication_gap_recovers_once_and_blocks_other_mutations() {
     fixture
         .filesystem
         .call(
-            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string().into(),
             TestCall::Write {
                 path: "/file".into(),
                 content: initial,
@@ -176,7 +177,7 @@ async fn append_publication_gap_recovers_once_and_blocks_other_mutations() {
         .await
         .unwrap();
     let content = fixture.input(b" suffix").await;
-    let effect = uuid::Uuid::new_v4().to_string();
+    let effect: EffectId = uuid::Uuid::new_v4().to_string().into();
     let request = TestCall::Append {
         path: "/file".into(),
         content,
@@ -186,7 +187,7 @@ async fn append_publication_gap_recovers_once_and_blocks_other_mutations() {
         fixture
             .filesystem
             .call(
-                &uuid::Uuid::new_v4().to_string(),
+                &uuid::Uuid::new_v4().to_string().into(),
                 TestCall::Remove {
                     path: "/file".into()
                 }
@@ -196,7 +197,7 @@ async fn append_publication_gap_recovers_once_and_blocks_other_mutations() {
     );
     let restored = open(
         fixture.filesystem.vfs().clone(),
-        fixture.filesystem.id(),
+        fixture.filesystem.run_id(),
         fixture.database.clone(),
         fixture.context.clone(),
     )
@@ -213,7 +214,7 @@ async fn append_publication_gap_recovers_once_and_blocks_other_mutations() {
 #[tokio::test]
 async fn rejected_preflight_is_replayed_even_when_the_path_later_exists() {
     let fixture = Fixture::new().await;
-    let effect = uuid::Uuid::new_v4().to_string();
+    let effect: EffectId = uuid::Uuid::new_v4().to_string().into();
     let request = TestCall::Remove {
         path: "/missing".into(),
     };
@@ -225,7 +226,7 @@ async fn rejected_preflight_is_replayed_even_when_the_path_later_exists() {
     fixture
         .filesystem
         .call(
-            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string().into(),
             TestCall::Write {
                 path: "/missing".into(),
                 content,
@@ -246,9 +247,9 @@ async fn rejected_preflight_is_replayed_even_when_the_path_later_exists() {
 #[tokio::test]
 async fn writer_chunks_survive_pause_and_duplicate_close_never_republishes() {
     let fixture = Fixture::new().await;
-    let resource = uuid::Uuid::new_v4().to_string();
-    let chunk = uuid::Uuid::new_v4().to_string();
-    let close = uuid::Uuid::new_v4().to_string();
+    let resource: EffectId = uuid::Uuid::new_v4().to_string().into();
+    let chunk: EffectId = uuid::Uuid::new_v4().to_string().into();
+    let close: EffectId = uuid::Uuid::new_v4().to_string().into();
     fixture
         .filesystem
         .operation(None)
@@ -264,7 +265,7 @@ async fn writer_chunks_survive_pause_and_duplicate_close_never_republishes() {
         .unwrap();
     let resumed = open(
         fixture.filesystem.vfs().clone(),
-        fixture.filesystem.id(),
+        fixture.filesystem.run_id(),
         fixture.database.clone(),
         fixture.context.clone(),
     )
@@ -278,14 +279,14 @@ async fn writer_chunks_survive_pause_and_duplicate_close_never_republishes() {
     let second = fixture.input(b" second").await;
     resumed
         .operation(None)
-        .write_chunk(&resource, &uuid::Uuid::new_v4().to_string(), second)
+        .write_chunk(&resource, &uuid::Uuid::new_v4().to_string().into(), second)
         .await
         .unwrap();
     reserve_close(&fixture, &resource, &close).await;
     assert!(
         resumed
             .call(
-                &uuid::Uuid::new_v4().to_string(),
+                &uuid::Uuid::new_v4().to_string().into(),
                 TestCall::Remove {
                     path: "/out".into()
                 }
@@ -295,7 +296,7 @@ async fn writer_chunks_survive_pause_and_duplicate_close_never_republishes() {
     );
     let resumed = open(
         fixture.filesystem.vfs().clone(),
-        fixture.filesystem.id(),
+        fixture.filesystem.run_id(),
         fixture.database.clone(),
         fixture.context.clone(),
     )
@@ -314,7 +315,7 @@ async fn writer_chunks_survive_pause_and_duplicate_close_never_republishes() {
     let newer = fixture.input(b"newer").await;
     resumed
         .call(
-            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string().into(),
             TestCall::Write {
                 path: "/out".into(),
                 content: newer,
@@ -359,7 +360,11 @@ async fn reader_reopen_refuses_a_replaced_path() {
     let mut reader = fixture
         .filesystem
         .operation(None)
-        .open_reader(&uuid::Uuid::new_v4().to_string(), "/file", byte_options())
+        .open_reader(
+            &uuid::Uuid::new_v4().to_string().into(),
+            "/file",
+            byte_options(),
+        )
         .await
         .unwrap();
     let descriptor = reader.descriptor().unwrap();
@@ -386,7 +391,7 @@ async fn directory_snapshot_restores_order_after_directory_changes() {
     std::fs::create_dir(fixture.filesystem.vfs().root().join("tree")).unwrap();
     std::fs::write(fixture.filesystem.vfs().root().join("tree/a"), b"a").unwrap();
     std::fs::write(fixture.filesystem.vfs().root().join("tree/b"), b"b").unwrap();
-    let resource = uuid::Uuid::new_v4().to_string();
+    let resource: EffectId = uuid::Uuid::new_v4().to_string().into();
     let mut listing = fixture
         .filesystem
         .listing(&resource, "/tree", true)
@@ -407,7 +412,7 @@ async fn directory_snapshot_restores_order_after_directory_changes() {
     std::fs::write(fixture.filesystem.vfs().root().join("tree/c"), b"c").unwrap();
     let resumed = open(
         fixture.filesystem.vfs().clone(),
-        fixture.filesystem.id(),
+        fixture.filesystem.run_id(),
         fixture.database.clone(),
         fixture.context.clone(),
     )
@@ -441,7 +446,7 @@ async fn interpreter_uses_durable_backend_and_replay_does_not_repeat_append() {
     run_backend(&fixture, source).await.unwrap();
     let operation = sole_operation_id(&fixture).await;
     let invocation = interpreter::runtime::filesystem::Invocation {
-        operation: Some(operation.clone().into()),
+        operation: Some(operation.clone()),
         ..Default::default()
     };
     interpreter::runtime::filesystem::Filesystem::write(
@@ -508,8 +513,8 @@ async fn durable_backend_refuses_unprepared_recursive_mutations() {
     assert_eq!(unit.operation_count(&fixture.run).await.unwrap(), 0);
 }
 
-async fn sole_operation_id(fixture: &Fixture) -> String {
-    let scope = fixture.run.clone();
+async fn sole_operation_id(fixture: &Fixture) -> EffectId {
+    let run_id = fixture.run.clone();
     let ids: Vec<String> = fixture
         .database
         .read(move |connection| {
@@ -517,7 +522,7 @@ async fn sole_operation_id(fixture: &Fixture) -> String {
                 Ok(sqlx::query_scalar(
                     "SELECT operation_id FROM durable_filesystem_operations WHERE scope_id=?",
                 )
-                .bind(scope)
+                .bind(run_id.as_str())
                 .fetch_all(connection)
                 .await?)
             })
@@ -525,7 +530,7 @@ async fn sole_operation_id(fixture: &Fixture) -> String {
         .await
         .unwrap();
     assert_eq!(ids.len(), 1);
-    ids.into_iter().next().unwrap()
+    ids.into_iter().next().unwrap().into()
 }
 
 async fn run_backend(fixture: &Fixture, source: &str) -> wasmtime::Result<Option<String>> {
@@ -609,7 +614,7 @@ async fn durable_append_and_eager_listing_admit_their_own_fuel() {
     assert_eq!(std::fs::read(root.join("large")).unwrap(), original);
     // Retry the admitted effect directly; the interpreter stub does not replay IDs.
     let invocation = interpreter::runtime::filesystem::Invocation {
-        operation: Some(sole_operation_id(&fixture).await.into()),
+        operation: Some(sole_operation_id(&fixture).await),
         ..Default::default()
     };
     interpreter::runtime::filesystem::Filesystem::write(
@@ -647,7 +652,7 @@ async fn durable_quota_scan_stops_before_mutation_and_resumes_with_fuel() {
     assert!(error.is::<wasmtime::Trap>(), "{error}");
     assert!(!root.join("created").exists());
     let invocation = interpreter::runtime::filesystem::Invocation {
-        operation: Some(sole_operation_id(&fixture).await.into()),
+        operation: Some(sole_operation_id(&fixture).await),
         ..Default::default()
     };
     interpreter::runtime::filesystem::Filesystem::mkdir(
@@ -824,10 +829,10 @@ enum TestCall {
 }
 #[async_trait::async_trait]
 trait CallTestCase {
-    async fn call(&self, id: &str, call: TestCall) -> Result<Outcome, FilesystemError>;
+    async fn call(&self, id: &EffectId, call: TestCall) -> Result<Outcome, FilesystemError>;
     async fn listing(
         &self,
-        id: &str,
+        id: &EffectId,
         path: &str,
         recursive: bool,
     ) -> Result<
@@ -839,7 +844,7 @@ trait CallTestCase {
 impl CallTestCase for DurableFilesystem {
     async fn listing(
         &self,
-        id: &str,
+        id: &EffectId,
         path: &str,
         recursive: bool,
     ) -> Result<
@@ -847,7 +852,7 @@ impl CallTestCase for DurableFilesystem {
         interpreter::runtime::filesystem::FilesystemError,
     > {
         let invocation = interpreter::runtime::filesystem::Invocation {
-            operation: Some(id.to_owned().into()),
+            operation: Some(id.clone()),
             ..Default::default()
         };
         interpreter::runtime::filesystem::Filesystem::open_directory(
@@ -860,7 +865,7 @@ impl CallTestCase for DurableFilesystem {
         .await
     }
 
-    async fn call(&self, id: &str, call: TestCall) -> Result<Outcome, FilesystemError> {
+    async fn call(&self, id: &EffectId, call: TestCall) -> Result<Outcome, FilesystemError> {
         match call {
             TestCall::Write { path, content } => {
                 self.operation(None)
@@ -883,7 +888,7 @@ impl CallTestCase for DurableFilesystem {
 #[tokio::test]
 async fn pending_write_requires_replay_bytes_and_rejects_changed_input() {
     let fixture = Fixture::new().await;
-    let effect = uuid::Uuid::new_v4().to_string();
+    let effect: EffectId = uuid::Uuid::new_v4().to_string().into();
     fail_operation_updates(&fixture, "NEW.recovery_payload IS NOT NULL").await;
     assert!(
         fixture
@@ -995,7 +1000,7 @@ async fn directory_outputs_larger_than_metadata_limit_are_stored_in_sqlite() {
         )
         .unwrap();
     }
-    let resource = uuid::Uuid::new_v4().to_string();
+    let resource: EffectId = uuid::Uuid::new_v4().to_string().into();
     fixture
         .filesystem
         .listing(&resource, "/", false)
@@ -1035,7 +1040,7 @@ async fn directory_outputs_larger_than_metadata_limit_are_stored_in_sqlite() {
     // exceeds the remaining budget. Return it and settle; do not lose the result.
     let work = Arc::new(fuel::WorkBudget::new(1));
     let invocation = Invocation {
-        operation: Some(resource.into()),
+        operation: Some(resource),
         work: Some(work.clone()),
     };
     Filesystem::open_directory(
@@ -1054,8 +1059,8 @@ async fn directory_outputs_larger_than_metadata_limit_are_stored_in_sqlite() {
 #[tokio::test]
 async fn writer_rejects_changed_chunks_and_corrupt_staging_before_publication() {
     let fixture = Fixture::new().await;
-    let resource = uuid::Uuid::new_v4().to_string();
-    let chunk = uuid::Uuid::new_v4().to_string();
+    let resource: EffectId = uuid::Uuid::new_v4().to_string().into();
+    let chunk: EffectId = uuid::Uuid::new_v4().to_string().into();
     fixture
         .filesystem
         .operation(None)
@@ -1081,14 +1086,14 @@ async fn writer_rejects_changed_chunks_and_corrupt_staging_before_publication() 
         .vfs()
         .root()
         .join(".git-submilli-recovery")
-        .join(fixture.filesystem.id())
+        .join(fixture.filesystem.run_id().as_str())
         .join(format!("writer-{resource}/output"));
     std::fs::write(&staged, b"corrupt!").unwrap();
     assert!(
         fixture
             .filesystem
             .operation(None)
-            .close_writer(&resource, &uuid::Uuid::new_v4().to_string())
+            .close_writer(&resource, &uuid::Uuid::new_v4().to_string().into())
             .await
             .is_err()
     );
@@ -1102,7 +1107,7 @@ async fn failed_admission_does_not_stage_input_or_mutate_public_files() {
         sqlx::query("CREATE TRIGGER refuse_effect BEFORE INSERT ON durable_filesystem_operations BEGIN SELECT RAISE(FAIL, 'injected admission failure'); END").execute(connection).await?;
         Ok(())
     })).await.unwrap();
-    let effect = uuid::Uuid::new_v4().to_string();
+    let effect: EffectId = uuid::Uuid::new_v4().to_string().into();
     assert!(
         fixture
             .filesystem
@@ -1118,8 +1123,8 @@ async fn failed_admission_does_not_stage_input_or_mutate_public_files() {
             .vfs()
             .root()
             .join(".git-submilli-recovery")
-            .join(fixture.filesystem.id())
-            .join(effect)
+            .join(fixture.filesystem.run_id().as_str())
+            .join(effect.as_str())
             .exists()
     );
 }
@@ -1129,7 +1134,7 @@ async fn writer_close_records_target_refusals_and_replays_them() {
     let fixture = Fixture::new().await;
     let root = fixture.filesystem.vfs().root();
     std::fs::create_dir(root.join("parent")).unwrap();
-    let resource = uuid::Uuid::new_v4().to_string();
+    let resource: EffectId = uuid::Uuid::new_v4().to_string().into();
     fixture
         .filesystem
         .operation(None)
@@ -1141,13 +1146,13 @@ async fn writer_close_records_target_refusals_and_replays_them() {
         .operation(None)
         .write_chunk(
             &resource,
-            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string().into(),
             b"output".to_vec(),
         )
         .await
         .unwrap();
     std::fs::remove_dir(root.join("parent")).unwrap();
-    let effect = uuid::Uuid::new_v4().to_string();
+    let effect: EffectId = uuid::Uuid::new_v4().to_string().into();
     let error = fixture
         .filesystem
         .operation(None)
@@ -1164,7 +1169,7 @@ async fn writer_close_records_target_refusals_and_replays_them() {
         .unwrap_err();
     assert_eq!(error.to_string(), replay.to_string());
     assert!(!root.join("parent/out").exists());
-    let resource = uuid::Uuid::new_v4().to_string();
+    let resource: EffectId = uuid::Uuid::new_v4().to_string().into();
     fixture
         .filesystem
         .operation(None)
@@ -1174,7 +1179,7 @@ async fn writer_close_records_target_refusals_and_replays_them() {
     let error = fixture
         .filesystem
         .operation(None)
-        .close_writer(&resource, &uuid::Uuid::new_v4().to_string())
+        .close_writer(&resource, &uuid::Uuid::new_v4().to_string().into())
         .await
         .unwrap_err();
     assert!(matches!(error, FilesystemError::Rejected(_)), "{error}");
@@ -1183,7 +1188,7 @@ async fn writer_close_records_target_refusals_and_replays_them() {
 #[tokio::test]
 async fn writer_quota_refusal_leaves_acknowledged_prefix_retryable() {
     let fixture = Fixture::with_filesystem_limit(Some(8)).await;
-    let resource = uuid::Uuid::new_v4().to_string();
+    let resource: EffectId = uuid::Uuid::new_v4().to_string().into();
     fixture
         .filesystem
         .operation(None)
@@ -1195,12 +1200,12 @@ async fn writer_quota_refusal_leaves_acknowledged_prefix_retryable() {
         .operation(None)
         .write_chunk(
             &resource,
-            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string().into(),
             b"abc".to_vec(),
         )
         .await
         .unwrap();
-    let chunk = uuid::Uuid::new_v4().to_string();
+    let chunk: EffectId = uuid::Uuid::new_v4().to_string().into();
     let error = fixture
         .filesystem
         .operation(None)
@@ -1218,7 +1223,7 @@ async fn writer_quota_refusal_leaves_acknowledged_prefix_retryable() {
     fixture
         .filesystem
         .operation(None)
-        .close_writer(&resource, &uuid::Uuid::new_v4().to_string())
+        .close_writer(&resource, &uuid::Uuid::new_v4().to_string().into())
         .await
         .unwrap();
     assert_eq!(
@@ -1230,7 +1235,7 @@ async fn writer_quota_refusal_leaves_acknowledged_prefix_retryable() {
 #[tokio::test]
 async fn opening_existing_workspace_leaves_pending_mutation_for_explicit_retry() {
     let fixture = Fixture::new().await;
-    let effect = uuid::Uuid::new_v4().to_string();
+    let effect: EffectId = uuid::Uuid::new_v4().to_string().into();
     let request = TestCall::CreateDirectory {
         path: "/pending".into(),
     };
@@ -1255,7 +1260,7 @@ async fn opening_existing_workspace_leaves_pending_mutation_for_explicit_retry()
     drop(opened);
     let reopened = open(
         fixture.filesystem.vfs().clone(),
-        fixture.filesystem.id(),
+        fixture.filesystem.run_id(),
         fixture.database.clone(),
         fixture.context.clone(),
     )
@@ -1291,7 +1296,7 @@ async fn direct_namespace_calls_reconcile_sql_gaps_and_preserve_later_paths() {
         let root = fixture.filesystem.vfs().root();
         std::fs::write(root.join("source"), b"original").unwrap();
         std::fs::write(root.join("destination"), b"old destination").unwrap();
-        let effect = uuid::Uuid::new_v4().to_string();
+        let effect: EffectId = uuid::Uuid::new_v4().to_string().into();
         fail_operation_updates(&fixture, "NEW.state='done'").await;
         assert!(
             namespace_call(&fixture.filesystem, kind, &effect)
@@ -1345,7 +1350,7 @@ async fn direct_namespace_calls_reconcile_sql_gaps_and_preserve_later_paths() {
 async fn namespace_call(
     filesystem: &DurableFilesystem,
     kind: &str,
-    effect: &str,
+    effect: &EffectId,
 ) -> Result<Outcome, FilesystemError> {
     match kind {
         "move" => {
@@ -1426,7 +1431,7 @@ async fn empty_writer_close_records_read_only_refusal_without_staging() {
         .vfs()
         .root()
         .join(".git-submilli-recovery")
-        .join(&fixture.run)
+        .join(fixture.run.as_str())
         .join(format!("writer-{}", descriptor.id));
     assert!(!staging.exists());
     let empty = resource_invocation();

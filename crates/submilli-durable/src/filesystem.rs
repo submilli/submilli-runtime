@@ -6,6 +6,7 @@ use crate::unit_of_work::*;
 use crate::writers::DurableWriter;
 use crate::{UnitFactory, UnitOfWork};
 use interpreter::runtime::Vfs;
+use interpreter::runtime::durable::{EffectId, RunId};
 use interpreter::runtime::filesystem::{
     DirectoryReader, FileReader, FileWriter, Filesystem, FilesystemError as PortError,
     FilesystemInfo, Invocation, ReaderOptions, ResourceDescriptor, ResourceKind,
@@ -39,33 +40,33 @@ pub struct DurableFilesystem {
     pub(crate) units: UnitFactory,
     pub(crate) binding: [u8; 32],
     pub(crate) context: FilesystemContext,
-    pub(crate) id: String,
+    pub(crate) run_id: RunId,
 }
 
 impl DurableFilesystem {
-    /// The caller supplies the configured mounts and a stable UUID scope for
-    /// operation IDs. It must retain these roots and this journal across retries,
+    /// The caller supplies the configured mounts and a stable UUID run ID for
+    /// effect IDs. It must retain these roots and this journal across retries,
     /// exclusively own writable roots, and drain work before replacing access.
     /// `context` shares mutation admission and disk quotas across these instances.
     pub async fn open(
         vfs: Vfs,
-        scope: &str,
+        run_id: &RunId,
         units: UnitFactory,
         context: FilesystemContext,
     ) -> Result<Self, FilesystemError> {
-        validate_id(scope)?;
+        validate_id(run_id)?;
         let gate = Arc::new(context.filesystem_gate.clone().lock_owned().await);
         let vfs = paths::share_quotas(&context, vfs).await?;
         let binding = paths::binding(&vfs)?;
-        let id = scope.to_owned();
-        let worker_id = id.clone();
+        let run_id = run_id.clone();
+        let worker_id = run_id.clone();
         let workspace = blocking(gate, move || Files::create(vfs, &worker_id)).await?;
         Ok(Self {
             files: Arc::new(workspace),
             units,
             binding,
             context,
-            id,
+            run_id,
         })
     }
 
@@ -73,8 +74,8 @@ impl DurableFilesystem {
     pub fn test_context(&self) -> &FilesystemContext {
         &self.context
     }
-    pub fn id(&self) -> &str {
-        &self.id
+    pub fn run_id(&self) -> &RunId {
+        &self.run_id
     }
     pub fn vfs(&self) -> &Vfs {
         self.files.vfs()
@@ -248,13 +249,13 @@ impl Filesystem for DurableFilesystem {
         bytes: Vec<u8>,
         append: bool,
     ) -> Result<(), PortError> {
-        let filesystem = self.operation(invocation.work.clone());
-        let id = operation(invocation)?;
-        filesystem
+        let effect_id = require_effect_id(invocation)?;
+        let operation = self.operation(invocation.work.clone());
+        operation
             .charge(interpreter::runtime::fuel::HASH, bytes.len() as u64)
             .map_err(backend)?;
-        filesystem
-            .write_bytes(id, path, bytes, append)
+        operation
+            .write_bytes(effect_id, path, bytes, append)
             .await
             .map_err(backend)?;
         Ok(())
@@ -265,15 +266,15 @@ impl Filesystem for DurableFilesystem {
         path: &str,
         recursive: bool,
     ) -> Result<(), PortError> {
-        let filesystem = self.operation(invocation.work.clone());
-        let id = operation(invocation)?;
+        let effect_id = require_effect_id(invocation)?;
+        let operation = self.operation(invocation.work.clone());
         if recursive {
             return Err(PortError::Unsupported(
                 "recursive directory creation requires caller-orchestrated primitive operations",
             ));
         }
-        filesystem
-            .create_directory(id, path)
+        operation
+            .create_directory(effect_id, path)
             .await
             .map_err(backend)?;
         Ok(())
@@ -285,14 +286,17 @@ impl Filesystem for DurableFilesystem {
         recursive: bool,
         budget: &mut dyn interpreter::runtime::filesystem::MutationBudget,
     ) -> Result<(), PortError> {
-        let filesystem = self.operation(invocation.work.clone());
-        let id = operation(invocation)?;
+        let effect_id = require_effect_id(invocation)?;
+        let operation = self.operation(invocation.work.clone());
         if recursive {
             return Err(PortError::Unsupported(
                 "recursive removal requires caller-orchestrated primitive operations",
             ));
         }
-        filesystem.remove_path(id, path).await.map_err(backend)?;
+        operation
+            .remove_path(effect_id, path)
+            .await
+            .map_err(backend)?;
         budget.effect();
         Ok(())
     }
@@ -303,9 +307,12 @@ impl Filesystem for DurableFilesystem {
         to: &str,
         budget: &mut dyn interpreter::runtime::filesystem::MutationBudget,
     ) -> Result<(), PortError> {
-        let filesystem = self.operation(invocation.work.clone());
-        let id = operation(invocation)?;
-        filesystem.move_path(id, from, to).await.map_err(backend)?;
+        let effect_id = require_effect_id(invocation)?;
+        let operation = self.operation(invocation.work.clone());
+        operation
+            .move_path(effect_id, from, to)
+            .await
+            .map_err(backend)?;
         budget.effect();
         Ok(())
     }
@@ -327,9 +334,10 @@ impl Filesystem for DurableFilesystem {
         path: &str,
         options: ReaderOptions,
     ) -> Result<Box<dyn FileReader>, PortError> {
-        let filesystem = self.operation(invocation.work.clone());
+        let operation = self.operation(invocation.work.clone());
         Ok(Box::new(
-            FilesystemOperation::open_reader(&filesystem, operation(invocation)?, path, options)
+            operation
+                .open_reader(require_effect_id(invocation)?, path, options)
                 .await
                 .map_err(backend)?,
         ))
@@ -351,13 +359,13 @@ impl Filesystem for DurableFilesystem {
             )
             .map_err(|error| PortError::Execution(error.into()))?,
         );
-        let filesystem = self.operation(invocation.work.clone());
-        let id = operation(invocation)?;
-        let resource = id.to_owned();
+        let effect_id = require_effect_id(invocation)?;
+        let operation = self.operation(invocation.work.clone());
+        let resource = effect_id.to_owned();
         let path = path.to_owned();
         finish_owned(async move {
             let _memory = memory.clone();
-            filesystem
+            operation
                 .open_directory_reserved(&resource, &path, recursive, Some(memory))
                 .await
                 .map(|_| ())
@@ -366,7 +374,7 @@ impl Filesystem for DurableFilesystem {
         .map_err(backend)?;
         Ok(Box::new(DurableDirectory {
             filesystem: self.clone(),
-            resource: id.into(),
+            resource: effect_id.clone(),
         }))
     }
     fn restore_reader(
@@ -415,20 +423,20 @@ impl Filesystem for DurableFilesystem {
         invocation: &Invocation,
         path: &str,
     ) -> Result<Box<dyn FileWriter>, PortError> {
-        let id = operation(invocation)?;
+        let effect_id = require_effect_id(invocation)?;
         self.operation(invocation.work.clone())
-            .open_writer(id, path)
+            .open_writer(effect_id, path)
             .await
             .map_err(backend)?;
         Ok(Box::new(DurableWriter {
             filesystem: self.clone(),
-            resource: id.into(),
+            resource: effect_id.clone(),
             closed: false,
         }))
     }
 }
-pub(crate) fn operation(invocation: &Invocation) -> Result<&str, PortError> {
-    invocation.operation.as_deref().ok_or_else(|| {
+pub(crate) fn require_effect_id(invocation: &Invocation) -> Result<&EffectId, PortError> {
+    invocation.operation.as_ref().ok_or_else(|| {
         PortError::Backend(Box::new(FilesystemError::Configuration(
             "durable filesystem operation requires a stable operation identity",
         )))
@@ -448,7 +456,7 @@ fn check_descriptor(
     descriptor: &ResourceDescriptor,
 ) -> Result<(), PortError> {
     validate_id(&descriptor.id).map_err(backend)?;
-    if descriptor.scope != filesystem.id {
+    if descriptor.run_id != filesystem.run_id {
         return Err(backend(RecoveryError::Conflict.into()));
     }
     Ok(())
@@ -456,18 +464,18 @@ fn check_descriptor(
 
 pub(crate) async fn require_ready(
     unit: &mut dyn UnitOfWork,
-    scope: &str,
-    writer_close: Option<(&str, &str)>,
+    run_id: &RunId,
+    writer_close: Option<(&EffectId, &EffectId)>,
 ) -> Result<(), FilesystemError> {
-    if unit.pending_resource(scope).await?.is_some() {
+    if unit.pending_resource(run_id).await?.is_some() {
         return conflict();
     }
-    if let Some(writer) = unit.closing_writer(scope).await?
+    if let Some(writer) = unit.closing_writer(run_id).await?
         && writer_close
             != writer
                 .close_effect
-                .as_deref()
-                .map(|effect| (writer.id.as_str(), effect))
+                .as_ref()
+                .map(|effect| (&writer.id, effect))
     {
         return conflict();
     }
@@ -475,30 +483,30 @@ pub(crate) async fn require_ready(
 }
 pub(crate) async fn require_idle(
     unit: &mut dyn UnitOfWork,
-    scope: &str,
+    run_id: &RunId,
 ) -> Result<(), FilesystemError> {
-    require_ready(unit, scope, None).await?;
-    if unit.pending_operation(scope).await?.is_some() {
+    require_ready(unit, run_id, None).await?;
+    if unit.pending_operation(run_id).await?.is_some() {
         return conflict();
     }
     Ok(())
 }
 pub(crate) async fn require_capacity(
     unit: &mut dyn UnitOfWork,
-    scope: &str,
+    run_id: &RunId,
 ) -> Result<(), FilesystemError> {
-    if unit.operation_count(scope).await? >= MAX_OPERATIONS {
+    if unit.operation_count(run_id).await? >= MAX_OPERATIONS {
         return conflict();
     }
     Ok(())
 }
 pub(crate) async fn require_unused_operation(
     unit: &mut dyn UnitOfWork,
-    scope: &str,
-    id: &str,
+    run_id: &RunId,
+    id: &EffectId,
 ) -> Result<(), FilesystemError> {
-    if unit.get_operation(scope, id).await?.is_some()
-        || unit.writer_for_effect(scope, id).await?.is_some()
+    if unit.get_operation(run_id, id).await?.is_some()
+        || unit.writer_for_effect(run_id, id).await?.is_some()
     {
         return conflict();
     }
@@ -506,9 +514,9 @@ pub(crate) async fn require_unused_operation(
 }
 pub(crate) async fn require_resource_limit(
     unit: &mut dyn UnitOfWork,
-    scope: &str,
+    run_id: &RunId,
 ) -> Result<(), FilesystemError> {
-    let count = unit.resource_counts(scope).await?;
+    let count = unit.resource_counts(run_id).await?;
     if count
         .readers
         .saturating_add(count.listings)
@@ -575,7 +583,7 @@ impl Target {
 impl FilesystemOperation {
     pub async fn write_bytes(
         &self,
-        effect: &str,
+        effect: &EffectId,
         path: &str,
         bytes: Vec<u8>,
         append: bool,
@@ -603,11 +611,11 @@ impl FilesystemOperation {
     pub(crate) async fn write_held<R: Read + Seek + Send + 'static>(
         &self,
         gate: Arc<tokio::sync::OwnedMutexGuard<()>>,
-        effect: &str,
+        effect: &EffectId,
         path: &str,
         (payload, mut input): (Content, R),
         append: bool,
-        writer: Option<&str>,
+        writer: Option<&EffectId>,
     ) -> Result<Outcome, FilesystemError> {
         validate_id(effect)?;
         validate_guest_path(path)?;
@@ -721,7 +729,7 @@ impl FilesystemOperation {
 
     pub async fn move_path(
         &self,
-        effect: &str,
+        effect: &EffectId,
         source: &str,
         destination: &str,
     ) -> Result<Outcome, FilesystemError> {
@@ -810,7 +818,11 @@ impl FilesystemOperation {
         self.record_success(&row, 0).await
     }
 
-    pub async fn remove_path(&self, effect: &str, path: &str) -> Result<Outcome, FilesystemError> {
+    pub async fn remove_path(
+        &self,
+        effect: &EffectId,
+        path: &str,
+    ) -> Result<Outcome, FilesystemError> {
         validate_id(effect)?;
         validate_guest_path(path)?;
         let gate = Arc::new(
@@ -888,7 +900,7 @@ impl FilesystemOperation {
 
     pub async fn create_directory(
         &self,
-        effect: &str,
+        effect: &EffectId,
         path: &str,
     ) -> Result<Outcome, FilesystemError> {
         validate_id(effect)?;
@@ -963,14 +975,14 @@ impl FilesystemOperation {
     async fn attach<T: Serialize>(
         &self,
         unit: &mut dyn UnitOfWork,
-        effect: &str,
+        effect: &EffectId,
         kind: &str,
         request: &T,
-        writer: Option<&str>,
+        writer: Option<&EffectId>,
     ) -> Result<Operation, FilesystemError> {
         let mut fingerprint = self.filesystem.binding.to_vec();
         fingerprint.extend_from_slice(&Sha256::digest(serialize(request)?));
-        if let Some(row) = unit.get_operation(&self.filesystem.id, effect).await? {
+        if let Some(row) = unit.get_operation(&self.filesystem.run_id, effect).await? {
             if row.operation != kind || row.version != 2 || row.request != fingerprint {
                 return conflict();
             }
@@ -978,22 +990,28 @@ impl FilesystemOperation {
         }
         require_ready(
             unit,
-            &self.filesystem.id,
+            &self.filesystem.run_id,
             writer.map(|writer| (writer, effect)),
         )
         .await?;
-        require_capacity(unit, &self.filesystem.id).await?;
-        if unit.pending_operation(&self.filesystem.id).await?.is_some() {
+        require_capacity(unit, &self.filesystem.run_id).await?;
+        if unit
+            .pending_operation(&self.filesystem.run_id)
+            .await?
+            .is_some()
+        {
             return conflict();
         }
-        if let Some(owner) = unit.writer_for_effect(&self.filesystem.id, effect).await?
-            && writer != Some(owner.id.as_str())
+        if let Some(owner) = unit
+            .writer_for_effect(&self.filesystem.run_id, effect)
+            .await?
+            && writer != Some(&owner.id)
         {
             return conflict();
         }
         let row = Operation {
-            id: effect.into(),
-            scope: self.filesystem.id.clone(),
+            id: effect.clone(),
+            run_id: self.filesystem.run_id.clone(),
             operation: kind.into(),
             version: 2,
             request: fingerprint,
@@ -1011,7 +1029,7 @@ impl FilesystemOperation {
     ) -> Result<(), FilesystemError> {
         let mut unit = (self.filesystem.units)().await?;
         let mut row = unit
-            .get_operation(&self.filesystem.id, &admitted.id)
+            .get_operation(&self.filesystem.run_id, &admitted.id)
             .await?
             .ok_or(StoreError::Conflict)?;
         if row.request != admitted.request
@@ -1054,7 +1072,7 @@ impl FilesystemOperation {
     ) -> Result<(), FilesystemError> {
         let mut unit = (self.filesystem.units)().await?;
         let mut row = unit
-            .get_operation(&self.filesystem.id, &admitted.id)
+            .get_operation(&self.filesystem.run_id, &admitted.id)
             .await?
             .ok_or(StoreError::Conflict)?;
         if row.request != admitted.request || row.operation != admitted.operation {
@@ -1093,10 +1111,10 @@ fn decode_checkpoint<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, 
     }
     serde_json::from_slice(bytes).map_err(invalid)
 }
-pub(crate) fn fingerprint(id: &str, bytes: &[u8]) -> Result<Content, RecoveryError> {
+pub(crate) fn fingerprint(id: &EffectId, bytes: &[u8]) -> Result<Content, RecoveryError> {
     paths::validate_id(id)?;
     Ok(Content {
-        id: id.into(),
+        id: id.clone(),
         bytes: bytes.len() as u64,
         sha256: Sha256::digest(bytes).into(),
     })
@@ -1115,7 +1133,7 @@ struct CaptureOptions {
 impl Files {
     fn capture_target(
         &self,
-        effect: &str,
+        effect: &EffectId,
         path: &str,
         options: CaptureOptions,
         work: Option<&interpreter::runtime::fuel::WorkBudget>,

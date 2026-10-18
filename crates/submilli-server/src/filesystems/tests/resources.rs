@@ -120,7 +120,7 @@ async fn reader_progress_precedes_history_and_replay_skips_recorded_calls() {
     );
     drop(unit);
     let mut foreign = descriptor.clone();
-    foreign.scope = uuid::Uuid::new_v4().to_string();
+    foreign.run_id = uuid::Uuid::new_v4().to_string().into();
     assert!(Filesystem::restore_reader(restarted, foreign).is_err());
     let mut changed = descriptor;
     changed.kind = interpreter::runtime::filesystem::ResourceKind::Reader(ReaderOptions::Bytes {
@@ -545,7 +545,7 @@ async fn listing_open_admits_memory_before_enumeration_or_replay() {
         .await
         .unwrap();
     assert!(
-        unit.get_listing(&fixture.run, opening.operation.as_deref().unwrap())
+        unit.get_listing(&fixture.run, opening.operation.as_ref().unwrap())
             .await
             .unwrap()
             .is_none()

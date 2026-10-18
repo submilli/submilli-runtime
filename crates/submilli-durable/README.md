@@ -35,10 +35,11 @@ calls; a fixed invocation is useful only for an isolated operation and its retry
 Ordinary server and CLI runs continue to use the native backend.
 
 This component does not discover pending work or run recovery at server startup.
-`open(vfs, scope, units, context)` takes the caller's configured filesystem,
-including its mounts, and a stable UUID namespace for operation IDs. It creates
+`open(vfs, run_id, units, context)` takes the caller's configured filesystem,
+including its mounts, and a stable UUID `RunId`. Each logical call takes an
+`EffectId`; reader and writer handles use their opening effect's ID. It creates
 private recovery artifacts within those roots, not a new public run directory.
-The caller retains the same roots, journal, scope and operation IDs across
+The caller retains the same roots, journal, run ID and effect IDs across
 retries. Every journal record binds its request to a fingerprint of the configured
 roots, mounts, working directory, access modes and quotas. A changed binding
 fails rather than replaying a result against different paths. Supplying an empty

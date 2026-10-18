@@ -1,5 +1,6 @@
 //! Version-preserving database codecs shared by persistence adapters.
 use crate::unit_of_work::*;
+use interpreter::runtime::durable::{EffectId, RunId};
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
 use submilli_shared::secret_store::{KEY_ID_LEN, SecretCipher};
@@ -38,7 +39,7 @@ pub fn open(sealer: &Sealer, owner: &str, bytes: &[u8]) -> Result<Vec<u8>, Store
 pub fn operation_owner(effect: &Operation, field: &str) -> Result<String, StoreError> {
     serde_json::to_string(&(
         "filesystem-operation",
-        &effect.scope,
+        &effect.run_id,
         &effect.id,
         &effect.operation,
         effect.version,
@@ -197,10 +198,10 @@ fn decode_optional<T: DeserializeOwned>(
 
 pub fn encode_reader(
     sealer: &Sealer,
-    scope: &str,
+    run_id: &RunId,
     value: &Reader,
 ) -> Result<ResourceColumns, StoreError> {
-    let owner = format!("resource:{scope}:{}", value.id);
+    let owner = format!("resource:{run_id}:{}", value.id);
     Ok(ResourceColumns {
         request: encode(
             sealer,
@@ -218,11 +219,11 @@ pub fn encode_reader(
 }
 pub fn decode_reader(
     sealer: &Sealer,
-    scope: &str,
-    id: String,
+    run_id: &RunId,
+    id: EffectId,
     columns: ResourceColumns,
 ) -> Result<Reader, StoreError> {
-    let owner = format!("resource:{scope}:{id}");
+    let owner = format!("resource:{run_id}:{id}");
     let (version, binding, path, options): (
         u32,
         [u8; 32],
@@ -245,10 +246,10 @@ pub fn decode_reader(
 
 pub fn encode_listing(
     sealer: &Sealer,
-    scope: &str,
+    run_id: &RunId,
     value: &Listing,
 ) -> Result<ResourceColumns, StoreError> {
-    let owner = format!("listing:{scope}:{}", value.id);
+    let owner = format!("listing:{run_id}:{}", value.id);
     Ok(ResourceColumns {
         request: encode(
             sealer,
@@ -270,11 +271,11 @@ pub fn encode_listing(
 }
 pub fn decode_listing(
     sealer: &Sealer,
-    scope: &str,
-    id: String,
+    run_id: &RunId,
+    id: EffectId,
     columns: ResourceColumns,
 ) -> Result<Listing, StoreError> {
-    let owner = format!("listing:{scope}:{id}");
+    let owner = format!("listing:{run_id}:{id}");
     let (version, binding, path, recursive): (u32, [u8; 32], String, bool) =
         decode(sealer, &owner, &columns.request)?;
     if version != 1 {
@@ -320,36 +321,40 @@ fn decode_listing_output(
     serde_json::from_slice(&plain).map_err(|e| StoreError::Io(e.to_string()))
 }
 
-pub fn encode_writer(sealer: &Sealer, scope: &str, value: &Writer) -> Result<Vec<u8>, StoreError> {
+pub fn encode_writer(
+    sealer: &Sealer,
+    run_id: &RunId,
+    value: &Writer,
+) -> Result<Vec<u8>, StoreError> {
     encode(
         sealer,
-        &format!("resource:{scope}:{}", value.id),
+        &format!("resource:{run_id}:{}", value.id),
         &(value.binding, &value.path),
     )
 }
 pub fn decode_writer_path(
     sealer: &Sealer,
-    scope: &str,
-    id: &str,
+    run_id: &RunId,
+    id: &EffectId,
     request: &[u8],
 ) -> Result<([u8; 32], String), StoreError> {
-    decode(sealer, &format!("resource:{scope}:{id}"), request)
+    decode(sealer, &format!("resource:{run_id}:{id}"), request)
 }
-pub fn encode_chunk(sealer: &Sealer, scope: &str, chunk: &Chunk) -> Result<Vec<u8>, StoreError> {
+pub fn encode_chunk(sealer: &Sealer, run_id: &RunId, chunk: &Chunk) -> Result<Vec<u8>, StoreError> {
     encode(
         sealer,
-        &format!("resource:{scope}:{}:{}", chunk.writer, chunk.id),
+        &format!("resource:{run_id}:{}:{}", chunk.writer, chunk.id),
         &chunk.content,
     )
 }
 pub fn decode_chunk_content(
     sealer: &Sealer,
-    scope: &str,
-    writer: &str,
-    id: &str,
+    run_id: &RunId,
+    writer: &EffectId,
+    id: &EffectId,
     content: &[u8],
 ) -> Result<crate::unit_of_work::Content, StoreError> {
-    decode(sealer, &format!("resource:{scope}:{writer}:{id}"), content)
+    decode(sealer, &format!("resource:{run_id}:{writer}:{id}"), content)
 }
 
 pub fn encode_operation(

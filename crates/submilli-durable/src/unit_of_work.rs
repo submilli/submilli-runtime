@@ -1,6 +1,7 @@
 //! Persistence contract owned by durability, independent of a database driver.
 use crate::readers::{DirectoryEntry, ReaderPosition};
 use futures::future::BoxFuture;
+use interpreter::runtime::durable::{EffectId, RunId};
 use interpreter::runtime::filesystem::{ReadPosition, ReaderOptions};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -30,46 +31,58 @@ pub type UnitFactory =
 pub trait UnitOfWork: Send {
     async fn get_operation(
         &mut self,
-        scope: &str,
-        id: &str,
+        run_id: &RunId,
+        id: &EffectId,
     ) -> Result<Option<Operation>, StoreError>;
     async fn save_operation(&mut self, effect: Operation) -> Result<(), StoreError>;
-    async fn pending_operation(&mut self, scope: &str) -> Result<Option<String>, StoreError>;
-    async fn operation_count(&mut self, scope: &str) -> Result<u64, StoreError>;
+    async fn pending_operation(&mut self, run_id: &RunId) -> Result<Option<EffectId>, StoreError>;
+    async fn operation_count(&mut self, run_id: &RunId) -> Result<u64, StoreError>;
 
-    async fn get_reader(&mut self, scope: &str, id: &str) -> Result<Option<Reader>, StoreError>;
-    async fn save_reader(&mut self, scope: &str, reader: Reader) -> Result<(), StoreError>;
+    async fn get_reader(
+        &mut self,
+        run_id: &RunId,
+        id: &EffectId,
+    ) -> Result<Option<Reader>, StoreError>;
+    async fn save_reader(&mut self, run_id: &RunId, reader: Reader) -> Result<(), StoreError>;
     /// Encoded snapshot size, without loading or decoding its payload.
-    async fn listing_bytes(&mut self, scope: &str, id: &str) -> Result<u64, StoreError>;
-    async fn get_listing(&mut self, scope: &str, id: &str) -> Result<Option<Listing>, StoreError>;
-    async fn save_listing(&mut self, scope: &str, listing: Listing) -> Result<(), StoreError>;
+    async fn listing_bytes(&mut self, run_id: &RunId, id: &EffectId) -> Result<u64, StoreError>;
+    async fn get_listing(
+        &mut self,
+        run_id: &RunId,
+        id: &EffectId,
+    ) -> Result<Option<Listing>, StoreError>;
+    async fn save_listing(&mut self, run_id: &RunId, listing: Listing) -> Result<(), StoreError>;
     async fn pending_resource(
         &mut self,
-        scope: &str,
+        run_id: &RunId,
     ) -> Result<Option<PendingResource>, StoreError>;
-    async fn get_writer(&mut self, scope: &str, id: &str) -> Result<Option<Writer>, StoreError>;
-    async fn save_writer(&mut self, scope: &str, writer: Writer) -> Result<(), StoreError>;
-    async fn closing_writer(&mut self, scope: &str) -> Result<Option<Writer>, StoreError>;
+    async fn get_writer(
+        &mut self,
+        run_id: &RunId,
+        id: &EffectId,
+    ) -> Result<Option<Writer>, StoreError>;
+    async fn save_writer(&mut self, run_id: &RunId, writer: Writer) -> Result<(), StoreError>;
+    async fn closing_writer(&mut self, run_id: &RunId) -> Result<Option<Writer>, StoreError>;
     async fn writer_for_effect(
         &mut self,
-        scope: &str,
-        effect: &str,
+        run_id: &RunId,
+        effect: &EffectId,
     ) -> Result<Option<Writer>, StoreError>;
     async fn get_chunk(
         &mut self,
-        scope: &str,
-        writer: &str,
-        id: &str,
+        run_id: &RunId,
+        writer: &EffectId,
+        id: &EffectId,
     ) -> Result<Option<Chunk>, StoreError>;
-    async fn save_chunk(&mut self, scope: &str, chunk: Chunk) -> Result<(), StoreError>;
+    async fn save_chunk(&mut self, run_id: &RunId, chunk: Chunk) -> Result<(), StoreError>;
     async fn writer_chunks(
         &mut self,
-        scope: &str,
-        writer: &str,
+        run_id: &RunId,
+        writer: &EffectId,
         limit: u32,
     ) -> Result<Vec<Chunk>, StoreError>;
 
-    async fn resource_counts(&mut self, scope: &str) -> Result<ResourceCounts, StoreError>;
+    async fn resource_counts(&mut self, run_id: &RunId) -> Result<ResourceCounts, StoreError>;
     async fn commit(self: Box<Self>) -> Result<(), StoreError>;
 }
 
@@ -80,7 +93,7 @@ mod tests;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Content {
-    pub id: String,
+    pub id: EffectId,
     pub bytes: u64,
     pub sha256: [u8; 32],
 }
@@ -100,8 +113,8 @@ pub enum RecordedOutcome {
 
 #[derive(Clone)]
 pub struct Operation {
-    pub id: String,
-    pub scope: String,
+    pub id: EffectId,
+    pub run_id: RunId,
     pub operation: String,
     pub version: u32,
     pub request: Vec<u8>,
@@ -115,7 +128,7 @@ pub struct Operation {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Progress<T> {
-    pub effect: String,
+    pub effect: EffectId,
     pub close: bool,
     pub before: T,
     pub after: T,
@@ -149,7 +162,7 @@ fn progress_follows<T: PartialEq + Default>(
 #[derive(Clone)]
 pub struct Reader {
     pub binding: [u8; 32],
-    pub id: String,
+    pub id: EffectId,
     pub path: String,
     pub options: ReaderOptions,
     pub position: Option<ReaderPosition>,
@@ -159,7 +172,7 @@ pub struct Reader {
 #[derive(Clone)]
 pub struct Listing {
     pub binding: [u8; 32],
-    pub id: String,
+    pub id: EffectId,
     pub path: String,
     pub recursive: bool,
     pub progress: Option<Progress<ListingPosition>>,
@@ -169,15 +182,15 @@ pub struct Listing {
 #[derive(Clone)]
 pub struct Writer {
     pub binding: [u8; 32],
-    pub id: String,
+    pub id: EffectId,
     pub path: String,
-    pub close_effect: Option<String>,
+    pub close_effect: Option<EffectId>,
     pub state: String,
 }
 #[derive(Clone)]
 pub struct Chunk {
-    pub writer: String,
-    pub id: String,
+    pub writer: EffectId,
+    pub id: EffectId,
     pub sequence: u32,
     pub content: Content,
 }
@@ -188,11 +201,11 @@ pub struct WriterRecord {
 }
 pub enum PendingResource {
     Reader {
-        id: String,
+        id: EffectId,
         path: String,
     },
     Listing {
-        id: String,
+        id: EffectId,
         path: String,
         recursive: bool,
     },
@@ -217,7 +230,7 @@ impl Operation {
     }
     pub fn validate_successor(&self, prior: Option<&Self>) -> Result<(), StoreError> {
         use StoreError;
-        if self.scope.is_empty()
+        if self.run_id.is_empty()
             || self.id.is_empty()
             || self.operation.is_empty()
             || self.version == 0
@@ -242,7 +255,7 @@ impl Operation {
                 Err(StoreError::Conflict)
             };
         };
-        if self.scope != prior.scope
+        if self.run_id != prior.run_id
             || self.id != prior.id
             || self.operation != prior.operation
             || self.version != prior.version

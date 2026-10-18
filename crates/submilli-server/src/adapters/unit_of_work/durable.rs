@@ -2,6 +2,7 @@
 use super::transaction::SqliteTransaction;
 use crate::application::error::StoreError;
 use crate::database::ServerDatabase;
+use interpreter::runtime::durable::{EffectId, RunId};
 use std::sync::Arc;
 use submilli_durable::codec::Sealer;
 use submilli_durable::unit_of_work::*;
@@ -38,53 +39,61 @@ struct SqliteDurableUnitOfWork {
 impl UnitOfWork for SqliteDurableUnitOfWork {
     async fn get_reader(
         &mut self,
-        scope: &str,
-        id: &str,
+        run_id: &RunId,
+        id: &EffectId,
     ) -> Result<Option<Reader>, DurableStoreError> {
-        let scope = scope.to_owned();
+        let run_id = run_id.to_owned();
         let id = id.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::get_reader(connection, &sealer, &scope, &id).await
+                    super::durable_state::get_reader(connection, &sealer, &run_id, &id).await
                 })
             })
             .await
             .map_err(durable_error)
     }
-    async fn save_reader(&mut self, scope: &str, reader: Reader) -> Result<(), DurableStoreError> {
-        let scope = scope.to_owned();
+    async fn save_reader(
+        &mut self,
+        run_id: &RunId,
+        reader: Reader,
+    ) -> Result<(), DurableStoreError> {
+        let run_id = run_id.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::save_reader(connection, &sealer, &scope, reader).await
+                    super::durable_state::save_reader(connection, &sealer, &run_id, reader).await
                 })
             })
             .await
             .map_err(durable_error)
     }
-    async fn listing_bytes(&mut self, scope: &str, id: &str) -> Result<u64, DurableStoreError> {
-        let (scope, id) = (scope.to_owned(), id.to_owned());
+    async fn listing_bytes(
+        &mut self,
+        run_id: &RunId,
+        id: &EffectId,
+    ) -> Result<u64, DurableStoreError> {
+        let (run_id, id) = (run_id.to_owned(), id.to_owned());
         self.transaction.query_recoverable(move |connection| Box::pin(async move {
             let bytes = sqlx::query_scalar::<_, i64>("SELECT length(content) FROM durable_filesystem_listings WHERE scope_id=? AND resource_id=? AND content IS NOT NULL")
-                .bind(scope).bind(id).fetch_optional(connection).await.map_err(crate::adapters::sql::database)?.ok_or(StoreError::Conflict)?;
+                .bind(run_id.as_str()).bind(id.as_str()).fetch_optional(connection).await.map_err(crate::adapters::sql::database)?.ok_or(StoreError::Conflict)?;
             u64::try_from(bytes).map_err(|_| StoreError::Conflict)
         })).await.map_err(durable_error)
     }
     async fn get_listing(
         &mut self,
-        scope: &str,
-        id: &str,
+        run_id: &RunId,
+        id: &EffectId,
     ) -> Result<Option<Listing>, DurableStoreError> {
-        let scope = scope.to_owned();
+        let run_id = run_id.to_owned();
         let id = id.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::get_listing(connection, &sealer, &scope, &id).await
+                    super::durable_state::get_listing(connection, &sealer, &run_id, &id).await
                 })
             })
             .await
@@ -92,15 +101,15 @@ impl UnitOfWork for SqliteDurableUnitOfWork {
     }
     async fn save_listing(
         &mut self,
-        scope: &str,
+        run_id: &RunId,
         listing: Listing,
     ) -> Result<(), DurableStoreError> {
-        let scope = scope.to_owned();
+        let run_id = run_id.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::save_listing(connection, &sealer, &scope, listing).await
+                    super::durable_state::save_listing(connection, &sealer, &run_id, listing).await
                 })
             })
             .await
@@ -108,41 +117,48 @@ impl UnitOfWork for SqliteDurableUnitOfWork {
     }
     async fn get_writer(
         &mut self,
-        scope: &str,
-        id: &str,
+        run_id: &RunId,
+        id: &EffectId,
     ) -> Result<Option<Writer>, DurableStoreError> {
-        let scope = scope.to_owned();
+        let run_id = run_id.to_owned();
         let id = id.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::get_writer(connection, &sealer, &scope, &id).await
+                    super::durable_state::get_writer(connection, &sealer, &run_id, &id).await
                 })
             })
             .await
             .map_err(durable_error)
     }
-    async fn save_writer(&mut self, scope: &str, writer: Writer) -> Result<(), DurableStoreError> {
-        let scope = scope.to_owned();
+    async fn save_writer(
+        &mut self,
+        run_id: &RunId,
+        writer: Writer,
+    ) -> Result<(), DurableStoreError> {
+        let run_id = run_id.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::save_writer(connection, &sealer, &scope, writer).await
+                    super::durable_state::save_writer(connection, &sealer, &run_id, writer).await
                 })
             })
             .await
             .map_err(durable_error)
     }
 
-    async fn closing_writer(&mut self, scope: &str) -> Result<Option<Writer>, DurableStoreError> {
-        let scope = scope.to_owned();
+    async fn closing_writer(
+        &mut self,
+        run_id: &RunId,
+    ) -> Result<Option<Writer>, DurableStoreError> {
+        let run_id = run_id.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::closing_writer(connection, &sealer, &scope).await
+                    super::durable_state::closing_writer(connection, &sealer, &run_id).await
                 })
             })
             .await
@@ -150,16 +166,16 @@ impl UnitOfWork for SqliteDurableUnitOfWork {
     }
     async fn writer_for_effect(
         &mut self,
-        scope: &str,
-        effect: &str,
+        run_id: &RunId,
+        effect: &EffectId,
     ) -> Result<Option<Writer>, DurableStoreError> {
-        let scope = scope.to_owned();
+        let run_id = run_id.to_owned();
         let effect = effect.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::writer_for_effect(connection, &sealer, &scope, &effect)
+                    super::durable_state::writer_for_effect(connection, &sealer, &run_id, &effect)
                         .await
                 })
             })
@@ -168,26 +184,29 @@ impl UnitOfWork for SqliteDurableUnitOfWork {
     }
     async fn pending_resource(
         &mut self,
-        scope: &str,
+        run_id: &RunId,
     ) -> Result<Option<PendingResource>, DurableStoreError> {
-        let scope = scope.to_owned();
+        let run_id = run_id.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::pending_resource(connection, &sealer, &scope).await
+                    super::durable_state::pending_resource(connection, &sealer, &run_id).await
                 })
             })
             .await
             .map_err(durable_error)
     }
-    async fn resource_counts(&mut self, scope: &str) -> Result<ResourceCounts, DurableStoreError> {
-        let scope = scope.to_owned();
+    async fn resource_counts(
+        &mut self,
+        run_id: &RunId,
+    ) -> Result<ResourceCounts, DurableStoreError> {
+        let run_id = run_id.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::resource_counts(connection, &sealer, &scope).await
+                    super::durable_state::resource_counts(connection, &sealer, &run_id).await
                 })
             })
             .await
@@ -196,16 +215,16 @@ impl UnitOfWork for SqliteDurableUnitOfWork {
 
     async fn get_operation(
         &mut self,
-        scope: &str,
-        id: &str,
+        run_id: &RunId,
+        id: &EffectId,
     ) -> Result<Option<Operation>, DurableStoreError> {
-        let scope = scope.to_owned();
+        let run_id = run_id.to_owned();
         let id = id.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::get_operation(connection, &sealer, &scope, &id).await
+                    super::durable_state::get_operation(connection, &sealer, &run_id, &id).await
                 })
             })
             .await
@@ -224,26 +243,26 @@ impl UnitOfWork for SqliteDurableUnitOfWork {
     }
     async fn pending_operation(
         &mut self,
-        scope: &str,
-    ) -> Result<Option<String>, DurableStoreError> {
-        let scope = scope.to_owned();
+        run_id: &RunId,
+    ) -> Result<Option<EffectId>, DurableStoreError> {
+        let run_id = run_id.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::pending_operation(connection, &sealer, &scope).await
+                    super::durable_state::pending_operation(connection, &sealer, &run_id).await
                 })
             })
             .await
             .map_err(durable_error)
     }
-    async fn operation_count(&mut self, scope: &str) -> Result<u64, DurableStoreError> {
-        let scope = scope.to_owned();
+    async fn operation_count(&mut self, run_id: &RunId) -> Result<u64, DurableStoreError> {
+        let run_id = run_id.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::operation_count(connection, &sealer, &scope).await
+                    super::durable_state::operation_count(connection, &sealer, &run_id).await
                 })
             })
             .await
@@ -252,30 +271,31 @@ impl UnitOfWork for SqliteDurableUnitOfWork {
 
     async fn get_chunk(
         &mut self,
-        scope: &str,
-        writer: &str,
-        id: &str,
+        run_id: &RunId,
+        writer: &EffectId,
+        id: &EffectId,
     ) -> Result<Option<Chunk>, DurableStoreError> {
-        let scope = scope.to_owned();
+        let run_id = run_id.to_owned();
         let writer = writer.to_owned();
         let id = id.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::get_chunk(connection, &sealer, &scope, &writer, &id).await
+                    super::durable_state::get_chunk(connection, &sealer, &run_id, &writer, &id)
+                        .await
                 })
             })
             .await
             .map_err(durable_error)
     }
-    async fn save_chunk(&mut self, scope: &str, chunk: Chunk) -> Result<(), DurableStoreError> {
-        let scope = scope.to_owned();
+    async fn save_chunk(&mut self, run_id: &RunId, chunk: Chunk) -> Result<(), DurableStoreError> {
+        let run_id = run_id.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::save_chunk(connection, &sealer, &scope, chunk).await
+                    super::durable_state::save_chunk(connection, &sealer, &run_id, chunk).await
                 })
             })
             .await
@@ -283,18 +303,20 @@ impl UnitOfWork for SqliteDurableUnitOfWork {
     }
     async fn writer_chunks(
         &mut self,
-        scope: &str,
-        writer: &str,
+        run_id: &RunId,
+        writer: &EffectId,
         limit: u32,
     ) -> Result<Vec<Chunk>, DurableStoreError> {
-        let scope = scope.to_owned();
+        let run_id = run_id.to_owned();
         let writer = writer.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::writer_chunks(connection, &sealer, &scope, &writer, limit)
-                        .await
+                    super::durable_state::writer_chunks(
+                        connection, &sealer, &run_id, &writer, limit,
+                    )
+                    .await
                 })
             })
             .await

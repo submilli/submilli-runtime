@@ -7,6 +7,7 @@ use crate::filesystem::{
 use crate::io::{Files, RecoveryError, validate_guest_path};
 use crate::unit_of_work::*;
 use cap_std::fs::{Dir, File, OpenOptions};
+use interpreter::runtime::durable::EffectId;
 use interpreter::runtime::filesystem::{
     FileWriter, FilesystemError as PortError, Invocation, ResourceDescriptor, ResourceKind,
 };
@@ -15,7 +16,11 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 impl FilesystemOperation {
     /// Open one output-in-progress. Chunk receipts contain fingerprints only.
-    pub async fn open_writer(&self, resource: &str, path: &str) -> Result<(), FilesystemError> {
+    pub async fn open_writer(
+        &self,
+        resource: &EffectId,
+        path: &str,
+    ) -> Result<(), FilesystemError> {
         validate_id(resource)?;
         validate_guest_path(path)?;
         let _gate = self.filesystem.context.filesystem_gate.lock().await;
@@ -24,8 +29,8 @@ impl FilesystemOperation {
 
     pub async fn write_chunk(
         &self,
-        resource: &str,
-        chunk: &str,
+        resource: &EffectId,
+        chunk: &EffectId,
         bytes: Vec<u8>,
     ) -> Result<(), FilesystemError> {
         validate_id(resource)?;
@@ -89,8 +94,8 @@ impl FilesystemOperation {
 
     pub async fn close_writer(
         &self,
-        resource: &str,
-        effect: &str,
+        resource: &EffectId,
+        effect: &EffectId,
     ) -> Result<Outcome, FilesystemError> {
         validate_id(resource)?;
         validate_id(effect)?;
@@ -168,14 +173,14 @@ impl FilesystemOperation {
 }
 pub(crate) struct DurableWriter {
     pub(crate) filesystem: DurableFilesystem,
-    pub(crate) resource: String,
+    pub(crate) resource: EffectId,
     pub(crate) closed: bool,
 }
 #[async_trait::async_trait]
 impl FileWriter for DurableWriter {
     fn descriptor(&self) -> Option<ResourceDescriptor> {
         Some(ResourceDescriptor {
-            scope: self.filesystem.id.clone(),
+            run_id: self.filesystem.run_id.clone(),
             id: self.resource.clone(),
             kind: ResourceKind::Writer,
         })
@@ -184,17 +189,17 @@ impl FileWriter for DurableWriter {
         self.closed
     }
     async fn write(&mut self, invocation: &Invocation, bytes: Vec<u8>) -> Result<(), PortError> {
-        let id = operation(invocation)?;
-        let filesystem = self.filesystem.operation(invocation.work.clone());
-        filesystem
-            .write_chunk(&self.resource, id, bytes)
+        let effect_id = require_effect_id(invocation)?;
+        let operation = self.filesystem.operation(invocation.work.clone());
+        operation
+            .write_chunk(&self.resource, effect_id, bytes)
             .await
             .map_err(backend)
     }
     async fn close(&mut self, invocation: &Invocation) -> Result<(), PortError> {
-        let id = operation(invocation)?;
-        let filesystem = self.filesystem.operation(invocation.work.clone());
-        let result = filesystem.close_writer(&self.resource, id).await;
+        let effect_id = require_effect_id(invocation)?;
+        let operation = self.filesystem.operation(invocation.work.clone());
+        let result = operation.close_writer(&self.resource, effect_id).await;
         // SQL remains authoritative after either a successful close or a saved
         // refusal, and after an acknowledgement is lost.
         self.closed = self
@@ -209,7 +214,7 @@ impl FileWriter for DurableWriter {
 impl Files {
     pub(crate) fn stage_writer_chunk(
         &self,
-        resource: &str,
+        resource: &EffectId,
         path: &str,
         offset: u64,
         content: &Content,
@@ -253,7 +258,7 @@ impl Files {
     }
     pub(crate) fn writer_file(
         &self,
-        resource: &str,
+        resource: &EffectId,
         path: &str,
         chunks: &[Content],
         work: Option<&interpreter::runtime::fuel::WorkBudget>,
@@ -288,7 +293,7 @@ impl Files {
         crate::io::sync(&directory)?;
         self.reconcile_quotas(work)?;
         let content = Content {
-            id: resource.into(),
+            id: resource.clone(),
             bytes,
             sha256: whole.finalize().into(),
         };
@@ -297,7 +302,7 @@ impl Files {
     }
     fn writer_directory(
         &self,
-        resource: &str,
+        resource: &EffectId,
         path: &str,
         create: bool,
     ) -> Result<(Dir, &crate::io::Volume), RecoveryError> {
@@ -324,12 +329,12 @@ impl Files {
 impl DurableFilesystem {
     pub(crate) async fn stored_writer_is_closed(
         &self,
-        resource: &str,
+        resource: &EffectId,
     ) -> Result<bool, FilesystemError> {
-        let scope = self.id.as_str();
+        let run_id = &self.run_id;
         let mut unit = (self.units)().await?;
         let writer = unit
-            .get_writer(scope, resource)
+            .get_writer(run_id, resource)
             .await?
             .ok_or(StoreError::Conflict)?;
         if writer.binding != self.binding {
@@ -339,27 +344,27 @@ impl DurableFilesystem {
     }
     pub(crate) async fn stored_open_writer(
         &self,
-        resource: &str,
+        resource: &EffectId,
         path: &str,
     ) -> Result<(), FilesystemError> {
-        let scope = self.id.as_str();
+        let run_id = &self.run_id;
         let binding = self.binding;
         let mut owned = (self.units)().await?;
         let unit = owned.as_mut();
-        if let Some(prior) = unit.get_writer(scope, resource).await? {
+        if let Some(prior) = unit.get_writer(run_id, resource).await? {
             return if prior.binding == binding && prior.path == path {
                 Ok(())
             } else {
                 conflict()
             };
         }
-        require_idle(unit, scope).await?;
-        require_resource_limit(unit, scope).await?;
+        require_idle(unit, run_id).await?;
+        require_resource_limit(unit, run_id).await?;
         unit.save_writer(
-            scope,
+            run_id,
             Writer {
                 binding,
-                id: resource.into(),
+                id: resource.clone(),
                 path: path.into(),
                 close_effect: None,
                 state: "open".into(),
@@ -371,32 +376,32 @@ impl DurableFilesystem {
     }
     pub(crate) async fn stored_chunk_position(
         &self,
-        resource: &str,
-        chunk: &str,
+        resource: &EffectId,
+        chunk: &EffectId,
         content: &Content,
     ) -> Result<(String, bool, u64), FilesystemError> {
-        let scope = self.id.as_str();
+        let run_id = &self.run_id;
         let binding = self.binding;
         let mut unit = (self.units)().await?;
         let writer = unit
-            .get_writer(scope, resource)
+            .get_writer(run_id, resource)
             .await?
             .ok_or(StoreError::Conflict)?;
         if writer.binding != binding {
             return conflict();
         }
-        if let Some(prior) = unit.get_chunk(scope, resource, chunk).await? {
+        if let Some(prior) = unit.get_chunk(run_id, resource, chunk).await? {
             if prior.content != *content {
                 return conflict();
             }
             return Ok((writer.path, true, 0));
         }
-        require_idle(unit.as_mut(), scope).await?;
-        if writer.state != "open" || unit.resource_counts(scope).await?.chunks >= MAX_OPERATIONS {
+        require_idle(unit.as_mut(), run_id).await?;
+        if writer.state != "open" || unit.resource_counts(run_id).await?.chunks >= MAX_OPERATIONS {
             return conflict();
         }
         let chunks = unit
-            .writer_chunks(scope, resource, MAX_OPERATIONS as u32 + 1)
+            .writer_chunks(run_id, resource, MAX_OPERATIONS as u32 + 1)
             .await?;
         let offset = chunks
             .iter()
@@ -406,13 +411,13 @@ impl DurableFilesystem {
     }
     pub(crate) async fn stored_writer_outcome(
         &self,
-        effect: &str,
+        effect: &EffectId,
     ) -> Result<Option<RecordedOutcome>, FilesystemError> {
-        let scope = self.id.as_str();
+        let run_id = &self.run_id;
         let binding = self.binding;
         let mut unit = (self.units)().await?;
         Ok(unit
-            .get_operation(scope, effect)
+            .get_operation(run_id, effect)
             .await?
             .map(|row| decode_outcome(&row, binding))
             .transpose()?
@@ -420,41 +425,41 @@ impl DurableFilesystem {
     }
     pub(crate) async fn stored_writer_chunk(
         &self,
-        resource: &str,
-        chunk: &str,
+        resource: &EffectId,
+        chunk: &EffectId,
         content: &Content,
     ) -> Result<(), FilesystemError> {
-        let scope = self.id.as_str();
+        let run_id = &self.run_id;
         let binding = self.binding;
         let mut owned = (self.units)().await?;
         let unit = owned.as_mut();
         let writer = unit
-            .get_writer(scope, resource)
+            .get_writer(run_id, resource)
             .await?
             .ok_or(StoreError::Conflict)?;
         if writer.binding != binding {
             return conflict();
         }
-        if let Some(prior) = unit.get_chunk(scope, resource, chunk).await? {
+        if let Some(prior) = unit.get_chunk(run_id, resource, chunk).await? {
             return if prior.content == *content {
                 Ok(())
             } else {
                 conflict()
             };
         }
-        require_idle(unit, scope).await?;
-        if writer.state != "open" || unit.resource_counts(scope).await?.chunks >= MAX_OPERATIONS {
+        require_idle(unit, run_id).await?;
+        if writer.state != "open" || unit.resource_counts(run_id).await?.chunks >= MAX_OPERATIONS {
             return conflict();
         }
         let sequence = unit
-            .writer_chunks(scope, resource, MAX_OPERATIONS as u32 + 1)
+            .writer_chunks(run_id, resource, MAX_OPERATIONS as u32 + 1)
             .await?
             .len();
         unit.save_chunk(
-            scope,
+            run_id,
             Chunk {
-                writer: resource.into(),
-                id: chunk.into(),
+                writer: resource.clone(),
+                id: chunk.clone(),
                 sequence: u32::try_from(sequence).map_err(invalid)?,
                 content: content.clone(),
             },
@@ -465,8 +470,8 @@ impl DurableFilesystem {
     }
     pub(crate) async fn stored_closing_writer(
         &self,
-        resource: &str,
-        effect: &str,
+        resource: &EffectId,
+        effect: &EffectId,
         maximum_bytes: u64,
     ) -> Result<WriterRecord, FilesystemError> {
         self.stored_writer_close_record(resource, effect, maximum_bytes, true)
@@ -474,8 +479,8 @@ impl DurableFilesystem {
     }
     pub(crate) async fn stored_writer_for_close(
         &self,
-        resource: &str,
-        effect: &str,
+        resource: &EffectId,
+        effect: &EffectId,
         maximum_bytes: u64,
     ) -> Result<WriterRecord, FilesystemError> {
         self.stored_writer_close_record(resource, effect, maximum_bytes, false)
@@ -483,17 +488,17 @@ impl DurableFilesystem {
     }
     async fn stored_writer_close_record(
         &self,
-        resource: &str,
-        effect: &str,
+        resource: &EffectId,
+        effect: &EffectId,
         maximum_bytes: u64,
         admit: bool,
     ) -> Result<WriterRecord, FilesystemError> {
-        let scope = self.id.as_str();
+        let run_id = &self.run_id;
         let binding = self.binding;
         let mut owned = (self.units)().await?;
         let unit = owned.as_mut();
         let mut writer = unit
-            .get_writer(scope, resource)
+            .get_writer(run_id, resource)
             .await?
             .ok_or(StoreError::Conflict)?;
         if writer.binding != binding {
@@ -502,12 +507,12 @@ impl DurableFilesystem {
         if writer
             .close_effect
             .as_ref()
-            .is_some_and(|prior| *prior != effect)
+            .is_some_and(|prior| prior != effect)
         {
             return conflict();
         }
         let chunks = unit
-            .writer_chunks(scope, resource, MAX_OPERATIONS as u32 + 1)
+            .writer_chunks(run_id, resource, MAX_OPERATIONS as u32 + 1)
             .await?;
         if chunks.len() > MAX_OPERATIONS as usize {
             return conflict();
@@ -519,13 +524,13 @@ impl DurableFilesystem {
             return conflict();
         }
         if writer.close_effect.is_none() {
-            require_idle(unit, scope).await?;
-            require_capacity(unit, scope).await?;
-            require_unused_operation(unit, scope, effect).await?;
+            require_idle(unit, run_id).await?;
+            require_capacity(unit, run_id).await?;
+            require_unused_operation(unit, run_id, effect).await?;
             if admit {
-                writer.close_effect = Some(effect.into());
+                writer.close_effect = Some(effect.clone());
                 writer.state = "closing".into();
-                unit.save_writer(scope, writer.clone()).await?;
+                unit.save_writer(run_id, writer.clone()).await?;
             }
         }
         owned.commit().await?;
@@ -534,20 +539,23 @@ impl DurableFilesystem {
             chunks: chunks.into_iter().map(|chunk| chunk.content).collect(),
         })
     }
-    pub(crate) async fn stored_writer_closed(&self, resource: &str) -> Result<(), FilesystemError> {
-        let scope = self.id.as_str();
+    pub(crate) async fn stored_writer_closed(
+        &self,
+        resource: &EffectId,
+    ) -> Result<(), FilesystemError> {
+        let run_id = &self.run_id;
         let binding = self.binding;
         let mut owned = (self.units)().await?;
         let unit = owned.as_mut();
         let mut writer = unit
-            .get_writer(scope, resource)
+            .get_writer(run_id, resource)
             .await?
             .ok_or(StoreError::Conflict)?;
         if writer.binding != binding {
             return conflict();
         }
         writer.state = "closed".into();
-        unit.save_writer(scope, writer).await?;
+        unit.save_writer(run_id, writer).await?;
         owned.commit().await?;
         Ok(())
     }

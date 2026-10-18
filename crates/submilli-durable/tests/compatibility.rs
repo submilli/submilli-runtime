@@ -1,4 +1,5 @@
-//! Authentication binds records to their scope, operation, version, and field.
+//! Stored identities retain their encoding and authentication bindings.
+use interpreter::runtime::filesystem::ResourceDescriptor;
 use std::sync::Arc;
 use submilli_durable::{
     codec::{self, Sealer},
@@ -11,7 +12,7 @@ fn filesystem_operation_associated_data_bind_scope_and_codec() {
     let cipher = Arc::new(SecretCipher::from_key([7; 32]));
     let sealer = Sealer::new(Some(cipher.clone()));
     let effect = Operation {
-        scope: "scope".into(),
+        run_id: "scope".into(),
         id: "effect".into(),
         operation: "write".into(),
         version: 2,
@@ -38,4 +39,13 @@ fn legacy_seal(cipher: &SecretCipher, owner: &str, bytes: &[u8]) -> Vec<u8> {
     result.extend_from_slice(&cipher.key_id());
     result.extend_from_slice(&cipher.seal(bytes, owner.as_bytes()).unwrap());
     result
+}
+
+#[test]
+fn typed_resource_ids_preserve_descriptor_encoding() {
+    let stored = r#"{"scope":"run","id":"opening-effect","kind":"Writer"}"#;
+    let descriptor: ResourceDescriptor = serde_json::from_str(stored).unwrap();
+    assert_eq!(descriptor.run_id.as_str(), "run");
+    assert_eq!(descriptor.id.as_str(), "opening-effect");
+    assert_eq!(serde_json::to_string(&descriptor).unwrap(), stored);
 }
