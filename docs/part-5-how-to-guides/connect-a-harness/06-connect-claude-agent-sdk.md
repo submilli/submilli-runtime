@@ -1,35 +1,36 @@
 ---
 title: "Connect Claude Agent SDK to Submilli"
 description: "Add Submilli to the MCP servers used by an existing Claude Agent SDK harness."
+showDescription: false
 slug: how-to/connect-claude-agent-sdk
 sidebar:
   order: 6
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "3a0be69be8d8baf62a748c41c313c776903ae633a92eda14e407f8b176b7fb09"
+  contentHash: "27ea67985467c5aae568f0025129984cb22a84d170dbd9210d40c2e067e50336"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
 
-Add Submilli to the MCP servers used by your Claude Agent SDK harness.
-MCP (Model Context Protocol) connects the harness to external tools.
-A harness is the software that runs your agent and handles its tool calls.
+Connect through MCP by adding Submilli to your existing `query` options.
 
-## Before you start
+:::note[Before you start]
+- An existing Claude Agent SDK project with a configured model.
+- A [running Submilli server](/docs/server/run-the-server) and a token it accepts.
+- A [registered Blueprint](/docs/server/register-a-blueprint), which sets the
+  permissions for code sent to Submilli.
+:::
 
-Have your harness project and these Submilli settings ready:
+## Set connection variables
+
+Set these environment variables in the process that runs your agent:
 
 | Environment variable | Value |
 | --- | --- |
 | `SUBMILLI_SERVER` | Server address, such as `http://127.0.0.1:8128`, without a trailing slash |
-| `SUBMILLI_SERVER_TOKEN` | A token accepted by that server |
-| `SUBMILLI_BLUEPRINT` | The name of a registered Blueprint |
-
-Set these variables in the process that runs your harness. A Blueprint sets
-the permissions for code sent to Submilli. If needed,
-[run the server](/docs/server/run-the-server) and
-[register a Blueprint](/docs/server/register-a-blueprint) first.
+| `SUBMILLI_SERVER_TOKEN` | Server token |
+| `SUBMILLI_BLUEPRINT` | Registered Blueprint name |
 
 ## Install Claude Agent SDK
 

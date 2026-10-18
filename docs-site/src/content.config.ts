@@ -18,6 +18,7 @@ export const collections = {
       extend: z.object({
         nextSteps: z.array(z.string()).optional(),
         authorship: authorshipSchema.optional(),
+        showDescription: z.boolean().default(true),
       }),
     }),
   }),

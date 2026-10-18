@@ -1,33 +1,30 @@
 ---
 title: "Connect your harness to Submilli"
-description: "Configure your harness to use Submilli's code execution tool."
+description: "Configure your harness to use Submilli for code execution."
+showDescription: false
 slug: how-to/connect-a-harness
 sidebar:
   order: 0
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "df6fb840ea373f6eb49dab50ccde734b56386b06203eb30b401cccac112008f3"
+  contentHash: "47dc169b18eded68cc6d3e6a8638e03b2f456e211dfb71adfcec1db2957abe0a"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
 
-Connect your harness to Submilli so your agent can run code through it.
-A harness is the software that runs your agent and handles its tool calls.
+Choose your harness to configure it to use Submilli for code execution.
 
-Choose your harness below to add the connection to your project.
+:::note[Before you start]
+- A [running Submilli server](/docs/server/run-the-server) and a token it accepts.
+- A [registered Blueprint](/docs/server/register-a-blueprint), which sets the
+  permissions for code sent to Submilli.
+:::
 
-## Choose your harness
-
-| Harness | Connection code |
-| --- | --- |
-| [Mastra](/docs/how-to/connect-mastra) | TypeScript |
-| [LangChain deepagents](/docs/how-to/connect-deepagents) | Python |
-| [OpenAI Agents SDK](/docs/how-to/connect-openai-agents) | Python |
-| [Claude Agent SDK](/docs/how-to/connect-claude-agent-sdk) | TypeScript |
-| [Vercel AI SDK](/docs/how-to/use-the-http-api) | TypeScript |
-
-You will need a running Submilli server, a token it accepts, and a registered
-Blueprint, which sets the permissions for code sent to Submilli.
-If you do not have these yet, [run the server](/docs/server/run-the-server)
-and [register a Blueprint](/docs/server/register-a-blueprint).
+| Harness how-to | Language | Integration reference |
+| --- | --- | --- |
+| [Mastra](/docs/how-to/connect-mastra) | TypeScript | [MCP example](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/mastra) |
+| [LangChain deepagents](/docs/how-to/connect-deepagents) | Python | [Native integration (`langchain-submilli`)](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#readme) |
+| [OpenAI Agents SDK](/docs/how-to/connect-openai-agents) | Python | [MCP example](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/openai-agents) |
+| [Claude Agent SDK](/docs/how-to/connect-claude-agent-sdk) | TypeScript | [MCP example](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/claude-agent-sdk) |
+| [Vercel AI SDK](/docs/how-to/use-the-http-api) | TypeScript | [HTTP example](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/vercel-ai-sdk-http) |

@@ -1,35 +1,36 @@
 ---
 title: "Connect OpenAI Agents SDK to Submilli"
 description: "Add Submilli as an MCP server in an existing OpenAI Agents SDK harness."
+showDescription: false
 slug: how-to/connect-openai-agents
 sidebar:
   order: 5
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "fc3b4bbccdabf6b7cc1b1a397b45b4c91be121ea75eaf3a7f96b6b9d1a01537c"
+  contentHash: "a9a06150cbd9cced1ddc2a8e565a034253823987f95d5a5a4df82b538ee85c5d"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
 
-Add Submilli as an MCP server in your OpenAI Agents SDK harness.
-MCP (Model Context Protocol) connects the harness to external tools.
-A harness is the software that runs your agent and handles its tool calls.
+Use `MCPServerStreamableHttp` to connect your agent to the Submilli runtime over MCP.
 
-## Before you start
+:::note[Before you start]
+- An existing OpenAI Agents SDK project with a configured model.
+- A [running Submilli server](/docs/server/run-the-server) and a token it accepts.
+- A [registered Blueprint](/docs/server/register-a-blueprint), which sets the
+  permissions for code sent to Submilli.
+:::
 
-Have your harness project and these Submilli settings ready:
+## Set connection variables
+
+Set these environment variables in the process that runs your agent:
 
 | Environment variable | Value |
 | --- | --- |
 | `SUBMILLI_SERVER` | Server address, such as `http://127.0.0.1:8128`, without a trailing slash |
-| `SUBMILLI_SERVER_TOKEN` | A token accepted by that server |
-| `SUBMILLI_BLUEPRINT` | The name of a registered Blueprint |
-
-Set these variables in the process that runs your harness. A Blueprint sets
-the permissions for code sent to Submilli. If needed,
-[run the server](/docs/server/run-the-server) and
-[register a Blueprint](/docs/server/register-a-blueprint) first.
+| `SUBMILLI_SERVER_TOKEN` | Server token |
+| `SUBMILLI_BLUEPRINT` | Registered Blueprint name |
 
 ## Install OpenAI Agents SDK
 
@@ -83,7 +84,7 @@ of their names and values. See
 ## Verify the connection
 
 Before `Runner.run`, inside the `async with` block, check that the server
-offers its code execution tool:
+offers `submilli__typescript__execute`:
 
 ```python
 tools = await submilli.list_tools()
@@ -92,8 +93,8 @@ if not any(tool.name == "submilli__typescript__execute" for tool in tools):
 print("Connected to Submilli.")
 ```
 
-`Connected to Submilli.` confirms that the SDK can discover Submilli's
-code execution tool. Listing tools does not call a model.
+`Connected to Submilli.` confirms that the SDK can discover
+`submilli__typescript__execute`. Listing tools does not call a model.
 
 ## Troubleshooting
 

@@ -1,35 +1,36 @@
 ---
 title: "Connect Mastra to Submilli"
 description: "Give an existing Mastra agent access to Submilli through MCP."
+showDescription: false
 slug: how-to/connect-mastra
 sidebar:
   order: 3
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "5f9d580cf0f368b5497a257d0e76746efec7814c4ec29967fe56eea8ec23bfe6"
+  contentHash: "8a1c9eb444001223a5695d86cc862a1959714295fe7b7117c19fee7ca10cb4be"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
 
-Connect your Mastra harness to Submilli through MCP (Model Context Protocol),
-the protocol Mastra uses to discover and call external tools. A harness is
-the software that runs your agent and handles its tool calls.
+Use Mastra's MCP client to connect your agent to the Submilli runtime.
 
-## Before you start
+:::note[Before you start]
+- An existing Mastra project with a configured model.
+- A [running Submilli server](/docs/server/run-the-server) and a token it accepts.
+- A [registered Blueprint](/docs/server/register-a-blueprint), which sets the
+  permissions for code sent to Submilli.
+:::
 
-Have your harness project and these Submilli settings ready:
+## Set connection variables
+
+Set these environment variables in the process that runs your agent:
 
 | Environment variable | Value |
 | --- | --- |
 | `SUBMILLI_SERVER` | Server address, such as `http://127.0.0.1:8128`, without a trailing slash |
-| `SUBMILLI_SERVER_TOKEN` | A token accepted by that server |
-| `SUBMILLI_BLUEPRINT` | The name of a registered Blueprint |
-
-Set these variables in the process that runs your harness. A Blueprint sets
-the permissions for code sent to Submilli. If needed,
-[run the server](/docs/server/run-the-server) and
-[register a Blueprint](/docs/server/register-a-blueprint) first.
+| `SUBMILLI_SERVER_TOKEN` | Server token |
+| `SUBMILLI_BLUEPRINT` | Registered Blueprint name |
 
 ## Install the MCP client
 
@@ -105,8 +106,8 @@ if (!Object.keys(tools).some((name) => name.endsWith("submilli__typescript__exec
 console.log("Connected to Submilli.");
 ```
 
-`Connected to Submilli.` confirms that Mastra can discover Submilli's code
-execution tool. Keep this request inside the `try` block so the client
+`Connected to Submilli.` confirms that Mastra can discover
+`submilli__typescript__execute`. Keep this request inside the `try` block so the client
 disconnects if it fails.
 
 ## Troubleshooting

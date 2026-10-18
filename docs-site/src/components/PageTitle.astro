@@ -4,8 +4,8 @@ import PageActions from './PageActions.astro';
 
 /**
  * Article header: the sidebar group as a mono eyebrow, then the title. The
- * frontmatter description also serves as the restrained lead beneath the
- * title.
+ * frontmatter description serves as the lead unless the page opts out.
+ * The description remains available to metadata and Markdown indexes.
  */
 const { entry, sidebar } = Astro.locals.starlightRoute;
 
@@ -31,7 +31,7 @@ const showActions = entry.id !== '404' && !entry.data.sidebar.hidden;
 		<AuthorshipBadge />
 		{showActions && <PageActions slug={slug} />}
 	</div>
-	{entry.data.description && <p class="page-title__description">{entry.data.description}</p>}
+	{entry.data.showDescription && entry.data.description && <p class="page-title__description">{entry.data.description}</p>}
 </div>
 
 <style>
