@@ -1,4 +1,10 @@
-//! Version-preserving database codecs shared by persistence adapters.
+//! Encoding and encryption for journal records, independent of the SQL adapter.
+//!
+//! Each sealed value is authenticated against its owner: run and resource/effect.
+//! Mutation records also bind the operation kind, version and field. Decoding
+//! checks that binding before treating the plaintext as retry evidence.
+//! Size checks bound decoding; directory snapshots have their own larger bound.
+//! Codecs preserve stored formats and do not decide operation state transitions.
 use crate::unit_of_work::*;
 use interpreter::runtime::durable::{EffectId, RunId};
 use serde::{Serialize, de::DeserializeOwned};
@@ -36,13 +42,16 @@ pub fn open(sealer: &Sealer, owner: &str, bytes: &[u8]) -> Result<Vec<u8>, Store
     }
     Ok(plain)
 }
-pub fn operation_owner(effect: &Operation, field: &str) -> Result<String, StoreError> {
+pub fn journal_entry_owner(
+    journal_entry: &JournalEntry,
+    field: &str,
+) -> Result<String, StoreError> {
     serde_json::to_string(&(
         "filesystem-operation",
-        &effect.run_id,
-        &effect.id,
-        &effect.operation,
-        effect.version,
+        &journal_entry.run_id,
+        &journal_entry.id,
+        &journal_entry.operation,
+        journal_entry.version,
         field,
     ))
     .map_err(invalid)
@@ -55,6 +64,8 @@ fn invalid(error: impl std::fmt::Display) -> StoreError {
 /// none.
 const FORMAT: u8 = 2;
 
+/// Encryption boundary supplied with the application's secret-store key.
+/// The encoded key ID identifies the key required to reopen existing records.
 #[derive(Clone, Default)]
 pub struct Sealer {
     cipher: Option<Arc<SecretCipher>>,
@@ -176,7 +187,7 @@ pub struct ResourceColumns {
     pub error: Option<Vec<u8>>,
     pub progress: Option<Vec<u8>>,
 }
-pub struct OperationColumns {
+pub struct JournalEntryColumns {
     pub request: Vec<u8>,
     pub recovery: Option<Vec<u8>>,
     pub outcome: Option<Vec<u8>>,
@@ -206,7 +217,12 @@ pub fn encode_reader(
         request: encode(
             sealer,
             &owner,
-            &(1u32, value.binding, &value.path, &value.options),
+            &(
+                1u32,
+                value.filesystem_config_fingerprint,
+                &value.path,
+                &value.options,
+            ),
         )?,
         result: encode_optional(sealer, &owner, value.position.as_ref())?,
         error: encode_optional(sealer, &owner, value.error.as_ref())?,
@@ -224,7 +240,7 @@ pub fn decode_reader(
     columns: ResourceColumns,
 ) -> Result<Reader, StoreError> {
     let owner = format!("resource:{run_id}:{id}");
-    let (version, binding, path, options): (
+    let (version, filesystem_config_fingerprint, path, options): (
         u32,
         [u8; 32],
         String,
@@ -234,7 +250,7 @@ pub fn decode_reader(
         return Err(StoreError::Conflict);
     }
     Ok(Reader {
-        binding,
+        filesystem_config_fingerprint,
         id,
         path,
         options,
@@ -254,7 +270,12 @@ pub fn encode_listing(
         request: encode(
             sealer,
             &owner,
-            &(1u32, value.binding, &value.path, value.recursive),
+            &(
+                1u32,
+                value.filesystem_config_fingerprint,
+                &value.path,
+                value.recursive,
+            ),
         )?,
         result: value
             .content
@@ -276,13 +297,13 @@ pub fn decode_listing(
     columns: ResourceColumns,
 ) -> Result<Listing, StoreError> {
     let owner = format!("listing:{run_id}:{id}");
-    let (version, binding, path, recursive): (u32, [u8; 32], String, bool) =
+    let (version, filesystem_config_fingerprint, path, recursive): (u32, [u8; 32], String, bool) =
         decode(sealer, &owner, &columns.request)?;
     if version != 1 {
         return Err(StoreError::Conflict);
     }
     Ok(Listing {
-        binding,
+        filesystem_config_fingerprint,
         id,
         path,
         recursive,
@@ -329,7 +350,7 @@ pub fn encode_writer(
     encode(
         sealer,
         &format!("resource:{run_id}:{}", value.id),
-        &(value.binding, &value.path),
+        &(value.filesystem_config_fingerprint, &value.path),
     )
 }
 pub fn decode_writer_path(
@@ -357,45 +378,51 @@ pub fn decode_chunk_content(
     decode(sealer, &format!("resource:{run_id}:{writer}:{id}"), content)
 }
 
-pub fn encode_operation(
+pub fn encode_journal_entry(
     sealer: &Sealer,
-    effect: &Operation,
-) -> Result<OperationColumns, StoreError> {
-    Ok(OperationColumns {
+    journal_entry: &JournalEntry,
+) -> Result<JournalEntryColumns, StoreError> {
+    Ok(JournalEntryColumns {
         request: seal(
             sealer,
-            &operation_owner(effect, "request")?,
-            &effect.request,
+            &journal_entry_owner(journal_entry, "request")?,
+            &journal_entry.request,
         )?,
-        recovery: effect
+        recovery: journal_entry
             .recovery_payload
             .as_ref()
-            .map(|v| seal(sealer, &operation_owner(effect, "recovery")?, v))
+            .map(|v| seal(sealer, &journal_entry_owner(journal_entry, "recovery")?, v))
             .transpose()?,
-        outcome: effect
+        outcome: journal_entry
             .outcome
             .as_ref()
-            .map(|v| seal(sealer, &operation_owner(effect, "outcome")?, v))
+            .map(|v| seal(sealer, &journal_entry_owner(journal_entry, "outcome")?, v))
             .transpose()?,
     })
 }
-pub fn decode_operation(
+pub fn decode_journal_entry(
     sealer: &Sealer,
-    mut effect: Operation,
-    columns: OperationColumns,
-) -> Result<Operation, StoreError> {
-    effect.request = open(
+    mut journal_entry: JournalEntry,
+    columns: JournalEntryColumns,
+) -> Result<JournalEntry, StoreError> {
+    journal_entry.request = open(
         sealer,
-        &operation_owner(&effect, "request")?,
+        &journal_entry_owner(&journal_entry, "request")?,
         &columns.request,
     )?;
-    effect.recovery_payload = columns
+    journal_entry.recovery_payload = columns
         .recovery
-        .map(|v| open(sealer, &operation_owner(&effect, "recovery")?, &v))
+        .map(|v| {
+            open(
+                sealer,
+                &journal_entry_owner(&journal_entry, "recovery")?,
+                &v,
+            )
+        })
         .transpose()?;
-    effect.outcome = columns
+    journal_entry.outcome = columns
         .outcome
-        .map(|v| open(sealer, &operation_owner(&effect, "outcome")?, &v))
+        .map(|v| open(sealer, &journal_entry_owner(&journal_entry, "outcome")?, &v))
         .transpose()?;
-    Ok(effect)
+    Ok(journal_entry)
 }

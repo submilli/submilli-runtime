@@ -18,9 +18,7 @@ async fn pending_resources_finish_on_explicit_retry_and_rejected_opens_replay() 
         .open_reader(&seed, "/file", byte_options())
         .await
         .unwrap();
-    let mut unit = fixture.context.units(fixture.database.clone())()
-        .await
-        .unwrap();
+    let mut unit = fixture.units()().await.unwrap();
     let mut row = unit.get_reader(&fixture.run, &seed).await.unwrap().unwrap();
     row.id = reader.clone();
     row.position = None;
@@ -46,9 +44,7 @@ async fn pending_resources_finish_on_explicit_retry_and_rejected_opens_replay() 
     let listing = id();
     let seed = id();
     fs.listing(&seed, "/", false).await.unwrap();
-    let mut unit = fixture.context.units(fixture.database.clone())()
-        .await
-        .unwrap();
+    let mut unit = fixture.units()().await.unwrap();
     let mut row = unit
         .get_listing(&fixture.run, &seed)
         .await
@@ -91,7 +87,7 @@ async fn pending_resources_finish_on_explicit_retry_and_rejected_opens_replay() 
 }
 
 #[tokio::test]
-async fn changed_filesystem_binding_rejects_mutation_and_resource_retries() {
+async fn changed_filesystem_config_fingerprint_rejects_mutation_and_resource_retries() {
     use interpreter::runtime::vfs::{Access, MountSpec};
     let fixture = Fixture::new().await;
     let fs = &fixture.filesystem;
@@ -128,14 +124,15 @@ async fn changed_filesystem_binding_rejects_mutation_and_resource_retries() {
     let alternate = fixture.root.path().join("alternate");
     std::fs::create_dir(&alternate).unwrap();
     assert!(
-        open(
-            fs.vfs().clone().with_access(Access::ReadOnly),
-            fs.run_id(),
-            fixture.database.clone(),
-            fixture.context.clone(),
-        )
-        .await
-        .is_err()
+        fixture
+            .filesystem
+            .reopen(
+                fs.vfs().clone().with_access(Access::ReadOnly),
+                fs.run_id(),
+                fixture.units()
+            )
+            .await
+            .is_err()
     );
     let configurations = [
         Vfs::external(alternate.clone()).unwrap(),
@@ -152,14 +149,11 @@ async fn changed_filesystem_binding_rejects_mutation_and_resource_retries() {
             .unwrap(),
     ];
     for vfs in configurations {
-        let changed = open(
-            vfs,
-            fs.run_id(),
-            fixture.database.clone(),
-            fixture.context.clone(),
-        )
-        .await
-        .unwrap();
+        let changed = fixture
+            .filesystem
+            .reopen(vfs, fs.run_id(), fixture.units())
+            .await
+            .unwrap();
         assert!(changed.call(&operation, request.clone()).await.is_err());
         assert!(
             changed
@@ -234,14 +228,15 @@ async fn caller_code_replays_completed_prefix_and_finishes_pending_suffix() {
         .await
         .unwrap();
     publication_without_receipt(&fixture, &requests[1].0, requests[1].1.clone()).await;
-    let reopened = open(
-        fixture.filesystem.vfs().clone(),
-        fixture.filesystem.run_id(),
-        fixture.database.clone(),
-        fixture.context.clone(),
-    )
-    .await
-    .unwrap();
+    let reopened = fixture
+        .filesystem
+        .reopen(
+            fixture.filesystem.vfs().clone(),
+            fixture.filesystem.run_id(),
+            fixture.units(),
+        )
+        .await
+        .unwrap();
     // The caller has no aggregate completion yet. Its code repeats both calls.
     for (operation, request) in &requests {
         reopened.call(operation, request.clone()).await.unwrap();
@@ -364,14 +359,11 @@ async fn interrupted_writer_close_reserves_its_id_against_other_mutations() {
         .await
         .unwrap();
     reserve_close(&fixture, &writer, &close).await;
-    let reopened = open(
-        fs.vfs().clone(),
-        fs.run_id(),
-        fixture.database.clone(),
-        fixture.context.clone(),
-    )
-    .await
-    .unwrap();
+    let reopened = fixture
+        .filesystem
+        .reopen(fs.vfs().clone(), fs.run_id(), fixture.units())
+        .await
+        .unwrap();
     assert!(
         reopened
             .call(
@@ -393,6 +385,78 @@ async fn interrupted_writer_close_reserves_its_id_against_other_mutations() {
     assert_eq!(
         std::fs::read(fs.vfs().root().join("output")).unwrap(),
         b"output"
+    );
+    fixture.assert_no_pending_work().await;
+}
+
+#[tokio::test]
+async fn reopen_shares_live_quota_reservations_and_rejects_changed_limits() {
+    let fixture = Fixture::with_filesystem_limit(Some(8)).await;
+    let root = fixture.filesystem.vfs().root();
+    let reopened = fixture
+        .filesystem
+        .reopen(
+            Vfs::external(root.to_owned()).unwrap().with_size_limit(8),
+            &fixture.run,
+            fixture.units(),
+        )
+        .await
+        .unwrap();
+    let original_quota = fixture.filesystem.vfs().quota().unwrap();
+    let reopened_quota = reopened.vfs().quota().unwrap();
+    original_quota.reserve(8).unwrap();
+    assert!(reopened_quota.reserve(1).is_err());
+    original_quota.release(8);
+    reopened_quota.reserve(1).unwrap();
+    assert_eq!(original_quota.used(), 1);
+    reopened_quota.release(1);
+    assert!(
+        fixture
+            .filesystem
+            .reopen(
+                Vfs::external(root.to_owned()).unwrap().with_size_limit(16),
+                &fixture.run,
+                fixture.units(),
+            )
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn write_and_append_cannot_reuse_each_others_effect_ids() {
+    let fixture = Fixture::new().await;
+    let filesystem = fixture.filesystem.operation(None);
+    let write = id();
+    filesystem
+        .write_bytes(&write, "/file", b"bytes".to_vec())
+        .await
+        .unwrap();
+    assert!(
+        filesystem
+            .append_bytes(&write, "/file", b"bytes".to_vec())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read(fixture.filesystem.vfs().root().join("file")).unwrap(),
+        b"bytes"
+    );
+
+    let append = id();
+    filesystem
+        .append_bytes(&append, "/file", b"more".to_vec())
+        .await
+        .unwrap();
+    assert!(
+        filesystem
+            .write_bytes(&append, "/file", b"more".to_vec())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read(fixture.filesystem.vfs().root().join("file")).unwrap(),
+        b"bytesmore"
     );
     fixture.assert_no_pending_work().await;
 }

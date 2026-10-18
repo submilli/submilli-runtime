@@ -1,4 +1,13 @@
-//! Capability-relative IO, private artifacts, and shared resource accounting.
+//! Contained disk access and private artifacts used to retry filesystem work.
+//!
+//! `Files` retains the configured VFS; `Volume` maps each writable mount to its
+//! private recovery directory. Entry records name paths relative to those roots
+//! and carry parent identities, so replay cannot silently target a replaced tree.
+//!
+//! This layer knows nothing about SQL transactions or which effect to run next.
+//! Its callers supply retry facts and retain the mutation gate while disk work
+//! runs. Sync barriers make artifacts durable before the journal refers to them.
+//! The quota registry at the end shares counters across reopened VFS values.
 use cap_std::fs::Dir;
 use interpreter::runtime::Vfs;
 use interpreter::runtime::durable::{EffectId, RunId};
@@ -42,6 +51,8 @@ pub(crate) struct Files {
     volumes: Arc<BTreeMap<String, Volume>>,
 }
 
+/// One backing root and its per-run recovery directory, with the same quota
+/// counter used by public access to that storage.
 pub(crate) struct Volume {
     root: Arc<Dir>,
     pub(crate) recovery: Dir,
@@ -287,12 +298,12 @@ pub(crate) fn private_dir(parent: &Dir, name: &str, create: bool) -> Result<Dir,
 }
 
 pub(crate) fn sync(dir: &Dir) -> Result<(), RecoveryError> {
-    checkpoint("before-directory-sync")?;
+    test_checkpoint("before-directory-sync")?;
     // A Dir may carry O_PATH on Linux, which cannot be fsynced. Open a
     // readable handle relative to the held directory, preserving its identity
     // even if its original path has been renamed or replaced.
     dir.open(".")?.sync_all()?;
-    checkpoint("directory-sync")?;
+    test_checkpoint("directory-sync")?;
     Ok(())
 }
 
@@ -503,10 +514,10 @@ fn regular_files(
     Ok(files)
 }
 
-pub(crate) fn checkpoint(point: &str) -> Result<(), RecoveryError> {
-    crate::checkpoint(point);
+pub(crate) fn test_checkpoint(point: &str) -> Result<(), RecoveryError> {
+    crate::test_checkpoint(point);
     #[cfg(test)]
-    crate::filesystem::tests::checkpoint(point)?;
+    crate::filesystem::tests::test_checkpoint(point)?;
     Ok(())
 }
 
@@ -560,23 +571,9 @@ impl Entry {
     }
 }
 
-/// Shared same-process coordination for access to the same backing roots.
-/// The caller retains this context across filesystem handles; it is not a lease.
-#[derive(Clone, Default)]
-pub struct FilesystemContext {
-    pub(crate) filesystem_gate: Arc<Mutex<()>>,
-    pub(crate) filesystem_quotas: Arc<Mutex<SharedQuotas>>,
-}
-impl FilesystemContext {
-    #[cfg(feature = "test-support")]
-    pub fn test_gate(&self) -> &Arc<Mutex<()>> {
-        &self.filesystem_gate
-    }
-}
-
 // A retry must resolve the same guest paths against the same configured roots.
 // Keep only a fingerprint in each record, not a second persisted mount catalog.
-pub(crate) fn binding(vfs: &Vfs) -> Result<[u8; 32], FilesystemError> {
+pub(crate) fn filesystem_config_fingerprint(vfs: &Vfs) -> Result<[u8; 32], FilesystemError> {
     let root = vfs
         .dir()
         .ok_or(RecoveryError::Unsupported("filesystem disabled"))?;
@@ -611,10 +608,10 @@ pub(crate) type SharedQuotas = HashMap<FileIdentity, Weak<DiskQuota>>;
 // Reopening a logical workspace in the same process must keep the counter used
 // by its existing VFS owners. Weak entries do not retain completed workspaces.
 pub(crate) async fn share_quotas(
-    context: &FilesystemContext,
+    quotas: &Mutex<SharedQuotas>,
     mut vfs: Vfs,
 ) -> Result<Vfs, FilesystemError> {
-    let mut shared = context.filesystem_quotas.lock().await;
+    let mut shared = quotas.lock().await;
     shared.retain(|_, quota| quota.strong_count() != 0);
     if let (Some(root), Some(quota)) = (vfs.dir(), vfs.quota()) {
         let identity = FileIdentity::of(&root.dir_metadata().map_err(RecoveryError::from)?)

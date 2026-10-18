@@ -1,6 +1,25 @@
-//! Direct, idempotent filesystem operations. Only the caller retries pending work.
-pub use crate::io::FilesystemContext;
-use crate::io::{self as paths, Entry, Files, RecoveryError, validate_guest_path};
+//! Shared filesystem state and the interpreter-facing filesystem implementation.
+//!
+//! The trait methods create a per-call `FilesystemOperation`. The lower half of
+//! this file contains shared evidence helpers: they compare recorded file
+//! identities with disk state to distinguish an unfinished mutation from one
+//! that already happened. They never select or schedule another effect.
+mod append_bytes;
+mod close_listing;
+mod close_reader;
+mod close_writer;
+mod create_directory;
+mod move_path;
+mod next_listing;
+mod next_reader;
+mod open_directory;
+mod open_reader;
+mod open_writer;
+mod operation;
+mod remove_path;
+mod write_bytes;
+mod write_chunk;
+use crate::io::{self as paths, Entry, Files, RecoveryError};
 use crate::readers::{DurableDirectory, FilesystemReader, MAX_LISTING_BYTES};
 use crate::unit_of_work::*;
 use crate::writers::DurableWriter;
@@ -14,6 +33,7 @@ use interpreter::runtime::filesystem::{
 use interpreter::runtime::fs::FileIdentity;
 use interpreter::runtime::fuel::WorkBudget;
 use interpreter::runtime::{fs, vfs::Placement};
+pub use operation::FilesystemOperation;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Seek, SeekFrom};
@@ -34,46 +54,77 @@ pub enum FilesystemError {
     Configuration(&'static str),
 }
 
+/// A run's configured filesystem and journal, shared by calls and resource handles.
+/// Clones share the same mounts, admission gate and quota registry. Per-call fuel
+/// belongs to `FilesystemOperation`, so a retained handle cannot retain an old budget.
 #[derive(Clone)]
 pub struct DurableFilesystem {
     pub(crate) files: Arc<Files>,
     pub(crate) units: UnitFactory,
-    pub(crate) binding: [u8; 32],
-    pub(crate) context: FilesystemContext,
+    /// Fingerprint of mounts, root identities, access modes, cwd and quota limits.
+    pub(crate) filesystem_config_fingerprint: [u8; 32],
+    /// Serializes native mutations and drains workers that outlive cancellation.
+    pub(crate) filesystem_gate: Arc<tokio::sync::Mutex<()>>,
+    /// Reopened VFS values must use the counters held by existing handles.
+    filesystem_quotas: Arc<tokio::sync::Mutex<paths::SharedQuotas>>,
     pub(crate) run_id: RunId,
 }
 
 impl DurableFilesystem {
-    /// The caller supplies the configured mounts and a stable UUID run ID for
-    /// effect IDs. It must retain these roots and this journal across retries,
-    /// exclusively own writable roots, and drain work before replacing access.
-    /// `context` shares mutation admission and disk quotas across these instances.
+    /// Open the configured mounts for a run. The caller must exclusively own
+    /// writable roots and retain these roots and their journal across retries.
+    /// Use `reopen` while another handle or worker may still access these roots.
     pub async fn open(
         vfs: Vfs,
         run_id: &RunId,
         units: UnitFactory,
-        context: FilesystemContext,
+    ) -> Result<Self, FilesystemError> {
+        Self::open_shared(vfs, run_id, units, Default::default(), Default::default()).await
+    }
+
+    /// Reopen with shared mutation admission and quota counters. The same gate
+    /// drains work still owned by cancelled calls before replacing access.
+    /// This only opens access; pending journal entries wait for explicit retries.
+    pub async fn reopen(
+        &self,
+        vfs: Vfs,
+        run_id: &RunId,
+        units: UnitFactory,
+    ) -> Result<Self, FilesystemError> {
+        Self::open_shared(
+            vfs,
+            run_id,
+            units,
+            self.filesystem_gate.clone(),
+            self.filesystem_quotas.clone(),
+        )
+        .await
+    }
+
+    async fn open_shared(
+        vfs: Vfs,
+        run_id: &RunId,
+        units: UnitFactory,
+        filesystem_gate: Arc<tokio::sync::Mutex<()>>,
+        filesystem_quotas: Arc<tokio::sync::Mutex<paths::SharedQuotas>>,
     ) -> Result<Self, FilesystemError> {
         validate_id(run_id)?;
-        let gate = Arc::new(context.filesystem_gate.clone().lock_owned().await);
-        let vfs = paths::share_quotas(&context, vfs).await?;
-        let binding = paths::binding(&vfs)?;
+        let gate = Arc::new(filesystem_gate.clone().lock_owned().await);
+        let vfs = paths::share_quotas(&filesystem_quotas, vfs).await?;
+        let filesystem_config_fingerprint = paths::filesystem_config_fingerprint(&vfs)?;
         let run_id = run_id.clone();
         let worker_id = run_id.clone();
         let workspace = blocking(gate, move || Files::create(vfs, &worker_id)).await?;
         Ok(Self {
             files: Arc::new(workspace),
             units,
-            binding,
-            context,
+            filesystem_config_fingerprint,
+            filesystem_gate,
+            filesystem_quotas,
             run_id,
         })
     }
 
-    #[cfg(feature = "test-support")]
-    pub fn test_context(&self) -> &FilesystemContext {
-        &self.context
-    }
     pub fn run_id(&self) -> &RunId {
         &self.run_id
     }
@@ -81,13 +132,21 @@ impl DurableFilesystem {
         self.files.vfs()
     }
 }
+/// The worker owns admission until it exits, even if its awaiting task is dropped.
 pub(crate) async fn blocking<T: Send + 'static>(
     guard: Arc<tokio::sync::OwnedMutexGuard<()>>,
     operation: impl FnOnce() -> Result<T, RecoveryError> + Send + 'static,
 ) -> Result<T, FilesystemError> {
+    #[cfg(test)]
+    let failure = tests::take_failure();
     tokio::task::spawn_blocking(move || {
         let _guard = guard;
-        operation()
+        #[cfg(test)]
+        tests::set_failure(failure);
+        let result = operation();
+        #[cfg(test)]
+        tests::set_failure(None);
+        result
     })
     .await
     .map_err(|error| FilesystemError::Worker(error.to_string()))?
@@ -105,13 +164,8 @@ pub(crate) async fn finish_owned<T: Send + 'static>(
         .map_err(|error| FilesystemError::Worker(error.to_string()))?
 }
 
-pub(crate) fn unpack(outcome: RecordedOutcome) -> Result<Outcome, FilesystemError> {
-    match outcome {
-        RecordedOutcome::Completed(outcome) => Ok(outcome),
-        RecordedOutcome::Rejected(reason) => Err(FilesystemError::Rejected(reason)),
-    }
-}
-
+/// Only a definite refusal before public mutation can become a replayable error.
+/// Uncertain I/O leaves the operation pending so a retry can inspect disk state.
 pub(crate) fn preflight_refusal(error: &RecoveryError) -> bool {
     match error {
         RecoveryError::Unsupported(_)
@@ -137,15 +191,8 @@ pub(crate) fn validate_id(id: &str) -> Result<(), FilesystemError> {
     Ok(())
 }
 
-pub(crate) fn checkpoint(_point: &str) {
-    crate::checkpoint(_point);
-}
-
-/// One call's accounting, separate from the shared filesystem and durable handles.
-#[derive(Clone)]
-pub struct FilesystemOperation {
-    pub(crate) filesystem: DurableFilesystem,
-    pub(crate) work: Option<Arc<WorkBudget>>,
+pub(crate) fn test_checkpoint(_point: &str) {
+    crate::test_checkpoint(_point);
 }
 
 impl DurableFilesystem {
@@ -158,35 +205,6 @@ impl DurableFilesystem {
     }
 }
 
-impl FilesystemOperation {
-    pub(crate) fn charge(
-        &self,
-        rate: interpreter::runtime::fuel::Rate,
-        count: u64,
-    ) -> Result<(), FilesystemError> {
-        if let Some(work) = &self.work {
-            work.charge(rate, count).map_err(RecoveryError::from)?;
-        }
-        Ok(())
-    }
-    fn charge_preparation(&self, path: &str, payload: u64) -> Result<(), FilesystemError> {
-        use interpreter::runtime::fuel;
-        if self.work.is_none() {
-            return Ok(());
-        }
-        let original =
-            paths::resolve_content(self.filesystem.vfs(), self.filesystem.vfs().cwd(), path)
-                .and_then(|p| p.metadata())
-                .ok()
-                .filter(cap_std::fs::Metadata::is_file)
-                .map_or(0, |m| m.len());
-        let bytes = original
-            .saturating_mul(2)
-            .saturating_add(payload.saturating_mul(3));
-        self.charge(fuel::HASH, bytes)?;
-        self.charge(fuel::IO, bytes)
-    }
-}
 #[async_trait::async_trait]
 impl Filesystem for DurableFilesystem {
     fn info(&self) -> FilesystemInfo {
@@ -256,10 +274,12 @@ impl Filesystem for DurableFilesystem {
         operation
             .charge(interpreter::runtime::fuel::HASH, bytes.len() as u64)
             .map_err(backend)?;
-        operation
-            .write_bytes(effect_id, path, bytes, append)
-            .await
-            .map_err(backend)?;
+        if append {
+            operation.append_bytes(effect_id, path, bytes).await
+        } else {
+            operation.write_bytes(effect_id, path, bytes).await
+        }
+        .map_err(backend)?;
         Ok(())
     }
     async fn mkdir(
@@ -302,6 +322,7 @@ impl Filesystem for DurableFilesystem {
         budget.effect();
         Ok(())
     }
+
     async fn move_entry(
         &self,
         effect_id: &EffectId,
@@ -459,6 +480,8 @@ fn check_descriptor(
     Ok(())
 }
 
+/// An unfinished resource open or writer close must finish before unrelated work.
+/// The closing writer may enter its own publication effect.
 pub(crate) async fn require_ready(
     unit: &mut dyn UnitOfWork,
     run_id: &RunId,
@@ -483,7 +506,7 @@ pub(crate) async fn require_idle(
     run_id: &RunId,
 ) -> Result<(), FilesystemError> {
     require_ready(unit, run_id, None).await?;
-    if unit.pending_operation(run_id).await?.is_some() {
+    if unit.pending_journal_entry(run_id).await?.is_some() {
         return conflict();
     }
     Ok(())
@@ -492,7 +515,7 @@ pub(crate) async fn require_capacity(
     unit: &mut dyn UnitOfWork,
     run_id: &RunId,
 ) -> Result<(), FilesystemError> {
-    if unit.operation_count(run_id).await? >= MAX_OPERATIONS {
+    if unit.journal_entry_count(run_id).await? >= MAX_OPERATIONS {
         return conflict();
     }
     Ok(())
@@ -502,7 +525,7 @@ pub(crate) async fn require_unused_operation(
     run_id: &RunId,
     id: &EffectId,
 ) -> Result<(), FilesystemError> {
-    if unit.get_operation(run_id, id).await?.is_some()
+    if unit.get_journal_entry(run_id, id).await?.is_some()
         || unit.writer_for_effect(run_id, id).await?.is_some()
     {
         return conflict();
@@ -538,7 +561,9 @@ pub(crate) fn conflict<T>() -> Result<T, FilesystemError> {
     Err(StoreError::Conflict.into())
 }
 
-// These records contain only the facts a retry cannot rediscover safely.
+// These records describe the original disk state; they are not executable plans.
+// The operation code decides what to do from these facts on every attempt.
+/// The original entry and append baseline, captured before changing its name or bytes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Target {
@@ -548,18 +573,12 @@ struct Target {
     original_sha256: Option<[u8; 32]>,
     original_directory: bool,
 }
+/// Replacement writes retain a candidate inode; existing-file appends use the baseline.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WriteCheckpoint {
     target: Target,
     candidate: Option<FileIdentity>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MoveCheckpoint {
-    target: Target,
-    destination: Entry,
-    destination_original: Option<FileIdentity>,
 }
 impl Target {
     fn validate(&self) -> Result<(), RecoveryError> {
@@ -577,530 +596,33 @@ impl Target {
     }
 }
 
-impl FilesystemOperation {
-    pub async fn write_bytes(
-        &self,
-        effect: &EffectId,
-        path: &str,
-        bytes: Vec<u8>,
-        append: bool,
-    ) -> Result<Outcome, FilesystemError> {
-        let payload = fingerprint(effect, &bytes)?;
-        let gate = Arc::new(
-            self.filesystem
-                .context
-                .filesystem_gate
-                .clone()
-                .lock_owned()
-                .await,
-        );
-        self.write_held(
-            gate,
-            effect,
-            path,
-            (payload, std::io::Cursor::new(bytes)),
-            append,
-            None,
-        )
-        .await
-    }
-
-    pub(crate) async fn write_held<R: Read + Seek + Send + 'static>(
-        &self,
-        gate: Arc<tokio::sync::OwnedMutexGuard<()>>,
-        effect: &EffectId,
-        path: &str,
-        (payload, mut input): (Content, R),
-        append: bool,
-        writer: Option<&EffectId>,
-    ) -> Result<Outcome, FilesystemError> {
-        validate_id(effect)?;
-        validate_guest_path(path)?;
-        let mut unit = (self.filesystem.units)().await?;
-        let row = self
-            .attach(
-                unit.as_mut(),
-                effect,
-                if append { "append" } else { "write" },
-                &(path, &payload),
-                writer,
-            )
-            .await?;
-        unit.commit().await?;
-        if let Some(outcome) = decode_outcome(&row, self.filesystem.binding)? {
-            return unpack(outcome);
-        }
-        self.charge_preparation(path, payload.bytes)?;
-        checkpoint("effect-request");
-        let state: WriteCheckpoint = if let Some(bytes) = &row.recovery_payload {
-            decode_checkpoint(bytes)?
-        } else {
-            let files = self.filesystem.files.clone();
-            let work = self.work.clone();
-            let (path, effect, payload) = (path.to_owned(), effect.to_owned(), payload.clone());
-            let result = blocking(gate.clone(), move || {
-                let prepared = (|| {
-                    let target = files.capture_target(
-                        &effect,
-                        &path,
-                        CaptureOptions {
-                            follow_final: append,
-                            ..Default::default()
-                        },
-                        work.as_deref(),
-                    )?;
-                    let artifacts = files.artifacts(&target.source, &effect, true)?;
-                    let candidate = if append && target.original.is_some() {
-                        target
-                            .original_bytes
-                            .checked_add(payload.bytes)
-                            .filter(|n| *n <= i64::MAX as u64)
-                            .ok_or(RecoveryError::Limit)?;
-                        files
-                            .volume(&target.source.mount)?
-                            .check_growth(payload.bytes, work.as_deref())?;
-                        None
-                    } else {
-                        Some(files.prepare_candidate(
-                            &target.source,
-                            &artifacts,
-                            &payload,
-                            &mut input,
-                            work.as_deref(),
-                        )?)
-                    };
-                    paths::sync(&artifacts)?;
-                    paths::checkpoint("prepared")?;
-                    Ok(WriteCheckpoint { target, candidate })
-                })();
-                files.reconcile_quotas(work.as_deref())?;
-                prepared.map(|state| (state, input))
-            })
-            .await;
-            let (state, returned_input) = match result {
-                Ok(value) => value,
-                Err(FilesystemError::Recovery(error)) if preflight_refusal(&error) => {
-                    return self.refuse(&row, error).await;
-                }
-                Err(error) => return Err(error),
-            };
-            input = returned_input;
-            self.save_checkpoint(&row, &state).await?;
-            state
-        };
-        state.target.validate()?;
-        if state.target.original_directory
-            || (!append && state.candidate.is_none())
-            || (state.target.original.is_none() && state.candidate.is_none())
-        {
-            return Err(RecoveryError::InvalidRecord.into());
-        }
-        if let Some(work) = &self.work {
-            work.before_effect();
-        }
-        let files = self.filesystem.files.clone();
-        let work = self.work.clone();
-        let effect = effect.to_owned();
-        let bytes = payload.bytes;
-        blocking(gate.clone(), move || {
-            input.seek(SeekFrom::Start(0))?;
-            let artifacts = files.artifacts(&state.target.source, &effect, false)?;
-            let result = if append && state.target.original.is_some() {
-                files.append_range(
-                    &state.target,
-                    &artifacts,
-                    &payload,
-                    &mut input,
-                    work.as_deref(),
-                )
-            } else {
-                files.publish_candidate(&state, &artifacts, &payload, &mut input, work.as_deref())
-            };
-            files.reconcile_quotas(work.as_deref())?;
-            result?;
-            paths::checkpoint("before-receipt")
-        })
-        .await?;
-        self.record_success(&row, bytes).await
-    }
-
-    pub async fn move_path(
-        &self,
-        effect: &EffectId,
-        source: &str,
-        destination: &str,
-    ) -> Result<Outcome, FilesystemError> {
-        validate_id(effect)?;
-        validate_guest_path(source)?;
-        validate_guest_path(destination)?;
-        let gate = Arc::new(
-            self.filesystem
-                .context
-                .filesystem_gate
-                .clone()
-                .lock_owned()
-                .await,
-        );
-        let mut unit = (self.filesystem.units)().await?;
-        let row = self
-            .attach(unit.as_mut(), effect, "move", &(source, destination), None)
-            .await?;
-        unit.commit().await?;
-        if let Some(outcome) = decode_outcome(&row, self.filesystem.binding)? {
-            return unpack(outcome);
-        }
-        self.charge_preparation(source, 0)?;
-        checkpoint("effect-request");
-        let state: MoveCheckpoint = if let Some(bytes) = &row.recovery_payload {
-            decode_checkpoint(bytes)?
-        } else {
-            let files = self.filesystem.files.clone();
-            let work = self.work.clone();
-            let (effect, source, destination) =
-                (effect.to_owned(), source.to_owned(), destination.to_owned());
-            let result = blocking(gate.clone(), move || {
-                let target = files.capture_target(
-                    &effect,
-                    &source,
-                    CaptureOptions::default(),
-                    work.as_deref(),
-                )?;
-                let artifacts = files.artifacts(&target.source, &effect, true)?;
-                let (destination, destination_original) = files.capture_destination(
-                    &target,
-                    &artifacts,
-                    &destination,
-                    work.as_deref(),
-                )?;
-                paths::sync(&artifacts)?;
-                paths::checkpoint("prepared")?;
-                Ok(MoveCheckpoint {
-                    target,
-                    destination,
-                    destination_original,
-                })
-            })
-            .await;
-            let state = match result {
-                Ok(state) => state,
-                Err(FilesystemError::Recovery(error)) if preflight_refusal(&error) => {
-                    return self.refuse(&row, error).await;
-                }
-                Err(error) => return Err(error),
-            };
-            self.save_checkpoint(&row, &state).await?;
-            state
-        };
-        state.target.validate()?;
-        state.destination.validate()?;
-        if state.target.original.is_none()
-            || state.target.original_directory
-            || state.destination.mount != state.target.source.mount
-        {
-            return Err(RecoveryError::InvalidRecord.into());
-        }
-        if let Some(work) = &self.work {
-            work.before_effect();
-        }
-        let files = self.filesystem.files.clone();
-        let work = self.work.clone();
-        let effect = effect.to_owned();
-        blocking(gate.clone(), move || {
-            let artifacts = files.artifacts(&state.target.source, &effect, false)?;
-            files.move_entry(&state, &artifacts)?;
-            files.reconcile_quotas(work.as_deref())?;
-            paths::checkpoint("before-receipt")
-        })
-        .await?;
-        self.record_success(&row, 0).await
-    }
-
-    pub async fn remove_path(
-        &self,
-        effect: &EffectId,
-        path: &str,
-    ) -> Result<Outcome, FilesystemError> {
-        validate_id(effect)?;
-        validate_guest_path(path)?;
-        let gate = Arc::new(
-            self.filesystem
-                .context
-                .filesystem_gate
-                .clone()
-                .lock_owned()
-                .await,
-        );
-        let mut unit = (self.filesystem.units)().await?;
-        let row = self
-            .attach(unit.as_mut(), effect, "remove", &path, None)
-            .await?;
-        unit.commit().await?;
-        if let Some(outcome) = decode_outcome(&row, self.filesystem.binding)? {
-            return unpack(outcome);
-        }
-        self.charge_preparation(path, 0)?;
-        checkpoint("effect-request");
-        let target: Target = if let Some(bytes) = &row.recovery_payload {
-            decode_checkpoint(bytes)?
-        } else {
-            let files = self.filesystem.files.clone();
-            let work = self.work.clone();
-            let (path, effect) = (path.to_owned(), effect.to_owned());
-            let result = blocking(gate.clone(), move || {
-                let target = files.capture_target(
-                    &effect,
-                    &path,
-                    CaptureOptions {
-                        allow_directory: true,
-                        require_empty: true,
-                        ..Default::default()
-                    },
-                    work.as_deref(),
-                )?;
-                if target.original.is_none() {
-                    return Err(std::io::Error::from(std::io::ErrorKind::NotFound).into());
-                }
-                paths::checkpoint("prepared")?;
-                Ok(target)
-            })
-            .await;
-            let target = match result {
-                Ok(target) => target,
-                Err(FilesystemError::Recovery(error)) if preflight_refusal(&error) => {
-                    return self.refuse(&row, error).await;
-                }
-                Err(error) => return Err(error),
-            };
-            self.save_checkpoint(&row, &target).await?;
-            target
-        };
-        target.validate()?;
-        if let Some(work) = &self.work {
-            work.before_effect();
-        }
-        let files = self.filesystem.files.clone();
-        let work = self.work.clone();
-        let effect = effect.to_owned();
-        blocking(gate.clone(), move || {
-            if target.original_directory {
-                files.remove_directory(&target)?;
-            } else {
-                let artifacts = files.artifacts(&target.source, &effect, false)?;
-                files.remove_entry(&target, &artifacts)?;
-            }
-            files.reconcile_quotas(work.as_deref())?;
-            paths::checkpoint("before-receipt")
-        })
-        .await?;
-        self.record_success(&row, 0).await
-    }
-
-    pub async fn create_directory(
-        &self,
-        effect: &EffectId,
-        path: &str,
-    ) -> Result<Outcome, FilesystemError> {
-        validate_id(effect)?;
-        validate_guest_path(path)?;
-        let gate = Arc::new(
-            self.filesystem
-                .context
-                .filesystem_gate
-                .clone()
-                .lock_owned()
-                .await,
-        );
-        let mut unit = (self.filesystem.units)().await?;
-        let row = self
-            .attach(unit.as_mut(), effect, "mkdir", &path, None)
-            .await?;
-        unit.commit().await?;
-        if let Some(outcome) = decode_outcome(&row, self.filesystem.binding)? {
-            return unpack(outcome);
-        }
-        self.charge_preparation(path, 0)?;
-        checkpoint("effect-request");
-        let target: Target = if let Some(bytes) = &row.recovery_payload {
-            decode_checkpoint(bytes)?
-        } else {
-            let files = self.filesystem.files.clone();
-            let work = self.work.clone();
-            let (path, effect) = (path.to_owned(), effect.to_owned());
-            let result = blocking(gate.clone(), move || {
-                let target = files.capture_target(
-                    &effect,
-                    &path,
-                    CaptureOptions {
-                        allow_directory: true,
-                        ..Default::default()
-                    },
-                    work.as_deref(),
-                )?;
-                if target.original.is_some() && !target.original_directory {
-                    return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists).into());
-                }
-                paths::checkpoint("prepared")?;
-                Ok(target)
-            })
-            .await;
-            let target = match result {
-                Ok(target) => target,
-                Err(FilesystemError::Recovery(error)) if preflight_refusal(&error) => {
-                    return self.refuse(&row, error).await;
-                }
-                Err(error) => return Err(error),
-            };
-            self.save_checkpoint(&row, &target).await?;
-            target
-        };
-        target.validate()?;
-        if let Some(work) = &self.work {
-            work.before_effect();
-        }
-        let files = self.filesystem.files.clone();
-        let work = self.work.clone();
-        blocking(gate.clone(), move || {
-            files.create_directory(&target)?;
-            files.reconcile_quotas(work.as_deref())?;
-            paths::checkpoint("before-receipt")
-        })
-        .await?;
-        self.record_success(&row, 0).await
-    }
-
-    // Admission helpers operate on a caller-owned transaction; no IO is hidden here.
-    async fn attach<T: Serialize>(
-        &self,
-        unit: &mut dyn UnitOfWork,
-        effect: &EffectId,
-        kind: &str,
-        request: &T,
-        writer: Option<&EffectId>,
-    ) -> Result<Operation, FilesystemError> {
-        let mut fingerprint = self.filesystem.binding.to_vec();
-        fingerprint.extend_from_slice(&Sha256::digest(serialize(request)?));
-        if let Some(row) = unit.get_operation(&self.filesystem.run_id, effect).await? {
-            if row.operation != kind || row.version != 2 || row.request != fingerprint {
-                return conflict();
-            }
-            return Ok(row);
-        }
-        require_ready(
-            unit,
-            &self.filesystem.run_id,
-            writer.map(|writer| (writer, effect)),
-        )
-        .await?;
-        require_capacity(unit, &self.filesystem.run_id).await?;
-        if unit
-            .pending_operation(&self.filesystem.run_id)
-            .await?
-            .is_some()
-        {
-            return conflict();
-        }
-        if let Some(owner) = unit
-            .writer_for_effect(&self.filesystem.run_id, effect)
-            .await?
-            && writer != Some(&owner.id)
-        {
-            return conflict();
-        }
-        let row = Operation {
-            id: effect.clone(),
-            run_id: self.filesystem.run_id.clone(),
-            operation: kind.into(),
-            version: 2,
-            request: fingerprint,
-            recovery_payload: None,
-            outcome: None,
-            rejected: false,
-        };
-        unit.save_operation(row.clone()).await?;
-        Ok(row)
-    }
-    async fn save_checkpoint<T: Serialize>(
-        &self,
-        admitted: &Operation,
-        state: &T,
-    ) -> Result<(), FilesystemError> {
-        let mut unit = (self.filesystem.units)().await?;
-        let mut row = unit
-            .get_operation(&self.filesystem.run_id, &admitted.id)
-            .await?
-            .ok_or(StoreError::Conflict)?;
-        if row.request != admitted.request
-            || row.operation != admitted.operation
-            || row.outcome.is_some()
-        {
-            return conflict();
-        }
-        row.recovery_payload = Some(serialize(state)?);
-        unit.save_operation(row).await?;
-        unit.commit().await?;
-        checkpoint("effect-intent");
-        Ok(())
-    }
-    async fn record_success(
-        &self,
-        admitted: &Operation,
-        bytes: u64,
-    ) -> Result<Outcome, FilesystemError> {
-        checkpoint("effect-applied");
-        let outcome = Outcome { bytes };
-        self.save_outcome(admitted, RecordedOutcome::Completed(outcome.clone()))
-            .await?;
-        checkpoint("effect-receipt");
-        Ok(outcome)
-    }
-    async fn refuse(
-        &self,
-        admitted: &Operation,
-        error: RecoveryError,
-    ) -> Result<Outcome, FilesystemError> {
-        let outcome = RecordedOutcome::Rejected(error.to_string());
-        self.save_outcome(admitted, outcome.clone()).await?;
-        unpack(outcome)
-    }
-    async fn save_outcome(
-        &self,
-        admitted: &Operation,
-        outcome: RecordedOutcome,
-    ) -> Result<(), FilesystemError> {
-        let mut unit = (self.filesystem.units)().await?;
-        let mut row = unit
-            .get_operation(&self.filesystem.run_id, &admitted.id)
-            .await?
-            .ok_or(StoreError::Conflict)?;
-        if row.request != admitted.request || row.operation != admitted.operation {
-            return conflict();
-        }
-        row.rejected = matches!(outcome, RecordedOutcome::Rejected(_));
-        row.outcome = Some(serialize(&outcome)?);
-        unit.save_operation(row).await?;
-        unit.commit().await?;
-        Ok(())
-    }
-}
+/// Return a saved call result, keeping invalid records in the outer error.
+/// A saved rejection is still a completed call, including for writer cleanup.
 pub(crate) fn decode_outcome(
-    row: &Operation,
-    binding: [u8; 32],
-) -> Result<Option<RecordedOutcome>, FilesystemError> {
-    if row.version != 2
-        || row.request.len() != 64
-        || row.request.get(..32) != Some(binding.as_slice())
+    journal_entry: &JournalEntry,
+    filesystem_config_fingerprint: [u8; 32],
+) -> Result<Option<Result<Outcome, String>>, FilesystemError> {
+    if journal_entry.version != 2
+        || journal_entry.request.len() != 64
+        || journal_entry.request.get(..32) != Some(filesystem_config_fingerprint.as_slice())
     {
         return conflict();
     }
-    let outcome: Option<RecordedOutcome> =
-        row.outcome.as_deref().map(decode_checkpoint).transpose()?;
+    let outcome: Option<RecordedOutcome> = journal_entry
+        .outcome
+        .as_deref()
+        .map(decode_checkpoint)
+        .transpose()?;
     if outcome
         .as_ref()
-        .is_some_and(|o| matches!(o, RecordedOutcome::Rejected(_)) != row.rejected)
+        .is_some_and(|o| matches!(o, RecordedOutcome::Rejected(_)) != journal_entry.rejected)
     {
         return conflict();
     }
-    Ok(outcome)
+    Ok(outcome.map(|outcome| match outcome {
+        RecordedOutcome::Completed(outcome) => Ok(outcome),
+        RecordedOutcome::Rejected(reason) => Err(reason),
+    }))
 }
 fn decode_checkpoint<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, FilesystemError> {
     if bytes.len() > crate::codec::MAX_RECORD {
@@ -1210,52 +732,13 @@ impl Files {
         )?;
         copy_exact(content, &mut file, payload)?;
         file.sync_all()?;
-        paths::checkpoint("candidate-sync")?;
+        paths::test_checkpoint("candidate-sync")?;
         sync(artifacts)?;
         identity(&file.metadata()?)
     }
 
-    fn capture_destination(
-        &self,
-        target: &Target,
-        artifacts: &Dir,
-        guest: &str,
-        work: Option<&interpreter::runtime::fuel::WorkBudget>,
-    ) -> Result<(Entry, Option<FileIdentity>), RecoveryError> {
-        if target.original.is_none() {
-            return Err(std::io::Error::from(std::io::ErrorKind::NotFound).into());
-        }
-        let destination = self.entry(guest, false)?;
-        if destination.mount != target.source.mount {
-            return Err(RecoveryError::Unsupported(
-                "cross-volume move requires caller-orchestrated copy and remove",
-            ));
-        }
-        if destination == target.source {
-            return Err(RecoveryError::Unsupported("move source equals destination"));
-        }
-        let parent = self.parent(&destination)?;
-        let mut destination_original = None;
-        if let Some(metadata) = existing(&parent, &destination.name)? {
-            self.require_regular(&destination, &metadata, work)?;
-            let original = identity(&metadata)?;
-            if Some(original) == target.original {
-                return Err(RecoveryError::Unsupported("aliased move destination"));
-            }
-            parent.open(&destination.name)?.sync_all()?;
-            sync(&parent)?;
-            pin(
-                &parent,
-                &destination.name,
-                artifacts,
-                "destination",
-                original,
-            )?;
-            destination_original = Some(original);
-        }
-        Ok((destination, destination_original))
-    }
-
+    /// Publish the prepared inode, or recognize it at the destination on retry.
+    /// A third inode is a conflict: retry must not overwrite someone else's file.
     fn publish_candidate(
         &self,
         state: &WriteCheckpoint,
@@ -1290,143 +773,15 @@ impl Files {
             file.set_len(payload.bytes)?;
         }
         file.sync_all()?;
-        paths::checkpoint("candidate-sync")?;
+        paths::test_checkpoint("candidate-sync")?;
         if present != Some(candidate) {
             pin(artifacts, "candidate", artifacts, "publish", candidate)?;
             artifacts.rename("publish", &parent, &target.source.name)?;
-            paths::checkpoint("published")?;
+            paths::test_checkpoint("published")?;
         }
         sync(&parent)?;
         sync(artifacts)?;
         Ok(())
-    }
-
-    fn append_range(
-        &self,
-        target: &Target,
-        artifacts: &Dir,
-        payload: &Content,
-        content: &mut dyn Read,
-        work: Option<&interpreter::runtime::fuel::WorkBudget>,
-    ) -> Result<(), RecoveryError> {
-        let original = target.original.ok_or(RecoveryError::InvalidRecord)?;
-        require_pin(artifacts, "original", original)?;
-        let parent = self.parent(&target.source)?;
-        if current(&parent, &target.source.name)? != Some(original) {
-            return Err(RecoveryError::Conflict);
-        }
-        let final_length = target
-            .original_bytes
-            .checked_add(payload.bytes)
-            .filter(|bytes| *bytes <= i64::MAX as u64)
-            .ok_or(RecoveryError::Limit)?;
-        // Deliberately omit O_APPEND: every retry repairs the original interval.
-        let mut file =
-            artifacts.open_with("original", OpenOptions::new().read(true).write(true))?;
-        let length = file.metadata()?.len();
-        if length < target.original_bytes
-            || length > final_length
-            || Some(hash(&mut file, target.original_bytes)?) != target.original_sha256
-        {
-            return Err(RecoveryError::Conflict);
-        }
-        self.volume(&target.source.mount)?
-            .check_growth(final_length - length, work)?;
-        file.seek(SeekFrom::Start(target.original_bytes))?;
-        copy_exact(content, &mut file, payload)?;
-        file.set_len(final_length)?;
-        paths::checkpoint("append-written")?;
-        file.sync_all()?;
-        paths::checkpoint("append-sync")?;
-        sync(&parent)?;
-        Ok(())
-    }
-
-    fn move_entry(&self, state: &MoveCheckpoint, artifacts: &Dir) -> Result<(), RecoveryError> {
-        let target = &state.target;
-        let original = target.original.ok_or(RecoveryError::InvalidRecord)?;
-        require_pin(artifacts, "original", original)?;
-        let destination = &state.destination;
-        let source_parent = self.parent(&target.source)?;
-        let destination_parent = self.parent(destination)?;
-        let source = current(&source_parent, &target.source.name)?;
-        let present = current(&destination_parent, &destination.name)?;
-        if ![None, Some(original)].contains(&source)
-            || ![state.destination_original, Some(original)].contains(&present)
-        {
-            return Err(RecoveryError::Conflict);
-        }
-        if present != Some(original) {
-            pin(artifacts, "original", artifacts, "publish", original)?;
-            artifacts.rename("publish", &destination_parent, &destination.name)?;
-            paths::checkpoint("destination-published")?;
-        }
-        // A destination found on retry may be visible but not yet durable.
-        // Persist it before unlinking the source on every attempt.
-        sync(&destination_parent)?;
-        if source.is_some() {
-            source_parent.remove_file(&target.source.name)?;
-            paths::checkpoint("source-removed")?;
-        }
-        sync(&source_parent)?;
-        sync(&destination_parent)?;
-        sync(artifacts)?;
-        Ok(())
-    }
-
-    fn remove_entry(&self, target: &Target, artifacts: &Dir) -> Result<(), RecoveryError> {
-        let original = target.original.ok_or(RecoveryError::InvalidRecord)?;
-        require_pin(artifacts, "original", original)?;
-        let parent = self.parent(&target.source)?;
-        match current(&parent, &target.source.name)? {
-            None => {}
-            Some(current) if current == original => {
-                parent.remove_file(&target.source.name)?;
-                paths::checkpoint("source-removed")?;
-            }
-            Some(_) => return Err(RecoveryError::Conflict),
-        }
-        sync(&parent)
-    }
-
-    fn create_directory(&self, target: &Target) -> Result<(), RecoveryError> {
-        let parent = self.parent(&target.source)?;
-        match existing(&parent, &target.source.name)? {
-            None if target.original.is_none() => {
-                parent.create_dir(&target.source.name)?;
-                paths::checkpoint("directory-created")?;
-            }
-            Some(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-                if let Some(original) = target.original {
-                    if identity(&metadata)? != original {
-                        return Err(RecoveryError::Conflict);
-                    }
-                } else {
-                    // No later mutation is admitted before this receipt. A new
-                    // pending mkdir may only have produced an empty directory.
-                    require_empty(&parent.open_dir(&target.source.name)?)?;
-                }
-            }
-            _ => return Err(RecoveryError::Conflict),
-        }
-        sync(&parent.open_dir(&target.source.name)?)?;
-        sync(&parent)
-    }
-
-    fn remove_directory(&self, target: &Target) -> Result<(), RecoveryError> {
-        let parent = self.parent(&target.source)?;
-        if let Some(metadata) = existing(&parent, &target.source.name)? {
-            if Some(identity(&metadata)?) != target.original
-                || !metadata.is_dir()
-                || metadata.file_type().is_symlink()
-            {
-                return Err(RecoveryError::Conflict);
-            }
-            require_empty(&parent.open_dir(&target.source.name)?)?;
-            parent.remove_dir(&target.source.name)?;
-            paths::checkpoint("directory-removed")?;
-        }
-        sync(&parent)
     }
 }
 
@@ -1453,7 +808,7 @@ fn pin(
         Some(_) => {}
         None => source.hard_link(name, artifacts, retained)?,
     }
-    paths::checkpoint("pin-created")?;
+    paths::test_checkpoint("pin-created")?;
     sync(artifacts)?;
     Ok(())
 }
@@ -1503,7 +858,7 @@ fn copy_exact(
         // Fault tests can stop between chunks, exercising partial append.
         file.write_all(&buffer[..count])?;
         remaining -= count as u64;
-        paths::checkpoint("write-chunk")?;
+        paths::test_checkpoint("write-chunk")?;
     }
     let mut trailing = [0];
     if source.read(&mut trailing)? != 0 || <[u8; 32]>::from(digest.finalize()) != payload.sha256 {

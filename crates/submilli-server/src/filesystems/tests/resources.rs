@@ -9,10 +9,10 @@ async fn reopen(fixture: Fixture) -> Fixture {
         database,
         run,
         filesystem,
-        context,
+        cipher,
     } = fixture;
     drop(filesystem);
-    drop(context);
+    drop(cipher);
     database.close().await.unwrap();
     drop(database);
     let database = Arc::new(
@@ -20,19 +20,19 @@ async fn reopen(fixture: Fixture) -> Fixture {
             .await
             .unwrap(),
     );
-    let context = FilesystemContext::new(Arc::new(SecretCipher::from_key([7; 32])));
+    let cipher = Arc::new(SecretCipher::from_key([7; 32]));
     let filesystem = open(
         Vfs::external(root.path().join("workspace")).unwrap(),
         &run,
         database.clone(),
-        context.clone(),
+        cipher.clone(),
     )
     .await
     .unwrap();
     Fixture {
         root,
         database,
-        context,
+        cipher,
         run,
         filesystem,
     }
@@ -118,9 +118,7 @@ async fn reader_progress_precedes_history_and_replay_skips_recorded_calls() {
         reader.next(&close, None, &limits).await.is_err(),
         "same ID cannot change from close to next"
     );
-    let mut unit = fixture.context.units(fixture.database.clone())()
-        .await
-        .unwrap();
+    let mut unit = fixture.units()().await.unwrap();
     let row = unit
         .get_reader(&fixture.run, &descriptor.id)
         .await
@@ -128,7 +126,7 @@ async fn reader_progress_precedes_history_and_replay_skips_recorded_calls() {
         .unwrap();
     assert!(row.progress.unwrap().after.closed);
     assert!(
-        unit.get_operation(&fixture.run, &descriptor.id)
+        unit.get_journal_entry(&fixture.run, &descriptor.id)
             .await
             .unwrap()
             .is_none()
@@ -191,9 +189,7 @@ async fn lines_restore_logical_offset_bom_and_crlf_without_storing_input() {
         line(reader.next(&second, None, &limits).await.unwrap()).unwrap(),
         "\u{feff}second"
     );
-    let mut unit = fixture.context.units(fixture.database.clone())()
-        .await
-        .unwrap();
+    let mut unit = fixture.units()().await.unwrap();
     let row = unit
         .get_reader(&fixture.run, &descriptor.id)
         .await
@@ -244,9 +240,7 @@ async fn failed_line_read_does_not_commit_partial_progress() {
                 .contains("maxReadSize")
         );
     }
-    let mut unit = fixture.context.units(fixture.database.clone())()
-        .await
-        .unwrap();
+    let mut unit = fixture.units()().await.unwrap();
     assert!(
         unit.get_reader(&fixture.run, &descriptor.id)
             .await
@@ -507,7 +501,7 @@ async fn cancelling_before_checkpoint_does_not_advance_the_next_attempt() {
     drop(reader);
     let entered = Arc::new(tokio::sync::Notify::new());
     let calls = Arc::new(AtomicUsize::new(0));
-    let original = fixture.context.units(fixture.database.clone());
+    let original = fixture.units();
     let units: submilli_durable::UnitFactory = {
         let entered = entered.clone();
         Arc::new(move || {
@@ -523,14 +517,11 @@ async fn cancelling_before_checkpoint_does_not_advance_the_next_attempt() {
             })
         })
     };
-    let backend = submilli_durable::DurableFilesystem::open(
-        fixture.filesystem.vfs().clone(),
-        &fixture.run,
-        units,
-        fixture.filesystem.test_context().clone(),
-    )
-    .await
-    .unwrap();
+    let backend = fixture
+        .filesystem
+        .reopen(fixture.filesystem.vfs().clone(), &fixture.run, units)
+        .await
+        .unwrap();
     let mut reader = Filesystem::restore_reader(&backend, descriptor.clone()).unwrap();
     let effect = resource_effect_id();
     let retry = effect.clone();
@@ -603,9 +594,7 @@ async fn listing_open_admits_memory_before_enumeration_or_replay() {
         if error.is::<interpreter::runtime::limits::MemoryCapExceeded>())
     );
     assert_eq!(small.host_attached_bytes(), 0);
-    let mut unit = (fixture.context.units(fixture.database.clone()))()
-        .await
-        .unwrap();
+    let mut unit = (fixture.units())().await.unwrap();
     assert!(
         unit.get_listing(&fixture.run, &opening)
             .await
@@ -665,19 +654,16 @@ async fn cancelled_listing_calls_retain_memory_until_sql_work_finishes() {
         // Open pauses before its snapshot load. Next first queries the encoded
         // size, admits memory, then pauses before loading/advancing the snapshot.
         let units = pause_transaction(
-            fixture.context.units(fixture.database.clone()),
+            fixture.units(),
             usize::from(!opening_call),
             entered.clone(),
             release.clone(),
         );
-        let backend = submilli_durable::DurableFilesystem::open(
-            fixture.filesystem.vfs().clone(),
-            &fixture.run,
-            units,
-            fixture.filesystem.test_context().clone(),
-        )
-        .await
-        .unwrap();
+        let backend = fixture
+            .filesystem
+            .reopen(fixture.filesystem.vfs().clone(), &fixture.run, units)
+            .await
+            .unwrap();
         let effect = if opening_call {
             opening.clone()
         } else {

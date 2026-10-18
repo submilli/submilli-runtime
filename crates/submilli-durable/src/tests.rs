@@ -3,7 +3,7 @@ use crate::io::{Files, PRIVATE, Roots};
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::io;
-use std::io::{Cursor, Read, Write};
+use std::io::{Read, Write};
 
 #[test]
 fn typed_run_id_preserves_stored_roots_encoding() {
@@ -15,7 +15,7 @@ fn typed_run_id_preserves_stored_roots_encoding() {
 
 thread_local! { static FAILURE: RefCell<Option<(&'static str, usize)>> = const { RefCell::new(None) }; }
 
-pub(crate) fn checkpoint(point: &str) -> Result<(), RecoveryError> {
+pub(crate) fn test_checkpoint(point: &str) -> Result<(), RecoveryError> {
     FAILURE.with(|slot| {
         let mut failure = slot.borrow_mut();
         if let Some((name, count)) = failure.as_mut().filter(|(name, _)| *name == point) {
@@ -50,12 +50,8 @@ impl Payload {
         }
     }
 }
-fn workspace(root: &std::path::Path) -> Files {
-    Files::create(
-        Vfs::external(root.to_path_buf()).unwrap(),
-        &uuid::Uuid::new_v4().to_string().into(),
-    )
-    .unwrap()
+fn workspace(root: &std::path::Path) -> TestFilesystem {
+    TestFilesystem::new(Vfs::external(root.to_path_buf()).unwrap())
 }
 
 #[test]
@@ -98,11 +94,12 @@ fn append_repairs_partial_range_on_the_original_inode() {
         std::fs::metadata(root.path().join("file")).unwrap().len(),
         6 + 65_536
     );
-    let recovered = Files::reopen(
-        Vfs::external(root.path().to_path_buf()).unwrap(),
-        &workspace.identity(),
-    )
-    .unwrap();
+    let recovered = workspace
+        .reopen(
+            Vfs::external(root.path().to_path_buf()).unwrap(),
+            &workspace.identity(),
+        )
+        .unwrap();
     recovered.apply(&intent, &mut payload).unwrap();
     recovered.apply(&intent, &mut payload).unwrap();
     assert_eq!(
@@ -190,11 +187,12 @@ fn remove_refuses_a_new_file_at_a_reused_path() {
             &mut payload,
         )
         .unwrap();
-    workspace.apply(&intent, &mut payload).unwrap();
+    workspace.store.lock().unwrap().refuse_receipt = true;
+    assert!(workspace.apply(&intent, &mut payload).is_err());
     std::fs::write(root.path().join("file"), b"newer").unwrap();
     assert!(matches!(
         workspace.apply(&intent, &mut payload),
-        Err(RecoveryError::Conflict)
+        Err(FilesystemError::Recovery(RecoveryError::Conflict))
     ));
     assert_eq!(std::fs::read(root.path().join("file")).unwrap(), b"newer");
 }
@@ -235,11 +233,12 @@ fn restored_reader_refuses_path_replacement() {
         )
         .unwrap();
     workspace.apply(&replace, &mut replacement).unwrap();
-    let recovered = Files::reopen(
-        Vfs::external(root.path().to_path_buf()).unwrap(),
-        &workspace.identity(),
-    )
-    .unwrap();
+    let recovered = workspace
+        .reopen(
+            Vfs::external(root.path().to_path_buf()).unwrap(),
+            &workspace.identity(),
+        )
+        .unwrap();
     assert!(matches!(
         recovered.restore_reader(position, None),
         Err(RecoveryError::Conflict)
@@ -270,7 +269,7 @@ fn lost_pin_changed_prefix_and_foreign_identity_fail_closed() {
         .unwrap();
     assert!(matches!(
         workspace.apply(&intent, &mut payload),
-        Err(RecoveryError::Conflict)
+        Err(FilesystemError::Recovery(RecoveryError::Conflict))
     ));
     std::fs::remove_file(
         root.path()
@@ -282,15 +281,16 @@ fn lost_pin_changed_prefix_and_foreign_identity_fail_closed() {
     .unwrap();
     assert!(matches!(
         workspace.apply(&intent, &mut payload),
-        Err(RecoveryError::Conflict)
+        Err(FilesystemError::Recovery(RecoveryError::Conflict))
     ));
     let foreign = tempfile::tempdir().unwrap();
     assert!(
-        Files::reopen(
-            Vfs::external(foreign.path().to_path_buf()).unwrap(),
-            &workspace.identity()
-        )
-        .is_err()
+        workspace
+            .reopen(
+                Vfs::external(foreign.path().to_path_buf()).unwrap(),
+                &workspace.identity()
+            )
+            .is_err()
     );
 }
 
@@ -330,11 +330,12 @@ fn reopened_workspace_cannot_read_private_aliases() {
         root.path().join("alias"),
     )
     .unwrap();
-    let restored = Files::reopen(
-        Vfs::external(root.path().to_owned()).unwrap(),
-        &workspace.identity(),
-    )
-    .unwrap();
+    let restored = workspace
+        .reopen(
+            Vfs::external(root.path().to_owned()).unwrap(),
+            &workspace.identity(),
+        )
+        .unwrap();
     assert!(crate::io::resolve_content(restored.vfs(), "/", "/alias").is_err());
     assert!(
         restored
@@ -400,11 +401,12 @@ fn failed_mutation_barriers_remain_reconcilable() {
             workspace.apply(&intent, &mut payload).is_err(),
             "{kind} at {point}"
         );
-        let restored = Files::reopen(
-            Vfs::external(root.path().to_owned()).unwrap(),
-            &workspace.identity(),
-        )
-        .unwrap();
+        let restored = workspace
+            .reopen(
+                Vfs::external(root.path().to_owned()).unwrap(),
+                &workspace.identity(),
+            )
+            .unwrap();
         restored.apply(&intent, &mut payload).unwrap();
         restored.apply(&intent, &mut payload).unwrap();
         match kind {
@@ -436,7 +438,7 @@ fn retained_bytes_are_charged_once_and_failed_growth_does_not_change_the_file() 
     let vfs = Vfs::external(root.path().to_owned())
         .unwrap()
         .with_shared_quota(quota.clone());
-    let workspace = Files::create(vfs, &uuid::Uuid::new_v4().to_string().into()).unwrap();
+    let workspace = TestFilesystem::new(vfs);
     let mut payload = Payload::new(b"four");
     let intent = workspace
         .prepare(
@@ -461,7 +463,7 @@ fn retained_bytes_are_charged_once_and_failed_growth_does_not_change_the_file() 
             },
             &mut excess
         ),
-        Err(RecoveryError::Quota)
+        Err(FilesystemError::Rejected(_))
     ));
     assert_eq!(
         std::fs::read(root.path().join("file")).unwrap(),
@@ -493,8 +495,9 @@ fn reader_open_does_not_pin_or_scan_unrelated_recovery_artifacts() {
     assert_eq!(content, "content");
 }
 
-// Matrix adapters are test-only: each case calls the concrete native primitive.
-// Production callers attach and commit their checkpoint through UnitOfWork.
+// Drive the real operation until its prepared commit loses acknowledgement, then
+// invoke it again. No test-only mutation implementation stands in for production.
+#[derive(Clone)]
 enum Case {
     Write { path: String, content: Content },
     Append { path: String, content: Content },
@@ -502,155 +505,148 @@ enum Case {
     Remove { path: String },
     CreateDirectory { path: String },
 }
-enum Checkpoint {
-    Write(WriteCheckpoint, Content, bool),
-    Move(MoveCheckpoint),
-    Remove(Target),
-    Directory(Target),
-}
 struct Prepared {
     effect: EffectId,
-    checkpoint: Checkpoint,
+    case: Case,
 }
 impl Prepared {
     fn effect(&self) -> &EffectId {
         &self.effect
     }
 }
-impl Files {
-    fn reopen(vfs: Vfs, roots: &Roots) -> Result<Self, RecoveryError> {
-        let files = Self::create(vfs, &roots.run_id)?;
-        if files.identity() != *roots {
-            return Err(RecoveryError::Conflict);
+struct TestFilesystem {
+    filesystem: DurableFilesystem,
+    runtime: tokio::runtime::Runtime,
+    store: Arc<std::sync::Mutex<crate::unit_of_work::tests::State>>,
+}
+impl std::ops::Deref for TestFilesystem {
+    type Target = Files;
+    fn deref(&self) -> &Files {
+        &self.filesystem.files
+    }
+}
+impl TestFilesystem {
+    fn new(vfs: Vfs) -> Self {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (units, store) = crate::unit_of_work::tests::filesystem_units();
+        let filesystem = runtime
+            .block_on(DurableFilesystem::open(
+                vfs,
+                &uuid::Uuid::new_v4().to_string().into(),
+                units,
+            ))
+            .unwrap();
+        Self {
+            filesystem,
+            runtime,
+            store,
         }
-        Ok(files)
+    }
+    fn reopen(&self, vfs: Vfs, roots: &Roots) -> Result<Self, FilesystemError> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let filesystem = runtime.block_on(self.filesystem.reopen(
+            vfs,
+            &roots.run_id,
+            self.filesystem.units.clone(),
+        ))?;
+        if filesystem.files.identity() != *roots {
+            return Err(RecoveryError::Conflict.into());
+        }
+        Ok(Self {
+            filesystem,
+            runtime,
+            store: self.store.clone(),
+        })
     }
     fn prepare(
         &self,
         effect: &EffectId,
         case: Case,
         payload: &mut Payload,
-    ) -> Result<Prepared, RecoveryError> {
-        let result = (|| {
-            let checkpoint = match case {
+    ) -> Result<Prepared, FilesystemError> {
+        self.store.lock().unwrap().stop_after_prepared = true;
+        let result = self.call(effect, &case, payload);
+        self.store.lock().unwrap().stop_after_prepared = false;
+        match result {
+            Err(FilesystemError::Persistence(StoreError::Io(message)))
+                if message == "injected prepared acknowledgement loss" =>
+            {
+                Ok(Prepared {
+                    effect: effect.clone(),
+                    case,
+                })
+            }
+            Err(error) => Err(error),
+            Ok(_) => panic!(
+                "the operation passed its prepared commit without injected acknowledgement loss"
+            ),
+        }
+    }
+    fn apply(
+        &self,
+        prepared: &Prepared,
+        payload: &mut Payload,
+    ) -> Result<Outcome, FilesystemError> {
+        self.call(&prepared.effect, &prepared.case, payload)
+    }
+    fn call(
+        &self,
+        effect: &EffectId,
+        case: &Case,
+        payload: &Payload,
+    ) -> Result<Outcome, FilesystemError> {
+        let operation = self.filesystem.operation(None);
+        self.runtime.block_on(async {
+            match case {
                 Case::Write { path, content } => {
-                    let target =
-                        self.capture_target(effect, &path, CaptureOptions::default(), None)?;
-                    let dir = self.artifacts(&target.source, effect, true)?;
-                    let candidate = Some(self.prepare_candidate(
-                        &target.source,
-                        &dir,
-                        &content,
-                        &mut Cursor::new(&payload.bytes),
-                        None,
-                    )?);
-                    Checkpoint::Write(WriteCheckpoint { target, candidate }, content, false)
+                    assert_eq!(content.bytes, payload.bytes.len() as u64);
+                    operation
+                        .write_bytes(effect, path, payload.bytes.clone())
+                        .await
                 }
                 Case::Append { path, content } => {
-                    let target = self.capture_target(
-                        effect,
-                        &path,
-                        CaptureOptions {
-                            follow_final: true,
-                            ..Default::default()
-                        },
-                        None,
-                    )?;
-                    let dir = self.artifacts(&target.source, effect, true)?;
-                    let candidate = if target.original.is_none() {
-                        Some(self.prepare_candidate(
-                            &target.source,
-                            &dir,
-                            &content,
-                            &mut Cursor::new(&payload.bytes),
-                            None,
-                        )?)
-                    } else {
-                        self.volume(&target.source.mount)?
-                            .check_growth(content.bytes, None)?;
-                        None
-                    };
-                    Checkpoint::Write(WriteCheckpoint { target, candidate }, content, true)
+                    assert_eq!(content.bytes, payload.bytes.len() as u64);
+                    operation
+                        .append_bytes(effect, path, payload.bytes.clone())
+                        .await
                 }
                 Case::Move {
                     source,
                     destination,
-                } => {
-                    let target =
-                        self.capture_target(effect, &source, CaptureOptions::default(), None)?;
-                    let dir = self.artifacts(&target.source, effect, true)?;
-                    let (destination, destination_original) =
-                        self.capture_destination(&target, &dir, &destination, None)?;
-                    Checkpoint::Move(MoveCheckpoint {
-                        target,
-                        destination,
-                        destination_original,
-                    })
-                }
-                Case::Remove { path } => Checkpoint::Remove(self.capture_target(
-                    effect,
-                    &path,
-                    CaptureOptions {
-                        allow_directory: true,
-                        require_empty: true,
-                        ..Default::default()
-                    },
-                    None,
-                )?),
-                Case::CreateDirectory { path } => Checkpoint::Directory(self.capture_target(
-                    effect,
-                    &path,
-                    CaptureOptions {
-                        allow_directory: true,
-                        ..Default::default()
-                    },
-                    None,
-                )?),
-            };
-            Ok(Prepared {
-                effect: effect.clone(),
-                checkpoint,
-            })
-        })();
-        self.reconcile_quotas(None)?;
-        result
-    }
-    fn apply(&self, prepared: &Prepared, payload: &mut Payload) -> Result<(), RecoveryError> {
-        let result = (|| {
-            match &prepared.checkpoint {
-                Checkpoint::Write(state, content, append) => {
-                    let dir = self.artifacts(&state.target.source, &prepared.effect, false)?;
-                    let mut input = Cursor::new(&payload.bytes);
-                    if *append && state.target.original.is_some() {
-                        self.append_range(&state.target, &dir, content, &mut input, None)?;
-                    } else {
-                        self.publish_candidate(state, &dir, content, &mut input, None)?;
-                    }
-                }
-                Checkpoint::Move(state) => self.move_entry(
-                    state,
-                    &self.artifacts(&state.target.source, &prepared.effect, false)?,
-                )?,
-                Checkpoint::Remove(target) if target.original_directory => {
-                    self.remove_directory(target)?;
-                }
-                Checkpoint::Remove(target) => self.remove_entry(
-                    target,
-                    &self.artifacts(&target.source, &prepared.effect, false)?,
-                )?,
-                Checkpoint::Directory(target) => self.create_directory(target)?,
+                } => operation.move_path(effect, source, destination).await,
+                Case::Remove { path } => operation.remove_path(effect, path).await,
+                Case::CreateDirectory { path } => operation.create_directory(effect, path).await,
             }
-            crate::io::checkpoint("before-receipt")
-        })();
-        self.reconcile_quotas(None)?;
-        result
+        })
     }
+}
+
+pub(crate) fn take_failure() -> Option<(&'static str, usize)> {
+    FAILURE.with(|slot| slot.borrow_mut().take())
+}
+pub(crate) fn set_failure(failure: Option<(&'static str, usize)>) {
+    FAILURE.with(|slot| *slot.borrow_mut() = failure);
 }
 
 #[tokio::test]
 async fn cancelled_blocking_work_holds_admission_until_it_drains() {
-    let context = FilesystemContext::default();
-    let gate = Arc::new(context.filesystem_gate.clone().lock_owned().await);
+    let root = tempfile::tempdir().unwrap();
+    let run_id = uuid::Uuid::new_v4().to_string().into();
+    let units: UnitFactory = Arc::new(|| Box::pin(async { Err(StoreError::Conflict) }));
+    let filesystem = DurableFilesystem::open(
+        Vfs::external(root.path().to_owned()).unwrap(),
+        &run_id,
+        units.clone(),
+    )
+    .await
+    .unwrap();
+    let gate = Arc::new(filesystem.filesystem_gate.clone().lock_owned().await);
     let (started, entered) = tokio::sync::oneshot::channel();
     let (release, wait) = std::sync::mpsc::channel();
     let worker = tokio::spawn(blocking(gate, move || {
@@ -661,13 +657,19 @@ async fn cancelled_blocking_work_holds_admission_until_it_drains() {
     entered.await.unwrap();
     worker.abort();
     assert!(worker.await.unwrap_err().is_cancelled());
-    assert!(context.filesystem_gate.try_lock().is_err());
+    let reopening = filesystem.reopen(filesystem.vfs().clone(), &run_id, units);
+    tokio::pin!(reopening);
+    let blocked =
+        tokio::time::timeout(std::time::Duration::from_millis(100), reopening.as_mut()).await;
+    // Release the blocking worker even if the assertion fails.
     release.send(()).unwrap();
-    let drained = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        context.filesystem_gate.lock(),
-    )
-    .await
-    .unwrap();
-    drop(drained);
+    assert!(blocked.is_err(), "reopen bypassed the outstanding worker");
+    let reopened = tokio::time::timeout(std::time::Duration::from_secs(5), reopening)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        &filesystem.filesystem_gate,
+        &reopened.filesystem_gate
+    ));
 }

@@ -217,8 +217,21 @@ Cleanup ==
                    cursor, synced, crashes, consumed, reused, readLog,
                    replayRead, replacementBytes, badReceipt, input>>
 
-Next == SupplyInput \/ Intent \/ Discover \/ WriteChunk \/ SyncFile \/ CommitReceipt
-        \/ ObserveReceipt \/ ReplacePath \/ Replay \/ Writeback \/ Crash
+(* One loop iteration dispatches on the saved journal state. The actions inside
+   Prepared are separate machine steps: a crash can occur between any two.
+   Initial abstracts admission and the baseline checkpoint (Intent). *)
+DecodeState == CASE sql = "absent" -> "Initial"
+                 [] sql = "pending" -> "Prepared"
+                 [] sql = "done" -> "Completed"
+                 [] OTHER -> "Retired"
+AppendLoop ==
+    CASE DecodeState = "Initial" -> Intent
+      [] DecodeState = "Prepared" -> Discover \/ WriteChunk \/ SyncFile \/ CommitReceipt
+      [] DecodeState = "Completed" -> ObserveReceipt \/ Replay
+      [] OTHER -> FALSE
+(* Storage, caller replay/retention and failures can interleave with the loop.
+   They are not made atomic with a state arm or a journal commit. *)
+Next == AppendLoop \/ SupplyInput \/ ReplacePath \/ Writeback \/ Crash
         \/ Restart \/ Terminal \/ Cleanup
 Spec == Init /\ [][Next]_vars
 LiveSpec == Spec /\ WF_vars(SupplyInput) /\ WF_vars(Intent) /\ WF_vars(Discover)

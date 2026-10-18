@@ -136,10 +136,33 @@ Crash == /\ s.up /\ s.crashes < MaxCrashes
                              (IF s.publishedByClose /\ s.outcome = "none" THEN {"publication-gap"} ELSE {}) \cup
                              (IF s.outcome # "none" /\ s.closeHistory = "none" THEN {"close-history-gap"} ELSE {})]
 Restart == /\ ~s.up /\ s' = [s EXCEPT !.up = TRUE]
-Core == OpenWriter \/ CommitOpen \/ Hydrate \/ SkipHistory \/ Supply \/ ReplayChunk \/ Stage \/ SyncStage \/ Receipt
-        \/ CommitChunkEffect \/ Cancel \/ ReserveClose \/ AdmitClose \/ PrepareClose
-        \/ RejectClose \/ Publish \/ SyncTarget \/ CloseReceipt \/ MarkClosed \/ ReturnClose
-        \/ CommitCloseEffect \/ DeliverClose \/ Reuse \/ ReplayClose \/ Finalize
+(* Decode each call independently; there is no persisted executable plan.
+   Chunk Initial contains native staging/sync substeps. Staged is volatile;
+   only the fingerprint receipt makes Completed durable. *)
+OpenWriterState == IF s.row THEN "Completed" ELSE "Initial"
+WriteChunkState == CASE s.cursor < Len(s.receipts) -> "Completed"
+                       [] s.written /\ s.synced -> "Staged"
+                       [] OTHER -> "Initial"
+CloseWriterState == CASE s.outcome # "none" -> "Completed"
+                        [] s.intent -> "Prepared"
+                        [] OTHER -> "Initial"
+OpenWriterLoop == CASE OpenWriterState = "Initial" -> OpenWriter
+                      [] OTHER -> FALSE
+WriteChunkLoop == CASE WriteChunkState = "Initial" -> Stage \/ SyncStage
+                      [] WriteChunkState = "Staged" -> Receipt
+                      [] WriteChunkState = "Completed" -> ReplayChunk
+                      [] OTHER -> FALSE
+CloseWriterLoop == CASE CloseWriterState = "Initial" -> ReserveClose \/ AdmitClose \/ PrepareClose \/ RejectClose
+                       [] CloseWriterState = "Prepared" -> Publish \/ SyncTarget \/ CloseReceipt
+                       [] CloseWriterState = "Completed" -> MarkClosed \/ ReturnClose \/ ReplayClose
+                       [] OTHER -> FALSE
+(* Keep faulty ordering reachable: dispatch must not hide the negative controls. *)
+FaultyOrdering == (Fault = "early-receipt" /\ Receipt)
+                 \/ (Fault = "early-writer-closed" /\ MarkClosed)
+FrameworkStep == CommitOpen \/ Hydrate \/ SkipHistory \/ Supply \/ CommitChunkEffect
+                 \/ CommitCloseEffect \/ DeliverClose
+Core == OpenWriterLoop \/ WriteChunkLoop \/ CloseWriterLoop \/ FaultyOrdering
+        \/ FrameworkStep \/ Cancel \/ Reuse \/ Finalize
         \/ Release \/ DropNative \/ Collect \/ Crash \/ Restart
 Next == Core \/ WrongReplay \/ RejectInput \/ OtherMutation
 Spec == Init /\ [][Next]_vars

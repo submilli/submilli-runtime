@@ -75,10 +75,27 @@ Crash ==
 Restart ==
     /\ ~online /\ online' = TRUE
     /\ UNCHANGED <<rows, first, prepared, completed, crashes, acknowledged, lost, witnessed>>
-Next == (\E s \in Slots :
-           (\E k \in Kinds, q \in 1..2 : Admit(s, k, q) \/ Conflict(s, k, q)) \/
-           (\E v \in 1..2 : Prepare(s, v) \/ Complete(s, v)) \/ Reject(s) \/ Replay(s))
+(* The per-operation decoder turns SQL columns into these enum variants.
+   A Completed result includes either success or a terminal preflight refusal. *)
+DecodeState(s) == CASE rows[s].state = "absent" -> "Absent"
+                   [] rows[s].state = "preparing" -> "Initial"
+                   [] rows[s].state = "pending" -> "Prepared"
+                   [] OTHER -> "Completed"
+OperationLoop(s) ==
+    CASE DecodeState(s) = "Absent" -> (\E k \in Kinds, q \in 1..2 : Admit(s, k, q))
+      [] DecodeState(s) = "Initial" -> (\E v \in 1..2 : Prepare(s, v)) \/ Reject(s)
+      [] DecodeState(s) = "Prepared" -> (\E v \in 1..2 : Complete(s, v))
+      [] DecodeState(s) = "Completed" -> Replay(s)
+      [] OTHER -> FALSE
+(* Negative controls may bypass normal dispatch, exactly as a buggy loop could. *)
+FaultyLoop(s) == (Fault = "payload" /\ (\E v \in 1..2 : Prepare(s, v)))
+                \/ (Fault = "outcome" /\ (\E v \in 1..2 : Complete(s, v)))
+                \/ (Fault = "reject-pending" /\ Reject(s))
+                \/ (Fault = "early-return" /\ Replay(s))
+Next == (\E s \in Slots : OperationLoop(s) \/ FaultyLoop(s)
+           \/ (\E k \in Kinds, q \in 1..2 : Conflict(s, k, q)))
         \/ Crash \/ Restart
+
 TypeOK ==
     /\ rows \in [Slots -> [state : {"absent", "preparing", "pending", "done", "rejected"},
                           kind : Kinds \cup {"none"}, request : 0..2, payload : 0..2, outcome : 0..2]]

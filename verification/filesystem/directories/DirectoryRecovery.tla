@@ -44,8 +44,18 @@ Crash == /\ s.up /\ s.crashes < MaxCrashes
                              (IF s.sql = "pending" /\ s.disk = Desired THEN {"gap"} ELSE {})
                              \cup (IF s.sql = "done" /\ ~s.returned THEN {"lost-ack"} ELSE {})]
 Restart == /\ ~s.up /\ s' = [s EXCEPT !.up = TRUE]
-Next == Intent \/ Apply \/ SyncDirectory \/ SyncParent \/ Receipt \/ Error
-        \/ Return \/ Reuse \/ Replay \/ Writeback \/ Crash \/ Restart
+(* Intent abstracts Initial -> Prepared. Applying a name, syncing the directory
+   and parent, and saving Completed remain separate crashable steps. *)
+DecodeState == CASE s.sql = "absent" -> "Initial"
+                 [] s.sql = "pending" -> "Prepared"
+                 [] s.sql = "done" -> "Completed"
+                 [] OTHER -> "Failed"
+DirectoryLoop ==
+    CASE DecodeState = "Initial" -> Intent
+      [] DecodeState = "Prepared" -> Apply \/ SyncDirectory \/ SyncParent \/ Receipt \/ Error
+      [] DecodeState = "Completed" -> Return \/ Replay
+      [] OTHER -> FALSE
+Next == DirectoryLoop \/ Reuse \/ Writeback \/ Crash \/ Restart
 Spec == Init /\ [][Next]_vars
 LiveSpec == Spec /\ WF_vars(Intent) /\ WF_vars(Apply) /\ WF_vars(SyncDirectory)
              /\ WF_vars(SyncParent) /\ WF_vars(Receipt) /\ WF_vars(Return)

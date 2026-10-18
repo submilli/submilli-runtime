@@ -213,35 +213,39 @@ impl UnitOfWork for SqliteDurableUnitOfWork {
             .map_err(durable_error)
     }
 
-    async fn get_operation(
+    async fn get_journal_entry(
         &mut self,
         run_id: &RunId,
         id: &EffectId,
-    ) -> Result<Option<Operation>, DurableStoreError> {
+    ) -> Result<Option<JournalEntry>, DurableStoreError> {
         let run_id = run_id.to_owned();
         let id = id.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::get_operation(connection, &sealer, &run_id, &id).await
+                    super::durable_state::get_journal_entry(connection, &sealer, &run_id, &id).await
                 })
             })
             .await
             .map_err(durable_error)
     }
-    async fn save_operation(&mut self, effect: Operation) -> Result<(), DurableStoreError> {
+    async fn save_journal_entry(
+        &mut self,
+        journal_entry: JournalEntry,
+    ) -> Result<(), DurableStoreError> {
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::save_operation(connection, &sealer, effect).await
+                    super::durable_state::save_journal_entry(connection, &sealer, journal_entry)
+                        .await
                 })
             })
             .await
             .map_err(durable_error)
     }
-    async fn pending_operation(
+    async fn pending_journal_entry(
         &mut self,
         run_id: &RunId,
     ) -> Result<Option<EffectId>, DurableStoreError> {
@@ -250,19 +254,19 @@ impl UnitOfWork for SqliteDurableUnitOfWork {
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::pending_operation(connection, &sealer, &run_id).await
+                    super::durable_state::pending_journal_entry(connection, &sealer, &run_id).await
                 })
             })
             .await
             .map_err(durable_error)
     }
-    async fn operation_count(&mut self, run_id: &RunId) -> Result<u64, DurableStoreError> {
+    async fn journal_entry_count(&mut self, run_id: &RunId) -> Result<u64, DurableStoreError> {
         let run_id = run_id.to_owned();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::durable_state::operation_count(connection, &sealer, &run_id).await
+                    super::durable_state::journal_entry_count(connection, &sealer, &run_id).await
                 })
             })
             .await

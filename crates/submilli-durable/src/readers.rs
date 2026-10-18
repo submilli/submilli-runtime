@@ -1,7 +1,19 @@
-//! Effect-aware readers and immutable directory snapshots.
+//! Reader and directory handles, native reads, and their journal updates.
+//!
+//! Handles carry IDs rather than trusted native cursors. Each dispatched read
+//! loads its journal row, reopens and validates the file, reads from the selected
+//! logical position, then commits before/after progress before returning the item.
+//! The caller's execution history owns earlier returned items; this journal only
+//! needs the last step to bridge a crash before history completion.
+//! Retrying that step rereads the file, so the caller must keep its contents
+//! unchanged while the read is pending; file identity alone cannot ensure that.
+//!
+//! Directory handles use an immutable saved listing instead of a live OS iterator.
+//! Dropping either kind releases local resources but keeps the journal row, since
+//! dropping may mean a run paused and will restore the handle later.
+use crate::filesystem::conflict;
 use crate::filesystem::*;
-use crate::filesystem::{conflict, require_idle, require_resource_limit};
-use crate::io::{Files, RecoveryError, Roots, identity, validate_guest_path};
+use crate::io::{Files, RecoveryError, Roots, identity};
 use crate::io::{MAX_DEPTH, MAX_ENTRIES};
 use crate::unit_of_work::*;
 use cap_std::fs::File;
@@ -39,107 +51,25 @@ impl FileReader for FilesystemReader {
         work: Option<Arc<WorkBudget>>,
         limits: &TenantLimits,
     ) -> Result<ReadOutput, PortError> {
-        let fs = &self.filesystem;
-        validate_id(effect_id).map_err(backend)?;
-        if effect_id == &self.resource {
-            return Err(backend(RecoveryError::Conflict.into()));
-        }
-        let _gate = fs.context.filesystem_gate.lock().await;
-        let row = fs
-            .stored_reader_record(&self.resource)
+        self.filesystem
+            .operation(work)
+            .next_reader(&self.resource, effect_id, &self.options, limits)
             .await
-            .map_err(backend)?;
-        if row.options != self.options {
-            return Err(backend(RecoveryError::Conflict.into()));
-        }
-        let before = progress_start(&row.progress, effect_id, false).map_err(backend)?;
-        let initial = row
-            .position
-            .ok_or_else(|| backend(RecoveryError::Conflict.into()))?;
-        // Revalidate the path on every dispatched call, even in the same process.
-        // Native buffering cannot become an alternative progress authority.
-        let mut after = before.clone();
-        let output = if before.closed {
-            interpreter::runtime::default_filesystem::read_item(
-                &mut std::io::Cursor::new([]),
-                &self.options,
-                &mut after,
-                work.as_deref(),
-                limits,
-            )?
-        } else {
-            let mut native = fs
-                .files
-                .restore_reader(initial, work.as_deref())
-                .map_err(|e| backend(e.into()))?;
-            interpreter::runtime::default_filesystem::read_item(
-                &mut native,
-                &self.options,
-                &mut after,
-                work.as_deref(),
-                limits,
-            )?
-        };
-        checkpoint("reader-read");
-        if let Some(work) = &work {
-            work.before_effect();
-        }
-        fs.stored_reader_progress(
-            &self.resource,
-            row.progress,
-            Progress {
-                effect: effect_id.clone(),
-                close: false,
-                before,
-                after,
-            },
-        )
-        .await
-        .map_err(backend)?;
-        checkpoint("reader-progress");
-        Ok(output)
     }
     async fn close(
         &mut self,
         effect_id: &EffectId,
         work: Option<Arc<WorkBudget>>,
     ) -> Result<(), PortError> {
-        let fs = &self.filesystem;
-        validate_id(effect_id).map_err(backend)?;
-        if effect_id == &self.resource {
-            return Err(backend(RecoveryError::Conflict.into()));
-        }
-        let _gate = fs.context.filesystem_gate.lock().await;
-        let row = fs
-            .stored_reader_record(&self.resource)
+        self.filesystem
+            .operation(work)
+            .close_reader(&self.resource, effect_id, &self.options)
             .await
-            .map_err(backend)?;
-        if row.options != self.options {
-            return Err(backend(RecoveryError::Conflict.into()));
-        }
-        let before = progress_start(&row.progress, effect_id, true).map_err(backend)?;
-        let after = ReadPosition {
-            closed: true,
-            ..before.clone()
-        };
-        if let Some(work) = &work {
-            work.before_effect();
-        }
-        fs.stored_reader_progress(
-            &self.resource,
-            row.progress,
-            Progress {
-                effect: effect_id.clone(),
-                close: true,
-                before,
-                after,
-            },
-        )
-        .await
-        .map_err(backend)
     }
 }
 
+/// Same effect: repeat its item from before. New effect: continue from after.
+/// The caller must replay older completed effects from its own history.
 pub(crate) fn progress_start<T: Clone + Default>(
     progress: &Option<Progress<T>>,
     effect: &EffectId,
@@ -157,251 +87,6 @@ pub(crate) fn progress_start<T: Clone + Default>(
     }
 }
 
-impl FilesystemOperation {
-    pub async fn open_reader(
-        &self,
-        resource: &EffectId,
-        path: &str,
-        options: ReaderOptions,
-    ) -> Result<FilesystemReader, FilesystemError> {
-        validate_id(resource)?;
-        validate_guest_path(path)?;
-        if matches!(options, ReaderOptions::Bytes { chunk_size: 0 }) {
-            return Err(RecoveryError::InvalidRecord.into());
-        }
-        let gate = Arc::new(
-            self.filesystem
-                .context
-                .filesystem_gate
-                .clone()
-                .lock_owned()
-                .await,
-        );
-        let initial = self
-            .filesystem
-            .stored_reader(resource, path, &options)
-            .await?;
-        if initial.is_none() {
-            let workspace = self.filesystem.files.clone();
-            let work = self.work.clone();
-            let (id, path) = (resource.to_owned(), path.to_owned());
-            let opened = blocking(gate.clone(), move || {
-                workspace
-                    .open_reader(&id, &path, work.as_deref())?
-                    .position()
-            })
-            .await;
-            let position = match opened {
-                Ok(position) => position,
-                Err(FilesystemError::Recovery(error)) if preflight_refusal(&error) => {
-                    self.filesystem
-                        .stored_reject_reader(resource, error.to_string())
-                        .await?;
-                    return Err(FilesystemError::Rejected(error.to_string()));
-                }
-                Err(error) => return Err(error),
-            };
-            self.filesystem
-                .stored_reader_opened(resource, &position)
-                .await?;
-        }
-        checkpoint("reader-open");
-        Ok(FilesystemReader {
-            filesystem: self.filesystem.clone(),
-            resource: resource.clone(),
-            options,
-        })
-    }
-}
-impl FilesystemOperation {
-    pub(crate) async fn listing_step(
-        &self,
-        resource: &EffectId,
-        effect: &EffectId,
-        close: bool,
-        limits: &interpreter::runtime::limits::TenantLimits,
-    ) -> Result<Option<interpreter::runtime::filesystem::DirectoryEntry>, FilesystemError> {
-        validate_id(resource)?;
-        validate_id(effect)?;
-        if resource == effect {
-            return Err(RecoveryError::Conflict.into());
-        }
-        let gate = self
-            .filesystem
-            .context
-            .filesystem_gate
-            .clone()
-            .lock_owned()
-            .await;
-        let bytes = self.filesystem.stored_listing_bytes(resource).await?;
-        // Covers encrypted/plain JSON, decoded entries, validation copies and
-        // re-encoding during the transaction. JSON includes every path byte and
-        // fixed entry fields; Vec spare capacity and String capacity fit this bound.
-        let memory = interpreter::runtime::limits::HostBytes::new(
-            limits,
-            bytes.saturating_mul(8).saturating_add(8192),
-        )?;
-        self.charge(interpreter::runtime::fuel::HASH, bytes.saturating_mul(4))?;
-        self.charge(interpreter::runtime::fuel::PARSE, bytes.saturating_mul(4))?;
-        let operation = self.clone();
-        let resource = resource.to_owned();
-        let effect = effect.to_owned();
-        finish_owned(async move {
-            let _gate = gate;
-            let _memory = memory;
-            operation.advance_listing(&resource, &effect, close).await
-        })
-        .await
-    }
-    async fn advance_listing(
-        &self,
-        resource: &EffectId,
-        effect: &EffectId,
-        close: bool,
-    ) -> Result<Option<interpreter::runtime::filesystem::DirectoryEntry>, FilesystemError> {
-        use crate::unit_of_work::{ListingPosition, Progress};
-        let row = self.filesystem.stored_listing_record(resource).await?;
-        let before = progress_start(&row.progress, effect, close)?;
-        let entries = row.content.ok_or(RecoveryError::Conflict)?;
-        if before.index > entries.len() {
-            return Err(RecoveryError::Conflict.into());
-        }
-        let entry = if close || before.closed {
-            None
-        } else {
-            entries.get(before.index).cloned()
-        };
-        let after = ListingPosition {
-            index: before.index + usize::from(entry.is_some()),
-            closed: before.closed || close,
-        };
-        checkpoint("listing-next");
-        if let Some(work) = &self.work {
-            work.before_effect();
-        }
-        self.filesystem
-            .stored_listing_progress(
-                resource,
-                row.progress,
-                Progress {
-                    effect: effect.clone(),
-                    close,
-                    before,
-                    after,
-                },
-            )
-            .await?;
-        checkpoint("listing-progress");
-        Ok(
-            entry.map(|entry| interpreter::runtime::filesystem::DirectoryEntry {
-                name: entry.path.rsplit('/').next().unwrap_or_default().into(),
-                path: entry.path,
-                kind: if entry.directory {
-                    "directory"
-                } else if entry.symlink {
-                    "symlink"
-                } else {
-                    "file"
-                },
-                bytes: if entry.directory || entry.symlink {
-                    0
-                } else {
-                    entry.bytes
-                },
-            }),
-        )
-    }
-    /// The enumeration is an output. SQLite stores it once; replay never
-    /// re-enumerates a completed listing, even if the directory has changed.
-    pub(crate) async fn open_directory_reserved(
-        &self,
-        resource: &EffectId,
-        path: &str,
-        recursive: bool,
-        memory: Option<Arc<interpreter::runtime::limits::HostBytes>>,
-    ) -> Result<(), FilesystemError> {
-        validate_id(resource)?;
-        validate_guest_path(path)?;
-        let gate = Arc::new(
-            self.filesystem
-                .context
-                .filesystem_gate
-                .clone()
-                .lock_owned()
-                .await,
-        );
-        let entries = if let Some(entries) = self
-            .filesystem
-            .stored_listing(resource, path, recursive, None)
-            .await?
-        {
-            // This observation is already committed. Charge decoding and
-            // authentication by its data size, settling even on exhausted fuel.
-            if let Some(work) = &self.work {
-                work.before_effect();
-            }
-            let bytes = listing_data_bytes(&entries);
-            self.charge(interpreter::runtime::fuel::HASH, bytes)?;
-            self.charge(interpreter::runtime::fuel::PARSE, bytes)?;
-            entries
-        } else {
-            let workspace = self.filesystem.files.clone();
-            let work = self.work.clone();
-            let path_owned = path.to_owned();
-            let worker_memory = memory.clone();
-            let result = blocking(gate.clone(), move || {
-                // Cancellation cannot refund memory while enumeration still owns it.
-                let _memory = worker_memory;
-                workspace.directory_listing_metered(&path_owned, recursive, work.as_deref())
-            })
-            .await;
-            let entries = match result {
-                Ok(entries) => entries,
-                Err(FilesystemError::Recovery(error)) if preflight_refusal(&error) => {
-                    let reason = error.to_string();
-                    self.filesystem
-                        .stored_reject_listing(resource, reason.clone())
-                        .await?;
-                    return Err(FilesystemError::Rejected(reason));
-                }
-                Err(error) => return Err(error),
-            };
-            let bytes = listing_data_bytes(&entries);
-            // Serialize once for the bound and once in the sealed SQL codec.
-            self.charge(interpreter::runtime::fuel::PARSE, bytes.saturating_mul(2))?;
-            self.charge(interpreter::runtime::fuel::COPY, bytes)?;
-            let encoded = serde_json::to_vec(&entries).map_err(|_| RecoveryError::InvalidRecord)?;
-            if encoded.len() > MAX_LISTING_BYTES {
-                let reason = "directory snapshot exceeds the size limit".to_owned();
-                self.filesystem
-                    .stored_reject_listing(resource, reason.clone())
-                    .await?;
-                return Err(FilesystemError::Rejected(reason));
-            }
-            self.charge(interpreter::runtime::fuel::HASH, encoded.len() as u64)?;
-            self.filesystem
-                .stored_listing(resource, path, recursive, Some(entries.clone()))
-                .await?;
-            entries
-        };
-        if let Some(work) = &self.work {
-            work.before_effect();
-        }
-        drop(entries);
-        checkpoint("listing-open");
-        Ok(())
-    }
-}
-
-// Meter the data processed, including paths: entry count alone makes long
-// names free. Fixed fields use their in-memory size; strings use their byte size.
-fn listing_data_bytes(entries: &[DirectoryEntry]) -> u64 {
-    entries.iter().fold(0u64, |bytes, entry| {
-        bytes
-            .saturating_add(std::mem::size_of_val(entry) as u64)
-            .saturating_add(entry.path.len() as u64)
-    })
-}
 pub(crate) struct DurableDirectory {
     pub(crate) filesystem: DurableFilesystem,
     pub(crate) resource: EffectId,
@@ -423,7 +108,7 @@ impl DirectoryReader for DurableDirectory {
     ) -> Result<Option<interpreter::runtime::filesystem::DirectoryEntry>, PortError> {
         self.filesystem
             .operation(work)
-            .listing_step(&self.resource, effect_id, false, limits)
+            .next_listing(&self.resource, effect_id, limits)
             .await
             .map_err(backend)
     }
@@ -438,16 +123,16 @@ impl DirectoryReader for DurableDirectory {
     ) -> Result<(), PortError> {
         self.filesystem
             .operation(work)
-            .listing_step(&self.resource, effect_id, true, limits)
+            .close_listing(&self.resource, effect_id, limits)
             .await
             .map(|_| ())
             .map_err(backend)
     }
 }
 
-/// Byte position of a logical reader, independent of an OS descriptor number.
-/// Buffered adapters save the position of the first unread byte, together with
-/// their decoder flags; they must not save a prefetched descriptor position.
+/// Saved opening snapshot: configured roots, path, file identity and initial offset.
+/// This is not the current cursor. `Reader.progress` stores logical before/after
+/// offsets and decoder flags so read-ahead never advances durable progress.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReaderPosition {
@@ -459,6 +144,7 @@ pub struct ReaderPosition {
     offset: u64,
 }
 
+/// An OS handle for the current dispatched read only; it never enters the journal.
 pub struct RetainedReader {
     file: File,
     position: ReaderPosition,
@@ -640,89 +326,6 @@ impl Files {
 }
 
 impl DurableFilesystem {
-    pub(crate) async fn stored_reader(
-        &self,
-        resource: &EffectId,
-        path: &str,
-        options: &ReaderOptions,
-    ) -> Result<Option<ReaderPosition>, FilesystemError> {
-        let run_id = &self.run_id;
-        let binding = self.binding;
-        let mut owned = (self.units)().await?;
-        let unit = owned.as_mut();
-        if let Some(reader) = unit.get_reader(run_id, resource).await? {
-            if reader.binding != binding || reader.path != path || reader.options != *options {
-                return conflict();
-            }
-            if let Some(error) = reader.error {
-                return Err(FilesystemError::Rejected(error));
-            }
-            return Ok(reader.position);
-        }
-        require_idle(unit, run_id).await?;
-        require_resource_limit(unit, run_id).await?;
-        unit.save_reader(
-            run_id,
-            Reader {
-                binding,
-                id: resource.clone(),
-                path: path.into(),
-                options: options.clone(),
-                progress: None,
-                position: None,
-                error: None,
-            },
-        )
-        .await?;
-        owned.commit().await?;
-        Ok(None)
-    }
-    pub(crate) async fn stored_reject_reader(
-        &self,
-        resource: &EffectId,
-        error: String,
-    ) -> Result<(), FilesystemError> {
-        let run_id = &self.run_id;
-        let binding = self.binding;
-        let mut owned = (self.units)().await?;
-        let unit = owned.as_mut();
-        let mut reader = unit
-            .get_reader(run_id, resource)
-            .await?
-            .ok_or(StoreError::Conflict)?;
-        if reader.binding != binding {
-            return conflict();
-        }
-        if reader.position.is_none() {
-            reader.error = Some(error);
-            unit.save_reader(run_id, reader).await?;
-        }
-        owned.commit().await?;
-        Ok(())
-    }
-    pub(crate) async fn stored_reader_opened(
-        &self,
-        resource: &EffectId,
-        position: &ReaderPosition,
-    ) -> Result<(), FilesystemError> {
-        let run_id = &self.run_id;
-        let binding = self.binding;
-        let mut owned = (self.units)().await?;
-        let unit = owned.as_mut();
-        let mut reader = unit
-            .get_reader(run_id, resource)
-            .await?
-            .ok_or(StoreError::Conflict)?;
-        if reader.binding != binding {
-            return conflict();
-        }
-        if reader.position.is_none() {
-            reader.position = Some(position.clone());
-            unit.save_reader(run_id, reader).await?;
-        }
-        owned.commit().await?;
-        Ok(())
-    }
     pub(crate) async fn stored_reader_record(
         &self,
         resource: &EffectId,
@@ -731,7 +334,10 @@ impl DurableFilesystem {
         let mut unit = (self.units)().await?;
         unit.get_reader(run_id, resource)
             .await?
-            .filter(|r| r.binding == self.binding && r.position.is_some())
+            .filter(|r| {
+                r.filesystem_config_fingerprint == self.filesystem_config_fingerprint
+                    && r.position.is_some()
+            })
             .ok_or_else(|| StoreError::Conflict.into())
     }
     pub(crate) async fn stored_reader_progress(
@@ -741,14 +347,16 @@ impl DurableFilesystem {
         progress: Progress<ReadPosition>,
     ) -> Result<(), FilesystemError> {
         let run_id = &self.run_id;
-        let binding = self.binding;
+        let filesystem_config_fingerprint = self.filesystem_config_fingerprint;
         let mut owned = (self.units)().await?;
         let unit = owned.as_mut();
         let mut reader = unit
             .get_reader(run_id, resource)
             .await?
             .ok_or(StoreError::Conflict)?;
-        if reader.binding != binding || reader.progress != expected {
+        if reader.filesystem_config_fingerprint != filesystem_config_fingerprint
+            || reader.progress != expected
+        {
             return conflict();
         }
         reader.progress = Some(progress);
@@ -772,7 +380,10 @@ impl DurableFilesystem {
         let mut unit = (self.units)().await?;
         unit.get_listing(run_id, resource)
             .await?
-            .filter(|r| r.binding == self.binding && r.content.is_some())
+            .filter(|r| {
+                r.filesystem_config_fingerprint == self.filesystem_config_fingerprint
+                    && r.content.is_some()
+            })
             .ok_or_else(|| StoreError::Conflict.into())
     }
     pub(crate) async fn stored_listing_progress(
@@ -782,95 +393,20 @@ impl DurableFilesystem {
         progress: Progress<ListingPosition>,
     ) -> Result<(), FilesystemError> {
         let run_id = &self.run_id;
-        let binding = self.binding;
+        let filesystem_config_fingerprint = self.filesystem_config_fingerprint;
         let mut owned = (self.units)().await?;
         let unit = owned.as_mut();
         let mut listing = unit
             .get_listing(run_id, resource)
             .await?
             .ok_or(StoreError::Conflict)?;
-        if listing.binding != binding || listing.progress != expected {
+        if listing.filesystem_config_fingerprint != filesystem_config_fingerprint
+            || listing.progress != expected
+        {
             return conflict();
         }
         listing.progress = Some(progress);
         unit.save_listing(run_id, listing).await?;
-        owned.commit().await?;
-        Ok(())
-    }
-    pub(crate) async fn stored_listing(
-        &self,
-        resource: &EffectId,
-        path: &str,
-        recursive: bool,
-        completed: Option<Vec<DirectoryEntry>>,
-    ) -> Result<Option<Vec<DirectoryEntry>>, FilesystemError> {
-        let run_id = &self.run_id;
-        let binding = self.binding;
-        let mut owned = (self.units)().await?;
-        let unit = owned.as_mut();
-        if let Some(mut listing) = unit.get_listing(run_id, resource).await? {
-            if listing.binding != binding || listing.path != path || listing.recursive != recursive
-            {
-                return conflict();
-            }
-            if let Some(error) = listing.error {
-                return Err(FilesystemError::Rejected(error));
-            }
-            if let Some(content) = listing.content {
-                if completed.as_ref().is_some_and(|v| *v != content) {
-                    return conflict();
-                }
-                return Ok(Some(content));
-            }
-            if let Some(content) = completed {
-                listing.content = Some(content.clone());
-                unit.save_listing(run_id, listing).await?;
-                owned.commit().await?;
-                return Ok(Some(content));
-            }
-            return Ok(None);
-        }
-        if completed.is_some() {
-            return conflict();
-        }
-        require_idle(unit, run_id).await?;
-        require_resource_limit(unit, run_id).await?;
-        unit.save_listing(
-            run_id,
-            Listing {
-                binding,
-                id: resource.clone(),
-                path: path.into(),
-                recursive,
-                progress: None,
-                content: None,
-                error: None,
-            },
-        )
-        .await?;
-        owned.commit().await?;
-        Ok(None)
-    }
-    pub(crate) async fn stored_reject_listing(
-        &self,
-        resource: &EffectId,
-        reason: String,
-    ) -> Result<(), FilesystemError> {
-        let run_id = &self.run_id;
-        let binding = self.binding;
-        let mut owned = (self.units)().await?;
-        let unit = owned.as_mut();
-        let mut listing = unit
-            .get_listing(run_id, resource)
-            .await?
-            .ok_or(StoreError::Conflict)?;
-        if listing.binding != binding {
-            return conflict();
-        }
-        if listing.content.is_none() {
-            listing.error = Some(reason);
-            unit.save_listing(run_id, listing).await?;
-        }
         owned.commit().await?;
         Ok(())
     }

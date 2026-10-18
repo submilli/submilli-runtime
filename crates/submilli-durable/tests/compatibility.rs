@@ -3,7 +3,7 @@ use interpreter::runtime::filesystem::ResourceDescriptor;
 use std::sync::Arc;
 use submilli_durable::{
     codec::{self, Sealer},
-    unit_of_work::Operation,
+    unit_of_work::JournalEntry,
 };
 use submilli_shared::secret_store::SecretCipher;
 
@@ -11,7 +11,7 @@ use submilli_shared::secret_store::SecretCipher;
 fn filesystem_operation_associated_data_bind_scope_and_codec() {
     let cipher = Arc::new(SecretCipher::from_key([7; 32]));
     let sealer = Sealer::new(Some(cipher.clone()));
-    let effect = Operation {
+    let effect = JournalEntry {
         run_id: "scope".into(),
         id: "effect".into(),
         operation: "write".into(),
@@ -22,13 +22,13 @@ fn filesystem_operation_associated_data_bind_scope_and_codec() {
         rejected: false,
     };
     let aad = r#"["filesystem-operation","scope","effect","write",2,"request"]"#;
-    assert_eq!(codec::operation_owner(&effect, "request").unwrap(), aad);
+    assert_eq!(codec::journal_entry_owner(&effect, "request").unwrap(), aad);
     let old = legacy_seal(&cipher, aad, b"request");
     assert_eq!(codec::open(&sealer, aad, &old).unwrap(), b"request");
     assert!(
         codec::open(
             &sealer,
-            &codec::operation_owner(&effect, "outcome").unwrap(),
+            &codec::journal_entry_owner(&effect, "outcome").unwrap(),
             &old
         )
         .is_err()

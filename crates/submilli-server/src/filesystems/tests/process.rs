@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 const RUN: &str = "019a019a-019a-419a-819a-019a019a019a";
 const EFFECT: &str = "019b019b-019b-419b-819b-019b019b019b";
 
-pub(crate) fn checkpoint(point: &str) {
+pub(crate) fn test_checkpoint(point: &str) {
     if std::env::var("SUBMILLI_FILESYSTEM_CRASH_AT")
         .ok()
         .as_deref()
@@ -21,25 +21,25 @@ pub(crate) fn checkpoint(point: &str) {
     }
 }
 
-async fn open_database(root: &Path) -> (Arc<ServerDatabase>, FilesystemContext) {
+async fn open_database(root: &Path) -> (Arc<ServerDatabase>, Arc<SecretCipher>) {
     let database = Arc::new(ServerDatabase::open(&root.join("state.db")).await.unwrap());
-    let context = FilesystemContext::new(Arc::new(SecretCipher::from_key([7; 32])));
-    (database, context)
+    let cipher = Arc::new(SecretCipher::from_key([7; 32]));
+    (database, cipher)
 }
 
 #[tokio::test]
 async fn crash_child() {
-    submilli_durable::set_test_checkpoint(checkpoint);
+    submilli_durable::set_test_checkpoint(test_checkpoint);
     let Some(root) = std::env::var_os("SUBMILLI_FILESYSTEM_CRASH_ROOT") else {
         return;
     };
     let root = PathBuf::from(root);
-    let (database, context) = open_database(&root).await;
+    let (database, cipher) = open_database(&root).await;
     let filesystem = open(
         Vfs::external(root.join("workspace")).unwrap(),
         &RUN.into(),
         database,
-        context,
+        cipher,
     )
     .await
     .unwrap();
@@ -101,20 +101,26 @@ async fn crash_child() {
             .close_writer(&RUN.into(), &EFFECT.into())
             .await
             .unwrap();
-    } else {
+    } else if kind == "write" {
         std::fs::write(filesystem.vfs().root().join("file"), b"initial").unwrap();
         filesystem
             .operation(None)
-            .write_bytes(&EFFECT.into(), "/file", b"suffix".to_vec(), true)
+            .write_bytes(&EFFECT.into(), "/file", b"replacement".to_vec())
+            .await
+            .unwrap();
+    } else {
+        if kind != "append-create" {
+            std::fs::write(filesystem.vfs().root().join("file"), b"initial").unwrap();
+        }
+        filesystem
+            .operation(None)
+            .append_bytes(&EFFECT.into(), "/file", b"suffix".to_vec())
             .await
             .unwrap();
     }
     panic!("crash checkpoint not reached");
 }
 
-fn kill_at(root: &Path, point: &str) {
-    kill_at_mode(root, point, "append");
-}
 fn kill_at_mode(root: &Path, point: &str, kind: &str) {
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args([
@@ -148,36 +154,69 @@ fn kill_at_mode(root: &Path, point: &str, kind: &str) {
 
 #[tokio::test]
 async fn explicit_retries_after_process_restart_finish_filesystem_operations() {
-    for point in [
-        "effect-request",
-        "effect-intent",
-        "effect-applied",
-        "effect-receipt",
+    for (kind, expected) in [
+        ("write", b"replacement".as_slice()),
+        ("append", b"initialsuffix"),
+        ("append-create", b"suffix"),
     ] {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir(root.path().join("workspace")).unwrap();
-        let child_root = root.path().to_owned();
-        tokio::task::spawn_blocking(move || kill_at(&child_root, point))
+        for point in [
+            "effect-request",
+            "effect-intent",
+            "effect-applied",
+            "effect-receipt",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir(root.path().join("workspace")).unwrap();
+            let child_root = root.path().to_owned();
+            tokio::task::spawn_blocking(move || kill_at_mode(&child_root, point, kind))
+                .await
+                .unwrap();
+            let (database, cipher) = open_database(root.path()).await;
+            let filesystem = open(
+                Vfs::external(root.path().join("workspace")).unwrap(),
+                &RUN.into(),
+                database,
+                cipher,
+            )
             .await
             .unwrap();
-        let (database, context) = open_database(root.path()).await;
-        let filesystem = open(
-            Vfs::external(root.path().join("workspace")).unwrap(),
-            &RUN.into(),
-            database,
-            context,
-        )
-        .await
-        .unwrap();
-        filesystem
-            .operation(None)
-            .write_bytes(&EFFECT.into(), "/file", b"suffix".to_vec(), true)
-            .await
-            .unwrap();
-        assert_eq!(
-            std::fs::read(filesystem.vfs().root().join("file")).unwrap(),
-            b"initialsuffix"
-        );
+            let operation = filesystem.operation(None);
+            let effect = EFFECT.into();
+            if kind == "write" {
+                operation
+                    .write_bytes(&effect, "/file", b"replacement".to_vec())
+                    .await
+                    .unwrap();
+            } else {
+                operation
+                    .append_bytes(&effect, "/file", b"suffix".to_vec())
+                    .await
+                    .unwrap();
+            }
+            assert_eq!(
+                std::fs::read(filesystem.vfs().root().join("file")).unwrap(),
+                expected,
+                "{kind} at {point}"
+            );
+            // Once completed, neither flow may overwrite or append to a later file.
+            std::fs::write(filesystem.vfs().root().join("file"), b"later").unwrap();
+            if kind == "write" {
+                operation
+                    .write_bytes(&effect, "/file", b"replacement".to_vec())
+                    .await
+                    .unwrap();
+            } else {
+                operation
+                    .append_bytes(&effect, "/file", b"suffix".to_vec())
+                    .await
+                    .unwrap();
+            }
+            assert_eq!(
+                std::fs::read(filesystem.vfs().root().join("file")).unwrap(),
+                b"later",
+                "{kind} at {point}"
+            );
+        }
     }
 }
 
@@ -198,12 +237,12 @@ async fn writer_restart_repairs_unacknowledged_output_tail_and_close() {
         tokio::task::spawn_blocking(move || kill_at_mode(&child_root, point, "writer"))
             .await
             .unwrap();
-        let (database, context) = open_database(root.path()).await;
+        let (database, cipher) = open_database(root.path()).await;
         let filesystem = open(
             Vfs::external(root.path().join("workspace")).unwrap(),
             &RUN.into(),
             database,
-            context,
+            cipher,
         )
         .await
         .unwrap();
@@ -257,12 +296,12 @@ async fn resource_progress_survives_process_death_before_framework_completion() 
             tokio::task::spawn_blocking(move || kill_at_mode(&child_root, point, kind))
                 .await
                 .unwrap();
-            let (database, context) = open_database(root.path()).await;
+            let (database, cipher) = open_database(root.path()).await;
             let filesystem = open(
                 Vfs::external(root.path().join("workspace")).unwrap(),
                 &RUN.into(),
                 database,
-                context,
+                cipher,
             )
             .await
             .unwrap();

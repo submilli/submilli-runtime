@@ -5,7 +5,7 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 use submilli_durable::{
     codec::Sealer,
-    codec::{self as record_codec, OperationColumns, ResourceColumns},
+    codec::{self as record_codec, JournalEntryColumns, ResourceColumns},
     unit_of_work::*,
 };
 fn invalid(error: impl std::fmt::Display) -> StoreError {
@@ -96,7 +96,7 @@ fn decode_writer(row: SqliteRow, sealer: &Sealer, run_id: &RunId) -> Result<Writ
         .try_get::<String, _>("resource_id")
         .map_err(database)?
         .into();
-    let (binding, path) = record_codec::decode_writer_path(
+    let (filesystem_config_fingerprint, path) = record_codec::decode_writer_path(
         sealer,
         run_id,
         &id,
@@ -109,7 +109,7 @@ fn decode_writer(row: SqliteRow, sealer: &Sealer, run_id: &RunId) -> Result<Writ
         .map(EffectId::from);
     let state = row.try_get("state").map_err(database)?;
     Ok(Writer {
-        binding,
+        filesystem_config_fingerprint,
         id,
         path,
         close_effect,
@@ -234,8 +234,8 @@ pub(super) async fn resource_counts(
     })
 }
 
-fn decode_operation(row: SqliteRow, sealer: &Sealer) -> Result<Operation, StoreError> {
-    let effect = Operation {
+fn decode_journal_entry(row: SqliteRow, sealer: &Sealer) -> Result<JournalEntry, StoreError> {
+    let journal_entry = JournalEntry {
         id: row
             .try_get::<String, _>("operation_id")
             .map_err(database)?
@@ -255,10 +255,10 @@ fn decode_operation(row: SqliteRow, sealer: &Sealer) -> Result<Operation, StoreE
         outcome: None,
         rejected: row.try_get::<&str, _>("state").map_err(database)? == "rejected",
     };
-    record_codec::decode_operation(
+    record_codec::decode_journal_entry(
         sealer,
-        effect,
-        OperationColumns {
+        journal_entry,
+        JournalEntryColumns {
             request: row.try_get("request").map_err(database)?,
             recovery: row.try_get("recovery_payload").map_err(database)?,
             outcome: row.try_get("outcome").map_err(database)?,
@@ -266,38 +266,41 @@ fn decode_operation(row: SqliteRow, sealer: &Sealer) -> Result<Operation, StoreE
     )
     .map_err(invalid)
 }
-pub(super) async fn get_operation(
+pub(super) async fn get_journal_entry(
     connection: &mut SqliteConnection,
     sealer: &Sealer,
     run_id: &RunId,
     id: &EffectId,
-) -> Result<Option<Operation>, StoreError> {
+) -> Result<Option<JournalEntry>, StoreError> {
     sqlx::query("SELECT * FROM durable_filesystem_operations WHERE scope_id=? AND operation_id=?")
         .bind(run_id.as_str())
         .bind(id.as_str())
         .fetch_optional(connection)
         .await
         .map_err(database)?
-        .map(|row| decode_operation(row, sealer))
+        .map(|row| decode_journal_entry(row, sealer))
         .transpose()
 }
-pub(super) async fn save_operation(
+pub(super) async fn save_journal_entry(
     connection: &mut SqliteConnection,
     sealer: &Sealer,
-    effect: Operation,
+    journal_entry: JournalEntry,
 ) -> Result<(), StoreError> {
-    let prior = get_operation(connection, sealer, &effect.run_id, &effect.id).await?;
-    effect.validate_successor(prior.as_ref()).map_err(invalid)?;
-    let columns = record_codec::encode_operation(sealer, &effect).map_err(invalid)?;
-    let previous = prior.as_ref().map(Operation::state);
+    let prior =
+        get_journal_entry(connection, sealer, &journal_entry.run_id, &journal_entry.id).await?;
+    journal_entry
+        .validate_successor(prior.as_ref())
+        .map_err(invalid)?;
+    let columns = record_codec::encode_journal_entry(sealer, &journal_entry).map_err(invalid)?;
+    let previous = prior.as_ref().map(JournalEntry::state);
     let result = sqlx::query("INSERT INTO durable_filesystem_operations(scope_id,operation_id,operation,version,request,recovery_payload,outcome,state) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(scope_id,operation_id) DO UPDATE SET recovery_payload=excluded.recovery_payload,outcome=excluded.outcome,state=excluded.state WHERE durable_filesystem_operations.state=?")
-        .bind(effect.run_id.as_str()).bind(effect.id.as_str()).bind(&effect.operation).bind(effect.version).bind(columns.request).bind(columns.recovery).bind(columns.outcome).bind(effect.state()).bind(previous).execute(connection).await.map_err(database)?;
+        .bind(journal_entry.run_id.as_str()).bind(journal_entry.id.as_str()).bind(&journal_entry.operation).bind(journal_entry.version).bind(columns.request).bind(columns.recovery).bind(columns.outcome).bind(journal_entry.state()).bind(previous).execute(connection).await.map_err(database)?;
     if result.rows_affected() != 1 {
         return Err(StoreError::Conflict);
     }
     Ok(())
 }
-pub(super) async fn pending_operation(
+pub(super) async fn pending_journal_entry(
     connection: &mut SqliteConnection,
     _sealer: &Sealer,
     run_id: &RunId,
@@ -311,7 +314,7 @@ pub(super) async fn pending_operation(
     .map(|value| value.map(EffectId::from))
     .map_err(database)
 }
-pub(super) async fn operation_count(
+pub(super) async fn journal_entry_count(
     connection: &mut SqliteConnection,
     _sealer: &Sealer,
     run_id: &RunId,

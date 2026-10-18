@@ -1,9 +1,9 @@
 use crate::{adapters::unit_of_work::durable::units, database::ServerDatabase};
 use std::sync::Arc;
-use submilli_durable::{UnitFactory, codec::MAX_RECORD, unit_of_work::Operation};
+use submilli_durable::{UnitFactory, codec::MAX_RECORD, unit_of_work::JournalEntry};
 use submilli_shared::secret_store::SecretCipher;
-fn operation(id: &str) -> Operation {
-    Operation {
+fn journal_entry(id: &str) -> JournalEntry {
+    JournalEntry {
         run_id: "scope".into(),
         id: id.into(),
         operation: "test.operation".into(),
@@ -25,12 +25,12 @@ async fn filesystem_records_survive_reopen_without_run_or_workspace_tables() {
     let path = root.path().join("db");
     let (db, factory) = database(&path).await;
     let mut unit = factory().await.unwrap();
-    let mut row = operation("one");
-    unit.save_operation(row.clone()).await.unwrap();
+    let mut row = journal_entry("one");
+    unit.save_journal_entry(row.clone()).await.unwrap();
     row.recovery_payload = Some(b"recovery data".to_vec());
-    unit.save_operation(row.clone()).await.unwrap();
+    unit.save_journal_entry(row.clone()).await.unwrap();
     row.outcome = Some(b"result".to_vec());
-    unit.save_operation(row.clone()).await.unwrap();
+    unit.save_journal_entry(row.clone()).await.unwrap();
     unit.commit().await.unwrap();
     drop(factory);
     db.close().await.unwrap();
@@ -38,7 +38,7 @@ async fn filesystem_records_survive_reopen_without_run_or_workspace_tables() {
     let (_db, factory) = database(&path).await;
     let mut unit = factory().await.unwrap();
     let mut record = unit
-        .get_operation(&"scope".into(), &"one".into())
+        .get_journal_entry(&"scope".into(), &"one".into())
         .await
         .unwrap()
         .unwrap();
@@ -47,18 +47,18 @@ async fn filesystem_records_survive_reopen_without_run_or_workspace_tables() {
         record.recovery_payload.as_deref(),
         Some(b"recovery data".as_slice())
     );
-    unit.save_operation(record.clone()).await.unwrap();
+    unit.save_journal_entry(record.clone()).await.unwrap();
     record.outcome = Some(b"changed".to_vec());
-    assert!(unit.save_operation(record).await.is_err());
-    assert_eq!(unit.operation_count(&"scope".into()).await.unwrap(), 1);
+    assert!(unit.save_journal_entry(record).await.is_err());
+    assert_eq!(unit.journal_entry_count(&"scope".into()).await.unwrap(), 1);
 }
 #[tokio::test]
 async fn filesystem_operation_identity_and_pending_exclusion() {
     let root = tempfile::tempdir().unwrap();
     let (_db, factory) = database(&root.path().join("db")).await;
     let mut unit = factory().await.unwrap();
-    let row = operation("one");
-    unit.save_operation(row.clone()).await.unwrap();
+    let row = journal_entry("one");
+    unit.save_journal_entry(row.clone()).await.unwrap();
     for mut changed in [row.clone(), row.clone(), row.clone()]
         .into_iter()
         .enumerate()
@@ -68,43 +68,48 @@ async fn filesystem_operation_identity_and_pending_exclusion() {
             1 => changed.1.version = 2,
             _ => changed.1.request = b"changed".to_vec(),
         }
-        assert!(unit.save_operation(changed.1).await.is_err());
+        assert!(unit.save_journal_entry(changed.1).await.is_err());
     }
     unit.commit().await.unwrap();
     let mut collision = factory().await.unwrap();
-    assert!(collision.save_operation(operation("two")).await.is_err());
+    assert!(
+        collision
+            .save_journal_entry(journal_entry("two"))
+            .await
+            .is_err()
+    );
     drop(collision);
     let mut unit = factory().await.unwrap();
     let mut early = row.clone();
     early.outcome = Some(b"too soon".to_vec());
-    assert!(unit.save_operation(early).await.is_err());
+    assert!(unit.save_journal_entry(early).await.is_err());
     let mut refused = row;
     refused.outcome = Some(b"refusal".to_vec());
     refused.rejected = true;
-    unit.save_operation(refused).await.unwrap();
-    let mut row = operation("two");
-    unit.save_operation(row.clone()).await.unwrap();
+    unit.save_journal_entry(refused).await.unwrap();
+    let mut row = journal_entry("two");
+    unit.save_journal_entry(row.clone()).await.unwrap();
     row.recovery_payload = Some(b"checkpoint".to_vec());
-    unit.save_operation(row.clone()).await.unwrap();
-    unit.save_operation(row.clone()).await.unwrap();
+    unit.save_journal_entry(row.clone()).await.unwrap();
+    unit.save_journal_entry(row.clone()).await.unwrap();
     let mut changed = row.clone();
     changed.recovery_payload = Some(b"changed".to_vec());
-    assert!(unit.save_operation(changed).await.is_err());
+    assert!(unit.save_journal_entry(changed).await.is_err());
     row.outcome = Some(b"uncertain".to_vec());
     row.rejected = true;
-    assert!(unit.save_operation(row).await.is_err());
+    assert!(unit.save_journal_entry(row).await.is_err());
 }
 #[tokio::test]
 async fn dropped_unit_discards_effect_and_pending_slot() {
     let root = tempfile::tempdir().unwrap();
     let (_db, factory) = database(&root.path().join("db")).await;
     let mut unit = factory().await.unwrap();
-    let mut row = operation("one");
-    unit.save_operation(row.clone()).await.unwrap();
+    let mut row = journal_entry("one");
+    unit.save_journal_entry(row.clone()).await.unwrap();
     row.recovery_payload = Some(b"checkpoint".to_vec());
-    unit.save_operation(row).await.unwrap();
+    unit.save_journal_entry(row).await.unwrap();
     assert!(
-        unit.get_operation(&"scope".into(), &"one".into())
+        unit.get_journal_entry(&"scope".into(), &"one".into())
             .await
             .unwrap()
             .is_some()
@@ -112,18 +117,18 @@ async fn dropped_unit_discards_effect_and_pending_slot() {
     drop(unit);
     let mut unit = factory().await.unwrap();
     assert!(
-        unit.get_operation(&"scope".into(), &"one".into())
+        unit.get_journal_entry(&"scope".into(), &"one".into())
             .await
             .unwrap()
             .is_none()
     );
     assert!(
-        unit.pending_operation(&"scope".into())
+        unit.pending_journal_entry(&"scope".into())
             .await
             .unwrap()
             .is_none()
     );
-    unit.save_operation(operation("two")).await.unwrap();
+    unit.save_journal_entry(journal_entry("two")).await.unwrap();
     unit.commit().await.unwrap();
 }
 #[tokio::test]
@@ -131,21 +136,21 @@ async fn records_are_bounded_and_sealed_to_field_row_operation_and_version() {
     let root = tempfile::tempdir().unwrap();
     let (db, factory) = database(&root.path().join("db")).await;
     let mut unit = factory().await.unwrap();
-    let mut oversized = operation("one");
+    let mut oversized = journal_entry("one");
     oversized.request = vec![0; MAX_RECORD + 1];
-    assert!(unit.save_operation(oversized).await.is_err());
-    let mut row = operation("one");
-    unit.save_operation(row.clone()).await.unwrap();
+    assert!(unit.save_journal_entry(oversized).await.is_err());
+    let mut row = journal_entry("one");
+    unit.save_journal_entry(row.clone()).await.unwrap();
     let mut oversized = row.clone();
     oversized.recovery_payload = Some(vec![0; MAX_RECORD + 1]);
-    assert!(unit.save_operation(oversized).await.is_err());
+    assert!(unit.save_journal_entry(oversized).await.is_err());
     row.recovery_payload = Some(b"secret intent".to_vec());
-    unit.save_operation(row.clone()).await.unwrap();
+    unit.save_journal_entry(row.clone()).await.unwrap();
     let mut oversized = row.clone();
     oversized.outcome = Some(vec![0; MAX_RECORD + 1]);
-    assert!(unit.save_operation(oversized).await.is_err());
+    assert!(unit.save_journal_entry(oversized).await.is_err());
     row.outcome = Some(b"secret outcome".to_vec());
-    unit.save_operation(row).await.unwrap();
+    unit.save_journal_entry(row).await.unwrap();
     unit.commit().await.unwrap();
     let original: (Vec<u8>, Vec<u8>) = db
         .read(|connection| {
@@ -180,7 +185,7 @@ async fn records_are_bounded_and_sealed_to_field_row_operation_and_version() {
         .unwrap();
         let mut unit = factory().await.unwrap();
         assert!(
-            unit.get_operation(
+            unit.get_journal_entry(
                 &"scope".into(),
                 &if changed_row { "two" } else { "one" }.into()
             )
@@ -205,8 +210,8 @@ async fn direct_persistence_refuses_rewriting_committed_operation_identity() {
     let root = tempfile::tempdir().unwrap();
     let (_db, factory) = database(&root.path().join("db")).await;
     let mut unit = factory().await.unwrap();
-    let mut row = operation("one");
-    unit.save_operation(row.clone()).await.unwrap();
+    let mut row = journal_entry("one");
+    unit.save_journal_entry(row.clone()).await.unwrap();
     row.request = b"changed".to_vec();
-    assert!(unit.save_operation(row).await.is_err());
+    assert!(unit.save_journal_entry(row).await.is_err());
 }

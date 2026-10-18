@@ -1,4 +1,12 @@
-//! Persistence contract owned by durability, independent of a database driver.
+//! Journal records and the application's transaction contract.
+//!
+//! `JournalEntry` records namespace/content mutations. `Reader` and `Listing` record
+//! resource openings and the last cursor step. `Writer` and `Chunk` track an
+//! unpublished output until close hands it to a normal mutation operation.
+//!
+//! The `validate_successor` methods define allowed updates: identity and completed
+//! facts cannot be rewritten. Persistence adapters call them before saving. These
+//! checks complement the database's uniqueness and pending-operation constraints.
 use crate::readers::{DirectoryEntry, ReaderPosition};
 use futures::future::BoxFuture;
 use interpreter::runtime::durable::{EffectId, RunId};
@@ -29,14 +37,17 @@ pub type UnitFactory =
 /// durable identity in a fresh unit, never by repeating an external mutation.
 #[async_trait::async_trait]
 pub trait UnitOfWork: Send {
-    async fn get_operation(
+    async fn get_journal_entry(
         &mut self,
         run_id: &RunId,
         id: &EffectId,
-    ) -> Result<Option<Operation>, StoreError>;
-    async fn save_operation(&mut self, effect: Operation) -> Result<(), StoreError>;
-    async fn pending_operation(&mut self, run_id: &RunId) -> Result<Option<EffectId>, StoreError>;
-    async fn operation_count(&mut self, run_id: &RunId) -> Result<u64, StoreError>;
+    ) -> Result<Option<JournalEntry>, StoreError>;
+    async fn save_journal_entry(&mut self, journal_entry: JournalEntry) -> Result<(), StoreError>;
+    async fn pending_journal_entry(
+        &mut self,
+        run_id: &RunId,
+    ) -> Result<Option<EffectId>, StoreError>;
+    async fn journal_entry_count(&mut self, run_id: &RunId) -> Result<u64, StoreError>;
 
     async fn get_reader(
         &mut self,
@@ -87,7 +98,7 @@ pub trait UnitOfWork: Send {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Input fingerprint and logical identity. No payload bytes or storage location.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +109,7 @@ pub struct Content {
     pub sha256: [u8; 32],
 }
 
+/// The mutation receipt returned again for a completed effect.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Outcome {
@@ -111,20 +123,32 @@ pub enum RecordedOutcome {
     Rejected(String),
 }
 
+/// One effect's mutation journal. Its optional fields describe progress:
+/// request only = preparing; retry facts present = pending; outcome present = done
+/// or rejected. A crash can leave disk ahead of the journal, so pending is not proof
+/// that the public mutation has not happened yet.
 #[derive(Clone)]
-pub struct Operation {
+pub struct JournalEntry {
     pub id: EffectId,
     pub run_id: RunId,
+    /// Mutation kind, such as write, append or move; part of the effect identity.
     pub operation: String,
     pub version: u32,
+    /// Filesystem configuration fingerprint plus the hash of the arguments, not their payload bytes.
     pub request: Vec<u8>,
+    /// Original file identities, lengths and prepared artifacts needed on retry.
     pub recovery_payload: Option<Vec<u8>>,
+    /// Serialized RecordedOutcome; once present, retry returns it without mutating.
     pub outcome: Option<Vec<u8>>,
     pub rejected: bool,
 }
 
 /// The last dispatched effect only. Earlier completed effects are replayed by
 /// execution history, never dispatched back to this resource.
+///
+/// A retry of `effect` starts at `before`; the next distinct effect starts at
+/// `after`. Both positions are necessary because filesystem progress may commit
+/// before the caller records the returned item in execution history.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Progress<T> {
@@ -159,9 +183,11 @@ fn progress_follows<T: PartialEq + Default>(
     }
 }
 
+/// An opening identity plus cursor progress. `position` fixes the opened file;
+/// `progress` holds the evolving byte offset and decoder/close flags.
 #[derive(Clone)]
 pub struct Reader {
-    pub binding: [u8; 32],
+    pub filesystem_config_fingerprint: [u8; 32],
     pub id: EffectId,
     pub path: String,
     pub options: ReaderOptions,
@@ -169,9 +195,10 @@ pub struct Reader {
     pub progress: Option<Progress<ReadPosition>>,
     pub error: Option<String>,
 }
+/// One frozen directory snapshot and progress through it. Retries do not re-enumerate.
 #[derive(Clone)]
 pub struct Listing {
-    pub binding: [u8; 32],
+    pub filesystem_config_fingerprint: [u8; 32],
     pub id: EffectId,
     pub path: String,
     pub recursive: bool,
@@ -179,14 +206,17 @@ pub struct Listing {
     pub content: Option<Vec<DirectoryEntry>>,
     pub error: Option<String>,
 }
+/// An unpublished output. close_effect reserves the only effect allowed to publish it.
 #[derive(Clone)]
 pub struct Writer {
-    pub binding: [u8; 32],
+    pub filesystem_config_fingerprint: [u8; 32],
     pub id: EffectId,
     pub path: String,
     pub close_effect: Option<EffectId>,
     pub state: String,
 }
+/// An acknowledged piece of a writer. Sequence and prior lengths fix its disk offset;
+/// content fingerprints verify retry bytes without storing them in the database.
 #[derive(Clone)]
 pub struct Chunk {
     pub writer: EffectId,
@@ -195,10 +225,6 @@ pub struct Chunk {
     pub content: Content,
 }
 
-pub struct WriterRecord {
-    pub path: String,
-    pub chunks: Vec<Content>,
-}
 pub enum PendingResource {
     Reader {
         id: EffectId,
@@ -218,7 +244,7 @@ pub struct ResourceCounts {
     pub chunks: u64,
 }
 
-impl Operation {
+impl JournalEntry {
     pub fn state(&self) -> &'static str {
         if self.outcome.is_some() {
             if self.rejected { "rejected" } else { "done" }
@@ -321,7 +347,7 @@ impl Reader {
         require(prior.map_or(
             self.position.is_none() && self.error.is_none() && self.progress.is_none(),
             |prior| {
-                self.binding == prior.binding
+                self.filesystem_config_fingerprint == prior.filesystem_config_fingerprint
                     && self.id == prior.id
                     && self.path == prior.path
                     && self.options == prior.options
@@ -359,7 +385,7 @@ impl Listing {
         require(prior.map_or(
             self.content.is_none() && self.error.is_none() && self.progress.is_none(),
             |prior| {
-                self.binding == prior.binding
+                self.filesystem_config_fingerprint == prior.filesystem_config_fingerprint
                     && self.id == prior.id
                     && self.path == prior.path
                     && self.recursive == prior.recursive
@@ -380,7 +406,7 @@ impl Writer {
             return require(self.state == "open");
         };
         require(
-            self.binding == prior.binding
+            self.filesystem_config_fingerprint == prior.filesystem_config_fingerprint
                 && self.id == prior.id
                 && self.path == prior.path
                 && unchanged(&prior.close_effect, &self.close_effect)

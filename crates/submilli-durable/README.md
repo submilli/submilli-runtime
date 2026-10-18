@@ -18,6 +18,29 @@ associated-data formats belong here. The journal stores fingerprints and recover
 outputs inline in SQLite. Native paths, file descriptors and database connections are not
 persistence contracts.
 
+## Reading an operation
+
+Start with `src/filesystem/write_bytes.rs`. Each journaled operation has its own
+file, state enum, execution loop, and state encoding/decoding. Mutation loops
+advance `Initial -> Prepared -> Completed`, with terminal preflight refusals
+also represented by `Completed`. Each arm performs its native work, then the
+operation saves the next state before continuing. A retry decodes the latest
+journal entry for the same run/effect and enters that state again.
+
+`encode_state` maps those variants onto the existing SQL intent/receipt columns;
+this refactor does not change the database format. Prepared evidence and completed
+results remain immutable. `operation.rs` contains only shared per-call accounting
+and journal admission/commit. Shared evidence primitives stay in `filesystem.rs`;
+operation-specific steps are inline in their state arms.
+
+Resource calls have their own state machines too. A chunk advances through
+`Initial -> Staged -> Completed`; only its fingerprint receipt is persisted.
+Reader/listing next calls use `ReadAt -> SaveProgress -> Completed`. They encode
+only effect ID and before/after cursor progress, not the returned bytes. Retrying
+the same effect decodes its before position and reconstructs the result; the next
+effect starts at after. Explicit close has its own loop. File metadata and direct
+reads remain observations; their result recording belongs to execution history.
+
 ## Interpreter boundary
 
 Embedders set `StoreData.filesystem` to inject the selected backend, using the
@@ -35,13 +58,17 @@ calls; a fixed effect ID is useful only for an isolated operation and its retry.
 Ordinary server and CLI runs continue to use the native backend.
 
 This component does not discover pending work or run recovery at server startup.
-`open(vfs, run_id, units, context)` takes the caller's configured filesystem,
+`open(vfs, run_id, units)` takes the caller's configured filesystem,
 including its mounts, and a stable UUID `RunId`. Each logical call takes an
 `EffectId`; reader and writer handles use their opening effect's ID. It creates
 private recovery artifacts within those roots, not a new public run directory.
+`DurableFilesystem` owns its mutation gate and shared quota registry. Use its
+`reopen(vfs, run_id, units)` method when existing handles or cancelled workers may
+still access the roots: it shares their coordination and waits for outstanding
+work. A fresh `open` requires exclusive ownership of the roots.
 The caller retains the same roots, journal, run ID and effect IDs across
 retries. Every journal record binds its request to a fingerprint of the configured
-roots, mounts, working directory, access modes and quotas. A changed binding
+roots, mounts, working directory, access modes and quotas. A changed filesystem configuration fingerprint
 fails rather than replaying a result against different paths. Supplying an empty
 or unrelated journal is a caller error; there is no separate database-identity
 registry to detect it.

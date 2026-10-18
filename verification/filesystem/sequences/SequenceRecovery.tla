@@ -43,8 +43,17 @@ Restart == /\ ~s.up /\ s' = [s EXCEPT !.up = TRUE]
 \* Evidence lifetime is a caller precondition, not a cleanup service here.
 BadCleanup == /\ Fault = "early-cleanup" /\ s.pinned
               /\ s' = [s EXCEPT !.pinned = FALSE]
-Next == Prepare \/ Apply \/ Sync \/ Receipt \/ RefuseSecond \/ Return
-        \/ Finish \/ Crash \/ Restart \/ BadCleanup
+(* The program retries prior completed calls before reaching a later pending
+   call. Its cursor is not a filesystem plan. Sync/receipt can be in flight for
+   that later identity while the caller replays the completed prefix. *)
+DecodeState == CASE s.cursor \in (s.receipts \cup s.refused) -> "Completed"
+                 [] s.intent = s.cursor /\ s.intent \in Steps -> "Prepared"
+                 [] OTHER -> "Initial"
+CallLoop == CASE DecodeState = "Initial" -> Prepare \/ RefuseSecond
+                [] DecodeState = "Prepared" -> Apply
+                [] DecodeState = "Completed" -> Return
+                [] OTHER -> FALSE
+Next == CallLoop \/ Sync \/ Receipt \/ Finish \/ Crash \/ Restart \/ BadCleanup
 Spec == Init /\ [][Next]_vars
 LiveSpec == Spec /\ WF_vars(Prepare) /\ WF_vars(Apply) /\ WF_vars(Sync)
              /\ WF_vars(Receipt) /\ WF_vars(Return) /\ WF_vars(Finish)

@@ -214,9 +214,22 @@ Cleanup ==
                    up, phase, syncedDirs, fileSynced, crashes, consumed,
                    reused, badReceipt, inputAvailable, seen>>
 
-Next == SupplyInput \/ Intent \/ Discover \/ PinOriginal \/ SyncBackup \/ PrepareCandidate
-        \/ SyncCandidate \/ Apply \/ (\E p \in Paths: SyncDirectory(p))
-        \/ RemoveSource \/ CommitReceipt \/ Consume \/ ReplacePaths \/ Replay \/ Writeback
+(* The journal identifies the effect; phase tracks volatile native work inside
+   an arm. Prepared may still need to reconcile pins/candidate bytes after a
+   crash. This model abstracts request admission and baseline identity capture
+   into Intent; FilesystemOperations checks their separate SQL transitions. *)
+DecodeState == CASE sql = "absent" -> "Initial"
+                 [] sql = "pending" -> "Prepared"
+                 [] sql = "done" -> "Completed"
+                 [] OTHER -> "Retired"
+NamespaceLoop ==
+    CASE DecodeState = "Initial" -> Intent
+      [] DecodeState = "Prepared" -> Discover \/ PinOriginal \/ SyncBackup
+           \/ PrepareCandidate \/ SyncCandidate \/ Apply
+           \/ (\E p \in Paths: SyncDirectory(p)) \/ RemoveSource \/ CommitReceipt
+      [] DecodeState = "Completed" -> Consume \/ Replay
+      [] OTHER -> FALSE
+Next == NamespaceLoop \/ SupplyInput \/ ReplacePaths \/ Writeback
         \/ CandidateWriteback \/ Crash \/ Restart \/ Terminal \/ Cleanup
 Spec == Init /\ [][Next]_vars
 LiveSpec == Spec /\ WF_vars(SupplyInput) /\ WF_vars(Intent) /\ WF_vars(Discover)
