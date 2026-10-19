@@ -19,3 +19,8 @@ export const legacyDocsRoutes = {
 	"/testing-packages": "/docs/packages/write-tests/",
 	"/the-language": "/docs/reference/language/",
 };
+
+// Retired pages whose destinations are anchors, so they have no Markdown alias.
+export const legacyRedirectRoutes = {
+	"/videos/code-execution-introduction": "/docs/why/#video-code-execution-introduction",
+};
