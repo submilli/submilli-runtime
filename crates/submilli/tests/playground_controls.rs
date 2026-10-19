@@ -1218,6 +1218,44 @@ function main(): string {
         }
 
         #[test]
+        fn after_an_upgrade_from_the_embedded_server_the_earlier_runs_are_still_listed() {
+            let playground = Playground::starter();
+            playground.start();
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let ran = playground.expect(0, &["exec", "--example"]);
+            let started = playground.expect(
+                0,
+                &["session", "start", "--var", "customerId=cus_northwind"],
+            );
+            let session = started["session"].as_str().unwrap().to_owned();
+            playground.stop();
+
+            // What an earlier version leaves: its sessions under `server/`, and no `host/`.
+            std::fs::rename(
+                playground.state().join("host"),
+                playground.state().join("server"),
+            )
+            .unwrap();
+            playground.start();
+            let log = std::fs::read_to_string(playground.state().join("playground.log")).unwrap();
+            assert_eq!(log.matches("were left behind").count(), 1, "{log}");
+            assert_eq!(playground.runs(), 1);
+            let shown = playground.expect(0, &["show", &ran["run"].to_string()]);
+            assert_eq!(shown["source"], "example", "{shown}");
+            // The session it had starts fresh: gone.
+            let (refused, code) = playground.json(&["exec", "--example", "--session", &session]);
+            assert_eq!(code, 2, "{refused}");
+            assert_eq!(refused["error"]["kind"], "unknown-session", "{refused}");
+
+            // The notice is printed once: the next start, with a log of its own, is quiet.
+            playground.stop();
+            playground.start();
+            let log = std::fs::read_to_string(playground.state().join("playground.log")).unwrap();
+            assert!(!log.contains("were left behind"), "{log}");
+            assert_eq!(playground.runs(), 1);
+        }
+
+        #[test]
         fn a_started_session_keeps_its_values_and_bind_applies_to_new_runs_only() {
             let playground = Playground::starter();
             playground.start();

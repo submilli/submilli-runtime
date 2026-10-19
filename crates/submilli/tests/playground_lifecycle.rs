@@ -861,6 +861,28 @@ mod unix {
 
     #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
     #[test]
+    fn a_write_past_the_size_limit_fails_as_the_server_fails_it() {
+        let project = Project::with_blueprint(
+            "name: demo\ndefault: allow\nvfs:\n  mode: per_session\n  size_limit: 100\n",
+        );
+        let record = project.start(&[]);
+        let body = execute(
+            &record,
+            &project.token("app"),
+            r#"import { writeText } from "submilli:fs"; function main(): void { writeText("/a.txt", "x".repeat(160)); }"#,
+        );
+        assert_eq!(body["error"]["kind"], "runtime_error", "{body}");
+        let message = body["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("QuotaExceededError") && message.contains("size limit of 100 bytes"),
+            "{body}"
+        );
+        let status = project.run(&["status", "--json"]);
+        assert!(status.status.success(), "{}", stderr(&status));
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
     fn a_deeply_recursive_program_ends_with_a_resource_error_and_the_playground_stays_up() {
         let project = Project::new();
         let record = project.start(&[]);
