@@ -232,3 +232,31 @@ async fn a_new_project_starts_with_no_notice() {
     assert_eq!(booted.notice, None);
     booted.sessions.close_database().await.unwrap();
 }
+
+#[tokio::test]
+async fn closing_cancels_admitted_work_and_waits_for_it_to_drain() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_state, sessions, _) = booted(dir.path()).await;
+    let sessions = Arc::new(sessions);
+    let session = sessions
+        .open(&per_session(), &BTreeMap::new())
+        .await
+        .unwrap();
+    let permit = sessions.admit_resource_work(&session.id).await.unwrap();
+    let close = tokio::spawn({
+        let sessions = Arc::clone(&sessions);
+        let id = session.id.clone();
+        async move { sessions.close(&id).await }
+    });
+    permit.cancel.cancelled().await;
+    tokio::task::yield_now().await;
+    assert!(!close.is_finished(), "close must wait for work to drain");
+    assert!(sessions.session_dir(&session.id).exists());
+    drop(permit);
+    assert!(close.await.unwrap().unwrap());
+    assert!(!sessions.session_dir(&session.id).exists());
+    assert!(matches!(
+        sessions.admit_resource_work(&session.id).await,
+        Err(SessionsError::UnknownSession)
+    ));
+}

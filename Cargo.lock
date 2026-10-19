@@ -5408,11 +5408,13 @@ dependencies = [
  "subtle",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tower",
  "unicode-properties",
  "ureq",
  "url",
  "uuid",
+ "wasm-encoder 0.248.0",
 ]
 
 [[package]]

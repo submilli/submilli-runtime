@@ -136,6 +136,28 @@ pub(crate) struct Sessions {
     /// so a run that starts while it decides is either counted or finds the
     /// session closed.
     in_flight: Mutex<HashMap<String, usize>>,
+    /// Each session's resource scope while anything holds it: closing a session
+    /// cancels its scope and waits for the work admitted under it to drain.
+    resource_scopes: std::sync::Mutex<HashMap<String, std::sync::Weak<ResourceScope>>>,
+}
+
+/// What a session's admitted work shares: the lock closing takes for writing once
+/// that work has drained, and the token that tells the work to stop.
+#[derive(Default)]
+struct ResourceScope {
+    work: Arc<tokio::sync::RwLock<()>>,
+    cancel: tokio_util::sync::CancellationToken,
+}
+
+/// Work admitted to run against an open session, from
+/// [`Sessions::admit_resource_work`]. Closing the session cancels
+/// [`Self::cancel`], then waits until every one of these has dropped before it
+/// deletes the session's files and values. Mirrors `submilli-server`'s
+/// `session_manager.rs` (`ResourceUse`).
+pub(crate) struct ResourceUse {
+    _scope: Arc<ResourceScope>,
+    _permit: tokio::sync::OwnedRwLockReadGuard<()>,
+    pub(crate) cancel: tokio_util::sync::CancellationToken,
 }
 
 impl Sessions {
@@ -158,6 +180,7 @@ impl Sessions {
             limits: SessionKvLimits::default(),
             max_last_run_bytes: MAX_LAST_RUN_BYTES,
             in_flight: Mutex::new(HashMap::new()),
+            resource_scopes: std::sync::Mutex::new(HashMap::new()),
         };
         let open: Vec<Session> = sessions
             .database
@@ -304,9 +327,44 @@ impl Sessions {
             }))
     }
 
-    /// Close the session: its values, last run and directory go with it. Returns
-    /// whether it was open.
+    /// Admit work against the open session `id`: a run holds the returned use
+    /// until its blocking host work has drained.
+    pub(crate) async fn admit_resource_work(&self, id: &str) -> Result<ResourceUse, SessionsError> {
+        let scope = self.resource_scope(id);
+        let permit = scope.work.clone().read_owned().await;
+        if self.database.session(id).await?.is_none() || scope.cancel.is_cancelled() {
+            return Err(SessionsError::UnknownSession);
+        }
+        Ok(ResourceUse {
+            _permit: permit,
+            cancel: scope.cancel.clone(),
+            _scope: scope,
+        })
+    }
+
+    fn resource_scope(&self, id: &str) -> Arc<ResourceScope> {
+        // Poison means a panic interrupted an insert or a prune of this map.
+        // AGENTS.md permits the poisoned-lock panic rather than reading it.
+        let mut scopes = self
+            .resource_scopes
+            .lock()
+            .expect("session resource scopes poisoned");
+        scopes.retain(|_, scope| scope.strong_count() > 0);
+        if let Some(scope) = scopes.get(id).and_then(std::sync::Weak::upgrade) {
+            return scope;
+        }
+        let scope = Arc::new(ResourceScope::default());
+        scopes.insert(id.to_owned(), Arc::downgrade(&scope));
+        scope
+    }
+
+    /// Close the session: its admitted work is told to stop and drains first,
+    /// then its values, last run and directory go. Returns whether it was open.
     pub(crate) async fn close(&self, id: &str) -> Result<bool> {
+        let scope = self.resource_scope(id);
+        scope.cancel.cancel();
+        // A run holds its read permit until its blocking host work has drained.
+        let _drained = scope.work.write().await;
         let closed = self.database.delete_session(id).await?;
         self.remove_dir(id);
         Ok(closed)

@@ -82,3 +82,76 @@ fn leftover_ephemeral_scratch_is_swept_at_boot() {
     assert!(!scratch.exists());
     assert!(kept.exists());
 }
+
+#[test]
+fn references_must_be_declared_and_within_the_access_ceiling() {
+    let dir = tempfile::tempdir().unwrap();
+    let volumes = Volumes::boot(
+        &state(dir.path()),
+        VolumeTable::from([(
+            "handbook".to_owned(),
+            VolumeSpec::local_path(dir.path().join("handbook")).with_access(Access::ReadOnly),
+        )]),
+    );
+    assert!(volumes.is_declared("handbook"));
+    assert_eq!(volumes.check_reference("handbook", None), Ok(()));
+    assert_eq!(
+        volumes.check_reference("handbook", Some(Access::ReadOnly)),
+        Ok(())
+    );
+    assert!(matches!(
+        volumes.check_reference("handbook", Some(Access::ReadWrite)),
+        Err(VolumeProblem::AccessExceeds(message)) if message.contains("read_only on this server")
+    ));
+    assert!(matches!(
+        volumes.check_reference("other", None),
+        Err(VolumeProblem::Undeclared(message)) if message.contains("declared volumes: handbook")
+    ));
+}
+
+#[test]
+fn a_withdrawn_declaration_is_gone_and_can_be_made_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let volumes = Volumes::boot(&state(dir.path()), VolumeTable::new());
+    assert_eq!(volumes.declare_managed("notes"), Ok(true));
+    assert_eq!(volumes.declare_managed("notes"), Ok(false));
+    assert!(volumes.is_declared("notes"));
+    volumes.withdraw_managed("notes");
+    assert!(!volumes.is_declared("notes"));
+    assert!(volumes.check_reference("notes", None).is_err());
+    assert_eq!(volumes.declare_managed("notes"), Ok(true));
+}
+
+#[test]
+fn a_managed_name_must_differ_in_more_than_case() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path());
+    let volumes = Volumes::boot(&state, VolumeTable::new());
+    assert_eq!(volumes.declare_managed("notes"), Ok(true));
+    let conflict = volumes.check_managed("Notes").unwrap_err();
+    assert!(
+        conflict.contains("differs only in letter case from 'notes'"),
+        "{conflict}"
+    );
+    assert!(volumes.declare_managed("Notes").is_err());
+    // A directory left behind by a volume of another case counts too.
+    fs::create_dir_all(state.managed_volumes_dir().join("Archive")).unwrap();
+    assert!(volumes.check_managed("archive").is_err());
+    assert!(volumes.check_managed("bad/name").is_err());
+    assert_eq!(volumes.check_managed("notes"), Ok(()));
+}
+
+#[test]
+fn a_declared_managed_volume_is_mounted_by_a_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let volumes = Volumes::boot(&state(dir.path()), VolumeTable::new());
+    let named = blueprint("name: x\nvfs:\n  mode: named\n  volume: notes\n");
+    assert!(matches!(
+        volumes.build_vfs(&named, &VarBindings::new(), None),
+        Err(VolumeError::UnknownVolume(_))
+    ));
+    volumes.declare_managed("notes").unwrap();
+    volumes
+        .build_vfs(&named, &VarBindings::new(), None)
+        .unwrap();
+}

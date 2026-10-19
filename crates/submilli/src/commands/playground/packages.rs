@@ -738,6 +738,32 @@ impl Freshness {
         check: impl FnOnce(&ProjectPackages) -> Result<Synced, ResolutionFailure> + Send + 'static,
     ) -> Result<(), ResolutionFailure> {
         let state = state.clone();
+        self.check_evicting(move || state.evict_all_prepared_packages(), check)
+            .await
+    }
+
+    /// Before a run is compiled: bring the project packages in `wanted` up to date,
+    /// calling `evict` once one was replaced, so the run links the new copy. A
+    /// package that no longer builds refuses the run with the message it gets.
+    pub(crate) async fn before_run(
+        &self,
+        wanted: BTreeSet<String>,
+        evict: impl FnOnce() + Send + 'static,
+    ) -> Result<(), String> {
+        if wanted.is_empty() {
+            return Ok(());
+        }
+        self.check_evicting(evict, move |packages| packages.sync(&wanted))
+            .await
+            .map_err(|failure| failure.for_run())
+    }
+
+    /// [`Self::check`], evicting through `evict`.
+    async fn check_evicting(
+        &self,
+        evict: impl FnOnce() + Send + 'static,
+        check: impl FnOnce(&ProjectPackages) -> Result<Synced, ResolutionFailure> + Send + 'static,
+    ) -> Result<(), ResolutionFailure> {
         self.run_check(move |packages| {
             let synced = check(packages)?;
             for name in &synced.reinstalled {
@@ -746,7 +772,7 @@ impl Freshness {
                 ));
             }
             if synced.evict {
-                state.evict_all_prepared_packages();
+                evict();
             }
             Ok(synced)
         })
@@ -775,15 +801,12 @@ impl Freshness {
 #[async_trait::async_trait]
 impl PreExecuteHook for Freshness {
     async fn before_execute(&self, run: PreExecute<'_>) -> Result<(), PreExecuteRefusal> {
-        if run.packages.is_empty() {
-            return Ok(());
-        }
-        let wanted = run.packages.clone();
-        self.check(run.state, move |packages| packages.sync(&wanted))
-            .await
-            .map_err(|failure| PreExecuteRefusal {
-                message: failure.for_run(),
-            })
+        let state = run.state.clone();
+        self.before_run(run.packages.clone(), move || {
+            state.evict_all_prepared_packages();
+        })
+        .await
+        .map_err(|message| PreExecuteRefusal { message })
     }
 }
 

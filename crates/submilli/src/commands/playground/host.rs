@@ -57,6 +57,11 @@ mod blueprints;
     dead_code,
     reason = "the playground switches its server listener onto these next"
 )]
+mod run;
+#[allow(
+    dead_code,
+    reason = "the playground switches its server listener onto these next"
+)]
 mod serve;
 #[allow(
     dead_code,

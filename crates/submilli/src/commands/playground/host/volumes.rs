@@ -6,11 +6,13 @@
 //! `config.rs` (`create_owned_dir`). The volume table is the project's, fixed
 //! when the playground starts. Managed volumes stay under
 //! `<state>/volumes/managed-local/`, where the embedded server kept them; scratch
-//! lives under `<state>/host/`.
+//! lives under `<state>/host/`. Adding a `managed-local` volume a blueprint apply
+//! names follows `volumes.rs` (`check_managed`, `declare_managed`,
+//! `withdraw_managed`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use interpreter::runtime::{
     Access as RtAccess, DiskQuota, MountError, MountSpec, Vfs, VfsMode as RtVfsMode,
@@ -24,6 +26,7 @@ use tokio::sync::OnceCell;
 
 use super::super::log::warn;
 use super::super::state::StateDir;
+use super::blueprints::{LocalVolumes, VolumeProblem};
 
 /// Why a run's file system could not be built. The messages are the server's,
 /// and name a volume, never its directory.
@@ -70,9 +73,14 @@ impl std::error::Error for VolumeError {}
 /// shares one [`DiskQuota`], measured once, the first time a run that may write
 /// opens it.
 pub(crate) struct Volumes {
-    table: VolumeTable,
+    /// Fixed at start, except that a blueprint apply may add a `managed-local`
+    /// volume, and withdraw one it just added. Poison means a panic interrupted
+    /// such a change; AGENTS.md permits the poisoned-lock panic rather than
+    /// reading a table that may be half-updated.
+    table: RwLock<VolumeTable>,
     managed_root: PathBuf,
-    quotas: BTreeMap<String, Arc<OnceCell<Arc<DiskQuota>>>>,
+    /// Grows with the table, under the same poisoning rule.
+    quotas: RwLock<BTreeMap<String, Arc<OnceCell<Arc<DiskQuota>>>>>,
     ephemeral: EphemeralRoot,
 }
 
@@ -86,9 +94,9 @@ impl Volumes {
             .map(|(name, _)| (name.clone(), Arc::new(OnceCell::new())))
             .collect();
         let volumes = Self {
-            table,
+            table: RwLock::new(table),
             managed_root: state.managed_volumes_dir(),
-            quotas,
+            quotas: RwLock::new(quotas),
             ephemeral: EphemeralRoot {
                 path: state.host_ephemeral_dir(),
             },
@@ -109,7 +117,7 @@ impl Volumes {
         volume: &str,
         requested: Option<Access>,
     ) -> Result<(PathBuf, Access), VolumeError> {
-        let Some(spec) = self.table.get(volume) else {
+        let Some(spec) = self.spec(volume) else {
             return Err(VolumeError::UnknownVolume(volume.to_string()));
         };
         let access = match requested {
@@ -117,7 +125,7 @@ impl Volumes {
             Some(access) => access,
             None => spec.access,
         };
-        let host = self.host_of(volume, spec)?;
+        let host = self.host_of(volume, &spec)?;
         if spec.kind == VolumeKind::ManagedLocal {
             create_owned_dir(&host).map_err(|err| {
                 warn(&format!(
@@ -128,6 +136,14 @@ impl Volumes {
             })?;
         }
         Ok((host, access))
+    }
+
+    fn spec(&self, volume: &str) -> Option<VolumeSpec> {
+        self.table
+            .read()
+            .expect("volume table poisoned")
+            .get(volume)
+            .cloned()
     }
 
     /// Where `volume`'s files live. A managed name becomes a path component, so it
@@ -146,16 +162,22 @@ impl Volumes {
     /// A failed measurement is not remembered; meanwhile the volume counts as
     /// full.
     async fn quota(&self, volume: &str) -> Result<Option<Arc<DiskQuota>>, VolumeError> {
-        let Some(spec) = self.table.get(volume) else {
+        let Some(spec) = self.spec(volume) else {
             return Err(VolumeError::UnknownVolume(volume.to_string()));
         };
         let SizeLimit::Bytes(limit) = spec.size_limit else {
             return Ok(None);
         };
-        let Some(cell) = self.quotas.get(volume) else {
+        let Some(cell) = self
+            .quotas
+            .read()
+            .expect("volume quotas poisoned")
+            .get(volume)
+            .cloned()
+        else {
             return Err(VolumeError::UnknownVolume(volume.to_string()));
         };
-        let host = self.host_of(volume, spec)?;
+        let host = self.host_of(volume, &spec)?;
         let measured = cell
             .get_or_try_init(|| async move {
                 let used = tokio::task::spawn_blocking(move || measure_host_dir(&host))
@@ -186,7 +208,7 @@ impl Volumes {
             ));
             return;
         }
-        for (name, spec) in &self.table {
+        for (name, spec) in self.table.read().expect("volume table poisoned").iter() {
             if spec.kind != VolumeKind::ManagedLocal {
                 continue;
             }
@@ -354,6 +376,111 @@ impl Volumes {
             },
         })
     }
+}
+
+impl LocalVolumes for Volumes {
+    fn is_declared(&self, volume: &str) -> bool {
+        self.spec(volume).is_some()
+    }
+
+    fn check_reference(
+        &self,
+        volume: &str,
+        requested: Option<Access>,
+    ) -> Result<(), VolumeProblem> {
+        let table = self.table.read().expect("volume table poisoned");
+        let Some(spec) = table.get(volume) else {
+            let declared: Vec<String> = table.keys().cloned().collect();
+            return Err(VolumeProblem::Undeclared(if declared.is_empty() {
+                format!(
+                    "volume '{volume}' is not declared on this server, which declares no \
+                     volumes; ask the operator to declare it under `volumes:` in the server config"
+                )
+            } else {
+                format!(
+                    "volume '{volume}' is not declared on this server; declared volumes: {}",
+                    declared.join(", ")
+                )
+            }));
+        };
+        if requested.is_some_and(|access| access > spec.access) {
+            return Err(VolumeProblem::AccessExceeds(format!(
+                "volume '{volume}' is read_only on this server; drop `access: read_write` (or \
+                 write `access: read_only`), or ask the operator to declare it read_write"
+            )));
+        }
+        Ok(())
+    }
+
+    fn check_managed(&self, volume: &str) -> Result<(), String> {
+        let table = self.table.read().expect("volume table poisoned");
+        if table.contains_key(volume) {
+            return Ok(());
+        }
+        check_new_managed(&table, volume)?;
+        // A directory a volume of another case left behind, from an earlier run.
+        // A root that cannot be listed fails the volume when it is used.
+        let Ok(entries) = std::fs::read_dir(&self.managed_root) else {
+            return Ok(());
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if let Some(name) = name.to_str()
+                && name != volume
+                && name.eq_ignore_ascii_case(volume)
+            {
+                return Err(case_conflict(volume, name));
+            }
+        }
+        Ok(())
+    }
+
+    fn declare_managed(&self, volume: &str) -> Result<bool, String> {
+        let mut table = self.table.write().expect("volume table poisoned");
+        if table.contains_key(volume) {
+            return Ok(false);
+        }
+        check_new_managed(&table, volume)?;
+        table.insert(volume.to_owned(), VolumeSpec::managed(SizeLimit::Unlimited));
+        Ok(true)
+    }
+
+    fn withdraw_managed(&self, volume: &str) {
+        // Lock order: the table, then the quotas, as `quota` never holds both.
+        let mut table = self.table.write().expect("volume table poisoned");
+        if table
+            .get(volume)
+            .is_some_and(|spec| spec.kind == VolumeKind::ManagedLocal)
+        {
+            table.remove(volume);
+            self.quotas
+                .write()
+                .expect("volume quotas poisoned")
+                .remove(volume);
+        }
+    }
+}
+
+/// The checks on a volume `table` does not declare yet, against the table alone.
+fn check_new_managed(table: &VolumeTable, volume: &str) -> Result<(), String> {
+    if !is_managed_name(volume) {
+        return Err(format!(
+            "volume '{volume}' cannot be stored as a managed volume: a name is up to 64 \
+             letters, digits, `.`, `_`, or `-`, starting with a letter or digit"
+        ));
+    }
+    match table.keys().find(|name| name.eq_ignore_ascii_case(volume)) {
+        Some(existing) => Err(case_conflict(volume, existing)),
+        None => Ok(()),
+    }
+}
+
+fn case_conflict(volume: &str, existing: &str) -> String {
+    format!(
+        "volume '{volume}' differs only in letter case from '{existing}', which this \
+         server already stores; on a case-insensitive filesystem they would share one \
+         directory, so use '{existing}' or a name that differs in more than case"
+    )
 }
 
 /// Enforce the blueprint's own `size_limit` on an ephemeral or per-session root.
