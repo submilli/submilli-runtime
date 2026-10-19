@@ -86,6 +86,56 @@ fn a_difference_fails_with_both_ways_out() {
     assert_eq!(compare(&playground, &server, &known), None);
 }
 
+#[test]
+fn a_failure_both_hosts_share_still_fails() {
+    let server = vec![
+        ("execute: a result".to_owned(), json!({ "isError": true })),
+        ("finalizer ran on close".to_owned(), json!(false)),
+    ];
+    let missing = missing_facts(&server);
+    assert!(
+        missing
+            .iter()
+            .any(|fact| fact.contains("execute: a result")),
+        "{missing:?}"
+    );
+    assert!(
+        missing
+            .iter()
+            .any(|fact| fact.contains("finalizer ran on close")),
+        "{missing:?}"
+    );
+}
+
+/// What the server must show for the comparison to mean anything: without these,
+/// a setup problem both hosts share would make every observation equal.
+fn missing_facts(server: &[Observation]) -> Vec<String> {
+    let find = |name: &str| {
+        server
+            .iter()
+            .find(|(seen, _)| seen == name)
+            .map_or(Value::Null, |(_, value)| value.clone())
+    };
+    let succeeded_with = |name: &str, text: &str| {
+        let value = find(name);
+        value.get("isError") != Some(&json!(true)) && value.to_string().contains(text)
+    };
+    let mut missing = Vec::new();
+    if !succeeded_with("execute: a result", "2") {
+        missing.push("`execute: a result` returns 2".to_owned());
+    }
+    if !succeeded_with("execute: a later run reads them", "hi v1") {
+        missing.push("`execute: a later run reads them` returns `hi v1`".to_owned());
+    }
+    if !succeeded_with("execute: a package registers a finalizer", "held") {
+        missing.push("`execute: a package registers a finalizer` returns `held`".to_owned());
+    }
+    if find("finalizer ran on close") != json!(true) {
+        missing.push("`finalizer ran on close` is true".to_owned());
+    }
+    missing
+}
+
 /// Replace what legitimately varies between two runs: ids, session ids, timings,
 /// and the temporary directories each host lives in.
 fn normalize(value: &mut Value, dirs: &[String]) {
@@ -759,6 +809,11 @@ function main(): string { try { session.registerFinalizer("k", "v"); } catch (er
         let server = Server::new(&playground.package_store(), &blueprint);
 
         let from_server = observations(&server, &releases);
+        let missing = super::missing_facts(&from_server);
+        assert!(
+            missing.is_empty(),
+            "the server did not show what the comparison relies on: {missing:?}"
+        );
         let from_playground = observations(&playground, &releases);
 
         if let Some(message) = compare(&from_playground, &from_server, KNOWN_DIFFERENCES) {
