@@ -1909,7 +1909,7 @@ network:
         let root = tempfile::tempdir().unwrap();
         let err = merge_err(FileConfig {
             session_store_dir: Some(root.path().join("sessions")),
-            volumes: local_table([("work".to_string(), root.path().join("sessions/idempotency"))]),
+            volumes: local_table([("work".to_string(), root.path().join("sessions/work"))]),
             ..FileConfig::default()
         });
         assert!(err.contains("durable session store"), "got: {err}");

@@ -80,8 +80,8 @@ pub struct Cli {
     #[arg(long)]
     blueprint_dir: Option<PathBuf>,
 
-    /// Source directory for session JSON import into SQLite; also holds the
-    /// file-backed idempotency ledger. Mount on durable storage.
+    /// Source directory for the one-time session JSON import into SQLite.
+    /// The directory moves to archive/sessions/ beside its original location.
     /// [default: ~/.submilli/server/sessions]
     /// Env: `$SUBMILLI_SESSION_STORE_DIR`.
     #[arg(long)]

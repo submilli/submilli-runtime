@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "bd4e5d3bacc1a2b38c0637c2a1af507c67d81d936d3fb43b023d2b0fd4772a39"
+  contentHash: "4099afedbbefad480e23bb6a030b17ac204746cc2cd2ae39b554d119b620d46f"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -184,8 +184,7 @@ decide what has to be kept, and what losing each piece would cost you.
 
 | What | Setting | Default | If it's lost |
 | --- | --- | --- | --- |
-| Registered Blueprints | `blueprint_dir` | `$SUBMILLI_HOME/server/blueprints` | Every program is refused until you register them again. That's quick if they live in source control and a deploy job applies them ([Manage Blueprints in Git](/docs/tutorials/manage-blueprints-in-git)). |
-| Open sessions | `session_store_dir` | `$SUBMILLI_HOME/server/sessions` | Your users' sessions end, and reconnecting clients get `404 unknown session`. There's nothing to rebuild them from. |
+| Registered Blueprints and open sessions | `database_path` | `$SUBMILLI_HOME/server/db/submilli.db` | Every program is refused until you register the Blueprints again. That's quick if they live in source control and a deploy job applies them ([Manage Blueprints in Git](/docs/tutorials/manage-blueprints-in-git)). Your users' sessions end, and reconnecting clients get `404 unknown session`. There's nothing to rebuild them from. |
 | Sessions' files | `volume_dir`, in `sessions/` | `$SUBMILLI_HOME/server/volumes/sessions` | Files the agent wrote in a session are gone. |
 | Secrets | `secret_store.dir` | `$SUBMILLI_HOME/server/secrets` | Blueprints that read `store:` secrets fail until every value is put back. Keep the key file safe too, because without it the store can't be read. |
 | Packages | `package_store_dir` | `$SUBMILLI_HOME/server/packages` | Imports fail until you reinstall. The same install commands bring them back. |
@@ -199,8 +198,7 @@ use. The simplest setup keeps everything together, either by pointing
 file:
 
 ```yaml title="server.yaml"
-blueprint_dir: /var/lib/submilli/blueprints
-session_store_dir: /var/lib/submilli/sessions
+database_path: /var/lib/submilli/db/submilli.db
 package_store_dir: /var/lib/submilli/packages
 volume_dir: /var/lib/submilli/volumes
 secret_store:
@@ -221,9 +219,11 @@ submilli-server --config server.yaml
 ts=2026-10-03T17:05:26.518Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128 protocol=http
 ```
 
-Back up the sessions, the managed volumes, and the secrets, and keep the
-store's key somewhere separate from the store. Blueprints and Packages
-can be rebuilt from source.
+Back up the database's directory, the sessions' files, the managed
+volumes, and the secrets while the server is stopped, and keep the
+store's key somewhere separate from the store. The database's directory
+also holds SQLite's `-wal` file, which carries writes not yet copied into
+the database file. Packages can be rebuilt from source.
 
 The server keeps its state under `server/`, apart from the CLI's own
 `packages/`, `secrets/`, and `mcp_oauth.yaml`. It does read the CLI's

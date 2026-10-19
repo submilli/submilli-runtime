@@ -240,7 +240,7 @@ pub fn default_server_root() -> PathBuf {
     default_data_root().join("server")
 }
 
-/// Default directory the file-backed blueprint store persists to.
+/// Default source directory for the one-time blueprint import into SQLite.
 pub fn default_blueprint_dir() -> PathBuf {
     default_server_root().join("blueprints")
 }
@@ -457,8 +457,8 @@ impl fmt::Display for VolumeRootError {
 
 impl std::error::Error for VolumeRootError {}
 
-/// Default directory the file-backed session store persists lifecycle metadata
-/// to — sibling to the VFS directories under the server root.
+/// Default source directory for the one-time session JSON import into SQLite —
+/// sibling to the VFS directories under the server root.
 pub fn default_session_store_dir() -> PathBuf {
     default_server_root().join("sessions")
 }
@@ -736,9 +736,8 @@ pub struct ServerDirectories {
     /// The TLS private key must never be reachable through a named volume.
     pub tls_key_file: Option<PathBuf>,
     pub tls_cert_file: Option<PathBuf>,
-    /// The durable session store — lifecycle records plus the idempotency
-    /// ledger in a subdirectory of it. A different directory from the
-    /// `per_session` workspaces under [`Self::volume_root`].
+    /// Source of the one-time session JSON import into SQLite. A different
+    /// directory from the `per_session` workspaces under [`Self::volume_root`].
     pub session_store_dir: Option<PathBuf>,
     pub database_path: Option<PathBuf>,
     /// The root of the server's VFS directories ([`VolumeRoot`]): `managed-local`
@@ -871,9 +870,9 @@ pub struct VolumeRootOverlap {
 
 /// Which way containment is unsafe. The two directions fail for different
 /// reasons, and a directory can be guarded in both: the volume root
-/// leaks outward and loses data inward, while the package store and the durable
-/// session store have nested layouts, so a volume one level down still lands on
-/// server-owned files.
+/// leaks outward and loses data inward. Package stores nest artifacts. The
+/// session import moves its whole source directory to an archive, taking a
+/// nested volume with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     /// The volume is at or above the server-owned directory.
@@ -1291,9 +1290,9 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
             "durable session store",
             dirs.session_store_dir.clone(),
             Direction::VolumeContains,
-            "a guest read would reach every session's stored variables and the recorded response \
-             body of every idempotent execute, and a guest write could repoint a session at \
-             another blueprint — running it under that blueprint's permissions",
+            "a guest read would reach the stored variables of every session awaiting import, and \
+             a guest write could repoint one at another blueprint before startup imports it — \
+             running it under that blueprint's permissions",
         ),
         (
             "server database",
@@ -1305,8 +1304,8 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
             "durable session store",
             dirs.session_store_dir.clone(),
             Direction::VolumeInside,
-            "the idempotency ledger lives in a subdirectory of that root, so a guest write would \
-             forge the recorded outcome of a keyed execute",
+            "a startup that imports session files moves that root to archive/sessions beside its \
+             original location, carrying the volume's files away from its programs",
         ),
         (
             "volume root",
