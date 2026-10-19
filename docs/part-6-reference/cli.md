@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "3566a2b67ff2e3d642ea0b5bf08a3550941a0cadae2557fea63d9acb79e7ba7d"
+  contentHash: "537129c09a319698511c9c6b3a42103ae69154500a7093eb2181781278b853c0"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -412,7 +412,7 @@ Options:
       --max-llm-tokens <TOKENS>
           Tokens this run's `submilli:llm` calls may spend in total. A run that asks for more raises a catchable `QuotaExceededError` rather than being billed.
           
-          Finite by default, deliberately: unlike `submilli:session`, whose state is memory-only, a blueprint-configured provider spends real money against the operator's credential, and a CLI run has no server-wide ceiling behind it. [default: 1000000] Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`.
+          Finite by default, deliberately: a blueprint-configured provider spends real money against the operator's credential, and a CLI run has no server-wide ceiling behind it. [default: 1000000] Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`.
 
       --max-llm-concurrency <PROMPTS>
           Prompts one `llm.batch` dispatches at once. [default: 4] Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`
@@ -904,6 +904,7 @@ Arguments:
 Options:
       --required               Reject a session that omits the variable or binds it to an empty string
       --default <VALUE>        Value bound when the caller supplies none. A variable is always a string
+      --alias <NAME>           Resolve from another declared variable instead of accepting a binding
       --blueprint <BLUEPRINT>  Blueprint file to edit (default: ./blueprint.yaml)
   -h, --help                   Print help
 ```
@@ -1864,35 +1865,38 @@ Usage: submilli playground [OPTIONS]
        submilli playground <COMMAND>
 
 Commands:
-  start       Start the playground in the background, or attach to the running one, and print its ready record with a fresh login link (the default)
-  status      Report whether the playground is running, where, and with what
-  open        Print a fresh single-use login link for the running playground
-  stop        Stop the running playground: drain its runs and end browser sessions
-  init        Create a `submilli/` folder with a starter billing package, a blueprint that pins charges to the signed-in customer, and an example program. Writes nothing outside `submilli/`
-  runs        List stored runs, newest first. Works with the playground stopped
-  show        Show one run: its decisions, calls, and outcome
-  explain     Explain one decision: the rule that decided it (or the default) and every rule that nearly matched
-  compare     Compare two runs: only the decisions that changed
-  audit       Audit the runs since the last blueprint edit
-  changes     List the blueprint versions and what each changed
-  sessions    List sessions, newest first
-  exec        Run a program in the running playground, labeled `assistant` (or the scaffolded example, labeled `example`), under the binding or in a started session
-  bind        Set the variables and harness-secret development values new runs use, or print them. Variables are kept for the next start; secret values only in the running playground's memory
-  session     Start a session with its variables fixed, or end one
-  recheck     After a blueprint edit, see which of a run's decisions would change: re-resolves them under the blueprint in force. Runs nothing and records nothing
-  test        After a blueprint edit, see whether a recorded program gets through now: runs it again under the blueprint in force, with its calls answered from the recording. It stops at a call with nothing recorded
-  rerun       After a package edit, or to try other variables, run a recorded program again for real under the current binding, as a new run linked to its source
-  draft-rule  Draft a rule that allows exactly one refused call; `--write` puts it in the blueprint file. Works with the playground stopped
-  clear       Remove every stored run and its sessions' events, and start a new audit window. Run ids keep counting, and started sessions stay listed
-  cancel      Cancel a run in flight
-  watch       Follow a session's events as JSON lines until its last run finishes (`--follow`: until the session ends). Without a session, follows the most recent one. On a session already idle it prints the events so far and exits at once, so start it after the run it is to follow has started, or pass `--follow`
-  mcp         Serve the running playground's tools over stdio, for a coding assistant's stand-in subagent to launch. Uses the binding and the development secrets; its runs are labeled `stand-in`
-  chat        Chat with an agent using your own model key, the way a production agent runs: it uses the playground's tools and prints its answer. Each chat starts a session; send the next message in it with `--session`. The session stays open until it sits idle past the blueprint's idle timeout or `session end` ends it. The key comes from the playground's environment (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY), the model from `--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`
-  chat-hook   Copy a coding assistant's stand-in conversation to the running playground: a Claude Code hook reads the hook's JSON from stdin. Only the stand-in's own hooks post anything. Always exits 0 and prints nothing
-  help        Print this message or the help of the given subcommand(s)
+  start        Start the playground in the background, or attach to the running one, print its ready record with a fresh login link, and open the link in your browser (the default)
+  status       Report whether the playground is running, where, and with what
+  open         Print a fresh single-use login link for the running playground, and open it in your browser
+  stop         Stop the running playground: drain its runs and end browser sessions
+  restart      Stop the running playground and start it again, with its blueprint and egress grants unless given here, and open a fresh login link. Browser sessions end, and bound secrets have to be bound again
+  init         Create a `submilli/` folder with a starter billing package, a blueprint that pins charges to the signed-in customer, and an example program. Writes nothing outside `submilli/`
+  runs         List stored runs, newest first. Works with the playground stopped
+  show         Show one run: its decisions, calls, and outcome
+  explain      Explain one decision: the rule that decided it (or the default) and every rule that nearly matched
+  compare      Compare two runs: only the decisions that changed
+  audit        Audit the runs since the last blueprint edit
+  changes      List the blueprint versions and what each changed
+  sessions     List sessions, newest first
+  exec         Run a program in the running playground, labeled `assistant` (or the scaffolded example, labeled `example`), under the binding or in a started session
+  bind         Set the variables and harness-secret development values new runs use, or print them. Variables are kept for the next start; secret values only in the running playground's memory
+  session      Start a session with its variables fixed, or end one
+  recheck      After a blueprint edit, see which of a run's decisions would change: re-resolves them under the blueprint in force. Runs nothing and records nothing
+  test         After a blueprint edit, see whether a recorded program gets through now: runs it again under the blueprint in force, with its calls answered from the recording. It stops at a call with nothing recorded
+  rerun        After a package edit, or to try other variables, run a recorded program again for real under the current binding, as a new run linked to its source
+  draft-rule   Draft a rule that allows exactly one refused call; `--write` puts it in the blueprint file. Works with the playground stopped
+  clear        Remove every stored run and its sessions' events, and start a new audit window. Run ids keep counting, and started sessions stay listed
+  cancel       Cancel a run in flight
+  watch        Follow a session's events as JSON lines until its last run finishes (`--follow`: until the session ends). Without a session, follows the most recent one. On a session already idle it prints the events so far and exits at once, so start it after the run it is to follow has started, or pass `--follow`
+  claude-code  Set Claude Code up in this project to try tasks through the playground on your Claude subscription: writes the `submilli-standin` subagent, which has only the playground's tools, and adds to your own `.claude/settings.local.json` the hooks that show its chat on the page and a rule that lets it use those tools without asking, so your blueprint decides its calls. Run it again to check; it changes only what's missing
+  mcp          Serve the running playground's tools over stdio, for a coding assistant's stand-in subagent to launch. Uses the binding and the development secrets; its runs are labeled `stand-in`
+  chat         Chat with an agent using your own model key, the way a production agent runs: it uses the playground's tools and prints its answer. Each chat starts a session; send the next message in it with `--session`. The session stays open until it sits idle past the blueprint's idle timeout or `session end` ends it. The key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY) comes from the playground's environment, else the project's `.env`, else `submilli secret put <NAME>`; the model from `--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`
+  chat-hook    Copy a coding assistant's stand-in conversation to the running playground: a Claude Code hook reads the hook's JSON from stdin. Only the stand-in's own hooks post anything. Always exits 0 and prints nothing
+  help         Print this message or the help of the given subcommand(s)
 
 Options:
       --json                Print the ready record as JSON
+      --no-open             Don't open the login link in your browser. A start in a terminal opens it; one with `--json`, or whose output isn't a terminal, never does
       --foreground          Serve in this terminal until `submilli playground stop` or a signal, instead of in the background
       --blueprint <PATH>    The blueprint to serve. Default: the single file under `submilli/blueprints/`, or the project's root `blueprint.yaml`
       --allow-localhost     Let programs reach IPv4 and IPv6 loopback, for an app's local services. Env: `$SUBMILLI_ALLOW_LOCALHOST` (`1`/`true`/`yes`/`on`), additive
@@ -1904,12 +1908,13 @@ Options:
 ### `submilli playground start`
 
 ```text
-Start the playground in the background, or attach to the running one, and print its ready record with a fresh login link (the default)
+Start the playground in the background, or attach to the running one, print its ready record with a fresh login link, and open the link in your browser (the default)
 
 Usage: submilli playground start [OPTIONS]
 
 Options:
       --json                Print the ready record as JSON
+      --no-open             Don't open the login link in your browser. A start in a terminal opens it; one with `--json`, or whose output isn't a terminal, never does
       --foreground          Serve in this terminal until `submilli playground stop` or a signal, instead of in the background
       --blueprint <PATH>    The blueprint to serve. Default: the single file under `submilli/blueprints/`, or the project's root `blueprint.yaml`
       --allow-localhost     Let programs reach IPv4 and IPv6 loopback, for an app's local services. Env: `$SUBMILLI_ALLOW_LOCALHOST` (`1`/`true`/`yes`/`on`), additive
@@ -1933,13 +1938,17 @@ Options:
 ### `submilli playground open`
 
 ```text
-Print a fresh single-use login link for the running playground
+Print a fresh single-use login link for the running playground, and open it in your browser
 
-Usage: submilli playground open [OPTIONS]
+Usage: submilli playground open [OPTIONS] [RUN]
+
+Arguments:
+  [RUN]  A run to open the page at, or a decision as `<run>.<n>` (for example `12` or `12.3`)
 
 Options:
-      --json  Print JSON
-  -h, --help  Print help
+      --json     Print JSON
+      --no-open  Only print the link. In a terminal it is opened too; with `--json`, or when the output isn't a terminal, it never is
+  -h, --help     Print help
 ```
 
 ### `submilli playground stop`
@@ -1952,6 +1961,24 @@ Usage: submilli playground stop [OPTIONS]
 Options:
       --json  Print JSON
   -h, --help  Print help
+```
+
+### `submilli playground restart`
+
+```text
+Stop the running playground and start it again, with its blueprint and egress grants unless given here, and open a fresh login link. Browser sessions end, and bound secrets have to be bound again
+
+Usage: submilli playground restart [OPTIONS]
+
+Options:
+      --json                Print the ready record as JSON
+      --no-open             Don't open the login link in your browser. A start in a terminal opens it; one with `--json`, or whose output isn't a terminal, never does
+      --foreground          Serve in this terminal until `submilli playground stop` or a signal, instead of in the background
+      --blueprint <PATH>    The blueprint to serve. Default: the single file under `submilli/blueprints/`, or the project's root `blueprint.yaml`
+      --allow-localhost     Let programs reach IPv4 and IPv6 loopback, for an app's local services. Env: `$SUBMILLI_ALLOW_LOCALHOST` (`1`/`true`/`yes`/`on`), additive
+      --allow-private       Let programs reach RFC1918, CGNAT, and IPv6 ULA private ranges. Env: `$SUBMILLI_ALLOW_PRIVATE` (`1`/`true`/`yes`/`on`), additive
+      --allow-ip <IP|CIDR>  Let programs reach this address or CIDR range (repeatable). Env: `$SUBMILLI_ALLOW_IP` (comma-separated), additive
+  -h, --help                Print help
 ```
 
 ### `submilli playground init`
@@ -2065,7 +2092,7 @@ List sessions, newest first
 Usage: submilli playground sessions [OPTIONS]
 
 Options:
-      --limit <LIMIT>  How many sessions to list [default: 20]
+      --limit <LIMIT>  How many sessions to list; tests' and reruns' own sessions come on top, up to as many [default: 20]
       --json           Print JSON
   -h, --help           Print help
 ```
@@ -2257,6 +2284,19 @@ Options:
   -h, --help    Print help
 ```
 
+### `submilli playground claude-code`
+
+```text
+Set Claude Code up in this project to try tasks through the playground on your Claude subscription: writes the `submilli-standin` subagent, which has only the playground's tools, and adds to your own `.claude/settings.local.json` the hooks that show its chat on the page and a rule that lets it use those tools without asking, so your blueprint decides its calls. Run it again to check; it changes only what's missing
+
+Usage: submilli playground claude-code [OPTIONS]
+
+Options:
+      --force  Replace a `submilli-standin` subagent file that differs from the playground's
+      --json   Print JSON
+  -h, --help   Print help
+```
+
 ### `submilli playground mcp`
 
 ```text
@@ -2271,7 +2311,7 @@ Options:
 ### `submilli playground chat`
 
 ```text
-Chat with an agent using your own model key, the way a production agent runs: it uses the playground's tools and prints its answer. Each chat starts a session; send the next message in it with `--session`. The session stays open until it sits idle past the blueprint's idle timeout or `session end` ends it. The key comes from the playground's environment (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY), the model from `--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`
+Chat with an agent using your own model key, the way a production agent runs: it uses the playground's tools and prints its answer. Each chat starts a session; send the next message in it with `--session`. The session stays open until it sits idle past the blueprint's idle timeout or `session end` ends it. The key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY) comes from the playground's environment, else the project's `.env`, else `submilli secret put <NAME>`; the model from `--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`
 
 Usage: submilli playground chat [OPTIONS] <MESSAGE>
 

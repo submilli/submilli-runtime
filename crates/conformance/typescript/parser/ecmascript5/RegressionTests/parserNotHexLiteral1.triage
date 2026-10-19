@@ -1,0 +1,1 @@
+line 3, 6 extra: by-design spec §1.9 `console` has only `log`, which writes the debug output channel

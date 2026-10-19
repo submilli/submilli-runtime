@@ -13,7 +13,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "bfc20fc2243366596e631deca83b638a9043c17d4c4440742736704cf07393bd"
+  contentHash: "1eb327d4fe374dcac8d3bd7fe45cbfc10ec0c48eb4ac11bf08f9e61018bbfd6a"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -57,10 +57,11 @@ submilli server status
 The file also sets up:
 
 - A named volume, `submilli-state`, holds `$SUBMILLI_HOME`,
-  so Blueprints, sessions, Packages, and secrets survive `docker compose
-  down` and image upgrades. `docker compose down -v` deletes it.
-- Each run's scratch directory lives in a
-  256 MB `tmpfs` at `/tmp`, so it never grows the container's disk.
+  so Blueprints, sessions and their files, named volumes, Packages, and
+  secrets survive `docker compose down` and image upgrades. Each run's
+  scratch directory lives there too. `docker compose down -v` deletes it.
+- A 256 MB `tmpfs` at `/tmp` gives the server a writable temp directory,
+  since the container's own disk is read-only.
 - The server runs as a non-root user on a
   read-only filesystem with every Linux capability dropped. The image has
   no shell. These are extra layers beneath the sandbox itself.

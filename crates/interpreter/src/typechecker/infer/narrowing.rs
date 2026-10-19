@@ -583,35 +583,36 @@ pub fn discriminant_table_for_key(
     Some(table)
 }
 
-/// Tuple-union analog of [`union_discriminant`]: find a position whose element
-/// type is a literal and pairwise distinct across variants.
-/// Positions are tried only up to the smallest variant's arity.
-pub fn tuple_union_discriminant(members: &[Type]) -> Option<(usize, DiscriminantTable)> {
+/// The literals that name each member of a union of tuples at `position`,
+/// when every member has a literal there. A tuple shorter than `position`
+/// reads `undefined`, as a destructuring pattern reads it. A member whose
+/// position is optional may hold either, so then the position is no
+/// discriminant.
+pub fn tuple_position_discriminant(members: &[Type], position: usize) -> Option<DiscriminantTable> {
     if members.len() < 2 {
         return None;
     }
-    let tuples: Vec<&crate::types::TupleType> = members
-        .iter()
-        .map(|m| match m.peel() {
-            Type::Tuple(elements) => Some(elements),
-            _ => None,
-        })
-        .collect::<Option<_>>()?;
-    let min_arity = tuples.iter().map(|t| t.required_len()).min().unwrap_or(0);
-    (0..min_arity).find_map(|position| {
-        let mut table = DiscriminantTable::default();
-        for (idx, tuple) in tuples.iter().enumerate() {
-            let lit = tuple.get(position).and_then(unit_value)?;
-            // Positions are required, so each one names one member, `undefined`
-            // included.
-            table.insert(
-                lit,
-                VariantIdx(u32::try_from(idx).ok()?),
-                UndefinedNames::One,
-            )?;
-        }
-        Some((position, table))
-    })
+    let mut table = DiscriminantTable::default();
+    for (idx, member) in members.iter().enumerate() {
+        let Type::Tuple(elements) = member.peel() else {
+            return None;
+        };
+        let lit = if position >= elements.len() {
+            LiteralValue::Undefined
+        } else if position < elements.required_len() {
+            elements.get(position).and_then(unit_value)?
+        } else {
+            return None;
+        };
+        // Present or not, a position holds one value, so each one names one
+        // member, `undefined` included.
+        table.insert(
+            lit,
+            VariantIdx(u32::try_from(idx).ok()?),
+            UndefinedNames::One,
+        )?;
+    }
+    Some(table)
 }
 
 /// The literal a `case` label compares against: `None` for an expression
@@ -799,7 +800,7 @@ pub fn narrow_field_presence(
         );
     }
     match receiver_ty.peel() {
-        Type::Unknown => {
+        Type::Unknown | Type::NonPrimitive => {
             let fields = BTreeMap::from([(
                 field.to_string(),
                 crate::ObjectField::required(Type::Unknown),
@@ -809,7 +810,7 @@ pub fn narrow_field_presence(
                     index: None,
                     fields,
                 },
-                Type::Unknown,
+                receiver_ty.clone(),
             )
         }
         Type::Object { fields, .. } => {
@@ -1025,7 +1026,8 @@ pub fn truthiness_class(member: &Type) -> TruthinessClass {
         | Type::Function { .. }
         | Type::Uint8Array
         | Type::InterfaceRef { .. }
-        | Type::ClassRef { .. } => AlwaysTruthy,
+        | Type::ClassRef { .. }
+        | Type::NonPrimitive => AlwaysTruthy,
         _ => Dynamic,
     }
 }
@@ -1194,7 +1196,9 @@ pub fn type_matches_facts(ty: &Type, facts: TypeFacts) -> bool {
         return matches!(ty, Type::Array(_));
     }
     if facts.contains(TypeFacts::IS_FUNCTION) {
-        return matches!(ty, Type::Function { .. });
+        // `object` holds functions too; Submilli has no `Function` type to
+        // narrow it to, so it stays `object`.
+        return matches!(ty, Type::Function { .. } | Type::NonPrimitive);
     }
     if facts.contains(TypeFacts::IS_OBJECT) {
         return is_typeof_object(ty);
@@ -1221,6 +1225,7 @@ fn is_typeof_object(ty: &Type) -> bool {
         | Type::InterfaceRef { .. }
         | Type::ClassRef { .. }
         | Type::Uint8Array
+        | Type::NonPrimitive
         // `typeof null === "object"` — the JS quirk.
         | Type::Null => true,
 
@@ -1257,7 +1262,9 @@ fn is_typeof_object(ty: &Type) -> bool {
 }
 
 /// Keep only the union members of `ty` that match `facts`. For a
-/// non-union `ty`, returns `ty` if matched or [`Type::Error`] if not.
+/// non-union `ty`, returns `ty` if matched or [`Type::Error`] if not. A
+/// `typeof "object"` test is the exception: it turns `unknown`, `{}` and a
+/// type parameter into the object types they hold ([`typeof_object_narrowing`]).
 pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
     if let Type::Refined {
         original,
@@ -1267,6 +1274,11 @@ pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
         return preserve_refinement(original, intersect_with(shape, facts));
     }
     let peeled = ty.peel();
+    if facts == TypeFacts::IS_OBJECT
+        && let Some(narrowed) = typeof_object_narrowing(ty, peeled)
+    {
+        return narrowed;
+    }
     if let Some(asserted) = asserted_type_for_facts(facts) {
         match peeled {
             Type::Unknown => return asserted,
@@ -1278,6 +1290,8 @@ pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
             {
                 return asserted;
             }
+            // `Array.isArray` pins an `object` to an array.
+            Type::NonPrimitive if matches!(asserted, Type::Array(_)) => return asserted,
             Type::GenericParam { .. } => {
                 return Type::Refined {
                     original: Box::new(ty.clone()),
@@ -1313,6 +1327,27 @@ pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
     }
 }
 
+/// What `typeof x === "object"` leaves of a type holding values of every
+/// kind, as in TypeScript: `object | null` of `unknown`, `object` of `{}`,
+/// and `(T & object) | (T & null)` of a type parameter `T`. `None` for the
+/// types the general rules narrow.
+fn typeof_object_narrowing(ty: &Type, peeled: &Type) -> Option<Type> {
+    match peeled {
+        Type::Unknown => Some(Type::union(vec![Type::NonPrimitive, Type::Null])),
+        empty if empty.is_empty_object() => Some(Type::NonPrimitive),
+        Type::GenericParam { .. } => Some(Type::union(
+            [Type::NonPrimitive, Type::Null]
+                .into_iter()
+                .map(|shape| Type::Refined {
+                    original: Box::new(ty.clone()),
+                    ty: Box::new(shape),
+                })
+                .collect(),
+        )),
+        _ => None,
+    }
+}
+
 pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
     if let Type::Refined {
         original,
@@ -1336,8 +1371,11 @@ pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
     // A `void` result may hold any value, so no test rules it out: `typeof
     // v !== "undefined"` keeps it, though `typeof v === "undefined"` may
     // narrow it to `undefined`.
-    let ruled_out =
-        |member: &Type| !matches!(member.peel(), Type::Void) && type_matches_facts(member, facts);
+    let ruled_out = |member: &Type| {
+        !matches!(member.peel(), Type::Void)
+            && !typeof_tag_keeps(member, facts)
+            && type_matches_facts(member, facts)
+    };
     match peeled {
         Type::Union(members) => {
             let kept: Vec<Type> = members.iter().filter(|m| !ruled_out(m)).cloned().collect();
@@ -1346,6 +1384,19 @@ pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
         _ if !ruled_out(peeled) => ty.clone(),
         _ => Type::Error,
     }
+}
+
+/// Whether a `typeof` tag in `facts` leaves `member` in place: `{}` holds a
+/// value of every tag, and `object` holds functions too. As in TypeScript,
+/// `typeof x !== "object"` does rule out `object`.
+fn typeof_tag_keeps(member: &Type, facts: TypeFacts) -> bool {
+    let peeled = member.peel();
+    let tags_object = facts.contains(TypeFacts::IS_OBJECT);
+    let tags_function = facts.contains(TypeFacts::IS_FUNCTION);
+    if peeled.is_empty_object() {
+        return tags_object || tags_function;
+    }
+    tags_function && matches!(peeled, Type::NonPrimitive)
 }
 
 pub(super) fn with_source_refinement(source: &Type, shape: Type) -> Type {

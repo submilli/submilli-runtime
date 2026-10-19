@@ -1,0 +1,139 @@
+=== neverInference.ts ===
+
+/*pruned*/;
+
+let neverArray: never[] = [];
+>neverArray : never[]
+>           : ^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+
+/*pruned*/;       // never
+/*pruned*/;               // never
+
+// Repro from #19576
+
+type Comparator<T> = (x: T, y: T) => number;
+>Comparator : Comparator<T>
+>           : ^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+>y : T
+>  : ^
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+function compareNumbers(x: number, y: number): number { return null as unknown as (number); }
+>compareNumbers : (x: number, y: number) => number
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+
+/*pruned*/;
+
+// Repro from #19858
+
+function f2<a>(as1: a[], as2: a[], cmp: (a1: a, a2: a) => number): void { }
+>f2 : <a>(as1: a[], as2: a[], cmp: (a1: a, a2: a) => number) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : a
+>  : ^
+>as1 : a[]
+>    : ^^^
+>as2 : a[]
+>    : ^^^
+>cmp : (a1: a, a2: a) => number
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^
+>a1 : a
+>   : ^
+>a2 : a
+>   : ^
+
+f2(Array.from([0]), [], (a1, a2) => a1 - a2);
+>f2(Array.from([0]), [], (a1, a2) => a1 - a2) : void
+>                                             : ^^^^
+>f2 : <a>(as1: a[], as2: a[], cmp: (a1: a, a2: a) => number) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>Array.from([0]) : number[]
+>                : ^^^^^^^^
+>Array.from : { <T>(arrayLike: ArrayLike<T>): T[]; <T, U>(arrayLike: ArrayLike<T>, mapfn: (v: T, k: number) => U, thisArg?: any): U[]; <T>(iterable: Iterable<T> | ArrayLike<T>): T[]; <T, U>(iterable: Iterable<T> | ArrayLike<T>, mapfn: (v: T, k: number) => U, thisArg?: any): U[]; }
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>Array : ArrayConstructor
+>      : ^^^^^^^^^^^^^^^^
+>from : { <T>(arrayLike: ArrayLike<T>): T[]; <T, U>(arrayLike: ArrayLike<T>, mapfn: (v: T, k: number) => U, thisArg?: any): U[]; <T>(iterable: Iterable<T> | ArrayLike<T>): T[]; <T, U>(iterable: Iterable<T> | ArrayLike<T>, mapfn: (v: T, k: number) => U, thisArg?: any): U[]; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>[0] : number[]
+>    : ^^^^^^^^
+>0 : 0
+>  : ^
+>[] : never[]
+>   : ^^^^^^^
+>(a1, a2) => a1 - a2 : (a1: number, a2: number) => number
+>                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a1 : number
+>   : ^^^^^^
+>a2 : number
+>   : ^^^^^^
+>a1 - a2 : number
+>        : ^^^^^^
+>a1 : number
+>   : ^^^^^^
+>a2 : number
+>   : ^^^^^^
+
+f2(Array.from([]), [0], (a1, a2) => a1 - a2);
+>f2(Array.from([]), [0], (a1, a2) => a1 - a2) : void
+>                                             : ^^^^
+>f2 : <a>(as1: a[], as2: a[], cmp: (a1: a, a2: a) => number) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>Array.from([]) : never[]
+>               : ^^^^^^^
+>Array.from : { <T>(arrayLike: ArrayLike<T>): T[]; <T, U>(arrayLike: ArrayLike<T>, mapfn: (v: T, k: number) => U, thisArg?: any): U[]; <T>(iterable: Iterable<T> | ArrayLike<T>): T[]; <T, U>(iterable: Iterable<T> | ArrayLike<T>, mapfn: (v: T, k: number) => U, thisArg?: any): U[]; }
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>Array : ArrayConstructor
+>      : ^^^^^^^^^^^^^^^^
+>from : { <T>(arrayLike: ArrayLike<T>): T[]; <T, U>(arrayLike: ArrayLike<T>, mapfn: (v: T, k: number) => U, thisArg?: any): U[]; <T>(iterable: Iterable<T> | ArrayLike<T>): T[]; <T, U>(iterable: Iterable<T> | ArrayLike<T>, mapfn: (v: T, k: number) => U, thisArg?: any): U[]; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+>[0] : number[]
+>    : ^^^^^^^^
+>0 : 0
+>  : ^
+>(a1, a2) => a1 - a2 : (a1: number, a2: number) => number
+>                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a1 : number
+>   : ^^^^^^
+>a2 : number
+>   : ^^^^^^
+>a1 - a2 : number
+>        : ^^^^^^
+>a1 : number
+>   : ^^^^^^
+>a2 : number
+>   : ^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "2d2f62b4e9378af6c74c37a2e60b6cf0abb4ab3ecb3be3bdb4669f5e23f582c6"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "9822d46919c7e1b3a1601a4c942bf3ffefd2c97b742550a2d959c4c7f611f491"
+  confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
 This page describes the endpoints of `submilli-server` a harness calls to run
@@ -162,7 +162,12 @@ lists the secrets to send to
 With an `Idempotency-Key`, the server records the outcome of the run under
 the pair of session and key, in the server's SQLite database. A later
 request with the same key and the same `code` replays the recorded status and
-body without running anything. The record lasts as long as the session.
+body without running anything.
+
+A recorded body is kept for 24 hours (`idempotency_retention`), and the
+session's three newest are kept whatever their age (`idempotency_keep_last`).
+Past both, the body is dropped and the key stays: it still refuses to run the
+code again. The record of the key lasts as long as the session.
 
 | Situation | Status | `error` |
 | --- | --- | --- |
@@ -172,6 +177,7 @@ body without running anything. The record lasts as long as the session.
 | Same key, same code, the run may wait on application tools | `200` | The run's next settled state: `suspended` with its pending call, or `finished` |
 | Same key, different code | `409` | `idempotency_conflict` |
 | Same key, an earlier request never recorded an outcome (the server stopped mid-run) | `409` | `idempotency_incomplete` |
+| Same key, same code, the recorded body is no longer kept | `409` | `idempotency_response_expired` |
 | Same key, the wait for the running request ran out | `503` | `idempotency_in_progress` |
 | The ledger could not be read or written | `503` | `idempotency_unavailable` |
 | Key empty, over 120 bytes, not printable ASCII, or sent twice | `400` | `idempotency_key_invalid` |
@@ -217,8 +223,15 @@ Role: `user`. Returns the session's most recent run, with its full console.
 {"result":"saved","console":["writing"],"error":null}
 ```
 
-Answers `404` with an empty body when no run is recorded for the id. Runs
-are recorded in memory.
+Answers `404` with an empty body when no run is recorded for the id,
+including once the session has ended, and after a run whose end is unknown,
+such as one the server was stopped in. A run over
+[`max_last_run_size`](/docs/reference/server-settings) is kept without its
+result and console, and answers `413`:
+
+```json
+{"error":"last_run_too_large","bytes":70254831,"limit":67108864}
+```
 
 ### DELETE /v1/sessions/{session_id}
 
@@ -236,7 +249,7 @@ object.
 | `execution_id` | string | The run, as named in the [audit trail](/docs/reference/audit-trail#execution) |
 | `session_id` | string | The session the program ran in |
 | `result` | string or null | What `main` returned: a string as is, other concrete values as JSON text (including `"null"` for a null return), `null` for an undefined return, no value, or failure |
-| `console` | string[] | Lines the program logged. Empty after a successful run. On failure, what it logged before it stopped |
+| `console` | string[] | Lines the program logged. Empty after a successful session run. On failure, what it logged before it stopped |
 | `error` | object or null | `null` on success |
 | `error.kind` | string | One of the kinds below |
 | `error.message` | string | Rendered message, with source excerpts for compile and runtime errors |
@@ -245,7 +258,7 @@ object.
 | `discovery_warnings` | string[] | Present only when non-empty. Tools of an imported `@mcp/<server>` or `@tools` Package that were dropped or degraded at discovery |
 
 `GET /v1/sessions/{session_id}/last-run` returns the console of a
-successful run.
+successful session run. `POST /v1/execute` returns it in `console`.
 
 | `error.kind` | Cause |
 | --- | --- |
@@ -494,7 +507,8 @@ Blueprint, plus `@tools`, which answers as an `@mcp/<server>` Package does.
 ### POST /v1/execute
 
 Role: `user`. Runs one program in a new session that ends when the program
-returns.
+returns, and with it the session's last run. `console` holds every line the
+program logged, on success too.
 
 | Field | Type | Required | Value |
 | --- | --- | --- | --- |

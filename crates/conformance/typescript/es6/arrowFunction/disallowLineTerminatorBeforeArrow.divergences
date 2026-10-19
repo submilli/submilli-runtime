@@ -1,0 +1,13 @@
+types: 53 of 71 tsc entries compared, 0 differ
+
+errors:
+line 4: tsc TS1200: Line terminator not permitted before arrow. (we accept)
+line 6: tsc TS1200: Line terminator not permitted before arrow. (we accept)
+line 16: tsc TS1200: Line terminator not permitted before arrow. (we accept)
+line 18: tsc TS1200: Line terminator not permitted before arrow. (we accept)
+line 20: tsc TS1200: Line terminator not permitted before arrow. (we accept)
+line 23: tsc TS1200: Line terminator not permitted before arrow. (we accept)
+line 25: tsc TS1200: Line terminator not permitted before arrow. (we accept)
+line 28: tsc TS1200: Line terminator not permitted before arrow. (we accept)
+line 54: tsc TS1200: Line terminator not permitted before arrow. (we accept)
+line 56: tsc TS1200: Line terminator not permitted before arrow. (we accept)

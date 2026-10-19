@@ -1,0 +1,18 @@
+id: 1
+event: chat
+data: {"format":1,"session_seq":1,"event_id":"chat-5e550000-0000-4000-8000-000000000004-chat-0","position":{"at_micros":1791898016217340,"rank":0},"body":{"chat":{"turn":"chat-0","role":"user","text":"What's my total?","agent":"chat"}}}
+
+: keep-alive
+
+id: 2
+event: gap
+data: {"format":1,"session_seq":2,"event_id":"gap-00000000-0000-4000-8000-000000000007","position":{"at_micros":1791898016249810,"run":1,"rank":0},"run":1,
+data: "body":{"gap":{"run_id":"00000000-0000-4000-8000-000000000007","dropped":3,"recovered":2,"lost":false}}}
+
+id: 3
+event: chat-replaced
+data: {"format":1,"session_seq":3,"event_id":"chat-replaced-5e550000-0000-4000-8000-000000000004-1","position":{"at_micros":1791898016300000,"rank":0},"body":{"chat-replaced":{"turns":["chat-0"]}}}
+
+event: feed-error
+data: {"kind":"feed-error","session":"5e550000-0000-4000-8000-000000000004","message":"the session's event log could not be read"}
+

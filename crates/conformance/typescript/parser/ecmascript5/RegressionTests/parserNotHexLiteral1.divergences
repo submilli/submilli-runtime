@@ -1,0 +1,5 @@
+types: 4 of 21 tsc entries compared, 0 differ
+
+errors:
+line 3: ours: no method `info` on `Console` (tsc accepts)
+line 6: ours: no method `info` on `Console` (tsc accepts)

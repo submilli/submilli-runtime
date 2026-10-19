@@ -1,0 +1,11 @@
+=== parserRegularExpression1.ts ===
+/(#?-?\d*\.\d\w*%?)|(@?#?[\w-?]+%?)/g;
+>/(#?-?\d*\.\d\w*%?)|(@?#?[\w-?]+%?)/g : RegExp
+>                                      : ^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

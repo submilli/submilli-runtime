@@ -1,2 +1,0 @@
-line 8 missed: bug SUB-1614 a binding named `arguments` is accepted, where strict mode rejects it
-line 9 type: bug SUB-1616 a closure returned into a union return type keeps its literal return type, where tsc widens it

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "ec32f373d69f2021e9414c913781ecbfb3cb5614473f9648bf30bacbfb961521"
+  contentHash: "4099afedbbefad480e23bb6a030b17ac204746cc2cd2ae39b554d119b620d46f"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -50,8 +50,8 @@ ts=2026-10-03T17:05:10.750Z level=info stream=log target=submilli_server::auth m
 ts=2026-10-03T17:05:10.758Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128 protocol=http
 ```
 
-Apart from the API token, everything the server needs it creates on
-first use. The `submilli server` commands read the API token from the
+Apart from the API token, everything the server needs it creates at
+startup or on first use. The `submilli server` commands read the API token from the
 same variable, so in this shell they need no further setup:
 
 ```sh
@@ -185,26 +185,31 @@ decide what has to be kept, and what losing each piece would cost you.
 | What | Setting | Default | If it's lost |
 | --- | --- | --- | --- |
 | Registered Blueprints and open sessions | `database_path` | `$SUBMILLI_HOME/server/db/submilli.db` | Every program is refused until you register the Blueprints again. That's quick if they live in source control and a deploy job applies them ([Manage Blueprints in Git](/docs/tutorials/manage-blueprints-in-git)). Your users' sessions end, and reconnecting clients get `404 unknown session`. There's nothing to rebuild them from. |
-| Sessions' files | `vfs_session_dir` | `$SUBMILLI_HOME/server/vfs/sessions` | Files the agent wrote in a session are gone. |
+| Sessions' files | `volume_dir`, in `sessions/` | `$SUBMILLI_HOME/server/volumes/sessions` | Files the agent wrote in a session are gone. |
 | Secrets | `secret_store.dir` | `$SUBMILLI_HOME/server/secrets` | Blueprints that read `store:` secrets fail until every value is put back. Keep the key file safe too, because without it the store can't be read. |
 | Packages | `package_store_dir` | `$SUBMILLI_HOME/server/packages` | Imports fail until you reinstall. The same install commands bring them back. |
-| Managed volumes | `volume_dir` | `$SUBMILLI_HOME/server/volumes` | Whatever programs kept in [named volumes](/docs/server/mount-a-shared-volume), such as agent memory and shared notes. Like sessions' files, nothing can rebuild them. |
-| Per-run scratch space | `vfs_ephemeral_dir` | The OS temp directory, `/tmp` on Linux (not under `$SUBMILLI_HOME`) | Nothing. Each run gets its own directory, deleted when the run ends. |
+| Managed volumes | `volume_dir`, in `managed-local/` | `$SUBMILLI_HOME/server/volumes/managed-local` | Whatever programs kept in [named volumes](/docs/server/mount-a-shared-volume), such as agent memory and shared notes. Like sessions' files, nothing can rebuild them. |
+| Per-run scratch space | `volume_dir`, in `ephemeral/` | `$SUBMILLI_HOME/server/volumes/ephemeral` | Nothing. Each run gets its own directory, deleted when the run ends. |
 
-The first five belong on a persistent disk. The scratch space belongs on
-a volatile one, so it never fills the disk the state is on. The simplest
-setup keeps the five together, either by pointing `SUBMILLI_HOME` at the
-persistent disk or by naming each path in the file:
+All of it belongs on a persistent disk. The scratch space is no exception,
+because it sits under `volume_dir` with the rest of the files programs
+use. The simplest setup keeps everything together, either by pointing
+`SUBMILLI_HOME` at the persistent disk or by naming each directory in the
+file:
 
 ```yaml title="server.yaml"
 database_path: /var/lib/submilli/db/submilli.db
-vfs_session_dir: /var/lib/submilli/vfs
 package_store_dir: /var/lib/submilli/packages
 volume_dir: /var/lib/submilli/volumes
 secret_store:
   dir: /var/lib/submilli/secrets
-vfs_ephemeral_dir: /tmp/submilli
 ```
+
+A `volume_dir` you name must exist before the server starts. Without it
+the server refuses to start, rather than create an empty directory where
+the disk should be mounted. On a host where you can't create it first, start
+the server with `--create-volume-dir`, but only if that disk is always mounted
+by then.
 
 ```sh
 submilli-server --config server.yaml

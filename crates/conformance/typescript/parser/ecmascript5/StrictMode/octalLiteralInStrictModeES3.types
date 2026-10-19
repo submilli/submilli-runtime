@@ -1,0 +1,15 @@
+=== octalLiteralInStrictModeES3.ts ===
+"use strict";
+>"use strict" : "use strict"
+>             : ^^^^^^^^^^^^
+
+03;
+>03 : 3
+>   : ^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

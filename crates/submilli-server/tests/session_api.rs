@@ -51,7 +51,7 @@ fn router() -> Router {
     let blueprints = Arc::new(InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"));
     let config = ServerConfig {
         blueprints: Some(blueprints),
-        session_storage_root: Some(tempfile::tempdir().expect("sessions").keep()),
+        volume_root: Some(tempfile::tempdir().expect("volume root").keep()),
         ..in_memory_config::config()
     };
     app(futures::executor::block_on(AppState::new(config)).expect("build AppState"))

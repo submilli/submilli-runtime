@@ -1,0 +1,15 @@
+=== unicodeExtendedEscapesInTemplates02.ts ===
+
+let x = `\u{00}`;
+>x : string
+>  : ^^^^^^
+>`\u{00}` : "\0"
+>         : ^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

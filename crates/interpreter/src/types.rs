@@ -421,6 +421,10 @@ pub enum Type {
         name: String,
         args: Vec<Type>,
     },
+    /// `object`: any value that isn't a primitive, `null` or `undefined`, as in
+    /// TypeScript. Every object, array, function and class instance is one. It
+    /// has `{}`'s members and, like `{}`, lowers as `unknown`.
+    NonPrimitive,
 }
 
 impl Type {
@@ -763,14 +767,14 @@ impl Type {
         matches!(t, Type::Object { fields, index: None } if fields.is_empty())
     }
 
-    /// [`peel`](Self::peel), with `{}` read as `unknown`: the type whose
+    /// [`peel`](Self::peel), with `{}` and `object` read as `unknown`: the type whose
     /// representation and run-time operations a value of this type uses.
     /// Codegen matches on this rather than on `peel`, so a `{}` holding a
     /// number is never treated as an object struct. `peel` reads a refinement
     /// as its shape, so `T & {}` lowers as `unknown`, like `T` itself.
     pub fn lowered(&self) -> &Type {
         let peeled = self.peel();
-        if peeled.is_empty_object() {
+        if peeled.is_empty_object() || matches!(peeled, Type::NonPrimitive) {
             return &Type::Unknown;
         }
         peeled
@@ -1123,6 +1127,10 @@ impl Type {
             .cloned()
             .collect();
         flat = kept;
+        // `object | {}` holds `{}`'s values: `object` adds nothing.
+        if flat.iter().any(Type::is_empty_object) {
+            flat.retain(|member| !matches!(member.peel(), Type::NonPrimitive));
+        }
         if flat.len() > 1 {
             return Type::Union(flat);
         }
@@ -1188,7 +1196,10 @@ impl Type {
                 "Array",
                 vec![Type::union(elements.elements.clone())],
             )),
-            Type::Object { .. } | Type::TypeVar(_) | Type::GenericParam { .. } => Some((
+            Type::Object { .. }
+            | Type::NonPrimitive
+            | Type::TypeVar(_)
+            | Type::GenericParam { .. } => Some((
                 crate::mangle::prelude("Object"),
                 prelude,
                 "Object",

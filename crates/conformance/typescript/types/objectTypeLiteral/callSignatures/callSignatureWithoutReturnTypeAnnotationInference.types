@@ -1,0 +1,272 @@
+=== callSignatureWithoutReturnTypeAnnotationInference.ts ===
+
+// Call signatures without a return type should infer one from the function body (if present)
+
+// Simple types
+/*pruned*/;
+
+
+/*pruned*/;
+
+/*pruned*/;
+
+
+/*pruned*/;
+
+function foo3(): never {
+>foo3 : () => never
+>     : ^^^^^^^^^^^
+
+    return foo3();
+>foo3() : never
+>       : ^^^^^
+>foo3 : () => never
+>     : ^^^^^^^^^^^
+
+}
+let r3 = foo3();
+>r3 : never
+>   : ^^^^^
+>foo3() : never
+>       : ^^^^^
+>foo3 : () => never
+>     : ^^^^^^^^^^^
+
+
+function foo4<T>(x: T): T {
+>foo4 : <T>(x: T) => T
+>     : ^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    return x;
+>x : T
+>  : ^
+
+}
+let r4 = foo4(1);
+>r4 : number
+>   : ^^^^^^
+>foo4(1) : 1
+>        : ^
+>foo4 : <T>(x: T) => T
+>     : ^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+
+/*pruned*/;
+
+
+
+
+
+
+/*pruned*/;
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+/*pruned*/;
+
+/*pruned*/;
+
+
+/*pruned*/;
+
+// object types
+function foo8(x: number): { x: number; } {
+>foo8 : (x: number) => { x: number; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>x : number
+>  : ^^^^^^
+
+    return { x: x };
+>{ x: x } : { x: number; }
+>         : ^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>x : number
+>  : ^^^^^^
+
+}
+let r8 = foo8(1);
+>r8 : { x: number; }
+>   : ^^^^^^^^^^^^^^
+>foo8(1) : { x: number; }
+>        : ^^^^^^^^^^^^^^
+>foo8 : (x: number) => { x: number; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+
+interface I {
+>I : I
+>  : ^
+
+    foo: string;
+>foo : string
+>    : ^^^^^^
+
+}
+function foo9(x: number): I {
+>foo9 : (x: number) => I
+>     : ^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+    let i: I = null as unknown as (I);
+>i : I
+>  : ^
+>null as unknown as (I) : I
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    return i;
+>i : I
+>  : ^
+
+}
+let r9 = foo9(1);
+>r9 : I
+>   : ^
+>foo9(1) : I
+>        : ^
+>foo9 : (x: number) => I
+>     : ^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+
+class C {
+>C : C
+>  : ^
+
+    foo: string;
+>foo : string
+>    : ^^^^^^
+
+}
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+/*pruned*/;
+
+// merged declarations
+interface I2 {
+>I2 : I2
+>   : ^^
+
+    x: number;
+>x : number
+>  : ^^^^^^
+
+}
+/*pruned*/;
+
+
+function foo12(): I2 {
+>foo12 : () => I2
+>      : ^^^^^^^^
+
+    let i2: I2 = null as unknown as (I2);
+>i2 : I2
+>   : ^^
+>null as unknown as (I2) : I2
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    return i2;
+>i2 : I2
+>   : ^^
+
+}
+let r12 = foo12();
+>r12 : I2
+>    : ^^
+>foo12() : I2
+>        : ^^
+>foo12 : () => I2
+>      : ^^^^^^^^
+
+
+function m1(): number { return 1; }
+>m1 : () => number
+>   : ^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;
+function foo13(): typeof m1 {
+>foo13 : () => typeof m1
+>      : ^^^^^^^^^^^^^^^
+>m1 : () => number
+>   : ^^^^^^^^^^^^
+
+    return m1;
+>m1 : () => number
+>   : ^^^^^^^^^^^^
+
+}
+let r13 = foo13();
+>r13 : () => number
+>    : ^^^^^^^^^^^^
+>foo13() : () => number
+>        : ^^^^^^^^^^^^
+>foo13 : () => typeof m1
+>      : ^^^^^^^^^^^^^^^
+
+
+/**/;
+
+
+
+/*pruned*/;
+
+
+/*pruned*/;
+
+
+/*pruned*/;
+
+enum e1 { A }
+>e1 : e1
+>   : ^^
+>A : e1.A
+>  : ^^^^
+
+/*pruned*/;
+/*pruned*/;
+
+
+/*pruned*/;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

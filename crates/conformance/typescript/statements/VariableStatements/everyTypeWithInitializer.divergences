@@ -1,0 +1,9 @@
+types: 12 of 24 tsc entries compared, 2 differ
+
+line 32: anAny
+  tsc:  any
+  ours: null
+
+line 34: anUndefined
+  tsc:  any
+  ours: undefined

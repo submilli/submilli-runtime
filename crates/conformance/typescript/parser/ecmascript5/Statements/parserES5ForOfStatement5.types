@@ -1,0 +1,14 @@
+=== parserES5ForOfStatement5.ts ===
+for (let a: number of X) {
+>a : any
+>  : ^^^
+>X : any
+>  : ^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

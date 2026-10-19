@@ -29,9 +29,12 @@ SLOW="${SLOW:-0}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVER_BIN="${SERVER_BIN:-${REPO_ROOT}/target/debug/submilli-server}"
+CLI_BIN="${CLI_BIN:-$(dirname "$SERVER_BIN")/submilli}"
 
 STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/submilli-idem-XXXXXX")"
 DATABASE="${STATE_DIR}/db/submilli.db"
+# A configured volume root must exist before the server starts.
+mkdir -p "${STATE_DIR}/volumes"
 SERVER_PID=""
 MOCK_PID=""
 SERVER_PORT=""
@@ -158,7 +161,7 @@ start_server() {
     SUBMILLI_DATABASE_PATH="$DATABASE" \
     SUBMILLI_SESSION_STORE_DIR="${STATE_DIR}/sessions" \
     SUBMILLI_BLUEPRINT_DIR="${STATE_DIR}/blueprints" \
-    SUBMILLI_VFS_SESSION_DIR="${STATE_DIR}/vfs" \
+    SUBMILLI_VOLUME_DIR="${STATE_DIR}/volumes" \
     SUBMILLI_SECRET_STORE_DIR="${STATE_DIR}/secrets" \
     SUBMILLI_PACKAGE_STORE_DIR="${STATE_DIR}/packages" \
     SUBMILLI_ALLOW_LOCALHOST=1 \
@@ -244,11 +247,11 @@ function main(): string {
   return r.body;
 }' "$MOCK_PORT" "$1" "$MOCK_PORT"; }
 
-# Reads the server's `idempotent_requests` table while it runs. Session ids are
+# Reads the server's keyed rows in the `runs` table while it runs. Session ids are
 # UUIDs from the server, so they are safe to splice into the query.
 ledger_query() { sqlite3 -readonly -cmd '.timeout 5000' "$DATABASE" "$1" || true; }
-ledger_entries() { ledger_query "SELECT count(*) FROM idempotent_requests WHERE session_id='$1'"; }
-ledger_state() { ledger_query "SELECT state FROM idempotent_requests WHERE session_id='$1'"; }
+ledger_entries() { ledger_query "SELECT count(*) FROM runs WHERE session_id='$1' AND request_key IS NOT NULL"; }
+ledger_state() { ledger_query "SELECT state FROM runs WHERE session_id='$1' AND request_key IS NOT NULL"; }
 
 # ---------------------------------------------------------------- setup
 
@@ -260,6 +263,29 @@ command -v sqlite3 >/dev/null || { printf 'the sqlite3 CLI is required to read t
     exit 1
 }
 
+[[ -x "$CLI_BIN" ]] || {
+    printf 'no CLI binary at %s\nBuild one with: cargo build -p submilli\n' "$CLI_BIN" >&2
+    exit 1
+}
+CLI_BIN="$(cd "$(dirname "$CLI_BIN")" && pwd)/$(basename "$CLI_BIN")"
+# Registration validates declared packages. Install a local fixture, then remove
+# it only for the pre-dispatch check to model an artifact lost after registration.
+mkdir -p "${STATE_DIR}/fixture/src" "${STATE_DIR}/fixture/docs"
+printf '# Local smoke fixture\n' >"${STATE_DIR}/fixture/docs/readme.md"
+cat >"${STATE_DIR}/fixture/submilli.toml" <<'TOML'
+[[package]]
+name = "@nonexistent-org/nonexistent-pkg"
+version = "0.1.0"
+description = "Local idempotency smoke fixture."
+keywords = ["test"]
+path = "."
+TOML
+printf 'export const thing: string = "fixture";\n' >"${STATE_DIR}/fixture/src/lib.ts"
+(cd "${STATE_DIR}/fixture" && SUBMILLI_HOME="${STATE_DIR}/home" "$CLI_BIN" build publish-local) >"${STATE_DIR}/fixture-build.log" 2>&1 || {
+    cat "${STATE_DIR}/fixture-build.log" >&2
+    exit 1
+}
+
 SERVER_PORT=$(free_port)
 BASE="http://127.0.0.1:${SERVER_PORT}"
 start_mock
@@ -268,9 +294,7 @@ start_server
 # says otherwise.
 put_blueprint smoke $'name: smoke\nvfs: per_session\ndefault: allow\nallow_insecure_http: true\n'
 put_blueprint brief $'name: brief\nvfs: per_session\ndefault: allow\nallow_insecure_http: true\nidle_timeout: 5s\n'
-# Declares a package that is not installed, so importing it fails at resolution
-# — before the runner — which is the only externally reachable pre-dispatch
-# failure. Code that does not import it runs normally under this blueprint.
+# The fixture is installed during registration and removed for check 10.
 put_blueprint unresolvable $'name: unresolvable\nvfs: per_session\ndefault: allow\nallow_insecure_http: true\npackages:\n  - "@nonexistent-org/nonexistent-pkg"\n'
 printf 'server %s | mock %s | state %s\n' "$SERVER_PORT" "$MOCK_PORT" "$STATE_DIR"
 
@@ -314,9 +338,8 @@ else
 fi
 
 step "3. A client that hangs up mid-execution"
-# `ClaimGuard` was rewritten after this was last checked by hand. The program
-# must run exactly once, and the abandoned reservation must read as
-# indeterminate rather than being cleared for a retry.
+# Disconnecting the HTTP waiter does not cancel the owned execution. The
+# retry waits for its result without dispatching another run.
 mock_reset
 sid=$(open_session smoke)
 body=$(python3 -c 'import json,sys; print(json.dumps({"code": sys.argv[1]}))' "$(holder 8)")
@@ -326,12 +349,11 @@ api_curl -s --max-time 2 -X POST "${BASE}/v1/sessions/${sid}/execute" \
 sleep 1
 resp=$(execute "$sid" "disconnect:1" "$(holder 8)")
 hits=$(mock_hits)
-if [[ "$(error_of "$resp")" == "idempotency_incomplete" && "$hits" == "1" ]]; then
-    ok "one execution, retry refused as incomplete"
+if [[ "$(status_of "$resp")" == "200" && "$hits" == "1" ]]; then
+    ok "one execution, retry received the completed result"
 else
-    fail "disconnect: error=$(error_of "$resp") hits=${hits} (want idempotency_incomplete / 1)"
+    fail "disconnect: status=$(status_of "$resp") hits=${hits} (want 200 / 1)"
 fi
-sleep 8  # let the abandoned execution finish before the next check reads the mock
 
 if [[ "$SLOW" == "1" ]]; then
     step "4. A slow execution reports in-progress, not unknown"
@@ -372,10 +394,10 @@ crash_server
 start_server
 resp=$(execute "$sid" "crash:1" "$(holder 20)")
 hits=$(mock_hits)
-if [[ "$before" == "reserved" && "$(error_of "$resp")" == "idempotency_incomplete" && "$hits" == "1" ]]; then
-    ok "reservation survived SIGKILL as 'reserved'; retry refused, nothing re-ran"
+if [[ "$before" == "running" && "$(error_of "$resp")" == "idempotency_incomplete" && "$hits" == "1" ]]; then
+    ok "running request survived SIGKILL; retry refused, nothing re-ran"
 else
-    fail "crash: before=${before} error=$(error_of "$resp") hits=${hits} (want reserved / idempotency_incomplete / 1)"
+    fail "crash: before=${before} error=$(error_of "$resp") hits=${hits} (want running / idempotency_incomplete / 1)"
 fi
 
 step "6. A retry after the original finished replays byte for byte"
@@ -436,6 +458,7 @@ else
 fi
 
 step "10. A failure before dispatch leaves no entry and frees the key"
+rm -rf "${STATE_DIR}/home/packages/@nonexistent-org/nonexistent-pkg"
 # The trigger has to be a *package resolution* failure, which happens before the
 # runner is reached. An unknown import is not one: the compiler reports it as a
 # compile error, which is a real outcome and is recorded and replayed on purpose.
@@ -462,16 +485,16 @@ else
     fail "pre-dispatch: kind=${kind} entries=${entries} status=$(status_of "$resp") hits=${hits}"
 fi
 
-step "11. Deleting a session purges its ledger"
+step "11. Deleting a session preserves evidence of its keyed run"
 sid=$(open_session smoke)
 execute "$sid" "purge:1" "$(hitter)" >/dev/null
 before=$(ledger_entries "$sid")
 api_curl -sf -X DELETE "${BASE}/v1/sessions/${sid}" >/dev/null
 after=$(ledger_entries "$sid")
-if [[ "$before" == "1" && "$after" == "0" ]]; then
-    ok "ledger entries removed with the session"
+if [[ "$before" == "1" && "$after" == "1" ]]; then
+    ok "keyed run evidence retained after session deletion"
 else
-    fail "purge: entries before=${before} after=${after} (want 1 / 0)"
+    fail "session deletion: entries before=${before} after=${after} (want 1 / 1)"
 fi
 
 # The server holds the SQLite file open, so permission bits set while it runs

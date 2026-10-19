@@ -555,6 +555,10 @@ pub enum Intrinsic {
     /// A template interpolation whose value may be `null`, `undefined` or of a
     /// type only known at run time — JavaScript's ToString, as `${x}` performs.
     ToString,
+    /// A `{}` value flowing into an object type: a primitive or array becomes
+    /// the object JavaScript reads its properties from, and an object stays
+    /// itself.
+    ToObject,
 }
 
 impl Intrinsic {
@@ -583,7 +587,9 @@ impl Intrinsic {
             Intrinsic::BigIntFromString => vec![Param::new("value", Type::String)],
             Intrinsic::JsonStringify => vec![Param::new("value", Type::Error)],
             Intrinsic::JsonParse => vec![Param::new("text", Type::String)],
-            Intrinsic::ToString => vec![Param::new("value", Type::Unknown)],
+            Intrinsic::ToString | Intrinsic::ToObject => {
+                vec![Param::new("value", Type::Unknown)]
+            }
         }
     }
 
@@ -595,6 +601,7 @@ impl Intrinsic {
             Intrinsic::JsonStringify => crate::Type::String,
             Intrinsic::JsonParse => crate::Type::Unknown,
             Intrinsic::ToString => crate::Type::String,
+            Intrinsic::ToObject => crate::Type::Unknown,
         }
     }
 
@@ -605,6 +612,7 @@ impl Intrinsic {
             Intrinsic::JsonStringify => "JSON.stringify",
             Intrinsic::JsonParse => "JSON.parse",
             Intrinsic::ToString => "String",
+            Intrinsic::ToObject => "Object",
         }
     }
 }
@@ -902,6 +910,9 @@ pub struct TypedAst {
     pub authored_arguments: std::collections::BTreeMap<(u32, u32, u32), Vec<ExprId>>,
     /// Parameter declaration types before optional/default ABI input widening.
     pub authored_parameter_types: std::collections::BTreeMap<(u32, u32, u32), Type>,
+    /// The type a binding's postfix `++`/`--` reads it at, keyed by the name's
+    /// span: its narrowed type, where the target records the declared one.
+    pub postfix_operand_types: std::collections::BTreeMap<(u32, u32, u32), Type>,
     /// Synthetic reads of incoming arguments before a parameter becomes initialized.
     pub parameter_inputs: std::collections::BTreeSet<ExprId>,
     /// Callee prologue statements that initialize parameters and pattern bindings.
@@ -919,6 +930,10 @@ pub struct TypedAst {
     /// whatever their value.
     pub spread_omitted_fields:
         std::collections::BTreeMap<ExprId, std::collections::BTreeSet<String>>,
+    /// Static member reads and calls named through a subclass that inherits
+    /// the member, with that subclass: `Sub.hello()` calls `Base`'s method but
+    /// still uses `Sub`, which may not be initialized yet.
+    pub inherited_static_receivers: std::collections::BTreeMap<ExprId, MangledName>,
     /// The discriminants of the `switch`es without a `default` whose cases the
     /// typechecker found match every value the discriminant can hold.
     pub exhaustive_switches: std::collections::BTreeSet<ExprId>,
@@ -1124,6 +1139,9 @@ pub struct TypedClassField {
     /// assigned from the constructor parameter, so it's exempt from the
     /// definite-assignment check.
     pub auto_assigned: bool,
+    /// Declared as a bodyless optional method (`f?(): T;`), which, as in
+    /// TypeScript, emits nothing: it neither initializes nor resets the slot.
+    pub method_signature: bool,
     /// Set when this declaration *narrows* an inherited one. See
     /// [`FieldNarrowingCheck`]. Boxed because every class field carries this and
     /// almost none of them narrow.

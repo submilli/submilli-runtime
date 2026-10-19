@@ -23,6 +23,7 @@ mod iife;
 mod import_graph;
 mod imports;
 mod inference_sources;
+mod instantiated_literals;
 mod likely_mistakes;
 mod literal_freshness;
 mod literal_prebinding;
@@ -95,6 +96,19 @@ pub fn infer_with_transitive_checked<'a>(
     packages: &'a [&'a PackageDeclaration],
     transitive: &'a [&'a PackageDeclaration],
 ) -> Result<(TypedAst, Vec<Diagnostic>), CompileError> {
+    infer_with_transitive_for_owner_checked(None, source, package_name, ast, packages, transitive)
+}
+
+/// Infer a script with the import access of its engine-assigned owner. Ordinary
+/// scripts and external package consumers cannot import lifecycle entry points.
+pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
+    owning_package: Option<&str>,
+    source: &'a str,
+    package_name: &'a str,
+    ast: &'a Ast,
+    packages: &'a [&'a PackageDeclaration],
+    transitive: &'a [&'a PackageDeclaration],
+) -> Result<(TypedAst, Vec<Diagnostic>), CompileError> {
     let file = ast
         .source_statements()
         .first()
@@ -108,7 +122,20 @@ pub fn infer_with_transitive_checked<'a>(
         .map_err(|failure| failure.with_stage(CompilerStage::Infer))?;
     validate_lowered_patterns(ast)?;
     check_declaration_types(packages.iter().chain(transitive).copied())?;
-    let packages_by_name: BTreeMap<&'a str, &'a PackageDeclaration> = packages
+    let visible: Vec<_> = packages
+        .iter()
+        .map(|declaration| {
+            if owning_package != Some(declaration.package_name.as_str())
+                && declaration.values.contains_key("finalizer")
+            {
+                std::borrow::Cow::Owned((*declaration).clone().without_finalizer())
+            } else {
+                std::borrow::Cow::Borrowed(*declaration)
+            }
+        })
+        .collect();
+    let packages: Vec<_> = visible.iter().map(std::borrow::Cow::as_ref).collect();
+    let packages_by_name: BTreeMap<&str, &PackageDeclaration> = packages
         .iter()
         .map(|d| (d.package_name.as_str(), *d))
         .collect();
@@ -120,6 +147,7 @@ pub fn infer_with_transitive_checked<'a>(
         typed_ast: TypedAst::with_package(package_name),
         diagnostics: bindings.diagnostics,
         top_symbols: BTreeMap::new(),
+        imported_values: std::collections::HashSet::new(),
         types: TypeNamespace::new(),
         type_registry: TypeRegistry::new(),
         scopes: Scopes::default(),
@@ -190,6 +218,7 @@ pub fn infer_with_transitive_checked<'a>(
         if_condition_ands: BTreeMap::new(),
         literal_hint_interfaces: BTreeMap::new(),
         held_arguments: BTreeMap::new(),
+        pending_static_receiver: None,
         values_widening_candidates: BTreeSet::new(),
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),
@@ -321,6 +350,10 @@ pub fn infer_package_checked<'a>(
             .values()
             .chain(transitive_packages.values()),
     )?;
+    let external_packages: BTreeMap<_, _> = external_packages
+        .into_iter()
+        .map(|(name, declaration)| (name, declaration.without_finalizer()))
+        .collect();
     let mut diagnostics = Vec::new();
     let module_map: BTreeMap<ModulePath, (crate::FileId, &'a Ast)> = modules
         .into_iter()
@@ -410,6 +443,7 @@ pub fn infer_package_checked<'a>(
         typed_ast: TypedAst::with_package(package_name),
         diagnostics: Vec::new(),
         top_symbols: BTreeMap::new(),
+        imported_values: std::collections::HashSet::new(),
         types: TypeNamespace::new(),
         type_registry: TypeRegistry::new(),
         scopes: Scopes::default(),
@@ -480,6 +514,7 @@ pub fn infer_package_checked<'a>(
         if_condition_ands: BTreeMap::new(),
         literal_hint_interfaces: BTreeMap::new(),
         held_arguments: BTreeMap::new(),
+        pending_static_receiver: None,
         values_widening_candidates: BTreeSet::new(),
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),
@@ -682,7 +717,7 @@ pub fn infer_package_checked<'a>(
         package_name,
         &tc.typed_ast,
         &package_declaration,
-        &tc.typed_ast.exports,
+        tc.resolver(),
         module_surfaces,
         &dependencies,
     )
@@ -812,6 +847,9 @@ pub(super) struct Inferer<'a> {
     pub(super) typed_ast: TypedAst,
     pub(super) diagnostics: Vec<Diagnostic>,
     pub(super) top_symbols: BTreeMap<String, ValueEntry>,
+    /// The `top_symbols` an import binds. An import is a read-only view of the
+    /// exporter's binding, so nothing here may assign to one.
+    pub(super) imported_values: std::collections::HashSet<String>,
     pub(super) types: TypeNamespace<'a>,
     /// Import-independent FQN registry for *structural* resolution of already-typed
     /// values. See [`TypeRegistry`].
@@ -969,6 +1007,14 @@ pub(super) struct Inferer<'a> {
     /// union of strings with arrays checks each argument against both
     /// signatures this way.
     pub(super) held_arguments: BTreeMap<crate::ExprId, crate::ExprId>,
+    /// The class a static member just inferred was named through, when it
+    /// inherits the member: `Sub` in `Sub.hello()`. The expression the
+    /// member's inference returns records it (see
+    /// [`crate::TypedAst::inherited_static_receivers`]). It is set only after
+    /// the member's arguments are inferred, and each `infer_expr` takes it
+    /// before pushing its node, so a nested expression never takes the
+    /// note meant for its parent.
+    pub(super) pending_static_receiver: Option<crate::MangledName>,
     /// Values of literal argument slots typed as a type parameter an earlier
     /// value bound to a candidate: one the candidate fits widens it rather
     /// than mismatching it (`{ v: new Dog(), w: new Animal() }`).
@@ -1096,6 +1142,7 @@ impl<'a> Inferer<'a> {
         self.current_export_seen.clear();
         self.inferred_modules = inferred_modules.clone();
         self.top_symbols.clear();
+        self.imported_values.clear();
         self.types = TypeNamespace::new();
         self.type_registry = TypeRegistry::new();
         self.scopes = Scopes::default();
@@ -1324,6 +1371,160 @@ mod tests {
     use crate::{Asi, Sources, Token, TokenKind, lower_patterns, parse};
 
     use super::*;
+
+    fn finalizer_dependency() -> PackageDeclaration {
+        crate::compile_package(
+            "@test/resource",
+            ModulePath::from("lib"),
+            &[crate::PackageSourceModule {
+                path: ModulePath::from("lib"),
+                source: "export function finalizer(key: string, value: number): void {}",
+            }],
+            &[],
+        )
+        .unwrap()
+        .declaration
+    }
+
+    #[test]
+    fn external_finalizers_are_visible_only_to_their_engine_assigned_owner() {
+        let dependency = finalizer_dependency();
+        let mut packages = runtime_external_packages();
+        packages.insert(dependency.package_name.clone(), dependency);
+        let declarations: Vec<_> = packages.values().collect();
+        for source in [
+            r#"import { finalizer as finish } from "@test/resource"; function main(): void { finish("k", 1); }"#,
+            r#"import * as resource from "@test/resource"; function main(): void { resource.finalizer("k", 1); }"#,
+        ] {
+            let mut sources = Sources::new();
+            let (_, _, ast) = parse_module(&mut sources, "main", source);
+            let (_, diagnostics) =
+                infer_with_transitive_checked(source, "main", &ast, &declarations, &[]).unwrap();
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|d| d.severity == crate::Severity::Error),
+                "{diagnostics:?}"
+            );
+            for owner in ["@test/resource", "@test/other"] {
+                let (_, diagnostics) = infer_with_transitive_for_owner_checked(
+                    Some(owner),
+                    source,
+                    "main",
+                    &ast,
+                    &declarations,
+                    &[],
+                )
+                .unwrap();
+                assert_eq!(
+                    diagnostics
+                        .iter()
+                        .any(|d| d.severity == crate::Severity::Error),
+                    owner != "@test/resource",
+                    "{owner}: {diagnostics:?}"
+                );
+            }
+        }
+        assert!(packages["@test/resource"].values.contains_key("finalizer"));
+    }
+
+    #[test]
+    fn packages_cannot_import_a_dependency_finalizer() {
+        let mut sources = Sources::new();
+        let (module, file, ast) = parse_module(
+            &mut sources,
+            "lib",
+            r#"
+            import { finalizer as finish } from "@test/resource";
+            export function misuse(): void { finish("k", 1); }
+        "#,
+        );
+        let mut dependencies = runtime_external_packages();
+        let dependency = finalizer_dependency();
+        dependencies.insert(dependency.package_name.clone(), dependency);
+        let (_, _, diagnostics) = infer_package_checked(
+            "@test/consumer",
+            ModulePath::from("lib"),
+            vec![(module, file, &ast)],
+            &sources,
+            dependencies,
+            BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("does not export `finalizer`")),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn finalizer_rule_propagates_type_budget_exhaustion() {
+        let mut sources = Sources::new();
+        let (module, file, ast) = parse_module(
+            &mut sources,
+            "lib",
+            r#"
+            import * as session from "submilli:session";
+            export function open(): void { session.registerFinalizer("k", 1); }
+            export function finalizer(key: string, value: number): void {}
+        "#,
+        );
+        let mut dependencies = runtime_external_packages();
+        let session = crate::stdlib::session::package_declaration();
+        dependencies.insert(session.package_name.clone(), session);
+        let (typed_ast, package, diagnostics) = infer_package_checked(
+            "@test/resource",
+            ModulePath::from("lib"),
+            vec![(module, file, &ast)],
+            &sources,
+            dependencies,
+            BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == crate::Severity::Error),
+            "{diagnostics:?}"
+        );
+        let types = TypeNamespace::new();
+        let registry = TypeRegistry::new();
+        let limits = crate::type_size::TypeLimits::with_work_allowance(0);
+        let resolver = assignable::TypeResolver {
+            types: &types,
+            registry: &registry,
+            limits: &limits,
+            strict_subtype: false,
+        };
+        let error = crate::typechecker::rules::check_package(
+            "@test/resource",
+            &typed_ast,
+            &package,
+            resolver,
+            std::iter::empty(),
+            &[],
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                error.fatal,
+                Some(CompilerFailure::Limit {
+                    stage: CompilerStage::Infer,
+                    ..
+                })
+            ),
+            "{error:?}"
+        );
+        assert!(
+            !error
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("does not match")),
+            "{error:?}"
+        );
+    }
 
     #[test]
     fn dependency_measurement_failure_is_internal_and_keeps_package_context() {

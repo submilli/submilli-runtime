@@ -1,0 +1,20 @@
+=== parserTypeQuery9.ts ===
+let s: typeof A[] = null as unknown as (typeof A[]);
+>s : any[]
+>  : ^^^^^
+>A : any
+>  : ^^^
+>null as unknown as (typeof A[]) : any[]
+>                                : ^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>A : any
+>  : ^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

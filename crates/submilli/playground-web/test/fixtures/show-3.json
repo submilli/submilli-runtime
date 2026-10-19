@@ -1,0 +1,52 @@
+{
+ "kind": "run",
+ "run": 3,
+ "page": "http://127.0.0.1:47100/#run=3",
+ "blueprint_version": "1",
+ "source": "chat",
+ "decision_refs": [],
+ "blueprint": "billing",
+ "entry": "mcp",
+ "started_at_micros": 1791898016711100,
+ "started_at": "2026-10-13T13:26:56Z",
+ "wall_ms": 78,
+ "outcome": {
+  "kind": "failed",
+  "error": "compile_error"
+ },
+ "denied": [],
+ "session": "5e550000-0000-4000-8000-000000000004",
+ "variables": {
+  "customerId": "cus_northwind"
+ },
+ "reruns": [],
+ "decision_count": 0,
+ "decisions": [],
+ "decisions_dropped": 0,
+ "log_truncated": false,
+ "calls": {
+  "count": 0,
+  "returned": 0,
+  "failed": 0,
+  "unfinished": 0,
+  "with_bodies": 0
+ },
+ "payloads_included": false,
+ "program_recorded": true,
+ "program_included": true,
+ "next": [
+  "submilli playground runs --session 5e550000-0000-4000-8000-000000000004"
+ ],
+ "untrusted": {
+  "error": "error: unresolved identifier `undefinedThing`\n --> <execute>:2:12\n  |\n1 | function main(): number {\n2 |     return undefinedThing + 1;\n  |            ^^^^^^^^^^^^^^\n3 | }\n",
+  "diagnostics": [
+   {
+    "column": 12,
+    "line": 2,
+    "message": "unresolved identifier `undefinedThing`",
+    "severity": "error"
+   }
+  ],
+  "program": "function main(): number {\n    return undefinedThing + 1;\n}\n"
+ }
+}

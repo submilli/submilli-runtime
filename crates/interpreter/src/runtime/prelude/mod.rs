@@ -69,6 +69,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     math::install(linker)?;
     temporal::install(linker)?;
     uri::install(linker)?;
+    closure::install(linker)?;
     regex::install(linker)?;
     value::install(linker)?;
     member::install(linker)
@@ -88,6 +89,7 @@ pub(crate) fn install_vtables(
     let error_host = error::install_store_bound(linker, store, &intr, &vtables.string)?;
     number::install_constants(linker, store)?;
     math::install_constants(linker, store)?;
+    uint8array::install_constants(linker, store)?;
     Ok((vtables, error_host))
 }
 
@@ -110,6 +112,7 @@ pub fn package_declaration() -> PackageDeclaration {
     bigint::declare(&mut defs);
     temporal::declare(&mut defs);
     uri::declare(&mut defs);
+    closure::declare(&mut defs);
     regex::declare(&mut defs);
     value::declare(&mut defs);
     member::declare(&mut defs);

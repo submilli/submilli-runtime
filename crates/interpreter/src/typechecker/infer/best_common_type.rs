@@ -49,7 +49,7 @@ impl Inferer<'_> {
         if kept
             .iter()
             .any(|ty| matches!(ty.peel(), Type::Function { .. }))
-            && self.union_call_signature(&kept).is_none()
+            && self.union_call_signature(&kept, None).is_none()
         {
             return Ok(joined);
         }

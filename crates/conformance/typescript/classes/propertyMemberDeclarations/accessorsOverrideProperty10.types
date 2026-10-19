@@ -1,0 +1,42 @@
+=== accessorsOverrideProperty10.ts ===
+
+class A {
+>A : A
+>  : ^
+
+  x: number = 1;
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+}
+class B extends A {}
+>B : B
+>  : ^
+>A : A
+>  : ^
+
+class C extends B {
+>C : C
+>  : ^
+>B : B
+>  : ^
+
+  get x(): number {
+>x : number
+>  : ^^^^^^
+
+    return 2;
+>2 : 2
+>  : ^
+
+  }
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

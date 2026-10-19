@@ -321,6 +321,7 @@ fn checked_source_auxiliary_spans_are_validated() {
                     PatternOrigin {
                         pattern_span: bad,
                         slot_arity: 1,
+                        defaulted: false,
                     },
                 );
             }

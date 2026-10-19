@@ -1,0 +1,307 @@
+=== typeofOperatorWithNumberType.ts ===
+// typeof  operator on number type
+let NUMBER: number = null as unknown as (number);
+>NUMBER : number
+>       : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let NUMBER1: number[] = [1, 2];
+>NUMBER1 : number[]
+>        : ^^^^^^^^
+>[1, 2] : number[]
+>       : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+
+
+function foo(): number { return 1; }
+>foo : () => number
+>    : ^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+
+class A {
+>A : A
+>  : ^
+
+    public a: number;
+>a : number
+>  : ^^^^^^
+
+    static foo(): number { return 1; }
+>foo : () => number
+>    : ^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+}
+/*pruned*/;
+
+
+
+let objA = new A();
+>objA : A
+>     : ^
+>new A() : A
+>        : ^
+>A : typeof A
+>  : ^^^^^^^^
+
+
+// number type var
+let ResultIsString1 = typeof NUMBER;
+>ResultIsString1 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof NUMBER : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+
+let ResultIsString2 = typeof NUMBER1;
+>ResultIsString2 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof NUMBER1 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>NUMBER1 : number[]
+>        : ^^^^^^^^
+
+
+// number type literal
+let ResultIsString3 = typeof 1;
+>ResultIsString3 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof 1 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+let ResultIsString4 = typeof { x: 1, y: 2};
+>ResultIsString4 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof { x: 1, y: 2} : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: 1, y: 2} : { x: number; y: number; }
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>y : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+
+let ResultIsString5 = typeof { x: 1, y: (n: number) => { return n; } };
+>ResultIsString5 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof { x: 1, y: (n: number) => { return n; } } : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                                                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: 1, y: (n: number) => { return n; } } : { x: number; y: (n: number) => number; }
+>                                          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>y : (n: number) => number
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>(n: number) => { return n; } : (n: number) => number
+>                             : ^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+>n : number
+>  : ^^^^^^
+
+
+// number type expressions
+let ResultIsString6 = typeof objA.a;
+>ResultIsString6 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof objA.a : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>objA.a : number
+>       : ^^^^^^
+>objA : A
+>     : ^
+>a : number
+>  : ^^^^^^
+
+/*pruned*/;
+let ResultIsString8 = typeof NUMBER1[0];
+>ResultIsString8 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof NUMBER1[0] : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>NUMBER1[0] : number
+>           : ^^^^^^
+>NUMBER1 : number[]
+>        : ^^^^^^^^
+>0 : 0
+>  : ^
+
+let ResultIsString9 = typeof foo();
+>ResultIsString9 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof foo() : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>foo() : number
+>      : ^^^^^^
+>foo : () => number
+>    : ^^^^^^^^^^^^
+
+let ResultIsString10 = typeof A.foo();
+>ResultIsString10 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof A.foo() : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>A.foo() : number
+>        : ^^^^^^
+>A.foo : () => number
+>      : ^^^^^^^^^^^^
+>A : typeof A
+>  : ^^^^^^^^
+>foo : () => number
+>    : ^^^^^^^^^^^^
+
+let ResultIsString11 = typeof (NUMBER + NUMBER);
+>ResultIsString11 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof (NUMBER + NUMBER) : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(NUMBER + NUMBER) : number
+>                  : ^^^^^^
+>NUMBER + NUMBER : number
+>                : ^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+
+
+// multiple typeof  operators
+let ResultIsString12 = typeof typeof NUMBER;
+>ResultIsString12 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof typeof NUMBER : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof NUMBER : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+
+let ResultIsString13 = typeof typeof typeof (NUMBER + NUMBER);
+>ResultIsString13 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof typeof typeof (NUMBER + NUMBER) : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof typeof (NUMBER + NUMBER) : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>typeof (NUMBER + NUMBER) : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(NUMBER + NUMBER) : number
+>                  : ^^^^^^
+>NUMBER + NUMBER : number
+>                : ^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+
+
+// miss assignment operators
+typeof 1;
+>typeof 1 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+typeof NUMBER;
+>typeof NUMBER : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+
+typeof NUMBER1;
+>typeof NUMBER1 : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>NUMBER1 : number[]
+>        : ^^^^^^^^
+
+typeof foo();
+>typeof foo() : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>foo() : number
+>      : ^^^^^^
+>foo : () => number
+>    : ^^^^^^^^^^^^
+
+typeof objA.a;
+>typeof objA.a : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>objA.a : number
+>       : ^^^^^^
+>objA : A
+>     : ^
+>a : number
+>  : ^^^^^^
+
+/*pruned*/;
+/*pruned*/;
+
+// use typeof in type query
+let z: number = null as unknown as (number);
+>z : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let x: number[] = null as unknown as (number[]);
+>x : number[]
+>  : ^^^^^^^^
+>null as unknown as (number[]) : number[]
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let r: () => number = null as unknown as (() => number);
+>r : () => number
+>  : ^^^^^^^^^^^^
+>null as unknown as (() => number) : () => number
+>                                  : ^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let y = { a: 1, b: 2 };
+>y : { a: number; b: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: 1, b: 2 } : { a: number; b: number; }
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>b : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

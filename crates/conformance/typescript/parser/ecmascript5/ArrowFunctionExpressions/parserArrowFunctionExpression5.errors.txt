@@ -1,0 +1,2 @@
+parserArrowFunctionExpression5.ts(2,2): error TS2304: Cannot find name 'bar'.
+parserArrowFunctionExpression5.ts(2,6): error TS2304: Cannot find name 'x'.

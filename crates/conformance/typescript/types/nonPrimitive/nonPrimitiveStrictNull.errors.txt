@@ -1,0 +1,13 @@
+nonPrimitiveStrictNull.ts(10,1): error TS2322: Type 'undefined' is not assignable to type 'object'.
+nonPrimitiveStrictNull.ts(11,1): error TS2322: Type 'null' is not assignable to type 'object'.
+nonPrimitiveStrictNull.ts(12,1): error TS2322: Type 'object | null' is not assignable to type 'object'.   Type 'null' is not assignable to type 'object'.
+nonPrimitiveStrictNull.ts(13,1): error TS2322: Type 'object | undefined' is not assignable to type 'object'.   Type 'undefined' is not assignable to type 'object'.
+nonPrimitiveStrictNull.ts(14,1): error TS2322: Type 'object | null | undefined' is not assignable to type 'object'.   Type 'undefined' is not assignable to type 'object'.
+nonPrimitiveStrictNull.ts(20,7): error TS2339: Property 'toString' does not exist on type 'never'.
+nonPrimitiveStrictNull.ts(24,5): error TS2322: Type 'object | null' is not assignable to type 'object'.   Type 'null' is not assignable to type 'object'.
+nonPrimitiveStrictNull.ts(29,5): error TS18047: 'd' is possibly 'null'.
+nonPrimitiveStrictNull.ts(31,5): error TS18048: 'd' is possibly 'undefined'.
+nonPrimitiveStrictNull.ts(41,5): error TS18047: 'd' is possibly 'null'.
+nonPrimitiveStrictNull.ts(43,5): error TS18048: 'd' is possibly 'undefined'.
+nonPrimitiveStrictNull.ts(47,5): error TS18048: 'd' is possibly 'undefined'.
+nonPrimitiveStrictNull.ts(49,5): error TS18047: 'd' is possibly 'null'.

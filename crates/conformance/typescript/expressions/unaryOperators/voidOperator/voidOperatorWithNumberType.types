@@ -1,0 +1,260 @@
+=== voidOperatorWithNumberType.ts ===
+// void  operator on number type
+let NUMBER: number = null as unknown as (number);
+>NUMBER : number
+>       : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let NUMBER1: number[] = [1, 2];
+>NUMBER1 : number[]
+>        : ^^^^^^^^
+>[1, 2] : number[]
+>       : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+
+
+function foo(): number { return 1; }
+>foo : () => number
+>    : ^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+
+class A {
+>A : A
+>  : ^
+
+    public a: number;
+>a : number
+>  : ^^^^^^
+
+    static foo(): number { return 1; }
+>foo : () => number
+>    : ^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+}
+/*pruned*/;
+
+
+
+let objA = new A();
+>objA : A
+>     : ^
+>new A() : A
+>        : ^
+>A : typeof A
+>  : ^^^^^^^^
+
+
+// number type var
+let ResultIsAny1 = void NUMBER;
+>ResultIsAny1 : undefined
+>             : ^^^^^^^^^
+>void NUMBER : undefined
+>            : ^^^^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+
+let ResultIsAny2 = void NUMBER1;
+>ResultIsAny2 : undefined
+>             : ^^^^^^^^^
+>void NUMBER1 : undefined
+>             : ^^^^^^^^^
+>NUMBER1 : number[]
+>        : ^^^^^^^^
+
+
+// number type literal
+let ResultIsAny3 = void 1;
+>ResultIsAny3 : undefined
+>             : ^^^^^^^^^
+>void 1 : undefined
+>       : ^^^^^^^^^
+>1 : 1
+>  : ^
+
+let ResultIsAny4 = void { x: 1, y: 2};
+>ResultIsAny4 : undefined
+>             : ^^^^^^^^^
+>void { x: 1, y: 2} : undefined
+>                   : ^^^^^^^^^
+>{ x: 1, y: 2} : { x: number; y: number; }
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>y : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+
+let ResultIsAny5 = void { x: 1, y: (n: number) => { return n; } };
+>ResultIsAny5 : undefined
+>             : ^^^^^^^^^
+>void { x: 1, y: (n: number) => { return n; } } : undefined
+>                                               : ^^^^^^^^^
+>{ x: 1, y: (n: number) => { return n; } } : { x: number; y: (n: number) => number; }
+>                                          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>y : (n: number) => number
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>(n: number) => { return n; } : (n: number) => number
+>                             : ^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+>n : number
+>  : ^^^^^^
+
+
+// number type expressions
+let ResultIsAny6 = void objA.a;
+>ResultIsAny6 : undefined
+>             : ^^^^^^^^^
+>void objA.a : undefined
+>            : ^^^^^^^^^
+>objA.a : number
+>       : ^^^^^^
+>objA : A
+>     : ^
+>a : number
+>  : ^^^^^^
+
+/*pruned*/;
+let ResultIsAny8 = void NUMBER1[0];
+>ResultIsAny8 : undefined
+>             : ^^^^^^^^^
+>void NUMBER1[0] : undefined
+>                : ^^^^^^^^^
+>NUMBER1[0] : number
+>           : ^^^^^^
+>NUMBER1 : number[]
+>        : ^^^^^^^^
+>0 : 0
+>  : ^
+
+let ResultIsAny9 = void foo();
+>ResultIsAny9 : undefined
+>             : ^^^^^^^^^
+>void foo() : undefined
+>           : ^^^^^^^^^
+>foo() : number
+>      : ^^^^^^
+>foo : () => number
+>    : ^^^^^^^^^^^^
+
+let ResultIsAny10 = void A.foo();
+>ResultIsAny10 : undefined
+>              : ^^^^^^^^^
+>void A.foo() : undefined
+>             : ^^^^^^^^^
+>A.foo() : number
+>        : ^^^^^^
+>A.foo : () => number
+>      : ^^^^^^^^^^^^
+>A : typeof A
+>  : ^^^^^^^^
+>foo : () => number
+>    : ^^^^^^^^^^^^
+
+let ResultIsAny11 = void (NUMBER + NUMBER);
+>ResultIsAny11 : undefined
+>              : ^^^^^^^^^
+>void (NUMBER + NUMBER) : undefined
+>                       : ^^^^^^^^^
+>(NUMBER + NUMBER) : number
+>                  : ^^^^^^
+>NUMBER + NUMBER : number
+>                : ^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+
+
+// multiple void  operators
+let ResultIsAny12 = void void NUMBER;
+>ResultIsAny12 : undefined
+>              : ^^^^^^^^^
+>void void NUMBER : undefined
+>                 : ^^^^^^^^^
+>void NUMBER : undefined
+>            : ^^^^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+
+let ResultIsAny13 = void void void (NUMBER + NUMBER);
+>ResultIsAny13 : undefined
+>              : ^^^^^^^^^
+>void void void (NUMBER + NUMBER) : undefined
+>                                 : ^^^^^^^^^
+>void void (NUMBER + NUMBER) : undefined
+>                            : ^^^^^^^^^
+>void (NUMBER + NUMBER) : undefined
+>                       : ^^^^^^^^^
+>(NUMBER + NUMBER) : number
+>                  : ^^^^^^
+>NUMBER + NUMBER : number
+>                : ^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+
+
+// miss assignment operators
+void 1;
+>void 1 : undefined
+>       : ^^^^^^^^^
+>1 : 1
+>  : ^
+
+void NUMBER;
+>void NUMBER : undefined
+>            : ^^^^^^^^^
+>NUMBER : number
+>       : ^^^^^^
+
+void NUMBER1;
+>void NUMBER1 : undefined
+>             : ^^^^^^^^^
+>NUMBER1 : number[]
+>        : ^^^^^^^^
+
+void foo();
+>void foo() : undefined
+>           : ^^^^^^^^^
+>foo() : number
+>      : ^^^^^^
+>foo : () => number
+>    : ^^^^^^^^^^^^
+
+void objA.a;
+>void objA.a : undefined
+>            : ^^^^^^^^^
+>objA.a : number
+>       : ^^^^^^
+>objA : A
+>     : ^
+>a : number
+>  : ^^^^^^
+
+/**/;
+/*pruned*/;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

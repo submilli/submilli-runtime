@@ -1,0 +1,4 @@
+types: 3 of 14 tsc entries compared, 0 differ
+
+errors:
+line 2: ours: unresolved identifier `cb` (tsc accepts)

@@ -8,7 +8,7 @@ chapter "Connecting to your harness".
 | Directory | Harness | Reaches the server over |
 |:----------|:--------|:------------------------|
 | `mastra/` | Mastra (TypeScript) | MCP |
-| `deepagents/` | LangChain deepagents (Python) | MCP |
+| `deepagents/` | LangChain deepagents (Python 3.11+, server 0.4.1+) | The HTTP API, through `langchain-submilli` |
 | `openai-agents/` | OpenAI Agents SDK (Python) | MCP |
 | `claude-agent-sdk/` | Claude Agent SDK (TypeScript) | MCP |
 | `vercel-ai-sdk-http/` | Vercel AI SDK (TypeScript) | The HTTP API; `submilli.ts` builds the tools |
@@ -81,8 +81,11 @@ Every directory has a check that needs no model API key. It runs the agent
 against the local server with a scripted model that calls the execute tool
 with `note.ts`, and asserts three things: two users who write the same note
 each see only their own, a connection that names no user is refused, and so
-is one whose token the server does not know. The deepagents check also lists
-the user's notes with `submilli__files__list`.
+is one whose token the server does not know. The deepagents check runs
+the agent's middleware on a scripted graph of its own, and also asserts
+the tools the model is offered and the execute tool's description, that
+a thread keeps one session across turns, that a second user on that
+thread is refused, and that `aclose_thread` ends the session.
 
 ```sh
 npm run check       # the TypeScript examples

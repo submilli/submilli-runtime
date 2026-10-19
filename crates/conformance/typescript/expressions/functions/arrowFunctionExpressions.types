@@ -1,0 +1,383 @@
+=== arrowFunctionExpressions.ts ===
+// ArrowFormalParameters => AssignmentExpression is equivalent to ArrowFormalParameters => { return AssignmentExpression; }
+let a = (p: string) => p.length;
+>a : (p: string) => number
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>(p: string) => p.length : (p: string) => number
+>                        : ^^^^^^^^^^^^^^^^^^^^^
+>p : string
+>  : ^^^^^^
+>p.length : number
+>         : ^^^^^^
+>p : string
+>  : ^^^^^^
+>length : number
+>       : ^^^^^^
+
+let a_2 = (p: string) => { return p.length; }
+>a_2 : (p: string) => number
+>    : ^^^^^^^^^^^^^^^^^^^^^
+>(p: string) => { return p.length; } : (p: string) => number
+>                                    : ^^^^^^^^^^^^^^^^^^^^^
+>p : string
+>  : ^^^^^^
+>p.length : number
+>         : ^^^^^^
+>p : string
+>  : ^^^^^^
+>length : number
+>       : ^^^^^^
+
+
+// Identifier => Block is equivalent to(Identifier) => Block
+/*pruned*/;
+/*pruned*/;
+
+// Identifier => AssignmentExpression is equivalent to(Identifier) => AssignmentExpression
+let c: number = null as unknown as (number);
+>c : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+// Binding patterns in arrow functions
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+// Arrow function used in class member initializer
+// Arrow function used in class member function
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+// Arrow function used in arrow function
+let arrrr = () => (m: number) => () => (n: number) => m + n;
+>arrrr : () => (m: number) => () => (n: number) => number
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>() => (m: number) => () => (n: number) => m + n : () => (m: number) => () => (n: number) => number
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(m: number) => () => (n: number) => m + n : (m: number) => () => (n: number) => number
+>                                          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>m : number
+>  : ^^^^^^
+>() => (n: number) => m + n : () => (n: number) => number
+>                           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(n: number) => m + n : (n: number) => number
+>                     : ^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+>m + n : number
+>      : ^^^^^^
+>m : number
+>  : ^^^^^^
+>n : number
+>  : ^^^^^^
+
+let e = arrrr()(3)()(4);
+>e : number
+>  : ^^^^^^
+>arrrr()(3)()(4) : number
+>                : ^^^^^^
+>arrrr()(3)() : (n: number) => number
+>             : ^^^^^^^^^^^^^^^^^^^^^
+>arrrr()(3) : () => (n: number) => number
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>arrrr() : (m: number) => () => (n: number) => number
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>arrrr : () => (m: number) => () => (n: number) => number
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>3 : 3
+>  : ^
+>4 : 4
+>  : ^
+
+let e_2: number = null as unknown as (number);
+>e_2 : number
+>    : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+// Arrow function used in arrow function used in function
+function someFn(): void {
+>someFn : () => void
+>       : ^^^^^^^^^^
+
+    let arr = (n: number) => (p: number) => p * n;
+>arr : (n: number) => (p: number) => number
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(n: number) => (p: number) => p * n : (n: number) => (p: number) => number
+>                                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+>(p: number) => p * n : (p: number) => number
+>                     : ^^^^^^^^^^^^^^^^^^^^^
+>p : number
+>  : ^^^^^^
+>p * n : number
+>      : ^^^^^^
+>p : number
+>  : ^^^^^^
+>n : number
+>  : ^^^^^^
+
+    arr(3)(4).toExponential();
+>arr(3)(4).toExponential() : string
+>                          : ^^^^^^
+>arr(3)(4).toExponential : (fractionDigits?: number) => string
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>arr(3)(4) : number
+>          : ^^^^^^
+>arr(3) : (p: number) => number
+>       : ^^^^^^^^^^^^^^^^^^^^^
+>arr : (n: number) => (p: number) => number
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>3 : 3
+>  : ^
+>4 : 4
+>  : ^
+>toExponential : (fractionDigits?: number) => string
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+}
+
+// Arrow function used in function
+function someOtherFn(): void {
+>someOtherFn : () => void
+>            : ^^^^^^^^^^
+
+    let arr = (n: number) => '' + n;
+>arr : (n: number) => string
+>    : ^^^^^^^^^^^^^^^^^^^^^
+>(n: number) => '' + n : (n: number) => string
+>                      : ^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+>'' + n : string
+>       : ^^^^^^
+>'' : ""
+>   : ^^
+>n : number
+>  : ^^^^^^
+
+    arr(4).charAt(0);
+>arr(4).charAt(0) : string
+>                 : ^^^^^^
+>arr(4).charAt : (pos: number) => string
+>              : ^^^^^^^^^^^^^^^^^^^^^^^
+>arr(4) : string
+>       : ^^^^^^
+>arr : (n: number) => string
+>    : ^^^^^^^^^^^^^^^^^^^^^
+>4 : 4
+>  : ^
+>charAt : (pos: number) => string
+>       : ^^^^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+}
+
+// Arrow function used in nested function in function
+function outerFn(): void {
+>outerFn : () => void
+>        : ^^^^^^^^^^
+
+    function innerFn(): void {
+>innerFn : () => void
+>        : ^^^^^^^^^^
+
+        let arrowFn = () => { };
+>arrowFn : () => void
+>        : ^^^^^^^^^^
+>() => { } : () => void
+>          : ^^^^^^^^^^
+
+        let p = arrowFn();
+>p : void
+>  : ^^^^
+>arrowFn() : void
+>          : ^^^^
+>arrowFn : () => void
+>        : ^^^^^^^^^^
+
+        let p_2: void = null as unknown as (void);
+>p_2 : void
+>    : ^^^^
+>null as unknown as (void) : void
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    }
+}
+
+// Arrow function used in nested function in arrow function
+let f = (n: string) => {
+>f : (n: string) => () => string
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(n: string) => {     function fn(x: number): () => string {         return () => n + x;     }     return fn(4); } : (n: string) => () => string
+>                                                                                                                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>n : string
+>  : ^^^^^^
+
+    function fn(x: number): () => string {
+>fn : (x: number) => () => string
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+        return () => n + x;
+>() => n + x : () => string
+>            : ^^^^^^^^^^^^
+>n + x : string
+>      : ^^^^^^
+>n : string
+>  : ^^^^^^
+>x : number
+>  : ^^^^^^
+
+    }
+    return fn(4);
+>fn(4) : () => string
+>      : ^^^^^^^^^^^^
+>fn : (x: number) => () => string
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>4 : 4
+>  : ^
+
+}
+let g = f('')();
+>g : string
+>  : ^^^^^^
+>f('')() : string
+>        : ^^^^^^
+>f('') : () => string
+>      : ^^^^^^^^^^^^
+>f : (n: string) => () => string
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>'' : ""
+>   : ^^
+
+let g_2: string = null as unknown as (string);
+>g_2 : string
+>    : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+
+// Arrow function used in nested function in arrow function in nested function
+function someOuterFn(): (n: string) => () => () => number {
+>someOuterFn : () => (n: string) => () => () => number
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>n : string
+>  : ^^^^^^
+
+    let arr = (n: string) => {
+>arr : (n: string) => () => () => number
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(n: string) => {         function innerFn(): () => number {             return () => n.length;         }         return innerFn;     } : (n: string) => () => () => number
+>                                                                                                                                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>n : string
+>  : ^^^^^^
+
+        function innerFn(): () => number {
+>innerFn : () => () => number
+>        : ^^^^^^^^^^^^^^^^^^
+
+            return () => n.length;
+>() => n.length : () => number
+>               : ^^^^^^^^^^^^
+>n.length : number
+>         : ^^^^^^
+>n : string
+>  : ^^^^^^
+>length : number
+>       : ^^^^^^
+
+        }
+        return innerFn;
+>innerFn : () => () => number
+>        : ^^^^^^^^^^^^^^^^^^
+
+    }
+    return arr;
+>arr : (n: string) => () => () => number
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+}
+let h = someOuterFn()('')()();
+>h : number
+>  : ^^^^^^
+>someOuterFn()('')()() : number
+>                      : ^^^^^^
+>someOuterFn()('')() : () => number
+>                    : ^^^^^^^^^^^^
+>someOuterFn()('') : () => () => number
+>                  : ^^^^^^^^^^^^^^^^^^
+>someOuterFn() : (n: string) => () => () => number
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>someOuterFn : () => (n: string) => () => () => number
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>'' : ""
+>   : ^^
+
+h.toExponential();
+>h.toExponential() : string
+>                  : ^^^^^^
+>h.toExponential : (fractionDigits?: number) => string
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>h : number
+>  : ^^^^^^
+>toExponential : (fractionDigits?: number) => string
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+// Arrow function used in try/catch/finally in function
+function tryCatchFn(): void {
+>tryCatchFn : () => void
+>           : ^^^^^^^^^^
+
+    try {
+        /*pruned*/;
+    } catch (e) {
+>e : unknown
+>  : ^^^^^^^
+
+        /*pruned*/;
+    } finally {
+        /*pruned*/;
+    }
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

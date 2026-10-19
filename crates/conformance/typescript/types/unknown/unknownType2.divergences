@@ -1,0 +1,78 @@
+types: 176 of 288 tsc entries compared, 15 differ
+
+line 65: u
+  tsc:  string
+  ours: unknown
+
+line 69: u
+  tsc:  boolean
+  ours: unknown
+
+line 73: u
+  tsc:  number
+  ours: unknown
+
+line 113: u
+  tsc:  NumberEnum.A
+  ours: 0
+
+line 117: u
+  tsc:  StringEnum.B
+  ours: "B"
+
+line 123: x
+  tsc:  StringEnum.A
+  ours: "A"
+
+line 126: x
+  tsc:  StringEnum.B
+  ours: "B"
+
+line 129: x
+  tsc:  StringEnum.C
+  ours: "C"
+
+line 138: x
+  tsc:  StringEnum.A
+  ours: "A"
+
+line 140: x
+  tsc:  StringEnum.A | StringEnum.B
+  ours: "B"
+
+line 142: x
+  tsc:  StringEnum
+  ours: "C"
+
+line 143: x
+  tsc:  StringEnum
+  ours: "C"
+
+line 244: u
+  tsc:  NumberEnum.A
+  ours: 0
+
+line 250: u
+  tsc:  NumberEnum.A | NumberEnum.B | StringEnum.A
+  ours: 0 | 1 | "A"
+
+line 256: u
+  tsc:  NumberEnum.A | NumberEnum.B | StringEnum.A
+  ours: 0 | 1 | "A"
+
+errors:
+line 65: ours: expected `string`, got `unknown` (tsc accepts)
+line 69: ours: expected `boolean`, got `unknown` (tsc accepts)
+line 73: ours: expected `number`, got `unknown` (tsc accepts)
+line 117: ours: expected `StringEnum.B`, got `"B"` (tsc accepts)
+line 123: ours: expected `StringEnum.A`, got `"A"` (tsc accepts)
+line 126: ours: expected `StringEnum.B`, got `"B"` (tsc accepts)
+line 129: ours: expected `StringEnum.C`, got `"C"` (tsc accepts)
+line 137: ours: `switch` case body must end with `break` or `return` — no fallthrough (tsc accepts)
+line 138: ours: expected `StringEnum.A`, got `"A"` (tsc accepts)
+line 139: ours: `switch` case body must end with `break` or `return` — no fallthrough (tsc accepts)
+line 140: ours: expected `StringEnum.A | StringEnum.B`, got `"B"` (tsc accepts)
+line 142: ours: expected `StringEnum`, got `"C"` (tsc accepts)
+line 143: ours: expected `StringEnum`, got `"C"` (tsc accepts)
+line 250: ours: expected `NumberEnum.A | NumberEnum.B | StringEnum.A`, got `0 | 1 | "A"` (tsc accepts)
+line 256: ours: expected `NumberEnum.A | NumberEnum.B | StringEnum.A`, got `0 | 1 | "A"` (tsc accepts)

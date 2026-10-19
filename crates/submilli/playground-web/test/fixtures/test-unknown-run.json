@@ -1,0 +1,16 @@
+{
+ "exit": 2,
+ "result": {
+  "error": {
+   "kind": "unknown-run",
+   "message": "no run 999999 is stored; list the runs with `submilli playground runs`"
+  },
+  "next": [
+   "submilli playground runs"
+  ]
+ },
+ "text": "",
+ "notes": [
+  "no run 999999 is stored; list the runs with `submilli playground runs`"
+ ]
+}

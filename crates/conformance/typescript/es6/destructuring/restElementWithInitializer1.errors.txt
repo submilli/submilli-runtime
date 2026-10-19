@@ -1,0 +1,1 @@
+restElementWithInitializer1.ts(3,11): error TS1186: A rest element cannot have an initializer.

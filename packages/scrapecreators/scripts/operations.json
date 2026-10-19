@@ -1,0 +1,1862 @@
+[
+  {
+    "platform": "youtube",
+    "method": "getChannel",
+    "path": "/v1/youtube/channel",
+    "capability": "scrapecreators.com/youtube.getChannel",
+    "optionsType": "YouTubeGetChannelOptions",
+    "resultType": "YouTubeGetChannelData",
+    "parameters": [
+      {
+        "option": "channelId",
+        "wire": "channelId",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "UC-9-kyTW8ZkZNDHQJ6FgpwQ"
+      },
+      {
+        "option": "handle",
+        "wire": "handle",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "ThePatMcAfeeShow"
+      },
+      {
+        "option": "url",
+        "wire": "url",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "https://www.youtube.com/@ThePatMcAfeeShow"
+      },
+      {
+        "option": "cacheMaxAge",
+        "wire": "cache_max_age",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "1d",
+          "3d",
+          "7d",
+          "14d",
+          "30d"
+        ],
+        "example": "7d"
+      }
+    ],
+    "primary": [
+      "channelId"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/youtube/channel"
+  },
+  {
+    "platform": "youtube",
+    "method": "listChannelVideos",
+    "path": "/v1/youtube/channel-videos",
+    "capability": "scrapecreators.com/youtube.listChannelVideos",
+    "optionsType": "YouTubeListChannelVideosOptions",
+    "resultType": "YouTubeListChannelVideosData",
+    "parameters": [
+      {
+        "option": "channelId",
+        "wire": "channelId",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "UC-9-kyTW8ZkZNDHQJ6FgpwQ"
+      },
+      {
+        "option": "handle",
+        "wire": "handle",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "ThePatMcAfeeShow"
+      },
+      {
+        "option": "sort",
+        "wire": "sort",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "latest",
+          "popular"
+        ],
+        "example": "latest"
+      },
+      {
+        "option": "continuationToken",
+        "wire": "continuationToken",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "4qmFsgKrCBIYVUNkRkpXVWE0M3NtUm00SXBIQnB"
+      },
+      {
+        "option": "isPaidPromotions",
+        "wire": "is_paid_promotions",
+        "required": false,
+        "type": "boolean",
+        "enum": null,
+        "example": false
+      },
+      {
+        "option": "includeExtras",
+        "wire": "includeExtras",
+        "required": false,
+        "type": "boolean",
+        "enum": null,
+        "example": false
+      }
+    ],
+    "primary": [
+      "videos"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/youtube/channel-videos"
+  },
+  {
+    "platform": "youtube",
+    "method": "listChannelPlaylists",
+    "path": "/v1/youtube/channel/playlists",
+    "capability": "scrapecreators.com/youtube.listChannelPlaylists",
+    "optionsType": "YouTubeListChannelPlaylistsOptions",
+    "resultType": "YouTubeListChannelPlaylistsData",
+    "parameters": [
+      {
+        "option": "channelId",
+        "wire": "channelId",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "UCX6OQ3DkcsbYNE6H8uQQuVA"
+      },
+      {
+        "option": "handle",
+        "wire": "handle",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "MrBeast"
+      },
+      {
+        "option": "continuationToken",
+        "wire": "continuationToken",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "4qmFsgKrCBIYVUNkRkpXVWE0M3NtUm00SXBIQnB"
+      }
+    ],
+    "primary": [
+      "playlists"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/youtube/channel/playlists"
+  },
+  {
+    "platform": "youtube",
+    "method": "listChannelLives",
+    "path": "/v1/youtube/channel/lives",
+    "capability": "scrapecreators.com/youtube.listChannelLives",
+    "optionsType": "YouTubeListChannelLivesOptions",
+    "resultType": "YouTubeListChannelLivesData",
+    "parameters": [
+      {
+        "option": "channelId",
+        "wire": "channelId",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "UCWsDFcIhY2DBi3GB5uykGXA"
+      },
+      {
+        "option": "handle",
+        "wire": "handle",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "IShowSpeed"
+      },
+      {
+        "option": "continuationToken",
+        "wire": "continuationToken",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "4qmFsgKrCBIYVUNkRkpXVWE0M3NtUm00SXBIQnB"
+      }
+    ],
+    "primary": [
+      "lives"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/youtube/channel/lives"
+  },
+  {
+    "platform": "youtube",
+    "method": "listChannelCommunityPosts",
+    "path": "/v1/youtube/channel/community-posts",
+    "capability": "scrapecreators.com/youtube.listChannelCommunityPosts",
+    "optionsType": "YouTubeListChannelCommunityPostsOptions",
+    "resultType": "YouTubeListChannelCommunityPostsData",
+    "parameters": [
+      {
+        "option": "channelId",
+        "wire": "channelId",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "UCX6OQ3DkcsbYNE6H8uQQuVA"
+      },
+      {
+        "option": "handle",
+        "wire": "handle",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "MrBeast"
+      },
+      {
+        "option": "continuationToken",
+        "wire": "continuationToken",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "4qmFsgKrCBIYVUNkRkpXVWE0M3NtUm00SXBIQnB"
+      }
+    ],
+    "primary": [
+      "posts"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/youtube/channel/community-posts"
+  },
+  {
+    "platform": "youtube",
+    "method": "listChannelShorts",
+    "path": "/v1/youtube/channel/shorts",
+    "capability": "scrapecreators.com/youtube.listChannelShorts",
+    "optionsType": "YouTubeListChannelShortsOptions",
+    "resultType": "YouTubeListChannelShortsData",
+    "parameters": [
+      {
+        "option": "handle",
+        "wire": "handle",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "starterstory"
+      },
+      {
+        "option": "channelId",
+        "wire": "channelId",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "UC-9-kyTW8ZkZNDHQJ6FgpwQ"
+      },
+      {
+        "option": "sort",
+        "wire": "sort",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "newest",
+          "popular"
+        ],
+        "example": "newest"
+      },
+      {
+        "option": "continuationToken",
+        "wire": "continuationToken",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "4qmFsgKrCBIYVUNkRkpXVWE0M3NtUm00SXBIQnB"
+      }
+    ],
+    "primary": [
+      "shorts"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/youtube/channel/shorts"
+  },
+  {
+    "platform": "youtube",
+    "method": "getVideo",
+    "path": "/v1/youtube/video",
+    "capability": "scrapecreators.com/youtube.getVideo",
+    "optionsType": "YouTubeGetVideoOptions",
+    "resultType": "YouTubeGetVideoData",
+    "parameters": [
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://youtu.be/gTCi7PaOPLY"
+      },
+      {
+        "option": "language",
+        "wire": "language",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "en"
+      },
+      {
+        "option": "cacheMaxAge",
+        "wire": "cache_max_age",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "1d",
+          "3d",
+          "7d",
+          "14d",
+          "30d"
+        ],
+        "example": "7d"
+      }
+    ],
+    "primary": [
+      "id"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/youtube/video"
+  },
+  {
+    "platform": "youtube",
+    "method": "getTranscript",
+    "path": "/v1/youtube/video/transcript",
+    "capability": "scrapecreators.com/youtube.getTranscript",
+    "optionsType": "YouTubeGetTranscriptOptions",
+    "resultType": "YouTubeGetTranscriptData",
+    "parameters": [
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://www.youtube.com/watch?v=bjVIDXPP7Uk"
+      },
+      {
+        "option": "language",
+        "wire": "language",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "en"
+      },
+      {
+        "option": "originalAudio",
+        "wire": "original_audio",
+        "required": false,
+        "type": "boolean",
+        "enum": null,
+        "example": true
+      },
+      {
+        "option": "cacheMaxAge",
+        "wire": "cache_max_age",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "1d",
+          "3d",
+          "7d",
+          "14d",
+          "30d"
+        ],
+        "example": "7d"
+      }
+    ],
+    "primary": [
+      "transcript"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/youtube/video/transcript"
+  },
+  {
+    "platform": "youtube",
+    "method": "getSponsors",
+    "path": "/v1/youtube/video/sponsors",
+    "capability": "scrapecreators.com/youtube.getSponsors",
+    "optionsType": "YouTubeGetSponsorsOptions",
+    "resultType": "YouTubeGetSponsorsData",
+    "parameters": [
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://www.youtube.com/watch?v=AVO0ifle-OU"
+      },
+      {
+        "option": "language",
+        "wire": "language",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "en"
+      }
+    ],
+    "primary": [
+      "video"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/youtube/video/sponsors"
+  },
+  {
+    "platform": "youtube",
+    "method": "search",
+    "path": "/v1/youtube/search",
+    "capability": "scrapecreators.com/youtube.search",
+    "optionsType": "YouTubeSearchOptions",
+    "resultType": "YouTubeSearchData",
+    "parameters": [
+      {
+        "option": "query",
+        "wire": "query",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "test"
+      },
+      {
+        "option": "uploadDate",
+        "wire": "uploadDate",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "today",
+          "this_week",
+          "this_month",
+          "this_year"
+        ],
+        "example": "today"
+      },
+      {
+        "option": "sortBy",
+        "wire": "sortBy",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "relevance",
+          "popular"
+        ],
+        "example": "relevance"
+      },
+      {
+        "option": "type",
+        "wire": "type",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "videos",
+          "shorts",
+          "channels",
+          "playlists"
+        ],
+        "example": "videos"
+      },
+      {
+        "option": "duration",
+        "wire": "duration",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "under_3_min",
+          "between_3_and_20_min",
+          "over_20_min"
+        ],
+        "example": "under_3_min"
+      },
+      {
+        "option": "region",
+        "wire": "region",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "US"
+      },
+      {
+        "option": "continuationToken",
+        "wire": "continuationToken",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "4qmFsgKrCBIYVUNkRkpXVWE0M3NtUm00SXBIQnB"
+      },
+      {
+        "option": "includeExtras",
+        "wire": "includeExtras",
+        "required": false,
+        "type": "boolean",
+        "enum": null,
+        "example": false
+      }
+    ],
+    "primary": [
+      "videos"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/youtube/search"
+  },
+  {
+    "platform": "youtube",
+    "method": "searchTypeahead",
+    "path": "/v1/youtube/search/typeahead",
+    "capability": "scrapecreators.com/youtube.searchTypeahead",
+    "optionsType": "YouTubeSearchTypeaheadOptions",
+    "resultType": "YouTubeSearchTypeaheadData",
+    "parameters": [
+      {
+        "option": "query",
+        "wire": "query",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "mr beast"
+      }
+    ],
+    "primary": [
+      "data"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/youtube/search/typeahead"
+  },
+  {
+    "platform": "youtube",
+    "method": "searchHashtag",
+    "path": "/v1/youtube/search/hashtag",
+    "capability": "scrapecreators.com/youtube.searchHashtag",
+    "optionsType": "YouTubeSearchHashtagOptions",
+    "resultType": "YouTubeSearchHashtagData",
+    "parameters": [
+      {
+        "option": "hashtag",
+        "wire": "hashtag",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "funny"
+      },
+      {
+        "option": "continuationToken",
+        "wire": "continuationToken",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "4qmFsgKrCBIYVUNkRkpXVWE0M3NtUm00SXBIQnB"
+      },
+      {
+        "option": "type",
+        "wire": "type",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "all",
+          "shorts"
+        ],
+        "example": "all"
+      }
+    ],
+    "primary": [
+      "videos"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/youtube/search/hashtag"
+  },
+  {
+    "platform": "youtube",
+    "method": "listComments",
+    "path": "/v1/youtube/video/comments",
+    "capability": "scrapecreators.com/youtube.listComments",
+    "optionsType": "YouTubeListCommentsOptions",
+    "resultType": "YouTubeListCommentsData",
+    "parameters": [
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+      },
+      {
+        "option": "continuationToken",
+        "wire": "continuationToken",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "4qmFsgKrCBIYVUNkRkpXVWE0M3NtUm00SXBIQnB"
+      },
+      {
+        "option": "order",
+        "wire": "order",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "top",
+          "newest"
+        ],
+        "example": "top"
+      }
+    ],
+    "primary": [
+      "comments"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/youtube/video/comments"
+  },
+  {
+    "platform": "youtube",
+    "method": "listCommentReplies",
+    "path": "/v1/youtube/video/comment/replies",
+    "capability": "scrapecreators.com/youtube.listCommentReplies",
+    "optionsType": "YouTubeListCommentRepliesOptions",
+    "resultType": "YouTubeListCommentRepliesData",
+    "parameters": [
+      {
+        "option": "continuationToken",
+        "wire": "continuationToken",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "Eg0SC2RRdzR3OVdnWGNRGAYygwEaUBIa..."
+      }
+    ],
+    "primary": [
+      "comments"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/youtube/video/comment/replies"
+  },
+  {
+    "platform": "youtube",
+    "method": "listTrendingShorts",
+    "path": "/v1/youtube/shorts/trending",
+    "capability": "scrapecreators.com/youtube.listTrendingShorts",
+    "optionsType": "YouTubeListTrendingShortsOptions",
+    "resultType": "YouTubeListTrendingShortsData",
+    "parameters": [],
+    "primary": [
+      "shorts"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/youtube/shorts/trending"
+  },
+  {
+    "platform": "youtube",
+    "method": "getPlaylist",
+    "path": "/v1/youtube/playlist",
+    "capability": "scrapecreators.com/youtube.getPlaylist",
+    "optionsType": "YouTubeGetPlaylistOptions",
+    "resultType": "YouTubeGetPlaylistData",
+    "parameters": [
+      {
+        "option": "playlistId",
+        "wire": "playlist_id",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "PLP32wGpgzmIlInfgKVFfCwVsxgGqZNIiS"
+      },
+      {
+        "option": "continuationToken",
+        "wire": "continuationToken",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "test"
+      }
+    ],
+    "primary": [
+      "videos"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/youtube/playlist"
+  },
+  {
+    "platform": "youtube",
+    "method": "getCommunityPost",
+    "path": "/v1/youtube/community-post",
+    "capability": "scrapecreators.com/youtube.getCommunityPost",
+    "optionsType": "YouTubeGetCommunityPostOptions",
+    "resultType": "YouTubeGetCommunityPostData",
+    "parameters": [
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://www.youtube.com/post/Ugkxvj2KoApYAXoqLWnKVr6zZe5JjeHrQeP8"
+      }
+    ],
+    "primary": [
+      "id"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/youtube/community-post"
+  },
+  {
+    "platform": "linkedin",
+    "method": "getProfile",
+    "path": "/v1/linkedin/profile",
+    "capability": "scrapecreators.com/linkedin.getProfile",
+    "optionsType": "LinkedInGetProfileOptions",
+    "resultType": "LinkedInGetProfileData",
+    "parameters": [
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://www.linkedin.com/in/parrsam/"
+      }
+    ],
+    "primary": [
+      "name"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/linkedin/profile"
+  },
+  {
+    "platform": "linkedin",
+    "method": "getCompany",
+    "path": "/v1/linkedin/company",
+    "capability": "scrapecreators.com/linkedin.getCompany",
+    "optionsType": "LinkedInGetCompanyOptions",
+    "resultType": "LinkedInGetCompanyData",
+    "parameters": [
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://linkedin.com/company/shopify"
+      }
+    ],
+    "primary": [
+      "name"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/linkedin/company"
+  },
+  {
+    "platform": "linkedin",
+    "method": "listCompanyPosts",
+    "path": "/v1/linkedin/company/posts",
+    "capability": "scrapecreators.com/linkedin.listCompanyPosts",
+    "optionsType": "LinkedInListCompanyPostsOptions",
+    "resultType": "LinkedInListCompanyPostsData",
+    "parameters": [
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://linkedin.com/company/shopify"
+      },
+      {
+        "option": "page",
+        "wire": "page",
+        "required": false,
+        "type": "number",
+        "enum": null,
+        "example": 1
+      }
+    ],
+    "primary": [
+      "posts"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/linkedin/company/posts"
+  },
+  {
+    "platform": "linkedin",
+    "method": "searchPosts",
+    "path": "/v1/linkedin/search/posts",
+    "capability": "scrapecreators.com/linkedin.searchPosts",
+    "optionsType": "LinkedInSearchPostsOptions",
+    "resultType": "LinkedInSearchPostsData",
+    "parameters": [
+      {
+        "option": "query",
+        "wire": "query",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "ai agents"
+      },
+      {
+        "option": "datePosted",
+        "wire": "date_posted",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "last-hour",
+          "last-day",
+          "last-week",
+          "last-month",
+          "last-year"
+        ],
+        "example": "last-week"
+      },
+      {
+        "option": "cursor",
+        "wire": "cursor",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "2"
+      }
+    ],
+    "primary": [
+      "posts"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/linkedin/search/posts"
+  },
+  {
+    "platform": "linkedin",
+    "method": "getPost",
+    "path": "/v1/linkedin/post",
+    "capability": "scrapecreators.com/linkedin.getPost",
+    "optionsType": "LinkedInGetPostOptions",
+    "resultType": "LinkedInGetPostData",
+    "parameters": [
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://www.linkedin.com/pulse/being-father-has-made-me-better-leader-vice-versa-austen-allred/"
+      }
+    ],
+    "primary": [
+      "url"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/linkedin/post"
+  },
+  {
+    "platform": "linkedin",
+    "method": "getTranscript",
+    "path": "/v1/linkedin/post/transcript",
+    "capability": "scrapecreators.com/linkedin.getTranscript",
+    "optionsType": "LinkedInGetTranscriptOptions",
+    "resultType": "LinkedInGetTranscriptData",
+    "parameters": [
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://www.linkedin.com/posts/gemini-35-flash-is-a-step-forward-for-google-ugcPost-7465082215316525056-MHBd/"
+      }
+    ],
+    "primary": [
+      "transcript"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/linkedin/post/transcript"
+  },
+  {
+    "platform": "github",
+    "method": "getUser",
+    "path": "/v1/github/user",
+    "capability": "scrapecreators.com/github.getUser",
+    "optionsType": "GitHubGetUserOptions",
+    "resultType": "GitHubGetUserData",
+    "parameters": [
+      {
+        "option": "handle",
+        "wire": "handle",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "torvalds"
+      },
+      {
+        "option": "url",
+        "wire": "url",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "https://github.com/torvalds"
+      }
+    ],
+    "primary": [
+      "login"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/github/user"
+  },
+  {
+    "platform": "github",
+    "method": "listUserRepositories",
+    "path": "/v1/github/user/repositories",
+    "capability": "scrapecreators.com/github.listUserRepositories",
+    "optionsType": "GitHubListUserRepositoriesOptions",
+    "resultType": "GitHubListUserRepositoriesData",
+    "parameters": [
+      {
+        "option": "handle",
+        "wire": "handle",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "torvalds"
+      },
+      {
+        "option": "url",
+        "wire": "url",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "https://github.com/kentcdodds"
+      },
+      {
+        "option": "type",
+        "wire": "type",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "owner",
+          "all",
+          "member"
+        ],
+        "example": "owner"
+      },
+      {
+        "option": "sort",
+        "wire": "sort",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "created",
+          "updated",
+          "pushed",
+          "full_name"
+        ],
+        "example": "updated"
+      },
+      {
+        "option": "direction",
+        "wire": "direction",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "asc",
+          "desc"
+        ],
+        "example": "desc"
+      },
+      {
+        "option": "cursor",
+        "wire": "cursor",
+        "required": false,
+        "type": "number",
+        "enum": null,
+        "example": 1
+      }
+    ],
+    "primary": [
+      "repositories"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/github/user/repositories"
+  },
+  {
+    "platform": "github",
+    "method": "listUserPullRequests",
+    "path": "/v1/github/user/pull-requests",
+    "capability": "scrapecreators.com/github.listUserPullRequests",
+    "optionsType": "GitHubListUserPullRequestsOptions",
+    "resultType": "GitHubListUserPullRequestsData",
+    "parameters": [
+      {
+        "option": "handle",
+        "wire": "handle",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "torvalds"
+      },
+      {
+        "option": "since",
+        "wire": "since",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "2024-01-01"
+      },
+      {
+        "option": "until",
+        "wire": "until",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "2024-12-31"
+      },
+      {
+        "option": "cursor",
+        "wire": "cursor",
+        "required": false,
+        "type": "number",
+        "enum": null,
+        "example": 1
+      }
+    ],
+    "primary": [
+      "pull_requests"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/github/user/pull-requests"
+  },
+  {
+    "platform": "github",
+    "method": "listUserActivity",
+    "path": "/v1/github/user/activity",
+    "capability": "scrapecreators.com/github.listUserActivity",
+    "optionsType": "GitHubListUserActivityOptions",
+    "resultType": "GitHubListUserActivityData",
+    "parameters": [
+      {
+        "option": "handle",
+        "wire": "handle",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "kentcdodds"
+      },
+      {
+        "option": "url",
+        "wire": "url",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "https://github.com/torvalds"
+      },
+      {
+        "option": "year",
+        "wire": "year",
+        "required": false,
+        "type": "number",
+        "enum": null,
+        "example": 2026
+      },
+      {
+        "option": "cursor",
+        "wire": "cursor",
+        "required": false,
+        "type": "number",
+        "enum": null,
+        "example": 1
+      }
+    ],
+    "primary": [
+      "activity"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/github/user/activity"
+  },
+  {
+    "platform": "github",
+    "method": "listFollowers",
+    "path": "/v1/github/user/followers",
+    "capability": "scrapecreators.com/github.listFollowers",
+    "optionsType": "GitHubListFollowersOptions",
+    "resultType": "GitHubListFollowersData",
+    "parameters": [
+      {
+        "option": "handle",
+        "wire": "handle",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "torvalds"
+      },
+      {
+        "option": "url",
+        "wire": "url",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "https://github.com/torvalds"
+      },
+      {
+        "option": "cursor",
+        "wire": "cursor",
+        "required": false,
+        "type": "number",
+        "enum": null,
+        "example": 1
+      }
+    ],
+    "primary": [
+      "followers"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/github/user/followers"
+  },
+  {
+    "platform": "github",
+    "method": "listFollowing",
+    "path": "/v1/github/user/following",
+    "capability": "scrapecreators.com/github.listFollowing",
+    "optionsType": "GitHubListFollowingOptions",
+    "resultType": "GitHubListFollowingData",
+    "parameters": [
+      {
+        "option": "handle",
+        "wire": "handle",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "kentcdodds"
+      },
+      {
+        "option": "url",
+        "wire": "url",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "https://github.com/kentcdodds"
+      },
+      {
+        "option": "cursor",
+        "wire": "cursor",
+        "required": false,
+        "type": "number",
+        "enum": null,
+        "example": 1
+      }
+    ],
+    "primary": [
+      "following"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/github/user/following"
+  },
+  {
+    "platform": "github",
+    "method": "getContributions",
+    "path": "/v1/github/user/contributions",
+    "capability": "scrapecreators.com/github.getContributions",
+    "optionsType": "GitHubGetContributionsOptions",
+    "resultType": "GitHubGetContributionsData",
+    "parameters": [
+      {
+        "option": "handle",
+        "wire": "handle",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "torvalds"
+      },
+      {
+        "option": "url",
+        "wire": "url",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "https://github.com/torvalds"
+      },
+      {
+        "option": "year",
+        "wire": "year",
+        "required": false,
+        "type": "number",
+        "enum": null,
+        "example": 2026
+      }
+    ],
+    "primary": [
+      "contributions"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/github/user/contributions"
+  },
+  {
+    "platform": "github",
+    "method": "getRepository",
+    "path": "/v1/github/repository",
+    "capability": "scrapecreators.com/github.getRepository",
+    "optionsType": "GitHubGetRepositoryOptions",
+    "resultType": "GitHubGetRepositoryData",
+    "parameters": [
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://github.com/torvalds/linux"
+      }
+    ],
+    "primary": [
+      "repository"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/github/repository"
+  },
+  {
+    "platform": "github",
+    "method": "listTrendingRepositories",
+    "path": "/v1/github/trending/repositories",
+    "capability": "scrapecreators.com/github.listTrendingRepositories",
+    "optionsType": "GitHubListTrendingRepositoriesOptions",
+    "resultType": "GitHubListTrendingRepositoriesData",
+    "parameters": [
+      {
+        "option": "language",
+        "wire": "language",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "javascript"
+      },
+      {
+        "option": "since",
+        "wire": "since",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "daily",
+          "weekly",
+          "monthly"
+        ],
+        "example": "daily"
+      },
+      {
+        "option": "spokenLanguageCode",
+        "wire": "spoken_language_code",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "en"
+      }
+    ],
+    "primary": [
+      "repositories"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/github/trending/repositories"
+  },
+  {
+    "platform": "github",
+    "method": "listTrendingDevelopers",
+    "path": "/v1/github/trending/developers",
+    "capability": "scrapecreators.com/github.listTrendingDevelopers",
+    "optionsType": "GitHubListTrendingDevelopersOptions",
+    "resultType": "GitHubListTrendingDevelopersData",
+    "parameters": [
+      {
+        "option": "language",
+        "wire": "language",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "javascript"
+      },
+      {
+        "option": "since",
+        "wire": "since",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "daily",
+          "weekly",
+          "monthly"
+        ],
+        "example": "daily"
+      }
+    ],
+    "primary": [
+      "developers"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/github/trending/developers"
+  },
+  {
+    "platform": "twitter",
+    "method": "searchPosts",
+    "path": "/v1/twitter/search/posts",
+    "capability": "scrapecreators.com/twitter.searchPosts",
+    "optionsType": "TwitterSearchPostsOptions",
+    "resultType": "TwitterSearchPostsData",
+    "parameters": [
+      {
+        "option": "query",
+        "wire": "query",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "ai agents"
+      },
+      {
+        "option": "cursor",
+        "wire": "cursor",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "2"
+      }
+    ],
+    "primary": [
+      "posts"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/twitter/search/posts"
+  },
+  {
+    "platform": "twitter",
+    "method": "getProfile",
+    "path": "/v1/twitter/profile",
+    "capability": "scrapecreators.com/twitter.getProfile",
+    "optionsType": "TwitterGetProfileOptions",
+    "resultType": "TwitterGetProfileData",
+    "parameters": [
+      {
+        "option": "handle",
+        "wire": "handle",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "Austen"
+      },
+      {
+        "option": "cacheMaxAge",
+        "wire": "cache_max_age",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "1d",
+          "3d",
+          "7d",
+          "14d",
+          "30d"
+        ],
+        "example": "7d"
+      }
+    ],
+    "primary": [
+      "rest_id"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/twitter/profile"
+  },
+  {
+    "platform": "twitter",
+    "method": "listUserTweets",
+    "path": "/v1/twitter/user-tweets",
+    "capability": "scrapecreators.com/twitter.listUserTweets",
+    "optionsType": "TwitterListUserTweetsOptions",
+    "resultType": "TwitterListUserTweetsData",
+    "parameters": [
+      {
+        "option": "handle",
+        "wire": "handle",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "levelsio"
+      },
+      {
+        "option": "trim",
+        "wire": "trim",
+        "required": false,
+        "type": "boolean",
+        "enum": null,
+        "example": false
+      }
+    ],
+    "primary": [
+      "tweets"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/twitter/user-tweets"
+  },
+  {
+    "platform": "twitter",
+    "method": "getTweet",
+    "path": "/v1/twitter/tweet",
+    "capability": "scrapecreators.com/twitter.getTweet",
+    "optionsType": "TwitterGetTweetOptions",
+    "resultType": "TwitterGetTweetData",
+    "parameters": [
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://x.com/example/status/2105732089685348719"
+      },
+      {
+        "option": "trim",
+        "wire": "trim",
+        "required": false,
+        "type": "boolean",
+        "enum": null,
+        "example": false
+      },
+      {
+        "option": "cacheMaxAge",
+        "wire": "cache_max_age",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "1d",
+          "3d",
+          "7d",
+          "14d",
+          "30d"
+        ],
+        "example": "7d"
+      }
+    ],
+    "primary": [
+      "rest_id"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/twitter/tweet"
+  },
+  {
+    "platform": "twitter",
+    "method": "getTranscript",
+    "path": "/v1/twitter/tweet/transcript",
+    "capability": "scrapecreators.com/twitter.getTranscript",
+    "optionsType": "TwitterGetTranscriptOptions",
+    "resultType": "TwitterGetTranscriptData",
+    "parameters": [
+      {
+        "option": "allowLongTranscription",
+        "wire": "allow_long_transcription",
+        "required": false,
+        "type": "boolean",
+        "enum": null,
+        "example": false
+      },
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://x.com/TheoVon/status/1916982720317821050"
+      },
+      {
+        "option": "cacheMaxAge",
+        "wire": "cache_max_age",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "1d",
+          "3d",
+          "7d",
+          "14d",
+          "30d"
+        ],
+        "example": "7d"
+      }
+    ],
+    "primary": [
+      "transcript"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/twitter/tweet/transcript"
+  },
+  {
+    "platform": "twitter",
+    "method": "getCommunity",
+    "path": "/v1/twitter/community",
+    "capability": "scrapecreators.com/twitter.getCommunity",
+    "optionsType": "TwitterGetCommunityOptions",
+    "resultType": "TwitterGetCommunityData",
+    "parameters": [
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://x.com/i/communities/1926186499399139650"
+      }
+    ],
+    "primary": [
+      "rest_id"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/twitter/community"
+  },
+  {
+    "platform": "twitter",
+    "method": "listCommunityTweets",
+    "path": "/v1/twitter/community/tweets",
+    "capability": "scrapecreators.com/twitter.listCommunityTweets",
+    "optionsType": "TwitterListCommunityTweetsOptions",
+    "resultType": "TwitterListCommunityTweetsData",
+    "parameters": [
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://x.com/i/communities/1926186499399139650"
+      }
+    ],
+    "primary": [
+      "tweets"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/twitter/community/tweets"
+  },
+  {
+    "platform": "reddit",
+    "method": "getSubreddit",
+    "path": "/v1/reddit/subreddit/details",
+    "capability": "scrapecreators.com/reddit.getSubreddit",
+    "optionsType": "RedditGetSubredditOptions",
+    "resultType": "RedditGetSubredditData",
+    "parameters": [
+      {
+        "option": "subreddit",
+        "wire": "subreddit",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "AskReddit"
+      },
+      {
+        "option": "url",
+        "wire": "url",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "https://www.reddit.com/r/AbsoluteUnits/"
+      },
+      {
+        "option": "cacheMaxAge",
+        "wire": "cache_max_age",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "1d",
+          "3d",
+          "7d",
+          "14d",
+          "30d"
+        ],
+        "example": "7d"
+      }
+    ],
+    "primary": [
+      "display_name"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/reddit/subreddit/details"
+  },
+  {
+    "platform": "reddit",
+    "method": "listSubredditPosts",
+    "path": "/v1/reddit/subreddit",
+    "capability": "scrapecreators.com/reddit.listSubredditPosts",
+    "optionsType": "RedditListSubredditPostsOptions",
+    "resultType": "RedditListSubredditPostsData",
+    "parameters": [
+      {
+        "option": "subreddit",
+        "wire": "subreddit",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "test"
+      },
+      {
+        "option": "timeframe",
+        "wire": "timeframe",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "all",
+          "day",
+          "week",
+          "month",
+          "year"
+        ],
+        "example": "all"
+      },
+      {
+        "option": "sort",
+        "wire": "sort",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "best",
+          "hot",
+          "new",
+          "top",
+          "rising"
+        ],
+        "example": "best"
+      },
+      {
+        "option": "after",
+        "wire": "after",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "t3_1234567890"
+      },
+      {
+        "option": "trim",
+        "wire": "trim",
+        "required": false,
+        "type": "boolean",
+        "enum": null,
+        "example": false
+      },
+      {
+        "option": "cacheMaxAge",
+        "wire": "cache_max_age",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "1d",
+          "3d",
+          "7d",
+          "14d",
+          "30d"
+        ],
+        "example": "7d"
+      }
+    ],
+    "primary": [
+      "posts"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/reddit/subreddit"
+  },
+  {
+    "platform": "reddit",
+    "method": "searchSubreddit",
+    "path": "/v1/reddit/subreddit/search",
+    "capability": "scrapecreators.com/reddit.searchSubreddit",
+    "optionsType": "RedditSearchSubredditOptions",
+    "resultType": "RedditSearchSubredditData",
+    "parameters": [
+      {
+        "option": "subreddit",
+        "wire": "subreddit",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "test"
+      },
+      {
+        "option": "query",
+        "wire": "query",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "push ups"
+      },
+      {
+        "option": "sort",
+        "wire": "sort",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "relevance",
+          "hot",
+          "top",
+          "new",
+          "comments"
+        ],
+        "example": "relevance"
+      },
+      {
+        "option": "timeframe",
+        "wire": "timeframe",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "all",
+          "year",
+          "month",
+          "week",
+          "day",
+          "hour"
+        ],
+        "example": "all"
+      },
+      {
+        "option": "cursor",
+        "wire": "cursor",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "eyJjYW5kaWRhdGVzX3JldHVybmVkIjoi..."
+      }
+    ],
+    "primary": [
+      "posts"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/reddit/subreddit/search"
+  },
+  {
+    "platform": "reddit",
+    "method": "getPost",
+    "path": "/v1/reddit/post",
+    "capability": "scrapecreators.com/reddit.getPost",
+    "optionsType": "RedditGetPostOptions",
+    "resultType": "RedditGetPostData",
+    "parameters": [
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://www.reddit.com/r/webscraping/comments/1q6pxwn/just_started_web_scraping_is_this_a_good_start/"
+      }
+    ],
+    "primary": [
+      "id"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/reddit/post"
+  },
+  {
+    "platform": "reddit",
+    "method": "listComments",
+    "path": "/v1/reddit/post/comments",
+    "capability": "scrapecreators.com/reddit.listComments",
+    "optionsType": "RedditListCommentsOptions",
+    "resultType": "RedditListCommentsData",
+    "parameters": [
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://www.reddit.com/r/AskReddit/comments/ablzuq/people_who_havent_pooped_in_2019_yet_why_are_you/"
+      },
+      {
+        "option": "cursor",
+        "wire": "cursor",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "opaque_cursor_returned_by_previous_response"
+      },
+      {
+        "option": "trim",
+        "wire": "trim",
+        "required": false,
+        "type": "boolean",
+        "enum": null,
+        "example": false
+      }
+    ],
+    "primary": [
+      "comments",
+      "post"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/reddit/post/comments"
+  },
+  {
+    "platform": "reddit",
+    "method": "getTranscript",
+    "path": "/v1/reddit/post/transcript",
+    "capability": "scrapecreators.com/reddit.getTranscript",
+    "optionsType": "RedditGetTranscriptOptions",
+    "resultType": "RedditGetTranscriptData",
+    "parameters": [
+      {
+        "option": "url",
+        "wire": "url",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "https://www.reddit.com/r/youseeingthisshit/comments/1oiu9xm/football_nostalgiasaints_punter_head_coach_cant/"
+      },
+      {
+        "option": "language",
+        "wire": "language",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "en"
+      },
+      {
+        "option": "cacheMaxAge",
+        "wire": "cache_max_age",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "1d",
+          "3d",
+          "7d",
+          "14d",
+          "30d"
+        ],
+        "example": "7d"
+      }
+    ],
+    "primary": [
+      "transcript"
+    ],
+    "reference": "https://docs.scrapecreators.com/v1/reddit/post/transcript"
+  },
+  {
+    "platform": "reddit",
+    "method": "search",
+    "path": "/v1/reddit/search",
+    "capability": "scrapecreators.com/reddit.search",
+    "optionsType": "RedditSearchOptions",
+    "resultType": "RedditSearchData",
+    "parameters": [
+      {
+        "option": "query",
+        "wire": "query",
+        "required": true,
+        "type": "string",
+        "enum": null,
+        "example": "test"
+      },
+      {
+        "option": "filter",
+        "wire": "filter",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "posts",
+          "comments"
+        ],
+        "example": "posts"
+      },
+      {
+        "option": "sort",
+        "wire": "sort",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "relevance",
+          "new",
+          "top",
+          "comment_count"
+        ],
+        "example": "relevance"
+      },
+      {
+        "option": "timeframe",
+        "wire": "timeframe",
+        "required": false,
+        "type": "string",
+        "enum": [
+          "all",
+          "day",
+          "week",
+          "month",
+          "year"
+        ],
+        "example": "all"
+      },
+      {
+        "option": "after",
+        "wire": "after",
+        "required": false,
+        "type": "string",
+        "enum": null,
+        "example": "t3_1i8z28z"
+      },
+      {
+        "option": "trim",
+        "wire": "trim",
+        "required": false,
+        "type": "boolean",
+        "enum": null,
+        "example": false
+      }
+    ],
+    "primary": [],
+    "reference": "https://docs.scrapecreators.com/v1/reddit/search"
+  }
+]

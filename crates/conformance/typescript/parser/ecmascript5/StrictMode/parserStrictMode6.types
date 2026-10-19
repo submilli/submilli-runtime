@@ -1,0 +1,17 @@
+=== parserStrictMode6.ts ===
+"use strict";
+>"use strict" : "use strict"
+>             : ^^^^^^^^^^^^
+
+eval++;
+>eval++ : number
+>       : ^^^^^^
+>eval : any
+>     : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

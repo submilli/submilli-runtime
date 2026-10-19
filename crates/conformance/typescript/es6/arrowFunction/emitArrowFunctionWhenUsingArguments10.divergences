@@ -1,0 +1,4 @@
+types: 1 of 8 tsc entries compared, 0 differ
+
+errors:
+line 6: ours: unresolved identifier `arguments` (tsc accepts)

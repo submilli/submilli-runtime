@@ -4,6 +4,7 @@
 
 use crate::compiler_error::CompilerFailure;
 use crate::literal_units::push_literal_text;
+use crate::runtime::number::{pow_js, to_int32, to_uint32};
 use crate::{BinOp, ExprId, ExprKind, MangledName, Type, TypedExprKind, UnOp};
 
 use super::assignable::TypeResolver;
@@ -159,7 +160,8 @@ impl ComparisonOperand {
 }
 
 /// The string a template literal spells when TypeScript can evaluate every
-/// substitution (string and number literals and arithmetic on them), else `None`.
+/// substitution (string and number literals and the arithmetic, bitwise and
+/// shift operators on them), else `None`.
 pub(super) fn constant_template(
     ast: &crate::Ast,
     id: ExprId,
@@ -230,23 +232,41 @@ pub(super) fn constant_number(
                 op: UnOp::Pos,
                 operand,
             } => constant_number(ast, *operand)?,
+            ExprKind::Unary {
+                op: UnOp::BitNot,
+                operand,
+            } => constant_number(ast, *operand)?.map(|value| f64::from(!to_int32(value))),
             ExprKind::Binary { op, lhs, rhs } => {
                 let (Some(left), Some(right)) =
                     (constant_number(ast, *lhs)?, constant_number(ast, *rhs)?)
                 else {
                     return Ok(None);
                 };
-                // The operators whose IEEE 754 result Rust and JavaScript agree on.
-                match op {
-                    BinOp::Add => Some(left + right),
-                    BinOp::Sub => Some(left - right),
-                    BinOp::Mul => Some(left * right),
-                    BinOp::Div => Some(left / right),
-                    BinOp::Rem => Some(left % right),
-                    _ => None,
-                }
+                evaluate_number_operator(*op, left, right)
             }
             _ => None,
         },
     )
+}
+
+/// `left op right` as JavaScript evaluates it on two numbers, for the operators
+/// TypeScript's constant evaluator folds; `None` for any other operator.
+fn evaluate_number_operator(op: BinOp, left: f64, right: f64) -> Option<f64> {
+    // A shift count is the right operand's low five bits.
+    let shift = to_uint32(right) & 31;
+    Some(match op {
+        BinOp::Add => left + right,
+        BinOp::Sub => left - right,
+        BinOp::Mul => left * right,
+        BinOp::Div => left / right,
+        BinOp::Rem => left % right,
+        BinOp::Pow => pow_js(left, right),
+        BinOp::BitAnd => f64::from(to_int32(left) & to_int32(right)),
+        BinOp::BitOr => f64::from(to_int32(left) | to_int32(right)),
+        BinOp::BitXor => f64::from(to_int32(left) ^ to_int32(right)),
+        BinOp::Shl => f64::from(to_int32(left).wrapping_shl(shift)),
+        BinOp::Shr => f64::from(to_int32(left) >> shift),
+        BinOp::UnsignedShr => f64::from(to_uint32(left) >> shift),
+        _ => return None,
+    })
 }

@@ -33,14 +33,7 @@ pub(super) struct Meter {
     /// Entries built: paths in a file set, index entries, objects indexed,
     /// references read.
     elements: AtomicU64,
-    /// The fuel the run had left when the worker started.
-    ceiling: u64,
-    algorithm: AtomicU64,
-    forgiving: AtomicBool,
-    /// Set to stop the operation once the counted work passes the ceiling.
-    cancel: Option<Arc<AtomicBool>>,
-    /// Whether the meter stopped the operation.
-    exhausted: AtomicBool,
+    budget: fuel::WorkBudget,
 }
 
 impl Default for Meter {
@@ -60,112 +53,134 @@ impl Meter {
             parse: AtomicU64::new(0),
             hash: AtomicU64::new(0),
             elements: AtomicU64::new(0),
-            ceiling,
-            algorithm: AtomicU64::new(0),
-            forgiving: AtomicBool::new(false),
-            cancel,
-            exhausted: AtomicBool::new(false),
+            budget: match cancel {
+                Some(cancel) => fuel::WorkBudget::new(ceiling).with_cancellation(cancel),
+                None => fuel::WorkBudget::new(ceiling),
+            },
         }
     }
 
     pub(super) fn syscalls(&self, n: u64) {
-        self.add(&self.syscalls, n);
+        self.add(&self.syscalls, fuel::SYSCALL, n);
     }
 
     pub(super) fn io(&self, bytes: u64) {
-        self.add(&self.io, bytes);
+        self.add(&self.io, fuel::IO, bytes);
     }
 
     pub(super) fn scan(&self, bytes: u64) {
-        self.add(&self.scan, bytes);
+        self.add(&self.scan, fuel::SCAN, bytes);
     }
 
     pub(super) fn parse(&self, bytes: u64) {
-        self.add(&self.parse, bytes);
+        self.add(&self.parse, fuel::PARSE, bytes);
     }
 
     pub(super) fn hash(&self, bytes: u64) {
-        self.add(&self.hash, bytes);
+        self.add(&self.hash, fuel::HASH, bytes);
     }
 
     pub(super) fn elements(&self, n: u64) {
-        self.add(&self.elements, n);
+        self.add(&self.elements, fuel::ELEM, n);
     }
 
-    fn add(&self, counter: &AtomicU64, n: u64) {
-        let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-            Some(value.saturating_add(n))
-        });
-        if !self.forgiving.load(Ordering::Relaxed) && self.fuel() > self.ceiling {
-            self.exhausted.store(true, Ordering::Relaxed);
-            if let Some(cancel) = &self.cancel {
-                cancel.store(true, Ordering::Relaxed);
-            }
-        }
+    fn add(&self, counter: &AtomicU64, rate: fuel::Rate, units: u64) {
+        // Retain cumulative rounding: four one-byte reads cost IO.cost(4),
+        // not four separately rounded IO.cost(1) charges.
+        let previous = counter
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                Some(value.saturating_add(units))
+            })
+            .unwrap_or_else(|previous| previous);
+        let cost = rate
+            .cost(previous.saturating_add(units))
+            .saturating_sub(rate.cost(previous));
+        self.budget.record_fuel(cost);
     }
 
     pub(super) fn charge_algorithm(&self, fuel: u64) -> wasmtime::Result<()> {
-        let forgiving = self.forgiving.load(Ordering::Relaxed);
-        let remaining = self.ceiling.saturating_sub(self.fuel());
-        self.add(
-            &self.algorithm,
-            if forgiving { fuel } else { fuel.min(remaining) },
-        );
-        if !forgiving && fuel > remaining {
-            return Err(wasmtime::Trap::OutOfFuel.into());
-        }
-        Ok(())
+        self.budget
+            .charge_fuel(fuel)
+            .map_err(|_| wasmtime::Trap::OutOfFuel.into())
     }
 
     #[cfg(test)]
     pub(super) fn algorithm_fuel(&self) -> u64 {
-        self.algorithm.load(Ordering::Relaxed)
-    }
-
-    pub(super) fn before_effect(&self) {
-        self.forgiving.store(true, Ordering::Relaxed);
-    }
-
-    /// Whether the work passed the ceiling, which stopped the operation.
-    pub(super) fn is_exhausted(&self) -> bool {
-        self.exhausted.load(Ordering::Relaxed)
-    }
-
-    /// The fuel the counted work costs.
-    pub(super) fn fuel(&self) -> u64 {
         let load = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
-        [
+        let counted = [
             fuel::SYSCALL.cost(load(&self.syscalls)),
             fuel::IO.cost(load(&self.io)),
             fuel::SCAN.cost(load(&self.scan)),
             fuel::PARSE.cost(load(&self.parse)),
             fuel::HASH.cost(load(&self.hash)),
             fuel::ELEM.cost(load(&self.elements)),
-            load(&self.algorithm),
         ]
         .into_iter()
-        .fold(0u64, u64::saturating_add)
+        .fold(0u64, u64::saturating_add);
+        self.budget.spent().saturating_sub(counted)
+    }
+
+    pub(super) fn before_effect(&self) {
+        self.budget.before_effect();
+    }
+
+    pub(super) fn is_exhausted(&self) -> bool {
+        self.budget.is_exhausted()
+    }
+
+    #[cfg(test)]
+    pub(super) fn fuel(&self) -> u64 {
+        self.budget.spent()
     }
 
     /// Charges the counted work; see the module documentation.
     pub(super) fn settle(&self, ctx: impl AsContextMut<Data = StoreData>) -> wasmtime::Result<()> {
-        fuel::settle_host_fuel(ctx, self.fuel())
+        self.budget.settle(ctx)
     }
-}
-
-/// The fuel a run has left for host work: what the engine holds, less the
-/// host charges not yet applied to it.
-pub(super) fn remaining_fuel(
-    mut ctx: impl AsContextMut<Data = StoreData>,
-) -> wasmtime::Result<u64> {
-    let ctx = ctx.as_context_mut();
-    let pending = ctx.data().host_fuel_pending;
-    Ok(ctx.get_fuel()?.saturating_sub(pending))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_categories_keep_cumulative_rounding_and_share_algorithm_admission() {
+        let meter = Meter::new(100, None);
+        for _ in 0..4 {
+            meter.io(1);
+        }
+        assert_eq!(meter.fuel(), fuel::IO.cost(4));
+        meter.scan(2);
+        meter.parse(3);
+        meter.hash(4);
+        meter.elements(1);
+        let native = fuel::IO.cost(4)
+            + fuel::SCAN.cost(2)
+            + fuel::PARSE.cost(3)
+            + fuel::HASH.cost(4)
+            + fuel::ELEM.cost(1);
+        assert_eq!(meter.fuel(), native);
+        meter.charge_algorithm(100 - native).unwrap();
+        assert_eq!(meter.algorithm_fuel(), 100 - native);
+        assert!(meter.charge_algorithm(1).is_err());
+        assert_eq!(meter.fuel(), 100);
+        meter.before_effect();
+        meter.syscalls(1);
+        assert_eq!(meter.fuel(), 100 + fuel::SYSCALL.cost(1));
+        assert!(!meter.is_exhausted());
+    }
+
+    #[test]
+    fn saturated_native_counters_do_not_charge_again() {
+        let meter = Meter::default();
+        meter.io(u64::MAX);
+        meter.io(1);
+        assert_eq!(meter.fuel(), fuel::IO.cost(u64::MAX));
+        meter.hash(u64::MAX);
+        meter.elements(u64::MAX);
+        assert_eq!(meter.fuel(), u64::MAX);
+        assert!(!meter.is_exhausted());
+    }
 
     #[test]
     fn passing_the_ceiling_cancels_the_operation() {

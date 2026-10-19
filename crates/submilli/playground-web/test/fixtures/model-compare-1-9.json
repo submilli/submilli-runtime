@@ -1,0 +1,28 @@
+{
+ "kind": "compare",
+ "before": {
+  "run": 1,
+  "page": "http://127.0.0.1:47100/#run=1",
+  "blueprint_version": "1",
+  "source": "chat",
+  "decision_refs": []
+ },
+ "after": {
+  "run": 9,
+  "page": "http://127.0.0.1:47100/#run=9",
+  "blueprint_version": "2",
+  "source": "test",
+  "decision_refs": []
+ },
+ "changes": [],
+ "unmatched": [
+  "1 more main → http.get decisions in run 9 than in run 1"
+ ],
+ "alignment": "the nth decision of each caller and capability in one run with the nth of the same caller and capability in the other",
+ "next": [
+  "submilli playground show 9"
+ ],
+ "untrusted": {
+  "contexts": {}
+ }
+}

@@ -204,10 +204,9 @@ Session state (`submilli:session`): a key-value store scoped to this
 session — `set(key, value)` writes, `get<T>(key)` reads it back checked
 against `T` (throws a catchable `TypeError` on a shape mismatch),
 `has`/`remove`/`list` round it out. There is no `set<T>`; the value's
-type is inferred. It is **memory-only**: it does not survive a server
-restart, so a key you wrote on an earlier call may legitimately be
-missing. `get<T>(key)` returns `T | undefined`, so handle the
-`undefined`."#;
+type is inferred. It lasts **until the session ends** and survives a
+server restart. A key may still be missing, as in a new session, and
+`get<T>(key)` returns `T | undefined`, so handle the `undefined`."#;
 
 impl PromptSurface {
     fn discovery_tools(self) -> [&'static str; 3] {
@@ -652,7 +651,11 @@ mod tests {
         ] {
             let blueprint = submilli_blueprint::parse(&format!("name: test\n{policy}")).unwrap();
             let prompt = execute_tool_description(&blueprint, PromptSurface::Mcp);
-            for text in ["submilli:session", "Session state", "memory-only"] {
+            for text in [
+                "submilli:session",
+                "Session state",
+                "until the session ends",
+            ] {
                 assert_eq!(prompt.contains(text), visible, "{policy}: {text}: {prompt}");
             }
             assert!(!prompt.contains("{session_guidance}"));

@@ -1,0 +1,5 @@
+types: 38 of 60 tsc entries compared, 1 differ
+
+line 7: x
+  tsc:  {}
+  ours: object

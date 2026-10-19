@@ -1,0 +1,4 @@
+types: 1 of 14 tsc entries compared, 0 differ
+
+errors:
+line 3: ours: a static field must be initialized (tsc accepts)

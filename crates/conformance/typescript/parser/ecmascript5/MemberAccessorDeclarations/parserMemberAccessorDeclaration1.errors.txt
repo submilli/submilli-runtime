@@ -1,0 +1,1 @@
+parserMemberAccessorDeclaration1.ts(3,7): error TS2378: A 'get' accessor must return a value.

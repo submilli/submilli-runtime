@@ -375,7 +375,7 @@ async fn an_unbound_harness_secret_is_reported_before_the_key_is_considered() {
     const NEEDS_SECRET: &str = "name: needs-secret\ndefault: deny\nvfs: none\nsecrets:\n  TOKEN:\n    harness:\n      required: true\n";
 
     let ledger: Arc<RequestRecords> = Arc::new(RequestRecords::ephemeral());
-    let session_root = tempfile::tempdir().expect("session root");
+    let volume_root = tempfile::tempdir().expect("volume root");
     let build = async || {
         AppState::new(ServerConfig {
             blueprints: Some(Arc::new(
@@ -385,7 +385,7 @@ async fn an_unbound_harness_secret_is_reported_before_the_key_is_considered() {
                 .expect("seed blueprints"),
             )),
             database: Some(ledger.database.clone()),
-            session_storage_root: Some(session_root.path().to_owned()),
+            volume_root: Some(volume_root.path().to_owned()),
             ..in_memory_config::config()
         })
         .await
@@ -700,4 +700,83 @@ async fn a_fingerprint_mismatch_against_an_indeterminate_entry_is_a_conflict() {
 
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(as_json(&body)["error"], json!("idempotency_conflict"));
+}
+
+// --- expired responses ------------------------------------------------------
+
+#[tokio::test]
+async fn an_expired_response_is_refused_without_running_and_different_code_still_conflicts() {
+    let (router, ledger) = router_with_ledger().await;
+    let session = open_session(&router).await;
+    let code = "function main(): number { return 1; }";
+    ledger
+        .put(LedgerEntry::expired(&session, "k1", code_fingerprint(code)))
+        .await
+        .unwrap();
+
+    let (status, body) = execute(&router, &session, code, Some("k1")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        as_json(&body)["error"],
+        json!("idempotency_response_expired")
+    );
+    assert_eq!(
+        ledger.load(&session, "k1").await.unwrap().unwrap().state,
+        submilli_server::domain::idempotent_request::RequestState::Expired,
+        "the tombstone stays and nothing ran"
+    );
+
+    let (status, body) = execute(&router, &session, "function main(): void {}", Some("k1")).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(as_json(&body)["error"], json!("idempotency_conflict"));
+}
+
+#[tokio::test]
+async fn unkeyed_http_session_and_one_shot_runs_persist_without_recording() {
+    type RunRow = (String, String, Option<String>, Option<Vec<u8>>);
+    let (router, ledger) = router_with_ledger().await;
+    let session = open_session(&router).await;
+    let code = "export function main(): number { return 42; }";
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let (status, body) = execute(&router, &session, code, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let response = as_json(&body);
+        assert!(response["error"].is_null(), "{body}");
+        ids.push(response["execution_id"].as_str().unwrap().to_owned());
+    }
+    let (_, body) = send(
+        &router,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/execute")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"blueprint":BLUEPRINT,"code":code}).to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+    let response = as_json(&body);
+    assert!(response["error"].is_null(), "{body}");
+    ids.push(response["execution_id"].as_str().unwrap().to_owned());
+    let rows: Vec<RunRow> = ledger
+        .database
+        .transaction(|connection| {
+            Box::pin(async move {
+                Ok(sqlx::query_as(
+                    "SELECT run_id,state,request_key,response_body FROM runs ORDER BY run_id",
+                )
+                .fetch_all(connection)
+                .await?)
+            })
+        })
+        .await
+        .unwrap();
+    ids.sort();
+    assert_eq!(rows.iter().map(|r| r.0.clone()).collect::<Vec<_>>(), ids);
+    assert!(
+        rows.iter()
+            .all(|r| r.1 == "finished" && r.2.is_none() && r.3.is_none())
+    );
 }

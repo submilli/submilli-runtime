@@ -392,6 +392,7 @@ impl<'a> Inferer<'a> {
                     )],
                 });
             } else {
+                self.imported_values.insert(local.name.clone());
                 self.top_symbols.insert(
                     local.name.clone(),
                     ValueEntry {
@@ -580,6 +581,7 @@ impl<'a> Inferer<'a> {
                         .rebindable_globals
                         .insert(val_sym.mangled_name.clone(), imported.to_string());
                 }
+                self.imported_values.insert(local.name.clone());
                 self.top_symbols.insert(
                     local.name.clone(),
                     ValueEntry {

@@ -181,7 +181,7 @@ fn server(runtime: RuntimeConfig) -> Server {
         blueprints: Some(Arc::new(
             InMemoryBlueprintStore::seed(blueprints).expect("seed"),
         )),
-        session_storage_root: Some(dirs.path().join("sessions")),
+        volume_root: Some(dirs.path().to_path_buf()),
         runtime,
         audit: AuditConfig {
             enabled: false,
@@ -410,7 +410,7 @@ async fn a_session_that_lost_its_required_secret_is_refused_naming_it() {
         AppState::new(ServerConfig {
             database: Some(database.clone()),
             blueprints: Some(blueprints.clone()),
-            session_storage_root: Some(dirs.path().join("sessions")),
+            volume_root: Some(dirs.path().to_path_buf()),
             ..in_memory_config::config()
         })
         .await

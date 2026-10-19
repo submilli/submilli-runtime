@@ -26,9 +26,6 @@ use submilli_server::config::{VolumeSpec, VolumeTable};
 use submilli_server::{AppState, ServerConfig, app};
 use tower::ServiceExt;
 
-#[path = "common/last_run_store.rs"]
-mod last_run_store;
-
 const EPH: &str = "eph";
 const SESS: &str = "sess";
 const MCP: &str = "mcp-bp";
@@ -51,8 +48,9 @@ fn allow_fs() -> BTreeMap<String, Vec<PermissionRule>> {
 
 struct Harness {
     state: AppState,
+    /// The volume root's `sessions/`, where `per_session` workspaces live.
     session_root: std::path::PathBuf,
-    _owned_session_root: Option<tempfile::TempDir>,
+    _owned_volume_root: Option<tempfile::TempDir>,
     _package_store_root: Option<tempfile::TempDir>,
 }
 
@@ -60,26 +58,18 @@ impl Harness {
     /// Build a harness over an arbitrary blueprint set (used by tests that point
     /// an `mcp:` server at a mock upstream on a dynamic port).
     fn from_blueprints(bps: Vec<Blueprint>) -> Self {
-        Self::from_blueprints_with_sessions(bps, None)
-    }
-
-    fn from_blueprints_with_sessions(
-        bps: Vec<Blueprint>,
-        sessions: Option<Arc<dyn submilli_server::session::SessionStore>>,
-    ) -> Self {
-        let session_root = tempfile::tempdir().expect("session root");
-        let session_root_path = session_root.path().to_path_buf();
+        let volume_root = tempfile::tempdir().expect("volume root");
+        let volume_root_path = volume_root.path().to_path_buf();
         let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
-            sessions,
-            session_storage_root: Some(session_root_path.clone()),
+            volume_root: Some(volume_root_path.clone()),
             ..in_memory_config::config()
         };
         Self {
             state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
-            session_root: session_root_path,
-            _owned_session_root: Some(session_root),
+            session_root: volume_root_path.join("sessions"),
+            _owned_volume_root: Some(volume_root),
             _package_store_root: None,
         }
     }
@@ -89,19 +79,19 @@ impl Harness {
         bps: Vec<Blueprint>,
         recorder: Arc<dyn submilli_server::record::RunRecorderFactory>,
     ) -> Self {
-        let session_root = tempfile::tempdir().expect("session root");
-        let session_root_path = session_root.path().to_path_buf();
+        let volume_root = tempfile::tempdir().expect("volume root");
+        let volume_root_path = volume_root.path().to_path_buf();
         let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
-            session_storage_root: Some(session_root_path.clone()),
+            volume_root: Some(volume_root_path.clone()),
             run_recorder: Some(recorder),
             ..in_memory_config::config()
         };
         Self {
             state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
-            session_root: session_root_path,
-            _owned_session_root: Some(session_root),
+            session_root: volume_root_path.join("sessions"),
+            _owned_volume_root: Some(volume_root),
             _package_store_root: None,
         }
     }
@@ -109,39 +99,39 @@ impl Harness {
     /// Like [`Harness::from_blueprints`] but with a declared volume table, for
     /// the sessionless mount route.
     fn from_blueprints_with_volumes(bps: Vec<Blueprint>, volumes: VolumeTable) -> Self {
-        let session_root = tempfile::tempdir().expect("session root");
-        let session_root_path = session_root.path().to_path_buf();
+        let volume_root = tempfile::tempdir().expect("volume root");
+        let volume_root_path = volume_root.path().to_path_buf();
         let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
-            session_storage_root: Some(session_root_path.clone()),
+            volume_root: Some(volume_root_path.clone()),
             volumes,
             ..in_memory_config::config()
         };
         Self {
             state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
-            session_root: session_root_path,
-            _owned_session_root: Some(session_root),
+            session_root: volume_root_path.join("sessions"),
+            _owned_volume_root: Some(volume_root),
             _package_store_root: None,
         }
     }
 
     fn from_blueprints_with_session_paths(
         bps: Vec<Blueprint>,
-        session_root: std::path::PathBuf,
+        volume_root: std::path::PathBuf,
         session_store_dir: std::path::PathBuf,
     ) -> Self {
         let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
-            session_storage_root: Some(session_root.clone()),
+            volume_root: Some(volume_root.clone()),
             database_path: Some(session_store_dir.join("server.db")),
             ..in_memory_config::config()
         };
         Self {
             state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
-            session_root,
-            _owned_session_root: None,
+            session_root: volume_root.join("sessions"),
+            _owned_volume_root: None,
             _package_store_root: None,
         }
     }
@@ -150,26 +140,26 @@ impl Harness {
         bps: Vec<Blueprint>,
         package_store_root: tempfile::TempDir,
     ) -> Self {
-        let session_root = tempfile::tempdir().expect("session root");
-        let session_root_path = session_root.path().to_path_buf();
+        let volume_root = tempfile::tempdir().expect("volume root");
+        let volume_root_path = volume_root.path().to_path_buf();
         let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
         let config = ServerConfig {
             blueprints: Some(blueprints),
-            session_storage_root: Some(session_root_path.clone()),
+            volume_root: Some(volume_root_path.clone()),
             package_store_root: Some(package_store_root.path().to_path_buf()),
             ..in_memory_config::config()
         };
         Self {
             state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
-            session_root: session_root_path,
-            _owned_session_root: Some(session_root),
+            session_root: volume_root_path.join("sessions"),
+            _owned_volume_root: Some(volume_root),
             _package_store_root: Some(package_store_root),
         }
     }
 
     fn new() -> Self {
-        let session_root = tempfile::tempdir().expect("session root");
-        let session_root_path = session_root.path().to_path_buf();
+        let volume_root = tempfile::tempdir().expect("volume root");
+        let volume_root_path = volume_root.path().to_path_buf();
         let blueprints = Arc::new(
             InMemoryBlueprintStore::seed([
                 Blueprint {
@@ -216,13 +206,13 @@ impl Harness {
         );
         let config = ServerConfig {
             blueprints: Some(blueprints),
-            session_storage_root: Some(session_root_path.clone()),
+            volume_root: Some(volume_root_path.clone()),
             ..in_memory_config::config()
         };
         Self {
             state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
-            session_root: session_root_path,
-            _owned_session_root: Some(session_root),
+            session_root: volume_root_path.join("sessions"),
+            _owned_volume_root: Some(volume_root),
             _package_store_root: None,
         }
     }
@@ -1721,7 +1711,7 @@ async fn delete_persisted_mcp_session_before_restore() {
         restarted.delete(SESS, &session).await,
         StatusCode::NO_CONTENT
     );
-    assert!(!session_root.path().join(&session).exists());
+    assert!(!session_root.path().join("sessions").join(&session).exists());
     assert_eq!(
         restarted.delete(SESS, &session).await,
         StatusCode::NOT_FOUND
@@ -1786,6 +1776,49 @@ async fn last_run_without_prior_execute_errors() {
     assert!(
         rpc.to_string().contains("no previous run"),
         "expected a tool error: {rpc}"
+    );
+}
+
+#[tokio::test]
+async fn last_run_over_the_limit_is_a_tool_error_naming_both_sizes() {
+    let volume_root = tempfile::tempdir().expect("volume root");
+    let h = Harness {
+        state: AppState::new(ServerConfig {
+            blueprints: Some(Arc::new(
+                InMemoryBlueprintStore::seed(vec![Blueprint {
+                    name: EPH.into(),
+                    ..Default::default()
+                }])
+                .unwrap(),
+            )),
+            volume_root: Some(volume_root.path().to_path_buf()),
+            max_last_run_size: Some(64),
+            ..in_memory_config::config()
+        })
+        .await
+        .expect("AppState"),
+        session_root: volume_root.path().join("sessions"),
+        _owned_volume_root: Some(volume_root),
+        _package_store_root: None,
+    };
+    let session = h.handshake(EPH).await;
+    h.post(
+        EPH,
+        tools_call(2, r#"function main(): string { return "y".repeat(100); }"#),
+        Some(&session),
+    )
+    .await;
+    let (_, _, rpc) = h
+        .post(
+            EPH,
+            rpc_call(3, "submilli__typescript__last_run", json!({})),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(rpc["error"]["code"], -32600, "{rpc}");
+    assert_eq!(
+        rpc["error"]["message"],
+        "the last run's output (139 bytes) is over the retained limit (64 bytes)"
     );
 }
 
@@ -1871,7 +1904,7 @@ async fn packages_search_by_symbol_and_list_all() {
     // Empty query lists every module the blueprint permits (security excluded).
     let (_, _, all) = h.post(EPH, search(2, ""), Some(&session)).await;
     let count = output(&all)["results"].as_array().unwrap().len();
-    assert_eq!(count, 6, "expected 6 permitted stdlib modules: {all}");
+    assert_eq!(count, 7, "expected 7 permitted stdlib modules: {all}");
     let listed = |name: &str| {
         output(&all)["results"]
             .as_array()
@@ -1880,6 +1913,9 @@ async fn packages_search_by_symbol_and_list_all() {
             .any(|entry| entry["name"] == name)
     };
     assert!(listed("submilli:code"));
+    // Package-only modules remain discoverable; reads still enforce caller grants.
+    assert!(listed("submilli:secrets"));
+    assert!(listed("submilli:variables"));
     // The blueprint grants FS only, so session state is hidden.
     assert!(!listed("submilli:session"));
     let (_, _, code) = h.post(EPH, search(3, "applyPatch"), Some(&session)).await;
@@ -3314,19 +3350,34 @@ async fn execute_ids_cover_argument_validation_and_compile_errors() {
     }
 }
 
+/// Run one statement against the harness's database, to inject a storage fault.
+async fn sql(h: &Harness, statement: &'static str) {
+    h.state
+        .database()
+        .unwrap()
+        .transaction(move |connection| {
+            Box::pin(async move {
+                sqlx::query(statement).execute(connection).await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn last_run_recording_failure_preserves_execution_and_recovers() {
-    use std::sync::atomic::Ordering;
-    let store = Arc::new(last_run_store::FaultStore::default());
-    store.fail_writes.store(true, Ordering::SeqCst);
-    let h = Harness::from_blueprints_with_sessions(
-        vec![Blueprint {
-            name: EPH.into(),
-            ..Default::default()
-        }],
-        Some(store.clone()),
-    );
+    let h = Harness::from_blueprints(vec![Blueprint {
+        name: EPH.into(),
+        ..Default::default()
+    }]);
     let session = h.handshake(EPH).await;
+    sql(
+        &h,
+        "CREATE TRIGGER fail_last_run BEFORE INSERT ON last_runs \
+         BEGIN SELECT RAISE(FAIL, 'private backend detail'); END",
+    )
+    .await;
     let (_, _, success) = h
         .post(
             EPH,
@@ -3349,8 +3400,7 @@ async fn last_run_recording_failure_preserves_execution_and_recovers() {
             .contains("original failure")
     );
     assert!(!failed.to_string().contains("private backend detail"));
-    assert_eq!(store.writes.load(Ordering::SeqCst), 2);
-    store.fail_writes.store(false, Ordering::SeqCst);
+    sql(&h, "DROP TRIGGER fail_last_run").await;
     let (_, _, healthy) = h
         .post(
             EPH,
@@ -3371,43 +3421,34 @@ async fn last_run_recording_failure_preserves_execution_and_recovers() {
 
 #[tokio::test]
 async fn last_run_read_failure_is_internal_and_hides_backend_details() {
-    use std::sync::atomic::Ordering;
-    let store = Arc::new(last_run_store::FaultStore::default());
-    let h = Harness::from_blueprints_with_sessions(
-        vec![Blueprint {
-            name: EPH.into(),
-            ..Default::default()
-        }],
-        Some(store.clone()),
-    );
+    let h = Harness::from_blueprints(vec![Blueprint {
+        name: EPH.into(),
+        ..Default::default()
+    }]);
     let session = h.handshake(EPH).await;
-    store.fail_reads.store(true, Ordering::SeqCst);
-    for id in [2, 4] {
-        if id == 4 {
-            h.post(
-                EPH,
-                tools_call(3, "function main(): number { return 7; }"),
-                Some(&session),
-            )
-            .await;
-        }
-        let (status, _, response) = h
-            .post(
-                EPH,
-                rpc_call(id, "submilli__typescript__last_run", json!({})),
-                Some(&session),
-            )
-            .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(response["error"]["code"], -32603, "{response}");
-        assert_eq!(response["error"]["message"], "last-run storage unavailable");
-        assert!(!response.to_string().contains("private backend detail"));
-    }
-    store.fail_reads.store(false, Ordering::SeqCst);
+    h.post(
+        EPH,
+        tools_call(2, "function main(): number { return 7; }"),
+        Some(&session),
+    )
+    .await;
+    sql(&h, "ALTER TABLE last_runs RENAME TO private_backend_detail").await;
+    let (status, _, response) = h
+        .post(
+            EPH,
+            rpc_call(3, "submilli__typescript__last_run", json!({})),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response["error"]["code"], -32603, "{response}");
+    assert_eq!(response["error"]["message"], "last-run storage unavailable");
+    assert!(!response.to_string().contains("private_backend_detail"));
+    sql(&h, "ALTER TABLE private_backend_detail RENAME TO last_runs").await;
     let (_, _, stored) = h
         .post(
             EPH,
-            rpc_call(5, "submilli__typescript__last_run", json!({})),
+            rpc_call(4, "submilli__typescript__last_run", json!({})),
             Some(&session),
         )
         .await;
@@ -3431,4 +3472,26 @@ async fn oversized_diagnostic_is_abbreviated_and_next_request_succeeds() {
     let (_, _, healthy) = h.post(EPH, tools_call(2, SUM), Some(&session)).await;
     assert_eq!(output(&healthy)["result"], "2");
     assert!(output(&healthy)["error"].is_null());
+}
+
+#[tokio::test]
+async fn unkeyed_mcp_programs_persist_distinct_run_identities() {
+    let h = Harness::new();
+    let session = h.handshake(EPH).await;
+    for request in 1..=2 {
+        let (status, _, rpc) = h.post(EPH, tools_call(request, SUM), Some(&session)).await;
+        assert_eq!(status, StatusCode::OK, "{rpc}");
+        assert_eq!(output(&rpc)["result"], json!("2"), "{rpc}");
+    }
+    let database = h.state.database().unwrap();
+    let rows: Vec<(String,String,String,Option<String>)> = database.transaction(move |connection| Box::pin(async move {
+        Ok(sqlx::query_as("SELECT run_id,state,entry_point,request_key FROM runs WHERE session_id=? ORDER BY admission_order")
+            .bind(session).fetch_all(connection).await?)
+    })).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_ne!(rows[0].0, rows[1].0);
+    assert!(
+        rows.iter()
+            .all(|r| r.1 == "finished" && r.2 == "mcp" && r.3.is_none())
+    );
 }

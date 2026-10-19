@@ -1,0 +1,1 @@
+line 7, 13 extra: by-design spec §Excluded-Features a directive that hides an error is excluded, so `// @ts-nocheck` doesn't suppress the file's errors

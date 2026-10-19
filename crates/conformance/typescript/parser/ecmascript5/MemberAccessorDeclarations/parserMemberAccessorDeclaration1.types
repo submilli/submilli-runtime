@@ -1,0 +1,16 @@
+=== parserMemberAccessorDeclaration1.ts ===
+class C {
+>C : C
+>  : ^
+
+  get a(): void { }
+>a : void
+>  : ^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

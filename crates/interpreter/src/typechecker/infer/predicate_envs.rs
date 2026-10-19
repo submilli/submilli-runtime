@@ -467,6 +467,15 @@ impl<'a> Inferer<'a> {
                 type_predicate: Some(predicate),
                 ..
             } => self.guard_envs(&predicate, &args, cond_expr_id)?,
+            TypedExprKind::MethodCall {
+                receiver,
+                iface,
+                name,
+                args,
+                type_predicate: None,
+            } if name.name == "every" && iface == crate::mangle::prelude("Array") => {
+                self.every_guard_envs(receiver, &args, cond_expr_id)?
+            }
             TypedExprKind::GenericMethodCall {
                 args,
                 type_predicate: Some(predicate),
@@ -512,6 +521,57 @@ impl<'a> Inferer<'a> {
         Ok((true_env, false_env))
     }
 
+    /// `xs.every(guard)` with a guard `(x) => x is S` narrows `xs` to `S[]`, or
+    /// `readonly S[]` for a readonly `xs`, as tsc's `this is S[]` overloads do.
+    fn every_guard_envs(
+        &mut self,
+        receiver: ExprId,
+        args: &[ExprId],
+        call: ExprId,
+    ) -> Result<(narrowing::NarrowEnv, narrowing::NarrowEnv), crate::compiler_error::CompilerFailure>
+    {
+        let empty = || (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
+        let Some(&callback) = args.first() else {
+            return Ok(empty());
+        };
+        let Type::Function {
+            predicate: Some(predicate),
+            ..
+        } = self
+            .typed_ast
+            .try_expr(callback)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .peel()
+            .clone()
+        else {
+            return Ok(empty());
+        };
+        if predicate.parameter_index != 0 {
+            return Ok(empty());
+        }
+        let asserted = Type::Array(Box::new(predicate.asserted_type));
+        let receiver_ty = &self
+            .typed_ast
+            .try_expr(receiver)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty;
+        // tsc's `ReadonlyArray#every` asserts `this is readonly S[]`.
+        let asserted = if receiver_ty.is_readonly_array() {
+            Type::Readonly(Box::new(asserted))
+        } else {
+            asserted
+        };
+        let Some((mut true_env, mut false_env)) =
+            self.narrow_path_to_asserted(receiver, &asserted)?
+        else {
+            return Ok(empty());
+        };
+        self.forget_later_writes(&mut true_env, receiver, call)?;
+        self.forget_later_writes(&mut false_env, receiver, call)?;
+        Ok((true_env, false_env))
+    }
+
     /// A literal, `null` or `undefined`: an operand that reads no reference path.
     fn is_constant_operand(
         &self,
@@ -540,7 +600,7 @@ impl<'a> Inferer<'a> {
         self.pop_narrow_frame()?;
         let mut rhs_failure = lhs_true.clone();
         rhs_failure.extend(rhs_false);
-        let false_env = join_reachable_envs(lhs_false, rhs_failure);
+        let false_env = join_condition_envs(lhs_false, rhs_failure);
         // RHS supersedes LHS — ran under LHS narrowing, so its view is at least as specific.
         let mut composed = lhs_true;
         for (path, view) in rhs_true.into_iter() {
@@ -563,7 +623,7 @@ impl<'a> Inferer<'a> {
         self.pop_narrow_frame()?;
         let mut rhs_success = lhs_false.clone();
         rhs_success.extend(rhs_true);
-        let true_env = join_reachable_envs(lhs_true, rhs_success);
+        let true_env = join_condition_envs(lhs_true, rhs_success);
         let mut composed = lhs_false;
         for (path, view) in rhs_false.into_iter() {
             composed.insert(path, view);
@@ -592,7 +652,7 @@ impl<'a> Inferer<'a> {
             _ => {
                 let null_env = self.equal_to_nullish_env(operand, Type::Null)?;
                 let undefined_env = self.equal_to_nullish_env(operand, Type::Undefined)?;
-                join_reachable_envs(null_env, undefined_env)
+                join_condition_envs(null_env, undefined_env)
             }
         })
     }
@@ -755,26 +815,25 @@ impl<'a> Inferer<'a> {
                 },
             );
         }
-        // A field that is only the compared value reads as `never` once proven
-        // otherwise, but re-reads its live value: an alias may have written it.
-        // `typeof x === "object"` leaves an `unknown` `x` an object or `null`,
-        // which Submilli spells `unknown` for want of an `object` type; ruling
-        // out a nullish value then leaves it `unknown`, not `{}`, so `in` and
-        // field tests still apply.
-        let tested_object = matches!(path_ty.peel(), Type::Unknown)
-            && self
-                .lookup_narrowed_view(&path)
-                .is_some_and(|view| view.facts.contains(narrowing::TypeFacts::IS_OBJECT));
-        let stripped = if tested_object {
-            path_ty.clone()
-        } else if compares_undefined {
-            narrowing::strip_undefined(&path_ty)
-        } else {
-            narrowing::strip_null(&path_ty)
+        // A field narrowed to only the compared value reads its declared type,
+        // less that value, once proven otherwise: a call or an alias may have
+        // written it since, and codegen would trust a `never`. Only a field
+        // that can't hold anything else is `never`.
+        let strip_compared = |ty: &Type| {
+            if compares_undefined {
+                narrowing::strip_undefined(ty)
+            } else {
+                narrowing::strip_null(ty)
+            }
         };
-        let unequal_ty = match stripped {
-            ty if narrowing::is_ruled_out(&ty) && !self.rules_out_to_never(&path) => Type::Never,
-            ty => ty,
+        let stripped = strip_compared(&path_ty);
+        let unequal_ty = if narrowing::is_ruled_out(&stripped) && !self.rules_out_to_never(&path) {
+            self.declared_path_ty(&path)
+                .map(|declared| strip_compared(&declared))
+                .filter(|declared| !narrowing::is_ruled_out(declared))
+                .unwrap_or(Type::Never)
+        } else {
+            stripped
         };
         neq_env.insert(
             path,
@@ -1562,12 +1621,9 @@ impl<'a> Inferer<'a> {
                 split
             }
             DiscriminantKey::Position(pos) => {
-                let Some((disc_pos, table)) = narrowing::tuple_union_discriminant(members) else {
+                let Some(table) = narrowing::tuple_position_discriminant(members, *pos) else {
                     return Ok(None);
                 };
-                if disc_pos != *pos {
-                    return Ok(None);
-                }
                 let Some(split) = table.partition(members, &literal) else {
                     return Ok(None);
                 };
@@ -2881,20 +2937,17 @@ fn comparison_literal_union(
     Ok(members.iter().map(narrowing::unit_literal_value).collect())
 }
 
-/// Joins the two ways a short-circuit condition can reach one outcome. A way
-/// that narrows some path to nothing cannot happen, so the other way alone
-/// decides: in `typeof x === "string" || typeof x === "string"` the right
-/// side is never true, and the true branch keeps `x: string`.
-fn join_reachable_envs(
+/// Joins the two ways a short-circuit condition can reach one outcome, one
+/// path at a time, as TypeScript does: a path holds what either way leaves in
+/// it, and a way that narrows it to nothing adds nothing. In `typeof x ===
+/// "string" || typeof x === "string"` the right side never holds, and the true
+/// branch keeps `x: string`. A way that can't happen because of one path
+/// still counts for the others: in `s || x` with `s: ""` and `x: 0`, the true
+/// branch reads `s` as `""`, not `never`.
+fn join_condition_envs(
     left: narrowing::NarrowEnv,
     right: narrowing::NarrowEnv,
 ) -> narrowing::NarrowEnv {
-    if is_unreachable_env(&right) {
-        return left;
-    }
-    if is_unreachable_env(&left) {
-        return right;
-    }
     narrowing::union_envs(left, Default::default(), right, Default::default()).0
 }
 
@@ -2977,10 +3030,13 @@ fn add_missing_views(env: &mut narrowing::NarrowEnv, extra: narrowing::NarrowEnv
 /// discriminant: the members type it differently, some with a unit type such
 /// as `null`, as [`Inferer::discriminant_field_types`] requires of a field.
 fn discriminant_element_types(members: &[Type], position: usize) -> Option<Vec<Option<Type>>> {
+    // A tuple shorter than `position` reads `undefined` there, as a pattern does.
     let element_tys: Vec<Type> = members
         .iter()
         .map(|member| match member.peel() {
-            Type::Tuple(elements) => elements.get(position).cloned(),
+            Type::Tuple(elements) => {
+                Some(elements.get(position).cloned().unwrap_or(Type::Undefined))
+            }
             _ => None,
         })
         .collect::<Option<_>>()?;

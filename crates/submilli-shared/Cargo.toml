@@ -19,6 +19,7 @@ submilli-build = { path = "../submilli-build" }
 submilli-policy = { workspace = true, features = ["engine"] }
 anyhow = { workspace = true }
 sha2 = "0.10"
+hmac = "0.12"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tracing = { workspace = true }

@@ -36,17 +36,13 @@ impl Fixture {
             ))
             .await
             .unwrap();
-        let workspaces = root.path().join("workspaces");
-        let sessions = Arc::new(SqliteSessionStore::new(
-            database.clone(),
-            None,
-            workspaces.clone(),
-        ));
+        let workspaces = root.path().join("sessions");
+        let sessions = Arc::new(SqliteSessionStore::new(database.clone(), None, workspaces));
         let ledger = Arc::new(RequestRecords::with_database(database.clone()));
         let state = AppState::new(ServerConfig {
             database: Some(database.clone()),
             blueprints: Some(blueprints),
-            session_storage_root: Some(workspaces),
+            volume_root: Some(root.path().to_path_buf()),
             ..Default::default()
         })
         .await
@@ -61,7 +57,7 @@ impl Fixture {
     }
 
     async fn session(&self, id: &str) {
-        let path = self.root.path().join("workspaces").join(id);
+        let path = self.root.path().join("sessions").join(id);
         std::fs::create_dir_all(&path).unwrap();
         self.sessions
             .put(SessionRecord {
@@ -100,12 +96,8 @@ async fn removal_closes_all_sessions_after_execution_starts() {
             .all(|r| r.status == SessionStatus::Closed
                 && r.closed_reason == Some(ClosedReason::BlueprintRemoved))
     );
-    assert!(fixture.root.path().join("workspaces/one").exists());
-    assert!(fixture.root.path().join("workspaces/two").exists());
-    assert_eq!(fixture.sessions.pending_cleanup().await.unwrap().len(), 2);
-    fixture.state.session_manager().reap_now().await.unwrap();
-    assert!(!fixture.root.path().join("workspaces/one").exists());
-    assert!(!fixture.root.path().join("workspaces/two").exists());
+    assert!(!fixture.root.path().join("sessions/one").exists());
+    assert!(!fixture.root.path().join("sessions/two").exists());
     assert!(fixture.sessions.pending_cleanup().await.unwrap().is_empty());
     assert!(!fixture.state.remove_blueprint("test").await.unwrap());
     fixture.database.close().await.unwrap();
@@ -155,7 +147,7 @@ async fn failed_session_write_rolls_back_blueprint_and_cleanup_changes() {
     for id in ["one", "two"] {
         assert!(fixture.ledger.load(id, "key").await.unwrap().is_some());
     }
-    assert!(fixture.root.path().join("workspaces/one").exists());
+    assert!(fixture.root.path().join("sessions/one").exists());
     fixture
         .database
         .transaction(|connection| {
@@ -176,10 +168,10 @@ async fn failed_session_write_rolls_back_blueprint_and_cleanup_changes() {
 async fn cleanup_failure_keeps_committed_closure_and_retry_obligation() {
     let fixture = Fixture::new().await;
     fixture.session("one").await;
-    let path = fixture.root.path().join("workspaces/one");
+    let path = fixture.root.path().join("sessions/one");
     std::fs::remove_dir(&path).unwrap();
     std::fs::write(&path, "blocks folder cleanup").unwrap();
-    assert!(fixture.state.remove_blueprint("test").await.unwrap());
+    assert!(fixture.state.remove_blueprint("test").await.is_err());
     assert!(
         fixture
             .state
@@ -231,7 +223,7 @@ async fn omitted_session_prevents_removal_and_rolls_back_earlier_writes() {
     fixture.session("two").await;
     let factory = crate::adapters::unit_of_work::SqliteUnitOfWorkFactory {
         database: fixture.database.clone(),
-        session_root: fixture.root.path().join("workspaces"),
+        session_root: fixture.root.path().join("sessions"),
         cipher: None,
     };
     let mut unit = factory.begin().await.unwrap();
@@ -277,7 +269,7 @@ async fn unit_of_work_saves_sessions_without_removal() {
     .unwrap();
     let factory = crate::adapters::unit_of_work::SqliteUnitOfWorkFactory {
         database: fixture.database.clone(),
-        session_root: fixture.root.path().join("workspaces"),
+        session_root: fixture.root.path().join("sessions"),
         cipher: None,
     };
     fixture
@@ -349,7 +341,7 @@ async fn dropping_a_unit_discards_writes_and_releases_the_database() {
     fixture.session("one").await;
     let factory = crate::adapters::unit_of_work::SqliteUnitOfWorkFactory {
         database: fixture.database.clone(),
-        session_root: fixture.root.path().join("workspaces"),
+        session_root: fixture.root.path().join("sessions"),
         cipher: None,
     };
     let mut unit = factory.begin().await.unwrap();
@@ -387,7 +379,7 @@ async fn dropping_a_unit_discards_writes_and_releases_the_database() {
 }
 
 #[tokio::test]
-async fn blueprint_removal_cleanup_purges_only_its_sessions_ledgers() {
+async fn blueprint_removal_closes_only_its_sessions_and_retains_run_evidence() {
     let fixture = Fixture::new().await;
     let yaml = "name: other\ndefault: deny\n";
     fixture
@@ -417,13 +409,42 @@ async fn blueprint_removal_cleanup_purges_only_its_sessions_ledgers() {
 
     assert!(fixture.state.remove_blueprint("test").await.unwrap());
     for id in ["one", "two"] {
-        assert!(fixture.ledger.load(id, "key").await.unwrap().is_none());
+        assert_eq!(
+            fixture.sessions.load(id).await.unwrap().unwrap().status,
+            SessionStatus::Closed
+        );
+        assert_eq!(
+            fixture.ledger.load(id, "key").await.unwrap(),
+            Some(LedgerEntry::indeterminate(
+                id,
+                "key",
+                code_fingerprint("main")
+            ))
+        );
     }
     fixture.state.session_manager().reap_now().await.unwrap();
     for id in ["one", "two"] {
-        assert!(fixture.ledger.load(id, "key").await.unwrap().is_none());
+        assert_eq!(
+            fixture.sessions.load(id).await.unwrap().unwrap().status,
+            SessionStatus::Closed
+        );
+        assert_eq!(
+            fixture.ledger.load(id, "key").await.unwrap(),
+            Some(LedgerEntry::indeterminate(
+                id,
+                "key",
+                code_fingerprint("main")
+            ))
+        );
     }
-    assert!(fixture.ledger.load("other", "key").await.unwrap().is_some());
+    assert_eq!(
+        fixture.ledger.load("other", "key").await.unwrap(),
+        Some(LedgerEntry::indeterminate(
+            "other",
+            "key",
+            code_fingerprint("main")
+        ))
+    );
     assert_eq!(
         fixture
             .sessions
@@ -442,7 +463,7 @@ async fn unknown_closure_survives_transactional_round_trip() {
     let fixture = Fixture::new().await;
     let factory = crate::adapters::unit_of_work::SqliteUnitOfWorkFactory {
         database: fixture.database.clone(),
-        session_root: fixture.root.path().join("workspaces"),
+        session_root: fixture.root.path().join("sessions"),
         cipher: None,
     };
     for (id, reason) in [("legacy", None), ("unknown", Some(ClosedReason::Unknown))] {
@@ -509,7 +530,7 @@ async fn expiry_queries_observe_pending_activity_and_closure() {
     let fixture = Fixture::new().await;
     let factories: Vec<Box<dyn UnitOfWorkFactory>> = vec![Box::new(SqliteUnitOfWorkFactory {
         database: fixture.database.clone(),
-        session_root: fixture.root.path().join("workspaces"),
+        session_root: fixture.root.path().join("sessions"),
         cipher: None,
     })];
     let now = std::time::UNIX_EPOCH

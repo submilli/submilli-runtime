@@ -1,0 +1,1 @@
+octalLiteralInStrictModeES3.ts(3,1): error TS1121: Octal literals are not allowed. Use the syntax '0o3'.

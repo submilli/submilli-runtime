@@ -98,11 +98,12 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
     let class_vtable = 20u32;
     // `$Error` class pair, one rec group `(rec $Error_vtable $Error)`. Shaped
     // byte-for-byte like the user-class emitter's output for
-    // `class Error { message: string; name: string }` (see
+    // `class Error { cause?: unknown; message: string; name: string }` (see
     // `classes.rs::{vtable_subtype, struct_subtype}`) so a user
     // `class MyError extends Error` reconstructs the parent via the ordinary
     // class path and canonicalization unifies it with this pair. Fields live
-    // in the object-fields payload: slot 0 = message, slot 1 = name.
+    // in the object-fields payload in name order: slot 0 = cause,
+    // slot 1 = message, slot 2 = name.
     let error_vtable = 21u32;
     let error = 22u32;
     // bigint runtime types. Standalone (like `$Array` /

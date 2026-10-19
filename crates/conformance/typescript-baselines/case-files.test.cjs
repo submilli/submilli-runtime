@@ -48,6 +48,7 @@ test("a multi-file case is ported unless a file is one we can't check", () => {
   const ts = "// @filename: a.ts\nexport let x = 1;\n// @filename: b.ts\nimport { x } from \"./a\";\n";
   assert.equal(exclusionBeforePort("multi.ts", ts), null);
   assert.equal(exclusionBeforePort("multi.ts", "// @filename: a.d.ts\nexport let x: number;\n// @filename: b.ts\nimport { x } from \"./a\";\n").detail, "declaration files (`.d.ts`)");
+  assert.equal(exclusionBeforePort("multi.ts", "// @filename: page.d.html.ts\nexport let x: number;\n// @filename: b.ts\nimport { x } from \"./page.html\";\n").detail, "declaration files (`.d.ts`)");
   assert.equal(exclusionBeforePort("multi.ts", "// @allowJs: true\nlet x = 1;\n").detail, "JavaScript");
   const twice = "// @filename: a.ts\nexport let x = 1;\n// @filename: ./a.ts\nexport let y = 1;\n// @filename: b.ts\nimport { x } from \"./a\";\n";
   assert.equal(exclusionBeforePort("multi.ts", twice).detail, "two files with one name: `a`");

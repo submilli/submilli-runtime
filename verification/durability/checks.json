@@ -1,0 +1,305 @@
+{
+  "module": "DurableExecution",
+  "constants": {
+    "MaxRuns": 1,
+    "MaxSteps": 3,
+    "MaxCrashes": 1,
+    "FuelLimit": 3,
+    "Lifecycle": false,
+    "Compatible": true,
+    "LegacyKey": false,
+    "Fault": "none",
+    "Witness": "",
+    "NoWrite": {
+      "model_value": "NoWrite"
+    }
+  },
+  "invariants": [
+    "TypeOK",
+    "RequestSetsDisjoint",
+    "AdmissionUnique",
+    "KeyReserved",
+    "ClientResponseMatches",
+    "HistoryConsistent",
+    "EffectHistoryWellFormed",
+    "ReplayMatches",
+    "NoDuplicateMutation",
+    "ProviderArgumentsMatch",
+    "CommitBarriers",
+    "StableEffectIdentity",
+    "NoStaleWrites",
+    "SessionOrder",
+    "ResourcesProtected",
+    "TerminalConsistent",
+    "LegacyNotRecovered"
+  ],
+  "properties": [
+    "AppendOnly"
+  ],
+  "cases": [
+    {
+      "name": "safety",
+      "kind": "safety"
+    },
+    {
+      "name": "lifecycle",
+      "kind": "safety",
+      "constants": {
+        "Lifecycle": true,
+        "MaxSteps": 2,
+        "FuelLimit": 2
+      }
+    },
+    {
+      "name": "session-order",
+      "kind": "safety",
+      "constants": {
+        "MaxRuns": 2,
+        "MaxSteps": 2,
+        "FuelLimit": 2,
+        "Lifecycle": true
+      },
+      "timeout_seconds": 300
+    },
+    {
+      "name": "fuel-stop",
+      "kind": "safety",
+      "constants": {
+        "FuelLimit": 1,
+        "Lifecycle": true
+      }
+    },
+    {
+      "name": "incompatible",
+      "kind": "safety",
+      "constants": {
+        "Compatible": false,
+        "Lifecycle": true
+      }
+    },
+    {
+      "name": "legacy",
+      "kind": "safety",
+      "constants": {
+        "LegacyKey": true,
+        "Lifecycle": true
+      }
+    },
+    {
+      "name": "progress",
+      "kind": "liveness",
+      "specification": "LiveSpec",
+      "properties": [
+        "AppendOnly",
+        "Progress",
+        "CleanupProgress"
+      ],
+      "constants": {
+        "MaxSteps": 2,
+        "FuelLimit": 2
+      }
+    },
+    {
+      "name": "lifecycle-progress",
+      "kind": "liveness",
+      "specification": "LiveSpec",
+      "properties": [
+        "AppendOnly",
+        "Progress",
+        "CleanupProgress",
+        "ReleaseProgress"
+      ],
+      "constants": {
+        "MaxSteps": 2,
+        "FuelLimit": 2,
+        "Lifecycle": true
+      }
+    },
+    {
+      "name": "session-progress",
+      "kind": "liveness",
+      "specification": "LiveSpec",
+      "properties": [
+        "AppendOnly",
+        "Progress",
+        "CleanupProgress"
+      ],
+      "constants": {
+        "MaxRuns": 2,
+        "MaxSteps": 1,
+        "FuelLimit": 1
+      },
+      "timeout_seconds": 180
+    },
+    {
+      "name": "negative-early-ack",
+      "kind": "negative",
+      "invariant": "CommitBarriers",
+      "constants": {
+        "Fault": "early-ack",
+        "MaxSteps": 1,
+        "FuelLimit": 1,
+        "MaxCrashes": 0
+      }
+    },
+    {
+      "name": "negative-expire-key",
+      "kind": "negative",
+      "invariant": "AdmissionUnique",
+      "constants": {
+        "Fault": "expire-key",
+        "MaxRuns": 2,
+        "MaxSteps": 1,
+        "FuelLimit": 1,
+        "MaxCrashes": 0,
+        "Lifecycle": true
+      }
+    },
+    {
+      "name": "negative-skip-replay",
+      "kind": "negative",
+      "invariant": "ReplayMatches",
+      "constants": {
+        "Fault": "skip-replay",
+        "MaxSteps": 1,
+        "FuelLimit": 1
+      }
+    },
+    {
+      "name": "negative-stale-write",
+      "kind": "negative",
+      "invariant": "NoStaleWrites",
+      "constants": {
+        "Fault": "stale-write",
+        "Lifecycle": true,
+        "MaxSteps": 1,
+        "FuelLimit": 1,
+        "MaxCrashes": 0
+      }
+    },
+    {
+      "name": "negative-new-key",
+      "kind": "negative",
+      "invariant": "NoDuplicateMutation",
+      "constants": {
+        "Fault": "new-key",
+        "MaxSteps": 2,
+        "FuelLimit": 2
+      }
+    },
+    {
+      "name": "witness-crash-after-intent",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "crash-after-intent",
+        "MaxSteps": 2,
+        "FuelLimit": 2
+      }
+    },
+    {
+      "name": "witness-crash-after-remote",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "crash-after-remote",
+        "MaxSteps": 2,
+        "FuelLimit": 2
+      }
+    },
+    {
+      "name": "witness-crash-after-outcome",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "crash-after-outcome",
+        "MaxSteps": 2,
+        "FuelLimit": 2
+      }
+    },
+    {
+      "name": "witness-crash-after-terminal",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "crash-after-terminal",
+        "MaxSteps": 2,
+        "FuelLimit": 2
+      }
+    },
+    {
+      "name": "witness-retry-in-flight",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "retry-in-flight",
+        "MaxSteps": 2,
+        "FuelLimit": 2
+      }
+    },
+    {
+      "name": "witness-replayed",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "replayed",
+        "MaxSteps": 2,
+        "FuelLimit": 2
+      }
+    },
+    {
+      "name": "witness-conflicting-retry",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "conflicting-retry",
+        "MaxSteps": 2,
+        "FuelLimit": 2
+      }
+    },
+    {
+      "name": "witness-expired-retry",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "expired-retry",
+        "MaxSteps": 2,
+        "FuelLimit": 2,
+        "Lifecycle": true
+      }
+    },
+    {
+      "name": "witness-legacy-refused",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "legacy-refused",
+        "MaxSteps": 2,
+        "FuelLimit": 2,
+        "LegacyKey": true
+      }
+    },
+    {
+      "name": "witness-cancel-pending",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "cancel-pending",
+        "MaxSteps": 2,
+        "FuelLimit": 2,
+        "Lifecycle": true
+      }
+    },
+    {
+      "name": "extended-repeated-effects",
+      "kind": "safety",
+      "suite": "extended",
+      "constants": {
+        "MaxSteps": 4,
+        "FuelLimit": 4,
+        "MaxCrashes": 2
+      },
+      "timeout_seconds": 180
+    }
+  ]
+}

@@ -76,12 +76,18 @@ pub fn emit_cast(
     }
 
     let Some(check_shape) = check else {
-        if &source_ty
-            != ctx
-                .ta
-                .source_type(value)
-                .map_err(crate::codegen::arena_failure)?
-        {
+        let static_ty = ctx
+            .ta
+            .source_type(value)
+            .map_err(crate::codegen::arena_failure)?;
+        if crate::codegen::closure_coercions::is_union_call_cast(static_ty, target_ty) {
+            emit_expr(emitter, ctx, value)?;
+            cast::emit_box(emitter, ctx, &source_ty)?;
+            return crate::codegen::closure_coercions::emit_union_call_cast(
+                emitter, ctx, target_ty,
+            );
+        }
+        if &source_ty != static_ty {
             emit_expr(emitter, ctx, value)?;
             let enclosing = map_cast_span(emitter, cast_span);
             emit_checked_cast_on_stack(emitter, ctx, &source_ty, target_ty)?;
@@ -317,6 +323,15 @@ fn emit_structural_test_inner(
             crate::codegen::function_emitter::expr::emit_is_undefined(emitter, ctx)?;
             emitter.instruction(Instruction::I32Or);
             emitter.instruction(Instruction::I32Eqz);
+        }
+        // `object` holds every value but the primitives, `null` and `undefined`.
+        Type::Unknown if matches!(ty.peel(), Type::NonPrimitive) => {
+            crate::codegen::function_emitter::expr::emit_is_non_primitive(
+                emitter,
+                ctx,
+                value_local,
+                crate::codegen::function_emitter::expr::Closures::AreObjects,
+            )?;
         }
         Type::Unknown => emitter.instruction(Instruction::I32Const(1)),
         Type::Number => emit_ref_test(emitter, value_local, boxed_number_idx(ctx)?),
@@ -1946,6 +1961,7 @@ fn emit_type_error_from_message_checked(
         .ok_or_else(|| {
             crate::codegen::internal_failure("TypeError#constructor imported from prelude")
         })?;
+    crate::codegen::throw::emit_no_error_options(emitter);
     emitter.instruction(Instruction::Call(new_idx));
 
     // Constructor returns (ref null $Object); the throw helper narrows to

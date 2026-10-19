@@ -1,0 +1,1 @@
+propertyOverridesAccessors5.ts(7,24): error TS2610: 'p' is defined as an accessor in class 'A', but is overridden here in 'B' as an instance property.

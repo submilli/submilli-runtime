@@ -1,0 +1,2 @@
+line 6 extra: by-design spec §2.3 interface `extends` is not in v1
+line 13, 17, 22 missed: artifact we reject the interface extending `Foo` on line 6, so `I` lacks its private `x`

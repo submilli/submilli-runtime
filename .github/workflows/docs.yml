@@ -48,6 +48,7 @@ jobs:
             --remap '^https://submilli\.ai/docs([?#].*)?$ file://${{ github.workspace }}/docs-site/dist/docs/$1'
             --remap '^https://submilli\.ai/docs/(.*)$ file://${{ github.workspace }}/docs-site/dist/docs/$1'
             --remap '^https://github\.com/submilli/submilli-runtime/edit/main/(.*)$ file://${{ github.workspace }}/$1'
+            --remap '^https://github\.com/submilli/submilli-runtime/blob/main/(.*)$ file://${{ github.workspace }}/$1'
             ${{ github.workspace }}/docs-site/dist/docs
       - name: Test link-check failure cases
         working-directory: docs-site

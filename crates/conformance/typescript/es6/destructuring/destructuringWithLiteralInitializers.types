@@ -1,0 +1,305 @@
+=== destructuringWithLiteralInitializers.ts ===
+// (arg: { x: any, y: any }) => void
+/*pruned*/;
+/*pruned*/;
+
+// (arg: { x: any, y?: number }) => void
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+// (arg: { x?: number, y?: number }) => void
+/*pruned*/;
+/**/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+// (arg?: { x: number, y: number }) => void
+function f4({ x, y } = { x: 0, y: 0 }): void { }
+>f4 : ({ x, y }?: { x: number; y: number; }) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>{ x: 0, y: 0 } : { x: number; y: number; }
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>y : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+f4();
+>f4() : void
+>     : ^^^^
+>f4 : ({ x, y }?: { x: number; y: number; }) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+f4({ x: 1, y: 1 });
+>f4({ x: 1, y: 1 }) : void
+>                   : ^^^^
+>f4 : ({ x, y }?: { x: number; y: number; }) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: 1, y: 1 } : { x: number; y: number; }
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>y : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+
+// (arg?: { x: number, y?: number }) => void
+function f5({ x, y = 0 } = { x: 0 }): void { }
+>f5 : ({ x, y }?: { x: number; y?: number | undefined; }) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>{ x: 0 } : { x: number; }
+>         : ^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+f5();
+>f5() : void
+>     : ^^^^
+>f5 : ({ x, y }?: { x: number; y?: number | undefined; }) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+f5({ x: 1 });
+>f5({ x: 1 }) : void
+>             : ^^^^
+>f5 : ({ x, y }?: { x: number; y?: number | undefined; }) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: 1 } : { x: number; }
+>         : ^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+f5({ x: 1, y: 1 });
+>f5({ x: 1, y: 1 }) : void
+>                   : ^^^^
+>f5 : ({ x, y }?: { x: number; y?: number | undefined; }) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: 1, y: 1 } : { x: number; y: number; }
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>y : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+
+// (arg?: { x?: number, y?: number }) => void
+function f6({ x = 0, y = 0 } = {}): void { }
+>f6 : ({ x, y }?: { x?: number | undefined; y?: number | undefined; }) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>y : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>{} : {}
+>   : ^^
+
+f6();
+>f6() : void
+>     : ^^^^
+>f6 : ({ x, y }?: { x?: number | undefined; y?: number | undefined; }) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+f6({});
+>f6({}) : void
+>       : ^^^^
+>f6 : ({ x, y }?: { x?: number | undefined; y?: number | undefined; }) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+f6({ x: 1 });
+>f6({ x: 1 }) : void
+>             : ^^^^
+>f6 : ({ x, y }?: { x?: number | undefined; y?: number | undefined; }) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: 1 } : { x: number; }
+>         : ^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+f6({ y: 1 });
+>f6({ y: 1 }) : void
+>             : ^^^^
+>f6 : ({ x, y }?: { x?: number | undefined; y?: number | undefined; }) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ y: 1 } : { y: number; }
+>         : ^^^^^^^^^^^^^^
+>y : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+f6({ x: 1, y: 1 });
+>f6({ x: 1, y: 1 }) : void
+>                   : ^^^^
+>f6 : ({ x, y }?: { x?: number | undefined; y?: number | undefined; }) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: 1, y: 1 } : { x: number; y: number; }
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>y : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+
+// (arg?: { a: { x?: number, y?: number } }) => void
+/*pruned*/;
+/**/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+// (arg: [any, any]) => void
+/*pruned*/;
+/*pruned*/;
+
+// (arg: [number, number]) => void
+/*pruned*/;
+/*pruned*/;
+
+// (arg?: [number, number]) => void
+function g3([x, y] = [0, 0]): void { }
+>g3 : ([x, y]?: [number, number]) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>[0, 0] : [number, number]
+>       : ^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+>0 : 0
+>  : ^
+
+g3();
+>g3() : void
+>     : ^^^^
+>g3 : ([x, y]?: [number, number]) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+g3([1, 1]);
+>g3([1, 1]) : void
+>           : ^^^^
+>g3 : ([x, y]?: [number, number]) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>[1, 1] : [number, number]
+>       : ^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>1 : 1
+>  : ^
+
+
+// (arg?: [number, number]) => void
+function g4([x, y = 0] = [0]): void { }
+>g4 : ([x, y]?: [number, (number | undefined)?]) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>[0] : [number]
+>    : ^^^^^^^^
+>0 : 0
+>  : ^
+
+g4();
+>g4() : void
+>     : ^^^^
+>g4 : ([x, y]?: [number, (number | undefined)?]) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+g4([1, 1]);
+>g4([1, 1]) : void
+>           : ^^^^
+>g4 : ([x, y]?: [number, (number | undefined)?]) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>[1, 1] : [number, number]
+>       : ^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>1 : 1
+>  : ^
+
+
+// (arg?: [number, number]) => void
+function g5([x = 0, y = 0] = []): void { }
+>g5 : ([x, y]?: [(number | undefined)?, (number | undefined)?]) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>y : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>[] : []
+>   : ^^
+
+g5();
+>g5() : void
+>     : ^^^^
+>g5 : ([x, y]?: [(number | undefined)?, (number | undefined)?]) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+g5([1, 1]);
+>g5([1, 1]) : void
+>           : ^^^^
+>g5 : ([x, y]?: [(number | undefined)?, (number | undefined)?]) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>[1, 1] : [number, number]
+>       : ^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>1 : 1
+>  : ^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

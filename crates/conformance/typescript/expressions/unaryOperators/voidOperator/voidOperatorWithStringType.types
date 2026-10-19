@@ -1,0 +1,265 @@
+=== voidOperatorWithStringType.ts ===
+// void  operator on string type
+let STRING: string = null as unknown as (string);
+>STRING : string
+>       : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let STRING1: string[] = ["", "abc"];
+>STRING1 : string[]
+>        : ^^^^^^^^
+>["", "abc"] : string[]
+>            : ^^^^^^^^
+>"" : ""
+>   : ^^
+>"abc" : "abc"
+>      : ^^^^^
+
+
+function foo(): string { return "abc"; }
+>foo : () => string
+>    : ^^^^^^^^^^^^
+>"abc" : "abc"
+>      : ^^^^^
+
+
+class A {
+>A : A
+>  : ^
+
+    public a: string;
+>a : string
+>  : ^^^^^^
+
+    static foo(): string { return ""; }
+>foo : () => string
+>    : ^^^^^^^^^^^^
+>"" : ""
+>   : ^^
+
+}
+/*pruned*/;
+
+
+
+let objA = new A();
+>objA : A
+>     : ^
+>new A() : A
+>        : ^
+>A : typeof A
+>  : ^^^^^^^^
+
+
+// string type var
+let ResultIsAny1 = void STRING;
+>ResultIsAny1 : undefined
+>             : ^^^^^^^^^
+>void STRING : undefined
+>            : ^^^^^^^^^
+>STRING : string
+>       : ^^^^^^
+
+let ResultIsAny2 = void STRING1;
+>ResultIsAny2 : undefined
+>             : ^^^^^^^^^
+>void STRING1 : undefined
+>             : ^^^^^^^^^
+>STRING1 : string[]
+>        : ^^^^^^^^
+
+
+// string type literal
+let ResultIsAny3 = void "";
+>ResultIsAny3 : undefined
+>             : ^^^^^^^^^
+>void "" : undefined
+>        : ^^^^^^^^^
+>"" : ""
+>   : ^^
+
+let ResultIsAny4 = void { x: "", y: "" };
+>ResultIsAny4 : undefined
+>             : ^^^^^^^^^
+>void { x: "", y: "" } : undefined
+>                      : ^^^^^^^^^
+>{ x: "", y: "" } : { x: string; y: string; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+>y : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+
+let ResultIsAny5 = void { x: "", y: (s: string) => { return s; } };
+>ResultIsAny5 : undefined
+>             : ^^^^^^^^^
+>void { x: "", y: (s: string) => { return s; } } : undefined
+>                                                : ^^^^^^^^^
+>{ x: "", y: (s: string) => { return s; } } : { x: string; y: (s: string) => string; }
+>                                           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+>y : (s: string) => string
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>(s: string) => { return s; } : (s: string) => string
+>                             : ^^^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+>s : string
+>  : ^^^^^^
+
+
+// string type expressions
+let ResultIsAny6 = void objA.a;
+>ResultIsAny6 : undefined
+>             : ^^^^^^^^^
+>void objA.a : undefined
+>            : ^^^^^^^^^
+>objA.a : string
+>       : ^^^^^^
+>objA : A
+>     : ^
+>a : string
+>  : ^^^^^^
+
+/*pruned*/;
+let ResultIsAny8 = void STRING1[0];
+>ResultIsAny8 : undefined
+>             : ^^^^^^^^^
+>void STRING1[0] : undefined
+>                : ^^^^^^^^^
+>STRING1[0] : string
+>           : ^^^^^^
+>STRING1 : string[]
+>        : ^^^^^^^^
+>0 : 0
+>  : ^
+
+let ResultIsAny9 = void foo();
+>ResultIsAny9 : undefined
+>             : ^^^^^^^^^
+>void foo() : undefined
+>           : ^^^^^^^^^
+>foo() : string
+>      : ^^^^^^
+>foo : () => string
+>    : ^^^^^^^^^^^^
+
+let ResultIsAny10 = void A.foo();
+>ResultIsAny10 : undefined
+>              : ^^^^^^^^^
+>void A.foo() : undefined
+>             : ^^^^^^^^^
+>A.foo() : string
+>        : ^^^^^^
+>A.foo : () => string
+>      : ^^^^^^^^^^^^
+>A : typeof A
+>  : ^^^^^^^^
+>foo : () => string
+>    : ^^^^^^^^^^^^
+
+let ResultIsAny11 = void (STRING + STRING);
+>ResultIsAny11 : undefined
+>              : ^^^^^^^^^
+>void (STRING + STRING) : undefined
+>                       : ^^^^^^^^^
+>(STRING + STRING) : string
+>                  : ^^^^^^
+>STRING + STRING : string
+>                : ^^^^^^
+>STRING : string
+>       : ^^^^^^
+>STRING : string
+>       : ^^^^^^
+
+let ResultIsAny12 = void STRING.charAt(0);
+>ResultIsAny12 : undefined
+>              : ^^^^^^^^^
+>void STRING.charAt(0) : undefined
+>                      : ^^^^^^^^^
+>STRING.charAt(0) : string
+>                 : ^^^^^^
+>STRING.charAt : (pos: number) => string
+>              : ^^^^^^^^^^^^^^^^^^^^^^^
+>STRING : string
+>       : ^^^^^^
+>charAt : (pos: number) => string
+>       : ^^^^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+
+// multiple void  operators
+let ResultIsAny13 = void void STRING;
+>ResultIsAny13 : undefined
+>              : ^^^^^^^^^
+>void void STRING : undefined
+>                 : ^^^^^^^^^
+>void STRING : undefined
+>            : ^^^^^^^^^
+>STRING : string
+>       : ^^^^^^
+
+let ResultIsAny14 = void void void (STRING + STRING);
+>ResultIsAny14 : undefined
+>              : ^^^^^^^^^
+>void void void (STRING + STRING) : undefined
+>                                 : ^^^^^^^^^
+>void void (STRING + STRING) : undefined
+>                            : ^^^^^^^^^
+>void (STRING + STRING) : undefined
+>                       : ^^^^^^^^^
+>(STRING + STRING) : string
+>                  : ^^^^^^
+>STRING + STRING : string
+>                : ^^^^^^
+>STRING : string
+>       : ^^^^^^
+>STRING : string
+>       : ^^^^^^
+
+
+// miss assignment operators
+void "";
+>void "" : undefined
+>        : ^^^^^^^^^
+>"" : ""
+>   : ^^
+
+void STRING;
+>void STRING : undefined
+>            : ^^^^^^^^^
+>STRING : string
+>       : ^^^^^^
+
+void STRING1;
+>void STRING1 : undefined
+>             : ^^^^^^^^^
+>STRING1 : string[]
+>        : ^^^^^^^^
+
+void foo();
+>void foo() : undefined
+>           : ^^^^^^^^^
+>foo() : string
+>      : ^^^^^^
+>foo : () => string
+>    : ^^^^^^^^^^^^
+
+/*pruned*/;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

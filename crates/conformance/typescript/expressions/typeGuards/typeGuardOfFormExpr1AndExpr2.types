@@ -1,0 +1,157 @@
+=== typeGuardOfFormExpr1AndExpr2.ts ===
+let str: string = null as unknown as (string);
+>str : string
+>    : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let bool: boolean = null as unknown as (boolean);
+>bool : boolean
+>     : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let num: number = null as unknown as (number);
+>num : number
+>    : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let strOrNum: string | number = null as unknown as (string | number);
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>null as unknown as (string | number) : string | number
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let strOrNumOrBool: string | number | boolean = null as unknown as (string | number | boolean);
+>strOrNumOrBool : string | number | boolean
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | number | boolean) : string | number | boolean
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let numOrBool: number | boolean = null as unknown as (number | boolean);
+>numOrBool : number | boolean
+>          : ^^^^^^^^^^^^^^^^
+>null as unknown as (number | boolean) : number | boolean
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+// A type guard of the form expr1 && expr2
+//  - when true, narrows the type of x by expr1 when true and then by expr2 when true, or
+//  - when false, narrows the type of x to T1 | T2, where T1 is the type of x narrowed by expr1 when
+//    false, and T2 is the type of x narrowed by expr1 when true and then by expr2 when false.
+
+// (typeguard1 && typeguard2)
+if (typeof strOrNumOrBool !== "string" && typeof strOrNumOrBool !== "number") {
+>typeof strOrNumOrBool !== "string" && typeof strOrNumOrBool !== "number" : boolean
+>                                                                         : ^^^^^^^
+>typeof strOrNumOrBool !== "string" : boolean
+>                                   : ^^^^^^^
+>typeof strOrNumOrBool : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNumOrBool : string | number | boolean
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+>typeof strOrNumOrBool !== "number" : boolean
+>                                   : ^^^^^^^
+>typeof strOrNumOrBool : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNumOrBool : number | boolean
+>               : ^^^^^^^^^^^^^^^^
+>"number" : "number"
+>         : ^^^^^^^^
+
+    bool = strOrNumOrBool; // boolean
+>bool = strOrNumOrBool : boolean
+>                      : ^^^^^^^
+>bool : boolean
+>     : ^^^^^^^
+>strOrNumOrBool : boolean
+>               : ^^^^^^^
+
+}
+else {
+    strOrNum = strOrNumOrBool; // string | number
+>strOrNum = strOrNumOrBool : string | number
+>                          : ^^^^^^^^^^^^^^^
+>strOrNum : string | number
+>         : ^^^^^^^^^^^^^^^
+>strOrNumOrBool : string | number
+>               : ^^^^^^^^^^^^^^^
+
+}
+// (typeguard1 && typeguard2 && typeguard3)
+/*pruned*/;
+
+
+
+
+
+// (typeguard1 && typeguard2 && typeguard11(onAnotherType))
+/*pruned*/;
+
+
+
+
+
+
+
+// (typeguard1) && simpleExpr
+if (typeof strOrNumOrBool !== "string" && numOrBool !== strOrNumOrBool) {
+>typeof strOrNumOrBool !== "string" && numOrBool !== strOrNumOrBool : boolean
+>                                                                   : ^^^^^^^
+>typeof strOrNumOrBool !== "string" : boolean
+>                                   : ^^^^^^^
+>typeof strOrNumOrBool : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNumOrBool : string | number | boolean
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>"string" : "string"
+>         : ^^^^^^^^
+>numOrBool !== strOrNumOrBool : boolean
+>                             : ^^^^^^^
+>numOrBool : number | boolean
+>          : ^^^^^^^^^^^^^^^^
+>strOrNumOrBool : number | boolean
+>               : ^^^^^^^^^^^^^^^^
+
+    numOrBool = strOrNumOrBool; // number | boolean
+>numOrBool = strOrNumOrBool : number | boolean
+>                           : ^^^^^^^^^^^^^^^^
+>numOrBool : number | boolean
+>          : ^^^^^^^^^^^^^^^^
+>strOrNumOrBool : number | boolean
+>               : ^^^^^^^^^^^^^^^^
+
+}
+else {
+    let r3: string | number | boolean = strOrNumOrBool; // string | number | boolean
+>r3 : string | number | boolean
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>strOrNumOrBool : string | number | boolean
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

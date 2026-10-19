@@ -1,0 +1,18 @@
+=== parserStrictMode13.ts ===
+"use strict";
+>"use strict" : "use strict"
+>             : ^^^^^^^^^^^^
+
+try {
+}
+catch(eval) {
+>eval : unknown
+>     : ^^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

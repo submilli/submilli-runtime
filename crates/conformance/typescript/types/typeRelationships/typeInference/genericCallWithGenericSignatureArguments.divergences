@@ -1,0 +1,17 @@
+types: 37 of 89 tsc entries compared, 4 differ
+
+line 20: (x: typeof a) => a
+  tsc:  (x: typeof a) => { x: number; y?: number; }
+  ours: (arg0: { x: number; y?: number }) => { x: number; y?: number }
+
+line 20: (x: typeof b) => b
+  tsc:  (x: typeof b) => { x: number; z?: number; }
+  ours: (arg0: { x: number; z?: number }) => { x: number; z?: number }
+
+line 21: (x: typeof b) => b
+  tsc:  (x: typeof b) => { x: number; z?: number; }
+  ours: (arg0: { x: number; z?: number }) => { x: number; z?: number }
+
+line 21: (x: typeof a) => a
+  tsc:  (x: typeof a) => { x: number; y?: number; }
+  ours: (arg0: { x: number; y?: number }) => { x: number; y?: number }

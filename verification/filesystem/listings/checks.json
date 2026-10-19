@@ -1,0 +1,154 @@
+{
+  "module": "ListingRecovery",
+  "constants": {
+    "MaxCrashes": 1,
+    "MaxCancels": 1,
+    "Fault": "none",
+    "Witness": "gap"
+  },
+  "invariants": [
+    "TypeOK",
+    "SnapshotBeforeOpen",
+    "Retained",
+    "ProgressBeforeHistory",
+    "LogicalProgress",
+    "ReadPositionCorrect",
+    "FrozenOrder",
+    "HistoryCorrect"
+  ],
+  "properties": [],
+  "cases": [
+    {
+      "name": "listing-safety",
+      "kind": "safety"
+    },
+    {
+      "name": "listing-progress",
+      "kind": "liveness",
+      "specification": "LiveSpec",
+      "properties": [
+        "Progress"
+      ]
+    },
+    {
+      "name": "negative-open-before-snapshot",
+      "kind": "negative",
+      "invariant": "SnapshotBeforeOpen",
+      "constants": {
+        "Fault": "open-before-snapshot"
+      }
+    },
+    {
+      "name": "negative-no-checkpoint",
+      "kind": "negative",
+      "invariant": "ProgressBeforeHistory",
+      "constants": {
+        "Fault": "no-checkpoint"
+      }
+    },
+    {
+      "name": "negative-ignore-effect",
+      "kind": "negative",
+      "invariant": "ReadPositionCorrect",
+      "constants": {
+        "Fault": "ignore-effect"
+      }
+    },
+    {
+      "name": "negative-trust-cache",
+      "kind": "negative",
+      "invariant": "ReadPositionCorrect",
+      "constants": {
+        "Fault": "trust-cache"
+      }
+    },
+    {
+      "name": "negative-fresh-enumeration",
+      "kind": "negative",
+      "invariant": "FrozenOrder",
+      "constants": {
+        "Fault": "fresh-enumeration"
+      }
+    },
+    {
+      "name": "negative-sort-after-offset",
+      "kind": "negative",
+      "invariant": "FrozenOrder",
+      "constants": {
+        "Fault": "sort-after-offset"
+      }
+    },
+    {
+      "name": "negative-history-first",
+      "kind": "negative",
+      "invariant": "ProgressBeforeHistory",
+      "constants": {
+        "Fault": "history-first"
+      }
+    },
+    {
+      "name": "negative-finalizer-deletes",
+      "kind": "negative",
+      "invariant": "Retained",
+      "constants": {
+        "Fault": "finalizer-deletes"
+      }
+    },
+    {
+      "name": "witness-open",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "open"
+      }
+    },
+    {
+      "name": "witness-gap",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "gap"
+      }
+    },
+    {
+      "name": "witness-skip",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "skip"
+      }
+    },
+    {
+      "name": "witness-changed",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "changed"
+      }
+    },
+    {
+      "name": "witness-cancel-before",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "cancel-before"
+      }
+    },
+    {
+      "name": "witness-cancel-after",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "cancel-after"
+      }
+    },
+    {
+      "name": "witness-finalize",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "finalize"
+      }
+    }
+  ]
+}

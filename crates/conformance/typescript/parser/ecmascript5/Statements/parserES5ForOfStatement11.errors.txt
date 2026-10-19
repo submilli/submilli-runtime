@@ -1,0 +1,1 @@
+parserES5ForOfStatement11.ts(2,22): error TS2304: Cannot find name 'X'.

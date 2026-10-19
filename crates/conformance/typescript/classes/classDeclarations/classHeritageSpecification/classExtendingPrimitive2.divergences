@@ -1,0 +1,4 @@
+types: 0 of 5 tsc entries compared, 0 differ
+
+errors:
+line 5: ours: a class can only `extends` another class, but `null` is not a class (tsc accepts)

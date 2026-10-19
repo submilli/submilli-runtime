@@ -1,16 +1,17 @@
 //! The Rust port of the prelude's `ObjectConstructor` statics —
 //! `Object.keys`/`values`/`entries`/`hasOwn`/`is` — reading the `$ObjectShape`
 //! field-name/field-value arrays directly. Every per-arity object subtype
-//! subtypes `$ObjectShape`, so one `matches_ty` test covers them all; any other
-//! value takes the "no fields" path (`[]`/`false`), and a null receiver throws
-//! a catchable `Error`, matching the Wasm bodies in
-//! `codegen/prelude/object_shape.rs`.
+//! subtypes `$ObjectShape`, so one `matches_ty` test covers them all. A string
+//! or an array, which `{}` holds, lists its indices; any other value takes the
+//! "no fields" path (`[]`/`false`), and a null receiver throws a catchable
+//! `Error`, matching the Wasm bodies in `codegen/prelude/object_shape.rs`.
 
 use crate::runtime::host::{abi_arg, abi_result};
 mod assign;
 mod dynamic;
 mod from_entries;
 mod group_by;
+pub(crate) use group_by::map_group_by;
 mod index;
 mod static_value;
 
@@ -21,9 +22,11 @@ use wasmtime::{
 
 use crate::MangledName;
 use crate::runtime::StoreData;
+use crate::runtime::array_storage::ArrayStorage;
 use crate::runtime::host::{
     host_object_vtable, intrinsic_array_type, intrinsic_string_type, register_host_fn,
-    register_host_fn_async, write_submilli_array_struct,
+    register_host_fn_async, write_submilli_array_struct, write_submilli_string_struct,
+    write_submilli_string_struct_units,
 };
 use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
 use crate::runtime::prelude::collection::{FIELD_NAME, is_a};
@@ -173,6 +176,9 @@ fn enumerate(
             kind.method()
         )));
     }
+    if let Some(entries) = indexed_entries(caller, obj)? {
+        return enumerated(caller, entries, kind);
+    }
     let mut elems = Vec::new();
     if let Some((names, values)) = shape_arrays(caller, obj)? {
         let len = field_count(caller, obj)?;
@@ -202,6 +208,84 @@ fn enumerate(
     }
     let arr = write_submilli_array_struct(caller, &elems)?;
     Ok(Val::AnyRef(Some(arr.to_anyref())))
+}
+
+/// The `$Array` of `entries` that `Object.keys`, `values` or `entries` gives.
+fn enumerated(
+    caller: &mut Caller<'_, StoreData>,
+    entries: Vec<(Val, Val)>,
+    kind: Enumerate,
+) -> wasmtime::Result<Val> {
+    let mut elems = Vec::with_capacity(entries.len());
+    for (name, value) in entries {
+        elems.push(match kind {
+            Enumerate::Keys => name,
+            Enumerate::Values => value,
+            Enumerate::Entries => {
+                let pair = write_submilli_array_struct(caller, &[name, value])?;
+                Val::AnyRef(Some(pair.to_anyref()))
+            }
+        });
+    }
+    let arr = write_submilli_array_struct(caller, &elems)?;
+    Ok(Val::AnyRef(Some(arr.to_anyref())))
+}
+
+/// The index properties `"0"`, `"1"`, … of a string or an array, with their
+/// one-unit strings or elements, or `None` for any other value. Neither is an
+/// object shape, but `{}` holds both, as in TypeScript, and `Object.keys` and
+/// spread list their indices as JavaScript does.
+fn indexed_entries(
+    caller: &mut Caller<'_, StoreData>,
+    obj: &Val,
+) -> wasmtime::Result<Option<Vec<(Val, Val)>>> {
+    let intr = intrinsic_types(&mut *caller)?;
+    let values = if is_a(caller, obj, &intr.string)? {
+        let units = read_string_units(caller, obj, "indexed string")?;
+        let mut values = Vec::with_capacity(units.len());
+        for unit in units {
+            let one = write_submilli_string_struct_units(caller, &[unit])?;
+            values.push(Val::AnyRef(Some(one.to_anyref())));
+        }
+        values
+    } else if is_a(caller, obj, &intr.array)? {
+        ArrayStorage::read(caller, obj)?.snapshot(caller)?
+    } else {
+        return Ok(None);
+    };
+    let mut entries = Vec::with_capacity(values.len());
+    for (index, value) in values.into_iter().enumerate() {
+        let name = write_submilli_string_struct(caller, &index.to_string())?;
+        entries.push((Val::AnyRef(Some(name.to_anyref())), value));
+    }
+    Ok(Some(entries))
+}
+
+/// The length of a string (in UTF-16 units) or an array, or `None` for any
+/// other value.
+fn indexed_len(caller: &mut Caller<'_, StoreData>, obj: &Val) -> wasmtime::Result<Option<u32>> {
+    let intr = intrinsic_types(&mut *caller)?;
+    if is_a(caller, obj, &intr.string)? {
+        let units = read_string_units(caller, obj, "indexed string")?;
+        return Ok(Some(u32::try_from(units.len()).unwrap_or(u32::MAX)));
+    }
+    if is_a(caller, obj, &intr.array)? {
+        return Ok(Some(ArrayStorage::read(caller, obj)?.len));
+    }
+    Ok(None)
+}
+
+/// The array index `units` spells canonically ("0", "17", not "017" or "-1").
+fn array_index(units: &[u16]) -> Option<u32> {
+    if units.is_empty() || (units.len() > 1 && units[0] == u16::from(b'0')) {
+        return None;
+    }
+    let mut index: u32 = 0;
+    for &unit in units {
+        let digit = char::from_u32(u32::from(unit))?.to_digit(10)?;
+        index = index.checked_mul(10)?.checked_add(digit)?;
+    }
+    Some(index)
 }
 
 /// A marked name identifies an internal accessor slot independently of its
@@ -244,6 +328,13 @@ fn spread(
     let mut entries = std::collections::BTreeMap::new();
     let omitted = spread_omitted_fields(caller, mask)?;
     for (source_index, object) in [target, source].into_iter().enumerate() {
+        if let Some(indexed) = indexed_entries(caller, object)? {
+            for (name, value) in indexed {
+                let units = read_string_units(caller, &name, FIELD_NAME)?;
+                entries.insert(units, (name, value));
+            }
+            continue;
+        }
         let Some((names, values)) = shape_arrays(caller, object)? else {
             continue;
         };
@@ -292,6 +383,31 @@ fn spread(
     Ok(Val::AnyRef(Some(object.to_anyref())))
 }
 
+/// `value` as an object an object type's field reads can take. `{}` holds
+/// any value, and TypeScript lets it into a type whose fields are all
+/// optional; JavaScript then reads a primitive's fields through a wrapper
+/// object and finds none of an exotic object's (a `Map`, a function) own. A
+/// plain object or class instance stays itself; any other value becomes a
+/// fresh object of its index entries (a string's or array's) or none.
+fn to_object(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<Val> {
+    if is_kept_as_object(caller, value)? {
+        return Ok(*value);
+    }
+    let none = Val::AnyRef(None);
+    spread(caller, &none, value, &none, &none)
+}
+
+/// Whether object-type field reads take `value` as it is: `null` or
+/// `undefined` (read through an optional chain), or a plain object, which
+/// class and error instances extend.
+fn is_kept_as_object(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<bool> {
+    if super::undefined::is_nullish(caller, value)? {
+        return Ok(true);
+    }
+    let object_shape = intrinsic_types(&mut *caller)?.object_shape.clone();
+    is_a(caller, value, &object_shape)
+}
+
 fn copy_field_name(
     caller: &mut Caller<'_, StoreData>,
     name: Val,
@@ -326,6 +442,20 @@ fn copy_field_name(
 
 /// Append without replacing the receiver, so every alias sees the new slot.
 /// Existing indices (including class payload and guard slots) stay unchanged.
+/// A fresh object with `fields` (name, value) in order, for host code that
+/// hands JavaScript an object (`replace`'s named groups).
+pub(crate) fn object_from_fields(
+    caller: &mut Caller<'_, StoreData>,
+    fields: &[(Val, Val)],
+) -> wasmtime::Result<Val> {
+    let empty = Val::null_any_ref();
+    let object = spread(caller, &empty, &empty, &empty, &empty)?;
+    for (name, value) in fields {
+        insert_field(caller, &object, name, value)?;
+    }
+    Ok(object)
+}
+
 fn insert_field(
     caller: &mut Caller<'_, StoreData>,
     obj: &Val,
@@ -461,6 +591,17 @@ fn inserted_field_name(caller: &mut Caller<'_, StoreData>, name: &Val) -> wasmti
     )))
 }
 
+/// `object[name]` as JavaScript reads it: a data field, a getter's result, or
+/// `undefined` when the object has neither.
+pub(crate) async fn read_property(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    name: &str,
+) -> wasmtime::Result<Val> {
+    let key = crate::runtime::host::write_submilli_string_struct(caller, name)?;
+    dynamic::get(caller, object, &Val::AnyRef(Some(key.to_anyref()))).await
+}
+
 pub(crate) fn field_was_inserted(
     caller: &mut Caller<'_, StoreData>,
     name: &Val,
@@ -496,10 +637,14 @@ fn has_own(caller: &mut Caller<'_, StoreData>, obj: &Val, key: &Val) -> wasmtime
             "Object.hasOwn called on null or undefined",
         ));
     }
+    let target = read_string_units(caller, key, FIELD_NAME)?;
+    if let Some(len) = indexed_len(caller, obj)? {
+        let length: Vec<u16> = "length".encode_utf16().collect();
+        return Ok(target == length || array_index(&target).is_some_and(|index| index < len));
+    }
     let Some((names, values)) = shape_arrays(caller, obj)? else {
         return Ok(false);
     };
-    let target = read_string_units(caller, key, FIELD_NAME)?;
     let Some(slot) = find_data_slot(caller, obj, &target)? else {
         return Ok(false);
     };
@@ -707,6 +852,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Ok(())
         },
     )?;
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        ctor_key("#toObject"),
+        ft(vec![obj.clone()], vec![obj.clone()]),
+        true,
+        |caller, params, results| {
+            *abi_result(results, 0)? = to_object(caller, abi_arg(params, 0)?)?;
+            Ok(())
+        },
+    )?;
     register_host_fn_async(
         linker,
         MODULE_NAME,
@@ -775,6 +931,14 @@ pub fn declare(defs: &mut PackageDeclaration) {
         ctor_key("#toJson"),
         vec![Param::new("object", Type::Unknown)],
         Type::String,
+    );
+    // Compiler-only helper: a `{}` value as the object an object type reads.
+    declare_method(
+        defs,
+        "#toObject",
+        ctor_key("#toObject"),
+        vec![Param::new("value", Type::Unknown)],
+        Type::Unknown,
     );
     // Compiler-only helper: the value a static-dispatch binding reads as.
     declare_method(
@@ -872,8 +1036,8 @@ pub fn declare(defs: &mut PackageDeclaration) {
         "is",
         ctor_key("is"),
         vec![
-            Param::with_default("a", Type::Unknown, crate::DefaultValue::Undefined),
-            Param::with_default("b", Type::Unknown, crate::DefaultValue::Undefined),
+            Param::new("a", Type::Unknown),
+            Param::new("b", Type::Unknown),
         ],
         Type::Boolean,
     );
@@ -1094,8 +1258,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             optional: false,
                             generics: Vec::new(),
                             params: vec![
-                                Param::with_default("a", Type::Unknown, crate::DefaultValue::Undefined),
-                                Param::with_default("b", Type::Unknown, crate::DefaultValue::Undefined),
+                                Param::new("a", Type::Unknown),
+                                Param::new("b", Type::Unknown),
                             ],
                             ret: Type::Boolean,
                             predicate: None,

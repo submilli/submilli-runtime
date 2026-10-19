@@ -75,10 +75,16 @@ fn filename_to_key(name: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
+/// Length of a [`SecretCipher::key_id`], in bytes.
+pub const KEY_ID_LEN: usize = 8;
+
 /// Shared authenticated encryption for server-owned secret material.
 /// The key stays outside persistent stores; associated data binds a blob to its owner.
 pub struct SecretCipher {
     cipher: XChaCha20Poly1305,
+    key_id: [u8; KEY_ID_LEN],
+    /// Root for [`Self::derive`], kept apart from the encryption key itself.
+    derivation: [u8; KEY_LEN],
 }
 
 impl SecretCipher {
@@ -86,13 +92,27 @@ impl SecretCipher {
     pub fn from_key(key: [u8; KEY_LEN]) -> Self {
         Self {
             cipher: XChaCha20Poly1305::new(&key.into()),
+            key_id: key_id(&key),
+            derivation: hmac_sha256(&key, b"submilli:derive:v1"),
         }
     }
 
     pub fn new(source: &KeySource) -> Result<Self, SecretStoreError> {
-        Ok(Self {
-            cipher: cipher_for(source)?,
-        })
+        Ok(Self::from_key(load_key(source)?))
+    }
+
+    /// Names the key without revealing it, so a stored blob can say which key
+    /// sealed it: a domain-separated hash prefix of the key.
+    pub fn key_id(&self) -> [u8; KEY_ID_LEN] {
+        self.key_id
+    }
+
+    /// A key for another purpose, derived from this one and named like it: the
+    /// same `label` under the same key always derives the same key, and no
+    /// derived key reveals this one or another label's.
+    pub fn derive(&self, label: &[u8]) -> ([u8; KEY_ID_LEN], [u8; KEY_LEN]) {
+        let derived = hmac_sha256(&self.derivation, label);
+        (key_id(&derived), derived)
     }
 
     pub fn seal(&self, plaintext: &[u8], owner: &[u8]) -> Result<Vec<u8>, SecretStoreError> {
@@ -111,7 +131,7 @@ impl SecretCipher {
                     aad: owner,
                 },
             )
-            .map_err(|_| SecretStoreError::Crypto("could not encrypt bindings".into()))?;
+            .map_err(|_| SecretStoreError::Crypto("could not encrypt the value".into()))?;
         let mut blob = Vec::new();
         blob.extend_from_slice(nonce.as_slice());
         blob.extend_from_slice(&ciphertext);
@@ -133,7 +153,7 @@ impl SecretCipher {
             )
             .map_err(|_| {
                 SecretStoreError::Crypto(
-                    "cannot decrypt bindings; restore the configured secret-store key".into(),
+                    "cannot decrypt the value; restore the configured secret-store key".into(),
                 )
             })
     }
@@ -143,16 +163,63 @@ impl SecretCipher {
 /// per key in `dir`. Reads decrypt on demand; no plaintext is held resident.
 pub struct FileSecretStore {
     dir: PathBuf,
-    cipher: SecretCipher,
+    cipher: std::sync::Arc<SecretCipher>,
+}
+
+/// One sealed file of a [`FileSecretStore`] directory, read for import.
+pub struct SealedFile {
+    pub key: String,
+    pub path: PathBuf,
+    /// The file's bytes as read, so an importer can confirm nothing changed
+    /// before it archives the directory.
+    pub bytes: Vec<u8>,
 }
 
 impl FileSecretStore {
     /// Open the store, creating `dir` if absent. No secrets are read here — the
     /// store holds only the key (the cipher); values are decrypted per lookup.
     pub fn open(dir: PathBuf, key_src: &KeySource) -> Result<Self, SecretStoreError> {
-        let cipher = SecretCipher::new(key_src)?;
+        let cipher = std::sync::Arc::new(SecretCipher::new(key_src)?);
         fs::create_dir_all(&dir).map_err(io)?;
         Ok(Self { dir, cipher })
+    }
+
+    /// An existing store directory, read with `cipher`, for import. Creates
+    /// nothing.
+    pub fn existing(dir: PathBuf, cipher: std::sync::Arc<SecretCipher>) -> Self {
+        Self { dir, cipher }
+    }
+
+    /// Every sealed file in a store directory, sorted by key, read without
+    /// opening any. Symlinks and anything but regular files are refused; temp
+    /// files and names that encode no key are skipped.
+    pub fn sealed_files(dir: &Path) -> Result<Vec<SealedFile>, SecretStoreError> {
+        let mut files = Vec::new();
+        for entry in fs::read_dir(dir).map_err(io)? {
+            let entry = entry.map_err(io)?;
+            let name = entry.file_name();
+            let Some(key) = name.to_str().and_then(filename_to_key) else {
+                continue;
+            };
+            let path = entry.path();
+            if !fs::symlink_metadata(&path).map_err(io)?.is_file() {
+                return Err(SecretStoreError::Io(format!(
+                    "`{}` is not a regular file",
+                    path.display()
+                )));
+            }
+            let bytes = fs::read(&path).map_err(io)?;
+            files.push(SealedFile { key, path, bytes });
+        }
+        files.sort_by(|left, right| left.key.cmp(&right.key));
+        Ok(files)
+    }
+
+    /// The value a sealed file holds.
+    pub fn open_file(&self, file: &SealedFile) -> Result<String, SecretStoreError> {
+        let plain = open_sealed(&self.cipher, &file.bytes)?;
+        String::from_utf8(plain)
+            .map_err(|e| SecretStoreError::Crypto(format!("value is not utf-8: {e}")))
     }
 
     /// Read and decrypt the one sealed file for `key`. `Ok(None)` if absent.
@@ -236,6 +303,25 @@ impl SecretStore for FileSecretStore {
 /// every setting is acceptable.
 pub fn check_key(key_src: &KeySource) -> Result<(), SecretStoreError> {
     cipher_for(key_src).map(|_| ())
+}
+
+fn key_id(key: &[u8; KEY_LEN]) -> [u8; KEY_ID_LEN] {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::new()
+        .chain_update(b"submilli:key-id:v1")
+        .chain_update(key)
+        .finalize();
+    // A SHA-256 digest is 32 bytes, longer than a key id.
+    digest.first_chunk().copied().unwrap_or_default()
+}
+
+fn hmac_sha256(key: &[u8; KEY_LEN], message: &[u8]) -> [u8; KEY_LEN] {
+    use hmac::{Hmac, Mac};
+    // HMAC accepts keys of any length.
+    let mut mac =
+        <Hmac<sha2::Sha256> as Mac>::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(message);
+    mac.finalize().into_bytes().into()
 }
 
 fn cipher_for(key_src: &KeySource) -> Result<XChaCha20Poly1305, SecretStoreError> {
@@ -514,5 +600,24 @@ mod tests {
         let good = tmp.path().join("good.b64");
         fs::write(&good, test_key_b64()).unwrap();
         assert_eq!(load_key(&KeySource::File(good)).unwrap(), [7u8; KEY_LEN]);
+    }
+
+    #[test]
+    fn derived_keys_are_stable_per_label_and_independent_of_each_other() {
+        let one = SecretCipher::from_key([1; KEY_LEN]);
+        let (id, key) = one.derive(b"a");
+        assert_eq!((id, key), SecretCipher::from_key([1; KEY_LEN]).derive(b"a"));
+        assert_ne!(key, one.derive(b"b").1);
+        assert_ne!(key, SecretCipher::from_key([2; KEY_LEN]).derive(b"a").1);
+        assert_ne!(key, [1; KEY_LEN]);
+        assert_ne!(id, one.key_id());
+    }
+
+    #[test]
+    fn key_ids_name_the_key_without_revealing_it() {
+        let one = SecretCipher::from_key([1; KEY_LEN]);
+        assert_eq!(one.key_id(), SecretCipher::from_key([1; KEY_LEN]).key_id());
+        assert_ne!(one.key_id(), SecretCipher::from_key([2; KEY_LEN]).key_id());
+        assert_ne!(&one.key_id()[..], &[1u8; KEY_ID_LEN][..]);
     }
 }

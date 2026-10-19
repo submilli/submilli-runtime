@@ -1,0 +1,13 @@
+=== parserConstructorDeclaration7.ts ===
+class C {
+>C : C
+>  : ^
+
+  public private constructor() { }
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

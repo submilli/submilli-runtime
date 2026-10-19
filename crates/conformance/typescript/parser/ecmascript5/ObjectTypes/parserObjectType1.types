@@ -1,0 +1,15 @@
+=== parserObjectType1.ts ===
+let v: {} = null as unknown as ({});
+>v : {}
+>  : ^^
+>null as unknown as ({}) : {}
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -142,7 +142,21 @@ impl VariableReport {
     /// required ones checked: what a run of `blueprint` would see. A re-check and a test
     /// run both read variables through this, so they see the same values.
     pub fn resolve(&self, blueprint: &Blueprint) -> Result<VarBindings, VariableError> {
-        resolve_variables(&blueprint.variables, &self.bindings())
+        resolve_variables(&blueprint.variables, &self.supplied_bindings(blueprint))
+    }
+
+    /// A recorded snapshot contains resolved alias entries. New runs derive
+    /// those again from the current declarations instead of supplying overrides.
+    pub(crate) fn supplied_bindings(&self, blueprint: &Blueprint) -> VarBindings {
+        self.bindings()
+            .into_iter()
+            .filter(|(name, _)| {
+                blueprint
+                    .variables
+                    .get(name)
+                    .is_none_or(|decl| decl.alias.is_none())
+            })
+            .collect()
     }
 }
 

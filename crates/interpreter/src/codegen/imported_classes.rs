@@ -743,6 +743,18 @@ fn reconstruct_one(
     );
     let ctor_idx = next_index(next_func_idx)?;
     symbols.record_imported_fn(ctor_mangled, ctor_idx, ctor_param_tys, class_ref, false);
+    // A host constructor can't fill its own defaults, so an argument that is
+    // `undefined` takes the declared default at the call, as a host method's does.
+    let host_defaults = super::is_host_package(class.package).then(|| {
+        class
+            .constructor
+            .iter()
+            .map(|param| param.default.clone())
+            .collect::<Vec<_>>()
+    });
+    if let Some(defaults) = &host_defaults {
+        symbols.record_host_parameter_defaults(ctor_idx, defaults.clone());
+    }
 
     // Self-first ctor-init: `((ref $Object), params...) -> ()`.
     let mut init_params = vec![ref_to(intrinsics.object)];
@@ -757,6 +769,12 @@ fn reconstruct_one(
     );
     let init_idx = next_index(next_func_idx)?;
     symbols.record_class_ctor_init_func(mangled.clone(), init_idx);
+    if let Some(defaults) = host_defaults {
+        symbols.record_host_parameter_defaults(
+            init_idx,
+            std::iter::once(None).chain(defaults).collect(),
+        );
+    }
 
     // Own method bodies — reuse the slot's `((ref $Object), params...) -> ret`
     // sig. A local subclass's vtable global `ref.func`s the inherited ones.

@@ -1,0 +1,21 @@
+=== templateStringInArray.ts ===
+let x = [1, 2, `abc${ 123 }def`];
+>x : (string | number)[]
+>  : ^^^^^^^^^^^^^^^^^^^
+>[1, 2, `abc${ 123 }def`] : (string | number)[]
+>                         : ^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+>`abc${ 123 }def` : "abc123def"
+>                 : ^^^^^^^^^^^
+>123 : 123
+>    : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+
