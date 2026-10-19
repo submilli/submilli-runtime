@@ -1,0 +1,78 @@
+{
+  "module": "SequenceRecovery",
+  "constants": {
+    "MaxCrashes": 1,
+    "Fault": "none",
+    "Witness": "prefix"
+  },
+  "invariants": [
+    "TypeOK",
+    "DurablePrefix",
+    "JournalRetained",
+    "Completed",
+    "NoRepeat"
+  ],
+  "properties": [],
+  "cases": [
+    {
+      "name": "sequence-safety",
+      "kind": "safety"
+    },
+    {
+      "name": "sequence-progress",
+      "kind": "liveness",
+      "specification": "LiveSpec",
+      "properties": [
+        "Progress"
+      ]
+    },
+    {
+      "name": "negative-skip-receipt",
+      "kind": "negative",
+      "invariant": "DurablePrefix",
+      "constants": {
+        "Fault": "skip-receipt"
+      }
+    },
+    {
+      "name": "negative-repeat-prefix",
+      "kind": "negative",
+      "invariant": "NoRepeat",
+      "constants": {
+        "Fault": "repeat-prefix"
+      }
+    },
+    {
+      "name": "negative-early-cleanup",
+      "kind": "negative",
+      "invariant": "JournalRetained",
+      "constants": {
+        "Fault": "early-cleanup"
+      }
+    },
+    {
+      "name": "witness-prefix",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "prefix"
+      }
+    },
+    {
+      "name": "witness-failure",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "failure"
+      }
+    },
+    {
+      "name": "witness-completion-gap",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "gap"
+      }
+    }
+  ]
+}

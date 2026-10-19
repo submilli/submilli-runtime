@@ -21,6 +21,8 @@
 //! to the budget.
 
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use wasmtime::{AsContextMut, Caller, Func, FuncType, Trap, Val};
 
@@ -273,11 +275,200 @@ pub fn charge_host_fuel(
     ctx.set_fuel(engine_fuel - batch)
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("host operation exhausted its fuel budget")]
+pub struct Exhausted;
+
+/// Fuel shared by native workers while the store awaits their operation.
+/// Admit work with `charge`; report already-performed work with `record_fuel`.
+/// The caller settles the total once all workers have drained, even on failure.
+#[derive(Debug)]
+pub struct WorkBudget {
+    limit: u64,
+    spent: AtomicU64,
+    after_effect: AtomicBool,
+    cancel: Option<Arc<AtomicBool>>,
+    exhausted: AtomicBool,
+}
+impl WorkBudget {
+    pub fn new(limit: u64) -> Self {
+        Self {
+            limit,
+            spent: AtomicU64::new(0),
+            after_effect: AtomicBool::new(false),
+            cancel: None,
+            exhausted: AtomicBool::new(false),
+        }
+    }
+    /// Signal cooperative cancellation if reported work exceeds the limit.
+    /// Explicit admission failures return `Exhausted` directly instead.
+    pub fn with_cancellation(mut self, cancel: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    pub fn charge(&self, rate: Rate, count: u64) -> Result<(), Exhausted> {
+        self.charge_fuel(rate.cost(count))
+    }
+    pub fn charge_fuel(&self, amount: u64) -> Result<(), Exhausted> {
+        let settled = self.after_effect.load(Ordering::Acquire);
+        let mut refused = false;
+        let _ = self
+            .spent
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |spent| {
+                let remaining = self.limit.saturating_sub(spent);
+                refused = !settled && amount > remaining;
+                let admitted = if settled {
+                    amount
+                } else {
+                    amount.min(remaining)
+                };
+                Some(spent.saturating_add(admitted))
+            });
+        if refused { Err(Exhausted) } else { Ok(()) }
+    }
+    /// Record work that has already happened. Keep its full cost even if it
+    /// exceeds the limit; a worker's next cancellation check can stop further work.
+    pub fn record_fuel(&self, amount: u64) {
+        let _ = self
+            .spent
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |spent| {
+                Some(spent.saturating_add(amount))
+            });
+        if !self.after_effect.load(Ordering::Acquire) && self.spent() > self.limit {
+            self.exhausted.store(true, Ordering::Release);
+            if let Some(cancel) = &self.cancel {
+                cancel.store(true, Ordering::Release);
+            }
+        }
+    }
+
+    /// Call immediately before an external effect can begin. Later work counts
+    /// without fuel refusal or fuel-driven cancellation. The operation owns this
+    /// transition and must coordinate it with any concurrent admission checks.
+    /// Existing cancellation (including a deadline) is never cleared.
+    pub fn before_effect(&self) {
+        self.after_effect.store(true, Ordering::Release);
+    }
+    pub fn spent(&self) -> u64 {
+        self.spent.load(Ordering::Acquire)
+    }
+
+    /// Whether reported work exceeded the limit before an effect began.
+    pub fn is_exhausted(&self) -> bool {
+        self.exhausted.load(Ordering::Acquire)
+    }
+
+    pub fn settle(&self, ctx: impl AsContextMut<Data = StoreData>) -> wasmtime::Result<()> {
+        settle_host_fuel(ctx, self.spent())
+    }
+}
+
+/// Fuel available to native work, including host charges awaiting settlement.
+pub fn remaining_fuel(mut ctx: impl AsContextMut<Data = StoreData>) -> wasmtime::Result<u64> {
+    let ctx = ctx.as_context_mut();
+    Ok(ctx.get_fuel()?.saturating_sub(ctx.data().host_fuel_pending))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::runtime::{RuntimeConfig, Vfs};
     use wasmtime::{Func, FuncType, Val, ValType};
+
+    #[test]
+    fn refuses_before_effect_and_settles_after_publication_starts() {
+        let budget = WorkBudget::new(HASH.cost(4));
+        budget.charge(HASH, 3).unwrap();
+        assert!(budget.charge(HASH, 2).is_err());
+        assert_eq!(budget.spent(), HASH.cost(4));
+        budget.before_effect();
+        budget.charge(HASH, 2).unwrap();
+        assert_eq!(budget.spent(), HASH.cost(6));
+    }
+
+    #[test]
+    fn reported_work_cancels_before_effect_and_keeps_its_full_cost() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let budget = WorkBudget::new(10).with_cancellation(cancel.clone());
+        budget.record_fuel(10);
+        assert!(!cancel.load(Ordering::Acquire));
+        budget.record_fuel(3);
+        assert!(cancel.load(Ordering::Acquire));
+        assert!(budget.is_exhausted());
+        assert_eq!(budget.spent(), 13);
+        assert!(budget.charge_fuel(1).is_err());
+        assert_eq!(budget.spent(), 13, "admission must not erase reported work");
+        budget.before_effect();
+        budget.record_fuel(4);
+        budget.charge_fuel(5).unwrap();
+        assert_eq!(budget.spent(), 22);
+        assert!(
+            cancel.load(Ordering::Acquire),
+            "never clear an existing cancellation"
+        );
+    }
+
+    #[test]
+    fn effect_completion_does_not_request_fuel_cancellation() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let budget = WorkBudget::new(10).with_cancellation(cancel.clone());
+        budget.charge_fuel(10).unwrap();
+        assert!(budget.charge_fuel(1).is_err());
+        assert!(
+            !cancel.load(Ordering::Acquire),
+            "admission returns its own error"
+        );
+        budget.before_effect();
+        budget.record_fuel(20);
+        budget.charge_fuel(30).unwrap();
+        assert_eq!(budget.spent(), 60);
+        assert!(!cancel.load(Ordering::Acquire));
+        assert!(!budget.is_exhausted());
+    }
+
+    #[test]
+    fn worker_charges_share_one_limit_and_saturate_after_effects() {
+        let budget = WorkBudget::new(100);
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..4)
+                .map(|_| scope.spawn(|| (0..100).filter(|_| budget.charge_fuel(1).is_ok()).count()))
+                .collect();
+            let admitted: usize = workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .sum();
+            assert_eq!(admitted, 100);
+        });
+        assert_eq!(budget.spent(), 100);
+        budget.before_effect();
+        budget.charge_fuel(u64::MAX).unwrap();
+        budget.record_fuel(1);
+        assert_eq!(budget.spent(), u64::MAX);
+        let budget = WorkBudget::new(u64::MAX);
+        budget.charge_fuel(u64::MAX).unwrap();
+        assert!(budget.charge_fuel(1).is_err());
+    }
+
+    #[test]
+    fn worker_budget_accounts_for_pending_charges_and_settles_once_after_effect() {
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut store = config
+            .store(&engine, StoreData::with_vfs(Vfs::none()))
+            .unwrap();
+        store.set_fuel(100).unwrap();
+        charge_host_fuel(&mut store, 20).unwrap();
+        assert_eq!(remaining_fuel(&mut store).unwrap(), 80);
+        let budget = WorkBudget::new(remaining_fuel(&mut store).unwrap());
+        budget.charge_fuel(80).unwrap();
+        budget.before_effect();
+        budget.record_fuel(10);
+        budget.settle(&mut store).unwrap();
+        assert_eq!(store.get_fuel().unwrap(), 0);
+        assert_eq!(budget.spent(), 90);
+        assert_eq!(store.data().host_fuel, 100);
+    }
 
     #[test]
     fn result_settlement_preserves_values_and_restores_refusing_charges() {

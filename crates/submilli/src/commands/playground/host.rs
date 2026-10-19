@@ -6,6 +6,7 @@
 //! steps add go into [`ControlRoutes`].
 
 use std::fs::File;
+use std::mem::ManuallyDrop;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -258,8 +259,11 @@ struct Serving {
 /// `instance.lock` so a command that finds no instance record still sees it. It is
 /// kept until the process exits, so the lock goes only when the process does.
 struct HeldInstance {
-    /// Dropped only when the process exits.
-    instance: InstanceLock,
+    /// Native database cleanup can outlive the async runtime. Leave this single
+    /// descriptor for the kernel to close at process exit, so `stop` cannot report
+    /// success while the old process still owns the database. This CLI serves
+    /// only one playground per process, including on startup failure.
+    instance: ManuallyDrop<InstanceLock>,
     stopping: AtomicBool,
     /// The signal that began the stop, or 0 when none did.
     stopped_by: AtomicI32,
@@ -268,7 +272,7 @@ struct HeldInstance {
 impl HeldInstance {
     fn new(instance: InstanceLock) -> Self {
         Self {
-            instance,
+            instance: ManuallyDrop::new(instance),
             stopping: AtomicBool::new(false),
             stopped_by: AtomicI32::new(0),
         }
@@ -1019,6 +1023,68 @@ fn content_type(file: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LOCK_LIFETIME_PROJECT: &str = "SUBMILLI_TEST_LOCK_LIFETIME_PROJECT";
+
+    #[test]
+    #[ignore = "subprocess for instance_lock_outlives_runtime_teardown"]
+    fn instance_lock_lifetime_child() {
+        use std::io::Read;
+
+        let root = std::env::var_os(LOCK_LIFETIME_PROJECT).expect("child project");
+        let state = StateDir::for_project(std::path::Path::new(&root));
+        state.create().unwrap();
+        let held = Arc::new(HeldInstance::new(state.instance_lock().unwrap().unwrap()));
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.spawn(async move {
+            let _held = held;
+            std::future::pending::<()>().await;
+        });
+        runtime.shutdown_timeout(Duration::from_secs(1));
+        // No async task or caller retains HeldInstance now. Native database
+        // cleanup may still be running, so the instance must remain locked.
+        std::fs::write(std::path::Path::new(&root).join("torn-down"), "").unwrap();
+        std::io::stdin().read_exact(&mut [0]).unwrap();
+    }
+
+    #[test]
+    fn instance_lock_outlives_runtime_teardown() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        use std::time::Instant;
+
+        let directory = tempfile::tempdir().unwrap();
+        let state = StateDir::for_project(directory.path());
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "commands::playground::host::tests::instance_lock_lifetime_child",
+                "--ignored",
+            ])
+            .env(LOCK_LIFETIME_PROJECT, directory.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !directory.path().join("torn-down").exists() {
+            assert!(child.try_wait().unwrap().is_none(), "child exited early");
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("child did not finish runtime teardown");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let holder = state.instance_holder().unwrap().and_then(|held| held.pid());
+        let pid = child.id();
+        child.stdin.take().unwrap().write_all(&[0]).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(holder, Some(pid), "runtime teardown released the instance");
+        assert!(state.instance_holder().unwrap().is_none());
+    }
 
     #[test]
     fn the_playground_turns_off_run_telemetry_and_the_audit_trail() {

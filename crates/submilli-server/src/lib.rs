@@ -20,6 +20,7 @@ pub mod handlers;
 pub mod idempotency;
 #[cfg(test)]
 extern crate self as submilli_server;
+pub mod filesystems;
 mod import_archive;
 pub mod local_apply;
 pub mod logging;
