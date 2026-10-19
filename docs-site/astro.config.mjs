@@ -8,12 +8,12 @@ import { securityAside } from "./src/plugins/satteri-security-aside.mjs";
 import { agentDocs } from "./src/plugins/agent-docs.ts";
 import { codeBlocks } from "./src/plugins/code-blocks.mjs";
 
-import { legacyDocsRoutes } from "./src/lib/legacy-docs.ts";
+import { legacyDocsRoutes, legacyRedirectRoutes } from "./src/lib/legacy-docs.ts";
 
 export default defineConfig({
   site: "https://submilli.ai",
   base: "/docs",
-  redirects: legacyDocsRoutes,
+  redirects: { ...legacyDocsRoutes, ...legacyRedirectRoutes },
   // Match the URL prefix on static hosts that publish dist/ at the domain root.
   outDir: "./dist/docs",
   markdown: {
