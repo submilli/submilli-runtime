@@ -41,6 +41,12 @@ pub(crate) fn router() -> Router {
     Router::new().route("/healthz", get(|| async { StatusCode::OK }))
 }
 
+/// [`router`] with the MCP endpoint, `/mcp/{blueprint}`, mounted behind the
+/// playground's tokens.
+pub(crate) fn router_with_mcp(mcp: Arc<super::mcp::McpHost>) -> Router {
+    router().merge(super::mcp::routes(mcp))
+}
+
 /// What asks the listener to stop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Stop {

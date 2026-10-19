@@ -62,6 +62,11 @@ mod finalizers;
     dead_code,
     reason = "the playground switches its server listener onto these next"
 )]
+mod mcp;
+#[allow(
+    dead_code,
+    reason = "the playground switches its server listener onto these next"
+)]
 mod run;
 #[allow(
     dead_code,

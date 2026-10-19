@@ -254,6 +254,16 @@ impl Sessions {
         self.lock_secrets().insert(id.to_owned(), secrets);
     }
 
+    /// The open session's bound secrets, if any were bound.
+    pub(crate) fn secrets(&self, id: &str) -> Option<Arc<HarnessSecretBindings>> {
+        self.lock_secrets().get(id).cloned()
+    }
+
+    /// Drop the session's bound secrets.
+    pub(crate) fn forget_secrets(&self, id: &str) {
+        self.lock_secrets().remove(id);
+    }
+
     fn lock_secrets(
         &self,
     ) -> std::sync::MutexGuard<'_, HashMap<String, Arc<HarnessSecretBindings>>> {
@@ -273,9 +283,21 @@ impl Sessions {
         blueprint: &Blueprint,
         supplied: &BTreeMap<String, String>,
     ) -> Result<Session, SessionsError> {
+        self.open_as(uuid::Uuid::new_v4().to_string(), blueprint, supplied)
+            .await
+    }
+
+    /// Like [`Self::open`], under an id the caller chose, such as the MCP session
+    /// id an agent already holds.
+    pub(crate) async fn open_as(
+        &self,
+        id: String,
+        blueprint: &Blueprint,
+        supplied: &BTreeMap<String, String>,
+    ) -> Result<Session, SessionsError> {
         let variables = resolve_variables(&blueprint.variables, supplied)?;
         let session = Session {
-            id: uuid::Uuid::new_v4().to_string(),
+            id,
             blueprint_name: blueprint.name.clone(),
             idle_timeout: blueprint.idle_timeout,
             last_activity: SystemTime::now(),
@@ -318,6 +340,22 @@ impl Sessions {
     /// Where a `per_session` session's files live.
     pub(crate) fn session_dir(&self, id: &str) -> PathBuf {
         self.sessions_dir.join(id)
+    }
+
+    /// The session is active now. Returns whether it is open.
+    pub(crate) async fn touch(&self, id: &str) -> Result<bool> {
+        self.database.touch(id, SystemTime::now()).await
+    }
+
+    /// Store the session's MCP `initialize` parameters, as JSON, for it to
+    /// resume under after a restart. Returns whether the session is open.
+    pub(crate) async fn put_mcp_state(&self, id: &str, json: &str) -> Result<bool> {
+        self.database.put_mcp_state(id, json).await
+    }
+
+    /// The session's stored MCP `initialize` parameters.
+    pub(crate) async fn mcp_state(&self, id: &str) -> Result<Option<String>> {
+        self.database.mcp_state(id).await
     }
 
     /// A run in the session starts: it is active now, and the reaper leaves it

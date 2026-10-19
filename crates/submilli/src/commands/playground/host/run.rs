@@ -319,7 +319,7 @@ pub(crate) trait RecordedRun: Send + Sync {
 /// A run being recorded. Clones share one run; dropping the last clone of a run
 /// nobody finished finishes it.
 #[derive(Clone)]
-struct Recording {
+pub(crate) struct Recording {
     shared: Arc<RecordingShared>,
 }
 
@@ -393,14 +393,14 @@ impl Recording {
     }
 
     /// The decision log for the run, reporting each record as an event.
-    fn log(&self) -> Arc<DecisionLog> {
+    pub(crate) fn log(&self) -> Arc<DecisionLog> {
         DecisionLog::new(
             self.shared.run.log_config(),
             Some(Arc::new(Events(Arc::clone(&self.shared.run))) as Arc<dyn RecordObserver>),
         )
     }
 
-    fn finish(&self, run: FinishedRun) {
+    pub(crate) fn finish(&self, run: FinishedRun) {
         self.shared.finish(run);
     }
 
@@ -424,7 +424,7 @@ impl Recording {
         self.shared.run.returned(bytes);
     }
 
-    fn started(&self) -> Instant {
+    pub(crate) fn started(&self) -> Instant {
         self.shared.started
     }
 }
@@ -683,6 +683,26 @@ impl RunHost {
     /// against the blueprint in force.
     pub(crate) fn clear_mcp_catalogs(&self) {
         self.lock_catalogs().clear();
+    }
+
+    /// Start recording a run that is not a program, such as an MCP file tool's one
+    /// decision; `None` when the recorder leaves it unrecorded. The caller
+    /// finishes it.
+    pub(crate) fn record(&self, run: RunStart) -> Option<Recording> {
+        self.recorder
+            .as_ref()
+            .and_then(|recorder| recorder.start(run).map(Recording::new))
+    }
+
+    /// Every `@mcp/<server>` package `blueprint` declares, for the package tools
+    /// to describe.
+    pub(crate) async fn blueprint_mcp_catalog(
+        &self,
+        blueprint: &Arc<Blueprint>,
+    ) -> Result<Arc<McpCatalog>, String> {
+        let servers = blueprint.mcp.keys().cloned().collect();
+        self.mcp_catalog_for_imports(blueprint, &servers, &Arc::default())
+            .await
     }
 
     /// Run one program. The recorder is asked about it first, and sees its end on

@@ -195,6 +195,30 @@ impl Database {
         Ok(())
     }
 
+    /// Store the session's MCP `initialize` parameters. Returns whether the
+    /// session is open; a closed one gets none.
+    pub(crate) async fn put_mcp_state(&self, id: &str, json: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "INSERT INTO mcp_states(session_id,initialize_params) \
+             SELECT session_id,? FROM sessions WHERE session_id=? \
+             ON CONFLICT(session_id) DO UPDATE SET initialize_params=excluded.initialize_params",
+        )
+        .bind(json)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub(crate) async fn mcp_state(&self, id: &str) -> Result<Option<String>> {
+        Ok(
+            sqlx::query_scalar("SELECT initialize_params FROM mcp_states WHERE session_id=?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
+    }
+
     /// Store `json` as the session's last run, or only its size when it is over
     /// `limit`. A closed session gets none. Returns whether it was written.
     pub(crate) async fn put_last_run(
