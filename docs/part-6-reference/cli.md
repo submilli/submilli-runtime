@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "537129c09a319698511c9c6b3a42103ae69154500a7093eb2181781278b853c0"
+  contentHash: "a2fcd38184825452797d9f5c42ae67de734e0a53cbc4d7a7d79f91d3823f6513"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -1207,6 +1207,7 @@ Commands:
   authenticate    Run the OAuth flow for a blueprint's MCP server and store its credential locally. Re-run to re-authenticate (e.g. after changing scopes) — it overwrites the existing credential
   deauthenticate  Remove an MCP server's stored credential (blueprint returns to PENDING)
   auth-status     Show each declared MCP server's authentication state
+  grants          List the MCP OAuth grants stored locally, one per blueprint and server
   provider        Manage local OAuth provider apps (`~/.submilli/mcp_oauth.yaml`) — the client id / secret used to authenticate confidential OAuth servers
   help            Print this message or the help of the given subcommand(s)
 
@@ -1253,6 +1254,18 @@ Usage: submilli mcp auth-status --blueprint <BLUEPRINT>
 
 Options:
       --blueprint <BLUEPRINT>  Blueprint file to report on
+  -h, --help                   Print help
+```
+
+### `submilli mcp grants`
+
+```text
+List the MCP OAuth grants stored locally, one per blueprint and server
+
+Usage: submilli mcp grants [OPTIONS]
+
+Options:
+      --blueprint <BLUEPRINT>  Only list this blueprint's grants
   -h, --help                   Print help
 ```
 
@@ -1800,6 +1813,7 @@ Commands:
   authenticate    Run the OAuth flow for a blueprint's MCP server and store its refresh token. Re-run to re-authenticate (e.g. after changing scopes) — it overwrites the existing credential
   deauthenticate  Remove an MCP server's stored refresh token (blueprint returns to PENDING)
   auth-status     Show each declared MCP server's authentication state
+  grants          List the MCP OAuth grants the server holds, or delete one
   help            Print this message or the help of the given subcommand(s)
 
 Options:
@@ -1849,6 +1863,53 @@ Usage: submilli server mcp auth-status [OPTIONS] <BLUEPRINT>
 
 Arguments:
   <BLUEPRINT>  Blueprint to report on
+
+Options:
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help               Print help
+```
+
+#### `submilli server mcp grants`
+
+```text
+List the MCP OAuth grants the server holds, or delete one
+
+Usage: submilli server mcp grants <COMMAND>
+
+Commands:
+  list    List the grants, one per blueprint and MCP server
+  delete  Delete a grant, even one whose blueprint no longer declares the server
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+```
+
+#### `submilli server mcp grants list`
+
+```text
+List the grants, one per blueprint and MCP server
+
+Usage: submilli server mcp grants list [OPTIONS]
+
+Options:
+      --blueprint <BLUEPRINT>  Only list this blueprint's grants
+      --server <URL>           Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
+      --token-file <PATH>      File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help                   Print help
+```
+
+#### `submilli server mcp grants delete`
+
+```text
+Delete a grant, even one whose blueprint no longer declares the server
+
+Usage: submilli server mcp grants delete [OPTIONS] <BLUEPRINT> <SERVER>
+
+Arguments:
+  <BLUEPRINT>  Blueprint the grant belongs to
+  <SERVER>     The MCP server's local name (its key in the `mcp:` block)
 
 Options:
       --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
