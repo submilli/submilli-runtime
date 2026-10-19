@@ -53,6 +53,16 @@ mod auth;
     reason = "the playground switches its server listener onto these next"
 )]
 mod serve;
+#[allow(
+    dead_code,
+    reason = "the playground switches its server listener onto these next"
+)]
+mod sessions;
+#[allow(
+    dead_code,
+    reason = "the playground switches its server listener onto these next"
+)]
+mod volumes;
 
 /// How long in-flight requests may finish after a stop before they are dropped.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);

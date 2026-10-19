@@ -49,6 +49,11 @@ pub(crate) struct InstanceRecord {
     pub(crate) nonce: String,
 }
 
+/// Printed once, on the first start after sessions moved out of the embedded
+/// server's directory.
+pub(crate) const SESSIONS_LEFT_BEHIND: &str = "sessions from the previous playground version \
+     were left behind and start fresh; run records, the blueprint and egress grants are kept";
+
 pub(crate) struct StateDir {
     root: PathBuf,
 }
@@ -213,6 +218,41 @@ impl StateDir {
         self.root.join("server").join("sessions")
     }
 
+    /// The host's own state: its database, session directories and ephemeral
+    /// scratch. The embedded server's `server/` beside it is never read here.
+    pub(crate) fn host_dir(&self) -> PathBuf {
+        self.root.join("host")
+    }
+
+    pub(crate) fn host_database_path(&self) -> PathBuf {
+        self.host_dir().join("host.db")
+    }
+
+    /// One directory per session, named by its id.
+    pub(crate) fn host_sessions_dir(&self) -> PathBuf {
+        self.host_dir().join("sessions")
+    }
+
+    /// One scratch directory per ephemeral run; any found at boot are leftovers.
+    pub(crate) fn host_ephemeral_dir(&self) -> PathBuf {
+        self.host_dir().join("ephemeral")
+    }
+
+    /// Managed volumes, which hold program data across sessions and so stay where
+    /// the embedded server kept them.
+    pub(crate) fn managed_volumes_dir(&self) -> PathBuf {
+        self.volume_root().join("managed-local")
+    }
+
+    /// [`Self::create`], and the one-line notice to print when this is the first
+    /// start since the embedded server kept sessions here: `server/` is there and
+    /// `host/` is not. Creating `host/` records that the notice was shown.
+    pub(crate) fn create_noting_upgrade(&self) -> Result<Option<&'static str>> {
+        let upgraded = self.root.join("server").is_dir() && !self.host_dir().exists();
+        self.create()?;
+        Ok(upgraded.then_some(SESSIONS_LEFT_BEHIND))
+    }
+
     /// The server's volume root: managed volumes, session workspaces and
     /// ephemeral scratch.
     pub(crate) fn volume_root(&self) -> PathBuf {
@@ -251,6 +291,9 @@ impl StateDir {
             self.root.clone(),
             self.root.join("tokens"),
             self.root.join("server"),
+            self.host_dir(),
+            self.host_sessions_dir(),
+            self.host_ephemeral_dir(),
             self.volume_root(),
         ] {
             owned_private_dir(&dir)?;

@@ -5397,8 +5397,10 @@ dependencies = [
  "serde_json",
  "serde_yml",
  "sha2 0.10.9",
+ "sqlx",
  "submilli-blueprint",
  "submilli-build",
+ "submilli-durable",
  "submilli-engine",
  "submilli-server",
  "submilli-shared",
@@ -5410,6 +5412,7 @@ dependencies = [
  "unicode-properties",
  "ureq",
  "url",
+ "uuid",
 ]
 
 [[package]]

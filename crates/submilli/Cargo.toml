@@ -17,6 +17,7 @@ path = "src/main.rs"
 interpreter = { workspace = true }
 submilli-blueprint = { path = "../submilli-blueprint" }
 submilli-build = { path = "../submilli-build" }
+submilli-durable = { path = "../submilli-durable" }
 submilli-shared = { path = "../submilli-shared" }
 submilli-server = { path = "../submilli-server" }
 clap = { workspace = true }
@@ -36,6 +37,8 @@ subtle = "2.6"
 getrandom = "0.2"
 dialoguer = "0.11"
 tempfile = { workspace = true }
+sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
+uuid = { workspace = true }
 
 rustls.workspace = true
 axum = { workspace = true }
