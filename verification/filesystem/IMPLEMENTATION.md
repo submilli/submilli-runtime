@@ -30,7 +30,7 @@ resumption and the bridge assigning these IDs remain future work.
 
 ## Tables
 
-Migration 10 creates only filesystem-owned tables. None references a run row.
+Migration 11 creates only filesystem-owned tables. None references a run row.
 
 | Table | Purpose |
 | --- | --- |
@@ -144,7 +144,7 @@ to recognize an already published candidate. None of these states stores an
 `Entry` or inode identity. `Entry` is only a transient contained path resolution.
 No SQL transaction spans IO. Journal format version 4 rejects earlier state
 shapes; the prior unmerged adapter format is not a compatibility target.
-Migration 10 changes within this unmerged PR; main-branch application data and
+Migration 11 changes within this unmerged PR; main-branch application data and
 other tables remain unchanged.
 
 ## Resources and retention

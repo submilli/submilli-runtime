@@ -74,5 +74,5 @@ completion; [their model](../filesystem/writes/README.md) covers that separate c
 This PR does not implement that bridge or prove end-to-end execution composition.
 Neither component requires durable-object storage; outputs can start in SQLite.
 
-Migration 10 is revised within the unmerged filesystem PR. Main schemas upgrade
+Migration 11 is revised within the unmerged filesystem PR. Main schemas upgrade
 normally; earlier PR-only migration checksums are intentionally incompatible.

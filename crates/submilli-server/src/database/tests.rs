@@ -701,7 +701,7 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
             })
             .await
             .unwrap();
-        assert_eq!(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
         database.close().await.unwrap();
     }
 }
@@ -720,7 +720,7 @@ async fn durability_migrations_preserve_existing_session_state() {
     .unwrap();
     let before = MIGRATOR
         .iter()
-        .filter(|migration| migration.version <= 9)
+        .filter(|migration| migration.version <= 10)
         .cloned()
         .collect();
     sqlx::migrate::Migrator::with_migrations(before)
@@ -730,7 +730,8 @@ async fn durability_migrations_preserve_existing_session_state() {
     sqlx::raw_sql(
         "INSERT INTO sessions(session_id,record_version,status,blueprint_name,idle_timeout_ms,last_activity_unix_ms,root_vfs_type) VALUES ('s',1,'active','test',0,0,'none');
          INSERT INTO session_kv(session_id,key,payload,value_bytes,retained_bytes) VALUES ('s',X'006b',X'0076',2,4);
-         INSERT INTO last_runs(session_id,run_id,completed_at_unix_ms,storage,encoded_bytes,payload) VALUES ('s','run',1,'inline',2,X'7b7d');",
+         INSERT INTO last_runs(session_id,run_id,completed_at_unix_ms,storage,encoded_bytes,payload) VALUES ('s','run',1,'inline',2,X'7b7d');
+         INSERT INTO session_finalizers(id,session_id,package,local_key,sealed,retained_bytes,status) VALUES ('finalizer','s','@test/resource',X'006b',0,2,'registered');",
     )
     .execute(&mut connection)
     .await
@@ -765,6 +766,19 @@ async fn durability_migrations_preserve_existing_session_state() {
             .await
             .unwrap();
         assert_eq!(last_run, ("run".into(), b"{}".to_vec()));
+        let finalizer_status: String = database
+            .read(|connection| {
+                Box::pin(async move {
+                    Ok(sqlx::query_scalar(
+                        "SELECT status FROM session_finalizers WHERE id='finalizer'",
+                    )
+                    .fetch_one(connection)
+                    .await?)
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(finalizer_status, "registered");
         database.close().await.unwrap();
     }
 }

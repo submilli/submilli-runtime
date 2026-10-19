@@ -33,5 +33,5 @@ barriers → outcome commit. No database transaction spans public filesystem
 mutation.
 
 Run with `python3 verification/check.py --model unit-of-work`. SQL contract and
-crash tests exercise the implementation separately. Migration 10 stores filesystem metadata and outputs without object tables.
+crash tests exercise the implementation separately. Migration 11 stores filesystem metadata and outputs without object tables.
 No input payload bytes are required by this transaction model.
