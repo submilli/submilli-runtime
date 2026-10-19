@@ -582,9 +582,10 @@ pub(crate) struct RunHost {
 /// beside the blueprint it was discovered from.
 #[derive(Default)]
 struct McpCatalogs {
+    /// The blueprint tag stops a run from being served another blueprint's catalog.
     entries: HashMap<String, (Arc<Blueprint>, Arc<McpCatalog>)>,
-    /// Bumped by every clear, so a discovery that started before one does not
-    /// put its result back.
+    /// Bumped by every clear; it stops a run on a blueprint older than the latest
+    /// save from caching its catalog again, and holding that blueprint, after the clear.
     generation: u64,
 }
 
@@ -598,9 +599,10 @@ impl McpCatalogs {
     }
 
     /// Keep a catalog discovered from `blueprint` since `generation`, returning
-    /// the one now cached under `key`. A clear during discovery means the
-    /// blueprint changed under it: the caller still gets what it discovered, but
-    /// it is not kept.
+    /// the one now cached under `key`. A clear since `generation` means a save
+    /// replaced `blueprint`: the caller still gets what it discovered, but it is
+    /// not kept, so the old blueprint is not held. The tag on each entry stops
+    /// another blueprint's run from being served it.
     fn keep(
         &mut self,
         key: String,
@@ -1105,8 +1107,9 @@ impl RunHost {
         let key = declared.iter().cloned().collect::<Vec<_>>().join("\u{1f}");
         let session_scoped = !harness_secrets.is_empty();
         // A run takes its blueprint before it gets here, so a save's clear can
-        // land in between; the generation alone would then keep the old
-        // blueprint's catalog, which is why entries only match their blueprint.
+        // land in between: the blueprint tag keeps this run from another
+        // blueprint's catalog, and the generation keeps it from caching its own
+        // old one after the clear.
         let generation = {
             let catalogs = self.lock_catalogs();
             if !session_scoped && let Some(cached) = catalogs.cached(&key, blueprint) {

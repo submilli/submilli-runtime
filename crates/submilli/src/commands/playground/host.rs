@@ -198,7 +198,6 @@ pub(crate) fn serve(options: HostOptions) -> Result<Served> {
     {
         std::thread::sleep(Duration::from_millis(delay).min(START_DELAY_CAP));
     }
-    let tokens = state_dir.tokens()?;
     let serving = Serving::prepare(&options, &state_dir)?;
     let runtime = serve::runtime(serving.config.runtime.native_stack_size())
         .context("starting the async runtime")?;
@@ -207,7 +206,6 @@ pub(crate) fn serve(options: HostOptions) -> Result<Served> {
         state_dir,
         Arc::new(HeldInstance::new(instance)),
         serving,
-        tokens,
     ));
     // Teardown is bounded: a stray connection task must not keep the process up.
     runtime.shutdown_timeout(Duration::from_millis(250));
@@ -232,12 +230,15 @@ struct Serving {
     freshness: Arc<Freshness>,
     /// The closure as it was at start, for the ready record.
     closure: Vec<ClosureEntry>,
+    /// The API tokens the control and MCP routes accept.
+    tokens: Vec<ApiToken>,
 }
 
 impl Serving {
     /// Read the blueprint, build and install its project packages, and open the
     /// stores the host records into.
     fn prepare(options: &HostOptions, state_dir: &StateDir) -> Result<Self> {
+        let tokens = state_dir.tokens()?;
         let blueprint_yaml = std::fs::read_to_string(&options.project.blueprint)
             .with_context(|| format!("reading {}", options.project.blueprint.display()))?;
         let blueprint = submilli_blueprint::parse(&blueprint_yaml)
@@ -279,6 +280,7 @@ impl Serving {
             packages,
             freshness,
             closure,
+            tokens,
         })
     }
 }
@@ -337,7 +339,6 @@ async fn run(
     state_dir: StateDir,
     held: Arc<HeldInstance>,
     serving: Serving,
-    tokens: Vec<ApiToken>,
 ) -> Result<Served> {
     let server_shutdown = Arc::new(Notify::new());
     // Before anything announces this instance: a signal from then on drains it
@@ -351,7 +352,6 @@ async fn run(
         &state_dir,
         &held,
         serving,
-        tokens,
         Arc::clone(&sessions),
         server_shutdown,
         stops,
@@ -366,18 +366,18 @@ async fn run(
 
 /// Start the host on the booted sessions, bind its listeners, announce it, and
 /// serve until it drains; then close the control listener and remove the records.
-#[allow(clippy::too_many_arguments)]
 async fn serve_sessions(
-    mut options: HostOptions,
+    options: HostOptions,
     state_dir: &StateDir,
     held: &Arc<HeldInstance>,
-    serving: Serving,
-    tokens: Vec<ApiToken>,
+    mut serving: Serving,
     sessions: Arc<sessions::Sessions>,
     server_shutdown: Arc<Notify>,
     stops: serve::Stops,
 ) -> Result<Served> {
-    let (host, closure) = start_host(&options, state_dir, serving, &tokens, sessions).await?;
+    let closure = std::mem::take(&mut serving.closure);
+    let auth = Arc::new(ControlAuth::new(serving.tokens.clone()));
+    let host = start_host(&options, state_dir, serving, sessions).await?;
     let server = serve::bind().await?;
     let control = tokio::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
         .await
@@ -393,7 +393,6 @@ async fn serve_sessions(
         server_port,
         closure,
     );
-    let auth = Arc::new(ControlAuth::new(tokens));
     let actions = Arc::new(actions(
         &options,
         state_dir,
@@ -426,13 +425,16 @@ async fn serve_sessions(
         server_port,
         nonce: options.nonce.clone(),
     };
-    let start_lock = options.start_lock.take();
-    let print = options.print.take();
+    // Held past the cleanup below whenever the instance does not announce itself,
+    // so a concurrent start waits for the records to go rather than finding them.
+    let mut announcing = Announce {
+        start_lock: options.start_lock,
+        print: options.print,
+        open: options.open,
+    };
     let served = async {
         if let Some(stopped) = announce(
-            start_lock,
-            print,
-            options.open,
+            &mut announcing,
             state_dir,
             held,
             &record,
@@ -460,6 +462,7 @@ async fn serve_sessions(
     stopped.send_replace(true);
     control.close().await;
     state_dir.remove_if_ours(&options.nonce);
+    drop(announcing);
     served
 }
 
@@ -480,15 +483,13 @@ struct Started {
 }
 
 /// Build the run host on `sessions`, apply the blueprint as it is now while
-/// watching it for saves, and finish the closes a stop cut short. The closure
-/// at start comes back beside it, for the ready record.
+/// watching it for saves, and finish the closes a stop cut short.
 async fn start_host(
     options: &HostOptions,
     state_dir: &StateDir,
     serving: Serving,
-    tokens: &[ApiToken],
     sessions: Arc<sessions::Sessions>,
-) -> Result<(Started, Vec<ClosureEntry>)> {
+) -> Result<Started> {
     let mut config = serving.config;
     let volumes = Arc::new(volumes::Volumes::boot(
         state_dir,
@@ -546,7 +547,7 @@ async fn start_host(
             package_store: serving.package_store,
             events: Some(Arc::clone(serving.recorder.events())),
         },
-        Arc::from(tokens),
+        Arc::from(serving.tokens),
         &serving.name,
     ));
     let started = Started {
@@ -562,7 +563,7 @@ async fn start_host(
         _watch: watch,
         _store_watch: store_watch,
     };
-    Ok((started, serving.closure))
+    Ok(started)
 }
 
 /// What the control routes act through, starting from the variables the last
@@ -602,14 +603,19 @@ fn actions(
     }
 }
 
-/// Write the instance record and the ready file, release the start lock, and print
-/// the ready record when asked. Returns how serving ended instead when the
-/// instance was told to stop while it started.
-#[allow(clippy::too_many_arguments)]
-async fn announce(
+/// How the instance announces itself once it serves.
+struct Announce {
+    /// Released once the ready file is written; until then a concurrent start waits.
     start_lock: Option<File>,
     print: Option<super::Output>,
     open: bool,
+}
+
+/// Write the instance record and the ready file, release the start lock, and print
+/// the ready record when asked. Returns how serving ended instead when the
+/// instance was told to stop while it started; the start lock is then still held.
+async fn announce(
+    announcing: &mut Announce,
     state_dir: &StateDir,
     held: &HeldInstance,
     record: &InstanceRecord,
@@ -628,10 +634,14 @@ async fn announce(
     // The record first, so the ready file never names an instance without one.
     state_dir.write_record(record)?;
     state_dir.write_ready(record)?;
-    drop(start_lock);
-    if let Some(output) = print {
+    drop(announcing.start_lock.take());
+    if let Some(output) = announcing.print.take() {
         let code = auth.mint_login_code(Now::current())?;
-        ReadyRecord::new(description, None, &code, false).announce(output, open, state_dir);
+        ReadyRecord::new(description, None, &code, false).announce(
+            output,
+            announcing.open,
+            state_dir,
+        );
     }
     Ok(None)
 }

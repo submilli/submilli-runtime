@@ -177,18 +177,19 @@ async fn hold_deletion<'a>(
         match host.sessions.contains_session(id).await {
             Ok(true) => {}
             Ok(false) => return Err(Box::new(StatusCode::NOT_FOUND.into_response())),
-            Err(error) => {
-                return Err(Box::new(
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("session storage unavailable: {error:#}"),
-                    )
-                        .into_response(),
-                ));
-            }
+            Err(error) => return Err(Box::new(storage_unavailable(&error))),
         }
     }
     Ok(guard)
+}
+
+/// The 500 for a session the storage could not be asked about.
+fn storage_unavailable(error: &anyhow::Error) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("session storage unavailable: {error:#}"),
+    )
+        .into_response()
 }
 
 /// Refuse, with a 400, an `initialize` whose variables or secrets do not satisfy
