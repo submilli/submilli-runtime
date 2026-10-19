@@ -5,7 +5,7 @@ Source: `test/built-ins/RegExp/**` (~1900 files) plus the regex-arm
 methods were ported with the String area). The engine is the Rust `regex`
 crate behind `submilli:regex` (docs/regex.md), so this area carries the
 engine-divergence pins alongside the conformance port: 47 cases under
-`cases/RegExp/` (2 `expect-error` divergence pins, 9 `expect-fail` known
+`cases/RegExp/` (1 `expect-error` divergence pin, 9 `expect-fail` known
 gaps) + 7 regex-arm cases under `cases/String/prototype/{split,replaceAll}/`,
 all passing. Representative rejected originals under `rejected/RegExp/`.
 
@@ -34,6 +34,10 @@ Porting adaptations used throughout (README rules):
 - `new String(...)` receivers become plain strings; `__split.constructor`
   checks are dropped.
 
+Writable `lastIndex` is checked by the restored upstream
+`prototype/exec/y-init-lastindex.ts` case. It checks the initial sticky match
+and maps the upstream match-array length and element checks to `RegExpMatch`.
+
 ## Divergence pins (`cases/RegExp/divergence/`)
 
 Documented engine divergences, pinned to the *Submilli* behavior (an original
@@ -41,7 +45,6 @@ asserting the JS behavior would be a permanent failure by design):
 
 | Pin | Divergence |
 |:--|:--|
-| `lastindex-readonly` (`expect-error`) | `lastIndex` is read-only in v1 (RegExp builtin declaration documents it); JS honors user writes. Every test262 case that sets `lastIndex` (`exec/y-*-lastindex*`, `test/y-*`, `S15.10.6.2_A4_T*`, `A5_T2/T3`) is unportable until the writable follow-up lands; this pin flips when it does. |
 | `pattern-syntax-error-at-compile-time` (`expect-error`) | Regex literals are validated at codegen time (docs/regex.md), so `/0{2,1}/` is a compile diagnostic, not a catchable runtime SyntaxError (from `15.10.2.5-3-1.js`). |
 | `dot-astral-without-u` | `.` always matches a whole code point; JS without `u` works on code units, so a single `.` never matches an astral character. The same holds for empty matches in `replace` and `split`: without `u`, JS steps one code unit past an empty match, splitting an astral character into its halves, while Submilli steps a whole code point. (docs/regex.md describes the no-u fallback as byte-mode; observed behavior is code-point-mode — the doc's description of the mechanism is stale, the divergence-from-JS is real either way.) |
 | `replaceall-nonglobal-no-typeerror` | `replaceAll` with a non-g regex replaces every match instead of throwing TypeError (prelude doc-comment documents the divergence; from `replaceAll/searchValue-flags-no-g-throws.js`). |
@@ -80,7 +83,7 @@ asserting the JS behavior would be a permanent failure by design):
 | Remaining `S15.10.2.3_A1_T*`, `S15.10.2.6_A*`, `S15.10.2.7_A*`, `S15.10.2.8_A2/A3/A4_T*`, `S15.10.2.13_A*` rows | Same constructs as the ported representatives (alternation, anchors, `\b`/`\B`, quantifiers, classes, dot) over different inputs; the interpreter fixtures `regex_*.subm` and `conformance_regexp.subm` add more. The rows built on backreferences or `[^]`/`[\b]` fall under the rejected/gap entries above. |
 | `S15.10.2.10_A1.2-A1.5`, `S15.10.2.11_A1_T*` (`\0`, DecimalEscape), `S15.10.2.12_A*` and `CharacterClassEscapes/**` | Escape-table repetition; `\t`/`\x`/`\u` representatives ported; `\s`/`\d`/`\w` semantics are covered by the interpreter fixture `regexp_shorthand_classes_match_js.ts`. The 0x10000-code-point sweeps (`character-class-escape-non-whitespace.js`) are too heavy for the harness. |
 | `prototype/exec/S15.10.6.2_A1_T*` remainder, `prototype/test/S15.10.6.3_A1_T*` remainder | Receiver/argument coercion variants (`new String`, `new Object`, functions, `eval`) of the ported T1/T2 intent. |
-| `prototype/exec/u-lastindex-*`, `y-*`, `failure-*`, `success-*`, `prototype/test/y-*` | All require writing `lastIndex` or property-descriptor traps — blocked on the read-only divergence pin (`divergence/lastindex-readonly`). |
+| `prototype/exec/u-lastindex-*`, `y-*`, `failure-*`, `success-*`, `prototype/test/y-*` | The initial sticky-index case is ported as `prototype/exec/y-init-lastindex.ts`. Remaining behavioral rows have not been ported individually; property-descriptor traps remain excluded. |
 | `prototype/{global,ignoreCase,multiline,dotAll,sticky,unicode,source,flags}/**` | Accessor prop-desc/this-coercion matrices; the flag-property reads themselves are covered by `valid-flags-y.ts` and the interpreter fixtures `regex_property_reads.subm` / `regex_flags_all.subm`. |
 | `named-groups/duplicate-names-*.js`, `groups-object*.js`, `string-replace-get.js`, `functional-replace-*` | Duplicate names are engine-rejected (recorded above); groups-object shape and `Array.prototype.groups` pollution don't exist under `namedGroups`; function replacers are deferred by design (docs/regex.md); the expressible `$<name>`/`$N` token semantics are covered by the ported `string-replace-*` cases. |
 | `quantifier-integer-limit.js`, `regexp-class-chars.js`, `u180e.js`, `character-class-escape-non-whitespace-u180e.js` | Marginal single-row vectors (integer-limit quantifiers, U+180E membership churn across Unicode versions). |

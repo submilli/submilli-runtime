@@ -42,8 +42,10 @@ coercion-trap cases (`toobject_before_topropertykey.js`) without further note.
   structural equality rather than identity; the identity-negative
   counterpart is rejected (see above).
 
-Undefined equality is covered by `is/same-value-x-y-undefined.ts`, including an
-omitted second argument, and by the restored primitive mixed-type cases.
+Undefined equality is covered by `is/same-value-x-y-undefined.ts`, including
+an explicit `undefined` second argument for the upstream omitted-argument
+variant, and by the restored primitive mixed-type cases. `Object.is` requires
+two arguments under the TypeScript signature.
 Undefined receivers throw like null ones: `keys/15.2.3.14-1-5.ts`,
 `hasOwn/toobject_undefined.ts`, and both halves of
 `values|entries/exception-not-object-coercible.ts`.
@@ -59,7 +61,9 @@ Ported: `empty-iterable.js`, `iterator-not-closed-for-throwing-next.js`,
 `iterator-not-closed-for-throwing-done-accessor.js`,
 `iterator-closed-for-throwing-entry-key-tostring.js`, and
 `key-order.js` (using `Object.keys` instead of `Object.getOwnPropertyNames`). Iterator protocol names
-are adapted from `Symbol.iterator`/`return` to `iterator`/`close`.
+are adapted from `Symbol.iterator`/`return` to `iterator`/`close`. The throwing
+`done` getter is typed `false` to fit the discriminated `IteratorResult`; its
+required yield value is unreachable because the getter always throws.
 Interpreter fixtures additionally cover Maps, arrays, readonly tuples, explicit
 value type arguments, duplicate keys, numeric keys, `__proto__`, undefined/null
 values, lone UTF-16 surrogates, and original-error precedence when cleanup throws.
