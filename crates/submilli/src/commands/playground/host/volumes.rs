@@ -19,9 +19,8 @@ use interpreter::runtime::{
     measure_host_dir,
 };
 use submilli_blueprint::{Blueprint, VarBindings, VfsConfig};
-use submilli_server::config::{
-    Access, SizeLimit, VolumeKind, VolumeSpec, VolumeTable, is_managed_name,
-};
+use submilli_server::config::is_managed_name;
+pub(crate) use submilli_server::config::{Access, SizeLimit, VolumeKind, VolumeSpec, VolumeTable};
 use tokio::sync::OnceCell;
 
 use super::super::log::warn;
@@ -82,6 +81,10 @@ pub(crate) struct Volumes {
     /// Grows with the table, under the same poisoning rule.
     quotas: RwLock<BTreeMap<String, Arc<OnceCell<Arc<DiskQuota>>>>>,
     ephemeral: EphemeralRoot,
+    /// For a copy of a volume, what its usage leaves out: the source's size less
+    /// what was copied, so the volume's limit counts the whole of it. `None` when
+    /// the source could not be measured, which counts the volume as full.
+    usage_offsets: BTreeMap<String, Option<u64>>,
 }
 
 impl Volumes {
@@ -100,6 +103,7 @@ impl Volumes {
             ephemeral: EphemeralRoot {
                 path: state.host_ephemeral_dir(),
             },
+            usage_offsets: BTreeMap::new(),
         };
         if let Err(error) = volumes.ephemeral.sweep() {
             warn(&format!(
@@ -110,9 +114,34 @@ impl Volumes {
         volumes
     }
 
+    /// The volumes of `table`, all local paths, for one run's file system:
+    /// scratch goes where this host's does, and each limited volume's usage counts
+    /// its `usage_offsets` entry besides what it holds. A test run's copies are
+    /// opened through this.
+    pub(crate) fn copies(
+        &self,
+        table: VolumeTable,
+        usage_offsets: BTreeMap<String, Option<u64>>,
+    ) -> Self {
+        let quotas = table
+            .iter()
+            .filter(|(_, spec)| matches!(spec.size_limit, SizeLimit::Bytes(_)))
+            .map(|(name, _)| (name.clone(), Arc::new(OnceCell::new())))
+            .collect();
+        Self {
+            table: RwLock::new(table),
+            managed_root: self.managed_root.clone(),
+            quotas: RwLock::new(quotas),
+            ephemeral: EphemeralRoot {
+                path: self.ephemeral.path.clone(),
+            },
+            usage_offsets,
+        }
+    }
+
     /// Where `volume` lives and the access a run gets: what the blueprint asked
     /// for, never more than the volume allows.
-    fn resolve(
+    pub(crate) fn resolve(
         &self,
         volume: &str,
         requested: Option<Access>,
@@ -138,7 +167,7 @@ impl Volumes {
         Ok((host, access))
     }
 
-    fn spec(&self, volume: &str) -> Option<VolumeSpec> {
+    pub(crate) fn spec(&self, volume: &str) -> Option<VolumeSpec> {
         self.table
             .read()
             .expect("volume table poisoned")
@@ -161,7 +190,7 @@ impl Volumes {
     /// The size limit every user of `volume` shares, or `None` when it has none.
     /// A failed measurement is not remembered; meanwhile the volume counts as
     /// full.
-    async fn quota(&self, volume: &str) -> Result<Option<Arc<DiskQuota>>, VolumeError> {
+    pub(crate) async fn quota(&self, volume: &str) -> Result<Option<Arc<DiskQuota>>, VolumeError> {
         let Some(spec) = self.spec(volume) else {
             return Err(VolumeError::UnknownVolume(volume.to_string()));
         };
@@ -178,11 +207,19 @@ impl Volumes {
             return Err(VolumeError::UnknownVolume(volume.to_string()));
         };
         let host = self.host_of(volume, &spec)?;
+        let offset = self.usage_offsets.get(volume).copied();
         let measured = cell
             .get_or_try_init(|| async move {
-                let used = tokio::task::spawn_blocking(move || measure_host_dir(&host))
+                let mut used = tokio::task::spawn_blocking(move || measure_host_dir(&host))
                     .await
                     .map_err(|err| std::io::Error::other(err.to_string()))??;
+                match offset {
+                    None => {}
+                    Some(Some(offset)) => used = used.saturating_add(offset),
+                    Some(None) => {
+                        return Err(std::io::Error::other("the source volume was not measured"));
+                    }
+                }
                 Ok::<_, std::io::Error>(Arc::new(DiskQuota::new(limit, used)))
             })
             .await;

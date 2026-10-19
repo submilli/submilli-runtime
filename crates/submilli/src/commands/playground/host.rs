@@ -67,7 +67,12 @@ mod mcp;
     dead_code,
     reason = "the playground switches its server listener onto these next"
 )]
-mod run;
+pub(super) mod record;
+#[allow(
+    dead_code,
+    reason = "the playground switches its server listener onto these next"
+)]
+pub(super) mod run;
 #[allow(
     dead_code,
     reason = "the playground switches its server listener onto these next"

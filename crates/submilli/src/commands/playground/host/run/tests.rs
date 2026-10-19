@@ -132,6 +132,7 @@ impl Host {
             test_of: None,
             vfs: VfsSource::Session,
             finalizers: None,
+            world: None,
         }
     }
 
@@ -464,6 +465,7 @@ fn host_request(session_id: &str, blueprint: &AppliedBlueprint, code: &str) -> R
         test_of: None,
         vfs: VfsSource::Session,
         finalizers: None,
+        world: None,
     }
 }
 

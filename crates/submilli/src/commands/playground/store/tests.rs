@@ -1902,3 +1902,73 @@ fn a_write_cut_before_its_newline_does_not_reuse_its_number() {
     recorder.event(event(3, "sess", "exec-2", run_started()));
     assert_eq!(seqs(&reopened), [1, 2, 3, 4]);
 }
+
+// ---- host runs ---------------------------------------------------------------------
+
+#[test]
+fn a_host_run_is_stored_with_its_events_as_a_server_run_is() {
+    use super::super::host::run as host;
+
+    let world = World::new();
+    let start = host::RunStart {
+        execution_id: "exec-h".into(),
+        label: "app".into(),
+        entry: host::RunEntry::Mcp,
+        test_of: None,
+        client: Some("claude-code".into()),
+        tool_call_id: Some("toolu_1".into()),
+        session_id: "sess-h".into(),
+        blueprint_name: "demo".into(),
+        blueprint: Arc::new(Blueprint::default()),
+        blueprint_version: "v7".into(),
+        variables: Arc::new(VarBindings::new()),
+        harness_secrets: Arc::new(
+            [("token".to_owned(), SECRET.to_owned())]
+                .into_iter()
+                .collect(),
+        ),
+        code: Some(Arc::from("function main(): string { return \"x\"; }")),
+    };
+    let run = host::RunRecorder::start(&world.recorder, start).expect("recorded");
+    let decided = decision(
+        0,
+        "http.get",
+        json!({ "host": "api.test", "q": SECRET }),
+        true,
+    );
+    run.event(host::RunEvent::Decision(&decided));
+    run.finish(host::FinishedRun {
+        dispatched: true,
+        error: None,
+        result: Some("x".into()),
+        console: String::new(),
+        usage: ExecutionUsage::default(),
+        log: DecisionLogOutput {
+            records: vec![decided.clone()],
+            ..DecisionLogOutput::default()
+        },
+        mcp_catalog: None,
+        wall: Duration::from_millis(3),
+    });
+    run.returned(9);
+    drop(run);
+
+    let loaded = world.store.load_run(1).unwrap().expect("run 1 is stored");
+    assert_eq!(loaded.entry, "mcp");
+    assert_eq!(loaded.recording.session_id.as_deref(), Some("sess-h"));
+    assert_eq!(loaded.recording.blueprint_version.as_deref(), Some("v7"));
+    assert_eq!(loaded.recording.decisions.len(), 1);
+    assert!(world.store.running().unwrap().is_empty());
+
+    let log = world.store.read_events(Some("sess-h")).unwrap();
+    let events: Vec<&StoredEvent> = log.events.iter().collect();
+    assert_eq!(kinds(&events), ["started", "decision 0", "end", "returned"]);
+    assert!(events.iter().all(|event| event.run == Some(1)));
+    assert!(!log.incomplete());
+    for (path, bytes) in world.files() {
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(SECRET),
+            "{path:?} holds the secret"
+        );
+    }
+}

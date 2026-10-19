@@ -609,6 +609,44 @@ pub(crate) struct RunRequest {
     /// Takes the place of the session's own finalizer registrations, for a run
     /// that must not register any, such as a test replay.
     pub(crate) finalizers: Option<Arc<dyn SessionFinalizers>>,
+    /// Takes the place of the run's outside world and the session's values, for a
+    /// run that must not touch either, such as a test replay.
+    pub(crate) world: Option<Box<dyn RunWorld>>,
+}
+
+/// The connectors a run reaches outside through.
+pub(crate) struct Connectors {
+    pub(crate) http: Arc<dyn HttpClient>,
+    pub(crate) mcp: Arc<dyn McpTransport>,
+    pub(crate) llm: Option<Arc<dyn LlmProvider>>,
+    pub(crate) embedding: Option<Arc<dyn EmbeddingProvider>>,
+}
+
+/// Stand-ins for a run's outside world. The run's file system comes from
+/// [`VfsSource::Provided`] and its finalizers from [`RunRequest::finalizers`];
+/// its token budgets are its own, so what it spends is not counted against live
+/// runs.
+pub(crate) trait RunWorld: Send {
+    /// The `@mcp/<server>` packages the program compiles against; no server is
+    /// contacted to discover them.
+    fn mcp_catalog(&self) -> Arc<McpCatalog>;
+
+    /// The run's `submilli:session` values.
+    fn session_kv(&self) -> Arc<dyn SessionKvStore>;
+
+    /// The connectors the run uses, given the live ones it would have used.
+    fn connectors(&self, live: Connectors) -> Connectors;
+
+    /// The run's cancel signal, given the host's, which [`RunHost::cancel`] fires.
+    fn cancel(
+        &mut self,
+        host: tokio::sync::oneshot::Receiver<()>,
+    ) -> tokio::sync::oneshot::Receiver<()>;
+
+    /// What the run reports to, given what the recorder returned for it.
+    fn recording(&self, run: Arc<dyn RecordedRun>) -> Arc<dyn RecordedRun> {
+        run
+    }
 }
 
 impl RunHost {
@@ -673,6 +711,11 @@ impl RunHost {
         self.cancels.cancel(execution_id)
     }
 
+    /// Whether runs are recorded: a test run is reported from its own record.
+    pub(crate) fn records(&self) -> bool {
+        self.recorder.is_some()
+    }
+
     /// Drop every prepared package set, so the next run links what the store
     /// holds now.
     pub(crate) fn clear_prepared_packages(&self) {
@@ -711,9 +754,11 @@ impl RunHost {
     pub(crate) async fn run(&self, request: RunRequest) -> RunOutput {
         let execution_id = uuid::Uuid::new_v4().to_string();
         let recording = self.recorder.as_ref().and_then(|recorder| {
-            recorder
-                .start(run_start(&execution_id, &request))
-                .map(Recording::new)
+            let run = recorder.start(run_start(&execution_id, &request))?;
+            Some(Recording::new(match &request.world {
+                Some(world) => world.recording(run),
+                None => run,
+            }))
         });
         let (_registered, cancel_requested) = self.cancels.register(&execution_id);
         let output = self
@@ -745,8 +790,14 @@ impl RunHost {
             harness_secrets,
             vfs: vfs_source,
             finalizers: finalizers_override,
+            world,
             ..
         } = request;
+        let mut world = world;
+        let cancel_requested = match &mut world {
+            Some(world) => world.cancel(cancel_requested),
+            None => cancel_requested,
+        };
         let blueprint = applied.blueprint;
         let fail = |kind: ErrorKind, message: String| RunOutput {
             response: failure_response(execution_id, &session_id, kind, message),
@@ -793,12 +844,15 @@ impl RunHost {
             Err(error) => return fail(ErrorKind::RuntimeError, error.to_string()),
         };
 
-        let mcp_catalog = match self
-            .mcp_catalog_for_imports(&blueprint, &script_imports.mcp_servers, &harness_secrets)
-            .await
-        {
-            Ok(catalog) => catalog,
-            Err(message) => return fail(ErrorKind::RuntimeError, message),
+        let mcp_catalog = match &world {
+            Some(world) => world.mcp_catalog(),
+            None => match self
+                .mcp_catalog_for_imports(&blueprint, &script_imports.mcp_servers, &harness_secrets)
+                .await
+            {
+                Ok(catalog) => catalog,
+                Err(message) => return fail(ErrorKind::RuntimeError, message),
+            },
         };
         let (vfs, vfs_info) = match vfs_source {
             VfsSource::Provided { vfs, vfs_info } => (vfs, vfs_info),
@@ -832,6 +886,26 @@ impl RunHost {
             },
         };
 
+        let live = Connectors {
+            http: self.http_client(&session_id),
+            mcp: self.mcp_transport(&blueprint, &harness_secrets),
+            llm: llm_provider,
+            embedding: embedding_provider,
+        };
+        let (connectors, session_kv, llm_budget, embedding_budget) = match &world {
+            Some(world) => (
+                world.connectors(live),
+                world.session_kv(),
+                SharedTokenBudget::new(interpreter::runtime::DEFAULT_MAX_ALL_EXECUTIONS_TOKENS),
+                SharedTokenBudget::new(MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS),
+            ),
+            None => (
+                live,
+                self.sessions.values(&session_id),
+                self.llm_budget.clone(),
+                self.embedding_budget.clone(),
+            ),
+        };
         let policy: Arc<dyn interpreter::runtime::SecurityCheck> = Arc::new(
             PolicyCheck::with_variables(Arc::clone(&blueprint), Arc::clone(&variables)),
         );
@@ -850,20 +924,17 @@ impl RunHost {
             )),
             variables: Arc::clone(&variables),
             security_check: policy,
-            http_client: self.http_client(&session_id),
-            mcp_transport: self.mcp_transport(&blueprint, &harness_secrets),
-            session_kv: self.sessions.values(&session_id),
+            http_client: connectors.http,
+            mcp_transport: connectors.mcp,
+            session_kv,
             session_finalizers,
             cursor_keys: self.cursor_keys.clone(),
-            llm_provider,
-            llm_budget: Arc::new(ExecutionTokenBudget::new(
-                self.llm_limits,
-                self.llm_budget.clone(),
-            )),
-            embedding_provider,
+            llm_provider: connectors.llm,
+            llm_budget: Arc::new(ExecutionTokenBudget::new(self.llm_limits, llm_budget)),
+            embedding_provider: connectors.embedding,
             embedding_budget: Arc::new(EmbeddingTokenBudget::new(
                 self.embedding_limits,
-                self.embedding_budget.clone(),
+                embedding_budget,
             )),
             recording,
             cancel_requested,
@@ -1123,7 +1194,7 @@ impl RunHost {
 /// The server's default ceiling on embedding tokens across every live run.
 const MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS: u64 = 50_000_000;
 
-fn vfs_info(blueprint: &Blueprint) -> VfsInfo {
+pub(crate) fn vfs_info(blueprint: &Blueprint) -> VfsInfo {
     VfsInfo {
         mode: match &blueprint.vfs {
             VfsConfig::None => VfsMode::None,

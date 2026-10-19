@@ -317,6 +317,7 @@ impl SubmilliMcp {
                 test_of: None,
                 vfs: VfsSource::Session,
                 finalizers: None,
+                world: None,
             })
             .await;
         let response = output.response;

@@ -8,6 +8,8 @@ use serde_json::Value;
 use submilli_server::error::ErrorKind;
 use submilli_server::record::{FinishedRun, RecordedRun, RunEntry, RunStart, TestReport};
 
+use super::super::host::record;
+use super::super::host::run as host;
 use super::FORMAT;
 
 /// One run as the store keeps it: who ran it and how, how it ended, and its recording,
@@ -199,6 +201,63 @@ impl StoredRun {
         }
     }
 
+    /// The host run `start` describes, as it ended in `finished`. Not yet redacted.
+    /// Stored in the same shape as a server run.
+    pub(crate) fn from_host_parts(
+        id: u64,
+        start: &host::RunStart,
+        finished: &host::FinishedRun,
+        test_of: Option<RunLink>,
+        started_at_micros: u64,
+    ) -> Self {
+        let recording = record::RecordedRun::from_parts(start, finished);
+        Self {
+            format: FORMAT,
+            id,
+            label: start.label.clone(),
+            entry: host_entry_name(&start.entry),
+            client: start.client.clone(),
+            tool_call_id: start.tool_call_id.clone(),
+            idempotency_key: None,
+            test_of,
+            started_at_micros,
+            wall_ms: u64::try_from(finished.wall.as_millis()).unwrap_or(u64::MAX),
+            dispatched: finished.dispatched,
+            error: finished.error.as_ref().map(|error| {
+                serde_json::to_value(error)
+                    .ok()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or_else(|| StoredError {
+                        kind: error_kind(error.kind),
+                        message: error.message.clone(),
+                        diagnostics: Vec::new(),
+                        caller: None,
+                        capability: None,
+                        source: None,
+                    })
+            }),
+            result: finished.result.clone(),
+            console: finished.console.clone(),
+            usage: finished.usage,
+            decisions_dropped: finished.log.dropped,
+            calls_dropped: finished.log.calls_dropped,
+            recording: RecordedRun {
+                execution_id: recording.execution_id,
+                blueprint_name: recording.blueprint_name,
+                blueprint_hash: recording.blueprint_hash,
+                blueprint_version: recording.blueprint_version,
+                code: recording.code,
+                session_id: recording.session_id,
+                variables: recording.variables,
+                decisions: recording.decisions,
+                calls: recording.calls,
+                log_truncated: recording.log_truncated,
+                mcp_catalog: recording.mcp_catalog,
+            },
+            test_report: None,
+        }
+    }
+
     /// The `n`th decision, counting from 1, as `<run>.<n>` names it.
     pub(crate) fn decision(&self, n: usize) -> Option<&interpreter::runtime::DecisionRecord> {
         self.recording.decisions.get(n.checked_sub(1)?)
@@ -214,6 +273,35 @@ pub(crate) fn entry_name(entry: &RunEntry) -> String {
         RunEntry::McpFileTool { tool } => format!("mcp:{tool}"),
         RunEntry::Program => "program".into(),
         RunEntry::Test => "test".into(),
+    }
+}
+
+/// How a host run's entry reads in the store and its events, as the server's
+/// [`entry_name`] reads the same entry.
+pub(crate) fn host_entry_name(entry: &host::RunEntry) -> String {
+    match entry {
+        host::RunEntry::Session => "session".into(),
+        host::RunEntry::Mcp => "mcp".into(),
+        host::RunEntry::McpFileTool { tool } => format!("mcp:{tool}"),
+        host::RunEntry::Program => "program".into(),
+        host::RunEntry::Test => "test".into(),
+    }
+}
+
+/// A host run's error kind as the store keeps it.
+pub(crate) fn error_kind(kind: host::ErrorKind) -> ErrorKind {
+    match kind {
+        host::ErrorKind::CompileError => ErrorKind::CompileError,
+        host::ErrorKind::Timeout => ErrorKind::Timeout,
+        host::ErrorKind::FuelExhausted => ErrorKind::FuelExhausted,
+        host::ErrorKind::MemoryExhausted => ErrorKind::MemoryExhausted,
+        host::ErrorKind::StackExhausted => ErrorKind::StackExhausted,
+        host::ErrorKind::Cancelled => ErrorKind::Cancelled,
+        host::ErrorKind::PermissionDenied => ErrorKind::PermissionDenied,
+        host::ErrorKind::RuntimeError => ErrorKind::RuntimeError,
+        host::ErrorKind::BlueprintNotFound => ErrorKind::BlueprintNotFound,
+        host::ErrorKind::PackageResolution => ErrorKind::PackageResolution,
+        host::ErrorKind::InvalidRequest => ErrorKind::InvalidRequest,
     }
 }
 

@@ -180,6 +180,7 @@ impl Host {
             test_of: None,
             vfs: VfsSource::Session,
             finalizers: None,
+            world: None,
         }
     }
 
