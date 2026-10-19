@@ -123,7 +123,7 @@ impl Database {
         let mut connection = self.pool.acquire().await?;
         let row: Option<(String, String, i64, i64)> = sqlx::query_as(
             "SELECT session_id,blueprint_name,idle_timeout_ms,last_activity_unix_ms \
-             FROM sessions WHERE session_id=?",
+             FROM sessions WHERE session_id=? AND closing=0",
         )
         .bind(id)
         .fetch_optional(&mut *connection)
@@ -138,7 +138,7 @@ impl Database {
         let mut connection = self.pool.acquire().await?;
         let rows: Vec<(String, String, i64, i64)> = sqlx::query_as(
             "SELECT session_id,blueprint_name,idle_timeout_ms,last_activity_unix_ms \
-             FROM sessions ORDER BY session_id",
+             FROM sessions WHERE closing=0 ORDER BY session_id",
         )
         .fetch_all(&mut *connection)
         .await?;
@@ -151,22 +151,48 @@ impl Database {
 
     /// Mark the session active at `now`. Returns whether it is open.
     pub(crate) async fn touch(&self, id: &str, now: SystemTime) -> Result<bool> {
-        let result = sqlx::query("UPDATE sessions SET last_activity_unix_ms=? WHERE session_id=?")
-            .bind(unix_ms(now)?)
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+        let result = sqlx::query(
+            "UPDATE sessions SET last_activity_unix_ms=? WHERE session_id=? AND closing=0",
+        )
+        .bind(unix_ms(now)?)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
         Ok(result.rows_affected() > 0)
     }
 
-    /// Delete the session with its variables, values and last run. Returns
-    /// whether it was open.
-    pub(crate) async fn delete_session(&self, id: &str) -> Result<bool> {
-        let result = sqlx::query("DELETE FROM sessions WHERE session_id=?")
+    /// A session that is closing: no longer open, its cleanup not yet done.
+    pub(crate) async fn closing_session(&self, id: &str) -> Result<Option<SessionRow>> {
+        let mut connection = self.pool.acquire().await?;
+        let row: Option<(String, String, i64, i64)> = sqlx::query_as(
+            "SELECT session_id,blueprint_name,idle_timeout_ms,last_activity_unix_ms \
+             FROM sessions WHERE session_id=? AND closing=1",
+        )
+        .bind(id)
+        .fetch_optional(&mut *connection)
+        .await?;
+        match row {
+            None => Ok(None),
+            Some(row) => session_row(&mut connection, row).await.map(Some),
+        }
+    }
+
+    /// The ids of every closing session.
+    pub(crate) async fn closing_ids(&self) -> Result<Vec<String>> {
+        Ok(sqlx::query_scalar(
+            "SELECT session_id FROM sessions WHERE closing=1 ORDER BY session_id",
+        )
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Delete the session with its variables, values and last run.
+    pub(crate) async fn delete_session(&self, id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM sessions WHERE session_id=?")
             .bind(id)
             .execute(&self.pool)
             .await?;
-        Ok(result.rows_affected() > 0)
+        Ok(())
     }
 
     /// Store `json` as the session's last run, or only its size when it is over
@@ -263,6 +289,10 @@ impl Database {
     pub(crate) async fn begin(&self) -> Result<sqlx::Transaction<'static, sqlx::Sqlite>> {
         Ok(self.pool.begin().await?)
     }
+
+    pub(crate) async fn acquire(&self) -> Result<sqlx::pool::PoolConnection<sqlx::Sqlite>> {
+        Ok(self.pool.acquire().await?)
+    }
 }
 
 async fn session_row(
@@ -283,14 +313,16 @@ async fn session_row(
     })
 }
 
-/// Whether the session is open. A closed one's state is gone, and a write must
-/// not bring it back.
+/// Whether the session is open. A closing or closed one's state is going or gone,
+/// and a write must not bring it back.
 pub(crate) async fn is_open(connection: &mut SqliteConnection, session_id: &str) -> Result<bool> {
     Ok(
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id=?)")
-            .bind(session_id)
-            .fetch_one(connection)
-            .await?,
+        sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id=? AND closing=0)",
+        )
+        .bind(session_id)
+        .fetch_one(connection)
+        .await?,
     )
 }
 

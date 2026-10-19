@@ -57,12 +57,12 @@ mod console;
 mod packages;
 mod timeout;
 
-pub(crate) use compile::{ParsedExecute, parse};
+pub(crate) use compile::{ParsedExecute, on_compiler_thread, parse};
 pub(crate) use packages::{PackageCache, PreparedPackages, finalizer_package_versions};
 
 use compile::{
-    FILENAME, classify_runtime_error, compile_failure, on_compiler_thread,
-    raised_by_top_level_statements, register_package_sources,
+    FILENAME, classify_runtime_error, compile_failure, raised_by_top_level_statements,
+    register_package_sources,
 };
 use console::{ConsoleLines, Sink, captured_console, split_console};
 
@@ -1031,6 +1031,66 @@ impl RunHost {
             Arc::new(ReqwestHttpClient::new(Arc::clone(&self.network_policy)))
                 as Arc<dyn HttpClient>
         }))
+    }
+
+    pub(crate) fn sessions(&self) -> &Arc<Sessions> {
+        &self.sessions
+    }
+
+    pub(crate) fn package_store(&self) -> &PackageStore {
+        self.packages.store()
+    }
+
+    pub(crate) fn runtime_config(&self) -> &RuntimeConfig {
+        &self.runtime
+    }
+
+    /// What a closing session's finalizer runs against: the session's files and
+    /// connectors under `blueprint`, with its console discarded, no session
+    /// values, and no further finalizer registrations. Mirrors
+    /// `submilli-server`'s `finalizers.rs` (`host_services`).
+    pub(crate) async fn finalizer_store_data(
+        &self,
+        session_id: &str,
+        blueprint: &Arc<Blueprint>,
+        variables: &Arc<VarBindings>,
+        secrets: &Arc<HarnessSecretBindings>,
+    ) -> Result<StoreData, String> {
+        let (vfs, vfs_info) = self.session_vfs(session_id, blueprint, variables).await?;
+        let mut data = StoreData::with_vfs_and_cap(vfs, self.runtime.max_store_bytes);
+        data.vfs_info = vfs_info;
+        data.finalizing = true;
+        data.git = submilli_shared::resolve_git(blueprint, variables)
+            .map_err(|error| error.to_string())?;
+        data.llm_provider = self.llm_provider_for(blueprint, secrets)?;
+        data.llm_budget = Some(Arc::new(ExecutionTokenBudget::new(
+            self.llm_limits,
+            self.llm_budget.clone(),
+        )));
+        data.embedding_provider = self.embedding_provider_for(blueprint, secrets)?;
+        data.embedding_budget = Some(Arc::new(EmbeddingTokenBudget::new(
+            self.embedding_limits,
+            self.embedding_budget.clone(),
+        )));
+        data.console = Box::new(std::io::sink());
+        data.variables = Arc::clone(variables);
+        data.security_check = Arc::new(PolicyCheck::with_variables(
+            Arc::clone(blueprint),
+            Arc::clone(variables),
+        ));
+        data.http_client = self.http_client(session_id);
+        data.mcp_transport = Some(self.mcp_transport(blueprint, secrets));
+        data.secret_provider = Arc::new(BlueprintSecretProvider::with_harness(
+            Arc::clone(blueprint),
+            self.secret_store.clone(),
+            Arc::clone(secrets),
+        ));
+        data.auth_proxy = Arc::new(BlueprintAuthProxy::with_harness(
+            Arc::clone(blueprint),
+            self.secret_store.clone(),
+            Arc::clone(secrets),
+        ));
+        Ok(data)
     }
 
     fn lock_catalogs(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<McpCatalog>>> {

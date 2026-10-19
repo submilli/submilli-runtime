@@ -58,7 +58,7 @@ pub(crate) fn parse(code: &str) -> Result<ParsedExecute, interpreter::source::So
 
 /// Why a compile could not run on its own thread.
 #[derive(Debug)]
-pub(super) enum CompilerThreadError {
+pub(crate) enum CompilerThreadError {
     Spawn(std::io::Error),
     Panicked,
 }
@@ -77,7 +77,7 @@ impl std::error::Error for CompilerThreadError {}
 /// Runs `work` on a compiler-sized thread and waits for it, blocking the caller.
 /// Compilation recurses with program nesting and needs the interpreter's
 /// documented stack, several times a runtime worker's 2 MiB.
-pub(super) fn on_compiler_thread<T: Send>(
+pub(crate) fn on_compiler_thread<T: Send>(
     work: impl FnOnce() -> T + Send,
 ) -> Result<T, CompilerThreadError> {
     std::thread::scope(|scope| {

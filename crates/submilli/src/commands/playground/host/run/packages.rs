@@ -107,6 +107,10 @@ impl PackageCache {
         }
     }
 
+    pub(crate) fn store(&self) -> &PackageStore {
+        &self.store
+    }
+
     /// The packages a program with `imports` links under `blueprint`: the
     /// blueprint-listed packages it imports, their closure, and the standard
     /// library modules it imports.

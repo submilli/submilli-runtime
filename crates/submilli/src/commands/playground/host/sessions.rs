@@ -6,12 +6,15 @@
 //! session nobody used, but never one with a run in flight; closing deletes the
 //! session's values, last run and directory. Session values follow
 //! `application/sessions/kv.rs`, and last runs the record, forget and keep rules
-//! of `application/sessions/runs.rs`. Everything lives in [`store::Database`],
-//! so an open session is still open after the playground restarts.
+//! of `application/sessions/runs.rs`. Closing follows `session_manager.rs`
+//! (`cleanup`, `close_owned`): every close takes one path, in turn, and runs the
+//! session's package finalizers before its files and values go. Everything lives
+//! in [`store::Database`], so an open session is still open after the playground
+//! restarts, and a close cut short finishes after it.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
@@ -19,15 +22,18 @@ use interpreter::runtime::{
     SessionKvEntry, SessionKvError, SessionKvFuture, SessionKvLimits, SessionKvPage,
     SessionKvStore, entry_bytes, value_bytes,
 };
-use submilli_blueprint::{Blueprint, VariableError, VfsConfig, resolve_variables};
+use submilli_blueprint::{
+    Blueprint, HarnessSecretBindings, VariableError, VfsConfig, resolve_variables,
+};
 use submilli_durable::codec::Sealer;
 use tokio::sync::Mutex;
 
 use super::super::log::{note, warn};
 use super::super::state::StateDir;
+use super::finalizers::{ClosingSession, FinalizerExecutor, Registrations, finalize_session};
 use super::volumes::create_owned_dir;
 
-mod store;
+pub(super) mod store;
 
 use store::{Database, SessionRow, StoredLastRun};
 
@@ -139,6 +145,14 @@ pub(crate) struct Sessions {
     /// Each session's resource scope while anything holds it: closing a session
     /// cancels its scope and waits for the work admitted under it to drain.
     resource_scopes: std::sync::Mutex<HashMap<String, std::sync::Weak<ResourceScope>>>,
+    /// Each open session's secret bindings, as its caller bound them. Kept in
+    /// memory only: a closing session with finalizers keeps a sealed copy.
+    secrets: std::sync::Mutex<HashMap<String, Arc<HarnessSecretBindings>>>,
+    registrations: Registrations,
+    finalizer_executor: OnceLock<Arc<dyn FinalizerExecutor>>,
+    /// Held across one session's cleanup, so closes arriving together wait in
+    /// turn and a session's finalizers run once.
+    cleanup_turn: Mutex<()>,
 }
 
 /// What a session's admitted work shares: the lock closing takes for writing once
@@ -173,14 +187,26 @@ impl Sessions {
         }
         let sealer = Sealer::new(Some(Arc::new(state.session_cipher()?)));
         let database = Database::open(&state.host_database_path()).await?;
+        let limits = SessionKvLimits::default();
+        let registrations = Registrations {
+            database: database.clone(),
+            sealer: sealer.clone(),
+            limits,
+        };
+        // Nothing runs yet: an attempt still running was cut short.
+        registrations.recover().await?;
         let sessions = Self {
             database,
             sealer,
             sessions_dir: state.host_sessions_dir(),
-            limits: SessionKvLimits::default(),
+            limits,
             max_last_run_bytes: MAX_LAST_RUN_BYTES,
             in_flight: Mutex::new(HashMap::new()),
             resource_scopes: std::sync::Mutex::new(HashMap::new()),
+            secrets: std::sync::Mutex::new(HashMap::new()),
+            registrations,
+            finalizer_executor: OnceLock::new(),
+            cleanup_turn: Mutex::new(()),
         };
         let open: Vec<Session> = sessions
             .database
@@ -189,7 +215,9 @@ impl Sessions {
             .into_iter()
             .map(Session::from)
             .collect();
-        sessions.remove_leftover_dirs(&open);
+        let mut kept: Vec<String> = open.iter().map(|session| session.id.clone()).collect();
+        kept.extend(sessions.database.closing_ids().await?);
+        sessions.remove_leftover_dirs(&kept);
         Ok(Booted {
             sessions,
             open,
@@ -201,6 +229,37 @@ impl Sessions {
     fn with_max_last_run_bytes(mut self, limit: u64) -> Self {
         self.max_last_run_bytes = limit;
         self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_limits(mut self, limits: SessionKvLimits) -> Self {
+        self.limits = limits;
+        self.registrations.limits = limits;
+        self
+    }
+
+    /// Where the sessions' runs register finalizers, and what they registered.
+    pub(crate) fn finalizers(&self) -> &Registrations {
+        &self.registrations
+    }
+
+    /// Install what runs finalizers, once, before any close needs it.
+    pub(crate) fn set_finalizer_executor(&self, executor: Arc<dyn FinalizerExecutor>) {
+        let _ = self.finalizer_executor.set(executor);
+    }
+
+    /// Bind the open session's secrets, for its finalizers should it close with
+    /// any registered.
+    pub(crate) fn bind_secrets(&self, id: &str, secrets: Arc<HarnessSecretBindings>) {
+        self.lock_secrets().insert(id.to_owned(), secrets);
+    }
+
+    fn lock_secrets(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<String, Arc<HarnessSecretBindings>>> {
+        // Poison means a panic interrupted an insert or a removal. AGENTS.md
+        // permits the poisoned-lock panic rather than reading the map.
+        self.secrets.lock().expect("session secrets poisoned")
     }
 
     /// Close the database. Nothing may use these sessions after.
@@ -358,16 +417,77 @@ impl Sessions {
         scope
     }
 
-    /// Close the session: its admitted work is told to stop and drains first,
-    /// then its values, last run and directory go. Returns whether it was open.
+    /// Close the session: it stops being open, its admitted work is told to stop
+    /// and drains, its finalizers run, and then its values, last run and
+    /// directory go. Returns whether it was open. Closing a session already
+    /// closing waits for that cleanup, and retries it if it failed.
     pub(crate) async fn close(&self, id: &str) -> Result<bool> {
+        let closed = self.begin_close(id).await?;
+        self.cleanup(id).await?;
+        Ok(closed)
+    }
+
+    /// Mark the open session closing, in one transaction with its finalizers
+    /// becoming pending and its secret bindings kept for them. Returns whether it
+    /// was open.
+    async fn begin_close(&self, id: &str) -> Result<bool> {
+        let secrets = self.lock_secrets().get(id).cloned().unwrap_or_default();
+        let mut tx = self.database.begin().await?;
+        if !store::is_open(&mut tx, id).await? {
+            return Ok(false);
+        }
+        super::finalizers::terminate(&mut tx, &self.sealer, id, &secrets).await?;
+        sqlx::query("UPDATE sessions SET closing=1 WHERE session_id=?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        self.lock_secrets().remove(id);
+        Ok(true)
+    }
+
+    /// Finish closing `id`, if it is closing. Nothing goes until every finalizer
+    /// has finished and that is recorded; until then the session stays closing,
+    /// to be retried.
+    async fn cleanup(&self, id: &str) -> Result<()> {
+        let _turn = self.cleanup_turn.lock().await;
+        let Some(row) = self.database.closing_session(id).await? else {
+            return Ok(());
+        };
         let scope = self.resource_scope(id);
         scope.cancel.cancel();
         // A run holds its read permit until its blocking host work has drained.
         let _drained = scope.work.write().await;
-        let closed = self.database.delete_session(id).await?;
+        if let Some(executor) = self.finalizer_executor.get() {
+            let session = self
+                .registrations
+                .secrets(id)
+                .await
+                .map(|secrets| ClosingSession {
+                    id: row.id.clone(),
+                    blueprint_name: row.blueprint_name.clone(),
+                    variables: Arc::new(row.variables.iter().cloned().collect()),
+                    secrets: Arc::new(secrets),
+                });
+            finalize_session(&self.registrations, executor.as_ref(), id, session).await?;
+        } else if self.registrations.has_unfinished(id).await? {
+            anyhow::bail!("finalizer executor is unavailable");
+        }
+        if self.registrations.has_unfinished(id).await? {
+            anyhow::bail!("finalization completion could not be recorded; recovery is required");
+        }
         self.remove_dir(id);
-        Ok(closed)
+        // The kept secret bindings go with the session row.
+        self.database.delete_session(id).await?;
+        Ok(())
+    }
+
+    /// Finish every close cut short, by a stop or by a cleanup that failed.
+    pub(crate) async fn finish_closing(&self) -> Result<()> {
+        for id in self.database.closing_ids().await? {
+            self.cleanup(&id).await?;
+        }
+        Ok(())
     }
 
     /// Close every session.
@@ -378,20 +498,23 @@ impl Sessions {
         Ok(())
     }
 
-    /// Close every session idle past its timeout at `now` with no run in flight.
-    /// Returns the ids it closed.
+    /// Close every session idle past its timeout at `now` with no run in flight,
+    /// then finish every close still pending. Returns the ids it closed.
     pub(crate) async fn reap(&self, now: SystemTime) -> Result<Vec<String>> {
-        let in_flight = self.in_flight.lock().await;
         let mut closed = Vec::new();
-        for session in self.database.sessions().await? {
-            let idle_until = session.last_activity + session.idle_timeout;
-            if idle_until > now || in_flight.contains_key(&session.id) {
-                continue;
-            }
-            if self.close(&session.id).await? {
-                closed.push(session.id);
+        {
+            let in_flight = self.in_flight.lock().await;
+            for session in self.database.sessions().await? {
+                let idle_until = session.last_activity + session.idle_timeout;
+                if idle_until > now || in_flight.contains_key(&session.id) {
+                    continue;
+                }
+                if self.begin_close(&session.id).await? {
+                    closed.push(session.id);
+                }
             }
         }
+        self.finish_closing().await?;
         Ok(closed)
     }
 
@@ -431,14 +554,14 @@ impl Sessions {
         }
     }
 
-    fn remove_leftover_dirs(&self, open: &[Session]) {
+    fn remove_leftover_dirs(&self, kept: &[String]) {
         let Ok(entries) = std::fs::read_dir(&self.sessions_dir) else {
             return;
         };
         for entry in entries.flatten() {
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
-            if !open.iter().any(|session| session.id == name) {
+            if !kept.iter().any(|id| id == name) {
                 self.remove_dir(name);
             }
         }
