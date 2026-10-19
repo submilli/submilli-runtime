@@ -1,4 +1,5 @@
 ---
+docType: tutorial
 title: "Verify a Package in CI"
 description: "Build a GitHub Actions job that fails a pull request when a Package's tests fail, with the tests that call the service run from the repository's secrets and skipped where there are none, and an agent's security review beside them."
 slug: tutorials/verify-a-package-in-ci

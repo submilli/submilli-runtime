@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Add a dependency"
 description: "How to make a Package import another, from the same project, your local store, or a GitHub repository, and what the dependency adds to what the Package requires and to the Blueprint."
 slug: packages/add-a-dependency

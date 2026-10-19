@@ -1,4 +1,5 @@
 ---
+docType: tutorial
 title: "Diagnose a denial"
 description: "Take one PermissionDeniedError from message to cause to fix: read it, find the rule that decided, reproduce it under another binding, meet the denial that comes from a missing field, and decide whether the rule or the program is wrong."
 slug: tutorials/diagnose-a-denial

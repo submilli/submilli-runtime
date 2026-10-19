@@ -1,4 +1,5 @@
 ---
+docType: reference
 title: "Curated Packages"
 description: "The Packages Submilli maintains for common services: each Package, what it is for, the secret it reads, the hosts it reaches, its readme, and the commands that install it and grant one of its capabilities."
 slug: reference/curated-packages

@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Publish a Package"
 description: "How to publish a Package: install it into your local store, see what programs see, add it to a Blueprint and run a program under it, make it installable from your repository, and put it on a server."
 slug: packages/publish-a-package

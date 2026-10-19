@@ -1,4 +1,5 @@
 ---
+docType: explanation
 title: "Packages"
 description: "What a Package is in Submilli: a library built for agents, where every operation asks the Blueprint before it acts; how a program uses one, and the tools for building one."
 slug: packages

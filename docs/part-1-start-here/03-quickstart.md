@@ -1,4 +1,5 @@
 ---
+docType: tutorial
 title: "Quickstart"
 description: "Write a Blueprint, the Package it governs, and an application that runs an agent's program on the server, and watch one rule refuse one call."
 slug: quickstart

@@ -1,4 +1,5 @@
 ---
+docType: reference
 title: Security review
 description: "Agent selection, authentication, review scope, report fields, limits, and exit codes for Package security reviews."
 slug: reference/security-review

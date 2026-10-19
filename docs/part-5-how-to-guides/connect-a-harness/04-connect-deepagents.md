@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Connect deepagents to Submilli"
 description: "Add Submilli tools to an existing LangChain deepagents harness."
 showDescription: false
@@ -8,7 +9,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "0793078b34bc88399391502d4039b2098b010dd4afc913fbcb990d702a3bc539"
+  contentHash: "3dc9d577047b8fb32c69c31c34770830c68c36eec277d030702befd3ea3af23f"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
@@ -35,11 +36,8 @@ Verify the connection and tool discovery without a model request.
 Tell me what changed and anything I still need to do.
 ```
 
-Once the connection is verified, you can stop here. The manual path is for
-setting it up yourself.
-
-The [released skill](https://github.com/submilli/submilli-runtime/blob/v0.4.1/skills/submilli/references/deepagents.md) uses MCP, a protocol for calling server tools.
-The manual path uses native middleware.
+After setup, [try it out](#try-it-out). To configure the connection yourself,
+follow the manual steps below.
 
 ## Set up manually
 
@@ -139,7 +137,55 @@ while the agent uses it, then close it during application shutdown:
 await submilli.client.aclose()
 ```
 
-### Troubleshooting
+## Try it out
+
+Test the agent in your application, using the connection you just configured.
+Send the following message through your application's chat or test input. This
+is a request to your running agent, not to the coding assistant that set it up.
+It makes a model request using your application's existing model configuration.
+
+> Use Submilli to run `export function main(): number { return 2 + 2; }` and report the result.
+
+For the manual example, put this message in your existing `messages` list as
+`{"role": "user", "content": "..."}`, replacing `...` with the message above.
+Run `await agent.ainvoke({"messages": messages})` in your application's async
+code, preserving any existing configuration and context arguments. Keep the
+Submilli client open until the run finishes. Then print the
+[returned messages](https://docs.langchain.com/oss/python/langchain/messages)
+in the same async function:
+
+```python
+for message in result["messages"]:
+    if message.type == "ai" and message.tool_calls:
+        print("Tool calls:", message.tool_calls)
+    elif message.type == "tool":
+        print("Tool result:", message.tool_call_id, message.content)
+print("Agent answer:", result["messages"][-1].content)
+```
+
+In the terminal running your application, find the call named
+`submilli__typescript__execute` and the tool message with its matching
+`tool_call_id`. The call's `args` should contain the program, and the tool
+message's content should contain the returned `4`. If setup used MCP instead
+of the native middleware, inspect the Submilli execution tool exposed by that
+connection in the same returned messages.
+
+A successful test shows the agent requesting Submilli's execution tool with
+the program, the tool returning `4` without an error, and the agent reporting
+that result. Match the tool call and result by their call ID. A chat answer of
+`4` alone is insufficient: the model can calculate it without using Submilli.
+
+This verifies the path from your agent through the Submilli server, code
+execution, and the returned result. It does not test access to your business
+systems or whether your Blueprint denies forbidden operations.
+
+If there is no execution call, check that this run uses the agent configuration
+with Submilli attached and that its tool settings allow the call. If the call
+fails, read the tool error and [check the connection settings](#troubleshooting).
+If the tool returns `4` but the agent gives no final answer, check your agent's
+step or turn limit so it can continue after the tool result.
+
+## Troubleshooting
 
 - Connection refused: check `SUBMILLI_SERVER` and whether the server is running.
 - `401`: use a token accepted by that server.

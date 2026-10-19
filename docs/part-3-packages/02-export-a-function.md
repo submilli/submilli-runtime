@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Export a function"
 description: "How to export a function a Blueprint can allow, filter, or deny: declare it with a @capability tag, enforce it with check, design the payload, call the service with a key the program never sees, and build it."
 slug: packages/export-a-function

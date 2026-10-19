@@ -1,4 +1,5 @@
 ---
+docType: explanation
 title: "Why Submilli"
 description: "Why a program an agent writes needs rules about what it may do, and why isolation alone can't enforce them."
 slug: why

@@ -1,4 +1,5 @@
 ---
+docType: tutorial
 title: "Build a Package"
 description: "Have your coding assistant build a read-only Package over a real API: the Package, its readme, tests, a Blueprint, and a verifier's review, tested against the live service; then tests for a Package on a machine without the key. What a good result looks like."
 slug: tutorials/build-a-package

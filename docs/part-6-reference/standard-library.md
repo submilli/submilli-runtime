@@ -1,4 +1,5 @@
 ---
+docType: reference
 title: "Standard library"
 description: "Every submilli: module: what gates it, who may import it, the rules its functions share, Git's operations and limits, and each module's functions and types."
 slug: reference/standard-library

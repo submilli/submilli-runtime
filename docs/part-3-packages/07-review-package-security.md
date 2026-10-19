@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Review a Package's security"
 description: "How to have a coding agent review a Package's authorization: run the review locally with Codex or Claude Code, read and keep its report, require it in CI, and make deployment wait for it."
 slug: packages/review-package-security

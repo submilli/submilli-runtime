@@ -126,7 +126,17 @@ export default defineConfig({
         { label: "Blueprints", collapsed: true, items: [{ autogenerate: { directory: "../docs/part-2-blueprints" } }] },
         { label: "Packages", collapsed: true, items: [{ autogenerate: { directory: "../docs/part-3-packages" } }] },
         { label: "Server", collapsed: true, items: [{ autogenerate: { directory: "../docs/part-4-server" } }] },
-        { label: "How-to guides", collapsed: true, items: [{ autogenerate: { directory: "../docs/part-5-how-to-guides/connect-a-harness" } }] },
+        {
+          label: "How-to guides",
+          collapsed: true,
+          items: [
+            {
+              label: "Harnesses",
+              collapsed: false,
+              items: [{ autogenerate: { directory: "../docs/part-5-how-to-guides/connect-a-harness" } }],
+            },
+          ],
+        },
         {
           label: "Tutorials",
           collapsed: true,

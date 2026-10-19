@@ -1,4 +1,5 @@
 ---
+docType: reference
 title: "Blueprint file"
 description: "Every top-level key and field of a Blueprint file: types, defaults, allowed values, where variables and secrets may be referenced, and the errors that refuse a file at lint and at registration."
 slug: reference/blueprint-file

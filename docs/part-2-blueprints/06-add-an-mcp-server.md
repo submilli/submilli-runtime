@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Add an MCP server"
 description: "How to make an MCP server importable as a Package: declare it, allow the tools the task needs, give it a credential or log in, register it on a server, and handle a server that can't be reached."
 slug: blueprints/add-an-mcp-server

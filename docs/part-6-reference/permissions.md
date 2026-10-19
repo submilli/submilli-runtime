@@ -1,4 +1,5 @@
 ---
+docType: reference
 title: "Permissions"
 description: "How a call is decided, callers, actions, the refusals no rule changes, the capabilities and their fields, the errors when a Blueprint is read, and the denials at run time."
 slug: reference/permissions

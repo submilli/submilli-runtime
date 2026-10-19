@@ -1,4 +1,5 @@
 ---
+docType: explanation
 title: "Your application"
 description: "How the application or agent framework connects: it opens a session under a Blueprint, binds the variables, and hands the agent its tools; what the agent gets back."
 slug: application

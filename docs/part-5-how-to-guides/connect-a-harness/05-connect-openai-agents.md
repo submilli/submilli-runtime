@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Connect OpenAI Agents SDK to Submilli"
 description: "Add Submilli as an MCP server in an existing OpenAI Agents SDK harness."
 showDescription: false
@@ -8,7 +9,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "49fc420cce34b8e0cc651a99ff125e9c72a2672b8f6f97ee2afa7aff68d68603"
+  contentHash: "658542f22e60b1abe818cc63eb142dc36682f5e3f55ac6bbea13c2ba8e506330"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
@@ -35,14 +36,14 @@ Verify the connection and tool discovery without a model request.
 Tell me what changed and anything I still need to do.
 ```
 
-Once the connection is verified, you can stop here. The manual path is for
-setting it up yourself.
+After setup, [try it out](#try-it-out). To configure the connection yourself,
+follow the manual steps below.
 
 ## Set up manually
 
 Use `MCPServerStreamableHttp` to connect your agent to the Submilli runtime over
-[MCP](https://openai.github.io/openai-agents-python/mcp/) (Model Context Protocol),
-which lets an agent discover and call tools on a server.
+[MCP](https://openai.github.io/openai-agents-python/mcp/), which lets an agent
+discover and call tools on a server.
 
 :::note[Before you start]
 You’ll need:
@@ -129,7 +130,49 @@ print("Connected to Submilli.")
 `Connected to Submilli.` confirms that the SDK can discover
 `submilli__typescript__execute`. Listing tools does not call a model.
 
-### Troubleshooting
+## Try it out
+
+Test the agent in your application, using the connection you just configured.
+Send the following message through your application's chat or test input. This
+is a request to your running agent, not to the coding assistant that set it up.
+It makes a model request using your application's existing model configuration.
+
+> Use Submilli to run `export function main(): number { return 2 + 2; }` and report the result.
+
+For the manual example, use this message as the input to
+`await Runner.run(connected_agent, ...)`, inside the existing `async with`
+block. Preserve your other run arguments. Add this after the call to print
+its [run items](https://openai.github.io/openai-agents-python/results/)
+in your application's terminal:
+
+```python
+for item in result.new_items:
+    if item.type in ("tool_call_item", "tool_call_output_item"):
+        print(item.type, item.raw_item)
+print("Agent answer:", result.final_output)
+```
+
+Find a function call named `submilli__typescript__execute`. Its `arguments`
+contain the program. Find the output item with the same `call_id` and inspect
+its `output` for the returned `4`. This prints the local run data; no tracing
+service is needed.
+
+A successful test shows the agent requesting Submilli's execution tool with
+the program, the tool returning `4` without an error, and the agent reporting
+that result. Match the tool call and result by their call ID. A chat answer of
+`4` alone is insufficient: the model can calculate it without using Submilli.
+
+This verifies the path from your agent through the Submilli server, code
+execution, and the returned result. It does not test access to your business
+systems or whether your Blueprint denies forbidden operations.
+
+If there is no execution call, check that this run uses the agent configuration
+with Submilli attached and that its tool settings allow the call. If the call
+fails, read the tool error and [check the connection settings](#troubleshooting).
+If the tool returns `4` but the agent gives no final answer, check your agent's
+step or turn limit so it can continue after the tool result.
+
+## Troubleshooting
 
 - Connection refused: check `SUBMILLI_SERVER` and whether the server is running.
 - `401`: use a token accepted by that server.

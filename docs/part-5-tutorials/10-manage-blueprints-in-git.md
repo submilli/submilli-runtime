@@ -1,4 +1,5 @@
 ---
+docType: tutorial
 title: "Manage Blueprints in Git"
 description: "Keep the Blueprints in a repository: on every pull request, lint them and test each one as two sessions, one it must allow and one it must refuse; on every merge to main or every release, register them on the server, with the Packages pinned in the same commit and a rollback that is a revert."
 slug: tutorials/manage-blueprints-in-git

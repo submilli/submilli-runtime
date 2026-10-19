@@ -1,4 +1,5 @@
 ---
+docType: reference
 title: "Server settings"
 description: "Every submilli-server setting with its config-file key, flag, and SUBMILLI_* variable, the precedence between them, and the tokens, directories, secret store, volumes, outbound network block, limits, telemetry, health, logs, audit trail, and shutdown they control."
 slug: reference/server-settings

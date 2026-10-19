@@ -1,4 +1,5 @@
 ---
+docType: explanation
 title: "Blueprints"
 description: "The Blueprint in full: default deny, rules per caller, the variable the application binds, secrets, files, and models, and what no rule can grant."
 slug: blueprints

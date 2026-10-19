@@ -3,6 +3,7 @@ import { confirmedAuthorshipFor } from '../lib/authorship';
 const { entry } = Astro.locals.starlightRoute;
 const authorship = entry.data.authorship;
 const confirmedAuthorship = confirmedAuthorshipFor(authorship, entry.body);
+
 ---
 		{confirmedAuthorship && (
 			<details class="authorship" data-pagefind-ignore>
@@ -12,26 +13,96 @@ const confirmedAuthorship = confirmedAuthorshipFor(authorship, entry.body);
 							<><circle cx="12" cy="8" r="3"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></>
 						) : authorship?.label === 'generated-from-source' ? (
 							<path d="m8 5-6 7 6 7m8-14 6 7-6 7m-3-17-2 20"/>
+						) : authorship?.label === 'ai-assisted' ? (
+							<>
+								<path d="M12 4a8 8 0 0 0 0 16V4h5a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3h-5M15 2v2m5 7h2v4h-2"/>
+								<path d="M8 10h1m6-1h2v2h-2zM8 15c2 2 6 2 8 0"/>
+							</>
 						) : (
 							<>
 								<rect x="4" y="7" width="16" height="13" rx="4"/>
-								<path d="M12 3v4M2 12v4m20-4v4M9 16h6"/>
+								<path d="M12 3v4M2 12v4m20-4v4M9 16c1.8 1.6 4.2 1.6 6 0"/>
 								<circle cx="9" cy="12" r=".7"/>
 								<circle cx="15" cy="12" r=".7"/>
 							</>
 						)}
 					</svg>
 				</summary>
-				<span class="authorship__tooltip" role="tooltip"><strong>{confirmedAuthorship.label}</strong>{confirmedAuthorship.description}</span>
+				<span class="authorship__tooltip" role="tooltip">{authorship?.label === 'ai-generated'
+					? 'written with AI'
+					: authorship?.label === 'ai-assisted'
+						? 'Written by a human with AI assistance'
+						: <><strong>{confirmedAuthorship.label}</strong>{confirmedAuthorship.description}</>}
+				</span>
 			</details>
 		)}
+<script>
+	for (const badge of document.querySelectorAll('.authorship')) {
+		const tooltip = badge.querySelector('.authorship__tooltip');
+		if (!(badge instanceof HTMLDetailsElement) || !(tooltip instanceof HTMLElement)) continue;
+
+		const positionTooltip = () => {
+			if (!badge.open && !badge.matches(':hover, :focus-within')) return;
+			const viewport = window.visualViewport;
+			let left = viewport?.offsetLeft ?? 0;
+			let top = viewport?.offsetTop ?? 0;
+			let right = left + (viewport?.width ?? document.documentElement.clientWidth);
+			let bottom = top + (viewport?.height ?? document.documentElement.clientHeight);
+
+			// A tooltip must fit the reading pane as well as the browser viewport.
+			for (let ancestor = badge.parentElement; ancestor; ancestor = ancestor.parentElement) {
+				const style = getComputedStyle(ancestor);
+				const rect = ancestor.getBoundingClientRect();
+				const scaleX = ancestor.offsetWidth ? rect.width / ancestor.offsetWidth : 1;
+				const scaleY = ancestor.offsetHeight ? rect.height / ancestor.offsetHeight : 1;
+				if (style.overflowX !== 'visible') {
+					left = Math.max(left, rect.left + ancestor.clientLeft * scaleX);
+					right = Math.min(right, rect.left + (ancestor.clientLeft + ancestor.clientWidth) * scaleX);
+				}
+				if (style.overflowY !== 'visible') {
+					top = Math.max(top, rect.top + ancestor.clientTop * scaleY);
+					bottom = Math.min(bottom, rect.top + (ancestor.clientTop + ancestor.clientHeight) * scaleY);
+				}
+			}
+			const margin = 8;
+			left += margin;
+			right -= margin;
+			top += margin;
+			bottom -= margin;
+			const anchor = badge.getBoundingClientRect();
+			const outside = right <= left || bottom <= top || anchor.bottom < top || anchor.top > bottom;
+			tooltip.style.visibility = outside ? 'hidden' : '';
+			if (outside) return;
+			const scaleX = anchor.width / badge.offsetWidth || 1;
+			const scaleY = anchor.height / badge.offsetHeight || 1;
+			tooltip.style.width = `${Math.min(260, (right - left) / scaleX)}px`;
+			tooltip.style.maxHeight = `${(bottom - top) / scaleY}px`;
+			const popup = tooltip.getBoundingClientRect();
+			const x = Math.max(left, Math.min(anchor.right - popup.width, right - popup.width));
+			const preferredY = anchor.bottom + margin + popup.height <= bottom
+				? anchor.bottom + margin : anchor.top - margin - popup.height;
+			const y = Math.max(top, Math.min(preferredY, bottom - popup.height));
+			tooltip.style.left = `${(x - anchor.left) / scaleX}px`;
+			tooltip.style.top = `${(y - anchor.top) / scaleY}px`;
+		};
+
+		new ResizeObserver(positionTooltip).observe(badge.parentElement ?? badge);
+		badge.addEventListener('pointerenter', positionTooltip);
+		badge.addEventListener('focusin', positionTooltip);
+		badge.addEventListener('toggle', positionTooltip);
+		window.addEventListener('resize', positionTooltip);
+		document.addEventListener('scroll', positionTooltip, true);
+		window.visualViewport?.addEventListener('resize', positionTooltip);
+		window.visualViewport?.addEventListener('scroll', positionTooltip);
+	}
+</script>
 <style>
 	.authorship { position: relative; flex-shrink: 0; }
 	.authorship summary { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; list-style: none; color: var(--sl-color-gray-3); cursor: pointer; border-radius: 5px; }
 	.authorship summary::-webkit-details-marker { display: none; }
 	.authorship summary:hover, .authorship summary:focus-visible { color: var(--sl-color-white); background: var(--sl-color-gray-6); }
 	.authorship summary:focus-visible { outline: 2px solid var(--sl-color-text-accent); outline-offset: 2px; }
-	.authorship__tooltip { display: none; position: absolute; z-index: 10; top: calc(100% + 8px); right: 0; width: min(260px, 75vw); padding: 12px 14px; background: var(--sl-color-gray-6); color: var(--sl-color-white); border: 1px solid var(--sl-color-gray-5); border-radius: 8px; box-shadow: 0 5px 18px #0003; font: 400 0.8rem/1.5 var(--sl-font); }
+	.authorship__tooltip { display: none; position: absolute; z-index: 10; top: calc(100% + 8px); left: 0; box-sizing: border-box; width: min(260px, 75vw); overflow: auto; overflow-wrap: anywhere; padding: 12px 14px; background: var(--sl-color-gray-6); color: var(--sl-color-white); border: 1px solid var(--sl-color-gray-5); border-radius: 8px; box-shadow: 0 5px 18px #0003; font: 400 0.8rem/1.5 var(--sl-font); }
 	.authorship__tooltip strong { display: block; margin-bottom: 3px; }
 	.authorship:is(:hover, :focus-within)::details-content { content-visibility: visible; }
 	.authorship[open] .authorship__tooltip, .authorship:hover .authorship__tooltip, .authorship:focus-within .authorship__tooltip { display: block; }

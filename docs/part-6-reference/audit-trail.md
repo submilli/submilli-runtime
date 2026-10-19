@@ -1,4 +1,5 @@
 ---
+docType: reference
 title: "Audit trail"
 description: "Every record submilli-server writes to its audit trail: the fields all records share, and the decision, execution, session, admin, auth, and server records with their events and fields."
 slug: reference/audit-trail

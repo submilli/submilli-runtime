@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Keep files and state"
 description: "How to give the programs in one session a filesystem and a key-value store that last between them: choose the filesystem, grant its operations, run a program, cap the files, grant session state."
 slug: blueprints/keep-files-and-state

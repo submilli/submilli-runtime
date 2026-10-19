@@ -1,4 +1,5 @@
 ---
+docType: explanation
 title: Why agents execute code — transcript
 description: The complete narration of the code-execution introduction.
 slug: videos/code-execution-introduction

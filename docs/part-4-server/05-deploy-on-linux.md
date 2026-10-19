@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Deploy on Linux"
 description: "How to run the server on a Linux machine of its own under systemd: the binaries for the system, a user and directories of its own, the config and token files under /etc/submilli, the unit, HTTPS, upgrades, and backups."
 slug: server/deploy-on-linux

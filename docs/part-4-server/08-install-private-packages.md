@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Install private Packages on a server"
 description: "How to let a server install Packages from private GitHub repositories: create a token that can read them and give it to the server, under a process, Compose, or the Helm chart."
 slug: server/install-private-packages

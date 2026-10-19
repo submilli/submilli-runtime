@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Install"
 description: "Install the Submilli CLI and server, and the skill for your coding assistant, and check that each works."
 slug: install

@@ -1,4 +1,5 @@
 ---
+docType: reference
 title: Videos
 description: Code execution, permissions, and building with Submilli.
 slug: videos

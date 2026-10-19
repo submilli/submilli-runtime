@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Start a project"
 description: "How to create a Package project with submilli build: scaffold it, fill in submilli.toml, check that it builds, add a second Package, and open it in your editor."
 slug: packages/start-a-project

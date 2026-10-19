@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Start a Blueprint"
 description: "How to create a Blueprint with the CLI: start from nothing allowed, check the file, add a Package, grant operations, declare secrets and variables, test it, and register it on a server."
 slug: blueprints/start-a-blueprint

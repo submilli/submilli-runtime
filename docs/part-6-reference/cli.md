@@ -1,4 +1,5 @@
 ---
+docType: reference
 title: "CLI"
 description: "The submilli command tree: what each command does and where it runs, exit codes, environment variables, the state directory, Package installation and its errors, the GitHub token, and the help text of every command."
 slug: reference/cli

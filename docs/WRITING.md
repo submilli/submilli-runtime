@@ -29,6 +29,20 @@ Package, the customer `cus_northwind`, and the injected ticket.
 | 5 · Tutorials | `docs/part-5-tutorials/` | Tutorial | In order, by group |
 | 6 · Reference | `docs/part-6-reference/` | [Reference](https://diataxis.fr/reference/) | Looked up |
 
+Diátaxis guides each page's purpose and structure. It does not require every
+top-level navigation group to be a documentation type. Product concepts such as
+Blueprints and Packages can remain top-level groups.
+
+Declare each page's purpose in frontmatter with `docType: tutorial`,
+`docType: how-to`, `docType: explanation`, or `docType: reference`. Choose the
+page's primary purpose independently of its sidebar group. This field is required
+for hidden and generated pages too. Reference regeneration preserves the declared
+type rather than assigning one from the presence of generated sections.
+
+The allowed values are defined in `docs-site/src/lib/doc-type.ts` and required by
+`docs-site/src/content.config.ts`. The documentation checks reject missing or
+invalid values.
+
 A page's URL comes from
 its `slug` frontmatter, not its path; its position comes from `sidebar.order`.
 A folder inside a part is a sidebar group, named in `astro.config.mjs`.
@@ -66,6 +80,10 @@ the same prompt for the reader to review and send. Keep these controls in the
 shared renderer, with accessible names, focus states, and a copy fallback.
 Use this pattern throughout the docs. Do not mark command output, example
 conversations, or runtime task inputs as coding-agent prompts.
+
+Treat established acronyms such as MCP as familiar terms. Do not expand or
+define them automatically. Explain the protocol's behavior when that detail
+helps the reader complete the task.
 
 Put advanced options in reference. A how-to is read on its own: never explain its output by
 what another page did. Don't hedge; one sentence beside the rule it qualifies
@@ -182,6 +200,7 @@ Add `authorship` to the page's existing YAML frontmatter. Keep its `title`,
 ```yaml
 ---
 title: "Example reference"
+docType: reference
 description: "Fields and defaults for an example configuration."
 slug: reference/example
 # Keep the page's other frontmatter fields here.

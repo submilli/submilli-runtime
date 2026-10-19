@@ -1,4 +1,5 @@
 ---
+docType: explanation
 title: "The server"
 description: "What submilli-server is and why it is built the way it is: an isolated WebAssembly instance per run instead of a microVM, and what it does with a program."
 slug: server

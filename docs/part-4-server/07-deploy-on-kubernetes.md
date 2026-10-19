@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Deploy on Kubernetes"
 description: "How to install the server in your cluster with the Helm chart: generated tokens, a network policy that admits only your application, HTTPS, the encrypted secret store and its key, Blueprints registered through the API, memory sizing, storage, and upgrades."
 slug: server/deploy-on-kubernetes

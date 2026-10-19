@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Write tests"
 description: "How to test a Package with submilli build test: a test file and its helpers, labels and failures, a live test run with the key or skipped, and what Package tests don't prove."
 slug: packages/write-tests

@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Set limits"
 description: "How to set the server's limits: bound CPU work with fuel, keep a time limit as the backstop for your callers, size memory and the container, bound recursion, cap model spending and session state, and read what a program sees when it passes one."
 slug: server/set-limits

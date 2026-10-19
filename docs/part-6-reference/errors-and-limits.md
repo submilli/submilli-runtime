@@ -1,4 +1,5 @@
 ---
+docType: reference
 title: "Errors and limits"
 description: "Every limit on a program's run with its default, scope, and what a program sees when it passes it; the fixed limits inside the standard library; and the catalog of errors a program and its caller can get."
 slug: reference/errors-and-limits

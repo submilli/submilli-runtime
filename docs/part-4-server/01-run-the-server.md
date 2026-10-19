@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Run the server"
 description: "How to run submilli-server for an application: start it, configure its admin and user credentials, keep the server private, put its state on a persistent disk, turn on the secret store, and keep its audit trail."
 slug: server/run-the-server

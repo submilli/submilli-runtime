@@ -14,6 +14,8 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ts from 'typescript';
+import { parseFrontmatter } from 'astro/markdown';
+import { docTypeSchema } from '../src/lib/doc-type.ts';
 
 const cli = process.env.SUBMILLI_BIN ?? 'submilli';
 const server = process.env.SUBMILLI_SERVER_BIN ?? 'submilli-server';
@@ -277,6 +279,13 @@ try {
 	for (const file of files) {
 		const path = new URL(file, docs);
 		const before = readFileSync(path, 'utf8');
+		// Regeneration preserves the page's declared purpose, including mixed pages.
+		if (/<!-- generated:[a-z-]+ -->/.test(before)) {
+			const { frontmatter } = parseFrontmatter(before);
+			if (!docTypeSchema.safeParse(frontmatter.docType).success) {
+				throw new Error(`${file}: provide a valid docType before regenerating reference regions`);
+			}
+		}
 		const after = before.replace(
 			/(<!-- generated:([a-z-]+) -->\n)[\s\S]*?(<!-- \/generated:\2 -->)/g,
 			(_, open: string, name: string, close: string) => `${open}\n${generated(name)}\n\n${close}`,

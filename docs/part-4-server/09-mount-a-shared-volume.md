@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Mount a shared volume"
 description: "How to give programs a directory that outlives sessions and is shared across Blueprints: declare a named volume on the server, mount it in a Blueprint read-only or read-write, use it from a program, and know where its files live."
 slug: server/mount-a-shared-volume

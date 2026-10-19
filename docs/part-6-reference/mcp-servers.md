@@ -1,4 +1,5 @@
 ---
+docType: reference
 title: "MCP servers"
 description: "The Blueprint's mcp block, discovery, how tools become functions, output schemas, results, failure messages, OAuth, limits, and the local and server commands."
 slug: reference/mcp-servers

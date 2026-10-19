@@ -1,4 +1,5 @@
 ---
+docType: reference
 title: "Filter language"
 description: "The language of a permission rule's filter: comparisons, operators, glob and regex patterns, combining conditions, literals, field names, variables, how a filter is evaluated, and the errors a malformed one gives."
 slug: reference/filter-language

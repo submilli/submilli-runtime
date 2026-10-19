@@ -1,4 +1,5 @@
 ---
+docType: reference
 title: Submilli documentation
 slug: ""
 description: The runtime for the code your agent writes — under rules you set.

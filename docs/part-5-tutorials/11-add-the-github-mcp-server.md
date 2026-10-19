@@ -1,4 +1,5 @@
 ---
+docType: tutorial
 title: "Add the GitHub MCP server"
 description: "Give an agent GitHub through GitHub's hosted MCP server: declare it in a Blueprint, register an OAuth application and log in once, allow a tool and call it, run it on a server, and know where a per-user token belongs instead."
 slug: tutorials/add-the-github-mcp-server

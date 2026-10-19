@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Allow model calls"
 description: "How to let a program call a model through submilli:llm: declare the provider's key, list the models, grant the capability, run a program, and register it on a server."
 slug: blueprints/allow-model-calls

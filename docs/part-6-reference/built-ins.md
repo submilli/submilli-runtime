@@ -1,4 +1,5 @@
 ---
+docType: reference
 title: "Built-ins"
 description: "The globals every Submilli program has without an import: types, error classes, namespaces, and global functions, with each one's members."
 slug: reference/built-ins

@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "HTTP and credentials"
 description: "How to let programs call an HTTP endpoint that has no Package, give that endpoint a credential the program never sees, and prove it arrived."
 slug: blueprints/http-and-credentials

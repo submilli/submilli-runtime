@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Document the Package"
 description: "How to document a Package for its two readers: the doc comments and docs/readme.md the model reads, with examples the build compiles, and the readme the person who installs and grants it reads."
 slug: packages/document-the-package

@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Allow Git"
 description: "How to let a program clone a repository, find and change what it needs, and commit: set the identity and its token, grant the Git and file operations, and run it."
 slug: blueprints/allow-git

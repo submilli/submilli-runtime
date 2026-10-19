@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Connect Claude Agent SDK to Submilli"
 description: "Add Submilli to the MCP servers used by an existing Claude Agent SDK harness."
 showDescription: false
@@ -8,7 +9,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "cbbc3f56edf00bb2de1f0cf838df74456c775a5df61d72fbc39a1f57a58d43c3"
+  contentHash: "64af195906631ad73527d604f8685fc46a13893b80c9dea15990713a56d240be"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
@@ -35,14 +36,14 @@ Verify the connection and tool discovery without a model request.
 Tell me what changed and anything I still need to do.
 ```
 
-Once the connection is verified, you can stop here. The manual path is for
-setting it up yourself.
+After setup, [try it out](#try-it-out). To configure the connection yourself,
+follow the manual steps below.
 
 ## Set up manually
 
-Connect through [MCP](https://code.claude.com/docs/en/agent-sdk/mcp)
-(Model Context Protocol) by adding Submilli to your existing `query` options.
-MCP lets an agent discover and call tools on a server.
+Connect through [MCP](https://code.claude.com/docs/en/agent-sdk/mcp) by adding
+Submilli to your existing `query` options. MCP lets an agent discover and call
+tools on a server.
 
 :::note[Before you start]
 You’ll need:
@@ -128,7 +129,59 @@ The status should become `connected`, and `submilli.tools` should include
 `submilli__typescript__execute`. A `pending` status means the SDK is still
 connecting. Inspect `submilli.error` if the status becomes `failed`.
 
-### Troubleshooting
+## Try it out
+
+Test the agent in your application, using the connection you just configured.
+Send the following message through your application's chat or test input. This
+is a request to your running agent, not to the coding assistant that set it up.
+It makes a model request using your application's existing model configuration.
+
+> Use Submilli to run `export function main(): number { return 2 + 2; }` and report the result.
+
+For the manual example, set `prompt` to this message in the existing
+`query({ prompt, options: ... })` call. Keep the configured MCP server and
+allowed tools. In the loop that already consumes `agent`, add this logging
+alongside your application's existing message handling:
+
+```typescript
+for await (const message of agent) {
+  if (message.type === "assistant" || message.type === "user") {
+    const content = message.message.content;
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block.type === "tool_use" || block.type === "tool_result") {
+          console.dir(block, { depth: null });
+        }
+      }
+    }
+  }
+  if (message.type === "result") console.dir(message, { depth: null });
+}
+```
+
+Use one message loop, not two competing consumers, and close the query when
+it finishes. In your application's terminal, find the `tool_use` block whose
+name ends in `submilli__typescript__execute`. With the `submilli` server name
+used here, Claude prefixes MCP tool names with `mcp__submilli__`. Its `input`
+contains the program. The `tool_result` block refers to the call's `id` as
+`tool_use_id`; inspect its content for `4` and check that `is_error` is not true.
+
+A successful test shows the agent requesting Submilli's execution tool with
+the program, the tool returning `4` without an error, and the agent reporting
+that result. Match the tool call and result by their call ID. A chat answer of
+`4` alone is insufficient: the model can calculate it without using Submilli.
+
+This verifies the path from your agent through the Submilli server, code
+execution, and the returned result. It does not test access to your business
+systems or whether your Blueprint denies forbidden operations.
+
+If there is no execution call, check that this run uses the agent configuration
+with Submilli attached and that its tool settings allow the call. If the call
+fails, read the tool error and [check the connection settings](#troubleshooting).
+If the tool returns `4` but the agent gives no final answer, check your agent's
+step or turn limit so it can continue after the tool result.
+
+## Troubleshooting
 
 - Connection refused: check `SUBMILLI_SERVER` and whether the server is running.
 - `401`: use a token accepted by that server.

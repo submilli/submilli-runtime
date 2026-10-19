@@ -1,4 +1,5 @@
 ---
+docType: reference
 title: "Connect your harness to Submilli"
 description: "Configure your harness to use Submilli for code execution."
 showDescription: false

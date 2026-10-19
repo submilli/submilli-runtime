@@ -56,7 +56,7 @@ test('agent prompts share ordered launch controls and an exact escaped payload',
     return url.searchParams.get('prompt') ?? url.searchParams.get('q') ?? url.searchParams.get('text');
   }), [prompt, prompt, prompt]);
   assert.equal(selectAll('textarea', renderedGroupAst)[0].children[0].value, prompt);
-  assert.equal(selectAll('pre code', renderedGroupAst)[0].children[0].value, prompt);
+  assert.equal(selectAll('details', renderedGroupAst).length, 1);
   assert.equal(selectAll('script', renderedGroupAst).length, 0);
   assert.equal(selectAll('[data-copy-prompt]', renderedGroupAst).length, 1);
   assert.doesNotMatch(html, /class="copy"/); // no second Expressive Code copy button

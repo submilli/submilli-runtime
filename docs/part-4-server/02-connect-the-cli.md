@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Connect the CLI"
 description: "How to point the submilli server commands at a server: its token from a file, its address, the first check, trusting its HTTPS certificate, keeping both in your shell, switching between servers by name, and which commands need the admin token."
 slug: server/connect-the-cli

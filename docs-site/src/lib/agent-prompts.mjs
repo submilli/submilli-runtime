@@ -17,7 +17,24 @@ export function promptLink(agent, prompt) {
   return href.length <= 10000 ? href : undefined;
 }
 
-export function agentPromptAst(prompt, { collapsed = false } = {}) {
+function promptTextAst(prompt) {
+  const blocks = prompt.split(/\n{2,}/);
+  const children = [];
+  for (const block of blocks) {
+    const lines = block.split('\n');
+    const listItems = lines.every(line => /^\s*(?:[-*]|\d+[.)])\s+/.test(line));
+    if (listItems) {
+      children.push(h('ul', { className: ['agent-prompt-list'] }, lines.map(line =>
+        h('li', line.replace(/^\s*(?:[-*]|\d+[.)])\s+/, '')),
+      )));
+      continue;
+    }
+    children.push(h('p', lines.join(' ')));
+  }
+  return h('div', { className: ['agent-prompt-readable'] }, children);
+}
+
+export function agentPromptAst(prompt, { collapsed = true } = {}) {
   const launchers = agents.map(agent => {
     const href = promptLink(agent, prompt);
     const label = href ? `Open in ${agent.name}` : `${agent.name}: use Copy prompt for this long prompt`;
@@ -27,7 +44,7 @@ export function agentPromptAst(prompt, { collapsed = false } = {}) {
       title: href ? `${label}. Choose your project, review, then send.` : label,
     }, [icon(agent.id)]);
   });
-  const text = h('pre', { className: ['agent-prompt-text'], tabindex: 0 }, [h('code', prompt)]);
+  const text = h('div', { className: ['agent-prompt-text'], tabindex: 0 }, [promptTextAst(prompt)]);
   return h('div', { className: ['agent-prompt'], 'data-agent-prompt': '' }, [
     h('div', { className: ['agent-prompt-bar'] }, [
       h('span', { className: ['agent-prompt-label'] }, 'Run in'),

@@ -1,4 +1,5 @@
 ---
+docType: how-to
 title: "Register a Blueprint"
 description: "How to put a Blueprint on a server: install its Packages and store its secrets first, register it, prove it with a program, and update or remove it later, knowing what registration checks and what remove costs."
 slug: server/register-a-blueprint

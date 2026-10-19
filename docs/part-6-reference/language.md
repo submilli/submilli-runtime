@@ -1,4 +1,5 @@
 ---
+docType: reference
 title: "Language"
 description: "The TypeScript Submilli programs are written in: the shape of a program, the stricter checks Submilli makes and why, and how to look declarations up."
 slug: reference/language

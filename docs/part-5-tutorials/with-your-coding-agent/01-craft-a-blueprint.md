@@ -1,4 +1,5 @@
 ---
+docType: tutorial
 title: "Craft a Blueprint"
 description: "Have your coding assistant write and test a Blueprint: a curated Package granted narrowly, a credential the program never sees, a tool server with only the tools the task needs; then put it on a server and prove it as two users. What a good result looks like, and what to ask for next."
 slug: tutorials/craft-a-blueprint

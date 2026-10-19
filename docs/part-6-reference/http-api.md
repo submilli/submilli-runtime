@@ -1,4 +1,5 @@
 ---
+docType: reference
 title: "HTTP API"
 description: "The endpoints a harness calls to run programs over HTTP: sessions and their execute, rebind, last-run, and delete; the execute result; application tools and their runs; the prompt, Package, and built-in descriptions; and one-off runs."
 slug: reference/http-api
