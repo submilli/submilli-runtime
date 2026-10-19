@@ -444,11 +444,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 
     // write / writeText / append / appendText share the shape
     // `(path, content) -> void`; only the op name, encoding, and disk action differ.
-    for (name, op, text_content, atomic) in [
-        ("write", "write", false, true),
-        ("writeText", "writeText", true, true),
-        ("append", "append", false, false),
-        ("appendText", "appendText", true, false),
+    for (name, op, text_content, append) in [
+        ("write", "write", false, false),
+        ("writeText", "writeText", true, false),
+        ("append", "append", false, true),
+        ("appendText", "appendText", true, true),
     ] {
         let content_ty = if text_content {
             string.clone()
@@ -486,9 +486,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     fuel::charge(&mut *caller, fuel::IO, bytes.len() as u64)?;
                     let effect_id = EffectId::stub().map_err(fatal_host_error)?;
                     let work = begin_work(caller)?;
-                    let result = filesystem
-                        .write(&effect_id, Some(work.clone()), &path, bytes, !atomic)
-                        .await;
+                    let result = if append {
+                        filesystem
+                            .append(&effect_id, Some(work.clone()), &path, bytes)
+                            .await
+                    } else {
+                        filesystem
+                            .write(&effect_id, Some(work.clone()), &path, bytes)
+                            .await
+                    };
                     work.settle(&mut *caller)?;
                     result.map_err(|e| backend_error(&ctx, &path, e))
                 })

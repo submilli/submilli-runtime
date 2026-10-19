@@ -485,13 +485,12 @@ async fn interpreter_uses_durable_backend_and_replay_does_not_repeat_append() {
     run_backend(&fixture, source).await.unwrap();
     let operation = sole_operation_id(&fixture).await;
     let effect_id: EffectId = operation.clone();
-    interpreter::runtime::filesystem::Filesystem::write(
+    interpreter::runtime::filesystem::Filesystem::append(
         &fixture.filesystem,
         &effect_id,
         None,
         "/port.txt",
         b"once".to_vec(),
-        true,
     )
     .await
     .unwrap();
@@ -735,16 +734,9 @@ async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
         );
         let effect_id: EffectId = uuid::Uuid::new_v4().to_string().into();
         assert!(
-            Filesystem::write(
-                backend,
-                &effect_id,
-                None,
-                path,
-                b"overwrite".to_vec(),
-                false
-            )
-            .await
-            .is_err()
+            Filesystem::write(backend, &effect_id, None, path, b"overwrite".to_vec())
+                .await
+                .is_err()
         );
     }
     for path in ["/.git-submilli-recovery", "/alias"] {

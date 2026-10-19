@@ -69,7 +69,6 @@ impl Filesystem for DefaultFilesystem {
         _work: Option<Arc<WorkBudget>>,
         path: &str,
         bytes: Vec<u8>,
-        append: bool,
     ) -> Result<(), FilesystemError> {
         let path = fs::resolve_content(&self.vfs, self.vfs.cwd(), path)?;
         path.writable()?;
@@ -77,9 +76,6 @@ impl Filesystem for DefaultFilesystem {
             return Err(FilesystemError::Unsupported(
                 "cannot write to the VFS root or a mount point",
             ));
-        }
-        if append {
-            return append_bytes(&path, &bytes);
         }
         let mut quota = QuotaCharge::new(path.placement().quota().cloned(), path.regular_file());
         quota.reserve(bytes.len() as u64)?;
@@ -94,6 +90,37 @@ impl Filesystem for DefaultFilesystem {
         })();
         if result.is_err() {
             let _ = temp.remove_file();
+        } else {
+            quota.commit();
+        }
+        result
+    }
+    async fn append(
+        &self,
+        _effect_id: &EffectId,
+        _work: Option<Arc<WorkBudget>>,
+        path: &str,
+        bytes: Vec<u8>,
+    ) -> Result<(), FilesystemError> {
+        let path = fs::resolve_content(&self.vfs, self.vfs.cwd(), path)?;
+        path.writable()?;
+        if path.is_root() {
+            return Err(FilesystemError::Unsupported(
+                "cannot write to the VFS root or a mount point",
+            ));
+        }
+        let count = bytes.len() as u64;
+        let before = path.file_len();
+        let mut quota = QuotaCharge::new(path.placement().quota().cloned(), None);
+        quota.reserve(count)?;
+        let result = path
+            .append()
+            .map_err(FilesystemError::from)
+            .and_then(|mut file| file.write_all(&bytes).map_err(Into::into));
+        if result.is_err() {
+            quota
+                .unreserve(count.saturating_sub(path.file_len().saturating_sub(before).min(count)));
+            quota.keep();
         } else {
             quota.commit();
         }
@@ -216,24 +243,6 @@ impl Filesystem for DefaultFilesystem {
             quota,
         )))
     }
-}
-
-fn append_bytes(path: &fs::ContentPath, bytes: &[u8]) -> Result<(), FilesystemError> {
-    let count = bytes.len() as u64;
-    let before = path.file_len();
-    let mut quota = QuotaCharge::new(path.placement().quota().cloned(), None);
-    quota.reserve(count)?;
-    let result = path
-        .append()
-        .map_err(FilesystemError::from)
-        .and_then(|mut file| file.write_all(bytes).map_err(Into::into));
-    if result.is_err() {
-        quota.unreserve(count.saturating_sub(path.file_len().saturating_sub(before).min(count)));
-        quota.keep();
-    } else {
-        quota.commit();
-    }
-    result
 }
 
 struct DefaultReader {

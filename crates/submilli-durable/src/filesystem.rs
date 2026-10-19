@@ -274,18 +274,32 @@ impl Filesystem for DurableFilesystem {
         work: Option<Arc<WorkBudget>>,
         path: &str,
         bytes: Vec<u8>,
-        append: bool,
     ) -> Result<(), PortError> {
         let operation = self.operation(work);
         operation
             .charge(interpreter::runtime::fuel::HASH, bytes.len() as u64)
             .map_err(backend)?;
-        if append {
-            operation.append_bytes(effect_id, path, bytes).await
-        } else {
-            operation.write_bytes(effect_id, path, bytes).await
-        }
-        .map_err(backend)?;
+        operation
+            .write_bytes(effect_id, path, bytes)
+            .await
+            .map_err(backend)?;
+        Ok(())
+    }
+    async fn append(
+        &self,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+        path: &str,
+        bytes: Vec<u8>,
+    ) -> Result<(), PortError> {
+        let operation = self.operation(work);
+        operation
+            .charge(interpreter::runtime::fuel::HASH, bytes.len() as u64)
+            .map_err(backend)?;
+        operation
+            .append_bytes(effect_id, path, bytes)
+            .await
+            .map_err(backend)?;
         Ok(())
     }
     async fn mkdir(

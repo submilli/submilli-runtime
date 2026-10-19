@@ -200,13 +200,21 @@ pub trait Filesystem: Send + Sync {
         offset: u64,
         maximum_bytes: u64,
     ) -> Result<Vec<u8>, FilesystemError>;
+    /// Atomically replace the file contents, creating the file if it is missing.
     async fn write(
         &self,
         effect_id: &EffectId,
         work: Option<Arc<WorkBudget>>,
         path: &str,
         bytes: Vec<u8>,
-        append: bool,
+    ) -> Result<(), FilesystemError>;
+    /// Append bytes to the file, creating the file if it is missing.
+    async fn append(
+        &self,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+        path: &str,
+        bytes: Vec<u8>,
     ) -> Result<(), FilesystemError>;
     async fn mkdir(
         &self,
