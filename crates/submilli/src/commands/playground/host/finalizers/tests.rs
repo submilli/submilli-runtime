@@ -135,7 +135,7 @@ async fn boot_with(
     let mut config = RunHostConfig::new(PackageStore::new(store_root(dir.path())));
     let mut limits = None;
     configure(&mut config, &mut limits);
-    let mut sessions = Sessions::boot(&state).await.unwrap().sessions;
+    let mut sessions = Sessions::boot(&state).await.unwrap();
     if let Some(limits) = limits {
         sessions = sessions.with_limits(limits);
     }

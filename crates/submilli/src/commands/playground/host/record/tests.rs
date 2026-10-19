@@ -103,7 +103,7 @@ async fn host() -> Host {
 async fn host_recording(records: bool) -> Host {
     let dir = tempfile::tempdir().unwrap();
     let state = StateDir::for_project(dir.path());
-    let sessions = Arc::new(Sessions::boot(&state).await.unwrap().sessions);
+    let sessions = Arc::new(Sessions::boot(&state).await.unwrap());
     let volumes = Arc::new(Volumes::boot(&state, VolumeTable::new()));
     let kept = Arc::new(Kept::default());
     let store_root = dir.path().join("store");

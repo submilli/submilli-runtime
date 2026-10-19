@@ -21,7 +21,7 @@ fn per_session() -> Blueprint {
 
 async fn booted(dir: &Path) -> (StateDir, Sessions, Vec<Session>) {
     let state = StateDir::for_project(dir);
-    let booted = Sessions::boot(&state).await.unwrap();
+    let booted = Sessions::boot_reporting(&state).await.unwrap();
     (state, booted.sessions, booted.open)
 }
 
@@ -68,7 +68,7 @@ async fn an_open_session_its_values_and_last_run_survive_closing_the_host() {
         sessions: reopened,
         open,
         notice,
-    } = Sessions::boot(&state).await.unwrap();
+    } = Sessions::boot_reporting(&state).await.unwrap();
     assert_eq!(notice, None);
     assert_eq!(open.len(), 1);
     assert_eq!(open[0].id, session.id);
@@ -206,7 +206,7 @@ async fn an_embedded_server_state_directory_starts_empty_with_one_notice() {
     fs::create_dir_all(state.store_dir()).unwrap();
     fs::write(state.store_dir().join("1.json"), b"a run record").unwrap();
 
-    let booted = Sessions::boot(&state).await.unwrap();
+    let booted = Sessions::boot_reporting(&state).await.unwrap();
     assert_eq!(booted.notice, Some(SESSIONS_LEFT_BEHIND));
     assert!(booted.open.is_empty());
     booted.sessions.close_database().await.unwrap();
@@ -219,7 +219,7 @@ async fn an_embedded_server_state_directory_starts_empty_with_one_notice() {
         b"old sessions"
     );
 
-    let next = Sessions::boot(&state).await.unwrap();
+    let next = Sessions::boot_reporting(&state).await.unwrap();
     assert_eq!(next.notice, None);
     next.sessions.close_database().await.unwrap();
 }
@@ -228,7 +228,7 @@ async fn an_embedded_server_state_directory_starts_empty_with_one_notice() {
 async fn a_new_project_starts_with_no_notice() {
     let dir = tempfile::tempdir().unwrap();
     let state = StateDir::for_project(dir.path());
-    let booted = Sessions::boot(&state).await.unwrap();
+    let booted = Sessions::boot_reporting(&state).await.unwrap();
     assert_eq!(booted.notice, None);
     booted.sessions.close_database().await.unwrap();
 }

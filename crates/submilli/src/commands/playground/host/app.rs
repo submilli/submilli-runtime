@@ -133,7 +133,7 @@ impl App {
         config: super::run::RunHostConfig,
     ) -> Self {
         let state = super::super::state::StateDir::for_project(project);
-        let sessions = Arc::new(Sessions::boot(&state).await.unwrap().sessions);
+        let sessions = Arc::new(Sessions::boot(&state).await.unwrap());
         let volumes = Arc::new(Volumes::boot(&state, super::volumes::VolumeTable::new()));
         let blueprints = Arc::new(Blueprints::new(
             name.to_owned(),

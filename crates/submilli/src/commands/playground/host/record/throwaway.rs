@@ -972,7 +972,7 @@ mod tests {
     async fn manager(volumes: VolumeTable, root: &Path) -> Manager {
         std::fs::create_dir_all(root).unwrap();
         let state = StateDir::for_project(root);
-        let sessions = Sessions::boot(&state).await.unwrap().sessions;
+        let sessions = Sessions::boot(&state).await.unwrap();
         Manager {
             sessions,
             volumes: Volumes::boot(&state, volumes),

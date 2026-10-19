@@ -238,9 +238,9 @@ pub(crate) async fn test_program(
     let resolved = variables
         .resolve(&blueprint)
         .map_err(|error| TestError::InvalidVariables(error.to_string()))?;
-    let secrets = secrets.unwrap_or_default();
-    // Refused before anything is copied, as the run would refuse them.
-    resolve_harness_secrets(&blueprint.secrets, &secrets)
+    // Refused before anything is copied, as the run would refuse them; the run
+    // gets them as resolved, without the empty ones.
+    let secrets = resolve_harness_secrets(&blueprint.secrets, &secrets.unwrap_or_default())
         .map_err(|error| TestError::InvalidSecrets(error.to_string()))?;
     let local = Throwaway::copy(
         host.sessions,

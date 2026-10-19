@@ -564,7 +564,7 @@ pub(crate) struct RunHost {
     oauth: Option<Arc<OAuthTokenManager>>,
     cursor_keys: Option<Arc<CursorKeys>>,
     packages: Arc<PackageCache>,
-    mcp_catalogs: Mutex<HashMap<String, Arc<McpCatalog>>>,
+    mcp_catalogs: Mutex<McpCatalogs>,
     http_clients: Mutex<HashMap<String, Arc<dyn HttpClient>>>,
     llm_limits: LlmLimits,
     llm_budget: SharedTokenBudget,
@@ -576,6 +576,32 @@ pub(crate) struct RunHost {
     recorder: Option<Arc<dyn RunRecorder>>,
     freshness: Option<Arc<Freshness>>,
     finalizers: Option<Arc<dyn FinalizerRegistry>>,
+}
+
+/// The discovered `@mcp/<server>` catalogs, keyed by the servers imported.
+#[derive(Default)]
+struct McpCatalogs {
+    entries: HashMap<String, Arc<McpCatalog>>,
+    /// Bumped by every clear, so a discovery that started before one does not
+    /// put its result back.
+    generation: u64,
+}
+
+impl McpCatalogs {
+    /// Keep a catalog discovered since `generation`, returning the one now
+    /// cached under `key`. A clear during discovery means the blueprint changed
+    /// under it: the caller still gets what it discovered, but it is not kept.
+    fn keep(
+        &mut self,
+        key: String,
+        generation: u64,
+        discovered: Arc<McpCatalog>,
+    ) -> Arc<McpCatalog> {
+        if self.generation != generation {
+            return discovered;
+        }
+        Arc::clone(self.entries.entry(key).or_insert(discovered))
+    }
 }
 
 /// Who opens a run's file system.
@@ -687,7 +713,7 @@ impl RunHost {
             oauth,
             cursor_keys,
             packages: Arc::new(PackageCache::new(config.package_store)),
-            mcp_catalogs: Mutex::new(HashMap::new()),
+            mcp_catalogs: Mutex::new(McpCatalogs::default()),
             http_clients: Mutex::new(HashMap::new()),
             llm_limits: config.llm_limits,
             llm_budget: SharedTokenBudget::new(
@@ -724,7 +750,9 @@ impl RunHost {
     /// Drop every discovered `@mcp/<server>` catalog, so the next run discovers
     /// against the blueprint in force.
     pub(crate) fn clear_mcp_catalogs(&self) {
-        self.lock_catalogs().clear();
+        let mut catalogs = self.lock_catalogs();
+        catalogs.entries.clear();
+        catalogs.generation += 1;
     }
 
     /// Start recording a run that is not a program, such as an MCP file tool's one
@@ -909,34 +937,36 @@ impl RunHost {
             PolicyCheck::with_variables(Arc::clone(&blueprint), Arc::clone(&variables)),
         );
         let services = Services {
-            git: submilli_shared::resolve_git(&blueprint, &variables)
-                .map_err(|error| error.to_string()),
-            auth_proxy: Arc::new(BlueprintAuthProxy::with_harness(
-                Arc::clone(&blueprint),
-                self.secret_store.clone(),
-                Arc::clone(&harness_secrets),
-            )),
-            secret_provider: Arc::new(BlueprintSecretProvider::with_harness(
-                Arc::clone(&blueprint),
-                self.secret_store.clone(),
-                Arc::clone(&harness_secrets),
-            )),
-            variables: Arc::clone(&variables),
-            security_check: policy,
-            http_client: connectors.http,
-            mcp_transport: connectors.mcp,
-            session_kv,
-            session_finalizers,
-            cursor_keys: self.cursor_keys.clone(),
-            llm_provider: connectors.llm,
-            llm_budget: Arc::new(ExecutionTokenBudget::new(self.llm_limits, llm_budget)),
-            embedding_provider: connectors.embedding,
-            embedding_budget: Arc::new(EmbeddingTokenBudget::new(
-                self.embedding_limits,
-                embedding_budget,
-            )),
+            inputs: Inputs {
+                git: submilli_shared::resolve_git(&blueprint, &variables)
+                    .map_err(|error| error.to_string()),
+                auth_proxy: Arc::new(BlueprintAuthProxy::with_harness(
+                    Arc::clone(&blueprint),
+                    self.secret_store.clone(),
+                    Arc::clone(&harness_secrets),
+                )),
+                secret_provider: Arc::new(BlueprintSecretProvider::with_harness(
+                    Arc::clone(&blueprint),
+                    self.secret_store.clone(),
+                    Arc::clone(&harness_secrets),
+                )),
+                variables: Arc::clone(&variables),
+                security_check: policy,
+                http_client: connectors.http,
+                mcp_transport: connectors.mcp,
+                session_kv,
+                session_finalizers,
+                cursor_keys: self.cursor_keys.clone(),
+                llm_provider: connectors.llm,
+                llm_budget: Arc::new(ExecutionTokenBudget::new(self.llm_limits, llm_budget)),
+                embedding_provider: connectors.embedding,
+                embedding_budget: Arc::new(EmbeddingTokenBudget::new(
+                    self.embedding_limits,
+                    embedding_budget,
+                )),
+                cancel_requested,
+            },
             recording,
-            cancel_requested,
             resource_use,
             session_run,
         };
@@ -1058,9 +1088,13 @@ impl RunHost {
         }
         let key = declared.iter().cloned().collect::<Vec<_>>().join("\u{1f}");
         let session_scoped = !harness_secrets.is_empty();
-        if !session_scoped && let Some(cached) = self.lock_catalogs().get(&key) {
-            return Ok(Arc::clone(cached));
-        }
+        let generation = {
+            let catalogs = self.lock_catalogs();
+            if !session_scoped && let Some(cached) = catalogs.entries.get(&key) {
+                return Ok(Arc::clone(cached));
+            }
+            catalogs.generation
+        };
         let discovered = Arc::new(
             discover_selected(
                 DiscoveryAuth {
@@ -1079,9 +1113,7 @@ impl RunHost {
         if session_scoped {
             return Ok(discovered);
         }
-        Ok(Arc::clone(
-            self.lock_catalogs().entry(key).or_insert(discovered),
-        ))
+        Ok(self.lock_catalogs().keep(key, generation, discovered))
     }
 
     fn mcp_transport(
@@ -1183,7 +1215,7 @@ impl RunHost {
         Ok(data)
     }
 
-    fn lock_catalogs(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<McpCatalog>>> {
+    fn lock_catalogs(&self) -> std::sync::MutexGuard<'_, McpCatalogs> {
         // Poison means a panic interrupted an insert or a clear. AGENTS.md permits
         // the poisoned-lock panic rather than serving a catalog that may be stale.
         self.mcp_catalogs.lock().expect("mcp catalog poisoned")
@@ -1348,22 +1380,8 @@ impl Drop for SessionRun {
 
 /// What a program runs against.
 struct Services {
-    git: Result<Option<interpreter::stdlib::git::GitConfig>, String>,
-    auth_proxy: Arc<dyn interpreter::runtime::AuthProxy>,
-    variables: Arc<VarBindings>,
-    secret_provider: Arc<dyn interpreter::runtime::SecretProvider>,
-    security_check: Arc<dyn interpreter::runtime::SecurityCheck>,
-    http_client: Arc<dyn HttpClient>,
-    mcp_transport: Arc<dyn McpTransport>,
-    session_kv: Arc<dyn SessionKvStore>,
-    session_finalizers: Option<Arc<dyn SessionFinalizers>>,
-    cursor_keys: Option<Arc<CursorKeys>>,
-    llm_provider: Option<Arc<dyn LlmProvider>>,
-    llm_budget: Arc<ExecutionTokenBudget>,
-    embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
-    embedding_budget: Arc<EmbeddingTokenBudget>,
+    inputs: Inputs,
     recording: Option<Recording>,
-    cancel_requested: tokio::sync::oneshot::Receiver<()>,
     resource_use: ResourceUse,
     session_run: SessionRun,
 }
@@ -1381,7 +1399,7 @@ async fn dispatch(
     code: &str,
     parsed: ParsedExecute,
     runtime: Runtime<'_>,
-    vfs: (Vfs, VfsInfo),
+    (vfs, vfs_info): (Vfs, VfsInfo),
     mut services: Services,
     packages: &Arc<PreparedPackages>,
     mcps: &Arc<McpCatalog>,
@@ -1392,7 +1410,7 @@ async fn dispatch(
     let config = runtime.config.clone();
     let packages = Arc::clone(packages);
     let owner_mcps = Arc::clone(mcps);
-    let (request, caller_gone) = tokio::sync::oneshot::channel::<()>();
+    let (caller_alive, caller_gone) = tokio::sync::oneshot::channel::<()>();
     // This clone stays outside the owner task, so a run whose task panics is
     // still finished.
     let recording = services.recording.clone();
@@ -1403,20 +1421,12 @@ async fn dispatch(
     let owner = tokio::spawn(async move {
         let mut services = services;
         // Closing the session cancels its work, as an explicit cancel does.
-        let resource_cancel = services.resource_use.cancel.clone();
-        let previous = std::mem::replace(
-            &mut services.cancel_requested,
+        let requested = std::mem::replace(
+            &mut services.inputs.cancel_requested,
             tokio::sync::oneshot::channel().1,
         );
-        let (mut sender, receiver) = tokio::sync::oneshot::channel();
-        tokio::spawn(async move {
-            tokio::select! {
-                () = resource_cancel.cancelled() => { let _ = sender.send(()); }
-                Ok(()) = previous => { let _ = sender.send(()); }
-                () = sender.closed() => {}
-            }
-        });
-        services.cancel_requested = receiver;
+        services.inputs.cancel_requested =
+            cancel_on_close_or_request(services.resource_use.cancel.clone(), requested);
         let owner_recording = services.recording.take();
         let log = owner_recording.as_ref().map(Recording::log);
         let resource_use = services.resource_use;
@@ -1430,24 +1440,10 @@ async fn dispatch(
                 config: &config,
             },
             vfs,
-            Inputs {
-                git: services.git,
-                auth_proxy: services.auth_proxy,
-                variables: services.variables,
-                secret_provider: services.secret_provider,
-                security_check: services.security_check,
-                http_client: services.http_client,
-                mcp_transport: services.mcp_transport,
-                session_kv: services.session_kv,
-                session_finalizers: services.session_finalizers,
-                cursor_keys: services.cursor_keys,
-                llm_provider: services.llm_provider,
-                llm_budget: services.llm_budget,
-                embedding_provider: services.embedding_provider,
-                embedding_budget: services.embedding_budget,
-                cancel_requested: services.cancel_requested,
-            },
-            (&packages, &owner_mcps),
+            vfs_info,
+            services.inputs,
+            &packages,
+            &owner_mcps,
             caller_gone,
             log.clone(),
         )
@@ -1487,8 +1483,26 @@ async fn dispatch(
             outcome
         }
     };
-    drop(request);
+    drop(caller_alive);
     outcome
+}
+
+/// A cancel signal that fires when `resource_cancel` does, as closing the session
+/// does, or when `requested` is sent. A forwarding task watches both until the
+/// returned receiver is dropped.
+fn cancel_on_close_or_request(
+    resource_cancel: tokio_util::sync::CancellationToken,
+    requested: tokio::sync::oneshot::Receiver<()>,
+) -> tokio::sync::oneshot::Receiver<()> {
+    let (mut sender, receiver) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        tokio::select! {
+            () = resource_cancel.cancelled() => { let _ = sender.send(()); }
+            Ok(()) = requested => { let _ = sender.send(()); }
+            () = sender.closed() => {}
+        }
+    });
+    receiver
 }
 
 /// The per-run host capabilities [`run_inner`] installs in the store.
@@ -1518,9 +1532,11 @@ async fn run_inner(
     code: &str,
     mut parsed: ParsedExecute,
     runtime: Runtime<'_>,
-    (vfs, vfs_info): (Vfs, VfsInfo),
+    vfs: Vfs,
+    vfs_info: VfsInfo,
     inputs: Inputs,
-    (packages, mcps): (&PreparedPackages, &McpCatalog),
+    packages: &PreparedPackages,
+    mcps: &McpCatalog,
     mut caller_gone: tokio::sync::oneshot::Receiver<()>,
     log: Option<Arc<DecisionLog>>,
 ) -> RunOutcome {

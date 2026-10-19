@@ -200,7 +200,7 @@ impl Database {
     pub(crate) async fn put_mcp_state(&self, id: &str, json: &str) -> Result<bool> {
         let result = sqlx::query(
             "INSERT INTO mcp_states(session_id,initialize_params) \
-             SELECT session_id,? FROM sessions WHERE session_id=? \
+             SELECT session_id,? FROM sessions WHERE session_id=? AND closing=0 \
              ON CONFLICT(session_id) DO UPDATE SET initialize_params=excluded.initialize_params",
         )
         .bind(json)

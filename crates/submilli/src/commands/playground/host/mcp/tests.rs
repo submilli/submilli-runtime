@@ -45,7 +45,7 @@ struct Harness {
 
 async fn harness_in(dir: &Path, yaml: &str) -> Harness {
     let state = StateDir::for_project(dir);
-    let sessions = Arc::new(Sessions::boot(&state).await.unwrap().sessions);
+    let sessions = Arc::new(Sessions::boot(&state).await.unwrap());
     let volumes = Arc::new(Volumes::boot(&state, VolumeTable::new()));
     let store_root = dir.join("store");
     std::fs::create_dir_all(&store_root).unwrap();

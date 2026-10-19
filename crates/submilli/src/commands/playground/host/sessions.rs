@@ -124,14 +124,13 @@ impl From<anyhow::Error> for SessionsError {
     }
 }
 
-/// What [`Sessions::boot`] found.
+/// What [`Sessions::boot_reporting`] found.
+#[cfg(test)]
 pub(crate) struct Booted {
     pub(crate) sessions: Sessions,
     /// The sessions still open from the last start.
-    #[cfg(test)]
     pub(crate) open: Vec<Session>,
     /// The notice printed, if any.
-    #[cfg(test)]
     pub(crate) notice: Option<&'static str>,
 }
 
@@ -183,7 +182,22 @@ impl Sessions {
     /// session is a leftover and is removed. The first start after the embedded
     /// server kept sessions here prints, and returns, a one-line notice that they
     /// were left behind.
-    pub(crate) async fn boot(state: &StateDir) -> Result<Booted> {
+    pub(crate) async fn boot(state: &StateDir) -> Result<Self> {
+        Ok(Self::boot_inner(state).await?.0)
+    }
+
+    /// [`Sessions::boot`], with the sessions it restored and the notice it printed.
+    #[cfg(test)]
+    pub(crate) async fn boot_reporting(state: &StateDir) -> Result<Booted> {
+        let (sessions, open, notice) = Self::boot_inner(state).await?;
+        Ok(Booted {
+            sessions,
+            open,
+            notice,
+        })
+    }
+
+    async fn boot_inner(state: &StateDir) -> Result<(Self, Vec<Session>, Option<&'static str>)> {
         let notice = state.create_noting_upgrade()?;
         if let Some(notice) = notice {
             note(notice);
@@ -221,13 +235,7 @@ impl Sessions {
         let mut kept: Vec<String> = open.iter().map(|session| session.id.clone()).collect();
         kept.extend(sessions.database.closing_ids().await?);
         sessions.remove_leftover_dirs(&kept);
-        Ok(Booted {
-            sessions,
-            #[cfg(test)]
-            open,
-            #[cfg(test)]
-            notice,
-        })
+        Ok((sessions, open, notice))
     }
 
     #[cfg(test)]

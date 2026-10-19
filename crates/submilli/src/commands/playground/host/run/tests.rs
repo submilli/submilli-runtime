@@ -83,7 +83,7 @@ async fn host_in(
     configure: impl FnOnce(&mut RunHostConfig),
 ) -> Host {
     let state = StateDir::for_project(dir.path());
-    let sessions = Arc::new(Sessions::boot(&state).await.unwrap().sessions);
+    let sessions = Arc::new(Sessions::boot(&state).await.unwrap());
     let volumes = Arc::new(Volumes::boot(&state, VolumeTable::new()));
     let seen = Arc::new(Seen::default());
     let mut config = RunHostConfig::new(PackageStore::new(store_root.clone()));
@@ -810,4 +810,21 @@ async fn the_finalizer_registry_is_asked_with_the_linked_versions_before_the_run
             BTreeMap::from([("@a/app".to_owned(), r#"{"@a/app":"1.0.0"}"#.to_owned())])
         )]
     );
+}
+
+#[test]
+fn a_catalog_discovered_before_a_clear_is_returned_but_not_kept() {
+    let mut catalogs = McpCatalogs::default();
+    let generation = catalogs.generation;
+    catalogs.entries.clear();
+    catalogs.generation += 1;
+    let stale = Arc::new(McpCatalog::empty());
+    let returned = catalogs.keep("server".to_owned(), generation, Arc::clone(&stale));
+    assert!(Arc::ptr_eq(&returned, &stale));
+    assert!(catalogs.entries.is_empty());
+
+    let fresh = Arc::new(McpCatalog::empty());
+    let kept = catalogs.keep("server".to_owned(), catalogs.generation, Arc::clone(&fresh));
+    assert!(Arc::ptr_eq(&kept, &fresh));
+    assert!(Arc::ptr_eq(&catalogs.entries["server"], &fresh));
 }
