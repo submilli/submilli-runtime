@@ -310,11 +310,3 @@ fn clone_repository(
     operations::create_branch(snapshot, branch, &format!("refs/remotes/origin/{branch}"))?;
     snapshot.write_head(branch)
 }
-
-impl crate::runtime::effects::NativeOutcome for Output {
-    const DYNAMIC_MAPS: bool = true;
-    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<Value>();
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}

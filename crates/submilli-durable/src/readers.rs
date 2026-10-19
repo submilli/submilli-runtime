@@ -18,56 +18,12 @@ use crate::io::{MAX_DEPTH, MAX_ENTRIES};
 use crate::unit_of_work::*;
 use cap_std::fs::File;
 use interpreter::runtime::durable::EffectId;
-use interpreter::runtime::filesystem::{
-    DirectoryReader, FileReader, FilesystemError as PortError, ReadOutput, ReadPosition,
-    ReaderOptions, ResourceDescriptor, ResourceKind,
-};
+
+use interpreter::runtime::filesystem::ReadPosition;
 use interpreter::runtime::fs;
 use interpreter::runtime::fs::FileIdentity;
-use interpreter::runtime::fuel::WorkBudget;
-use interpreter::runtime::limits::TenantLimits;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek, SeekFrom};
-use std::sync::Arc;
-/// ID-only handles are valid during replay. Open a native file only for a new
-/// backend call; dropping this object never retires its durable row.
-pub struct FilesystemReader {
-    pub(crate) filesystem: DurableFilesystem,
-    pub(crate) resource: EffectId,
-    pub(crate) options: ReaderOptions,
-}
-#[async_trait::async_trait]
-impl FileReader for FilesystemReader {
-    fn descriptor(&self) -> Option<ResourceDescriptor> {
-        Some(ResourceDescriptor {
-            run_id: self.filesystem.run_id.clone(),
-            id: self.resource.clone(),
-            kind: ResourceKind::Reader(self.options.clone()),
-        })
-    }
-    async fn next(
-        &mut self,
-        effect_id: &EffectId,
-        work: Option<Arc<WorkBudget>>,
-        limits: &TenantLimits,
-    ) -> Result<ReadOutput, PortError> {
-        self.filesystem
-            .operation(work)
-            .next_reader(&self.resource, effect_id, &self.options, limits)
-            .await
-    }
-    async fn close(
-        &mut self,
-        effect_id: &EffectId,
-        work: Option<Arc<WorkBudget>>,
-    ) -> Result<(), PortError> {
-        self.filesystem
-            .operation(work)
-            .close_reader(&self.resource, effect_id, &self.options)
-            .await
-    }
-}
-
 /// Same effect: repeat its item from before. New effect: continue from after.
 /// The caller must replay older completed effects from its own history.
 pub(crate) fn progress_start<T: Clone + Default>(
@@ -84,49 +40,6 @@ pub(crate) fn progress_start<T: Clone + Default>(
         }
         Some(prior) => Ok(prior.after.clone()),
         None => Ok(T::default()),
-    }
-}
-
-pub(crate) struct DurableDirectory {
-    pub(crate) filesystem: DurableFilesystem,
-    pub(crate) resource: EffectId,
-}
-#[async_trait::async_trait]
-impl DirectoryReader for DurableDirectory {
-    fn descriptor(&self) -> Option<ResourceDescriptor> {
-        Some(ResourceDescriptor {
-            run_id: self.filesystem.run_id.clone(),
-            id: self.resource.clone(),
-            kind: ResourceKind::Directory,
-        })
-    }
-    async fn next_entry(
-        &mut self,
-        effect_id: &EffectId,
-        work: Option<Arc<WorkBudget>>,
-        limits: &interpreter::runtime::limits::TenantLimits,
-    ) -> Result<Option<interpreter::runtime::filesystem::DirectoryEntry>, PortError> {
-        self.filesystem
-            .operation(work)
-            .next_listing(&self.resource, effect_id, limits)
-            .await
-            .map_err(backend)
-    }
-    fn retained_bytes(&self) -> u64 {
-        0
-    }
-    async fn close(
-        &mut self,
-        effect_id: &EffectId,
-        work: Option<Arc<WorkBudget>>,
-        limits: &interpreter::runtime::limits::TenantLimits,
-    ) -> Result<(), PortError> {
-        self.filesystem
-            .operation(work)
-            .close_listing(&self.resource, effect_id, limits)
-            .await
-            .map(|_| ())
-            .map_err(backend)
     }
 }
 

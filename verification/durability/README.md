@@ -219,6 +219,14 @@ literal collections to 128 MiB, and recorded blueprints to 16 regex operators
 (across all permission filters). This conservative policy restriction bounds
 compiler multiplicity separately; 128 MiB is not a compiled-regex heap claim.
 The normal policy parser retains its per-pattern compilation limits. Other limits and available tenant memory can refuse earlier.
+`execute` returns the native Rust value directly using Serde bounds. It validates
+encoded size, lengths and nesting before decoding, but does not estimate or charge
+the transient decoded value's heap through guest conversion. SQL/envelope buffers,
+encoded payloads, ordinary provider allocations and guest allocations retain their
+existing limits. This deliberately does not claim a total-memory bound for arbitrary
+Serde deserializers. The native codec and runtime compatibility marker are version 2;
+old internal recordings are refused rather than decoded as the new resource types.
+
 HTTP downloads retain metadata and the destination reference, never the downloaded
 file body. Large-object storage is a later optimization.
 
@@ -235,7 +243,15 @@ variables/secrets, filesystem operations and resources, HTTP/downloads, session
 KV/finalizers, LLM/embedding, MCP/tools/agents/skills, explicit security checks,
 console output, and code/Git operations. Argument conversion and guest callbacks
 precede the boundary; pure operations have no history row. Console replay rebuilds
-retained output without publishing duplicate console events.
+retained output without publishing duplicate console events. Console tracks whether
+its own write ran; the generic execution result carries no replay flag.
+
+Reader, writer and listing values serialize persistent identity/options directly.
+Process-local handles are skipped. Resources hold no filesystem or unit-of-work
+reference; operations receive the resource through the active filesystem backend.
+Deserialization itself performs no I/O. The default backend retains its existing
+local handles; durable handle caching remains SUB-1883. Host return adapters own
+Wasm result slots, and ordinary host conversion helpers preserve fuel settlement.
 
 Filesystem bytes, namespace changes and fsync are not modeled as atomic SQLite
 effects here; SUB-1815 owns that protocol. The [filesystem models](../filesystem/README.md)

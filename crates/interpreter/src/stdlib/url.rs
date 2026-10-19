@@ -391,7 +391,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "encodeComponent"),
         string_to_string.clone(),
-        /* deterministic = */ true,
         |caller, params, results| {
             let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.encodeComponent")?;
             fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
@@ -407,7 +406,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "decodeComponent"),
         string_to_string,
-        /* deterministic = */ true,
         |caller, params, results| {
             let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.decodeComponent")?;
             fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
@@ -430,7 +428,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "encodeQuery"),
         FuncType::new(&engine, [nullable_object.clone()], [string.clone()]),
-        /* deterministic = */ true,
         |caller, params, results| {
             let pairs = map::string_entries(caller, abi_arg(params, 0)?)?;
             fuel::charge(&mut *caller, fuel::SCAN, pairs_len(&pairs))?;
@@ -445,7 +442,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "decodeQuery"),
         FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
-        /* deterministic = */ true,
         |caller, params, results| {
             Box::pin(async move {
                 let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.decodeQuery")?;
@@ -463,7 +459,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "parse"),
         FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
-        /* deterministic = */ true,
         |caller, params, results| {
             Box::pin(async move {
                 let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.parse")?;
@@ -505,7 +500,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ],
             [string],
         ),
-        /* deterministic = */ true,
         |caller, params, results| {
             let protocol =
                 read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.build (protocol)")?;

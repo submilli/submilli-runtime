@@ -1,5 +1,5 @@
 //! Stored identities retain their encoding and authentication bindings.
-use interpreter::runtime::filesystem::ResourceDescriptor;
+use interpreter::runtime::filesystem::{DirectoryReader, FileReader, FileWriter, ReaderOptions};
 use std::sync::Arc;
 use submilli_durable::{
     codec::{self, Sealer},
@@ -40,10 +40,26 @@ fn legacy_seal(cipher: &SecretCipher, owner: &str, bytes: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn typed_resource_ids_preserve_descriptor_encoding() {
-    let stored = r#"{"scope":"run","id":"opening-effect","kind":"Writer"}"#;
-    let descriptor: ResourceDescriptor = serde_json::from_str(stored).unwrap();
-    assert_eq!(descriptor.run_id.as_str(), "run");
-    assert_eq!(descriptor.id.as_str(), "opening-effect");
-    assert_eq!(serde_json::to_string(&descriptor).unwrap(), stored);
+fn resource_values_roundtrip_without_backend_services() {
+    let reader = FileReader::new(
+        "run".into(),
+        "reader".into(),
+        ReaderOptions::Bytes { chunk_size: 3 },
+    );
+    let encoded = serde_json::to_vec(&reader).unwrap();
+    let reader: FileReader = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(reader.run_id.as_ref().unwrap().as_str(), "run");
+    assert_eq!(reader.id.as_str(), "reader");
+    assert_eq!(reader.options, ReaderOptions::Bytes { chunk_size: 3 });
+
+    let writer = FileWriter::new("run".into(), "writer".into());
+    let encoded = serde_json::to_vec(&writer).unwrap();
+    let writer: FileWriter = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(writer.id.as_str(), "writer");
+    assert!(!writer.closed);
+
+    let listing = DirectoryReader::new("run".into(), "listing".into());
+    let encoded = serde_json::to_vec(&listing).unwrap();
+    let listing: DirectoryReader = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(listing.id.as_str(), "listing");
 }

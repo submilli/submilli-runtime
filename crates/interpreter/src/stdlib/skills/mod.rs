@@ -20,10 +20,7 @@ use crate::runtime::StoreData;
 use crate::runtime::call_log::{Payload, Side, record_payload};
 use crate::runtime::decision::CallTicket;
 use crate::runtime::fuel;
-use crate::runtime::host::{
-    abi_arg, abi_result, range_error, read_string_arg, register_host_fn_async,
-    write_submilli_string_struct,
-};
+use crate::runtime::host::{abi_arg, range_error, read_string_arg, write_submilli_string_struct};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::skills::{Skill, SkillError, SkillInfo, SkillProvider};
 use crate::stdlib::abi::{
@@ -71,51 +68,41 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.array.clone()),
     ));
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "list"),
         FuncType::new(&engine, [], [array]),
-        /* deterministic = */ false,
-        |caller, _params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = list(caller).await?;
-                Ok(())
-            })
-        },
+        |caller, _params| Box::pin(async move { list(caller).await }),
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "load"),
         // A `Skill` crosses as the universal `(ref null $Object)` lowering.
         FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let name =
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "skills.load (name)")?;
-                *abi_result(results, 0)? = load(caller, name).await?;
-                Ok(())
+                load(caller, name).await
             })
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "readFile"),
         FuncType::new(&engine, [string.clone(), string.clone()], [string.clone()]),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let name =
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "skills.readFile (name)")?;
                 let path =
                     read_string_arg(&mut *caller, abi_arg(params, 1)?, "skills.readFile (path)")?;
-                *abi_result(results, 0)? = read_file(caller, name, path).await?;
-                Ok(())
+                read_file(caller, name, path).await
             })
         },
     )?;
@@ -161,10 +148,9 @@ async fn list(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<
             })
         })
         .await?;
-    crate::runtime::effects::convert_result(caller, |caller| {
+    crate::runtime::host::convert_result(caller, |caller| {
         // A name `load` would refuse is no use to the program, so it is not offered.
         let loadable = candidates
-            .value
             .into_iter()
             .filter(|skill| is_skill_name(&skill.name))
             .collect();
@@ -221,7 +207,7 @@ async fn load(caller: &mut wasmtime::Caller<'_, StoreData>, name: String) -> was
             })
         })
         .await?;
-    crate::runtime::effects::convert_result(caller, |caller| build_skill(caller, skill.value))
+    crate::runtime::host::convert_result(caller, |caller| build_skill(caller, skill))
 }
 
 /// `readFile(name, path)`: in the order `load` follows, with the path checked
@@ -271,7 +257,7 @@ async fn read_file(
         },
     )
     .await?;
-    crate::runtime::effects::convert_result(caller, |caller| {
+    crate::runtime::host::convert_result(caller, |caller| {
         let text = write_submilli_string_struct(caller, &text)?;
         Ok(Val::AnyRef(Some(text.to_anyref())))
     })

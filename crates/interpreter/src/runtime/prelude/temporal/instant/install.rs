@@ -42,7 +42,6 @@ fn install_direct(
         host,
         prelude_key("InstantConstructor", "from"),
         FuncType::new(engine, [string.clone()], obj_result.clone()),
-        true,
         |caller, params, results| {
             let s = read_string_arg(caller, abi_arg(params, 0)?, "Temporal.Instant.from")?;
             let ts = super::parse(&s).map_err(crate::runtime::host::range_error)?;
@@ -56,7 +55,6 @@ fn install_direct(
         host,
         prelude_key("InstantConstructor", "fromEpochMilliseconds"),
         FuncType::new(engine, [ValType::F64], obj_result.clone()),
-        true,
         |caller, params, results| {
             let ms = read_f64(abi_arg(params, 0)?, "Instant.fromEpochMilliseconds")?;
             let ts =
@@ -71,7 +69,6 @@ fn install_direct(
         host,
         prelude_key("InstantConstructor", "fromEpochNanoseconds"),
         FuncType::new(engine, [bigint.clone()], obj_result.clone()),
-        true,
         |caller, params, results| {
             let (sign, limbs) = crate::runtime::prelude::bigint::ops::read_bigint_struct(
                 caller,
@@ -91,7 +88,6 @@ fn install_direct(
         host,
         prelude_key("InstantConstructor", "compare"),
         FuncType::new(engine, [obj.clone(), obj.clone()], [ValType::F64]),
-        true,
         |caller, params, results| {
             let a = instant_from_val(caller, abi_arg(params, 0)?, "Instant.compare")?;
             let b = instant_from_val(caller, abi_arg(params, 1)?, "Instant.compare")?;
@@ -106,7 +102,6 @@ fn install_direct(
             host,
             prelude_key("Instant", method),
             FuncType::new(engine, [obj.clone()], [string.clone()]),
-            true,
             move |caller, params, results| {
                 let ts = instant_from_val(caller, abi_arg(params, 0)?, "Instant.toString")?;
                 let text = super::to_string(ts);
@@ -122,7 +117,6 @@ fn install_direct(
         host,
         prelude_key("Instant", "equals"),
         FuncType::new(engine, [obj.clone(), obj.clone()], [ValType::I32]),
-        true,
         |caller, params, results| {
             let a = instant_from_val(caller, abi_arg(params, 0)?, "Instant.equals")?;
             let b = instant_from_val(caller, abi_arg(params, 1)?, "Instant.equals")?;
@@ -136,7 +130,6 @@ fn install_direct(
         host,
         prelude_key("Instant", "epochMilliseconds"),
         FuncType::new(engine, [obj.clone()], [ValType::F64]),
-        true,
         |caller, params, results| {
             let ts = instant_from_val(caller, abi_arg(params, 0)?, "Instant.epochMilliseconds")?;
             *abi_result(results, 0)? = Val::F64(super::epoch_milliseconds(ts).to_bits());
@@ -149,7 +142,6 @@ fn install_direct(
         host,
         prelude_key("Instant", "epochNanoseconds"),
         FuncType::new(engine, [obj.clone()], [bigint]),
-        true,
         |caller, params, results| {
             let ts = instant_from_val(caller, abi_arg(params, 0)?, "Instant.epochNanoseconds")?;
             *abi_result(results, 0)? = crate::runtime::prelude::bigint::ops::make_bigint_struct(
@@ -168,7 +160,6 @@ fn install_direct(
             host,
             prelude_key("Instant", method),
             FuncType::new(engine, [obj.clone(), obj.clone()], obj_result.clone()),
-            true,
             move |caller, params, results| {
                 let ts = instant_from_val(caller, abi_arg(params, 0)?, "Instant arithmetic")?;
                 let span =
@@ -199,7 +190,6 @@ fn install_direct(
                 [obj.clone(), obj.clone(), options.clone()],
                 obj_result.clone(),
             ),
-            true,
             move |caller, params, results| {
                 let a = instant_from_val(caller, abi_arg(params, 0)?, "Instant difference")?;
                 let b = instant_from_val(caller, abi_arg(params, 1)?, "Instant difference")?;
@@ -228,7 +218,6 @@ fn install_direct(
         host,
         prelude_key("Instant", "round"),
         round_ty,
-        true,
         instant_round_direct,
     )?;
     register_host_fn(
@@ -236,7 +225,6 @@ fn install_direct(
         host,
         prelude_key("Instant", "toZonedDateTimeISO"),
         FuncType::new(engine, [obj.clone(), string.clone()], obj_result.clone()),
-        true,
         |caller, params, results| {
             let ts = instant_from_val(caller, abi_arg(params, 0)?, "Instant.toZonedDateTimeISO")?;
             let tz_id = read_string_arg(

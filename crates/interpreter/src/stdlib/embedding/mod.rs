@@ -44,7 +44,7 @@ use crate::runtime::embedding::{
 use crate::runtime::fuel;
 use crate::runtime::host::{
     abi_arg, abi_result, fatal_host_error, quota_exceeded_error, range_error, read_string_arg,
-    register_host_fn, register_host_fn_async, type_error, write_boxed_number_struct,
+    register_host_fn, type_error, write_boxed_number_struct,
     write_submilli_array_struct_precharged, write_submilli_string_struct,
     write_submilli_uint8array_struct, write_uint8_array_precharged,
 };
@@ -113,7 +113,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.object.clone()),
     ));
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "embed"),
@@ -122,8 +122,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             [string.clone(), array.clone(), string.clone()],
             [nullable_object.clone()],
         ),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let model =
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "embedding.embed (model)")?;
@@ -132,25 +131,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     abi_arg(params, 2)?,
                     "embedding.embed (purpose)",
                 )?;
-                *abi_result(results, 0)? =
-                    embed(caller, &model, abi_arg(params, 1)?, &purpose).await?;
-                Ok(())
+                embed(caller, &model, abi_arg(params, 1)?, &purpose).await
             })
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "models"),
         FuncType::new(&engine, [], [array.clone()]),
-        /* deterministic = */ false,
-        |caller, _params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = models(caller).await?;
-                Ok(())
-            })
-        },
+        |caller, _params| Box::pin(async move { models(caller).await }),
     )?;
 
     install_getters(linker, &engine, &receiver, string, nullable_object)?;
@@ -209,7 +200,6 @@ fn install_methods(
         MODULE_NAME,
         crate::mangle::extend(&embeddings_key, "vector"),
         FuncType::new(engine, [receiver.clone(), ValType::F64], [array]),
-        /* deterministic = */ true,
         |caller, params, results| {
             let row = read_row(
                 caller,
@@ -227,7 +217,6 @@ fn install_methods(
         MODULE_NAME,
         crate::mangle::extend(&embeddings_key, "bytes"),
         FuncType::new(engine, [receiver, ValType::F64], [uint8]),
-        /* deterministic = */ true,
         |caller, params, results| {
             let row = read_row(
                 caller,
@@ -375,7 +364,7 @@ async fn embed(
         },
     )
     .await?;
-    crate::runtime::effects::convert_result(caller, |caller| build_embeddings(caller, batch.value))
+    crate::runtime::host::convert_result(caller, |caller| build_embeddings(caller, batch))
 }
 
 /// The capability check, run before any bytes leave the process. The context is
@@ -502,9 +491,9 @@ async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Resul
             Box::pin(async move { provider(caller, "")?.models().await.map_err(throw) })
         })
         .await?;
-    crate::runtime::effects::convert_result(caller, |caller| {
+    crate::runtime::host::convert_result(caller, |caller| {
         let mut built = Vec::with_capacity(candidates.len());
-        for candidate in candidates.value {
+        for candidate in candidates {
             if may_embed(caller, &candidate.name)? {
                 built.push(build_model(caller, candidate)?);
             }

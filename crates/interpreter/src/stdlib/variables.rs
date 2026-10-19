@@ -4,12 +4,10 @@
 //! the linker resolves the user import (`submilli:variables#get`) with no Wasm
 //! module.
 
-use crate::runtime::host::{abi_arg, abi_result};
+use crate::runtime::host::abi_arg;
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
-use crate::runtime::host::{
-    fatal_host_error, read_string_arg_units, register_host_fn_async, write_submilli_string_struct,
-};
+use crate::runtime::host::{fatal_host_error, read_string_arg_units, write_submilli_string_struct};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::{StoreData, fuel};
 use crate::stdlib::shared::check_security;
@@ -47,13 +45,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     // `string | undefined` lowers to the erased `(ref null $Object)` in codegen.
     let nullable_object = ValType::Ref(RefType::new(true, HeapType::ConcreteStruct(intr.object)));
     let ty = FuncType::new(&engine, [string], [nullable_object]);
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "get"),
         ty,
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let units = read_string_arg_units(caller, abi_arg(params, 0)?, "variables.get")?;
                 fuel::charge(&mut *caller, fuel::SCAN, units.len() as u64)?;
@@ -101,15 +98,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     },
                 )
                 .await?;
-                let Some(value) = &observation.value else {
-                    *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
-                    return Ok(());
+                let Some(value) = &observation else {
+                    return crate::runtime::prelude::undefined::value(caller);
                 };
-                let value = crate::runtime::effects::convert_result(caller, |caller| {
+                let value = crate::runtime::host::convert_result(caller, |caller| {
                     write_submilli_string_struct(caller, value)
                 })?;
-                *abi_result(results, 0)? = Val::AnyRef(Some(value.to_anyref()));
-                Ok(())
+                Ok(Val::AnyRef(Some(value.to_anyref())))
             })
         },
     )

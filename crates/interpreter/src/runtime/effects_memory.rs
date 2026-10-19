@@ -1,5 +1,6 @@
 //! Check the encoded shape before Serde allocates collections or scratch buffers.
-//! A native outcome declares the largest element its sequence deserializer owns.
+//! Persistence callers also use the scan to estimate envelope allocations.
+//! Native result decoding uses it only to validate the encoded structure.
 //! Strings and binary payloads are counted by length, rather than multiplying an
 //! entire response by a worst-case collection expansion factor.
 use super::host::fatal_host_error;

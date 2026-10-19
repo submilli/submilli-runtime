@@ -215,7 +215,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             math_key(name),
             unary_ty.clone(),
-            /* deterministic = */ true,
             move |_caller, params, results| -> wasmtime::Result<()> {
                 let x = read_f64(abi_arg(params, 0)?, "Math unary")?;
                 *abi_result(results, 0)? = Val::F64(op(x).to_bits());
@@ -231,7 +230,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             math_key(name),
             binary_ty.clone(),
-            /* deterministic = */ true,
             move |_caller, params, results| -> wasmtime::Result<()> {
                 let a = read_f64(abi_arg(params, 0)?, "Math binary")?;
                 let b = read_f64(abi_arg(params, 1)?, "Math binary")?;
@@ -248,7 +246,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             math_key(name),
             variadic_ty.clone(),
-            /* deterministic = */ true,
             move |caller, params, results| -> wasmtime::Result<()> {
                 let values = read_variadic_numbers(caller, abi_arg(params, 0)?, op)?;
                 let result = match op {
@@ -267,13 +264,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         )?;
     }
 
-    crate::runtime::host::register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         math_key("random"),
         FuncType::new(&engine, [], [ValType::F64]),
-        false,
-        |caller, _params, results| {
+        |caller, _params| {
             Box::pin(async move {
                 let value =
                     crate::runtime::effects::execute(caller, "Math.random", (), |_, _, ()| {
@@ -289,8 +285,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         })
                     })
                     .await?;
-                *abi_result(results, 0)? = Val::F64(value.to_bits());
-                Ok(())
+                Ok(Val::F64(value.to_bits()))
             })
         },
     )?;

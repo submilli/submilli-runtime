@@ -26,9 +26,7 @@ use crate::runtime::agents::{
 use crate::runtime::call_log::{ModelUsage, Payload, Side, record_payload, record_usage};
 use crate::runtime::decision::CallTicket;
 use crate::runtime::fuel;
-use crate::runtime::host::{
-    abi_arg, abi_result, read_string_arg, register_host_fn_async, write_submilli_string_struct,
-};
+use crate::runtime::host::{abi_arg, read_string_arg, write_submilli_string_struct};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::stdlib::abi::{
     self, backing_struct, install_field_getters, nullable_object_field, string_field,
@@ -65,7 +63,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.array.clone()),
     ));
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "run"),
@@ -75,33 +73,24 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             // `run` is generic, so its result travels in the erased `T` slot.
             [nullable_object.clone()],
         ),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let agent =
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "agents.run (agent)")?;
                 let input =
                     read_string_arg(&mut *caller, abi_arg(params, 1)?, "agents.run (input)")?;
                 let schema = read_optional_string(caller, abi_arg(params, 2)?)?;
-                let result = abi_result(results, 0)?;
-                *result = run(caller, agent, input, schema).await?;
-                Ok(())
+                run(caller, agent, input, schema).await
             })
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "list"),
         FuncType::new(&engine, [], [array]),
-        /* deterministic = */ false,
-        |caller, _params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = list(caller).await?;
-                Ok(())
-            })
-        },
+        |caller, _params| Box::pin(async move { list(caller).await }),
     )?;
 
     let receiver = ValType::Ref(RefType::new(
@@ -164,7 +153,7 @@ async fn run(
         },
     )
     .await?;
-    crate::runtime::effects::convert_result(caller, |caller| {
+    crate::runtime::host::convert_result(caller, |caller| {
         if typed {
             crate::runtime::json::parse_json_as_unknown(
                 caller,
@@ -246,10 +235,10 @@ async fn list(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<
             })
         })
         .await?;
-    crate::runtime::effects::convert_result(caller, |caller| {
+    crate::runtime::host::convert_result(caller, |caller| {
         let visible = permitted_candidates(
             caller,
-            candidates.value,
+            candidates,
             |agent| agent.name.as_str(),
             |caller, name| gate(caller, name).map(|_| ()),
         )?;

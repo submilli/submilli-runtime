@@ -29,7 +29,6 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             crate::mangle::package_symbol(MODULE_NAME, name),
             FuncType::new(&engine, params, []),
-            false,
             move |caller, params, _| {
                 Box::pin(async move {
                     let package =

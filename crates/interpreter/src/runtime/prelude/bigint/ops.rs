@@ -63,7 +63,6 @@ pub(crate) fn install(
         BIGINT_MODULE_NAME,
         crate::mangle::host(BIGINT_MODULE_NAME, "fromString"),
         from_string_ty,
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "bigint.fromString")?;
             let parsed = parse_decimal(caller, &s, "bigint.fromString")?;
@@ -86,7 +85,6 @@ pub(crate) fn install(
         BIGINT_MODULE_NAME,
         crate::mangle::host(BIGINT_MODULE_NAME, "fromNumber"),
         from_number_ty,
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let n = match *abi_arg(params, 0)? {
                 Val::F64(bits) => f64::from_bits(bits),
@@ -116,7 +114,6 @@ pub(crate) fn install(
         BIGINT_MODULE_NAME,
         crate::mangle::host(BIGINT_MODULE_NAME, "toString"),
         to_string_ty,
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let value = read_bigint_arg(
                 &mut *caller,
@@ -141,7 +138,6 @@ pub(crate) fn install(
         BIGINT_MODULE_NAME,
         crate::mangle::host(BIGINT_MODULE_NAME, "toStringRadix"),
         to_string_radix_ty,
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let value = read_bigint_arg(
                 &mut *caller,
@@ -188,7 +184,6 @@ pub(crate) fn install(
             BIGINT_MODULE_NAME,
             crate::mangle::host(BIGINT_MODULE_NAME, name),
             binop_ty.clone(),
-            /* deterministic = */ true,
             move |caller, params, results| -> wasmtime::Result<()> {
                 run_binop(&mut *caller, params, results, name, cost, |a, b| {
                     Ok(match op {
@@ -206,7 +201,6 @@ pub(crate) fn install(
             BIGINT_MODULE_NAME,
             crate::mangle::host(BIGINT_MODULE_NAME, name),
             binop_ty.clone(),
-            /* deterministic = */ true,
             move |caller, params, results| -> wasmtime::Result<()> {
                 use num_traits::Zero;
                 let divisor = read_bigint_arg(
@@ -236,7 +230,6 @@ pub(crate) fn install(
         BIGINT_MODULE_NAME,
         crate::mangle::host(BIGINT_MODULE_NAME, "pow"),
         binop_ty.clone(),
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             run_binop(
                 &mut *caller,
@@ -273,7 +266,6 @@ pub(crate) fn install(
         BIGINT_MODULE_NAME,
         crate::mangle::host(BIGINT_MODULE_NAME, "cmp"),
         cmp_ty,
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let a = read_bigint_arg(
                 &mut *caller,
@@ -306,7 +298,6 @@ pub(crate) fn install(
         BIGINT_MODULE_NAME,
         crate::mangle::host(BIGINT_MODULE_NAME, "neg"),
         neg_ty,
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let sign = read_sign(abi_arg(params, 0)?)?;
             let limbs = read_limbs_arg(&mut *caller, abi_arg(params, 1)?, "bigint.neg")?;
@@ -323,7 +314,6 @@ pub(crate) fn install(
         NUMBER_MODULE_NAME,
         crate::mangle::host(NUMBER_MODULE_NAME, "fromBigInt"),
         from_bigint_ty,
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             use num_traits::ToPrimitive;
             let value = read_bigint_arg(

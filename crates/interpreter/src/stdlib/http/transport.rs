@@ -1228,10 +1228,3 @@ mod client_setup_tests {
         assert!(healthy.client().is_ok());
     }
 }
-
-impl crate::runtime::effects::NativeOutcome for HttpResponse {
-    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<(String, String)>();
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}

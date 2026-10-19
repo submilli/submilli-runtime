@@ -131,16 +131,3 @@ pub trait SkillProvider: Send + Sync {
         path: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<String, SkillError>> + Send + 'a>>;
 }
-
-impl super::effects::NativeOutcome for Skill {
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}
-
-impl super::effects::NativeOutcome for Vec<SkillInfo> {
-    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<SkillInfo>();
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}

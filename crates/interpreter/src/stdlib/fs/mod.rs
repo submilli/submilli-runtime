@@ -27,7 +27,7 @@ use crate::runtime::StoreData;
 use crate::runtime::call_log::{Payload, Side, record_payload};
 use crate::runtime::decision::CallTicket;
 use crate::runtime::fs::ContainError;
-use crate::runtime::fuel::{self, host_func_async};
+use crate::runtime::fuel::{self};
 use crate::runtime::gc_singleton::singleton_struct;
 use crate::runtime::host::{
     read_string_arg, read_uint8_array_arg, register_host_fn, register_host_fn_async,
@@ -205,7 +205,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         fs_fn("maxReadSize"),
         FuncType::new(&engine, [], [ValType::F64]),
-        /* deterministic = */ true,
         |caller, _params, results| {
             *abi_result(results, 0)? = Val::F64((caller.data().fs_max_read_size as f64).to_bits());
             Ok(())
@@ -217,7 +216,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         fs_fn("cwd"),
         FuncType::new(&engine, [], [string.clone()]),
-        true,
         |caller, _params, results| {
             let cwd = caller.data().filesystem.cwd().to_owned();
             let value = write_submilli_string_struct(&mut *caller, &cwd)?;
@@ -234,20 +232,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         fs_fn("info"),
         FuncType::new(&engine, [], [nullable_object.clone()]),
-        /* deterministic = */ true,
         |caller, _params, results| {
             *abi_result(results, 0)? = build_info(caller)?;
             Ok(())
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         fs_fn("exists"),
         FuncType::new(&engine, [string.clone()], [ValType::I32]),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.exists")?;
                 let ticket = gate(
@@ -291,21 +287,19 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 )
                 .await?;
                 record_payload(&*caller, ticket, Side::Response, || {
-                    Payload::meta(serde_json::json!({ "exists": found.value }))
+                    Payload::meta(serde_json::json!({ "exists": found }))
                 });
-                *abi_result(results, 0)? = Val::I32(i32::from(found.value));
-                Ok(())
+                Ok(Val::I32(i32::from(found)))
             })
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         fs_fn("size"),
         FuncType::new(&engine, [string.clone()], [ValType::F64]),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.size")?;
                 let ticket = gate(
@@ -336,21 +330,19 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 )
                 .await?;
                 record_payload(&*caller, ticket, Side::Response, || {
-                    Payload::meta(serde_json::json!({ "size": size.value }))
+                    Payload::meta(serde_json::json!({ "size": size }))
                 });
-                *abi_result(results, 0)? = Val::F64((size.value as f64).to_bits());
-                Ok(())
+                Ok(Val::F64((size as f64).to_bits()))
             })
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         fs_fn("stat"),
         FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.stat")?;
                 gate(
@@ -358,19 +350,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     "fs.stat",
                     serde_json::json!({ "path": &path }),
                 )?;
-                *abi_result(results, 0)? = stat_entry(caller, &path).await?;
-                Ok(())
+                stat_entry(caller, &path).await
             })
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         fs_fn("peek"),
         FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.peek")?;
                 gate(
@@ -378,68 +368,59 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     "fs.stat",
                     serde_json::json!({ "path": &path }),
                 )?;
-                *abi_result(results, 0)? = peek_file(caller, &path).await?;
-                Ok(())
+                peek_file(caller, &path).await
             })
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         fs_fn("read"),
         FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.read")?;
                 let output = read_whole_capped(caller, &path, "read").await?;
-                *abi_result(results, 0)? =
-                    crate::runtime::effects::convert_result(caller, |caller| {
-                        match &output.value {
-                            Some(bytes) => {
-                                let arr = write_submilli_uint8array_struct(caller, &bytes.0)?;
-                                Ok(Val::AnyRef(Some(arr.to_anyref())))
-                            }
-                            None => crate::runtime::prelude::undefined::value(caller),
-                        }
-                    })?;
-                Ok(())
+                crate::runtime::host::convert_result(caller, |caller| match &output {
+                    Some(bytes) => {
+                        let arr = write_submilli_uint8array_struct(caller, &bytes.0)?;
+                        Ok(Val::AnyRef(Some(arr.to_anyref())))
+                    }
+                    None => crate::runtime::prelude::undefined::value(caller),
+                })
             })
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         fs_fn("readText"),
         FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.readText")?;
                 let output = read_whole_capped(caller, &path, "readText").await?;
-                *abi_result(results, 0)? =
-                    crate::runtime::effects::convert_result(caller, |caller| {
-                        match &output.value {
-                            Some(bytes) => {
-                                // Lossy UTF-8: invalid bytes become U+FFFD rather than trapping.
-                                let mut text = String::from_utf8_lossy(&bytes.0).into_owned();
-                                if text.starts_with('\u{FEFF}') {
-                                    text.remove(0);
-                                }
-                                let st = write_submilli_string_struct(caller, &text)?;
-                                Ok(Val::AnyRef(Some(st.to_anyref())))
+                crate::runtime::host::convert_result(caller, |caller| {
+                    match &output {
+                        Some(bytes) => {
+                            // Lossy UTF-8: invalid bytes become U+FFFD rather than trapping.
+                            let mut text = String::from_utf8_lossy(&bytes.0).into_owned();
+                            if text.starts_with('\u{FEFF}') {
+                                text.remove(0);
                             }
-                            None => crate::runtime::prelude::undefined::value(caller),
+                            let st = write_submilli_string_struct(caller, &text)?;
+                            Ok(Val::AnyRef(Some(st.to_anyref())))
                         }
-                    })?;
-                Ok(())
+                        None => crate::runtime::prelude::undefined::value(caller),
+                    }
+                })
             })
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         fs_fn("readBytes"),
@@ -448,8 +429,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             [string.clone(), ValType::F64, ValType::F64],
             [uint8.clone()],
         ),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.readBytes")?;
                 let offset = f64_arg(abi_arg(params, 1)?, "fs.readBytes (offset)")? as i64;
@@ -466,11 +446,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 record_payload(&*caller, ticket, Side::Response, || {
                     Payload::meta(serde_json::json!({ "offset": offset })).with_body(&bytes.0)
                 });
-                let arr = crate::runtime::effects::convert_result(caller, |caller| {
+                let arr = crate::runtime::host::convert_result(caller, |caller| {
                     write_submilli_uint8array_struct(caller, &bytes.0)
                 })?;
-                *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
-                Ok(())
+                Ok(Val::AnyRef(Some(arr.to_anyref())))
             })
         },
     )?;
@@ -493,7 +472,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             fs_fn(name),
             FuncType::new(&engine, [string.clone(), content_ty], []),
-            /* deterministic = */ false,
             move |caller, params, _results| {
                 Box::pin(async move {
                     let ctx = format!("fs.{op}");
@@ -576,7 +554,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         fs_fn("mkdir"),
         FuncType::new(&engine, [string.clone(), ValType::I32], []),
-        /* deterministic = */ false,
         |caller, params, _results| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.mkdir")?;
@@ -617,7 +594,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     },
                 )
                 .await;
-                crate::runtime::effects::convert_result(caller, |caller| {
+                crate::runtime::host::convert_result(caller, |caller| {
                     outcome
                         .map(|_| ())
                         .map_err(|error| crate::runtime::host::throw_host_error(caller, error))
@@ -631,7 +608,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         fs_fn("remove"),
         FuncType::new(&engine, [string.clone(), ValType::I32], []),
-        /* deterministic = */ false,
         |caller, params, _results| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.remove")?;
@@ -672,7 +648,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     },
                 )
                 .await;
-                crate::runtime::effects::convert_result(caller, |caller| {
+                crate::runtime::host::convert_result(caller, |caller| {
                     outcome
                         .map(|_| ())
                         .map_err(|error| crate::runtime::host::throw_host_error(caller, error))
@@ -686,7 +662,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         fs_fn("move"),
         FuncType::new(&engine, [string.clone(), string.clone()], []),
-        /* deterministic = */ false,
         |caller, params, _results| {
             Box::pin(async move {
                 let from = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.move (from)")?;
@@ -725,7 +700,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     },
                 )
                 .await;
-                crate::runtime::effects::convert_result(caller, |caller| {
+                crate::runtime::host::convert_result(caller, |caller| {
                     outcome
                         .map(|_| ())
                         .map_err(|error| crate::runtime::host::throw_host_error(caller, error))
@@ -739,7 +714,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         fs_fn("copy"),
         FuncType::new(&engine, [string.clone(), string.clone(), ValType::I32], []),
-        /* deterministic = */ false,
         |caller, params, _results| {
             Box::pin(async move {
                 let from = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.copy (from)")?;
@@ -794,7 +768,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     },
                 )
                 .await;
-                crate::runtime::effects::convert_result(caller, |caller| {
+                crate::runtime::host::convert_result(caller, |caller| {
                     outcome
                         .map(|_| ())
                         .map_err(|error| crate::runtime::host::throw_host_error(caller, error))
@@ -803,13 +777,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         fs_fn("writer"),
         FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.writer (path)")?;
                 let ticket = gate(
@@ -817,19 +790,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     "fs.write",
                     serde_json::json!({ "path": &path }),
                 )?;
-                *abi_result(results, 0)? = open_writer(caller, ticket, &path).await?;
-                Ok(())
+                open_writer(caller, ticket, &path).await
             })
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         fs_fn("lines"),
         FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.lines (path)")?;
                 gate(
@@ -843,18 +814,16 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let reader = effects::open_reader(caller, path, options, "fs.lines").await?;
                 let reader = BackendReader::new(reader, &caller.data().tenant_limits)
                     .map_err(wasmtime::Error::new)?;
-                *abi_result(results, 0)? =
-                    crate::runtime::effects::convert_result(caller, |caller| {
-                        make_handle_iterator(caller, reader, |mut caller, params, results| {
-                            Box::new(async move { reader_next(&mut caller, params, results).await })
-                        })
-                    })?;
-                Ok(())
+                crate::runtime::host::convert_result(caller, |caller| {
+                    make_handle_iterator(caller, reader, |mut caller, params| {
+                        Box::new(async move { reader_next(&mut caller, params).await })
+                    })
+                })
             })
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         fs_fn("bytes"),
@@ -863,8 +832,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             [string.clone(), ValType::F64],
             [nullable_object.clone()],
         ),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.bytes (path)")?;
                 let chunk_size = f64_arg(abi_arg(params, 1)?, "fs.bytes (chunkSize)")? as i64;
@@ -884,18 +852,16 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let reader = effects::open_reader(caller, path, options, "fs.bytes").await?;
                 let reader = BackendReader::new(reader, &caller.data().tenant_limits)
                     .map_err(wasmtime::Error::new)?;
-                *abi_result(results, 0)? =
-                    crate::runtime::effects::convert_result(caller, |caller| {
-                        make_handle_iterator(caller, reader, |mut caller, params, results| {
-                            Box::new(async move { reader_next(&mut caller, params, results).await })
-                        })
-                    })?;
-                Ok(())
+                crate::runtime::host::convert_result(caller, |caller| {
+                    make_handle_iterator(caller, reader, |mut caller, params| {
+                        Box::new(async move { reader_next(&mut caller, params).await })
+                    })
+                })
             })
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         fs_fn("list"),
@@ -904,8 +870,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             [string.clone(), ValType::I32],
             [nullable_object.clone()],
         ),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.list (path)")?;
                 let recursive = i32_flag(abi_arg(params, 1)?, "fs.list (recursive)")?;
@@ -917,13 +882,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let walk = effects::open_directory(caller, path.clone(), recursive).await?;
                 let dir = ChargedDirIter::new(walk, &caller.data().tenant_limits)
                     .map_err(|e| wasmtime::Error::new(e).context(format!("fs.list {path}")))?;
-                *abi_result(results, 0)? =
-                    crate::runtime::effects::convert_result(caller, |caller| {
-                        make_handle_iterator(caller, dir, |mut caller, params, results| {
-                            Box::new(async move { list_next(&mut caller, params, results).await })
-                        })
-                    })?;
-                Ok(())
+                crate::runtime::host::convert_result(caller, |caller| {
+                    make_handle_iterator(caller, dir, |mut caller, params| {
+                        Box::new(async move { list_next(&mut caller, params).await })
+                    })
+                })
             })
         },
     )?;
@@ -1060,10 +1023,10 @@ async fn stat_entry(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime:
         },
     )
     .await?;
-    let Some(stat) = &observation.value else {
+    let Some(stat) = &observation else {
         return crate::runtime::prelude::undefined::value(caller);
     };
-    crate::runtime::effects::convert_result(caller, |caller| {
+    crate::runtime::host::convert_result(caller, |caller| {
         let kind = write_submilli_string_struct(caller, &stat.kind)?.to_anyref();
         let ty = stat_backing_struct(caller.engine())?;
         abi::new_backing(
@@ -1110,7 +1073,7 @@ async fn peek_file(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::
     )
     .await?;
     let buf = &observation.bytes.0;
-    crate::runtime::effects::convert_result(caller, |caller| {
+    crate::runtime::host::convert_result(caller, |caller| {
         let (encoding, content_start) = detect_encoding(buf);
         let content = &buf[content_start..];
         let line_ending = if content.windows(2).any(|w| w == b"\r\n") {
@@ -1160,9 +1123,7 @@ async fn read_whole_capped(
     caller: &mut Caller<'_, StoreData>,
     path: &str,
     op: &'static str,
-) -> wasmtime::Result<
-    crate::runtime::effects::NativeResult<Option<crate::runtime::effects::OutcomeBytes>>,
-> {
+) -> wasmtime::Result<Option<crate::runtime::effects::OutcomeBytes>> {
     let ctx = format!("fs.{op}");
     let ticket = gate(&mut *caller, "fs.read", serde_json::json!({ "path": path }))?;
     let label = if op == "read" {
@@ -1222,8 +1183,7 @@ async fn read_byte_range(
     path: &str,
     offset: i64,
     length: i64,
-) -> wasmtime::Result<crate::runtime::effects::NativeResult<crate::runtime::effects::OutcomeBytes>>
-{
+) -> wasmtime::Result<crate::runtime::effects::OutcomeBytes> {
     if offset < 0 {
         return Err(crate::runtime::host::range_error(
             "fs.readBytes: negative offset",
@@ -1290,7 +1250,7 @@ async fn open_writer(
         .map_err(crate::runtime::host::fatal_host_error)?;
     let handle = ExternRef::new(&mut *caller, writer)?;
     let ty = file_writer_backing_struct(caller.engine())?;
-    crate::runtime::effects::convert_result(caller, |caller| {
+    crate::runtime::host::convert_result(caller, |caller| {
         abi::new_backing(caller, ty, &[Val::ExternRef(Some(handle))])
     })
 }
@@ -1303,8 +1263,7 @@ type IterCallback =
     for<'a> fn(
         Caller<'a, StoreData>,
         &'a [Val],
-        &'a mut [Val],
-    ) -> Box<dyn std::future::Future<Output = wasmtime::Result<()>> + Send + 'a>;
+    ) -> Box<dyn std::future::Future<Output = wasmtime::Result<Val>> + Send + 'a>;
 
 /// Wrap a charged handle in a closable iterator: the handle rides an
 /// `externref` inside a host-private env struct; `next_step` / `close_step`
@@ -1322,10 +1281,11 @@ fn make_handle_iterator<T: handles::Closable + 'static>(
     let intr = intrinsic_types(&mut *caller)?;
     let (next_ty, _) = next_closure_type(caller.engine(), &intr)?;
     let (close_ty, _) = void_closure_type(caller.engine(), &intr)?;
-    let next_fn = host_func_async(&mut *caller, next_ty, next_step);
-    let close_fn = host_func_async(&mut *caller, close_ty, |mut caller, params, results| {
-        Box::new(async move { close_handle_of::<T>(&mut caller, params, results).await })
-    });
+    let next_fn = crate::runtime::host::host_value_async(&mut *caller, next_ty, next_step);
+    let close_fn =
+        crate::runtime::host::host_value_async(&mut *caller, close_ty, |mut caller, params| {
+            Box::new(async move { close_handle_of::<T>(&mut caller, params).await })
+        });
     build_closable_iterator(
         caller,
         next_fn,
@@ -1362,19 +1322,14 @@ fn handle_payload<'a, T: 'static>(
         .ok_or_else(|| wasmtime::Error::msg(format!("{ctx}: unexpected externref payload")))
 }
 
-async fn reader_next(
-    caller: &mut Caller<'_, StoreData>,
-    params: &[Val],
-    results: &mut [Val],
-) -> wasmtime::Result<()> {
+async fn reader_next(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
     use crate::runtime::filesystem::ReadItem;
     let Some(handle) = env_handle(caller, abi_arg(params, 0)?)? else {
-        *abi_result(results, 0)? = iter_done(caller)?;
-        return Ok(());
+        return iter_done(caller);
     };
     let descriptor = handle_payload::<Option<BackendReader>>(caller, &handle, "fs.next")?
         .as_ref()
-        .and_then(BackendReader::descriptor);
+        .map(BackendReader::id);
     let output = crate::runtime::effects::execute(
         caller,
         "fs.reader.next",
@@ -1387,9 +1342,15 @@ async fn reader_next(
                 else {
                     return Err(fatal_host_error("reader handle is unavailable"));
                 };
-                let result = reader
-                    .reader
-                    .next(&effect_id, Some(work.clone()), &caller.data().tenant_limits)
+                let result = caller
+                    .data()
+                    .filesystem
+                    .next_reader(
+                        &effect_id,
+                        Some(work.clone()),
+                        &mut reader.reader,
+                        &caller.data().tenant_limits,
+                    )
                     .await;
                 *handle_payload::<Option<BackendReader>>(caller, &handle, "fs.next")? =
                     Some(reader);
@@ -1399,7 +1360,7 @@ async fn reader_next(
         },
     )
     .await;
-    *abi_result(results, 0)? = crate::runtime::effects::convert_result(caller, |caller| {
+    crate::runtime::host::convert_result(caller, |caller| {
         let output =
             output.map_err(|error| crate::runtime::host::throw_host_error(caller, error))?;
         match &output.item {
@@ -1413,23 +1374,17 @@ async fn reader_next(
             }
             None => iter_done(caller),
         }
-    })?;
-    Ok(())
+    })
 }
 
-async fn list_next(
-    caller: &mut Caller<'_, StoreData>,
-    params: &[Val],
-    results: &mut [Val],
-) -> wasmtime::Result<()> {
+async fn list_next(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
     let Some(handle) = env_handle(caller, abi_arg(params, 0)?)? else {
-        *abi_result(results, 0)? = iter_done(caller)?;
-        return Ok(());
+        return iter_done(caller);
     };
     fuel::charge(&mut *caller, fuel::SYSCALL, 1)?;
     let descriptor = handle_payload::<Option<ChargedDirIter>>(caller, &handle, "fs.list.next")?
         .as_ref()
-        .and_then(ChargedDirIter::descriptor);
+        .map(ChargedDirIter::id);
     let outcome = crate::runtime::effects::execute(
         caller,
         "fs.list.next",
@@ -1443,9 +1398,15 @@ async fn list_next(
                 else {
                     return Err(fatal_host_error("directory handle is unavailable"));
                 };
-                let result = directory
-                    .walk
-                    .next_entry(&effect_id, Some(work.clone()), &caller.data().tenant_limits)
+                let result = caller
+                    .data()
+                    .filesystem
+                    .next_directory(
+                        &effect_id,
+                        Some(work.clone()),
+                        &mut directory.walk,
+                        &caller.data().tenant_limits,
+                    )
                     .await;
                 *handle_payload::<Option<ChargedDirIter>>(caller, &handle, "fs.list.next")? =
                     Some(directory);
@@ -1456,11 +1417,10 @@ async fn list_next(
     )
     .await
     .map_err(|error| crate::runtime::host::throw_host_error(caller, error))?;
-    let Some(entry) = &outcome.value else {
-        *abi_result(results, 0)? = iter_done(caller)?;
-        return Ok(());
+    let Some(entry) = &outcome else {
+        return iter_done(caller);
     };
-    *abi_result(results, 0)? = crate::runtime::effects::convert_result(caller, |caller| {
+    crate::runtime::host::convert_result(caller, |caller| {
         let size = entry.bytes as f64;
         let kind = write_submilli_string_struct(caller, entry.kind)?.to_anyref();
         let name = write_submilli_string_struct(caller, &entry.name)?.to_anyref();
@@ -1478,8 +1438,7 @@ async fn list_next(
             ],
         )?;
         iter_yield(caller, entry)
-    })?;
-    Ok(())
+    })
 }
 
 /// Eager close: drops the OS handle and refunds bytes now. A reclaimed
@@ -1488,12 +1447,11 @@ async fn list_next(
 async fn close_handle_of<T: handles::Closable + 'static>(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
-    results: &mut [Val],
-) -> wasmtime::Result<()> {
+) -> wasmtime::Result<Val> {
     if let Some(handle) = env_handle(caller, abi_arg(params, 0)?)? {
         let descriptor = handle_payload::<Option<T>>(caller, &handle, "fs.close")?
             .as_ref()
-            .and_then(handles::Closable::descriptor);
+            .map(handles::Closable::id);
         let live_handle = handle;
         crate::runtime::effects::execute(
             caller,
@@ -1507,7 +1465,12 @@ async fn close_handle_of<T: handles::Closable + 'static>(
                         handle_payload::<Option<T>>(caller, &handle, "fs.close")?.take()
                     {
                         let result = payload
-                            .close(&effect_id, Some(work.clone()), &caller.data().tenant_limits)
+                            .close(
+                                caller.data().filesystem.as_ref(),
+                                &effect_id,
+                                Some(work.clone()),
+                                &caller.data().tenant_limits,
+                            )
                             .await;
                         *handle_payload::<Option<T>>(caller, &handle, "fs.close")? = Some(payload);
                         work.settle(&mut *caller)?;
@@ -1523,8 +1486,7 @@ async fn close_handle_of<T: handles::Closable + 'static>(
             payload.release_buffer();
         }
     }
-    *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
-    Ok(())
+    crate::runtime::prelude::undefined::value(caller)
 }
 
 // ---------------------------------------------------------------------------
@@ -1637,11 +1599,10 @@ fn install_file_writer_methods(
         MODULE_NAME,
         crate::mangle::extend(&writer_key, "close"),
         FuncType::new(engine, [receiver.clone()], []),
-        /* deterministic = */ false,
         |caller, params, _results| {
             Box::pin(async move {
                 let receiver = *abi_arg(params, 0)?;
-                let descriptor = writer_payload(caller, &receiver, "fs.writer.close")?.descriptor();
+                let descriptor = writer_payload(caller, &receiver, "fs.writer.close")?.id();
                 let live_receiver = receiver;
                 crate::runtime::effects::execute(
                     caller,
@@ -1651,8 +1612,9 @@ fn install_file_writer_methods(
                         let receiver = live_receiver;
                         Box::pin(async move {
                             let work = begin_work(caller)?;
+                            let filesystem = caller.data().filesystem.clone();
                             let result = writer_payload(caller, &receiver, "fs.writer.close")?
-                                .close(&effect_id, Some(work.clone()))
+                                .close(filesystem.as_ref(), &effect_id, Some(work.clone()))
                                 .await;
                             work.settle(&mut *caller)?;
                             result.map_err(|error| backend_error("fs.writer.close", "", error))
@@ -1671,7 +1633,6 @@ fn install_file_writer_methods(
         MODULE_NAME,
         crate::mangle::extend(&writer_key, "writeLine"),
         FuncType::new(engine, [receiver.clone(), string], []),
-        /* deterministic = */ false,
         |caller, params, _results| {
             Box::pin(async move {
                 let line =
@@ -1680,9 +1641,11 @@ fn install_file_writer_methods(
                 let mut bytes = line.into_bytes();
                 bytes.push(b'\n');
                 let receiver = *abi_arg(params, 0)?;
-                let descriptor =
-                    writer_payload(caller, &receiver, "fs.writer.writeLine")?.descriptor();
-                let request = effects::WriterChunk { descriptor, bytes };
+                let descriptor = writer_payload(caller, &receiver, "fs.writer.writeLine")?.id();
+                let request = effects::WriterChunk {
+                    resource: descriptor,
+                    bytes,
+                };
                 crate::runtime::effects::execute(
                     caller,
                     "fs.writer.writeLine",
@@ -1690,8 +1653,14 @@ fn install_file_writer_methods(
                     move |caller, effect_id, request| {
                         Box::pin(async move {
                             let work = begin_work(caller)?;
+                            let filesystem = caller.data().filesystem.clone();
                             let result = writer_payload(caller, &receiver, "fs.writer.writeLine")?
-                                .write(&effect_id, Some(work.clone()), request.bytes)
+                                .write(
+                                    filesystem.as_ref(),
+                                    &effect_id,
+                                    Some(work.clone()),
+                                    request.bytes,
+                                )
                                 .await;
                             work.settle(&mut *caller)?;
                             result.map_err(|error| backend_error("fs.writer.writeLine", "", error))
@@ -1709,7 +1678,6 @@ fn install_file_writer_methods(
         MODULE_NAME,
         crate::mangle::extend(&writer_key, "writeBytes"),
         FuncType::new(engine, [receiver, uint8], []),
-        /* deterministic = */ false,
         |caller, params, _results| {
             Box::pin(async move {
                 let bytes = read_uint8_array_arg(
@@ -1719,9 +1687,11 @@ fn install_file_writer_methods(
                 )?;
                 fuel::charge(&mut *caller, fuel::IO, bytes.len() as u64)?;
                 let receiver = *abi_arg(params, 0)?;
-                let descriptor =
-                    writer_payload(caller, &receiver, "fs.writer.writeBytes")?.descriptor();
-                let request = effects::WriterChunk { descriptor, bytes };
+                let descriptor = writer_payload(caller, &receiver, "fs.writer.writeBytes")?.id();
+                let request = effects::WriterChunk {
+                    resource: descriptor,
+                    bytes,
+                };
                 crate::runtime::effects::execute(
                     caller,
                     "fs.writer.writeBytes",
@@ -1729,8 +1699,14 @@ fn install_file_writer_methods(
                     move |caller, effect_id, request| {
                         Box::pin(async move {
                             let work = begin_work(caller)?;
+                            let filesystem = caller.data().filesystem.clone();
                             let result = writer_payload(caller, &receiver, "fs.writer.writeBytes")?
-                                .write(&effect_id, Some(work.clone()), request.bytes)
+                                .write(
+                                    filesystem.as_ref(),
+                                    &effect_id,
+                                    Some(work.clone()),
+                                    request.bytes,
+                                )
                                 .await;
                             work.settle(&mut *caller)?;
                             result.map_err(|error| backend_error("fs.writer.writeBytes", "", error))

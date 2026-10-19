@@ -18,7 +18,7 @@ use super::limits::{HostBytes, HostMemory, TenantLimits};
 
 /// Independent of the filesystem journal's much smaller metadata limit.
 pub const MAX_OUTCOME_BYTES: usize = 64 * 1024 * 1024;
-pub const CODEC_VERSION: u32 = 1;
+pub const CODEC_VERSION: u32 = 2;
 
 #[derive(Debug, thiserror::Error)]
 #[error("durable execution: {0}")]
@@ -56,36 +56,6 @@ pub struct TokenSpend {
 #[serde(transparent)]
 pub struct OutcomeBytes(#[serde(with = "binary")] pub Vec<u8>);
 
-/// A reviewed native representation with a bound on its decoded working heap.
-///
-/// Do not implement this for arbitrary Serde types. Each implementation must bound
-/// allocations from untrusted encoded data, including collection capacity, and
-/// preserve missing versus null (use a tagged enum for nullable optional fields).
-/// No heap pointers, guest handles, or unbounded custom deserializers belong here.
-pub trait NativeOutcome: Serialize + DeserializeOwned + Send + 'static {
-    /// Size of the largest owned sequence element, or zero when there are none.
-    const SEQUENCE_ELEMENT_BYTES: usize = 0;
-    /// Dynamic maps own tree nodes; fixed Serde structs and enums do not.
-    const DYNAMIC_MAPS: bool = false;
-    /// Temporary buffers a custom serializer creates before writing its bytes.
-    fn encoding_scratch(&self) -> u64 {
-        0
-    }
-    fn decoded_heap_bound(encoded_bytes: usize) -> u64;
-}
-/// Keeps replay's native allocation charged until guest conversion finishes.
-pub struct NativeResult<T> {
-    pub value: T,
-    pub replayed: bool,
-    _memory: Option<HostBytes>,
-}
-impl<T> std::ops::Deref for NativeResult<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.value
-    }
-}
-
 /// Implementations must serialize calls and commit before `complete` returns.
 /// A missing outcome is an instruction to execute, regardless of idempotency.
 #[async_trait::async_trait]
@@ -116,10 +86,10 @@ pub async fn execute<'store, A, T, F>(
     operation: &'static str,
     arguments: A,
     action: F,
-) -> wasmtime::Result<NativeResult<T>>
+) -> wasmtime::Result<T>
 where
     A: Serialize + Send + 'static,
-    T: NativeOutcome,
+    T: Serialize + DeserializeOwned + Send + 'static,
     F: for<'call> FnOnce(
             &'call mut Caller<'store, StoreData>,
             EffectId,
@@ -130,13 +100,7 @@ where
     let Some(history) = caller.data().effects.clone() else {
         let result = action(caller, EffectId::stub()?, arguments).await;
         return fuel::settle_result(caller, |caller| {
-            result
-                .map(|value| NativeResult {
-                    value,
-                    replayed: false,
-                    _memory: None,
-                })
-                .map_err(|error| host::throw_host_error(caller, error))
+            result.map_err(|error| host::throw_host_error(caller, error))
         });
     };
     let fingerprint = fingerprint(caller, &arguments)?;
@@ -168,7 +132,7 @@ where
             );
         }
         return match &recorded.result {
-            Ok(bytes) => decode(caller, &bytes.0),
+            Ok(bytes) => decode(&bytes.0),
             Err(error) => fuel::settle_result(caller, |caller| {
                 Err(host::throw_host_error(caller, error.clone().into_error()))
             }),
@@ -185,30 +149,14 @@ where
     if let Err(error) = &result
         && (host::ends_the_run(error) || error.is::<wasmtime::ThrownException>())
     {
-        return result.map(|value| NativeResult {
-            value,
-            replayed: false,
-            _memory: None,
-        });
+        return result;
     }
     let mut encoded_memory = None;
     let recorded_result = match &result {
         Ok(value) => {
             let encoded = encode(&caller.data().tenant_limits, value)?;
             // Do not commit a representation the replay decoder refuses structurally.
-            let replay_heap = super::effects_memory::decoded_heap_bound(
-                &encoded.bytes,
-                T::SEQUENCE_ELEMENT_BYTES,
-                T::DYNAMIC_MAPS,
-            )?;
-            // Admission must also cover replay's owned envelope and decoded value.
-            let replay_admission = HostBytes::new(
-                &caller.data().tenant_limits,
-                replay_heap
-                    .max(T::decoded_heap_bound(encoded.bytes.len()))
-                    .saturating_add(1024),
-            )?;
-            drop(replay_admission);
+            validate_outcome(&encoded.bytes)?;
             fuel::settle(&mut *caller, fuel::COPY, encoded.bytes.len() as u64)?;
             encoded_memory = Some(encoded.memory);
             Ok(OutcomeBytes(encoded.bytes))
@@ -234,24 +182,7 @@ where
         .map_err(fatal_host_error)?;
     drop(encoded_memory);
     fuel::settle_result(caller, |caller| {
-        result
-            .map(|value| NativeResult {
-                value,
-                replayed: false,
-                _memory: None,
-            })
-            .map_err(|error| host::throw_host_error(caller, error))
-    })
-}
-
-/// Convert an observed result to guest values without losing an ordinary error
-/// while allocating its exception at the end of the fuel budget.
-pub(crate) fn convert_result<T>(
-    caller: &mut Caller<'_, StoreData>,
-    convert: impl FnOnce(&mut Caller<'_, StoreData>) -> wasmtime::Result<T>,
-) -> wasmtime::Result<T> {
-    fuel::settle_result(caller, |caller| {
-        convert(caller).map_err(|error| host::throw_host_error(caller, error))
+        result.map_err(|error| host::throw_host_error(caller, error))
     })
 }
 
@@ -315,50 +246,6 @@ pub(crate) mod binary {
     }
 }
 
-impl NativeOutcome for () {
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}
-impl NativeOutcome for bool {
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}
-impl NativeOutcome for u64 {
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}
-impl NativeOutcome for f64 {
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}
-impl NativeOutcome for String {
-    fn decoded_heap_bound(bytes: usize) -> u64 {
-        bytes as u64
-    }
-}
-impl NativeOutcome for Option<String> {
-    // A present string cannot be confused with MessagePack nil.
-    fn decoded_heap_bound(bytes: usize) -> u64 {
-        bytes as u64
-    }
-}
-impl NativeOutcome for OutcomeBytes {
-    // The binary visitor copies one validated slice, with no sequence preallocation.
-    fn decoded_heap_bound(bytes: usize) -> u64 {
-        bytes as u64
-    }
-}
-impl NativeOutcome for jiff::Timestamp {
-    // Timestamp parses borrowed text into two integers, without retaining heap data.
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}
-
 fn fingerprint<A: Serialize>(
     caller: &mut Caller<'_, StoreData>,
     arguments: &A,
@@ -400,8 +287,7 @@ struct EncodedOutcome {
     bytes: Vec<u8>,
     memory: HostBytes,
 }
-fn encode<T: NativeOutcome>(limits: &TenantLimits, value: &T) -> wasmtime::Result<EncodedOutcome> {
-    let _scratch = HostBytes::new(limits, value.encoding_scratch())?;
+fn encode<T: Serialize>(limits: &TenantLimits, value: &T) -> wasmtime::Result<EncodedOutcome> {
     let mut writer = OutcomeWriter {
         limits,
         bytes: Vec::new(),
@@ -446,34 +332,24 @@ impl Write for OutcomeWriter<'_> {
         Ok(())
     }
 }
-fn decode<T: NativeOutcome>(
-    caller: &Caller<'_, StoreData>,
-    bytes: &[u8],
-) -> wasmtime::Result<NativeResult<T>> {
+fn validate_outcome(bytes: &[u8]) -> wasmtime::Result<()> {
     if bytes.len() > MAX_OUTCOME_BYTES {
         return Err(fatal_host_error("native outcome exceeds history limit"));
     }
-    let structural_bound = super::effects_memory::decoded_heap_bound(
-        bytes,
-        T::SEQUENCE_ELEMENT_BYTES,
-        T::DYNAMIC_MAPS,
-    )?;
-    let memory = HostBytes::new(
-        &caller.data().tenant_limits,
-        structural_bound.max(T::decoded_heap_bound(bytes.len())),
-    )?;
-    // Structural admission includes the decoder's reusable scratch buffer.
+    // Validate lengths, nesting and complete consumption before deserialization.
+    super::effects_memory::decoded_heap_bound(bytes, 1, false)?;
+    Ok(())
+}
+
+fn decode<T: DeserializeOwned>(bytes: &[u8]) -> wasmtime::Result<T> {
+    validate_outcome(bytes)?;
     let mut decoder = rmp_serde::Deserializer::new(std::io::Cursor::new(bytes));
     decoder.set_max_depth(128);
     let value = T::deserialize(&mut decoder).map_err(fatal_host_error)?;
     if decoder.position() != bytes.len() as u64 {
         return Err(fatal_host_error("trailing native outcome bytes"));
     }
-    Ok(NativeResult {
-        value,
-        replayed: true,
-        _memory: Some(memory),
-    })
+    Ok(value)
 }
 
 /// Guest-visible error data, captured before the host wrapper raises an exception.

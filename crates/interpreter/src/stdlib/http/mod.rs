@@ -25,7 +25,7 @@ use crate::runtime::fs::{ContainError, ContentPath};
 use crate::runtime::fuel;
 use crate::runtime::host::{
     read_boxed_number, read_string_arg, read_uint8_array_arg, register_host_fn,
-    register_host_fn_async, write_submilli_string_struct,
+    write_submilli_string_struct,
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types, intrinsic_types};
 use crate::runtime::metrics::{HttpMetric, MetricsSink};
@@ -144,7 +144,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     // Body-less verbs: (url, headers?) → Response.
     for verb in ["get", "delete", "head", "options"] {
         let method = verb.to_ascii_uppercase();
-        register_host_fn_async(
+        crate::runtime::host::register_host_value_async(
             linker,
             MODULE_NAME,
             crate::mangle::package_symbol(MODULE_NAME, verb),
@@ -153,15 +153,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 [string.clone(), nullable_object.clone()],
                 [nullable_object.clone()],
             ),
-            /* deterministic = */ false,
-            move |caller, params, results| {
+            move |caller, params| {
                 let method = method.clone();
                 Box::pin(async move {
                     let url = read_string_arg(&mut *caller, abi_arg(params, 0)?, "http (url)")?;
                     let body = crate::runtime::prelude::undefined::value(caller)?;
-                    *abi_result(results, 0)? =
-                        perform_request(caller, &method, &url, &body, abi_arg(params, 1)?).await?;
-                    Ok(())
+                    perform_request(caller, &method, &url, &body, abi_arg(params, 1)?).await
                 })
             },
         )?;
@@ -170,7 +167,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     // Body-carrying verbs: (url, body?, headers?) → Response.
     for verb in ["post", "put", "patch"] {
         let method = verb.to_ascii_uppercase();
-        register_host_fn_async(
+        crate::runtime::host::register_host_value_async(
             linker,
             MODULE_NAME,
             crate::mangle::package_symbol(MODULE_NAME, verb),
@@ -183,27 +180,25 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 ],
                 [nullable_object.clone()],
             ),
-            /* deterministic = */ false,
-            move |caller, params, results| {
+            move |caller, params| {
                 let method = method.clone();
                 Box::pin(async move {
                     let url = read_string_arg(&mut *caller, abi_arg(params, 0)?, "http (url)")?;
-                    *abi_result(results, 0)? = perform_request(
+                    perform_request(
                         caller,
                         &method,
                         &url,
                         abi_arg(params, 1)?,
                         abi_arg(params, 2)?,
                     )
-                    .await?;
-                    Ok(())
+                    .await
                 })
             },
         )?;
     }
 
     // Runtime-verb form: (method, url, body?, headers?) → Response.
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "request"),
@@ -217,26 +212,24 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ],
             [nullable_object.clone()],
         ),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let method =
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "http.request (method)")?;
                 let url = read_string_arg(&mut *caller, abi_arg(params, 1)?, "http.request (url)")?;
-                *abi_result(results, 0)? = perform_request(
+                perform_request(
                     caller,
                     &method,
                     &url,
                     abi_arg(params, 2)?,
                     abi_arg(params, 3)?,
                 )
-                .await?;
-                Ok(())
+                .await
             })
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "download"),
@@ -245,13 +238,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             [string.clone(), string, nullable_object.clone()],
             [nullable_object],
         ),
-        /* deterministic = */ false,
-        |caller, params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = perform_download(caller, params).await?;
-                Ok(())
-            })
-        },
+        |caller, params| Box::pin(async move { perform_download(caller, params).await }),
     )?;
 
     install_response_members(linker, &engine, &intr, object.clone())?;
@@ -456,7 +443,7 @@ async fn perform_request(
             })
         })
         .await?;
-    crate::runtime::effects::convert_result(caller, |caller| write_response(caller, response.value))
+    crate::runtime::host::convert_result(caller, |caller| write_response(caller, response))
 }
 
 /// The request's key and digest as the call log records them, when the transport reads
@@ -542,7 +529,7 @@ fn settle_response(
     send_result: std::result::Result<HttpResponse, HttpError>,
     method: &str,
 ) -> wasmtime::Result<Val> {
-    crate::runtime::effects::convert_result(caller, |caller| {
+    crate::runtime::host::convert_result(caller, |caller| {
         let response = settle_native_response(caller, send_result, method)?;
         write_response(caller, response)
     })
@@ -839,7 +826,7 @@ async fn perform_download(
         commit_temp(file, disk_charge, &tmp, &resolved, &guest_path)?;
         Ok(Downloaded { meta, duration_ms: start.elapsed().as_millis() as f64 })
     })).await?;
-    crate::runtime::effects::convert_result(caller, |caller| {
+    crate::runtime::host::convert_result(caller, |caller| {
         write_download_result(
             caller,
             &downloaded.meta,
@@ -854,12 +841,6 @@ async fn perform_download(
 struct Downloaded {
     meta: DownloadMeta,
     duration_ms: f64,
-}
-impl crate::runtime::effects::NativeOutcome for Downloaded {
-    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<(String, String)>();
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
 }
 
 /// Why a download attempt failed before commit. Transport failures carry the
@@ -1110,7 +1091,6 @@ fn install_response_members(
         MODULE_NAME,
         crate::mangle::extend(&response_key, "throwForStatus"),
         FuncType::new(engine, [receiver.clone()], []),
-        /* deterministic = */ true,
         |caller, params, _results| {
             let st = backing_receiver(caller, abi_arg(params, 0)?)?;
             if matches!(st.field(&mut *caller, R_OK)?, Val::I32(ok) if ok != 0) {
@@ -1130,7 +1110,6 @@ fn install_response_members(
         MODULE_NAME,
         crate::mangle::extend(&response_key, "toString"),
         FuncType::new(engine, [receiver], [string]),
-        /* deterministic = */ true,
         |caller, params, results| {
             let st = backing_receiver(caller, abi_arg(params, 0)?)?;
             let (status, status_text, url) = read_response_status_line(caller, &st)?;
@@ -1195,7 +1174,6 @@ fn install_download_result_members(
         MODULE_NAME,
         crate::mangle::extend(&result_key, "toString"),
         FuncType::new(engine, [receiver], [string]),
-        /* deterministic = */ true,
         |caller, params, results| {
             let st = backing_receiver(caller, abi_arg(params, 0)?)?;
             let Val::F64(status_bits) = st.field(&mut *caller, D_STATUS)? else {

@@ -49,13 +49,6 @@ impl<'de> serde::Deserialize<'de> for McpResponse {
             .map_err(|_| serde::de::Error::custom("recorded MCP response exceeds its bounds"))
     }
 }
-impl crate::runtime::effects::NativeOutcome for McpResponse {
-    const DYNAMIC_MAPS: bool = true;
-    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<Value>();
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}
 
 // Bound retained tree data independently of wire JSON escaping. Each node/key
 // contributes a fixed allowance, and string bytes are added without rescanning.

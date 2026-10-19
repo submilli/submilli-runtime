@@ -12,7 +12,7 @@
 //! Keys and payloads stay UTF-16 code units from the guest `$string` to the
 //! trait and back — see [`value`] for why.
 
-use crate::runtime::host::{abi_arg, abi_result};
+use crate::runtime::host::abi_arg;
 mod cursor;
 pub mod declaration;
 mod finalizers;
@@ -70,18 +70,6 @@ struct ListedPage {
     entries: Vec<SessionKvEntry>,
     cursor: Option<String>,
 }
-impl crate::runtime::effects::NativeOutcome for ListedPage {
-    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<SessionKvEntry>();
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}
-impl crate::runtime::effects::NativeOutcome for Option<Vec<u16>> {
-    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<u16>();
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}
 
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     finalizers::install(linker)?;
@@ -101,13 +89,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.object.clone()),
     ));
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "get"),
         FuncType::new(&engine, [string.clone()], [unknown.clone()]),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "get")?;
                 let ticket = gate(caller, "session.read", &key)?;
@@ -133,32 +120,29 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     },
                 )
                 .await?;
-                record_payload(&*caller, ticket, Side::Response, || match &found.value {
+                record_payload(&*caller, ticket, Side::Response, || match &found {
                     // The size is of the copy and digest's encoding: UTF-8 bytes.
                     Some(payload) => Payload::meta(serde_json::Value::Null)
                         .with_owned_body(String::from_utf16_lossy(payload).into_bytes()),
                     None => Payload::meta(serde_json::json!({ "found": false })),
                 });
-                *abi_result(results, 0)? =
-                    crate::runtime::effects::convert_result(caller, |caller| {
-                        let Some(payload) = &found.value else {
-                            return crate::runtime::prelude::undefined::value(caller);
-                        };
-                        fuel::charge(&mut *caller, fuel::PARSE, payload.len() as u64)?;
-                        value::deserialize(caller, payload)
-                    })?;
-                Ok(())
+                crate::runtime::host::convert_result(caller, |caller| {
+                    let Some(payload) = &found else {
+                        return crate::runtime::prelude::undefined::value(caller);
+                    };
+                    fuel::charge(&mut *caller, fuel::PARSE, payload.len() as u64)?;
+                    value::deserialize(caller, payload)
+                })
             })
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "has"),
         FuncType::new(&engine, [string.clone()], [ValType::I32]),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "has")?;
                 let ticket = gate(caller, "session.read", &key)?;
@@ -177,10 +161,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 )
                 .await?;
                 record_payload(&*caller, ticket, Side::Response, || {
-                    Payload::meta(serde_json::json!({ "found": found.value }))
+                    Payload::meta(serde_json::json!({ "found": found }))
                 });
-                *abi_result(results, 0)? = Val::I32(i32::from(found.value));
-                Ok(())
+                Ok(Val::I32(i32::from(found)))
             })
         },
     )?;
@@ -190,7 +173,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "set"),
         FuncType::new(&engine, [string.clone(), unknown.clone()], []),
-        /* deterministic = */ false,
         |caller, params, _results| {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "set")?;
@@ -223,13 +205,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "remove"),
         FuncType::new(&engine, [string.clone()], [ValType::I32]),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "remove")?;
                 gate(caller, "session.remove", &key)?;
@@ -247,14 +228,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     },
                 )
                 .await?;
-                *abi_result(results, 0)? = Val::I32(i32::from(removed.value));
-                Ok(())
+                Ok(Val::I32(i32::from(removed)))
             })
         },
     )?;
 
     // `list` re-enters no guest code, but its store may reach durable storage.
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "list"),
@@ -263,17 +243,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             [string.clone(), ValType::F64, unknown.clone()],
             [unknown.clone()],
         ),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
-                *abi_result(results, 0)? = list(
+                list(
                     caller,
                     abi_arg(params, 0)?,
                     abi_arg(params, 1)?,
                     abi_arg(params, 2)?,
                 )
-                .await?;
-                Ok(())
+                .await
             })
         },
     )?;
@@ -413,9 +391,9 @@ async fn list(
             })
         })
         .await?;
-    crate::runtime::effects::convert_result(caller, |caller| {
+    crate::runtime::host::convert_result(caller, |caller| {
         let mut visible = Vec::new();
-        for entry in page.value.entries {
+        for entry in page.entries {
             fuel::charge(&mut *caller, fuel::ELEM, 1)?;
             if may_read(caller, &entry.key)? {
                 visible.push(entry);
@@ -426,11 +404,9 @@ async fn list(
                 .iter()
                 .map(|entry| String::from_utf16_lossy(&entry.key))
                 .collect();
-            Payload::meta(
-                serde_json::json!({ "keys": keys, "cursor": page.value.cursor.is_some() }),
-            )
+            Payload::meta(serde_json::json!({ "keys": keys, "cursor": page.cursor.is_some() }))
         });
-        build_page(caller, &visible, page.value.cursor.as_deref())
+        build_page(caller, &visible, page.cursor.as_deref())
     })
 }
 

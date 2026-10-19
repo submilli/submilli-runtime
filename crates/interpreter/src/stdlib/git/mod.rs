@@ -1,5 +1,5 @@
 //! Capability-controlled Git operations. No subprocesses or guest-visible credentials.
-use crate::runtime::host::{abi_arg, abi_result};
+use crate::runtime::host::abi_arg;
 pub(crate) mod class;
 pub mod declaration;
 mod diff;
@@ -23,7 +23,7 @@ mod worker;
 use crate::runtime::decision::{CallOrigin, CallSite, EntryPath};
 use crate::runtime::fuel;
 use crate::runtime::host::{
-    permission_denied, read_string_arg, register_host_fn_async, write_submilli_string_struct,
+    permission_denied, read_string_arg, write_submilli_string_struct,
     write_submilli_uint8array_struct,
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
@@ -189,20 +189,14 @@ fn install_repository_reads(
         HeapType::ConcreteStruct(intr.array.clone()),
     ));
     let repository = crate::mangle::package_symbol(MODULE_NAME, "Repository");
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::extend(&repository, "status"),
         FuncType::new(engine, [receiver.clone()], [object.clone()]),
-        false,
-        |caller, params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = invoke(caller, "status", true, params).await?;
-                Ok(())
-            })
-        },
+        |caller, params| Box::pin(async move { invoke(caller, "status", true, params).await }),
     )?;
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::extend(&repository, "log"),
@@ -211,15 +205,9 @@ fn install_repository_reads(
             [receiver.clone(), argument.clone()],
             [object.clone()],
         ),
-        false,
-        |caller, params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = invoke(caller, "log", true, params).await?;
-                Ok(())
-            })
-        },
+        |caller, params| Box::pin(async move { invoke(caller, "log", true, params).await }),
     )?;
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::extend(&repository, "diff"),
@@ -228,15 +216,9 @@ fn install_repository_reads(
             [receiver.clone(), argument.clone()],
             [object.clone()],
         ),
-        false,
-        |caller, params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = invoke(caller, "diff", true, params).await?;
-                Ok(())
-            })
-        },
+        |caller, params| Box::pin(async move { invoke(caller, "diff", true, params).await }),
     )?;
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::extend(&repository, "show"),
@@ -245,39 +227,21 @@ fn install_repository_reads(
             [receiver.clone(), argument.clone(), argument.clone()],
             [bytes.clone()],
         ),
-        false,
-        |caller, params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = invoke(caller, "show", true, params).await?;
-                Ok(())
-            })
-        },
+        |caller, params| Box::pin(async move { invoke(caller, "show", true, params).await }),
     )?;
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::extend(&repository, "branches"),
         FuncType::new(engine, [receiver.clone()], [array.clone()]),
-        false,
-        |caller, params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = invoke(caller, "branches", true, params).await?;
-                Ok(())
-            })
-        },
+        |caller, params| Box::pin(async move { invoke(caller, "branches", true, params).await }),
     )?;
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::extend(&repository, "remotes"),
         FuncType::new(engine, [receiver.clone()], [array.clone()]),
-        false,
-        |caller, params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = invoke(caller, "remotes", true, params).await?;
-                Ok(())
-            })
-        },
+        |caller, params| Box::pin(async move { invoke(caller, "remotes", true, params).await }),
     )?;
     Ok(())
 }
@@ -302,7 +266,7 @@ fn install_repository_writes(
     // Class method slots carry a value even when their source return type is void.
     let completion = argument.clone();
     let repository = crate::mangle::package_symbol(MODULE_NAME, "Repository");
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::extend(&repository, "add"),
@@ -311,16 +275,14 @@ fn install_repository_writes(
             [receiver.clone(), argument.clone()],
             [completion.clone()],
         ),
-        false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 invoke(caller, "add", true, params).await?;
-                *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
-                Ok(())
+                crate::runtime::prelude::undefined::value(caller)
             })
         },
     )?;
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::extend(&repository, "commit"),
@@ -332,15 +294,9 @@ fn install_repository_writes(
                 intr.string.clone().into(),
             ))],
         ),
-        false,
-        |caller, params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = invoke(caller, "commit", true, params).await?;
-                Ok(())
-            })
-        },
+        |caller, params| Box::pin(async move { invoke(caller, "commit", true, params).await }),
     )?;
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::extend(&repository, "createBranch"),
@@ -349,16 +305,14 @@ fn install_repository_writes(
             [receiver.clone(), argument.clone(), argument.clone()],
             [completion.clone()],
         ),
-        false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 invoke(caller, "createBranch", true, params).await?;
-                *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
-                Ok(())
+                crate::runtime::prelude::undefined::value(caller)
             })
         },
     )?;
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::extend(&repository, "switchBranch"),
@@ -367,16 +321,14 @@ fn install_repository_writes(
             [receiver.clone(), argument.clone()],
             [completion.clone()],
         ),
-        false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 invoke(caller, "switchBranch", true, params).await?;
-                *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
-                Ok(())
+                crate::runtime::prelude::undefined::value(caller)
             })
         },
     )?;
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::extend(&repository, "addRemote"),
@@ -385,16 +337,14 @@ fn install_repository_writes(
             [receiver.clone(), argument.clone(), argument.clone()],
             [completion.clone()],
         ),
-        false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 invoke(caller, "addRemote", true, params).await?;
-                *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
-                Ok(())
+                crate::runtime::prelude::undefined::value(caller)
             })
         },
     )?;
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::extend(&repository, "setRemoteUrl"),
@@ -403,16 +353,14 @@ fn install_repository_writes(
             [receiver.clone(), argument.clone(), argument.clone()],
             [completion.clone()],
         ),
-        false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 invoke(caller, "setRemoteUrl", true, params).await?;
-                *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
-                Ok(())
+                crate::runtime::prelude::undefined::value(caller)
             })
         },
     )?;
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::extend(&repository, "fetch"),
@@ -421,15 +369,9 @@ fn install_repository_writes(
             [receiver.clone(), argument.clone(), argument.clone()],
             [object.clone()],
         ),
-        false,
-        |caller, params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = invoke(caller, "fetch", true, params).await?;
-                Ok(())
-            })
-        },
+        |caller, params| Box::pin(async move { invoke(caller, "fetch", true, params).await }),
     )?;
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::extend(&repository, "pull"),
@@ -438,13 +380,7 @@ fn install_repository_writes(
             [receiver.clone(), argument.clone(), argument.clone()],
             [object.clone()],
         ),
-        false,
-        |caller, params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = invoke(caller, "pull", true, params).await?;
-                Ok(())
-            })
-        },
+        |caller, params| Box::pin(async move { invoke(caller, "pull", true, params).await }),
     )?;
     Ok(())
 }
@@ -581,15 +517,8 @@ async fn invoke(
             })
         })
         .await?;
-    crate::runtime::effects::convert_result(caller, |caller| {
-        encode_result(
-            caller,
-            outcome.value,
-            &path,
-            !method,
-            op == "commit",
-            max_bytes,
-        )
+    crate::runtime::host::convert_result(caller, |caller| {
+        encode_result(caller, outcome, &path, !method, op == "commit", max_bytes)
     })
 }
 

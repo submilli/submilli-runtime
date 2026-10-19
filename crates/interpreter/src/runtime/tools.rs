@@ -103,7 +103,6 @@ pub fn install_tools_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<(
         TOOLS_MODULE_NAME,
         crate::mangle::host(TOOLS_MODULE_NAME, "call"),
         ty,
-        /* deterministic = */ false,
         move |caller, params, results| {
             Box::pin(async move {
                 let params: &[Val; 2] = params.try_into().map_err(|_| {

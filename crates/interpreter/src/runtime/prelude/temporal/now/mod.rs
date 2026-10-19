@@ -60,12 +60,6 @@ pub(super) fn zoned_date_time_iso(
     })
 }
 
-impl crate::runtime::effects::NativeOutcome for ZonedObservation {
-    // The only retained allocation is the zone identifier; Timestamp is fixed size.
-    fn decoded_heap_bound(bytes: usize) -> u64 {
-        bytes as u64
-    }
-}
 impl ZonedObservation {
     pub fn zoned(&self, _caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Zoned> {
         let zone = match &self.zone {

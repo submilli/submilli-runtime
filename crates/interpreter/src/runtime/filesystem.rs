@@ -21,20 +21,6 @@ pub struct ReadPosition {
     pub bom_handled: bool,
     pub closed: bool,
 }
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum ResourceKind {
-    Reader(ReaderOptions),
-    Directory,
-    Writer,
-}
-/// Only this descriptor crosses execution history. Native handles never do.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ResourceDescriptor {
-    #[serde(rename = "scope")]
-    pub run_id: RunId,
-    pub id: EffectId,
-    pub kind: ResourceKind,
-}
 #[derive(serde::Serialize, serde::Deserialize)]
 pub enum ReadItem {
     Bytes(#[serde(with = "super::effects::binary")] Vec<u8>),
@@ -114,42 +100,62 @@ impl FilesystemInfo {
     }
 }
 
-#[async_trait::async_trait]
-pub trait FileReader: Send + Sync {
-    fn descriptor(&self) -> Option<ResourceDescriptor> {
-        None
+/// Resource values contain persistent identity and optional process-local handles.
+/// They never retain a backend or persistence services. Only durable resources
+/// have a run identity; default resources are valid in their original process.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct FileReader {
+    pub run_id: Option<RunId>,
+    pub id: EffectId,
+    pub options: ReaderOptions,
+    #[serde(skip)]
+    pub(crate) local: Option<super::default_filesystem::DefaultReader>,
+}
+impl FileReader {
+    pub fn new(run_id: RunId, id: EffectId, options: ReaderOptions) -> Self {
+        Self {
+            run_id: Some(run_id),
+            id,
+            options,
+            local: None,
+        }
     }
-    async fn next(
-        &mut self,
-        effect_id: &EffectId,
-        work: Option<Arc<WorkBudget>>,
-        limits: &super::limits::TenantLimits,
-    ) -> Result<ReadOutput, FilesystemError>;
-    async fn close(
-        &mut self,
-        effect_id: &EffectId,
-        work: Option<Arc<WorkBudget>>,
-    ) -> Result<(), FilesystemError>;
 }
 
-#[async_trait::async_trait]
-pub trait FileWriter: Send + Sync {
-    fn descriptor(&self) -> Option<ResourceDescriptor> {
-        None
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct FileWriter {
+    pub run_id: Option<RunId>,
+    pub id: EffectId,
+    pub closed: bool,
+    #[serde(skip)]
+    pub(crate) local: Option<super::default_filesystem::DefaultWriter>,
+}
+impl FileWriter {
+    pub fn new(run_id: RunId, id: EffectId) -> Self {
+        Self {
+            run_id: Some(run_id),
+            id,
+            closed: false,
+            local: None,
+        }
     }
-    fn is_closed(&self) -> bool;
-    async fn write(
-        &mut self,
-        effect_id: &EffectId,
-        work: Option<Arc<WorkBudget>>,
-        bytes: Vec<u8>,
-    ) -> Result<(), FilesystemError>;
-    /// Only explicit close publishes. Dropping a writer never publishes it.
-    async fn close(
-        &mut self,
-        effect_id: &EffectId,
-        work: Option<Arc<WorkBudget>>,
-    ) -> Result<(), FilesystemError>;
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct DirectoryReader {
+    pub run_id: Option<RunId>,
+    pub id: EffectId,
+    #[serde(skip)]
+    pub(crate) local: Option<super::default_filesystem::DefaultDirectory>,
+}
+impl DirectoryReader {
+    pub fn new(run_id: RunId, id: EffectId) -> Self {
+        Self {
+            run_id: Some(run_id),
+            id,
+            local: None,
+        }
+    }
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -184,26 +190,6 @@ impl<'de> serde::Deserialize<'de> for DirectoryEntry {
         })
     }
 }
-#[async_trait::async_trait]
-pub trait DirectoryReader: Send + Sync {
-    fn descriptor(&self) -> Option<ResourceDescriptor> {
-        None
-    }
-    async fn next_entry(
-        &mut self,
-        effect_id: &EffectId,
-        work: Option<Arc<WorkBudget>>,
-        limits: &super::limits::TenantLimits,
-    ) -> Result<Option<DirectoryEntry>, FilesystemError>;
-    fn retained_bytes(&self) -> u64;
-    async fn close(
-        &mut self,
-        effect_id: &EffectId,
-        work: Option<Arc<WorkBudget>>,
-        limits: &super::limits::TenantLimits,
-    ) -> Result<(), FilesystemError>;
-}
-
 #[async_trait::async_trait]
 pub trait Filesystem: Send + Sync {
     fn info(&self) -> FilesystemInfo;
@@ -276,32 +262,54 @@ pub trait Filesystem: Send + Sync {
         recursive: bool,
         budget: &mut dyn MutationBudget,
     ) -> Result<(), FilesystemError>;
-    /// Construct an ID-only resource without accessing storage during replay.
-    fn restore_reader(
+    async fn next_reader(
         &self,
-        _descriptor: ResourceDescriptor,
-    ) -> Result<Box<dyn FileReader>, FilesystemError> {
-        Err(FilesystemError::Unsupported("reader restoration"))
-    }
-    fn restore_directory(
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+        reader: &mut FileReader,
+        limits: &super::limits::TenantLimits,
+    ) -> Result<ReadOutput, FilesystemError>;
+    async fn close_reader(
         &self,
-        _descriptor: ResourceDescriptor,
-    ) -> Result<Box<dyn DirectoryReader>, FilesystemError> {
-        Err(FilesystemError::Unsupported("directory restoration"))
-    }
-    fn restore_writer(
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+        reader: &mut FileReader,
+    ) -> Result<(), FilesystemError>;
+    async fn next_directory(
         &self,
-        _descriptor: ResourceDescriptor,
-    ) -> Result<Box<dyn FileWriter>, FilesystemError> {
-        Err(FilesystemError::Unsupported("writer restoration"))
-    }
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+        directory: &mut DirectoryReader,
+        limits: &super::limits::TenantLimits,
+    ) -> Result<Option<DirectoryEntry>, FilesystemError>;
+    async fn close_directory(
+        &self,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+        directory: &mut DirectoryReader,
+        limits: &super::limits::TenantLimits,
+    ) -> Result<(), FilesystemError>;
+    async fn write_chunk(
+        &self,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+        writer: &mut FileWriter,
+        bytes: Vec<u8>,
+    ) -> Result<(), FilesystemError>;
+    /// Only explicit close publishes. Dropping a resource never publishes it.
+    async fn close_writer(
+        &self,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+        writer: &mut FileWriter,
+    ) -> Result<(), FilesystemError>;
     async fn open_reader(
         &self,
         effect_id: &EffectId,
         work: Option<Arc<WorkBudget>>,
         path: &str,
         options: ReaderOptions,
-    ) -> Result<Box<dyn FileReader>, FilesystemError>;
+    ) -> Result<FileReader, FilesystemError>;
     async fn open_directory(
         &self,
         effect_id: &EffectId,
@@ -309,13 +317,13 @@ pub trait Filesystem: Send + Sync {
         path: &str,
         recursive: bool,
         limits: &super::limits::TenantLimits,
-    ) -> Result<Box<dyn DirectoryReader>, FilesystemError>;
+    ) -> Result<DirectoryReader, FilesystemError>;
     async fn open_writer(
         &self,
         effect_id: &EffectId,
         work: Option<Arc<WorkBudget>>,
         path: &str,
-    ) -> Result<Box<dyn FileWriter>, FilesystemError>;
+    ) -> Result<FileWriter, FilesystemError>;
 }
 
 pub fn bounded_read(

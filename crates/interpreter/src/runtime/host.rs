@@ -185,7 +185,6 @@ fn install_internal_module(
         INTERNAL_MODULE_NAME,
         crate::mangle::host(INTERNAL_MODULE_NAME, "uint8array_to_base64"),
         ty,
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let bytes =
                 read_uint8_array_arg(&mut *caller, abi_arg(params, 0)?, "uint8array_to_base64")?;
@@ -222,7 +221,6 @@ fn install_internal_module(
         INTERNAL_MODULE_NAME,
         crate::mangle::host(INTERNAL_MODULE_NAME, "uint8array_from_base64"),
         ty,
-        /* deterministic = */ true,
         move |caller, params, results| -> wasmtime::Result<()> {
             let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "uint8array_from_base64")?;
             fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
@@ -264,7 +262,6 @@ fn install_internal_module(
         INTERNAL_MODULE_NAME,
         crate::mangle::host(INTERNAL_MODULE_NAME, "textencoder_encode"),
         ty,
-        /* deterministic = */ true,
         move |caller, params, results| -> wasmtime::Result<()> {
             let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "textencoder_encode")?;
             let bytes = s.into_bytes();
@@ -288,7 +285,6 @@ fn install_internal_module(
         INTERNAL_MODULE_NAME,
         crate::mangle::host(INTERNAL_MODULE_NAME, "textdecoder_decode"),
         ty,
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let bytes =
                 read_uint8_array_arg(&mut *caller, abi_arg(params, 0)?, "textdecoder_decode")?;
@@ -430,7 +426,6 @@ fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
         NUMBER_MODULE_NAME,
         crate::mangle::host(NUMBER_MODULE_NAME, "toString"),
         to_string_ty,
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let n = match *abi_arg(params, 0)? {
                 Val::F64(bits) => f64::from_bits(bits),
@@ -453,7 +448,6 @@ fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
         NUMBER_MODULE_NAME,
         crate::mangle::host(NUMBER_MODULE_NAME, "toNumber"),
         to_number_ty,
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "number.toNumber")?;
             let value = string_to_number_js(&s);
@@ -472,7 +466,6 @@ fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
         NUMBER_MODULE_NAME,
         crate::mangle::host(NUMBER_MODULE_NAME, "parseInt"),
         parse_int_ty,
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "number.parseInt")?;
             let radix = match *abi_arg(params, 1)? {
@@ -495,7 +488,6 @@ fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
         NUMBER_MODULE_NAME,
         crate::mangle::host(NUMBER_MODULE_NAME, "parseFloat"),
         parse_float_ty,
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "number.parseFloat")?;
             let value = parse_float_js(&s);
@@ -534,7 +526,6 @@ fn register_number_formatter(
         NUMBER_MODULE_NAME,
         crate::mangle::host(NUMBER_MODULE_NAME, name),
         ty,
-        /* deterministic = */ true,
         move |caller, params, results| -> wasmtime::Result<()> {
             let (Val::F64(x_bits), Val::F64(arg_bits)) = (abi_arg(params, 0)?, abi_arg(params, 1)?)
             else {
@@ -1681,8 +1672,6 @@ pub(crate) fn string_array_type(engine: &Engine) -> ArrayType {
 /// method's dispatch key (e.g. `submilli:prelude#String#repeat`) so codegen's
 /// method lookup resolves to it.
 ///
-/// `_deterministic` is reserved for Phase-2 durable-log wrapping; unused today.
-///
 /// Ordinary host errors become catchable guest errors via [`throw_error`].
 /// [`FatalHostError`], an engine trap and a reached memory cap bypass conversion
 /// and terminate execution. A body that already raised a throw (its `Err` is a
@@ -1699,7 +1688,6 @@ pub fn register_host_fn(
     module: &str,
     mangled_name: crate::MangledName,
     ty: FuncType,
-    _deterministic: bool,
     body: impl Fn(&mut Caller<'_, StoreData>, &[Val], &mut [Val]) -> wasmtime::Result<()>
     + Send
     + Sync
@@ -1789,7 +1777,6 @@ pub fn register_host_fn_async<F>(
     module: &str,
     mangled_name: crate::MangledName,
     ty: FuncType,
-    _deterministic: bool,
     body: F,
 ) -> wasmtime::Result<()>
 where
@@ -1834,6 +1821,74 @@ where
         },
     )?;
     Ok(())
+}
+
+/// Register a host function that returns one Wasm value. The adapter owns the
+/// ABI slot; the body performs argument conversion, native work, then conversion
+/// of its result, in that order.
+pub fn register_host_value_async<F>(
+    linker: &mut Linker<StoreData>,
+    module: &str,
+    mangled_name: crate::MangledName,
+    ty: FuncType,
+    body: F,
+) -> wasmtime::Result<()>
+where
+    F: for<'a> Fn(
+            &'a mut Caller<'_, StoreData>,
+            &'a [Val],
+        ) -> Pin<Box<dyn Future<Output = wasmtime::Result<Val>> + Send + 'a>>
+        + Send
+        + Sync
+        + 'static,
+{
+    if ty.results().len() != 1 {
+        return Err(fatal_host_error(
+            "value-returning host function requires one ABI result",
+        ));
+    }
+    register_host_fn_async(
+        linker,
+        module,
+        mangled_name,
+        ty,
+        move |caller, params, results| {
+            let value = body(caller, params);
+            Box::pin(async move {
+                *abi_result(results, 0)? = value.await?;
+                Ok(())
+            })
+        },
+    )
+}
+
+/// Value-returning counterpart for iterator callbacks reached through call_ref.
+pub(crate) fn host_value_async<F>(
+    store: impl AsContextMut<Data = StoreData>,
+    ty: FuncType,
+    body: F,
+) -> wasmtime::Func
+where
+    F: for<'a> Fn(
+            Caller<'a, StoreData>,
+            &'a [Val],
+        ) -> Box<dyn Future<Output = wasmtime::Result<Val>> + Send + 'a>
+        + Send
+        + Sync
+        + 'static,
+{
+    fuel::host_func_async(store, ty, move |caller, params, results| {
+        let value = Box::into_pin(body(caller, params));
+        Box::new(async move {
+            let [result] = results else {
+                return Err(fatal_host_error(
+                    "value-returning callback requires one ABI result",
+                ));
+            };
+            *result = value.await?;
+            Ok(())
+        })
+    })
 }
 
 /// PackageDeclaration for host fns the consumer imports directly. `console.log` and
@@ -1921,6 +1976,17 @@ fn number_module_definitions() -> PackageDeclaration {
 /// defaulted parameter still accepts `undefined` at the call.
 pub(crate) fn parse_int_radix_param() -> Param {
     Param::with_default("radix", Type::Number, crate::DefaultValue::Number(0.0))
+}
+
+/// Convert an observed result to guest values without losing an ordinary error
+/// while allocating its exception at the end of the fuel budget.
+pub(crate) fn convert_result<T>(
+    caller: &mut Caller<'_, StoreData>,
+    convert: impl FnOnce(&mut Caller<'_, StoreData>) -> wasmtime::Result<T>,
+) -> wasmtime::Result<T> {
+    fuel::settle_result(caller, |caller| {
+        convert(caller).map_err(|error| throw_host_error(caller, error))
+    })
 }
 
 #[cfg(test)]
@@ -2068,7 +2134,6 @@ mod tests {
                         TEST_MODULE,
                         name.clone(),
                         ty,
-                        true,
                         move |_, _, _| Box::pin(async move { Err(failure()) }),
                     )
                     .expect("async registration");
@@ -2078,7 +2143,6 @@ mod tests {
                         TEST_MODULE,
                         name.clone(),
                         ty,
-                        true,
                         move |_, _, _| Err(failure()),
                     )
                     .expect("sync registration");
@@ -2184,7 +2248,6 @@ mod tests {
             TEST_MODULE,
             name.clone(),
             FuncType::new(&engine, [], [ValType::I32]),
-            true,
             |_caller, _params, results| {
                 results[0] = Val::I32(42);
                 Ok(())
@@ -2214,7 +2277,6 @@ mod tests {
             TEST_MODULE,
             name.clone(),
             FuncType::new(&engine, [], []),
-            true,
             |_caller, _params, _results| Err(wasmtime::Error::msg("boom")),
         )
         .expect("register");
@@ -2235,7 +2297,6 @@ mod tests {
             TEST_MODULE,
             name.clone(),
             FuncType::new(&engine, [], []),
-            true,
             |_, _, _| Err(super::fatal_host_error("broken dynamic object ABI")),
         )
         .expect("register");
@@ -2258,7 +2319,6 @@ mod tests {
             TEST_MODULE,
             name.clone(),
             FuncType::new(&engine, [], []),
-            true,
             |_, _, _| Box::pin(async { Err(super::fatal_host_error("broken dynamic object ABI")) }),
         )
         .expect("register");
@@ -2284,7 +2344,6 @@ mod tests {
             TEST_MODULE,
             name.clone(),
             FuncType::new(&engine, [], []),
-            true,
             |_caller, _params, _results| Err(wasmtime::Error::new(wasmtime::ThrownException)),
         )
         .expect("register");

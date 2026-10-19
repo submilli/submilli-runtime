@@ -2037,3 +2037,9 @@ waiting costs no fuel. Backend work keeps its existing IO/SCAN/PARSE/SYSCALL cos
 | security.check; console output | Gate/write cost inside boundary; replay skips external output but reconstructs retained console text. |
 | code read/search/glob/tree/diffFiles/edit/insertAt/applyPatch | Existing native scan/parse/walk/write costs inside boundary; diffText stays pure. Mutation validates result size before publication. |
 | Git worker operations | Existing native WorkingBudget/Work settlement inside boundary, guest encoding afterward. Worker ownership/draining is unchanged. |
+
+Host registration no longer carries an unused determinism flag. Value-returning
+host adapters own ABI result slots; native outcome recording returns the Rust value
+and ordinary host conversion helpers settle its marshalling charges. Resource
+serialization skips native handles. These interface changes preserve the formulas
+and before-effect/after-effect timing in the table above.

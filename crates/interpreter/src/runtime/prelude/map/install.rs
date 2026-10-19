@@ -41,7 +41,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("get"),
         ft(vec![obj.clone(), obj.clone()], vec![obj.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 *abi_result(results, 0)? =
@@ -58,7 +57,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![obj.clone(), obj.clone(), obj.clone()],
             vec![obj.clone()],
         ),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 *abi_result(results, 0)? = super::set(
@@ -77,7 +75,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("has"),
         ft(vec![obj.clone(), obj.clone()], vec![boolean.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let r = super::has(caller, abi_arg(params, 0)?, abi_arg(params, 1)?).await?;
@@ -91,7 +88,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("delete"),
         ft(vec![obj.clone(), obj.clone()], vec![boolean.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let r = super::delete(caller, abi_arg(params, 0)?, abi_arg(params, 1)?).await?;
@@ -105,7 +101,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("clear"),
         ft(vec![obj.clone()], vec![]),
-        true,
         |caller, params, _results| {
             super::clear(caller, abi_arg(params, 0)?)?;
             Ok(())
@@ -116,7 +111,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("size"),
         ft(vec![obj.clone()], vec![ValType::F64]),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = super::size(caller, abi_arg(params, 0)?)?;
             Ok(())
@@ -128,7 +122,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         method_key("forEach"),
         // The callback crosses erased, as `Array`'s do.
         ft(vec![obj.clone(), obj.clone()], vec![]),
-        true,
         |caller, params, _results| {
             Box::pin(async move {
                 let f =
@@ -143,7 +136,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("keys"),
         ft(vec![obj.clone()], vec![iter_ret.clone()]),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = super::keys(caller, abi_arg(params, 0)?)?;
             Ok(())
@@ -154,7 +146,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("values"),
         ft(vec![obj.clone()], vec![iter_ret.clone()]),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = super::values(caller, abi_arg(params, 0)?)?;
             Ok(())
@@ -166,7 +157,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             method_key(name),
             ft(vec![obj.clone()], vec![iter_ret.clone()]),
-            true,
             |caller, params, results| {
                 *abi_result(results, 0)? = super::entries(caller, abi_arg(params, 0)?)?;
                 Ok(())
@@ -180,7 +170,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("new"),
         ft(vec![obj.clone()], vec![obj.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 *abi_result(results, 0)? = super::construct(caller, abi_arg(params, 0)?).await?;
@@ -193,7 +182,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("groupBy"),
         ft(vec![obj.clone(), obj.clone()], vec![obj.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 *abi_result(results, 0)? = crate::runtime::prelude::object::map_group_by(

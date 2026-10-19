@@ -1,5 +1,5 @@
 //! Contained workspace navigation and anchor-based editing, gated by existing fs grants.
-use crate::runtime::host::{abi_arg, abi_result};
+use crate::runtime::host::abi_arg;
 mod budget;
 pub mod declaration;
 mod myers;
@@ -11,9 +11,7 @@ mod walk;
 
 use crate::runtime::fuel;
 use crate::runtime::{
-    StoreData,
-    host::{register_host_fn_async, write_submilli_string_struct_units},
-    intrinsic_types::build_intrinsic_types,
+    StoreData, host::write_submilli_string_struct_units, intrinsic_types::build_intrinsic_types,
     prelude::vtable::read_string_units,
 };
 use crate::stdlib::shared::{
@@ -73,18 +71,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
         ),
         ("applyPatch", vec![string.clone(), string], object),
     ] {
-        register_host_fn_async(
+        crate::runtime::host::register_host_value_async(
             linker,
             MODULE_NAME,
             crate::mangle::package_symbol(MODULE_NAME, name),
             FuncType::new(&engine, params, [result]),
-            name == "diffText",
-            move |caller, params, results| {
-                Box::pin(async move {
-                    *abi_result(results, 0)? = invoke(caller, name, params).await?;
-                    Ok(())
-                })
-            },
+            move |caller, params| Box::pin(async move { invoke(caller, name, params).await }),
         )?;
     }
     Ok(())
@@ -143,13 +135,6 @@ struct CodeResult {
     // Live native buffers remain charged through history encoding and Wasm conversion.
     #[serde(skip)]
     _budget: Option<Budget>,
-}
-impl crate::runtime::effects::NativeOutcome for CodeResult {
-    const DYNAMIC_MAPS: bool = true;
-    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<Value>();
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
 }
 
 async fn invoke(
@@ -286,7 +271,7 @@ async fn invoke(
             })
         })
         .await?;
-    crate::runtime::effects::convert_result(caller, |caller| match &result.value.value {
+    crate::runtime::host::convert_result(caller, |caller| match &result.value {
         CodeValue::Json(value) => encode(caller, &mut Budget::new(caller), value),
         CodeValue::Text(text) => Ok(Val::AnyRef(Some(
             write_submilli_string_struct_units(caller, text)?.to_anyref(),

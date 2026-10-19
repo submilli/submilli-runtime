@@ -546,21 +546,6 @@ impl<'de> serde::Deserialize<'de> for EmbeddingBatch {
         .map_err(serde::de::Error::custom)
     }
 }
-impl super::effects::NativeOutcome for EmbeddingBatch {
-    fn encoding_scratch(&self) -> u64 {
-        (self.vectors.len() as u64).saturating_mul(4)
-    }
-    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<SubBatchSettlement>();
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}
-impl super::effects::NativeOutcome for Vec<EmbeddingModel> {
-    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<EmbeddingModel>();
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}
 
 impl EmbeddingBatch {
     /// Validates `vectors.len() == count * dimensions` (checked multiply).

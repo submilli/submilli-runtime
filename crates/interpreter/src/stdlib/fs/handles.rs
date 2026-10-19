@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::runtime::durable::EffectId;
-use crate::runtime::filesystem::FilesystemError;
+use crate::runtime::filesystem::{Filesystem, FilesystemError};
 use crate::runtime::fuel::WorkBudget;
 use crate::runtime::limits::{MemoryCapExceeded, TenantLimits};
 
@@ -72,9 +72,10 @@ pub trait Closable: Send + Sync {
     /// Release process-local accounting after a successful explicit close,
     /// including when execution history skipped the backend call.
     fn release_buffer(&mut self);
-    fn descriptor(&self) -> Option<crate::runtime::filesystem::ResourceDescriptor>;
+    fn id(&self) -> EffectId;
     async fn close(
         &mut self,
+        filesystem: &dyn Filesystem,
         effect_id: &EffectId,
         work: Option<Arc<WorkBudget>>,
         limits: &TenantLimits,
@@ -82,12 +83,12 @@ pub trait Closable: Send + Sync {
 }
 
 pub struct BackendReader {
-    pub reader: Box<dyn crate::runtime::filesystem::FileReader>,
+    pub reader: crate::runtime::filesystem::FileReader,
     charge: ByteCharge,
 }
 impl BackendReader {
     pub fn new(
-        reader: Box<dyn crate::runtime::filesystem::FileReader>,
+        reader: crate::runtime::filesystem::FileReader,
         limits: &TenantLimits,
     ) -> Result<Self, MemoryCapExceeded> {
         Ok(Self {
@@ -95,8 +96,8 @@ impl BackendReader {
             charge: ByteCharge::new(limits, HANDLE_BUF_BYTES)?,
         })
     }
-    pub fn descriptor(&self) -> Option<crate::runtime::filesystem::ResourceDescriptor> {
-        self.reader.descriptor()
+    pub fn id(&self) -> EffectId {
+        self.reader.id.clone()
     }
 }
 #[async_trait::async_trait]
@@ -104,37 +105,40 @@ impl Closable for BackendReader {
     fn release_buffer(&mut self) {
         self.charge.release();
     }
-    fn descriptor(&self) -> Option<crate::runtime::filesystem::ResourceDescriptor> {
-        self.reader.descriptor()
+    fn id(&self) -> EffectId {
+        self.reader.id.clone()
     }
     async fn close(
         &mut self,
+        filesystem: &dyn Filesystem,
         effect_id: &EffectId,
         work: Option<Arc<WorkBudget>>,
         _limits: &TenantLimits,
     ) -> Result<(), FilesystemError> {
-        self.reader.close(effect_id, work).await?;
+        filesystem
+            .close_reader(effect_id, work, &mut self.reader)
+            .await?;
         self.charge.release();
         Ok(())
     }
 }
 
 pub struct ChargedDirIter {
-    pub walk: Box<dyn crate::runtime::filesystem::DirectoryReader>,
+    pub walk: crate::runtime::filesystem::DirectoryReader,
     charge: ByteCharge,
 }
 impl ChargedDirIter {
     pub fn new(
-        walk: Box<dyn crate::runtime::filesystem::DirectoryReader>,
+        walk: crate::runtime::filesystem::DirectoryReader,
         limits: &TenantLimits,
     ) -> Result<Self, MemoryCapExceeded> {
         Ok(Self {
-            charge: ByteCharge::new(limits, HANDLE_BUF_BYTES.max(walk.retained_bytes()))?,
+            charge: ByteCharge::new(limits, HANDLE_BUF_BYTES)?,
             walk,
         })
     }
-    pub fn descriptor(&self) -> Option<crate::runtime::filesystem::ResourceDescriptor> {
-        self.walk.descriptor()
+    pub fn id(&self) -> EffectId {
+        self.walk.id.clone()
     }
 }
 #[async_trait::async_trait]
@@ -142,35 +146,38 @@ impl Closable for ChargedDirIter {
     fn release_buffer(&mut self) {
         self.charge.release();
     }
-    fn descriptor(&self) -> Option<crate::runtime::filesystem::ResourceDescriptor> {
-        self.walk.descriptor()
+    fn id(&self) -> EffectId {
+        self.walk.id.clone()
     }
     async fn close(
         &mut self,
+        filesystem: &dyn Filesystem,
         effect_id: &EffectId,
         work: Option<Arc<WorkBudget>>,
         _limits: &TenantLimits,
     ) -> Result<(), FilesystemError> {
-        self.walk.close(effect_id, work, _limits).await?;
+        filesystem
+            .close_directory(effect_id, work, &mut self.walk, _limits)
+            .await?;
         self.charge.release();
         Ok(())
     }
 }
 
-/// A guest writer holds only the selected backend and its bounded host buffer.
+/// A guest writer owns its resource state and accounts for its bounded buffer.
 pub struct BackendFileWriter {
-    writer: Box<dyn crate::runtime::filesystem::FileWriter>,
+    writer: crate::runtime::filesystem::FileWriter,
     charge: ByteCharge,
 }
 impl BackendFileWriter {
     pub fn release_buffer(&mut self) {
         self.charge.release();
     }
-    pub fn descriptor(&self) -> Option<crate::runtime::filesystem::ResourceDescriptor> {
-        self.writer.descriptor()
+    pub fn id(&self) -> EffectId {
+        self.writer.id.clone()
     }
     pub fn new(
-        writer: Box<dyn crate::runtime::filesystem::FileWriter>,
+        writer: crate::runtime::filesystem::FileWriter,
         limits: &TenantLimits,
     ) -> Result<Self, MemoryCapExceeded> {
         Ok(Self {
@@ -180,19 +187,25 @@ impl BackendFileWriter {
     }
     pub async fn write(
         &mut self,
+        filesystem: &dyn Filesystem,
         effect_id: &EffectId,
         work: Option<Arc<WorkBudget>>,
         bytes: Vec<u8>,
     ) -> Result<(), FilesystemError> {
-        self.writer.write(effect_id, work, bytes).await
+        filesystem
+            .write_chunk(effect_id, work, &mut self.writer, bytes)
+            .await
     }
     pub async fn close(
         &mut self,
+        filesystem: &dyn Filesystem,
         effect_id: &EffectId,
         work: Option<Arc<WorkBudget>>,
     ) -> Result<(), FilesystemError> {
-        let result = self.writer.close(effect_id, work).await;
-        if self.writer.is_closed() {
+        let result = filesystem
+            .close_writer(effect_id, work, &mut self.writer)
+            .await;
+        if self.writer.closed {
             self.charge.release();
         }
         result
@@ -202,6 +215,7 @@ impl BackendFileWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::default_filesystem::DefaultFilesystem;
 
     #[tokio::test]
     async fn failed_native_backend_close_refunds_a_discarded_buffer() {
@@ -219,13 +233,13 @@ mod tests {
             .unwrap();
         let mut handle = BackendFileWriter::new(writer, &limits).unwrap();
         handle
-            .write(&effect_id, None, b"data".to_vec())
+            .write(&filesystem, &effect_id, None, b"data".to_vec())
             .await
             .unwrap();
         std::fs::create_dir(root.path().join("target")).unwrap();
-        assert!(handle.close(&effect_id, None).await.is_err());
+        assert!(handle.close(&filesystem, &effect_id, None).await.is_err());
         assert_eq!(limits.host_attached_bytes(), 0);
-        assert!(handle.close(&effect_id, None).await.is_ok());
+        assert!(handle.close(&filesystem, &effect_id, None).await.is_ok());
     }
 
     async fn writer_over(vfs: &crate::runtime::Vfs, limits: &TenantLimits) -> BackendFileWriter {
@@ -252,9 +266,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vfs = crate::runtime::Vfs::external(dir.path().to_path_buf()).unwrap();
         let mut w = writer_over(&vfs, &limits).await;
-        w.write(&EffectId::stub().unwrap(), None, b"hello\n".to_vec())
-            .await
-            .unwrap();
+        w.write(
+            &DefaultFilesystem::new(vfs.clone()),
+            &EffectId::stub().unwrap(),
+            None,
+            b"hello\n".to_vec(),
+        )
+        .await
+        .unwrap();
         assert!(limits.host_attached_bytes() > 0);
         drop(w);
         assert!(
@@ -275,10 +294,21 @@ mod tests {
         let vfs = crate::runtime::Vfs::external(dir.path().to_path_buf()).unwrap();
         let final_path = dir.path().join("out.txt");
         let mut w = writer_over(&vfs, &limits).await;
-        w.write(&EffectId::stub().unwrap(), None, b"hello\n".to_vec())
-            .await
-            .unwrap();
-        w.close(&EffectId::stub().unwrap(), None).await.unwrap();
+        w.write(
+            &DefaultFilesystem::new(vfs.clone()),
+            &EffectId::stub().unwrap(),
+            None,
+            b"hello\n".to_vec(),
+        )
+        .await
+        .unwrap();
+        w.close(
+            &DefaultFilesystem::new(vfs.clone()),
+            &EffectId::stub().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
         assert!(final_path.exists());
         assert!(temp_leftovers(dir.path()).is_empty());
         assert_eq!(limits.host_attached_bytes(), 0);

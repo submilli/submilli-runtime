@@ -286,7 +286,6 @@ mod tests {
             "test:arguments",
             name.clone(),
             FuncType::new(&engine, [ValType::I32], [ValType::ANYREF]),
-            true,
             |caller, args, results| {
                 let default = if args[0].i32() == Some(0) {
                     DefaultValue::GlobalConst(crate::mangle::host(

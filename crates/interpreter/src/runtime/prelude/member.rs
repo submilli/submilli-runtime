@@ -45,7 +45,6 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             crate::mangle::prelude(&format!("__value_{name}")),
             FuncType::new(&engine, vec![object.clone(); arity], [object.clone()]),
-            true,
             move |caller, params, results| {
                 Box::pin(async move {
                     *abi_result(results, 0)? = match name {

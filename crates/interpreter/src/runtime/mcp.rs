@@ -117,7 +117,6 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
         MCP_MODULE_NAME,
         crate::mangle::host(MCP_MODULE_NAME, "call"),
         ty,
-        /* deterministic = */ false,
         move |caller, params, results| {
             Box::pin(async move {
                 let params: &[Val; 3] = params.try_into().map_err(|_| {
@@ -217,7 +216,7 @@ pub(crate) fn allocate_response(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     response: &McpResponse,
 ) -> wasmtime::Result<Val> {
-    crate::runtime::effects::convert_result(caller, |caller| {
+    crate::runtime::host::convert_result(caller, |caller| {
         fuel::settle(&mut *caller, fuel::ELEM, response.visited_nodes())?;
         let allocator = crate::runtime::json::JsonUnknownAllocator::new(caller)?;
         let value = crate::runtime::json::JsonValue::from(response.value());

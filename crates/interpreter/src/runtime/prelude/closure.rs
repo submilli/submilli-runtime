@@ -397,7 +397,6 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         length_key(),
         FuncType::new(&engine, [object], [ValType::F64]),
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let function = read_callback(caller, abi_arg(params, 0)?, "Function#length")?;
             let length = function.length(caller)?;

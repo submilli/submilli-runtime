@@ -513,7 +513,6 @@ mod tests {
             "test:cursor",
             name.clone(),
             FuncType::new(&engine, [wasmtime::ValType::I32], []),
-            true,
             |_, params, _| {
                 let failure = match params[0].i32().unwrap() {
                     0 => ciphertext_len(usize::MAX).map(|_| ()),

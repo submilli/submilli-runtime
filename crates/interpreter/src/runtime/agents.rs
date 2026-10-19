@@ -119,16 +119,3 @@ pub trait AgentProvider: Send + Sync {
         &'a self,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<AgentInfo>, AgentCallError>> + Send + 'a>>;
 }
-
-impl super::effects::NativeOutcome for AgentOutcome {
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}
-
-impl super::effects::NativeOutcome for Vec<AgentInfo> {
-    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<AgentInfo>();
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}

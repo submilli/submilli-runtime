@@ -8,8 +8,7 @@ use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
 use crate::runtime::host::{
-    intrinsic_string_type, read_string_arg, register_host_fn, register_host_fn_async,
-    write_submilli_string_struct,
+    intrinsic_string_type, read_string_arg, register_host_fn, write_submilli_string_struct,
 };
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
@@ -67,44 +66,40 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     ));
 
     let gen_ty = FuncType::new(&engine, [], [string.clone()]);
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "v4"),
         gen_ty.clone(),
-        /* deterministic = */ false,
-        |caller, _params, results| {
+        |caller, _params| {
             Box::pin(async move {
                 let value = crate::runtime::effects::execute(caller, "uuid.v4", (), |_, _, ()| {
                     Box::pin(async { Ok(::uuid::Uuid::new_v4().to_string()) })
                 })
                 .await?;
-                let st = crate::runtime::effects::convert_result(caller, |caller| {
+                let st = crate::runtime::host::convert_result(caller, |caller| {
                     write_submilli_string_struct(caller, &value)
                 })?;
-                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
-                Ok(())
+                Ok(Val::AnyRef(Some(st.to_anyref())))
             })
         },
     )?;
 
-    register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "v7"),
         gen_ty,
-        /* deterministic = */ false,
-        |caller, _params, results| {
+        |caller, _params| {
             Box::pin(async move {
                 let value = crate::runtime::effects::execute(caller, "uuid.v7", (), |_, _, ()| {
                     Box::pin(async { Ok(::uuid::Uuid::now_v7().to_string()) })
                 })
                 .await?;
-                let st = crate::runtime::effects::convert_result(caller, |caller| {
+                let st = crate::runtime::host::convert_result(caller, |caller| {
                     write_submilli_string_struct(caller, &value)
                 })?;
-                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
-                Ok(())
+                Ok(Val::AnyRef(Some(st.to_anyref())))
             })
         },
     )?;
@@ -115,7 +110,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "validate"),
         validate_ty,
-        /* deterministic = */ true,
         |caller, params, results| {
             let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "uuid.validate")?;
             *abi_result(results, 0)? = Val::I32(i32::from(::uuid::Uuid::parse_str(&s).is_ok()));

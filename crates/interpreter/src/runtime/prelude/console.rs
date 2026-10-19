@@ -37,7 +37,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         log_key(),
         FuncType::new(&engine, [first_ty, rest_ty], []),
-        false,
         |caller, params, _results| {
             Box::pin(async move {
                 let [first, rest] = params else {
@@ -55,11 +54,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     &caller.data().tenant_limits,
                     line.len() as u64,
                 )?;
+                let mut emitted = false;
                 let outcome = crate::runtime::effects::execute(
                     caller,
                     "console.log",
                     line.clone(),
                     |caller, _, line| {
+                        emitted = true;
                         Box::pin(async move {
                             let mut output = CountedWriter {
                                 sink: &mut caller.data_mut().console,
@@ -80,16 +81,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     },
                 )
                 .await?;
-                if outcome.replayed
-                    && let Some(output) = &mut caller.data_mut().replay_console
-                {
+                if !emitted && let Some(output) = &mut caller.data_mut().replay_console {
                     let length = usize::try_from(outcome.written).map_err(fatal_host_error)?;
                     let bytes = line.as_bytes().get(..length).ok_or_else(|| {
                         fatal_host_error("console history exceeds reconstructed line")
                     })?;
                     output.write_all(bytes).map_err(fatal_host_error)?;
                 }
-                crate::runtime::effects::convert_result(caller, |caller| match &outcome.error {
+                crate::runtime::host::convert_result(caller, |caller| match &outcome.error {
                     Some(error) => Err(crate::runtime::host::throw_host_error(
                         caller,
                         crate::runtime::host::range_error(error),
@@ -105,11 +104,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 struct ConsoleOutcome {
     written: u64,
     error: Option<String>,
-}
-impl crate::runtime::effects::NativeOutcome for ConsoleOutcome {
-    fn decoded_heap_bound(bytes: usize) -> u64 {
-        bytes as u64
-    }
 }
 
 struct CountedWriter<'a> {

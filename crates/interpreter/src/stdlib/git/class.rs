@@ -274,7 +274,6 @@ fn install_factories(
             "open",
         ),
         FuncType::new(engine, [string.clone()], [repository_result.clone()]),
-        false,
         {
             let class = class.clone();
             move |caller, params, results| {
@@ -299,7 +298,6 @@ fn install_factories(
             [string.clone(), options.clone()],
             [repository_result.clone()],
         ),
-        false,
         {
             let class = class.clone();
             move |caller, params, results| {
@@ -324,7 +322,6 @@ fn install_factories(
             [string.clone(), string.clone(), options.clone()],
             [repository_result.clone()],
         ),
-        false,
         {
             let class = class.clone();
             move |caller, params, results| {
@@ -360,7 +357,6 @@ fn install_constructor(
                 class.instance_type.clone().into(),
             ))],
         ),
-        false,
         move |caller, params, results| {
             let class = class.clone();
             Box::pin(async move {
@@ -382,7 +378,6 @@ fn install_constructor(
             ],
             [],
         ),
-        false,
         |caller, params, _results| {
             Box::pin(async move {
                 let path = super::invoke(caller, "open", false, &params[1..]).await?;

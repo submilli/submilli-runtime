@@ -1,5 +1,4 @@
 use super::*;
-use interpreter::runtime::filesystem::FileReader;
 
 fn id() -> EffectId {
     uuid::Uuid::new_v4().to_string().into()
@@ -32,8 +31,7 @@ async fn pending_resources_finish_on_explicit_retry_and_rejected_opens_replay() 
     let limits = interpreter::runtime::limits::TenantLimits::new(1 << 20);
     assert_eq!(
         read_bytes(
-            handle
-                .next(&resource_effect_id(), None, &limits)
+            Filesystem::next_reader(fs, &resource_effect_id(), None, &mut handle, &limits)
                 .await
                 .unwrap()
         )
@@ -57,15 +55,13 @@ async fn pending_resources_finish_on_explicit_retry_and_rejected_opens_replay() 
     let mut listing = fs.listing(&listing, "/", false).await.unwrap();
     let limits = interpreter::runtime::limits::TenantLimits::new(64 << 20);
     assert!(
-        listing
-            .next_entry(&resource_effect_id(), None, &limits)
+        Filesystem::next_directory(fs, &resource_effect_id(), None, &mut listing, &limits)
             .await
             .unwrap()
             .is_some()
     );
     assert!(
-        listing
-            .next_entry(&resource_effect_id(), None, &limits)
+        Filesystem::next_directory(fs, &resource_effect_id(), None, &mut listing, &limits)
             .await
             .unwrap()
             .is_none()

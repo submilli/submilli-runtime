@@ -765,19 +765,6 @@ impl ExecutionTokenBudget {
     }
 }
 
-impl crate::runtime::effects::NativeOutcome for Vec<LlmOutcome> {
-    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<LlmOutcome>();
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}
-impl crate::runtime::effects::NativeOutcome for Vec<LlmModel> {
-    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<LlmModel>();
-    fn decoded_heap_bound(_: usize) -> u64 {
-        0
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

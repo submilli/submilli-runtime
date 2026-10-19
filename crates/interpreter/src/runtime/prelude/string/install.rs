@@ -100,7 +100,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("fromCharCode"),
         FuncType::new(&engine, [array_ref.clone()], [abi.value_type()]),
-        true,
         move |caller, params, results| {
             let codes = read_number_array(caller, abi_arg(params, 0)?, "String.fromCharCode")?;
             let out = from_char_code(&codes);
@@ -114,7 +113,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("fromCodePoint"),
         FuncType::new(&engine, [array_ref], [abi.value_type()]),
-        true,
         move |caller, params, results| {
             let codes = read_number_array(caller, abi_arg(params, 0)?, "String.fromCodePoint")?;
             let out = from_code_point(&codes).map_err(throw)?;
@@ -131,7 +129,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("toString"),
         FuncType::new(&engine, [abi.value_type()], [abi.value_type()]),
-        true,
         |_caller, params, results| {
             *abi_result(results, 0)? = *abi_arg(params, 0)?;
             Ok(())
@@ -143,7 +140,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("toJson"),
         FuncType::new(&engine, [abi.value_type()], [abi.value_type()]),
-        true,
         move |caller, params, results| {
             let recv = json_abi.read(caller, abi_arg(params, 0)?, "String#toJson")?;
             *abi_result(results, 0)? =
@@ -161,7 +157,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             [abi.value_type(), abi.value_type()],
             [ValType::I32],
         ),
-        true,
         move |caller, params, results| {
             *abi_result(results, 0)? = Val::I32(super::super::vtable::string_equals(
                 caller,
@@ -182,7 +177,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             [abi.value_type(), abi.value_type()],
             [ValType::F64],
         ),
-        true,
         move |caller, params, results| {
             let a = lc_abi.read(caller, abi_arg(params, 0)?, "String#localeCompare")?;
             let b = lc_abi.read(caller, abi_arg(params, 1)?, "String#localeCompare")?;
@@ -204,7 +198,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::extend(&crate::mangle::prelude("StringConstructor"), "@call"),
         FuncType::new(&engine, [obj_param], [abi.value_type()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 *abi_result(results, 0)? = string_ctor_call(caller, abi_arg(params, 0)?).await?;
@@ -223,7 +216,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("iterator"),
         FuncType::new(&engine, [abi.value_type()], [obj_ret]),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = crate::runtime::prelude::iterator::make_string_iterator(
                 caller,
@@ -242,7 +234,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::prelude("string_concat"),
         FuncType::new(&engine, [s.clone(), s.clone()], [s.clone()]),
-        true,
         move |caller, params, results| {
             *abi_result(results, 0)? = concat_abi.concat(
                 caller,
@@ -259,7 +250,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::prelude("string_eq"),
         FuncType::new(&engine, [s.clone(), s.clone()], [ValType::I32]),
-        true,
         move |caller, params, results| {
             let equal = super::super::vtable::string_equals(
                 caller,
@@ -277,7 +267,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::prelude("string_cmp"),
         FuncType::new(&engine, [s.clone(), s], [ValType::I32]),
-        true,
         move |caller, params, results| {
             let a = cmp_abi.read(caller, abi_arg(params, 0)?, "string_cmp")?;
             let b = cmp_abi.read(caller, abi_arg(params, 1)?, "string_cmp")?;
@@ -544,7 +533,6 @@ fn reg_unit_to_str(
         MODULE_NAME,
         method_key(name),
         FuncType::new(engine, [s.clone(), ValType::F64], [s]),
-        true,
         move |caller, params, results| {
             let recv = abi.payload(caller, abi_arg(params, 0)?, name)?;
             let arg = number(abi_arg(params, 1)?, name)?;
@@ -573,7 +561,6 @@ fn reg_string_index(
         MODULE_NAME,
         crate::mangle::prelude("string_index"),
         FuncType::new(engine, [s.clone(), ValType::F64], [s]),
-        true,
         move |caller, params, results| {
             let recv = abi.payload(caller, abi_arg(params, 0)?, "string_index")?;
             let arg = number(abi_arg(params, 1)?, "string_index")?;
@@ -609,7 +596,6 @@ fn reg_unit_to_str_or_undefined(
         MODULE_NAME,
         method_key(name),
         FuncType::new(engine, [s, ValType::F64], [object]),
-        true,
         move |caller, params, results| {
             let recv = abi.payload(caller, abi_arg(params, 0)?, name)?;
             let arg = number(abi_arg(params, 1)?, name)?;
@@ -639,7 +625,6 @@ fn reg_char_code_at(
         MODULE_NAME,
         method_key(NAME),
         FuncType::new(engine, [s, ValType::F64], [ValType::F64]),
-        true,
         move |caller, params, results| {
             let recv = abi.payload(caller, abi_arg(params, 0)?, NAME)?;
             let arg = number(abi_arg(params, 1)?, NAME)?;
@@ -672,7 +657,6 @@ fn reg_code_point_at(
         MODULE_NAME,
         method_key(NAME),
         FuncType::new(engine, [s, ValType::F64], [object]),
-        true,
         move |caller, params, results| {
             let recv = abi.payload(caller, abi_arg(params, 0)?, NAME)?;
             let arg = number(abi_arg(params, 1)?, NAME)?;
@@ -706,7 +690,6 @@ fn reg_repeat(
         MODULE_NAME,
         method_key("repeat"),
         FuncType::new(engine, [s.clone(), ValType::F64], [s]),
-        true,
         move |caller, params, results| {
             let recv = abi.payload(caller, abi_arg(params, 0)?, "repeat")?;
             let count = number(abi_arg(params, 1)?, "repeat")?;
@@ -736,7 +719,6 @@ fn reg_range_to_str(
         MODULE_NAME,
         method_key(name),
         FuncType::new(engine, [s.clone(), ValType::F64, ValType::F64], [s]),
-        true,
         move |caller, params, results| {
             let recv = abi.payload(caller, abi_arg(params, 0)?, name)?;
             let a = number(abi_arg(params, 1)?, name)?;
@@ -764,7 +746,6 @@ fn reg_str_str_num_to_num(
         MODULE_NAME,
         method_key(name),
         FuncType::new(engine, [s.clone(), s, ValType::F64], [ValType::F64]),
-        true,
         move |caller, params, results| {
             let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
             let search = abi.read(caller, abi_arg(params, 1)?, name)?;
@@ -800,7 +781,6 @@ fn register_string_search_predicate(
             [abi.value_type(), value.clone(), value],
             [ValType::I32],
         ),
-        true,
         move |caller, params, results| {
             let abi = abi.clone();
             Box::pin(async move {
@@ -843,7 +823,6 @@ fn reg_window_predicate(
             [abi.value_type(), value.clone(), value],
             [ValType::I32],
         ),
-        true,
         move |caller, params, results| {
             let abi = abi.clone();
             Box::pin(async move {
@@ -883,7 +862,6 @@ fn reg_concat(
         MODULE_NAME,
         method_key("concat"),
         FuncType::new(engine, [s.clone(), array.clone()], [s]),
-        true,
         move |caller, params, results| {
             *abi_result(results, 0)? =
                 abi.concat_all(caller, abi_arg(params, 0)?, abi_arg(params, 1)?)?;
@@ -914,7 +892,6 @@ fn reg_pad(
         MODULE_NAME,
         method_key(name),
         FuncType::new(engine, [s.clone(), ValType::F64, s.clone()], [s]),
-        true,
         move |caller, params, results| {
             let recv = abi.payload(caller, abi_arg(params, 0)?, name)?;
             let target = number(abi_arg(params, 1)?, name)?;
@@ -953,7 +930,6 @@ fn reg_str_str_to_str_fallible(
         MODULE_NAME,
         method_key(name),
         FuncType::new(engine, [s.clone(), s.clone()], [s]),
-        true,
         move |caller, params, results| {
             let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
             let arg = abi.read(caller, abi_arg(params, 1)?, name)?;
@@ -979,7 +955,6 @@ fn reg_str_to_bool(
         MODULE_NAME,
         method_key(name),
         FuncType::new(engine, [s], [ValType::I32]),
-        true,
         move |caller, params, results| {
             let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
             *abi_result(results, 0)? = Val::I32(op(&recv.value) as i32);
@@ -1003,7 +978,6 @@ fn reg_str_to_str(
         MODULE_NAME,
         method_key(name),
         FuncType::new(engine, [s.clone()], [s]),
-        true,
         move |caller, params, results| {
             let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
             // toWellFormed scans the input and its mutable copy.
@@ -1034,7 +1008,6 @@ fn reg_case_map(
         MODULE_NAME,
         method_key(name),
         FuncType::new(engine, [s.clone()], [s]),
-        true,
         move |caller, params, results| {
             let recv = abi.payload(caller, abi_arg(params, 0)?, name)?;
             // Read, map, and write a result of the receiver's length; a result
@@ -1070,7 +1043,6 @@ fn reg_trim(
         MODULE_NAME,
         method_key(name),
         FuncType::new(engine, [s.clone()], [s]),
-        true,
         move |caller, params, results| {
             let recv = abi.payload(caller, abi_arg(params, 0)?, name)?;
             // The SUB-1292 price; the scan reads only the trimmed ends.

@@ -81,7 +81,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "check"),
         ty,
-        /* deterministic = */ false,
         |caller, params, _results| {
             Box::pin(async move {
                 let capability = read_string_arg(

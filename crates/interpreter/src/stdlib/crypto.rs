@@ -122,7 +122,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             crate::mangle::package_symbol(MODULE_NAME, name),
             FuncType::new(&engine, [object.clone()], [uint8.clone()]),
-            /* deterministic = */ true,
             move |caller, params, results| {
                 let input = read_string_or_bytes(caller, abi_arg(params, 0)?, &context)?;
                 fuel::charge(&mut *caller, fuel::HASH, input.len() as u64)?;
@@ -138,7 +137,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "hmacSha256"),
         FuncType::new(&engine, [uint8.clone(), object], [uint8.clone()]),
-        /* deterministic = */ true,
         |caller, params, results| {
             let key =
                 read_uint8_array_arg(&mut *caller, abi_arg(params, 0)?, "crypto.hmacSha256 (key)")?;
@@ -154,13 +152,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    crate::runtime::host::register_host_fn_async(
+    crate::runtime::host::register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "randomBytes"),
         FuncType::new(&engine, [ValType::F64], [uint8.clone()]),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let Val::F64(bits) = *abi_arg(params, 0)? else {
                     return Err(crate::runtime::host::type_error(
@@ -194,11 +191,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     },
                 )
                 .await?;
-                let arr = crate::runtime::effects::convert_result(caller, |caller| {
+                let arr = crate::runtime::host::convert_result(caller, |caller| {
                     write_submilli_uint8array_struct(caller, &buf.0)
                 })?;
-                *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
-                Ok(())
+                Ok(Val::AnyRef(Some(arr.to_anyref())))
             })
         },
     )?;
@@ -209,7 +205,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "timingSafeEqual"),
         FuncType::new(&engine, [uint8.clone(), uint8], [ValType::I32]),
-        /* deterministic = */ true,
         |caller, params, results| {
             let a = read_uint8_array_arg(
                 &mut *caller,

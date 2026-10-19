@@ -30,7 +30,7 @@ pub mod unit_of_work;
 mod writers;
 pub use filesystem::{DurableFilesystem, FilesystemError};
 pub use io::RecoveryError;
-pub use readers::{DirectoryEntry, FilesystemReader, ReaderPosition};
+pub use readers::{DirectoryEntry, ReaderPosition};
 pub use unit_of_work::{UnitFactory, UnitOfWork};
 #[cfg(feature = "test-support")]
 static CHECKPOINT: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
