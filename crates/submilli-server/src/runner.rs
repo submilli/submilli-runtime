@@ -33,7 +33,13 @@ use crate::error::{DenialDetails, DiagnosticNote, DiagnosticPayload, ErrorKind, 
 use crate::mcp::McpCatalog;
 use crate::record::FinishedRun;
 
+// Internal entry points are exercised before transport/startup integration.
+#[allow(dead_code)]
+pub(crate) mod durable;
+
 pub struct RunOutcome {
+    /// Internal interruptions retain a recorded run for a later attempt.
+    pub(crate) durable_completion: bool,
     pub usage: ExecutionUsage,
     /// Already-JSON-encoded `main` return.
     pub value: Option<String>,
@@ -84,6 +90,8 @@ pub(crate) fn parse(code: &str) -> Result<ParsedExecute, interpreter::source::So
 /// injection, the semantic-security policy, and the HTTP client. Grouped so the
 /// run signature stays readable as the set grows.
 pub struct HostServices {
+    pub effects: Option<Arc<dyn interpreter::runtime::effects::EffectHistory>>,
+    pub filesystem: Option<Arc<dyn interpreter::runtime::filesystem::Filesystem>>,
     pub(crate) session_manager: Option<Arc<crate::session_manager::SessionManager>>,
     pub(crate) audit: Option<Arc<crate::audit::ExecutionAudit>>,
     pub git: Result<Option<interpreter::stdlib::git::GitConfig>, String>,
@@ -360,6 +368,10 @@ async fn run_inner(
 
     let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
     let mut data = StoreData::with_vfs_and_cap(vfs, runtime.config.max_store_bytes);
+    data.effects = services.effects;
+    if let Some(filesystem) = services.filesystem {
+        data.filesystem = filesystem;
+    }
     data.git = git;
     data.vfs_info = vfs_info;
     data.auth_proxy = services.auth_proxy;
@@ -388,6 +400,10 @@ async fn run_inner(
         output: buf.clone(),
         lines: log.clone().map(ConsoleLines::new),
     });
+    data.replay_console = Some(Box::new(Sink {
+        output: buf.clone(),
+        lines: None,
+    }));
     data.install_type_info(compiled.type_info.clone());
 
     let mut rt = crate::metrics::RuntimePhaseTimings::default();
@@ -436,7 +452,15 @@ async fn run_inner(
         // Installing a package runs its top-level statements, and instantiation
         // runs the program's, so the deadline covers both and their failure is
         // reported as one in `main` is.
-        crate::execution_timeout::arm(&mut store, runtime.config.timeout, |data| data.clock_paused);
+        if store.data().effects.is_some() {
+            store.data_mut().execution_clock =
+                Some(interpreter::runtime::effects_clock::ExecutionClock::start());
+            crate::execution_timeout::arm_recorded(&mut store, runtime.config.timeout);
+        } else {
+            crate::execution_timeout::arm(&mut store, runtime.config.timeout, |data| {
+                data.clock_paused
+            });
+        }
         let phase_start = Instant::now();
         let installed =
             install_package_modules_async(&mut linker, &mut store, &package_modules).await;
@@ -469,6 +493,7 @@ async fn run_inner(
 
         match dispatch {
             Ok(value) => RunOutcome {
+                durable_completion: true,
                 usage: ExecutionUsage::default(),
                 value,
                 console_raw,
@@ -476,6 +501,9 @@ async fn run_inner(
                 discovery_warnings,
             },
             Err(err) => RunOutcome {
+                durable_completion: !err.is::<interpreter::runtime::host::FatalHostError>()
+                    && !err.is::<Trap>()
+                    && !is_memory_exhausted(&err),
                 usage: ExecutionUsage::default(),
                 value: None,
                 error: Some(classify_runtime_error(&err, &parsed.sources, parsed.file)),
@@ -521,6 +549,7 @@ fn record_worker_cleanup_failure(
     outcome: &mut RunOutcome,
     error: &interpreter::runtime::blocking::BlockingWorkDrainError,
 ) {
+    outcome.durable_completion = false;
     let secondary = format!("worker cleanup failure: {error}");
     if let Some(primary) = outcome.error.as_mut() {
         primary.message.push('\n');
@@ -583,6 +612,7 @@ fn compile_failure(
         message.push_str(interpreter::rendering::TRUNCATED);
     }
     RunOutcome {
+        durable_completion: true,
         usage: ExecutionUsage::default(),
         value: None,
         console_raw: String::new(),
@@ -861,6 +891,7 @@ fn sentry_extras(
 
 fn internal_failure(msg: &str) -> RunOutcome {
     RunOutcome {
+        durable_completion: false,
         usage: ExecutionUsage::default(),
         value: None,
         console_raw: String::new(),
@@ -1160,6 +1191,8 @@ mod tests {
             finish: Mutex::new(cleanup),
         });
         let services = HostServices {
+            effects: None,
+            filesystem: None,
             session_manager: None,
             git: Ok(Some(interpreter::stdlib::git::GitConfig {
                 name: "Agent".into(),
@@ -1285,6 +1318,7 @@ mod worker_cleanup_tests {
             outcome.discovery_warnings = vec!["discovery warning".into()];
             let primary = outcome.error.as_ref().unwrap().message.clone();
             record_worker_cleanup_failure(&mut outcome, &cleanup);
+            assert!(!outcome.durable_completion);
             let error = outcome.error.unwrap();
             assert!(matches!(error.kind, ErrorKind::Timeout));
             assert_eq!(
@@ -1300,6 +1334,7 @@ mod worker_cleanup_tests {
     async fn cleanup_failure_suppresses_success_and_preserves_reporting_context() {
         let cleanup = injected_drain_failure().await;
         let mut outcome = RunOutcome {
+            durable_completion: true,
             usage: ExecutionUsage::default(),
             value: Some("42".into()),
             console_raw: "before\n".into(),
@@ -1307,6 +1342,7 @@ mod worker_cleanup_tests {
             discovery_warnings: vec!["discovery warning".into()],
         };
         record_worker_cleanup_failure(&mut outcome, &cleanup);
+        assert!(!outcome.durable_completion);
         assert!(outcome.value.is_none());
         let error = outcome.error.unwrap();
         assert!(matches!(error.kind, ErrorKind::RuntimeError));
@@ -1315,3 +1351,6 @@ mod worker_cleanup_tests {
         assert_eq!(outcome.discovery_warnings, ["discovery warning"]);
     }
 }
+
+#[cfg(test)]
+mod durable_tests;

@@ -693,6 +693,8 @@ async fn prepare_and_run(
             Err(err) => return fail(ErrorKind::PackageResolution, err.to_string()),
         };
     let services = runner::HostServices {
+        effects: None,
+        filesystem: None,
         // Keyed completion updates activity with its recorded outcome in one transaction.
         session_manager: idempotency_key.is_none().then(|| manager.clone()),
         audit: execution_audit.clone(),

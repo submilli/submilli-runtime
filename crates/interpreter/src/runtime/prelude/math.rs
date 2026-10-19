@@ -267,21 +267,31 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         )?;
     }
 
-    register_host_fn(
+    crate::runtime::host::register_host_fn_async(
         linker,
         MODULE_NAME,
         math_key("random"),
         FuncType::new(&engine, [], [ValType::F64]),
-        /* deterministic = */ false,
-        |_caller, _params, results| -> wasmtime::Result<()> {
-            let mut bytes = [0u8; 8];
-            getrandom::getrandom(&mut bytes)
-                .map_err(|e| wasmtime::Error::msg(format!("Math.random getrandom failed: {e}")))?;
-            let raw = u64::from_le_bytes(bytes);
-            let mantissa = raw & ((1u64 << 52) - 1);
-            let bits = (0x3FFu64 << 52) | mantissa;
-            *abi_result(results, 0)? = Val::F64((f64::from_bits(bits) - 1.0).to_bits());
-            Ok(())
+        false,
+        |caller, _params, results| {
+            Box::pin(async move {
+                let value =
+                    crate::runtime::effects::execute(caller, "Math.random", (), |_, _, ()| {
+                        Box::pin(async {
+                            let mut bytes = [0u8; 8];
+                            getrandom::getrandom(&mut bytes).map_err(|e| {
+                                wasmtime::Error::msg(format!("Math.random getrandom failed: {e}"))
+                            })?;
+                            let raw = u64::from_le_bytes(bytes);
+                            let mantissa = raw & ((1u64 << 52) - 1);
+                            let bits = (0x3FFu64 << 52) | mantissa;
+                            Ok(f64::from_bits(bits) - 1.0)
+                        })
+                    })
+                    .await?;
+                *abi_result(results, 0)? = Val::F64(value.to_bits());
+                Ok(())
+            })
         },
     )?;
 

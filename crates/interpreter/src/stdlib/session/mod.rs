@@ -54,6 +54,35 @@ const PAGE_NEXT_CURSOR: usize = 2;
 
 pub use declaration::package_declaration;
 
+#[derive(serde::Serialize)]
+struct SessionWrite {
+    key: Vec<u16>,
+    payload: Vec<u16>,
+}
+#[derive(serde::Serialize)]
+struct SessionList {
+    prefix: Vec<u16>,
+    limit: usize,
+    cursor: Option<Vec<u16>>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ListedPage {
+    entries: Vec<SessionKvEntry>,
+    cursor: Option<String>,
+}
+impl crate::runtime::effects::NativeOutcome for ListedPage {
+    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<SessionKvEntry>();
+    fn decoded_heap_bound(_: usize) -> u64 {
+        0
+    }
+}
+impl crate::runtime::effects::NativeOutcome for Option<Vec<u16>> {
+    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<u16>();
+    fn decoded_heap_bound(_: usize) -> u64 {
+        0
+    }
+}
+
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     finalizers::install(linker)?;
     let engine = linker.engine().clone();
@@ -82,27 +111,42 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "get")?;
                 let ticket = gate(caller, "session.read", &key)?;
-                let store = provider(caller, "get")?;
-                let found = store.get(&key).await.map_err(|e| trap(caller, None, &e))?;
-                record_payload(&*caller, ticket, Side::Response, || match &found {
+                let found = crate::runtime::effects::execute(
+                    caller,
+                    "session.get",
+                    key,
+                    |caller, _, key| {
+                        Box::pin(async move {
+                            let found = provider(caller, "get")?
+                                .get(&key)
+                                .await
+                                .map_err(|e| trap(caller, None, &e))?;
+                            if let Some(payload) = &found {
+                                fuel::settle(
+                                    &mut *caller,
+                                    fuel::IO,
+                                    (payload.len() as u64).saturating_mul(2),
+                                )?;
+                            }
+                            Ok(found)
+                        })
+                    },
+                )
+                .await?;
+                record_payload(&*caller, ticket, Side::Response, || match &found.value {
                     // The size is of the copy and digest's encoding: UTF-8 bytes.
                     Some(payload) => Payload::meta(serde_json::Value::Null)
                         .with_owned_body(String::from_utf16_lossy(payload).into_bytes()),
                     None => Payload::meta(serde_json::json!({ "found": false })),
                 });
-                let Some(payload) = found else {
-                    *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
-                    return Ok(());
-                };
-                // Read from the store (code units, two bytes each), then
-                // parsed back into values.
-                fuel::charge(
-                    &mut *caller,
-                    fuel::IO,
-                    (payload.len() as u64).saturating_mul(2),
-                )?;
-                fuel::charge(&mut *caller, fuel::PARSE, payload.len() as u64)?;
-                *abi_result(results, 0)? = value::deserialize(caller, &payload)?;
+                *abi_result(results, 0)? =
+                    crate::runtime::effects::convert_result(caller, |caller| {
+                        let Some(payload) = &found.value else {
+                            return crate::runtime::prelude::undefined::value(caller);
+                        };
+                        fuel::charge(&mut *caller, fuel::PARSE, payload.len() as u64)?;
+                        value::deserialize(caller, payload)
+                    })?;
                 Ok(())
             })
         },
@@ -118,12 +162,24 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "has")?;
                 let ticket = gate(caller, "session.read", &key)?;
-                let store = provider(caller, "has")?;
-                let found = store.has(&key).await.map_err(|e| trap(caller, None, &e))?;
+                let found = crate::runtime::effects::execute(
+                    caller,
+                    "session.has",
+                    key,
+                    |caller, _, key| {
+                        Box::pin(async move {
+                            provider(caller, "has")?
+                                .has(&key)
+                                .await
+                                .map_err(|e| trap(caller, None, &e))
+                        })
+                    },
+                )
+                .await?;
                 record_payload(&*caller, ticket, Side::Response, || {
-                    Payload::meta(serde_json::json!({ "found": found }))
+                    Payload::meta(serde_json::json!({ "found": found.value }))
                 });
-                *abi_result(results, 0)? = Val::I32(i32::from(found));
+                *abi_result(results, 0)? = Val::I32(i32::from(found.value));
                 Ok(())
             })
         },
@@ -142,17 +198,27 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 // Serialization runs before the provider is consulted: a value
                 // with no JSON form must leave the previous entry intact.
                 let payload = value::serialize(caller, abi_arg(params, 1)?).await?;
-                // Written to the store: code units, two bytes each.
-                fuel::charge(
-                    &mut *caller,
-                    fuel::IO,
-                    (payload.len() as u64).saturating_mul(2),
-                )?;
-                let store = provider(caller, "set")?;
-                store
-                    .set(&key, &payload)
-                    .await
-                    .map_err(|e| trap(caller, ticket, &e))
+                let request = SessionWrite { key, payload };
+                crate::runtime::effects::execute(
+                    caller,
+                    "session.set",
+                    request,
+                    move |caller, _, request| {
+                        Box::pin(async move {
+                            fuel::charge(
+                                &mut *caller,
+                                fuel::IO,
+                                (request.payload.len() as u64).saturating_mul(2),
+                            )?;
+                            provider(caller, "set")?
+                                .set(&request.key, &request.payload)
+                                .await
+                                .map_err(|e| trap(caller, ticket, &e))
+                        })
+                    },
+                )
+                .await?;
+                Ok(())
             })
         },
     )?;
@@ -167,13 +233,21 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "remove")?;
                 gate(caller, "session.remove", &key)?;
-                let store = provider(caller, "remove")?;
-                *abi_result(results, 0)? = Val::I32(i32::from(
-                    store
-                        .remove(&key)
-                        .await
-                        .map_err(|e| trap(caller, None, &e))?,
-                ));
+                let removed = crate::runtime::effects::execute(
+                    caller,
+                    "session.remove",
+                    key,
+                    |caller, _, key| {
+                        Box::pin(async move {
+                            provider(caller, "remove")?
+                                .remove(&key)
+                                .await
+                                .map_err(|e| trap(caller, None, &e))
+                        })
+                    },
+                )
+                .await?;
+                *abi_result(results, 0)? = Val::I32(i32::from(removed.value));
                 Ok(())
             })
         },
@@ -294,40 +368,70 @@ async fn list(
         "session.list",
         serde_json::json!({ "prefix": String::from_utf16_lossy(&prefix) }),
     )?;
-    let keys = caller.data().cursor_keys.clone();
-    let resume_after = read_cursor(caller, keys.as_deref(), cursor_val, &prefix)?;
-    let store = provider(caller, "list")?;
-
-    let mut scanned = store
-        .scan(resume_after.as_deref(), &prefix, MAX_SCAN_PER_PAGE)
-        .await
-        .map_err(|e| trap(caller, None, &e))?;
-
-    // The `limit` applies to candidates, not to survivors of the filter: taking
-    // `limit` candidates and only then filtering keeps the cursor independent of
-    // what the policy hid. Refilling the page from further keys would make the
-    // number of keys consumed a function of how many were denied, which is the
-    // disclosure the filter exists to prevent.
-    scanned.entries.truncate(limit);
-    let considered = std::mem::take(&mut scanned.entries);
-    let next_cursor =
-        next_cursor(keys.as_deref(), &prefix, &scanned, &considered, limit).map_err(cursor_trap)?;
-
-    let mut visible = Vec::new();
-    for entry in considered {
-        fuel::charge(&mut *caller, fuel::ELEM, 1)?;
-        if may_read(caller, &entry.key)? {
-            visible.push(entry);
+    let cursor = if crate::runtime::prelude::undefined::is_undefined(caller, cursor_val)? {
+        None
+    } else {
+        let max_units = cursor::max_cursor_units(provider(caller, "list")?.limits().max_key_units);
+        Some(value::read_units_bounded(
+            caller,
+            cursor_val,
+            "session.list (cursor)",
+            max_units,
+        )?)
+    };
+    let request = SessionList {
+        prefix,
+        limit,
+        cursor,
+    };
+    let page =
+        crate::runtime::effects::execute(caller, "session.list", request, |caller, _, request| {
+            Box::pin(async move {
+                let keys = caller.data().cursor_keys.clone();
+                let resume_after = request
+                    .cursor
+                    .as_ref()
+                    .map(|units| cursor::decode(keys.as_deref(), &request.prefix, units))
+                    .transpose()
+                    .map_err(cursor_trap)?;
+                let mut scanned = provider(caller, "list")?
+                    .scan(resume_after.as_deref(), &request.prefix, MAX_SCAN_PER_PAGE)
+                    .await
+                    .map_err(|e| trap(caller, None, &e))?;
+                // Bound candidates before filtering, so policy cannot change the cursor.
+                scanned.entries.truncate(request.limit);
+                let entries = std::mem::take(&mut scanned.entries);
+                let cursor = next_cursor(
+                    keys.as_deref(),
+                    &request.prefix,
+                    &scanned,
+                    &entries,
+                    request.limit,
+                )
+                .map_err(cursor_trap)?;
+                Ok(ListedPage { entries, cursor })
+            })
+        })
+        .await?;
+    crate::runtime::effects::convert_result(caller, |caller| {
+        let mut visible = Vec::new();
+        for entry in page.value.entries {
+            fuel::charge(&mut *caller, fuel::ELEM, 1)?;
+            if may_read(caller, &entry.key)? {
+                visible.push(entry);
+            }
         }
-    }
-    record_payload(&*caller, ticket, Side::Response, || {
-        let keys: Vec<_> = visible
-            .iter()
-            .map(|entry| String::from_utf16_lossy(&entry.key))
-            .collect();
-        Payload::meta(serde_json::json!({ "keys": keys, "cursor": next_cursor.is_some() }))
-    });
-    build_page(caller, &visible, next_cursor.as_deref())
+        record_payload(&*caller, ticket, Side::Response, || {
+            let keys: Vec<_> = visible
+                .iter()
+                .map(|entry| String::from_utf16_lossy(&entry.key))
+                .collect();
+            Payload::meta(
+                serde_json::json!({ "keys": keys, "cursor": page.value.cursor.is_some() }),
+            )
+        });
+        build_page(caller, &visible, page.value.cursor.as_deref())
+    })
 }
 
 /// Where the next page resumes, or `None` once nothing matching can remain.
@@ -378,22 +482,6 @@ fn read_limit(val: &Val) -> wasmtime::Result<usize> {
         )));
     }
     Ok(limit as usize)
-}
-
-fn read_cursor(
-    caller: &mut wasmtime::Caller<'_, StoreData>,
-    keys: Option<&CursorKeys>,
-    val: &Val,
-    prefix: &[u16],
-) -> wasmtime::Result<Option<Vec<u16>>> {
-    if crate::runtime::prelude::undefined::is_undefined(caller, val)? {
-        return Ok(None);
-    }
-    let max_units = cursor::max_cursor_units(provider(caller, "list")?.limits().max_key_units);
-    let units = value::read_units_bounded(caller, val, "session.list (cursor)", max_units)?;
-    cursor::decode(keys, prefix, &units)
-        .map(Some)
-        .map_err(cursor_trap)
 }
 
 /// The per-key half of the double gate. A denial omits the key rather than

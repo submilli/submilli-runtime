@@ -149,6 +149,13 @@ impl Drop for CancelOnDrop {
     }
 }
 
+#[derive(serde::Serialize)]
+struct GitRequest {
+    operation: &'static str,
+    path: String,
+    arguments: Vec<Value>,
+}
+
 pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
@@ -444,7 +451,7 @@ fn install_repository_writes(
 
 async fn invoke(
     caller: &mut Caller<'_, StoreData>,
-    op: &str,
+    op: &'static str,
     method: bool,
     params: &[Val],
 ) -> Result<Val> {
@@ -465,107 +472,124 @@ async fn invoke(
     {
         cache.invalidate()?;
     }
-    let budget = WorkingBudget::reserve(&caller.data().tenant_limits, op)?;
+    let budget = Arc::new(WorkingBudget::reserve(&caller.data().tenant_limits, op)?);
     let max_bytes = budget.max_bytes(op);
     let (args, path) = before_deadline(
         deadline,
         decode_arguments(caller, op, method, params, max_bytes),
     )
     .await??;
-    let principal = running_package(&*caller)
-        .map_err(|_| crate::runtime::host::fatal_host_error("git: cannot identify caller"))?;
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let cancel_guard = CancelOnDrop(cancelled.clone());
-    // The worker stops itself once its work passes what the run has left.
-    let meter = Arc::new(meter::Meter::new(
-        fuel::remaining_fuel(&mut *caller)?,
-        Some(cancelled.clone()),
-    ));
-    let job = Job {
-        op: op.to_owned(),
-        path: path.clone(),
-        caller: principal,
-        config,
-        security: caller.data().security_check.clone(),
-        secrets: caller.data().secret_provider.clone(),
-        http: caller.data().http_client.clone(),
-        runtime: tokio::runtime::Handle::try_current().map_err(|_| {
-            crate::runtime::host::fatal_host_error("git worker requires a Tokio runtime")
-        })?,
-        deadline,
-        cancelled,
-        max_bytes,
-        transferred: Arc::new(AtomicU64::new(0)),
-        meter: Arc::clone(&meter),
-        algorithm_fuel: Arc::new(work::AlgorithmWork::with_meter(Arc::clone(&meter))),
-        denial: Arc::new(Mutex::new(None)),
-        history_cache: caller.data().git_history.clone(),
-        origin: crate::stdlib::shared::call_origin(&*caller),
-    };
-    let vfs = caller.data().vfs.clone();
-    let op = op.to_owned();
-    let is_constructor = !method;
-    let returns_string = op == "commit";
-    let denial = job.denial.clone();
-    let principal = job.caller.clone();
-    let worker = async {
-        caller
-            .data_mut()
-            .blocking_work
-            .spawn(move || {
-                job.check_cancelled()?;
-                worker::run(&vfs, &job, &op, &args).map(|result| (result, budget))
-            })
-            .await
-            .map_err(blocking_worker_failure)?
-    };
-    let outcome = finish_worker(worker, &cancel_guard.0, deadline).await;
-    // The work is done, and may be published, whether or not it succeeded:
-    // it is settled, not refused.
-    meter.settle(&mut *caller)?;
-    if let Err(error) = &outcome
-        && meter.is_exhausted()
-        && !crate::runtime::host::ends_the_run(error)
-        && !error.is::<stage::NeedsHostRecovery>()
-    {
-        // Stopped for fuel before publishing: the run ends as a Wasm loop
-        // out of fuel would, and the program cannot catch it. A host failure,
-        // or a publication that needs recovery, says more and goes first.
-        return Err(wasmtime::Trap::OutOfFuel.into());
-    }
 
-    let outcome = match outcome {
-        Err(error)
-            if crate::runtime::host::ends_the_run(&error)
-                || error.is::<stage::NeedsHostRecovery>() =>
-        {
-            return Err(error);
-        }
-        other => other,
+    let request = GitRequest {
+        operation: op,
+        path: path.clone(),
+        arguments: args,
     };
-    // Poison may leave denial attribution partly updated by the worker. AGENTS.md
-    // permits this poisoned-lock panic instead of recovery, including after worker
-    // cleanup; it does not permit the panic that caused poisoning.
-    let denial = denial.lock().expect("git: denial lock poisoned").take();
-    drop(cancel_guard);
-    fuel::settle_result(caller, |caller| {
-        if let Some((capability, reason)) = denial {
-            return Err(crate::runtime::host::throw_host_error(
-                caller,
-                permission_denied(&principal, &capability, reason),
-            ));
-        }
-        let (result, _budget) =
-            outcome.map_err(|error| crate::runtime::host::throw_host_error(caller, error))?;
+    // The worker retains this reservation if the awaiting guest is cancelled.
+    let worker_budget = Arc::clone(&budget);
+    let outcome =
+        crate::runtime::effects::execute(caller, "git", request, move |caller, _, request| {
+            Box::pin(async move {
+                let path = request.path;
+                let args = request.arguments;
+                let budget = worker_budget;
+                let principal = running_package(&*caller).map_err(|_| {
+                    crate::runtime::host::fatal_host_error("git: cannot identify caller")
+                })?;
+                let cancelled = Arc::new(AtomicBool::new(false));
+                let cancel_guard = CancelOnDrop(cancelled.clone());
+                // The worker stops itself once its work passes what the run has left.
+                let meter = Arc::new(meter::Meter::new(
+                    fuel::remaining_fuel(&mut *caller)?,
+                    Some(cancelled.clone()),
+                ));
+                let job = Job {
+                    op: op.to_owned(),
+                    path: path.clone(),
+                    caller: principal,
+                    config,
+                    security: caller.data().security_check.clone(),
+                    secrets: caller.data().secret_provider.clone(),
+                    http: caller.data().http_client.clone(),
+                    runtime: tokio::runtime::Handle::try_current().map_err(|_| {
+                        crate::runtime::host::fatal_host_error(
+                            "git worker requires a Tokio runtime",
+                        )
+                    })?,
+                    deadline,
+                    cancelled,
+                    max_bytes,
+                    transferred: Arc::new(AtomicU64::new(0)),
+                    meter: Arc::clone(&meter),
+                    algorithm_fuel: Arc::new(work::AlgorithmWork::with_meter(Arc::clone(&meter))),
+                    denial: Arc::new(Mutex::new(None)),
+                    history_cache: caller.data().git_history.clone(),
+                    origin: crate::stdlib::shared::call_origin(&*caller),
+                };
+                let vfs = caller.data().vfs.clone();
+                let op = op.to_owned();
+                let denial = job.denial.clone();
+                let principal = job.caller.clone();
+                let worker = async {
+                    caller
+                        .data_mut()
+                        .blocking_work
+                        .spawn(move || {
+                            job.check_cancelled()?;
+                            let _budget = budget;
+                            worker::run(&vfs, &job, &op, &args)
+                        })
+                        .await
+                        .map_err(blocking_worker_failure)?
+                };
+                let outcome = finish_worker(worker, &cancel_guard.0, deadline).await;
+                // The work is done, and may be published, whether or not it succeeded:
+                // it is settled, not refused.
+                meter.settle(&mut *caller)?;
+                if let Err(error) = &outcome
+                    && meter.is_exhausted()
+                    && !crate::runtime::host::ends_the_run(error)
+                    && !error.is::<stage::NeedsHostRecovery>()
+                {
+                    // Stopped for fuel before publishing: the run ends as a Wasm loop
+                    // out of fuel would, and the program cannot catch it. A host failure,
+                    // or a publication that needs recovery, says more and goes first.
+                    return Err(wasmtime::Trap::OutOfFuel.into());
+                }
+
+                let outcome = match outcome {
+                    Err(error)
+                        if crate::runtime::host::ends_the_run(&error)
+                            || error.is::<stage::NeedsHostRecovery>() =>
+                    {
+                        if error.is::<stage::NeedsHostRecovery>() {
+                            return Err(crate::runtime::host::fatal_host_error(error));
+                        }
+                        return Err(error);
+                    }
+                    other => other,
+                };
+                // Poison may leave denial attribution partly updated by the worker. AGENTS.md
+                // permits this poisoned-lock panic instead of recovery, including after worker
+                // cleanup; it does not permit the panic that caused poisoning.
+                let denial = denial.lock().expect("git: denial lock poisoned").take();
+                drop(cancel_guard);
+                if let Some((capability, reason)) = denial {
+                    return Err(permission_denied(&principal, &capability, reason));
+                }
+                outcome
+            })
+        })
+        .await?;
+    crate::runtime::effects::convert_result(caller, |caller| {
         encode_result(
             caller,
-            result,
+            outcome.value,
             &path,
-            is_constructor,
-            returns_string,
+            !method,
+            op == "commit",
             max_bytes,
         )
-        .map_err(|error| crate::runtime::host::throw_host_error(caller, error))
     })
 }
 

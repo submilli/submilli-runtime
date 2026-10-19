@@ -12,7 +12,8 @@
     "Witness": "",
     "NoWrite": {
       "model_value": "NoWrite"
-    }
+    },
+    "Idempotent": true
   },
   "invariants": [
     "TypeOK",
@@ -180,7 +181,7 @@
     {
       "name": "negative-new-key",
       "kind": "negative",
-      "invariant": "NoDuplicateMutation",
+      "invariant": "StableEffectIdentity",
       "constants": {
         "Fault": "new-key",
         "MaxSteps": 2,
@@ -188,11 +189,11 @@
       }
     },
     {
-      "name": "witness-crash-after-intent",
+      "name": "witness-crash-after-dispatch",
       "kind": "witness",
       "invariant": "NeverWitness",
       "constants": {
-        "Witness": "crash-after-intent",
+        "Witness": "crash-after-dispatch",
         "MaxSteps": 2,
         "FuelLimit": 2
       }
@@ -300,6 +301,37 @@
         "MaxCrashes": 2
       },
       "timeout_seconds": 180
+    },
+    {
+      "name": "non-idempotent",
+      "kind": "safety",
+      "constants": {
+        "Idempotent": false,
+        "MaxSteps": 2,
+        "FuelLimit": 2
+      }
+    },
+    {
+      "name": "witness-duplicate-mutation",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Idempotent": false,
+        "Witness": "duplicate-mutation",
+        "MaxSteps": 2,
+        "FuelLimit": 2
+      }
+    },
+    {
+      "name": "negative-consume-uncommitted",
+      "kind": "negative",
+      "invariant": "CommitBarriers",
+      "constants": {
+        "Fault": "consume-uncommitted",
+        "MaxSteps": 1,
+        "FuelLimit": 1,
+        "MaxCrashes": 0
+      }
     }
   ]
 }

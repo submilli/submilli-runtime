@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt as _;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct HttpRequest {
     /// Upper-cased.
     pub method: String,
@@ -26,15 +26,18 @@ pub struct HttpRequest {
     /// `http.download`-only: opt-in transparent decompression via `Content-Encoding` or URL suffix.
     pub decompress: bool,
     /// Custom transports must enforce this on the initial URL and every redirect.
+    #[serde(skip)]
     pub transport_policy: Option<Arc<HttpTransportPolicy>>,
     /// Capability rules for redirect hops, attached after the auth proxy runs.
     /// Custom transports must consult it before sending every redirect hop; the
     /// initial URL is already authorized.
+    #[serde(skip)]
     pub redirect_guard: Option<Arc<dyn RedirectGuard>>,
     /// What the call log recorded for the program's own request, before the auth proxy
     /// changed it. Set only for a client that asks ([`HttpClient::wants_recorded_request`]),
     /// and by the host functions alone: an auth proxy that builds a new request instead
     /// of changing this one drops it.
+    #[serde(skip)]
     pub recorded_as: Option<RecordedRequest>,
 }
 
@@ -112,18 +115,19 @@ impl std::fmt::Display for RedirectDenied {
 impl std::error::Error for RedirectDenied {}
 
 /// 4xx/5xx are not errors at this layer — only transport failures become [`HttpError`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct HttpResponse {
     pub status: u16,
     pub status_text: String,
     /// Names lowercased by [`ReqwestHttpClient`].
     pub headers: Vec<(String, String)>,
+    #[serde(with = "crate::runtime::effects::binary")]
     pub body: Vec<u8>,
     pub final_url: String,
 }
 
 /// Body was streamed to the caller's writer; only metadata survives.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DownloadMeta {
     pub status: u16,
     pub status_text: String,
@@ -1222,5 +1226,12 @@ mod client_setup_tests {
         let healthy = ReqwestHttpClient::default();
         assert!(healthy.client().is_ok());
         assert!(healthy.client().is_ok());
+    }
+}
+
+impl crate::runtime::effects::NativeOutcome for HttpResponse {
+    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<(String, String)>();
+    fn decoded_heap_bound(_: usize) -> u64 {
+        0
     }
 }

@@ -94,7 +94,7 @@ pub fn estimate_embedding_tokens(text: &str) -> u64 {
 
 /// What an embedding is for. Some providers embed queries and documents
 /// differently.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Purpose {
     Query,
     Document,
@@ -249,7 +249,7 @@ impl std::fmt::Display for EmbeddingMalformedReason {
 /// What one *sent* sub-batch cost. `estimate` is what was passed to
 /// [`EmbeddingTokenBudget::mark_sent`]; see the module table for the other two.
 /// The remainder (`estimate - reported - indeterminate`) is released.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct SubBatchSettlement {
     pub estimate: u64,
     pub reported: u64,
@@ -503,8 +503,9 @@ impl std::error::Error for EmbeddingShapeError {}
 
 /// The result of one successful call: `count` vectors of `dimensions` floats,
 /// row-major, labeled with the embedding-space `identity`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct EmbeddingBatch {
+    #[serde(with = "float_bytes")]
     vectors: Vec<f32>,
     count: usize,
     dimensions: usize,
@@ -512,6 +513,53 @@ pub struct EmbeddingBatch {
     model: String,
     input_tokens: Option<u64>,
     settlements: Vec<SubBatchSettlement>,
+}
+
+// Decode through the same shape check used by providers, before a guest accessor
+// can observe dimensions or index a row.
+impl<'de> serde::Deserialize<'de> for EmbeddingBatch {
+    fn deserialize<D: serde::Deserializer<'de>>(decoder: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct Batch {
+            #[serde(with = "float_bytes")]
+            vectors: Vec<f32>,
+            count: usize,
+            dimensions: usize,
+            identity: String,
+            model: String,
+            input_tokens: Option<u64>,
+            settlements: Vec<SubBatchSettlement>,
+        }
+        let batch = Batch::deserialize(decoder)?;
+        EmbeddingBatch::new(
+            batch.vectors,
+            batch.count,
+            batch.dimensions,
+            batch.identity,
+            batch.model,
+        )
+        .map(|value| {
+            value
+                .with_input_tokens(batch.input_tokens)
+                .with_settlements(batch.settlements)
+        })
+        .map_err(serde::de::Error::custom)
+    }
+}
+impl super::effects::NativeOutcome for EmbeddingBatch {
+    fn encoding_scratch(&self) -> u64 {
+        (self.vectors.len() as u64).saturating_mul(4)
+    }
+    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<SubBatchSettlement>();
+    fn decoded_heap_bound(_: usize) -> u64 {
+        0
+    }
+}
+impl super::effects::NativeOutcome for Vec<EmbeddingModel> {
+    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<EmbeddingModel>();
+    fn decoded_heap_bound(_: usize) -> u64 {
+        0
+    }
 }
 
 impl EmbeddingBatch {
@@ -600,7 +648,7 @@ impl EmbeddingBatch {
 }
 
 /// An embedding model alias the provider serves.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EmbeddingModel {
     pub name: String,
     pub description: Option<String>,
@@ -706,6 +754,15 @@ impl EmbeddingTokenBudget {
 
     pub fn held(&self) -> u64 {
         self.ledger.held()
+    }
+    /// Apply committed per-run spend during replay, without a provider reservation.
+    pub fn restore_spend(&self, used: u64, held: u64, requests: u64) {
+        self.ledger.restore_spend(used, held);
+        let _ = self
+            .requests
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                Some(count.saturating_add(requests))
+            });
     }
 
     /// Outbound requests counted so far.
@@ -1135,5 +1192,64 @@ mod tests {
                 "blocked-by-network-policy"
             ]
         );
+    }
+}
+
+// Binary little-endian IEEE-754, preserving exact provider float bits.
+mod float_bytes {
+    use serde::{Deserializer, Serializer};
+    pub fn serialize<S: Serializer>(values: &[f32], serializer: S) -> Result<S::Ok, S::Error> {
+        let bytes: Vec<_> = values
+            .iter()
+            .flat_map(|value| value.to_bits().to_le_bytes())
+            .collect();
+        serializer.serialize_bytes(&bytes)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(decoder: D) -> Result<Vec<f32>, D::Error> {
+        struct Floats;
+        impl<'de> serde::de::Visitor<'de> for Floats {
+            type Value = Vec<f32>;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("binary float vector")
+            }
+            fn visit_bytes<E: serde::de::Error>(self, bytes: &[u8]) -> Result<Self::Value, E> {
+                if !bytes.len().is_multiple_of(4) {
+                    return Err(E::custom("misaligned float vector"));
+                }
+                let mut values = Vec::new();
+                values
+                    .try_reserve_exact(bytes.len() / 4)
+                    .map_err(E::custom)?;
+                for word in bytes.as_chunks::<4>().0 {
+                    values.push(f32::from_bits(u32::from_le_bytes(*word)));
+                }
+                Ok(values)
+            }
+        }
+        decoder.deserialize_bytes(Floats)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct Floats(#[serde(with = "super")] Vec<f32>);
+
+        #[test]
+        fn replay_vectors_preserve_bits_without_geometric_capacity_growth() {
+            let mut values = vec![1.0; 65_537];
+            values[0] = -0.0;
+            values[1] = f32::from_bits(0x7fc0_1234);
+            let encoded = rmp_serde::to_vec(&Floats(values.clone())).unwrap();
+            let restored: Floats = rmp_serde::from_slice(&encoded).unwrap();
+            assert_eq!(restored.0.capacity(), values.len());
+            assert!(
+                restored
+                    .0
+                    .iter()
+                    .zip(values)
+                    .all(|(a, b)| a.to_bits() == b.to_bits())
+            );
+            assert!(rmp_serde::from_slice::<Floats>(&[0xc4, 3, 0, 0, 0]).is_err());
+        }
     }
 }

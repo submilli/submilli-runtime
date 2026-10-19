@@ -122,3 +122,18 @@ Plain byte writes now use a [separate protocol](writes/README.md): repeat atomic
 replacement while the outer effect is pending, then let execution history skip
 the completed effect. No local write journal or state machine is required. The
 namespace replacement model continues to cover writer close.
+
+## Native outcome history composition
+
+SUB-1837 supplies each filesystem call with a stable run/sequence EffectId. A
+committed native outcome skips the filesystem call; an absent outcome invokes
+it again with reconstructed arguments and the same ID. There is no outer durable
+intent row. Filesystem journals and reader/writer/listing cursors remain independent
+of `durable_outcomes`. Restored externrefs contain persistent resource IDs; live
+file handles are reopened lazily. Closing/finalizing a local handle does not erase
+progress needed by a paused run. The execution-history integration test interrupts
+24 resource boundaries and checks replay against the same SQLite database.
+
+These models establish filesystem idempotency under their single-writer assumption.
+The execution model establishes outcome-before-consumption separately. Neither is
+a formal refinement proof of Rust or a proof of multi-node composition.

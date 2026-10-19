@@ -142,39 +142,63 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                     request_payload(&server, &tool, &args_json)
                 });
 
-                let transport = caller.data().mcp_transport.clone().ok_or_else(|| {
-                    wasmtime::Error::msg(format!(
-                        "@mcp/{server}.{tool}: MCP transport not configured"
-                    ))
-                })?;
-
                 fuel::charge(&mut *caller, fuel::IO, args_json.len() as u64)?;
-                let outcome = transport.call(&server, &tool, &args_json).await;
-                record_payload(&*caller, ticket, Side::Response, || {
-                    let payload = match &outcome.result {
-                        Ok(response) => Payload::meta(serde_json::Value::Null).with_owned_body(
-                            serde_json::to_vec(response.value()).unwrap_or_default(),
-                        ),
-                        Err(error) => Payload::meta(error.record()),
-                    };
-                    payload.with_size(outcome.received_bytes)
-                });
-                fuel::settle(&mut *caller, fuel::IO, outcome.received_bytes)?;
-                fuel::settle(&mut *caller, fuel::PARSE, outcome.parsed_bytes)?;
-                fuel::settle_result(caller, |caller| {
-                    let result = (|| {
-                        let response = outcome
-                            .result
-                            .map_err(|error| mcp_error_to_throw(&server, &tool, error))?;
-                        let value = allocate_response(caller, &response)?;
-                        *result_slot = value;
-                        Ok(())
-                    })();
-                    result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
-                })
+                let request = ToolRequest {
+                    server,
+                    tool,
+                    args_json,
+                };
+                let response = super::effects::execute(
+                    caller,
+                    "mcp.call",
+                    request,
+                    move |caller, _, request| {
+                        Box::pin(async move {
+                            let ToolRequest {
+                                server,
+                                tool,
+                                args_json,
+                            } = request;
+                            let transport =
+                                caller.data().mcp_transport.clone().ok_or_else(|| {
+                                    wasmtime::Error::msg(format!(
+                                        "@mcp/{server}.{tool}: MCP transport not configured"
+                                    ))
+                                })?;
+
+                            let outcome = transport.call(&server, &tool, &args_json).await;
+                            record_payload(&*caller, ticket, Side::Response, || {
+                                let payload = match &outcome.result {
+                                    Ok(response) => Payload::meta(serde_json::Value::Null)
+                                        .with_owned_body(
+                                            serde_json::to_vec(response.value())
+                                                .unwrap_or_default(),
+                                        ),
+                                    Err(error) => Payload::meta(error.record()),
+                                };
+                                payload.with_size(outcome.received_bytes)
+                            });
+                            fuel::settle(&mut *caller, fuel::IO, outcome.received_bytes)?;
+                            fuel::settle(&mut *caller, fuel::PARSE, outcome.parsed_bytes)?;
+                            outcome
+                                .result
+                                .map_err(|error| mcp_error_to_throw(&server, &tool, error))
+                        })
+                    },
+                )
+                .await?;
+                *result_slot = allocate_response(caller, &response)?;
+                Ok(())
             })
         },
     )
+}
+
+#[derive(serde::Serialize)]
+struct ToolRequest {
+    server: String,
+    tool: String,
+    args_json: String,
 }
 
 /// A call's request as the recorder keeps it.
@@ -193,7 +217,7 @@ pub(crate) fn allocate_response(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     response: &McpResponse,
 ) -> wasmtime::Result<Val> {
-    fuel::settle_result(caller, |caller| {
+    crate::runtime::effects::convert_result(caller, |caller| {
         fuel::settle(&mut *caller, fuel::ELEM, response.visited_nodes())?;
         let allocator = crate::runtime::json::JsonUnknownAllocator::new(caller)?;
         let value = crate::runtime::json::JsonValue::from(response.value());

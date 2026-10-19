@@ -35,20 +35,23 @@ pub struct ResourceDescriptor {
     pub id: EffectId,
     pub kind: ResourceKind,
 }
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum ReadItem {
-    Bytes(Vec<u8>),
+    Bytes(#[serde(with = "super::effects::binary")] Vec<u8>),
     Line(String),
 }
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct ReadOutput {
     pub item: Option<ReadItem>,
-    pub(crate) _charge: super::limits::HostBytes,
+    #[serde(skip)]
+    pub(crate) _charge: Option<super::limits::HostBytes>,
 }
 impl ReadOutput {
     /// Keep a pre-admitted allocation charged until output marshalling finishes.
     pub fn new(item: Option<ReadItem>, reservation: super::limits::HostBytes) -> Self {
         Self {
             item,
-            _charge: reservation,
+            _charge: Some(reservation),
         }
     }
 }
@@ -149,12 +152,37 @@ pub trait FileWriter: Send + Sync {
     ) -> Result<(), FilesystemError>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
 pub struct DirectoryEntry {
     pub name: String,
     pub path: String,
     pub kind: &'static str,
     pub bytes: u64,
+}
+impl<'de> serde::Deserialize<'de> for DirectoryEntry {
+    fn deserialize<D: serde::Deserializer<'de>>(decoder: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct Entry {
+            name: String,
+            path: String,
+            kind: String,
+            bytes: u64,
+        }
+        let entry = Entry::deserialize(decoder)?;
+        let kind = match entry.kind.as_str() {
+            "file" => "file",
+            "directory" => "directory",
+            "symlink" => "symlink",
+            "other" => "other",
+            _ => return Err(serde::de::Error::custom("invalid filesystem entry kind")),
+        };
+        Ok(Self {
+            name: entry.name,
+            path: entry.path,
+            kind,
+            bytes: entry.bytes,
+        })
+    }
 }
 #[async_trait::async_trait]
 pub trait DirectoryReader: Send + Sync {

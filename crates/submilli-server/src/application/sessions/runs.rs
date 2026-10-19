@@ -115,18 +115,46 @@ impl ResolveRun {
         resolution: &RunResolution,
         last_run: Option<&StagedLastRun>,
     ) -> Result<Option<String>, RunFailure> {
+        self.resolve(reservation, resolution, last_run, None).await
+    }
+
+    /// Caller has consumed the complete history and drained its native work.
+    pub async fn execute_recorded(
+        &self,
+        reservation: &Run,
+        resolution: &RunResolution,
+        last_run: Option<&StagedLastRun>,
+        history_position: u64,
+    ) -> Result<Option<String>, RunFailure> {
+        self.resolve(reservation, resolution, last_run, Some(history_position))
+            .await
+    }
+
+    async fn resolve(
+        &self,
+        reservation: &Run,
+        resolution: &RunResolution,
+        last_run: Option<&StagedLastRun>,
+        history_position: Option<u64>,
+    ) -> Result<Option<String>, RunFailure> {
         let mut unit = self.units.begin().await?;
         let Some(mut request) = unit.get_run(reservation.reservation_id()).await? else {
             return Ok(None);
         };
-        if request.reservation_id() != reservation.reservation_id() {
-            return Ok(None);
+        if request.reservation_id() != reservation.reservation_id()
+            || request.owner_generation() != reservation.owner_generation()
+            || (request.program().is_some() && request.attempt() != reservation.attempt())
+        {
+            return Err(RunFailure::Store(StoreError::Conflict));
         }
         if !matches!(
             request.state(),
             RequestState::Reserved | RequestState::Running
         ) {
             return Ok(None);
+        }
+        if request.program().is_some() && history_position != Some(request.history_position()) {
+            return Err(RunFailure::Store(StoreError::Conflict));
         }
         let session_id = reservation.session_id();
         let now = SystemTime::now();
@@ -180,8 +208,29 @@ impl ResolveRun {
                 unit.remove_last_run(session_id).await?
             }
         };
-        unit.commit().await?;
-        Ok(replaced)
+        match unit.commit().await {
+            Ok(()) => Ok(replaced),
+            Err(error) => {
+                let mut check = self.units.begin().await?;
+                let saved = check.get_run(reservation.reservation_id()).await?;
+                let committed = saved.is_some_and(|run| {
+                    run.owner_generation() == reservation.owner_generation()
+                        && (run.program().is_none() || run.attempt() == reservation.attempt())
+                        && match resolution {
+                            RunResolution::Completed(outcome) => {
+                                run.state() == &RequestState::Completed(outcome.clone())
+                            }
+                            RunResolution::Finished => run.state() == &RequestState::Finished,
+                            _ => false,
+                        }
+                });
+                if committed {
+                    Ok(replaced)
+                } else {
+                    Err(error.into())
+                }
+            }
+        }
     }
 }
 
@@ -205,7 +254,7 @@ impl<'a> RecoverRuns<'a> {
     pub async fn execute(&self, generation: &str) -> Result<(), RunFailure> {
         let mut unit = self.units.begin().await?;
         for mut request in unit.unfinished_runs().await? {
-            if request.owner_generation() != generation {
+            if request.owner_generation() != generation && request.program().is_none() {
                 let id = request.reservation_id().to_owned();
                 // A run cut off once started ended unknown, as while the
                 // server runs; startup's sweep deletes the spill file.
@@ -314,4 +363,45 @@ pub(crate) async fn cancel_session_runs(
         unit.save_run(run).await?;
     }
     Ok(())
+}
+
+/// Internal resume; the caller has exclusively acquired the local store and
+/// drained any earlier in-process attempt. Startup discovery is a separate use case.
+#[allow(dead_code)] // Internal resume is integrated with startup scheduling separately.
+pub(crate) async fn reopen_run(
+    units: &dyn UnitOfWorkFactory,
+    id: &str,
+    startup: &str,
+    compatibility: &str,
+) -> Result<Run, RunFailure> {
+    let mut unit = units.begin().await?;
+    let mut run = unit.get_run(id).await?.ok_or(RunFailure::Indeterminate)?;
+    let session = unit
+        .get_session(run.session_id())
+        .await?
+        .ok_or(RunFailure::SessionUnavailable)?;
+    session
+        .require_available(SystemTime::now())
+        .map_err(|_| RunFailure::SessionUnavailable)?;
+    let program = run.program().ok_or(RunFailure::Indeterminate)?;
+    if program.compatibility != compatibility {
+        return Err(RunFailure::Store(StoreError::Io(
+            "runtime is incompatible with the recorded program".into(),
+        )));
+    }
+    run.reopen(startup)?;
+    unit.save_run(run.clone()).await?;
+    if let Err(error) = unit.commit().await {
+        let mut check = units.begin().await?;
+        let saved = check.get_run(id).await?;
+        if !saved.is_some_and(|saved| {
+            saved.owner_generation() == startup
+                && saved.attempt() == run.attempt()
+                && saved.revision() == run.revision()
+                && saved.state() == &RequestState::Running
+        }) {
+            return Err(error.into());
+        }
+    }
+    Ok(run)
 }

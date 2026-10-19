@@ -311,7 +311,7 @@ pub fn read_item(
 fn empty_read(limits: &super::limits::TenantLimits) -> Result<ReadOutput, FilesystemError> {
     Ok(ReadOutput {
         item: None,
-        _charge: memory(limits, 0)?,
+        _charge: Some(memory(limits, 0)?),
     })
 }
 fn memory(
@@ -370,7 +370,7 @@ fn read_chunk(
     bytes.truncate(filled);
     Ok(ReadOutput {
         item: (filled > 0).then_some(ReadItem::Bytes(bytes)),
-        _charge: charge,
+        _charge: Some(charge),
     })
 }
 fn read_line(
@@ -460,7 +460,7 @@ fn read_line(
     }
     Ok(ReadOutput {
         item: Some(ReadItem::Line(text)),
-        _charge: output_charge,
+        _charge: Some(output_charge),
     })
 }
 

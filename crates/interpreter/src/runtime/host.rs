@@ -1222,7 +1222,7 @@ pub fn type_error(message: impl Into<String>) -> wasmtime::Error {
 /// built-in `PermissionDeniedError` subclass, carrying the structured fields
 /// policy-aware recovery code reads (`e.capability`, `e.caller`, `e.reason`).
 /// Same contract as [`RangeError`].
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct PermissionDenied {
     pub caller: String,
@@ -1235,7 +1235,7 @@ pub struct PermissionDenied {
 /// `caller`/`capability`/`reason` as before. It selects the closing paragraph of
 /// the rendered message and, for a denial that escapes the program, the
 /// `source` the embedder reports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DenialSource {
     /// The operator's configured policy said no.
     Policy,

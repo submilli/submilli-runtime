@@ -303,7 +303,7 @@ impl LlmCallError {
 /// A closed set of nine. It is what a guest branches on, so a provider that
 /// meets something it cannot place reports [`Self::Incomplete`] and puts the raw
 /// provider spelling in [`LlmFailure::finish_reason`] rather than widening this.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FailureReason {
     /// Hit the output-token ceiling mid-answer (`finishReason` of `length`). The
     /// partial text is retained — that is the whole reason the failure arm has a
@@ -426,7 +426,7 @@ impl std::fmt::Display for FailureReason {
 /// success arm *cannot* carry a `message`, a `retryable`, or a `status` — those
 /// fields are meaningless on a clean completion, and a flattened struct would
 /// have to invent values for them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LlmFailure {
     /// The closed-set classification a guest branches on.
     pub reason: FailureReason,
@@ -517,7 +517,7 @@ impl LlmFailure {
 ///
 /// The arms differ in more than a flag: `text` is always present on success and
 /// nullable on failure, and the [`LlmFailure`] payload exists only on failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LlmOutcome {
     /// The provider reported a natural stop for this element.
     pub ok: bool,
@@ -584,7 +584,7 @@ impl LlmOutcome {
 /// Every optional may legitimately be `None`: models are blueprint-declared, and
 /// an operator may declare a name without a description, a context window, or an
 /// output reserve. Absent means unknown, not zero.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LlmModel {
     pub name: String,
     pub description: Option<String>,
@@ -695,6 +695,10 @@ impl ExecutionTokenBudget {
     pub fn held(&self) -> u64 {
         self.ledger.held()
     }
+    /// Apply committed per-run spend during replay, without a provider reservation.
+    pub fn restore_spend(&self, used: u64, held: u64) {
+        self.ledger.restore_spend(used, held);
+    }
 
     /// Reserve `tokens` against this execution and the aggregate, before
     /// dispatch.
@@ -758,6 +762,19 @@ impl ExecutionTokenBudget {
     /// of a batch abandoned partway.
     pub fn release(&self, tokens: u64) {
         self.reconcile(tokens, 0, 0);
+    }
+}
+
+impl crate::runtime::effects::NativeOutcome for Vec<LlmOutcome> {
+    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<LlmOutcome>();
+    fn decoded_heap_bound(_: usize) -> u64 {
+        0
+    }
+}
+impl crate::runtime::effects::NativeOutcome for Vec<LlmModel> {
+    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<LlmModel>();
+    fn decoded_heap_bound(_: usize) -> u64 {
+        0
     }
 }
 

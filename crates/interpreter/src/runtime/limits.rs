@@ -100,8 +100,45 @@ impl Drop for HostBytes {
 pub struct TenantLimits {
     pub max_total_bytes: u64,
     observed_bytes: u64,
-    peak_bytes: AtomicU64,
+    peak_bytes: Arc<AtomicU64>,
     host_attached_bytes: Arc<AtomicU64>,
+}
+
+/// Admission for asynchronous native work while the guest is suspended. The
+/// observed Wasm heap is a snapshot: no guest allocation may run concurrently.
+#[derive(Clone)]
+pub struct HostMemory {
+    max_total_bytes: u64,
+    observed_bytes: u64,
+    counter: Arc<AtomicU64>,
+    peak: Arc<AtomicU64>,
+}
+impl HostMemory {
+    pub fn reserve(&self, bytes: u64) -> Result<HostBytes, MemoryCapExceeded> {
+        self.counter
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                let next = current.checked_add(bytes)?;
+                (self.observed_bytes.saturating_add(next) <= self.max_total_bytes).then_some(next)
+            })
+            .map(|previous| {
+                self.peak.fetch_max(
+                    self.observed_bytes
+                        .saturating_add(previous)
+                        .saturating_add(bytes),
+                    Ordering::Relaxed,
+                );
+                HostBytes {
+                    counter: Arc::clone(&self.counter),
+                    bytes,
+                }
+            })
+            .map_err(|current| MemoryCapExceeded {
+                requested: bytes,
+                already_observed: self.observed_bytes,
+                already_host_attached: current,
+                cap: self.max_total_bytes,
+            })
+    }
 }
 
 impl TenantLimits {
@@ -109,8 +146,17 @@ impl TenantLimits {
         Self {
             max_total_bytes,
             observed_bytes: 0,
-            peak_bytes: AtomicU64::new(0),
+            peak_bytes: Arc::new(AtomicU64::new(0)),
             host_attached_bytes: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    pub fn host_memory(&self) -> HostMemory {
+        HostMemory {
+            max_total_bytes: self.max_total_bytes,
+            observed_bytes: self.observed_bytes,
+            counter: Arc::clone(&self.host_attached_bytes),
+            peak: Arc::clone(&self.peak_bytes),
         }
     }
 

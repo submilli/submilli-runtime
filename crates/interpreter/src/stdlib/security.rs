@@ -24,6 +24,13 @@ pub const MODULE_NAME: &str = "submilli:security";
 /// mangled name is what makes the answer independent of how the symbol was
 /// imported: a named, an aliased and a namespace import all carry it, while a
 /// user's own `check` never can.
+#[derive(serde::Serialize)]
+struct Check {
+    capability: String,
+    context: serde_json::Value,
+    who: String,
+}
+
 pub fn is_check(mangled: &MangledName) -> bool {
     *mangled == crate::mangle::package_symbol(MODULE_NAME, "check")
 }
@@ -105,20 +112,42 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         );
                     },
                 )?;
-                let policy = caller.data().security_check.clone();
-                let cwd = caller.data().vfs.cwd().to_owned();
-                let ticket =
-                    crate::stdlib::shared::begin_recorded_call(&*caller, &who, &capability);
-                let site = CallSite::new(ticket, EntryPath::PackageCheck);
-                crate::stdlib::shared::check_and_audit(
-                    policy.as_ref(),
-                    &who,
-                    &capability,
-                    &context,
-                    &cwd,
-                    site,
+
+                crate::runtime::effects::execute(
+                    caller,
+                    "security.check",
+                    Check {
+                        capability,
+                        context,
+                        who,
+                    },
+                    |caller, _, request| {
+                        Box::pin(async move {
+                            let capability = request.capability;
+                            let context = request.context;
+                            let who = request.who;
+                            let policy = caller.data().security_check.clone();
+                            let cwd = caller.data().vfs.cwd().to_owned();
+                            let ticket = crate::stdlib::shared::begin_recorded_call(
+                                &*caller,
+                                &who,
+                                &capability,
+                            );
+                            let site = CallSite::new(ticket, EntryPath::PackageCheck);
+                            crate::stdlib::shared::check_and_audit(
+                                policy.as_ref(),
+                                &who,
+                                &capability,
+                                &context,
+                                &cwd,
+                                site,
+                            )
+                            .map_err(|reason| permission_denied(who, capability, reason))
+                        })
+                    },
                 )
-                .map_err(|reason| permission_denied(who, capability, reason))
+                .await?;
+                Ok(())
             })
         },
     )

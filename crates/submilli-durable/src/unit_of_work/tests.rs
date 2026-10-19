@@ -26,6 +26,29 @@ impl MemoryUnit {
 #[async_trait::async_trait]
 #[allow(unused_variables)]
 impl UnitOfWork for MemoryUnit {
+    async fn history_progress(
+        &mut self,
+        attempt: &crate::history::ExecutionAttempt,
+    ) -> Result<crate::history::HistoryProgress, StoreError> {
+        Err(StoreError::Conflict)
+    }
+    async fn get_history_entry(
+        &mut self,
+        run_id: &RunId,
+        sequence: u64,
+        memory: interpreter::runtime::limits::HostMemory,
+    ) -> Result<Option<crate::history::LoadedHistoryEntry>, StoreError> {
+        Err(StoreError::Conflict)
+    }
+    async fn append_history(
+        &mut self,
+        attempt: &crate::history::ExecutionAttempt,
+        entry: Arc<crate::history::HistoryEntry>,
+        memory: interpreter::runtime::limits::HostMemory,
+    ) -> Result<(), StoreError> {
+        Err(StoreError::Conflict)
+    }
+
     async fn get_journal_entry(
         &mut self,
         run_id: &RunId,

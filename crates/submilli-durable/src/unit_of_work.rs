@@ -37,6 +37,23 @@ pub type UnitFactory =
 /// durable identity in a fresh unit, never by repeating an external mutation.
 #[async_trait::async_trait]
 pub trait UnitOfWork: Send {
+    async fn history_progress(
+        &mut self,
+        attempt: &crate::history::ExecutionAttempt,
+    ) -> Result<crate::history::HistoryProgress, StoreError>;
+    async fn get_history_entry(
+        &mut self,
+        run_id: &RunId,
+        sequence: u64,
+        memory: interpreter::runtime::limits::HostMemory,
+    ) -> Result<Option<crate::history::LoadedHistoryEntry>, StoreError>;
+    async fn append_history(
+        &mut self,
+        attempt: &crate::history::ExecutionAttempt,
+        entry: Arc<crate::history::HistoryEntry>,
+        memory: interpreter::runtime::limits::HostMemory,
+    ) -> Result<(), StoreError>;
+
     async fn get_journal_entry(
         &mut self,
         run_id: &RunId,

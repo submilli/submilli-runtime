@@ -9,9 +9,10 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use wasmtime::{Result, bail};
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(super) enum Output {
     Json(Value),
-    Bytes(Vec<u8>),
+    Bytes(#[serde(with = "crate::runtime::effects::binary")] Vec<u8>),
 }
 
 pub(super) fn run(
@@ -308,4 +309,12 @@ fn clone_repository(
     operations::replace_worktree(snapshot, &next)?;
     operations::create_branch(snapshot, branch, &format!("refs/remotes/origin/{branch}"))?;
     snapshot.write_head(branch)
+}
+
+impl crate::runtime::effects::NativeOutcome for Output {
+    const DYNAMIC_MAPS: bool = true;
+    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<Value>();
+    fn decoded_heap_bound(_: usize) -> u64 {
+        0
+    }
 }

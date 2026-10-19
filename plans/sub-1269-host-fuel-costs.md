@@ -2013,3 +2013,27 @@ Keys are local to the engine-attributed package. Registration metadata overhead
 is covered by `CALL`. Package code stays in the installed package store.
 Each finalization attempt receives fresh fuel independently of the originating
 execution.
+
+## Native outcome recording (SUB-1837)
+
+The following rows extend each affected host's existing formula when an execution
+history is installed. Ordinary mode keeps its existing charges. `HASH(encoded
+arguments)` is charged incrementally before dispatch; `COPY(encoded native outcome)`
+is settled after native work and included in the saved native fuel. Replay charges
+the original native fuel instead of running or charging the provider again.
+Guest argument conversion remains before the boundary; guest result conversion
+and its existing formula settle after the outcome is committed. Database/network
+waiting costs no fuel. Backend work keeps its existing IO/SCAN/PARSE/SYSCALL costs.
+
+| Hosts | Boundary and charge timing |
+| --- | --- |
+| UUID v4/v7; Math.random; crypto.randomBytes; Temporal.Now.* | Record native observation before guest conversion; random-byte SCAN precedes generation. Replay restores the original timezone lookup cost. |
+| variables.get; secrets.get | Record native optional value after lookup; conversion settles. |
+| fs read/write/append/size/exists/stat/mkdir/remove/move/copy; reader/listing/writer open/next/close | Fingerprint native arguments before backend; keep existing filesystem Work costs, settle after mutation. Rebuild resource handles from persistent IDs on replay. |
+| HTTP request verbs and download | Input costs before send; response IO/SCAN settles inside the boundary. Native response/metadata is committed before guest allocation. |
+| session get/has/set/remove/list and finalizer registration | Existing KV IO inside the boundary; parsing and guest values settle afterward. Guest serialization callbacks precede history allocation. |
+| LLM dispatch/models; embedding embed/models | Existing provider work and token settlement inside boundary; output conversion settles. Replay restores per-run spend, without a second shared provider reservation. |
+| MCP, tools, agents, skills | Existing provider charges inside boundary; native outcome then guest conversion. |
+| security.check; console output | Gate/write cost inside boundary; replay skips external output but reconstructs retained console text. |
+| code read/search/glob/tree/diffFiles/edit/insertAt/applyPatch | Existing native scan/parse/walk/write costs inside boundary; diffText stays pure. Mutation validates result size before publication. |
+| Git worker operations | Existing native WorkingBudget/Work settlement inside boundary, guest encoding afterward. Worker ownership/draining is unchanged. |

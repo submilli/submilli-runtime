@@ -6,6 +6,13 @@ use crate::runtime::{StoreData, fuel};
 use crate::stdlib::shared::{check_security, running_package};
 use wasmtime::{FuncType, HeapType, Linker, RefType, ValType};
 
+#[derive(serde::Serialize)]
+struct Registration {
+    package: String,
+    key: Vec<u16>,
+    payload: Option<Vec<u16>>,
+}
+
 pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
@@ -38,26 +45,54 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                             "finalizers cannot change finalizer registrations",
                         ));
                     }
-                    let provider = caller.data().session_finalizers.clone().ok_or_else(|| {
-                        fatal_host_error("no durable session finalizer provider configured")
-                    })?;
-                    if registering {
-                        let payload = value::serialize(caller, abi_arg(params, 1)?).await?;
-                        fuel::charge(
-                            &mut *caller,
-                            fuel::IO,
-                            (payload.len() as u64).saturating_mul(2),
-                        )?;
-                        provider
-                            .register(&package, &key, &payload)
-                            .await
-                            .map_err(|e| trap(caller, None, &e))?;
+
+                    let payload = if registering {
+                        Some(value::serialize(caller, abi_arg(params, 1)?).await?)
                     } else {
-                        provider
-                            .unregister(&package, &key)
-                            .await
-                            .map_err(|e| trap(caller, None, &e))?;
-                    }
+                        None
+                    };
+                    let request = Registration {
+                        package,
+                        key,
+                        payload,
+                    };
+                    crate::runtime::effects::execute(
+                        caller,
+                        if registering {
+                            "session.registerFinalizer"
+                        } else {
+                            "session.unregisterFinalizer"
+                        },
+                        request,
+                        |caller, _, request| {
+                            Box::pin(async move {
+                                let provider =
+                                    caller.data().session_finalizers.clone().ok_or_else(|| {
+                                        fatal_host_error(
+                                            "no durable session finalizer provider configured",
+                                        )
+                                    })?;
+                                if let Some(payload) = request.payload {
+                                    fuel::charge(
+                                        &mut *caller,
+                                        fuel::IO,
+                                        (payload.len() as u64).saturating_mul(2),
+                                    )?;
+                                    provider
+                                        .register(&request.package, &request.key, &payload)
+                                        .await
+                                        .map_err(|e| trap(caller, None, &e))?;
+                                } else {
+                                    provider
+                                        .unregister(&request.package, &request.key)
+                                        .await
+                                        .map_err(|e| trap(caller, None, &e))?;
+                                }
+                                Ok(())
+                            })
+                        },
+                    )
+                    .await?;
                     Ok(())
                 })
             },

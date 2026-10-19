@@ -904,3 +904,28 @@ async fn relative_glob_starts_inside_hidden_or_ignored_cwd() {
         .unwrap();
     }
 }
+
+#[tokio::test]
+async fn rejected_mutation_result_does_not_publish_the_edit() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("file"), "a\n").unwrap();
+    let mut data = crate::runtime::StoreData::with_vfs(
+        crate::runtime::Vfs::external(root.path().to_owned()).unwrap(),
+    );
+    data.fs_max_read_size = 64;
+    run(
+        r#"import { edit } from "submilli:code";
+        function main(): void {
+            let refused = false;
+            try { edit("/file", "a", "b"); } catch { refused = true; }
+            assert(refused);
+        }"#,
+        data,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("file")).unwrap(),
+        "a\n"
+    );
+}

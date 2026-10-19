@@ -118,6 +118,13 @@ fn download_result_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result
     )
 }
 
+#[derive(serde::Serialize)]
+struct DownloadRequest {
+    url: String,
+    path: String,
+    options: DownloadOptions,
+}
+
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
@@ -413,35 +420,43 @@ async fn perform_request(
         redirect_guard: None,
         recorded_as,
     };
-    let auth_proxy = std::sync::Arc::clone(&caller.data().auth_proxy);
-    let http_client = std::sync::Arc::clone(&caller.data().http_client);
-    let mut req = auth_proxy
-        .transform(req, &who)
-        .await
-        .map_err(|e| wasmtime::Error::msg(format!("http {method}: auth proxy: {e}")))?;
-    // Attached after the proxy, so no proxy can drop it and leave hops unchecked.
-    req.redirect_guard = Some(guard);
+    let response =
+        crate::runtime::effects::execute(caller, "http.request", req, move |caller, _, req| {
+            Box::pin(async move {
+                let method = req.method.clone();
+                let auth_proxy = std::sync::Arc::clone(&caller.data().auth_proxy);
+                let http_client = std::sync::Arc::clone(&caller.data().http_client);
+                let mut req = auth_proxy
+                    .transform(req, &who)
+                    .await
+                    .map_err(|e| wasmtime::Error::msg(format!("http {method}: auth proxy: {e}")))?;
+                // Attached after the proxy, so no proxy can drop it and leave hops unchecked.
+                req.redirect_guard = Some(guard);
 
-    // The request's bytes are the work before any effect; the response's are
-    // charged once it is here, since a stop in between would lose it.
-    fuel::charge(&mut *caller, fuel::IO, request_bytes(&req))?;
-    let metrics = std::sync::Arc::clone(&caller.data().metrics);
-    let start = std::time::Instant::now();
-    let send_result = http_client.send(&req).await;
-    let duration_ms = start.elapsed().as_millis() as u64;
-    record_http_metric(
-        metrics.as_ref(),
-        capability,
-        host_str,
-        duration_ms,
-        send_result
-            .as_ref()
-            .map(|resp| (resp.status, resp.body.len() as u64)),
-    );
-    record_payload(&*caller, ticket, Side::Response, || {
-        response_payload(&send_result)
-    });
-    settle_response(caller, send_result, method)
+                // The request's bytes are the work before any effect; the response's are
+                // charged once it is here, since a stop in between would lose it.
+                fuel::charge(&mut *caller, fuel::IO, request_bytes(&req))?;
+                let metrics = std::sync::Arc::clone(&caller.data().metrics);
+                let start = std::time::Instant::now();
+                let send_result = http_client.send(&req).await;
+                let duration_ms = start.elapsed().as_millis() as u64;
+                record_http_metric(
+                    metrics.as_ref(),
+                    capability,
+                    host_str,
+                    duration_ms,
+                    send_result
+                        .as_ref()
+                        .map(|resp| (resp.status, resp.body.len() as u64)),
+                );
+                record_payload(&*caller, ticket, Side::Response, || {
+                    response_payload(&send_result)
+                });
+                settle_native_response(caller, send_result, &method)
+            })
+        })
+        .await?;
+    crate::runtime::effects::convert_result(caller, |caller| write_response(caller, response.value))
 }
 
 /// The request's key and digest as the call log records them, when the transport reads
@@ -501,32 +516,35 @@ fn failure_meta(error: &HttpError) -> serde_json::Value {
     serde_json::json!({ "kind": error.kind(), "error": error.to_string() })
 }
 
+fn settle_native_response(
+    caller: &mut Caller<'_, StoreData>,
+    send_result: std::result::Result<HttpResponse, HttpError>,
+    method: &str,
+) -> wasmtime::Result<HttpResponse> {
+    let response = send_result.map_err(|error| {
+        let message = format!("http {method}: {error}");
+        match error {
+            HttpError::TooLarge { .. } => crate::runtime::host::range_error(message),
+            HttpError::UnsupportedMethod(_) => crate::runtime::host::type_error(message),
+            HttpError::Internal(_) => crate::runtime::host::fatal_host_error(message),
+            HttpError::PermissionDenied(denied) => denied.into_error(),
+            _ => wasmtime::Error::msg(message),
+        }
+    })?;
+    fuel::settle(&mut *caller, fuel::IO, response_bytes(&response))?;
+    fuel::settle(&mut *caller, fuel::SCAN, response.body.len() as u64)?;
+    Ok(response)
+}
+
+#[cfg(test)]
 fn settle_response(
     caller: &mut Caller<'_, StoreData>,
     send_result: std::result::Result<HttpResponse, HttpError>,
     method: &str,
 ) -> wasmtime::Result<Val> {
-    fuel::settle_result(caller, |caller| {
-        let result = (|| {
-            let resp = send_result.map_err(|e| {
-                let msg = format!("http {method}: {e}");
-                // An over-limit response body is a spec `RangeError` (out-of-range
-                // size) and a bad verb a `TypeError`; other transport failures stay
-                // base `Error`s.
-                match e {
-                    HttpError::TooLarge { .. } => crate::runtime::host::range_error(msg),
-                    HttpError::UnsupportedMethod(_) => crate::runtime::host::type_error(msg),
-                    HttpError::Internal(_) => crate::runtime::host::fatal_host_error(msg),
-                    HttpError::PermissionDenied(denied) => denied.into_error(),
-                    _ => wasmtime::Error::msg(msg),
-                }
-            })?;
-
-            fuel::settle(&mut *caller, fuel::IO, response_bytes(&resp))?;
-            fuel::settle(&mut *caller, fuel::SCAN, resp.body.len() as u64)?;
-            write_response(caller, resp)
-        })();
-        result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
+    crate::runtime::effects::convert_result(caller, |caller| {
+        let response = settle_native_response(caller, send_result, method)?;
+        write_response(caller, response)
     })
 }
 
@@ -595,6 +613,7 @@ fn write_response(caller: &mut Caller<'_, StoreData>, resp: HttpResponse) -> was
 // ---------------------------------------------------------------------------
 
 /// The `DownloadOptions` bag with every default filled in.
+#[derive(serde::Serialize)]
 struct DownloadOptions {
     overwrite: bool,
     max_bytes: u64,
@@ -699,6 +718,15 @@ async fn perform_download(
         }),
     )?;
 
+    let request = DownloadRequest {
+        url,
+        path: guest_path.clone(),
+        options,
+    };
+    let downloaded = crate::runtime::effects::execute(caller, "http.download", request, move |caller, _, request| Box::pin(async move {
+        let url = request.url;
+        let guest_path = request.path;
+        let options = request.options;
     // Resolution follows the policy checks, matching every `fs` module's ordering: no
     // filesystem work happens until the call is authorized.
     let resolved = resolve_content_or_trap(caller.data(), &guest_path, "http.download")?;
@@ -807,19 +835,31 @@ async fn perform_download(
         ),
         Err(DownloadFailure::Fs(_) | DownloadFailure::Full(..)) => {}
     }
-    fuel::settle_result(caller, |caller| {
-        let result = (|| {
-            let Streamed {
-                meta,
-                file,
-                disk_charge,
-            } = streamed.map_err(DownloadFailure::into_error)?;
-            commit_temp(file, disk_charge, &tmp, &resolved, &guest_path)?;
-            let duration_ms = start.elapsed().as_millis() as f64;
-            write_download_result(caller, &meta, &guest_path, duration_ms)
-        })();
-        result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
+        let Streamed { meta, file, disk_charge } = streamed.map_err(DownloadFailure::into_error)?;
+        commit_temp(file, disk_charge, &tmp, &resolved, &guest_path)?;
+        Ok(Downloaded { meta, duration_ms: start.elapsed().as_millis() as f64 })
+    })).await?;
+    crate::runtime::effects::convert_result(caller, |caller| {
+        write_download_result(
+            caller,
+            &downloaded.meta,
+            &guest_path,
+            downloaded.duration_ms,
+        )
     })
+}
+
+/// Only metadata enters history. The downloaded body remains in the mounted file.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Downloaded {
+    meta: DownloadMeta,
+    duration_ms: f64,
+}
+impl crate::runtime::effects::NativeOutcome for Downloaded {
+    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<(String, String)>();
+    fn decoded_heap_bound(_: usize) -> u64 {
+        0
+    }
 }
 
 /// Why a download attempt failed before commit. Transport failures carry the

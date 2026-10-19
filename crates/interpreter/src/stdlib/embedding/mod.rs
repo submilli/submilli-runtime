@@ -80,6 +80,13 @@ const M_MAX_INPUT_TOKENS: usize = 4;
 const M_MAX_INPUT_BYTES: usize = 5;
 const M_IDENTITY: usize = 6;
 
+#[derive(serde::Serialize)]
+struct EmbedRequest {
+    model: String,
+    texts: Vec<String>,
+    purpose: Purpose,
+}
+
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
@@ -277,78 +284,98 @@ async fn embed(
     });
     let purpose = parse_purpose(model, purpose)?;
 
-    let provider = provider(caller, model)?;
-    check_inputs(caller, &*provider, model, &texts).await?;
+    let request = EmbedRequest {
+        model: model.to_owned(),
+        texts,
+        purpose,
+    };
+    let batch = crate::runtime::effects::execute(
+        caller,
+        "embedding.embed",
+        request,
+        move |caller, _, request| {
+            Box::pin(async move {
+                let model = request.model.as_str();
+                let texts = request.texts;
+                let purpose = request.purpose;
+                let budget = execution_budget(caller);
+                let provider = provider(caller, model)?;
+                check_inputs(caller, &*provider, model, &texts).await?;
 
-    let sent: usize = texts.iter().map(String::len).sum();
-    fuel::charge(&mut *caller, fuel::IO, sent as u64)?;
+                let sent: usize = texts.iter().map(String::len).sum();
+                fuel::charge(&mut *caller, fuel::IO, sent as u64)?;
 
-    let estimate = provider.estimate_tokens(model, &texts);
-    budget
-        .reserve(model, estimate)
-        .map_err(|error| quota_throw(caller, ticket, model, error))?;
+                let estimate = provider.estimate_tokens(model, &texts);
+                budget
+                    .reserve(model, estimate)
+                    .map_err(|error| quota_throw(caller, ticket, model, error))?;
 
-    let batch = match provider.embed(model, &texts, purpose, &budget).await {
-        Ok(batch) => batch,
-        Err(error) => {
-            // Settled before the error becomes a throw, or a fatal one, so the
-            // sent sub-batches stay charged either way.
-            budget.settle(estimate, error.settlements());
-            // What the sent sub-batches reported is real spend; record it, and
-            // nothing when no sub-batch reported any. Unlike success, which is
-            // all-or-nothing, this is a lower bound: unreported sub-batches
-            // add nothing to it.
-            let reported: u64 = error
-                .settlements()
-                .iter()
-                .fold(0, |sum, settlement| sum.saturating_add(settlement.reported));
-            if reported > 0 {
+                let batch = match provider.embed(model, &texts, purpose, &budget).await {
+                    Ok(batch) => batch,
+                    Err(error) => {
+                        // Settled before the error becomes a throw, or a fatal one, so the
+                        // sent sub-batches stay charged either way.
+                        budget.settle(estimate, error.settlements());
+                        // What the sent sub-batches reported is real spend; record it, and
+                        // nothing when no sub-batch reported any. Unlike success, which is
+                        // all-or-nothing, this is a lower bound: unreported sub-batches
+                        // add nothing to it.
+                        let reported: u64 = error
+                            .settlements()
+                            .iter()
+                            .fold(0, |sum, settlement| sum.saturating_add(settlement.reported));
+                        if reported > 0 {
+                            record_usage(
+                                &*caller,
+                                ticket,
+                                ModelUsage {
+                                    input_tokens: Some(reported),
+                                    output_tokens: None,
+                                },
+                            );
+                        }
+                        return Err(quota_throw(caller, ticket, model, error));
+                    }
+                };
+                budget.settle(estimate, batch.settlements());
+
+                // The provider owes one vector per text. Settlement is already applied, so
+                // a violation is a defect reported to the program, never a partial result.
+                if batch.count() != texts.len() {
+                    return Err(throw(EmbeddingError::Malformed {
+                        alias: model.to_string(),
+                        reason: EmbeddingMalformedReason::CountMismatch,
+                        settlements: Vec::new(),
+                    }));
+                }
+
+                let received = (batch.values().len() as u64).saturating_mul(4);
+                // Metadata only: vectors are large and say nothing a call log can use.
+                record_payload(&*caller, ticket, Side::Response, || {
+                    Payload::meta(serde_json::json!({
+                        "count": batch.count(),
+                        "dimensions": batch.dimensions(),
+                        "identity": batch.identity(),
+                        "model": model,
+                        "inputTokens": batch.input_tokens(),
+                    }))
+                    .with_size(received)
+                });
                 record_usage(
                     &*caller,
                     ticket,
                     ModelUsage {
-                        input_tokens: Some(reported),
+                        input_tokens: batch.input_tokens(),
                         output_tokens: None,
                     },
                 );
-            }
-            return Err(quota_throw(caller, ticket, model, error));
-        }
-    };
-    budget.settle(estimate, batch.settlements());
-
-    // The provider owes one vector per text. Settlement is already applied, so
-    // a violation is a defect reported to the program, never a partial result.
-    if batch.count() != texts.len() {
-        return Err(throw(EmbeddingError::Malformed {
-            alias: model.to_string(),
-            reason: EmbeddingMalformedReason::CountMismatch,
-            settlements: Vec::new(),
-        }));
-    }
-
-    let received = (batch.values().len() as u64).saturating_mul(4);
-    // Metadata only: vectors are large and say nothing a call log can use.
-    record_payload(&*caller, ticket, Side::Response, || {
-        Payload::meta(serde_json::json!({
-            "count": batch.count(),
-            "dimensions": batch.dimensions(),
-            "identity": batch.identity(),
-            "model": model,
-            "inputTokens": batch.input_tokens(),
-        }))
-        .with_size(received)
-    });
-    record_usage(
-        &*caller,
-        ticket,
-        ModelUsage {
-            input_tokens: batch.input_tokens(),
-            output_tokens: None,
+                fuel::settle(&mut *caller, fuel::IO, received)?;
+                Ok(batch)
+            })
         },
-    );
-    fuel::settle(&mut *caller, fuel::IO, received)?;
-    build_embeddings(caller, batch)
+    )
+    .await?;
+    crate::runtime::effects::convert_result(caller, |caller| build_embeddings(caller, batch.value))
 }
 
 /// The capability check, run before any bytes leave the process. The context is
@@ -470,16 +497,20 @@ async fn available_aliases(
 /// refusal into a silently short listing.
 async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     preflight_models(caller, CAPABILITY, "input_count")?;
-    let provider = provider(caller, "")?;
-    let candidates = provider.models().await.map_err(throw)?;
-
-    let mut built = Vec::with_capacity(candidates.len());
-    for candidate in candidates {
-        if may_embed(caller, &candidate.name)? {
-            built.push(build_model(caller, candidate)?);
+    let candidates =
+        crate::runtime::effects::execute(caller, "embedding.models", (), |caller, _, ()| {
+            Box::pin(async move { provider(caller, "")?.models().await.map_err(throw) })
+        })
+        .await?;
+    crate::runtime::effects::convert_result(caller, |caller| {
+        let mut built = Vec::with_capacity(candidates.len());
+        for candidate in candidates.value {
+            if may_embed(caller, &candidate.name)? {
+                built.push(build_model(caller, candidate)?);
+            }
         }
-    }
-    abi::new_array(caller, &built)
+        abi::new_array(caller, &built)
+    })
 }
 
 /// The per-candidate gate. A denial omits the alias rather than failing the
@@ -508,12 +539,12 @@ fn provider(
 
 /// The execution's budget, or an unmetered one in the pure-interpreter path. The
 /// per-call caps in its limits still apply there.
-fn execution_budget(caller: &wasmtime::Caller<'_, StoreData>) -> Arc<EmbeddingTokenBudget> {
+fn execution_budget(caller: &mut wasmtime::Caller<'_, StoreData>) -> Arc<EmbeddingTokenBudget> {
     caller
-        .data()
+        .data_mut()
         .embedding_budget
+        .get_or_insert_with(|| Arc::new(EmbeddingTokenBudget::unmetered()))
         .clone()
-        .unwrap_or_else(|| Arc::new(EmbeddingTokenBudget::unmetered()))
 }
 
 /// [`throw`] plus an audit record when the failure is a budget refusal.

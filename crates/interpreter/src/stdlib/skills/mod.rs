@@ -45,6 +45,12 @@ const S_NAME: usize = 1;
 const S_DESCRIPTION: usize = 2;
 const S_CONTENT: usize = 3;
 
+#[derive(serde::Serialize)]
+struct SkillFile {
+    name: String,
+    path: String,
+}
+
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
@@ -144,24 +150,36 @@ fn gate(
 /// hidden here: a listing has no candidate to gate before asking it.
 async fn list(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     preflight_listing(caller, CAPABILITY, &serde_json::json!({ "name": "" }))?;
-    let provider = provider(caller).map_err(|error| throw("list", &error))?;
-    let candidates = provider.list().await.map_err(|e| throw("list", &e))?;
-    // A name `load` would refuse is no use to the program, so it is not offered.
-    let loadable = candidates
-        .into_iter()
-        .filter(|skill| is_skill_name(&skill.name))
-        .collect();
-    let visible = permitted_candidates(
-        caller,
-        loadable,
-        |skill| skill.name.as_str(),
-        |caller, name| gate(caller, name).map(|_| ()),
-    )?;
-    let mut built = Vec::with_capacity(visible.len());
-    for skill in visible {
-        built.push(build_skill_info(caller, skill)?);
-    }
-    abi::new_array(caller, &built)
+    let candidates =
+        crate::runtime::effects::execute(caller, "skills.list", (), |caller, _, ()| {
+            Box::pin(async move {
+                provider(caller)
+                    .map_err(|error| throw("list", &error))?
+                    .list()
+                    .await
+                    .map_err(|e| throw("list", &e))
+            })
+        })
+        .await?;
+    crate::runtime::effects::convert_result(caller, |caller| {
+        // A name `load` would refuse is no use to the program, so it is not offered.
+        let loadable = candidates
+            .value
+            .into_iter()
+            .filter(|skill| is_skill_name(&skill.name))
+            .collect();
+        let visible = permitted_candidates(
+            caller,
+            loadable,
+            |skill| skill.name.as_str(),
+            |caller, name| gate(caller, name).map(|_| ()),
+        )?;
+        let mut built = Vec::with_capacity(visible.len());
+        for skill in visible {
+            built.push(build_skill_info(caller, skill)?);
+        }
+        abi::new_array(caller, &built)
+    })
 }
 
 /// `load(name)`: gate, refuse what cannot be sent, record the request, then ask
@@ -177,30 +195,33 @@ async fn load(caller: &mut wasmtime::Caller<'_, StoreData>, name: String) -> was
             &SkillError::InvalidName { name },
         ));
     }
-    let provider = provider(caller).map_err(|error| fail(caller, ticket, "load", &error))?;
     record_payload(&*caller, ticket, Side::Request, || {
         Payload::meta(serde_json::json!({ "op": "load", "name": name }))
     });
-    match provider.load(&name).await {
-        // The policy decided on `name`; a provider that answered with another
-        // skill would hand the program one the policy never saw.
-        Ok(skill) if skill.name != name => {
-            // The read happened, so it is paid for; its content is not kept.
-            fuel::settle(&mut *caller, fuel::IO, skill.content.len() as u64)?;
-            Err(fail(
-                caller,
-                ticket,
-                "load",
-                &SkillError::WrongSkill { name },
-            ))
-        }
-        Ok(skill) => {
-            record_text(caller, ticket, &skill.content);
-            fuel::settle(&mut *caller, fuel::IO, skill.content.len() as u64)?;
-            fuel::settle_result(caller, |caller| build_skill(caller, skill))
-        }
-        Err(error) => Err(fail(caller, ticket, "load", &error)),
-    }
+    let skill =
+        crate::runtime::effects::execute(caller, "skills.load", name, move |caller, _, name| {
+            Box::pin(async move {
+                let provider =
+                    provider(caller).map_err(|error| fail(caller, ticket, "load", &error))?;
+                let skill = provider
+                    .load(&name)
+                    .await
+                    .map_err(|error| fail(caller, ticket, "load", &error))?;
+                fuel::settle(&mut *caller, fuel::IO, skill.content.len() as u64)?;
+                if skill.name != name {
+                    return Err(fail(
+                        caller,
+                        ticket,
+                        "load",
+                        &SkillError::WrongSkill { name },
+                    ));
+                }
+                record_text(caller, ticket, &skill.content);
+                Ok(skill)
+            })
+        })
+        .await?;
+    crate::runtime::effects::convert_result(caller, |caller| build_skill(caller, skill.value))
 }
 
 /// `readFile(name, path)`: in the order `load` follows, with the path checked
@@ -227,21 +248,33 @@ async fn read_file(
             &SkillError::InvalidPath { path },
         ));
     }
-    let provider = provider(caller).map_err(|error| fail(caller, ticket, "readFile", &error))?;
     record_payload(&*caller, ticket, Side::Request, || {
         Payload::meta(serde_json::json!({ "op": "readFile", "name": name, "path": path }))
     });
-    match provider.read_file(&name, &path).await {
-        Ok(text) => {
-            record_text(caller, ticket, &text);
-            fuel::settle(&mut *caller, fuel::IO, text.len() as u64)?;
-            fuel::settle_result(caller, |caller| {
-                let text = write_submilli_string_struct(caller, &text)?;
-                Ok(Val::AnyRef(Some(text.to_anyref())))
+
+    let text = crate::runtime::effects::execute(
+        caller,
+        "skills.readFile",
+        SkillFile { name, path },
+        move |caller, _, request| {
+            Box::pin(async move {
+                let provider =
+                    provider(caller).map_err(|error| fail(caller, ticket, "readFile", &error))?;
+                let text = provider
+                    .read_file(&request.name, &request.path)
+                    .await
+                    .map_err(|error| fail(caller, ticket, "readFile", &error))?;
+                record_text(caller, ticket, &text);
+                fuel::settle(&mut *caller, fuel::IO, text.len() as u64)?;
+                Ok(text)
             })
-        }
-        Err(error) => Err(fail(caller, ticket, "readFile", &error)),
-    }
+        },
+    )
+    .await?;
+    crate::runtime::effects::convert_result(caller, |caller| {
+        let text = write_submilli_string_struct(caller, &text)?;
+        Ok(Val::AnyRef(Some(text.to_anyref())))
+    })
 }
 
 /// The longest skill name, and the longest path, the engine passes to a

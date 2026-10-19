@@ -8,6 +8,9 @@ pub mod decision;
 pub mod default_filesystem;
 pub mod disk_quota;
 pub mod durable;
+pub mod effects;
+pub mod effects_clock;
+mod effects_memory;
 pub mod embedding;
 pub mod exec;
 pub mod filesystem;
@@ -133,8 +136,12 @@ pub struct StoreData {
     pub git: Option<crate::stdlib::git::GitConfig>,
     pub(crate) git_history: Option<Arc<crate::stdlib::git::log_cache::Cache>>,
     pub console: Box<dyn Write + Send>,
+    /// Rebuild retained console output during replay without publishing it again.
+    pub replay_console: Option<Box<dyn Write + Send>>,
     pub vfs: Vfs,
     pub filesystem: Arc<dyn filesystem::Filesystem>,
+    /// Native outcome history, installed before any guest initializer runs.
+    pub effects: Option<Arc<dyn effects::EffectHistory>>,
     pub vfs_info: VfsInfo,
     pub security_check: Arc<dyn SecurityCheck>,
     pub fs_max_read_size: u64,
@@ -158,6 +165,7 @@ pub struct StoreData {
     /// that must not count against its time limit (an application tool call).
     /// An embedder's execution timeout subtracts it from the elapsed time.
     pub clock_paused: std::time::Duration,
+    pub execution_clock: Option<effects_clock::ExecutionClock>,
     /// The model provider `submilli:llm` dispatches through, present only when
     /// the embedder wires one. Left `None` the runtime has no model access at
     /// all rather than silently completing against some default — the guest
@@ -295,7 +303,9 @@ impl StoreData {
             #[cfg(test)]
             array_growth: array_storage::GrowthStats::default(),
             console: Box::new(std::io::stderr()),
+            replay_console: None,
             filesystem: Arc::new(default_filesystem::DefaultFilesystem::new(vfs.clone())),
+            effects: None,
             vfs,
             vfs_info,
             security_check: security::default_check(),
@@ -312,6 +322,7 @@ impl StoreData {
             mcp_transport: None,
             tool_provider: None,
             clock_paused: std::time::Duration::ZERO,
+            execution_clock: None,
             llm_provider: None,
             llm_budget: None,
             embedding_provider: None,

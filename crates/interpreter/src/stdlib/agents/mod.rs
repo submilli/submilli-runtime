@@ -130,10 +130,8 @@ async fn run(
     schema: Option<String>,
 ) -> wasmtime::Result<Val> {
     let ticket = gate(caller, &agent)?;
-    let provider = provider(caller).map_err(|error| fail(caller, ticket, "run", &error))?;
     let principal = running_package(caller).map_err(|error| error.into_denial(CAPABILITY))?;
     let sent = (input.len() + schema.as_deref().map_or(0, str::len)) as u64;
-    fuel::charge(&mut *caller, fuel::IO, sent)?;
     record_payload(&*caller, ticket, Side::Request, || {
         Payload::meta(serde_json::json!({ "op": "run", "agent": agent, "schema": schema }))
             .with_owned_body(input.clone().into_bytes())
@@ -146,28 +144,41 @@ async fn run(
         schema,
         caller: principal,
     };
-    match provider.run(request).await {
-        Ok(outcome) => {
-            record_outcome(caller, ticket, &outcome);
-            fuel::settle(&mut *caller, fuel::IO, outcome.text.len() as u64)?;
-            fuel::settle_result(caller, |caller| {
-                if typed {
-                    crate::runtime::json::parse_json_as_unknown(
-                        caller,
-                        &outcome.text,
-                        &format!(
-                            "agents.run(\"{}\"): the agent's result is not JSON",
-                            truncated(&agent)
-                        ),
-                    )
-                } else {
-                    let text = write_submilli_string_struct(caller, &outcome.text)?;
-                    Ok(Val::AnyRef(Some(text.to_anyref())))
-                }
+    let outcome = crate::runtime::effects::execute(
+        caller,
+        "agents.run",
+        request,
+        move |caller, _, request| {
+            Box::pin(async move {
+                fuel::charge(&mut *caller, fuel::IO, sent)?;
+                let provider =
+                    provider(caller).map_err(|error| fail(caller, ticket, "run", &error))?;
+                let outcome = provider
+                    .run(request)
+                    .await
+                    .map_err(|error| fail(caller, ticket, "run", &error))?;
+                record_outcome(caller, ticket, &outcome);
+                fuel::settle(&mut *caller, fuel::IO, outcome.text.len() as u64)?;
+                Ok(outcome)
             })
+        },
+    )
+    .await?;
+    crate::runtime::effects::convert_result(caller, |caller| {
+        if typed {
+            crate::runtime::json::parse_json_as_unknown(
+                caller,
+                &outcome.text,
+                &format!(
+                    "agents.run(\"{}\"): the agent's result is not JSON",
+                    truncated(&agent)
+                ),
+            )
+        } else {
+            let text = write_submilli_string_struct(caller, &outcome.text)?;
+            Ok(Val::AnyRef(Some(text.to_anyref())))
         }
-        Err(error) => Err(fail(caller, ticket, "run", &error)),
-    }
+    })
 }
 
 /// Record `error` as the call's response and turn it into the guest's error.
@@ -224,19 +235,30 @@ fn gate(
 /// hidden here: a listing has no candidate to gate before asking it.
 async fn list(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     preflight_listing(caller, CAPABILITY, &serde_json::json!({ "agent": "" }))?;
-    let provider = provider(caller).map_err(|error| throw("list", &error))?;
-    let candidates = provider.agents().await.map_err(|e| throw("list", &e))?;
-    let visible = permitted_candidates(
-        caller,
-        candidates,
-        |agent| agent.name.as_str(),
-        |caller, name| gate(caller, name).map(|_| ()),
-    )?;
-    let mut built = Vec::with_capacity(visible.len());
-    for agent in visible {
-        built.push(build_agent_info(caller, agent)?);
-    }
-    abi::new_array(caller, &built)
+    let candidates =
+        crate::runtime::effects::execute(caller, "agents.list", (), |caller, _, ()| {
+            Box::pin(async move {
+                provider(caller)
+                    .map_err(|error| throw("list", &error))?
+                    .agents()
+                    .await
+                    .map_err(|e| throw("list", &e))
+            })
+        })
+        .await?;
+    crate::runtime::effects::convert_result(caller, |caller| {
+        let visible = permitted_candidates(
+            caller,
+            candidates.value,
+            |agent| agent.name.as_str(),
+            |caller, name| gate(caller, name).map(|_| ()),
+        )?;
+        let mut built = Vec::with_capacity(visible.len());
+        for agent in visible {
+            built.push(build_agent_info(caller, agent)?);
+        }
+        abi::new_array(caller, &built)
+    })
 }
 
 /// Clone the provider out of the store before any `await`. `run` looks it up

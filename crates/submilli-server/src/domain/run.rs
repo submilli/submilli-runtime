@@ -2,7 +2,7 @@
 use super::idempotent_request::{RecordedOutcome, RequestState};
 use std::time::SystemTime;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Run {
     session_id: String,
     key: Option<String>,
@@ -16,6 +16,8 @@ pub struct Run {
     identity: RunIdentity,
     revision: i64,
     attempt: i64,
+    history_position: u64,
+    program: Option<std::sync::Arc<super::run_program::RunProgram>>,
 }
 
 /// Immutable admission metadata. Imported requests may have no execution ID:
@@ -78,6 +80,8 @@ impl Run {
         identity: RunIdentity,
         revision: i64,
         attempt: i64,
+        history_position: u64,
+        program: Option<std::sync::Arc<super::run_program::RunProgram>>,
     ) -> Result<Self, RequestError> {
         if let Some(key) = &key {
             Self::validate_key(key)?;
@@ -104,6 +108,8 @@ impl Run {
             identity,
             revision,
             attempt,
+            history_position,
+            program,
         })
     }
 
@@ -176,7 +182,51 @@ impl Run {
             identity,
             revision: 0,
             attempt: 0,
+            history_position: 0,
+            program: None,
         })
+    }
+
+    /// Retain initial inputs before admission. Individual effects store outcomes only.
+    pub fn record_program(
+        &mut self,
+        program: super::run_program::RunProgram,
+    ) -> Result<(), RequestError> {
+        if self.state != RequestState::Reserved
+            || self.revision != 0
+            || self.attempt != 0
+            || self.program.is_some()
+        {
+            return Err(RequestError::InvalidTransition);
+        }
+        self.program = Some(std::sync::Arc::new(program));
+        Ok(())
+    }
+
+    pub fn program(&self) -> Option<&super::run_program::RunProgram> {
+        self.program.as_deref()
+    }
+
+    /// Called only after the old attempt's native work has drained. SQLite's
+    /// exclusive local-store owner establishes that across a process restart.
+    pub fn reopen(&mut self, startup: &str) -> Result<(), RequestError> {
+        if self.program.is_none()
+            || !matches!(
+                self.state,
+                RequestState::Reserved | RequestState::Running | RequestState::Blocked
+            )
+        {
+            return Err(RequestError::InvalidTransition);
+        }
+        let attempt = self
+            .attempt
+            .checked_add(1)
+            .ok_or(RequestError::CounterExhausted)?;
+        self.advance_revision()?;
+        self.attempt = attempt;
+        self.owner_generation = startup.to_owned();
+        self.state = RequestState::Running;
+        Ok(())
     }
 
     pub fn assign_admission(&mut self, order: i64) -> Result<(), RequestError> {
@@ -265,6 +315,9 @@ impl Run {
     }
     pub fn revision(&self) -> i64 {
         self.revision
+    }
+    pub fn history_position(&self) -> u64 {
+        self.history_position
     }
     pub fn attempt(&self) -> i64 {
         self.attempt

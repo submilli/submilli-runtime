@@ -49,31 +49,67 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     units.extend(to_string_units(caller, &elem).await?);
                 }
                 fuel::charge(&mut *caller, fuel::SCAN, units.len() as u64)?;
-                let line = String::from_utf16_lossy(&units);
-                let mut output = CountedWriter {
-                    sink: &mut caller.data_mut().console,
-                    written: 0,
-                };
-                let result = writeln!(output, "{line}");
-                let written = output.written;
-                fuel::settle(&mut *caller, fuel::IO, written)?;
-                fuel::settle_result(caller, |caller| {
-                    result.map_err(|error| {
-                        let error = match error.kind() {
-                            std::io::ErrorKind::FileTooLarge => {
-                                crate::runtime::host::range_error(error.to_string())
-                            }
-                            std::io::ErrorKind::OutOfMemory => {
-                                crate::runtime::host::fatal_host_error(error)
-                            }
-                            _ => fatal_host_error(error),
-                        };
-                        crate::runtime::host::throw_host_error(caller, error)
-                    })
+                let mut line = String::from_utf16_lossy(&units);
+                line.push('\n');
+                let _request = crate::runtime::limits::HostBytes::new(
+                    &caller.data().tenant_limits,
+                    line.len() as u64,
+                )?;
+                let outcome = crate::runtime::effects::execute(
+                    caller,
+                    "console.log",
+                    line.clone(),
+                    |caller, _, line| {
+                        Box::pin(async move {
+                            let mut output = CountedWriter {
+                                sink: &mut caller.data_mut().console,
+                                written: 0,
+                            };
+                            let result = output.write_all(line.as_bytes());
+                            let written = output.written;
+                            fuel::settle(&mut *caller, fuel::IO, written)?;
+                            let error = match result {
+                                Ok(()) => None,
+                                Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
+                                    Some(error.to_string())
+                                }
+                                Err(error) => return Err(fatal_host_error(error)),
+                            };
+                            Ok(ConsoleOutcome { written, error })
+                        })
+                    },
+                )
+                .await?;
+                if outcome.replayed
+                    && let Some(output) = &mut caller.data_mut().replay_console
+                {
+                    let length = usize::try_from(outcome.written).map_err(fatal_host_error)?;
+                    let bytes = line.as_bytes().get(..length).ok_or_else(|| {
+                        fatal_host_error("console history exceeds reconstructed line")
+                    })?;
+                    output.write_all(bytes).map_err(fatal_host_error)?;
+                }
+                crate::runtime::effects::convert_result(caller, |caller| match &outcome.error {
+                    Some(error) => Err(crate::runtime::host::throw_host_error(
+                        caller,
+                        crate::runtime::host::range_error(error),
+                    )),
+                    None => Ok(()),
                 })
             })
         },
     )
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ConsoleOutcome {
+    written: u64,
+    error: Option<String>,
+}
+impl crate::runtime::effects::NativeOutcome for ConsoleOutcome {
+    fn decoded_heap_bound(bytes: usize) -> u64 {
+        bytes as u64
+    }
 }
 
 struct CountedWriter<'a> {

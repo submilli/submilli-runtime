@@ -1,4 +1,5 @@
 //! Relational mapping for program runs. Transactions belong to the caller.
+use crate::adapters::sealing::Sealer;
 use crate::database::DatabaseError;
 use crate::domain::idempotent_request::{CompletedResponse, RecordedOutcome, RequestState};
 use crate::domain::run::Run;
@@ -7,31 +8,34 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(crate) async fn get(
     connection: &mut SqliteConnection,
+    sealer: &Sealer,
     session: &str,
     key: &str,
 ) -> Result<Option<Run>, DatabaseError> {
-    sqlx::query("SELECT * FROM runs WHERE session_id=? AND request_key=?")
+    sqlx::query("SELECT run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,history_position,recovery_mode,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms,CASE WHEN length(execution_manifest)<=16777344 THEN execution_manifest ELSE NULL END AS execution_manifest FROM runs WHERE session_id=? AND request_key=?")
         .bind(session)
         .bind(key)
         .fetch_optional(connection)
         .await?
-        .map(decode)
+        .map(|row| decode(row, sealer))
         .transpose()
 }
 
 pub(crate) async fn unfinished(
     connection: &mut SqliteConnection,
+    sealer: &Sealer,
 ) -> Result<Vec<Run>, DatabaseError> {
-    sqlx::query("SELECT * FROM runs WHERE state IN ('reserved','running')")
+    sqlx::query("SELECT run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,history_position,recovery_mode,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms,CASE WHEN length(execution_manifest)<=16777344 THEN execution_manifest ELSE NULL END AS execution_manifest FROM runs WHERE state IN ('reserved','running')")
         .fetch_all(connection)
         .await?
         .into_iter()
-        .map(decode)
+        .map(|row| decode(row, sealer))
         .collect()
 }
 
 pub(crate) async fn save(
     connection: &mut SqliteConnection,
+    sealer: &Sealer,
     mut request: Run,
 ) -> Result<(), DatabaseError> {
     if request.identity().admission_order == 0 {
@@ -56,13 +60,31 @@ pub(crate) async fn save(
         ),
         RequestState::Expired => ("expired", None, None),
     };
-    let result = sqlx::query("INSERT INTO runs(run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET request_key=excluded.request_key,state=excluded.state,reason=excluded.reason,attempt=excluded.attempt,revision=excluded.revision,response_status=excluded.response_status,response_body=excluded.response_body,completed_at_unix_ms=excluded.completed_at_unix_ms WHERE runs.revision=excluded.revision-1 AND runs.owner_generation=excluded.owner_generation")
+    let result = if request.revision() == 0 {
+        let manifest = request
+            .program()
+            .map(|program| super::run_program::seal(sealer, request.reservation_id(), program))
+            .transpose()?;
+        let recovery_mode = if manifest.is_some() {
+            "recorded"
+        } else {
+            "unrecorded"
+        };
+        sqlx::query("INSERT INTO runs(run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms,recovery_mode,execution_manifest) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)" )
         .bind(request.reservation_id()).bind(request.reservation_id())
         .bind(&request.identity().execution_id).bind(request.session_id()).bind(request.optional_key())
         .bind(request.fingerprint()).bind(&request.identity().principal).bind(&request.identity().entry)
         .bind(request.owner_generation()).bind(request.attempt())
         .bind(request.revision()).bind(request.identity().admission_order).bind(created).bind(state)
-        .bind(reason(request.state())).bind(status).bind(body).bind(completed).execute(connection).await?;
+        .bind(reason(request.state())).bind(status).bind(body).bind(completed).bind(recovery_mode).bind(manifest).execute(connection).await?
+    } else {
+        // Updating lifecycle never serializes or rewrites the retained initial inputs.
+        sqlx::query("UPDATE runs SET owner_generation=?,request_key=?,state=?,reason=?,attempt=?,revision=?,response_status=?,response_body=?,completed_at_unix_ms=? WHERE run_id=? AND revision=? AND (owner_generation=? OR (recovery_mode='recorded' AND state IN ('reserved','running','blocked') AND ?='running' AND attempt=?-1))")
+            .bind(request.owner_generation()).bind(request.optional_key()).bind(state).bind(reason(request.state()))
+            .bind(request.attempt()).bind(request.revision()).bind(status).bind(body).bind(completed)
+            .bind(request.reservation_id()).bind(request.revision()-1).bind(request.owner_generation()).bind(state).bind(request.attempt())
+            .execute(connection).await?
+    };
     if result.rows_affected() != 1 {
         return Err(DatabaseError::SessionConflict);
     }
@@ -123,7 +145,17 @@ pub(crate) async fn expire_responses(
     Ok(expired)
 }
 
-fn decode(row: SqliteRow) -> Result<Run, DatabaseError> {
+fn decode(row: SqliteRow, sealer: &Sealer) -> Result<Run, DatabaseError> {
+    let id: String = row.try_get("run_id")?;
+    let program = match row.try_get::<&str, _>("recovery_mode")? {
+        "unrecorded" => None,
+        "recorded" => Some(std::sync::Arc::new(super::run_program::open(
+            sealer,
+            &id,
+            row.try_get::<&[u8], _>("execution_manifest")?,
+        )?)),
+        _ => return Err(invalid("invalid recovery mode")),
+    };
     let state = match row.try_get::<&str, _>("state")? {
         "reserved" => RequestState::Reserved,
         "running" => RequestState::Running,
@@ -164,6 +196,8 @@ fn decode(row: SqliteRow) -> Result<Run, DatabaseError> {
         },
         row.try_get("revision")?,
         row.try_get("attempt")?,
+        u64::try_from(row.try_get::<i64, _>("history_position")?).map_err(invalid)?,
+        program,
     )
     .map_err(invalid)
 }
@@ -197,27 +231,29 @@ fn reason(state: &RequestState) -> Option<&'static str> {
 
 pub(crate) async fn get_run(
     connection: &mut SqliteConnection,
+    sealer: &Sealer,
     id: &str,
 ) -> Result<Option<Run>, DatabaseError> {
-    sqlx::query("SELECT * FROM runs WHERE run_id=?")
+    sqlx::query("SELECT run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,history_position,recovery_mode,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms,CASE WHEN length(execution_manifest)<=16777344 THEN execution_manifest ELSE NULL END AS execution_manifest FROM runs WHERE run_id=?")
         .bind(id)
         .fetch_optional(connection)
         .await?
-        .map(decode)
+        .map(|row| decode(row, sealer))
         .transpose()
 }
 
 pub(crate) async fn active_for_session(
     connection: &mut SqliteConnection,
+    sealer: &Sealer,
     session: &str,
 ) -> Result<Vec<Run>, DatabaseError> {
     sqlx::query(
-        "SELECT * FROM runs WHERE session_id=? AND state IN ('reserved','running','blocked')",
+        "SELECT run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,history_position,recovery_mode,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms,CASE WHEN length(execution_manifest)<=16777344 THEN execution_manifest ELSE NULL END AS execution_manifest FROM runs WHERE session_id=? AND state IN ('reserved','running','blocked')",
     )
     .bind(session)
     .fetch_all(connection)
     .await?
     .into_iter()
-    .map(decode)
+    .map(|row| decode(row, sealer))
     .collect()
 }

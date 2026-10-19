@@ -13,9 +13,9 @@
 
 use crate::runtime::host::{abi_arg, abi_result, fatal_host_error};
 pub mod declaration;
+mod effects;
 pub mod handles;
 
-use crate::runtime::durable::EffectId;
 use crate::runtime::filesystem::FilesystemError as PortError;
 
 use wasmtime::{
@@ -264,23 +264,36 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 // sandbox, missing, a file used as a directory component, a symlink cycle. A
                 // guard clause written as `if (!exists(p))` is exactly what an LLM writes, and it
                 // must not abort on the malformed-path case it exists to handle.
-                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-                let work = begin_work(caller)?;
-                let found = match filesystem
-                    .metadata(&effect_id, Some(work.clone()), &path, true)
-                    .await
-                {
-                    Ok(_) => true,
-                    Err(
-                        PortError::Containment(ContainError::Escape | ContainError::Io(_))
-                        | PortError::Io(_),
-                    ) => false,
-                    Err(e) => return Err(backend_error("fs.exists", &path, e)),
-                };
+                let found = crate::runtime::effects::execute(
+                    caller,
+                    "fs.exists",
+                    path,
+                    move |caller, effect_id, path| {
+                        Box::pin(async move {
+                            let work = begin_work(caller)?;
+                            let found = match filesystem
+                                .metadata(&effect_id, Some(work.clone()), &path, true)
+                                .await
+                            {
+                                Ok(_) => true,
+                                Err(
+                                    PortError::Containment(
+                                        ContainError::Escape | ContainError::Io(_),
+                                    )
+                                    | PortError::Io(_),
+                                ) => false,
+                                Err(e) => return Err(backend_error("fs.exists", &path, e)),
+                            };
+                            work.settle(&mut *caller)?;
+                            Ok(found)
+                        })
+                    },
+                )
+                .await?;
                 record_payload(&*caller, ticket, Side::Response, || {
-                    Payload::meta(serde_json::json!({ "exists": found }))
+                    Payload::meta(serde_json::json!({ "exists": found.value }))
                 });
-                *abi_result(results, 0)? = Val::I32(i32::from(found));
+                *abi_result(results, 0)? = Val::I32(i32::from(found.value));
                 Ok(())
             })
         },
@@ -300,21 +313,32 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     "fs.stat",
                     serde_json::json!({ "path": &path }),
                 )?;
-                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-                let work = begin_work(caller)?;
-                let meta = caller
-                    .data()
-                    .filesystem
-                    .metadata(&effect_id, Some(work.clone()), &path, true)
-                    .await
-                    .map_err(|e| backend_error("fs.size", &path, e))?;
-                if meta.is_dir() {
-                    wasmtime::bail!("fs.size {}: path is a directory", path);
-                }
+                let size = crate::runtime::effects::execute(
+                    caller,
+                    "fs.size",
+                    path,
+                    |caller, effect_id, path| {
+                        Box::pin(async move {
+                            let work = begin_work(caller)?;
+                            let meta = caller
+                                .data()
+                                .filesystem
+                                .metadata(&effect_id, Some(work.clone()), &path, true)
+                                .await
+                                .map_err(|e| backend_error("fs.size", &path, e))?;
+                            if meta.is_dir() {
+                                wasmtime::bail!("fs.size {}: path is a directory", path);
+                            }
+                            work.settle(&mut *caller)?;
+                            Ok(meta.len())
+                        })
+                    },
+                )
+                .await?;
                 record_payload(&*caller, ticket, Side::Response, || {
-                    Payload::meta(serde_json::json!({ "size": meta.len() }))
+                    Payload::meta(serde_json::json!({ "size": size.value }))
                 });
-                *abi_result(results, 0)? = Val::F64((meta.len() as f64).to_bits());
+                *abi_result(results, 0)? = Val::F64((size.value as f64).to_bits());
                 Ok(())
             })
         },
@@ -369,13 +393,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.read")?;
-                *abi_result(results, 0)? = match read_whole_capped(caller, &path, "read").await? {
-                    Some(bytes) => {
-                        let arr = write_submilli_uint8array_struct(caller, &bytes)?;
-                        Val::AnyRef(Some(arr.to_anyref()))
-                    }
-                    None => crate::runtime::prelude::undefined::value(caller)?,
-                };
+                let output = read_whole_capped(caller, &path, "read").await?;
+                *abi_result(results, 0)? =
+                    crate::runtime::effects::convert_result(caller, |caller| {
+                        match &output.value {
+                            Some(bytes) => {
+                                let arr = write_submilli_uint8array_struct(caller, &bytes.0)?;
+                                Ok(Val::AnyRef(Some(arr.to_anyref())))
+                            }
+                            None => crate::runtime::prelude::undefined::value(caller),
+                        }
+                    })?;
                 Ok(())
             })
         },
@@ -390,19 +418,22 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.readText")?;
+                let output = read_whole_capped(caller, &path, "readText").await?;
                 *abi_result(results, 0)? =
-                    match read_whole_capped(caller, &path, "readText").await? {
-                        Some(bytes) => {
-                            // Lossy UTF-8: invalid bytes become U+FFFD rather than trapping.
-                            let mut text = String::from_utf8_lossy(&bytes).into_owned();
-                            if text.starts_with('\u{FEFF}') {
-                                text.remove(0);
+                    crate::runtime::effects::convert_result(caller, |caller| {
+                        match &output.value {
+                            Some(bytes) => {
+                                // Lossy UTF-8: invalid bytes become U+FFFD rather than trapping.
+                                let mut text = String::from_utf8_lossy(&bytes.0).into_owned();
+                                if text.starts_with('\u{FEFF}') {
+                                    text.remove(0);
+                                }
+                                let st = write_submilli_string_struct(caller, &text)?;
+                                Ok(Val::AnyRef(Some(st.to_anyref())))
                             }
-                            let st = write_submilli_string_struct(caller, &text)?;
-                            Val::AnyRef(Some(st.to_anyref()))
+                            None => crate::runtime::prelude::undefined::value(caller),
                         }
-                        None => crate::runtime::prelude::undefined::value(caller)?,
-                    };
+                    })?;
                 Ok(())
             })
         },
@@ -433,9 +464,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 )?;
                 let bytes = read_byte_range(caller, &path, offset, length).await?;
                 record_payload(&*caller, ticket, Side::Response, || {
-                    Payload::meta(serde_json::json!({ "offset": offset })).with_body(&bytes)
+                    Payload::meta(serde_json::json!({ "offset": offset })).with_body(&bytes.0)
                 });
-                let arr = write_submilli_uint8array_struct(caller, &bytes)?;
+                let arr = crate::runtime::effects::convert_result(caller, |caller| {
+                    write_submilli_uint8array_struct(caller, &bytes.0)
+                })?;
                 *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
                 Ok(())
             })
@@ -484,19 +517,55 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         .map_err(|e| backend_error(&ctx, &path, e))?;
                     require_writable(&*caller, ticket, &placement, "fs.write", &path)?;
                     fuel::charge(&mut *caller, fuel::IO, bytes.len() as u64)?;
-                    let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-                    let work = begin_work(caller)?;
-                    let result = if append {
-                        filesystem
-                            .append(&effect_id, Some(work.clone()), &path, bytes)
-                            .await
+                    let request = FileWrite { path, bytes };
+                    if append {
+                        crate::runtime::effects::execute(
+                            caller,
+                            "fs.append",
+                            request,
+                            move |caller, effect_id, request| {
+                                Box::pin(async move {
+                                    let work = begin_work(caller)?;
+                                    let result = filesystem
+                                        .append(
+                                            &effect_id,
+                                            Some(work.clone()),
+                                            &request.path,
+                                            request.bytes,
+                                        )
+                                        .await;
+                                    work.settle(&mut *caller)?;
+                                    result
+                                        .map_err(|error| backend_error(&ctx, &request.path, error))
+                                })
+                            },
+                        )
+                        .await?;
                     } else {
-                        filesystem
-                            .write(&effect_id, Some(work.clone()), &path, bytes)
-                            .await
-                    };
-                    work.settle(&mut *caller)?;
-                    result.map_err(|e| backend_error(&ctx, &path, e))
+                        crate::runtime::effects::execute(
+                            caller,
+                            "fs.write",
+                            request,
+                            move |caller, effect_id, request| {
+                                Box::pin(async move {
+                                    let work = begin_work(caller)?;
+                                    let result = filesystem
+                                        .write(
+                                            &effect_id,
+                                            Some(work.clone()),
+                                            &request.path,
+                                            request.bytes,
+                                        )
+                                        .await;
+                                    work.settle(&mut *caller)?;
+                                    result
+                                        .map_err(|error| backend_error(&ctx, &request.path, error))
+                                })
+                            },
+                        )
+                        .await?;
+                    }
+                    Ok(())
                 })
             },
         )?;
@@ -517,26 +586,42 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     "fs.mkdir",
                     serde_json::json!({ "path": &path, "recursive": recursive }),
                 )?;
-                let filesystem = caller.data().filesystem.clone();
-                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-                let work = begin_work(caller)?;
-                let placement = filesystem
-                    .placement(&path)
-                    .map_err(|e| backend_error("fs.mkdir", &path, e))?;
-                if !(recursive
-                    && filesystem
-                        .metadata(&effect_id, Some(work.clone()), &path, true)
-                        .await
-                        .is_ok_and(|m| m.is_dir()))
-                {
-                    require_writable(&*caller, ticket, &placement, "fs.mkdir", &path)?;
-                }
-                let result = filesystem
-                    .mkdir(&effect_id, Some(work.clone()), &path, recursive)
-                    .await;
-                work.settle(&mut *caller)?;
-                result.map_err(|e| backend_error("fs.mkdir", &path, e))?;
-                Ok(())
+                let request = effects::PathMutation { path, recursive };
+                let outcome = crate::runtime::effects::execute(
+                    caller,
+                    "fs.mkdir",
+                    request,
+                    move |caller, effect_id, request| {
+                        Box::pin(async move {
+                            let effects::PathMutation { path, recursive } = request;
+                            let filesystem = caller.data().filesystem.clone();
+                            let work = begin_work(caller)?;
+                            let placement = filesystem
+                                .placement(&path)
+                                .map_err(|e| backend_error("fs.mkdir", &path, e))?;
+                            if !(recursive
+                                && filesystem
+                                    .metadata(&effect_id, Some(work.clone()), &path, true)
+                                    .await
+                                    .is_ok_and(|m| m.is_dir()))
+                            {
+                                require_writable(&*caller, ticket, &placement, "fs.mkdir", &path)?;
+                            }
+                            let result = filesystem
+                                .mkdir(&effect_id, Some(work.clone()), &path, recursive)
+                                .await;
+                            work.settle(&mut *caller)?;
+                            result.map_err(|e| backend_error("fs.mkdir", &path, e))?;
+                            Ok(())
+                        })
+                    },
+                )
+                .await;
+                crate::runtime::effects::convert_result(caller, |caller| {
+                    outcome
+                        .map(|_| ())
+                        .map_err(|error| crate::runtime::host::throw_host_error(caller, error))
+                })
             })
         },
     )?;
@@ -556,34 +641,42 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     "fs.remove",
                     serde_json::json!({ "path": &path, "recursive": recursive }),
                 )?;
-                let filesystem = caller.data().filesystem.clone();
-                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-                let work = begin_work(caller)?;
-                let placement = filesystem
-                    .placement(&path)
-                    .map_err(|e| backend_error("fs.remove", &path, e))?;
-                require_writable(&*caller, ticket, &placement, "fs.remove", &path)?;
-                let mut budget = HostMutationBudget::new(caller);
-                let result = filesystem
-                    .remove(
-                        &effect_id,
-                        Some(work.clone()),
-                        &path,
-                        recursive,
-                        &mut budget,
-                    )
-                    .await;
-                let changed = budget.changed;
-                drop(budget);
-                work.settle(&mut *caller)?;
-                let result = result.map_err(|e| backend_error("fs.remove", &path, e));
-                if changed {
-                    fuel::settle_result(caller, |caller| {
-                        result.map_err(|e| crate::runtime::host::throw_host_error(caller, e))
-                    })
-                } else {
-                    result
-                }
+                let request = effects::PathMutation { path, recursive };
+                let outcome = crate::runtime::effects::execute(
+                    caller,
+                    "fs.remove",
+                    request,
+                    move |caller, effect_id, request| {
+                        Box::pin(async move {
+                            let effects::PathMutation { path, recursive } = request;
+                            let filesystem = caller.data().filesystem.clone();
+                            let work = begin_work(caller)?;
+                            let placement = filesystem
+                                .placement(&path)
+                                .map_err(|e| backend_error("fs.remove", &path, e))?;
+                            require_writable(&*caller, ticket, &placement, "fs.remove", &path)?;
+                            let mut budget = HostMutationBudget::new(caller);
+                            let result = filesystem
+                                .remove(
+                                    &effect_id,
+                                    Some(work.clone()),
+                                    &path,
+                                    recursive,
+                                    &mut budget,
+                                )
+                                .await;
+                            drop(budget);
+                            work.settle(&mut *caller)?;
+                            result.map_err(|error| backend_error("fs.remove", &path, error))
+                        })
+                    },
+                )
+                .await;
+                crate::runtime::effects::convert_result(caller, |caller| {
+                    outcome
+                        .map(|_| ())
+                        .map_err(|error| crate::runtime::host::throw_host_error(caller, error))
+                })
             })
         },
     )?;
@@ -603,32 +696,40 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     "fs.move",
                     serde_json::json!({ "from": &from, "to": &to }),
                 )?;
-                let filesystem = caller.data().filesystem.clone();
-                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-                let work = begin_work(caller)?;
-                let placement = filesystem
-                    .placement(&from)
-                    .map_err(|e| backend_error("fs.move", &from, e))?;
-                require_writable(&*caller, ticket, &placement, "fs.move", &from)?;
-                let placement = filesystem
-                    .placement(&to)
-                    .map_err(|e| backend_error("fs.move", &to, e))?;
-                require_writable(&*caller, ticket, &placement, "fs.move", &to)?;
-                let mut budget = HostMutationBudget::new(caller);
-                let result = filesystem
-                    .move_entry(&effect_id, Some(work.clone()), &from, &to, &mut budget)
-                    .await;
-                let changed = budget.changed;
-                drop(budget);
-                work.settle(&mut *caller)?;
-                let result = result.map_err(|e| backend_error("fs.move", &to, e));
-                if changed {
-                    fuel::settle_result(caller, |caller| {
-                        result.map_err(|e| crate::runtime::host::throw_host_error(caller, e))
-                    })
-                } else {
-                    result
-                }
+                let request = effects::MoveEntry { from, to };
+                let outcome = crate::runtime::effects::execute(
+                    caller,
+                    "fs.move",
+                    request,
+                    move |caller, effect_id, request| {
+                        Box::pin(async move {
+                            let effects::MoveEntry { from, to } = request;
+                            let filesystem = caller.data().filesystem.clone();
+                            let work = begin_work(caller)?;
+                            let placement = filesystem
+                                .placement(&from)
+                                .map_err(|e| backend_error("fs.move", &from, e))?;
+                            require_writable(&*caller, ticket, &placement, "fs.move", &from)?;
+                            let placement = filesystem
+                                .placement(&to)
+                                .map_err(|e| backend_error("fs.move", &to, e))?;
+                            require_writable(&*caller, ticket, &placement, "fs.move", &to)?;
+                            let mut budget = HostMutationBudget::new(caller);
+                            let result = filesystem
+                                .move_entry(&effect_id, Some(work.clone()), &from, &to, &mut budget)
+                                .await;
+                            drop(budget);
+                            work.settle(&mut *caller)?;
+                            result.map_err(|error| backend_error("fs.move", &to, error))
+                        })
+                    },
+                )
+                .await;
+                crate::runtime::effects::convert_result(caller, |caller| {
+                    outcome
+                        .map(|_| ())
+                        .map_err(|error| crate::runtime::host::throw_host_error(caller, error))
+                })
             })
         },
     )?;
@@ -653,35 +754,51 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         "recursive": recursive,
                     }),
                 )?;
-                let filesystem = caller.data().filesystem.clone();
-                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-                let work = begin_work(caller)?;
-                let placement = filesystem
-                    .placement(&to)
-                    .map_err(|e| backend_error("fs.copy", &to, e))?;
-                require_writable(&*caller, ticket, &placement, "fs.copy", &to)?;
-                let mut budget = HostMutationBudget::new(caller);
-                let result = filesystem
-                    .copy(
-                        &effect_id,
-                        Some(work.clone()),
-                        &from,
-                        &to,
-                        recursive,
-                        &mut budget,
-                    )
-                    .await;
-                let changed = budget.changed;
-                drop(budget);
-                work.settle(&mut *caller)?;
-                let result = result.map_err(|e| backend_error("fs.copy", &to, e));
-                if changed {
-                    fuel::settle_result(caller, |caller| {
-                        result.map_err(|e| crate::runtime::host::throw_host_error(caller, e))
-                    })
-                } else {
-                    result
-                }
+                let request = effects::CopyEntry {
+                    from,
+                    to,
+                    recursive,
+                };
+                let outcome = crate::runtime::effects::execute(
+                    caller,
+                    "fs.copy",
+                    request,
+                    move |caller, effect_id, request| {
+                        Box::pin(async move {
+                            let effects::CopyEntry {
+                                from,
+                                to,
+                                recursive,
+                            } = request;
+                            let filesystem = caller.data().filesystem.clone();
+                            let work = begin_work(caller)?;
+                            let placement = filesystem
+                                .placement(&to)
+                                .map_err(|e| backend_error("fs.copy", &to, e))?;
+                            require_writable(&*caller, ticket, &placement, "fs.copy", &to)?;
+                            let mut budget = HostMutationBudget::new(caller);
+                            let result = filesystem
+                                .copy(
+                                    &effect_id,
+                                    Some(work.clone()),
+                                    &from,
+                                    &to,
+                                    recursive,
+                                    &mut budget,
+                                )
+                                .await;
+                            drop(budget);
+                            work.settle(&mut *caller)?;
+                            result.map_err(|error| backend_error("fs.copy", &to, error))
+                        })
+                    },
+                )
+                .await;
+                crate::runtime::effects::convert_result(caller, |caller| {
+                    outcome
+                        .map(|_| ())
+                        .map_err(|error| crate::runtime::host::throw_host_error(caller, error))
+                })
             })
         },
     )?;
@@ -720,26 +837,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     "fs.read",
                     serde_json::json!({ "path": &path }),
                 )?;
-                let filesystem = caller.data().filesystem.clone();
-                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-                let work = begin_work(caller)?;
-                let reader = filesystem
-                    .open_reader(
-                        &effect_id,
-                        Some(work.clone()),
-                        &path,
-                        crate::runtime::filesystem::ReaderOptions::Lines {
-                            maximum_bytes: caller.data().fs_max_read_size,
-                        },
-                    )
-                    .await;
-                work.settle(&mut *caller)?;
-                let reader = reader.map_err(|e| backend_error("fs.lines", &path, e))?;
+                let options = crate::runtime::filesystem::ReaderOptions::Lines {
+                    maximum_bytes: caller.data().fs_max_read_size,
+                };
+                let reader = effects::open_reader(caller, path, options, "fs.lines").await?;
                 let reader = BackendReader::new(reader, &caller.data().tenant_limits)
                     .map_err(wasmtime::Error::new)?;
                 *abi_result(results, 0)? =
-                    make_handle_iterator(caller, reader, |mut caller, params, results| {
-                        Box::new(async move { reader_next(&mut caller, params, results).await })
+                    crate::runtime::effects::convert_result(caller, |caller| {
+                        make_handle_iterator(caller, reader, |mut caller, params, results| {
+                            Box::new(async move { reader_next(&mut caller, params, results).await })
+                        })
                     })?;
                 Ok(())
             })
@@ -770,26 +878,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     "fs.read",
                     serde_json::json!({ "path": &path, "chunkSize": chunk_size }),
                 )?;
-                let filesystem = caller.data().filesystem.clone();
-                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-                let work = begin_work(caller)?;
-                let reader = filesystem
-                    .open_reader(
-                        &effect_id,
-                        Some(work.clone()),
-                        &path,
-                        crate::runtime::filesystem::ReaderOptions::Bytes {
-                            chunk_size: chunk_size as usize,
-                        },
-                    )
-                    .await;
-                work.settle(&mut *caller)?;
-                let reader = reader.map_err(|e| backend_error("fs.bytes", &path, e))?;
+                let options = crate::runtime::filesystem::ReaderOptions::Bytes {
+                    chunk_size: chunk_size as usize,
+                };
+                let reader = effects::open_reader(caller, path, options, "fs.bytes").await?;
                 let reader = BackendReader::new(reader, &caller.data().tenant_limits)
                     .map_err(wasmtime::Error::new)?;
                 *abi_result(results, 0)? =
-                    make_handle_iterator(caller, reader, |mut caller, params, results| {
-                        Box::new(async move { reader_next(&mut caller, params, results).await })
+                    crate::runtime::effects::convert_result(caller, |caller| {
+                        make_handle_iterator(caller, reader, |mut caller, params, results| {
+                            Box::new(async move { reader_next(&mut caller, params, results).await })
+                        })
                     })?;
                 Ok(())
             })
@@ -815,25 +914,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     "fs.list",
                     serde_json::json!({ "path": &path, "recursive": recursive }),
                 )?;
-                let filesystem = caller.data().filesystem.clone();
-                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-                let work = begin_work(caller)?;
-                let walk = filesystem
-                    .open_directory(
-                        &effect_id,
-                        Some(work.clone()),
-                        &path,
-                        recursive,
-                        &caller.data().tenant_limits,
-                    )
-                    .await;
-                work.settle(&mut *caller)?;
-                let walk = walk.map_err(|e| backend_error("fs.list", &path, e))?;
+                let walk = effects::open_directory(caller, path.clone(), recursive).await?;
                 let dir = ChargedDirIter::new(walk, &caller.data().tenant_limits)
                     .map_err(|e| wasmtime::Error::new(e).context(format!("fs.list {path}")))?;
                 *abi_result(results, 0)? =
-                    make_handle_iterator(caller, dir, |mut caller, params, results| {
-                        Box::new(async move { list_next(&mut caller, params, results).await })
+                    crate::runtime::effects::convert_result(caller, |caller| {
+                        make_handle_iterator(caller, dir, |mut caller, params, results| {
+                            Box::new(async move { list_next(&mut caller, params, results).await })
+                        })
                     })?;
                 Ok(())
             })
@@ -922,86 +1010,131 @@ fn size_limit_number(limit: Option<u64>) -> f64 {
     limit.map_or(-1.0, |v| v as f64)
 }
 
+#[derive(serde::Serialize)]
+struct FileWrite {
+    path: String,
+    bytes: Vec<u8>,
+}
+
 /// `stat(path)`: a `$StatBacking`, or `undefined` when the path does not exist.
 async fn stat_entry(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::Result<Val> {
     // `stat` is declared `Stat | undefined` so a program can probe for absence. Resolution now
     // opens the parent, so a missing *ancestor* fails here rather than at the metadata call
     // below — and answering that with a trap would break the contract every caller branches
     // on. Escapes still trap: unreachable-because-outside is not the same as absent.
-    let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-    let work = begin_work(caller)?;
-    let meta = match caller
-        .data()
-        .filesystem
-        .metadata(&effect_id, Some(work.clone()), path, false)
-        .await
-    {
-        Ok(meta) => meta,
-        Err(PortError::Containment(ContainError::Io(e)) | PortError::Io(e)) if is_absent(&e) => {
-            return crate::runtime::prelude::undefined::value(caller);
-        }
-        Err(e) => return Err(backend_error("fs.stat", path, e)),
-    };
-    let ft = meta.file_type();
-    let size = if ft.is_file() { meta.len() as f64 } else { 0.0 };
-    let modified_ms = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.into_std().duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0.0, |d| d.as_millis() as f64);
-    let kind = write_submilli_string_struct(caller, kind_of(&ft))?.to_anyref();
-    let ty = stat_backing_struct(caller.engine())?;
-    abi::new_backing(
+    let observation = crate::runtime::effects::execute(
         caller,
-        ty,
-        &[
-            Val::AnyRef(Some(kind)),
-            Val::F64(size.to_bits()),
-            Val::F64(modified_ms.to_bits()),
-        ],
+        "fs.stat",
+        path.to_owned(),
+        |caller, effect_id, path| {
+            Box::pin(async move {
+                let work = begin_work(caller)?;
+                let meta = match caller
+                    .data()
+                    .filesystem
+                    .metadata(&effect_id, Some(work.clone()), &path, false)
+                    .await
+                {
+                    Ok(meta) => meta,
+                    Err(PortError::Containment(ContainError::Io(e)) | PortError::Io(e))
+                        if is_absent(&e) =>
+                    {
+                        return Ok(None);
+                    }
+                    Err(e) => return Err(backend_error("fs.stat", &path, e)),
+                };
+                let ft = meta.file_type();
+                let size = if ft.is_file() { meta.len() as f64 } else { 0.0 };
+                let modified_ms = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.into_std().duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0.0, |d| d.as_millis() as f64);
+                work.settle(&mut *caller)?;
+                Ok(Some(effects::FileStat {
+                    kind: kind_of(&ft).to_owned(),
+                    size,
+                    modified_ms,
+                }))
+            })
+        },
     )
+    .await?;
+    let Some(stat) = &observation.value else {
+        return crate::runtime::prelude::undefined::value(caller);
+    };
+    crate::runtime::effects::convert_result(caller, |caller| {
+        let kind = write_submilli_string_struct(caller, &stat.kind)?.to_anyref();
+        let ty = stat_backing_struct(caller.engine())?;
+        abi::new_backing(
+            caller,
+            ty,
+            &[
+                Val::AnyRef(Some(kind)),
+                Val::F64(stat.size.to_bits()),
+                Val::F64(stat.modified_ms.to_bits()),
+            ],
+        )
+    })
 }
 
 /// `peek(path)`: sniff the first ~256 bytes into a `$PeekBacking`.
 async fn peek_file(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::Result<Val> {
-    let filesystem = caller.data().filesystem.clone();
-    let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-    let work = begin_work(caller)?;
-    let meta = filesystem
-        .metadata(&effect_id, Some(work.clone()), path, true)
-        .await
-        .map_err(|e| backend_error("fs.peek", path, e))?;
-    if !meta.is_file() {
-        wasmtime::bail!("fs.peek {}: path is not a regular file", path);
-    }
-    let buf = filesystem
-        .read(&effect_id, Some(work.clone()), path, 0, 256)
-        .await
-        .map_err(|e| backend_error("fs.peek", path, e))?;
-
-    let (encoding, content_start) = detect_encoding(&buf);
-    let content = &buf[content_start..];
-    let line_ending = if content.windows(2).any(|w| w == b"\r\n") {
-        "crlf"
-    } else {
-        "lf"
-    };
-    let preview = String::from_utf8_lossy(content).into_owned();
-
-    let preview = write_submilli_string_struct(caller, &preview)?.to_anyref();
-    let encoding = write_submilli_string_struct(caller, encoding)?.to_anyref();
-    let line_ending = write_submilli_string_struct(caller, line_ending)?.to_anyref();
-    let ty = peek_backing_struct(caller.engine())?;
-    abi::new_backing(
+    let observation = crate::runtime::effects::execute(
         caller,
-        ty,
-        &[
-            Val::AnyRef(Some(preview)),
-            Val::AnyRef(Some(encoding)),
-            Val::AnyRef(Some(line_ending)),
-            Val::F64((meta.len() as f64).to_bits()),
-        ],
+        "fs.peek",
+        path.to_owned(),
+        |caller, effect_id, path| {
+            Box::pin(async move {
+                let filesystem = caller.data().filesystem.clone();
+                let work = begin_work(caller)?;
+                let meta = filesystem
+                    .metadata(&effect_id, Some(work.clone()), &path, true)
+                    .await
+                    .map_err(|e| backend_error("fs.peek", &path, e))?;
+                if !meta.is_file() {
+                    wasmtime::bail!("fs.peek {}: path is not a regular file", path);
+                }
+                let buf = filesystem
+                    .read(&effect_id, Some(work.clone()), &path, 0, 256)
+                    .await
+                    .map_err(|e| backend_error("fs.peek", &path, e))?;
+
+                work.settle(&mut *caller)?;
+                Ok(effects::FilePreview {
+                    bytes: crate::runtime::effects::OutcomeBytes(buf),
+                    size: meta.len(),
+                })
+            })
+        },
     )
+    .await?;
+    let buf = &observation.bytes.0;
+    crate::runtime::effects::convert_result(caller, |caller| {
+        let (encoding, content_start) = detect_encoding(buf);
+        let content = &buf[content_start..];
+        let line_ending = if content.windows(2).any(|w| w == b"\r\n") {
+            "crlf"
+        } else {
+            "lf"
+        };
+        let preview = String::from_utf8_lossy(content).into_owned();
+
+        let preview = write_submilli_string_struct(caller, &preview)?.to_anyref();
+        let encoding = write_submilli_string_struct(caller, encoding)?.to_anyref();
+        let line_ending = write_submilli_string_struct(caller, line_ending)?.to_anyref();
+        let ty = peek_backing_struct(caller.engine())?;
+        abi::new_backing(
+            caller,
+            ty,
+            &[
+                Val::AnyRef(Some(preview)),
+                Val::AnyRef(Some(encoding)),
+                Val::AnyRef(Some(line_ending)),
+                Val::F64((observation.size as f64).to_bits()),
+            ],
+        )
+    })
 }
 
 /// BOM-first encoding sniff; falls back to a UTF-8 validity check, then latin1.
@@ -1026,42 +1159,60 @@ fn detect_encoding(buf: &[u8]) -> (&'static str, usize) {
 async fn read_whole_capped(
     caller: &mut Caller<'_, StoreData>,
     path: &str,
-    op: &str,
-) -> wasmtime::Result<Option<Vec<u8>>> {
+    op: &'static str,
+) -> wasmtime::Result<
+    crate::runtime::effects::NativeResult<Option<crate::runtime::effects::OutcomeBytes>>,
+> {
     let ctx = format!("fs.{op}");
     let ticket = gate(&mut *caller, "fs.read", serde_json::json!({ "path": path }))?;
-    let filesystem = caller.data().filesystem.clone();
-    let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-    let work = begin_work(caller)?;
-    let meta = filesystem
-        .metadata(&effect_id, Some(work.clone()), path, true)
-        .await
-        .map_err(|e| backend_error(&ctx, path, e))?;
-    if meta.is_dir() {
-        wasmtime::bail!("{ctx} {}: path is a directory", path);
-    }
-    if meta.len() > caller.data().fs_max_read_size {
-        record_payload(&*caller, ticket, Side::Response, || {
-            Payload::meta(serde_json::json!({ "over_max_read_size": meta.len() })).with_size(0)
-        });
-        return Ok(None);
-    }
-    // The size is known before the read, so the charge comes first.
-    fuel::charge(&mut *caller, fuel::IO, meta.len())?;
-    let bytes = filesystem
-        .read(
-            &effect_id,
-            Some(work.clone()),
-            path,
-            0,
-            caller.data().fs_max_read_size,
-        )
-        .await
-        .map_err(|e| backend_error(&ctx, path, e))?;
-    record_payload(&*caller, ticket, Side::Response, || {
-        Payload::meta(serde_json::Value::Null).with_body(&bytes)
-    });
-    Ok(Some(bytes))
+    let label = if op == "read" {
+        "fs.read"
+    } else {
+        "fs.readText"
+    };
+    crate::runtime::effects::execute(
+        caller,
+        label,
+        path.to_owned(),
+        move |caller, effect_id, path| {
+            Box::pin(async move {
+                let filesystem = caller.data().filesystem.clone();
+                let work = begin_work(caller)?;
+                let meta = filesystem
+                    .metadata(&effect_id, Some(work.clone()), &path, true)
+                    .await
+                    .map_err(|e| backend_error(&ctx, &path, e))?;
+                if meta.is_dir() {
+                    wasmtime::bail!("{ctx} {}: path is a directory", path);
+                }
+                if meta.len() > caller.data().fs_max_read_size {
+                    record_payload(&*caller, ticket, Side::Response, || {
+                        Payload::meta(serde_json::json!({ "over_max_read_size": meta.len() }))
+                            .with_size(0)
+                    });
+                    return Ok(None);
+                }
+                // The size is known before the read, so the charge comes first.
+                fuel::charge(&mut *caller, fuel::IO, meta.len())?;
+                let bytes = filesystem
+                    .read(
+                        &effect_id,
+                        Some(work.clone()),
+                        &path,
+                        0,
+                        caller.data().fs_max_read_size,
+                    )
+                    .await
+                    .map_err(|e| backend_error(&ctx, &path, e))?;
+                record_payload(&*caller, ticket, Side::Response, || {
+                    Payload::meta(serde_json::Value::Null).with_body(&bytes)
+                });
+                work.settle(&mut *caller)?;
+                Ok(Some(crate::runtime::effects::OutcomeBytes(bytes)))
+            })
+        },
+    )
+    .await
 }
 
 /// `readBytes(path, offset, length)`: validated random-access range read; may
@@ -1071,7 +1222,8 @@ async fn read_byte_range(
     path: &str,
     offset: i64,
     length: i64,
-) -> wasmtime::Result<Vec<u8>> {
+) -> wasmtime::Result<crate::runtime::effects::NativeResult<crate::runtime::effects::OutcomeBytes>>
+{
     if offset < 0 {
         return Err(crate::runtime::host::range_error(
             "fs.readBytes: negative offset",
@@ -1088,20 +1240,37 @@ async fn read_byte_range(
         )));
     }
     fuel::charge(&mut *caller, fuel::IO, length as u64)?;
-    let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-    let work = begin_work(caller)?;
-    caller
-        .data()
-        .filesystem
-        .read(
-            &effect_id,
-            Some(work.clone()),
-            path,
-            offset as u64,
-            length as u64,
-        )
-        .await
-        .map_err(|e| backend_error("fs.readBytes", path, e))
+    let request = effects::ReadRange {
+        path: path.to_owned(),
+        offset: offset as u64,
+        length: length as u64,
+    };
+    crate::runtime::effects::execute(
+        caller,
+        "fs.readBytes",
+        request,
+        |caller, effect_id, request| {
+            Box::pin(async move {
+                let work = begin_work(caller)?;
+                let result = caller
+                    .data()
+                    .filesystem
+                    .read(
+                        &effect_id,
+                        Some(work.clone()),
+                        &request.path,
+                        request.offset,
+                        request.length,
+                    )
+                    .await;
+                work.settle(&mut *caller)?;
+                result
+                    .map(crate::runtime::effects::OutcomeBytes)
+                    .map_err(|error| backend_error("fs.readBytes", &request.path, error))
+            })
+        },
+    )
+    .await
 }
 
 /// `writer(path)`: open the temp sibling and wrap the [`BackendFileWriter`] in
@@ -1112,22 +1281,18 @@ async fn open_writer(
     path: &str,
 ) -> wasmtime::Result<Val> {
     let filesystem = caller.data().filesystem.clone();
-    let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-    let work = begin_work(caller)?;
     let placement = filesystem
         .placement(path)
         .map_err(|e| backend_error("fs.writer", path, e))?;
     require_writable(&*caller, ticket, &placement, "fs.write", path)?;
-    let writer = filesystem
-        .open_writer(&effect_id, Some(work.clone()), path)
-        .await;
-    work.settle(&mut *caller)?;
-    let writer = writer.map_err(|e| backend_error("fs.writer", path, e))?;
+    let writer = effects::open_writer(caller, path.to_owned()).await?;
     let writer = BackendFileWriter::new(writer, &caller.data().tenant_limits)
         .map_err(crate::runtime::host::fatal_host_error)?;
     let handle = ExternRef::new(&mut *caller, writer)?;
     let ty = file_writer_backing_struct(caller.engine())?;
-    abi::new_backing(caller, ty, &[Val::ExternRef(Some(handle))])
+    crate::runtime::effects::convert_result(caller, |caller| {
+        abi::new_backing(caller, ty, &[Val::ExternRef(Some(handle))])
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1207,24 +1372,36 @@ async fn reader_next(
         *abi_result(results, 0)? = iter_done(caller)?;
         return Ok(());
     };
-    let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-    let work = begin_work(caller)?;
-    let Some(mut reader) =
-        handle_payload::<Option<BackendReader>>(caller, &handle, "fs.next")?.take()
-    else {
-        *abi_result(results, 0)? = iter_done(caller)?;
-        return Ok(());
-    };
-    let output = reader
-        .reader
-        .next(&effect_id, Some(work.clone()), &caller.data().tenant_limits)
-        .await;
-    *handle_payload::<Option<BackendReader>>(caller, &handle, "fs.next")? = Some(reader);
-    work.settle(&mut *caller)?;
-    *abi_result(results, 0)? = fuel::settle_result(caller, |caller| {
-        let output = output.map_err(|error| {
-            crate::runtime::host::throw_host_error(caller, backend_error("fs.next", "", error))
-        })?;
+    let descriptor = handle_payload::<Option<BackendReader>>(caller, &handle, "fs.next")?
+        .as_ref()
+        .and_then(BackendReader::descriptor);
+    let output = crate::runtime::effects::execute(
+        caller,
+        "fs.reader.next",
+        descriptor,
+        move |caller, effect_id, _| {
+            Box::pin(async move {
+                let work = begin_work(caller)?;
+                let Some(mut reader) =
+                    handle_payload::<Option<BackendReader>>(caller, &handle, "fs.next")?.take()
+                else {
+                    return Err(fatal_host_error("reader handle is unavailable"));
+                };
+                let result = reader
+                    .reader
+                    .next(&effect_id, Some(work.clone()), &caller.data().tenant_limits)
+                    .await;
+                *handle_payload::<Option<BackendReader>>(caller, &handle, "fs.next")? =
+                    Some(reader);
+                work.settle(&mut *caller)?;
+                result.map_err(|error| backend_error("fs.next", "", error))
+            })
+        },
+    )
+    .await;
+    *abi_result(results, 0)? = crate::runtime::effects::convert_result(caller, |caller| {
+        let output =
+            output.map_err(|error| crate::runtime::host::throw_host_error(caller, error))?;
         match &output.item {
             Some(ReadItem::Line(text)) => {
                 let value = write_submilli_string_struct(caller, text)?;
@@ -1250,28 +1427,40 @@ async fn list_next(
         return Ok(());
     };
     fuel::charge(&mut *caller, fuel::SYSCALL, 1)?;
-    let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-    let work = begin_work(caller)?;
-    let Some(mut directory) =
-        handle_payload::<Option<ChargedDirIter>>(caller, &handle, "fs.list.next")?.take()
-    else {
+    let descriptor = handle_payload::<Option<ChargedDirIter>>(caller, &handle, "fs.list.next")?
+        .as_ref()
+        .and_then(ChargedDirIter::descriptor);
+    let outcome = crate::runtime::effects::execute(
+        caller,
+        "fs.list.next",
+        descriptor,
+        move |caller, effect_id, _| {
+            Box::pin(async move {
+                let work = begin_work(caller)?;
+                let Some(mut directory) =
+                    handle_payload::<Option<ChargedDirIter>>(caller, &handle, "fs.list.next")?
+                        .take()
+                else {
+                    return Err(fatal_host_error("directory handle is unavailable"));
+                };
+                let result = directory
+                    .walk
+                    .next_entry(&effect_id, Some(work.clone()), &caller.data().tenant_limits)
+                    .await;
+                *handle_payload::<Option<ChargedDirIter>>(caller, &handle, "fs.list.next")? =
+                    Some(directory);
+                work.settle(&mut *caller)?;
+                result.map_err(|error| backend_error("fs.list.next", "", error))
+            })
+        },
+    )
+    .await
+    .map_err(|error| crate::runtime::host::throw_host_error(caller, error))?;
+    let Some(entry) = &outcome.value else {
         *abi_result(results, 0)? = iter_done(caller)?;
         return Ok(());
     };
-    let entry = directory
-        .walk
-        .next_entry(&effect_id, Some(work.clone()), &caller.data().tenant_limits)
-        .await;
-    *handle_payload::<Option<ChargedDirIter>>(caller, &handle, "fs.list.next")? = Some(directory);
-    work.settle(&mut *caller)?;
-    let entry = entry.map_err(|error| {
-        crate::runtime::host::throw_host_error(caller, backend_error("fs.list.next", "", error))
-    })?;
-    let Some(entry) = entry else {
-        *abi_result(results, 0)? = iter_done(caller)?;
-        return Ok(());
-    };
-    *abi_result(results, 0)? = fuel::settle_result(caller, |caller| {
+    *abi_result(results, 0)? = crate::runtime::effects::convert_result(caller, |caller| {
         let size = entry.bytes as f64;
         let kind = write_submilli_string_struct(caller, entry.kind)?.to_anyref();
         let name = write_submilli_string_struct(caller, &entry.name)?.to_anyref();
@@ -1302,19 +1491,36 @@ async fn close_handle_of<T: handles::Closable + 'static>(
     results: &mut [Val],
 ) -> wasmtime::Result<()> {
     if let Some(handle) = env_handle(caller, abi_arg(params, 0)?)? {
-        let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-        let work = begin_work(caller)?;
-        if let Some(mut payload) = handle_payload::<Option<T>>(caller, &handle, "fs.close")?.take()
-        {
-            let result = payload
-                .close(&effect_id, Some(work.clone()), &caller.data().tenant_limits)
-                .await;
-            // Keep the logical ID after close: retries must still consult the backend.
-            *handle_payload::<Option<T>>(caller, &handle, "fs.close")? = Some(payload);
-            work.settle(&mut *caller)?;
-            result.map_err(|error| {
-                crate::runtime::host::throw_host_error(caller, backend_error("fs.close", "", error))
-            })?;
+        let descriptor = handle_payload::<Option<T>>(caller, &handle, "fs.close")?
+            .as_ref()
+            .and_then(handles::Closable::descriptor);
+        let live_handle = handle;
+        crate::runtime::effects::execute(
+            caller,
+            "fs.iterator.close",
+            descriptor,
+            move |caller, effect_id, _| {
+                let handle = live_handle;
+                Box::pin(async move {
+                    let work = begin_work(caller)?;
+                    if let Some(mut payload) =
+                        handle_payload::<Option<T>>(caller, &handle, "fs.close")?.take()
+                    {
+                        let result = payload
+                            .close(&effect_id, Some(work.clone()), &caller.data().tenant_limits)
+                            .await;
+                        *handle_payload::<Option<T>>(caller, &handle, "fs.close")? = Some(payload);
+                        work.settle(&mut *caller)?;
+                        result.map_err(|error| backend_error("fs.close", "", error))?;
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .map_err(|error| crate::runtime::host::throw_host_error(caller, error))?;
+        if let Some(payload) = handle_payload::<Option<T>>(caller, &handle, "fs.close")?.as_mut() {
+            payload.release_buffer();
         }
     }
     *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
@@ -1434,13 +1640,28 @@ fn install_file_writer_methods(
         /* deterministic = */ false,
         |caller, params, _results| {
             Box::pin(async move {
-                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-                let work = begin_work(caller)?;
-                let result = writer_payload(caller, abi_arg(params, 0)?, "fs.writer.close")?
-                    .close(&effect_id, Some(work.clone()))
-                    .await;
-                work.settle(&mut *caller)?;
-                result.map_err(|e| backend_error("fs.writer.close", "", e))
+                let receiver = *abi_arg(params, 0)?;
+                let descriptor = writer_payload(caller, &receiver, "fs.writer.close")?.descriptor();
+                let live_receiver = receiver;
+                crate::runtime::effects::execute(
+                    caller,
+                    "fs.writer.close",
+                    descriptor,
+                    move |caller, effect_id, _| {
+                        let receiver = live_receiver;
+                        Box::pin(async move {
+                            let work = begin_work(caller)?;
+                            let result = writer_payload(caller, &receiver, "fs.writer.close")?
+                                .close(&effect_id, Some(work.clone()))
+                                .await;
+                            work.settle(&mut *caller)?;
+                            result.map_err(|error| backend_error("fs.writer.close", "", error))
+                        })
+                    },
+                )
+                .await?;
+                writer_payload(caller, &receiver, "fs.writer.close")?.release_buffer();
+                Ok(())
             })
         },
     )?;
@@ -1456,15 +1677,29 @@ fn install_file_writer_methods(
                 let line =
                     read_string_arg(&mut *caller, abi_arg(params, 1)?, "fs.writer.writeLine")?;
                 fuel::charge(&mut *caller, fuel::IO, line.len() as u64 + 1)?;
-                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-                let work = begin_work(caller)?;
                 let mut bytes = line.into_bytes();
                 bytes.push(b'\n');
-                let result = writer_payload(caller, abi_arg(params, 0)?, "fs.writer.writeLine")?
-                    .write(&effect_id, Some(work.clone()), bytes)
-                    .await;
-                work.settle(&mut *caller)?;
-                result.map_err(|e| backend_error("fs.writer.writeLine", "", e))
+                let receiver = *abi_arg(params, 0)?;
+                let descriptor =
+                    writer_payload(caller, &receiver, "fs.writer.writeLine")?.descriptor();
+                let request = effects::WriterChunk { descriptor, bytes };
+                crate::runtime::effects::execute(
+                    caller,
+                    "fs.writer.writeLine",
+                    request,
+                    move |caller, effect_id, request| {
+                        Box::pin(async move {
+                            let work = begin_work(caller)?;
+                            let result = writer_payload(caller, &receiver, "fs.writer.writeLine")?
+                                .write(&effect_id, Some(work.clone()), request.bytes)
+                                .await;
+                            work.settle(&mut *caller)?;
+                            result.map_err(|error| backend_error("fs.writer.writeLine", "", error))
+                        })
+                    },
+                )
+                .await?;
+                Ok(())
             })
         },
     )?;
@@ -1483,13 +1718,27 @@ fn install_file_writer_methods(
                     "fs.writer.writeBytes",
                 )?;
                 fuel::charge(&mut *caller, fuel::IO, bytes.len() as u64)?;
-                let effect_id = EffectId::stub().map_err(fatal_host_error)?;
-                let work = begin_work(caller)?;
-                let result = writer_payload(caller, abi_arg(params, 0)?, "fs.writer.writeBytes")?
-                    .write(&effect_id, Some(work.clone()), bytes)
-                    .await;
-                work.settle(&mut *caller)?;
-                result.map_err(|e| backend_error("fs.writer.writeBytes", "", e))
+                let receiver = *abi_arg(params, 0)?;
+                let descriptor =
+                    writer_payload(caller, &receiver, "fs.writer.writeBytes")?.descriptor();
+                let request = effects::WriterChunk { descriptor, bytes };
+                crate::runtime::effects::execute(
+                    caller,
+                    "fs.writer.writeBytes",
+                    request,
+                    move |caller, effect_id, request| {
+                        Box::pin(async move {
+                            let work = begin_work(caller)?;
+                            let result = writer_payload(caller, &receiver, "fs.writer.writeBytes")?
+                                .write(&effect_id, Some(work.clone()), request.bytes)
+                                .await;
+                            work.settle(&mut *caller)?;
+                            result.map_err(|error| backend_error("fs.writer.writeBytes", "", error))
+                        })
+                    },
+                )
+                .await?;
+                Ok(())
             })
         },
     )?;

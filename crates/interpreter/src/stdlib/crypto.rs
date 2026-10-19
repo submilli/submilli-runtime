@@ -154,36 +154,52 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    register_host_fn(
+    crate::runtime::host::register_host_fn_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "randomBytes"),
         FuncType::new(&engine, [ValType::F64], [uint8.clone()]),
         /* deterministic = */ false,
         |caller, params, results| {
-            let Val::F64(bits) = *abi_arg(params, 0)? else {
-                return Err(crate::runtime::host::type_error(
-                    "crypto.randomBytes: expected f64 length",
-                ));
-            };
-            let len = f64::from_bits(bits) as i32;
-            if len < 0 {
-                return Err(crate::runtime::host::range_error(format!(
-                    "crypto.randomBytes: length must be non-negative, got {len}"
-                )));
-            }
-            if len > MAX_RANDOM_BYTES {
-                return Err(crate::runtime::host::range_error(format!(
-                    "crypto.randomBytes: length {len} exceeds maximum {MAX_RANDOM_BYTES}"
-                )));
-            }
-            fuel::charge(&mut *caller, fuel::SCAN, len as u64)?;
-            let mut buf = vec![0u8; len as usize];
-            getrandom::getrandom(&mut buf)
-                .map_err(|e| wasmtime::Error::msg(format!("crypto.randomBytes: {e}")))?;
-            let arr = write_submilli_uint8array_struct(caller, &buf)?;
-            *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
-            Ok(())
+            Box::pin(async move {
+                let Val::F64(bits) = *abi_arg(params, 0)? else {
+                    return Err(crate::runtime::host::type_error(
+                        "crypto.randomBytes: expected f64 length",
+                    ));
+                };
+                let len = f64::from_bits(bits) as i32;
+                if len < 0 {
+                    return Err(crate::runtime::host::range_error(format!(
+                        "crypto.randomBytes: length must be non-negative, got {len}"
+                    )));
+                }
+                if len > MAX_RANDOM_BYTES {
+                    return Err(crate::runtime::host::range_error(format!(
+                        "crypto.randomBytes: length {len} exceeds maximum {MAX_RANDOM_BYTES}"
+                    )));
+                }
+                fuel::charge(&mut *caller, fuel::SCAN, len as u64)?;
+                let buf = crate::runtime::effects::execute(
+                    caller,
+                    "crypto.randomBytes",
+                    len,
+                    |_, _, len| {
+                        Box::pin(async move {
+                            let mut bytes = vec![0u8; len as usize];
+                            getrandom::getrandom(&mut bytes).map_err(|e| {
+                                wasmtime::Error::msg(format!("crypto.randomBytes: {e}"))
+                            })?;
+                            Ok(crate::runtime::effects::OutcomeBytes(bytes))
+                        })
+                    },
+                )
+                .await?;
+                let arr = crate::runtime::effects::convert_result(caller, |caller| {
+                    write_submilli_uint8array_struct(caller, &buf.0)
+                })?;
+                *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
+                Ok(())
+            })
         },
     )?;
 

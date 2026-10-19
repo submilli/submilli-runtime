@@ -69,6 +69,10 @@ impl Drop for ByteCharge {
 /// Explicit guest close is effect-aware. Drop only releases local resources.
 #[async_trait::async_trait]
 pub trait Closable: Send + Sync {
+    /// Release process-local accounting after a successful explicit close,
+    /// including when execution history skipped the backend call.
+    fn release_buffer(&mut self);
+    fn descriptor(&self) -> Option<crate::runtime::filesystem::ResourceDescriptor>;
     async fn close(
         &mut self,
         effect_id: &EffectId,
@@ -97,6 +101,12 @@ impl BackendReader {
 }
 #[async_trait::async_trait]
 impl Closable for BackendReader {
+    fn release_buffer(&mut self) {
+        self.charge.release();
+    }
+    fn descriptor(&self) -> Option<crate::runtime::filesystem::ResourceDescriptor> {
+        self.reader.descriptor()
+    }
     async fn close(
         &mut self,
         effect_id: &EffectId,
@@ -129,6 +139,12 @@ impl ChargedDirIter {
 }
 #[async_trait::async_trait]
 impl Closable for ChargedDirIter {
+    fn release_buffer(&mut self) {
+        self.charge.release();
+    }
+    fn descriptor(&self) -> Option<crate::runtime::filesystem::ResourceDescriptor> {
+        self.walk.descriptor()
+    }
     async fn close(
         &mut self,
         effect_id: &EffectId,
@@ -147,6 +163,9 @@ pub struct BackendFileWriter {
     charge: ByteCharge,
 }
 impl BackendFileWriter {
+    pub fn release_buffer(&mut self) {
+        self.charge.release();
+    }
     pub fn descriptor(&self) -> Option<crate::runtime::filesystem::ResourceDescriptor> {
         self.writer.descriptor()
     }

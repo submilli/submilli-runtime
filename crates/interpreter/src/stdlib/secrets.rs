@@ -61,17 +61,32 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     serde_json::json!({ "name": name }),
                 )?;
 
-                let provider = caller.data().secret_provider.clone();
-                let Some(value) = provider
-                    .get(&name)
-                    .await
-                    .map_err(|msg| wasmtime::Error::msg(format!("secrets.get {name}: {msg}")))?
-                else {
+                let observation = crate::runtime::effects::execute(
+                    caller,
+                    "secrets.get",
+                    name,
+                    |caller, _, name| {
+                        Box::pin(async move {
+                            caller
+                                .data()
+                                .secret_provider
+                                .get(&name)
+                                .await
+                                .map_err(|message| {
+                                    wasmtime::Error::msg(format!("secrets.get {name}: {message}"))
+                                })
+                        })
+                    },
+                )
+                .await?;
+                let Some(value) = &observation.value else {
                     *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
                     return Ok(());
                 };
 
-                let st = write_submilli_string_struct(caller, &value)?;
+                let st = crate::runtime::effects::convert_result(caller, |caller| {
+                    write_submilli_string_struct(caller, value)
+                })?;
                 *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })

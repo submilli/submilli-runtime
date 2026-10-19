@@ -12,7 +12,7 @@ mod walk;
 use crate::runtime::fuel;
 use crate::runtime::{
     StoreData,
-    host::{register_host_fn, write_submilli_string_struct_units},
+    host::{register_host_fn_async, write_submilli_string_struct_units},
     intrinsic_types::build_intrinsic_types,
     prelude::vtable::read_string_units,
 };
@@ -73,84 +73,151 @@ pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
         ),
         ("applyPatch", vec![string.clone(), string], object),
     ] {
-        register_host_fn(
+        register_host_fn_async(
             linker,
             MODULE_NAME,
             crate::mangle::package_symbol(MODULE_NAME, name),
             FuncType::new(&engine, params, [result]),
             name == "diffText",
             move |caller, params, results| {
-                let mut budget = Budget::new(caller);
-                *abi_result(results, 0)? = invoke(caller, &mut budget, name, params)?;
-                Ok(())
+                Box::pin(async move {
+                    *abi_result(results, 0)? = invoke(caller, name, params).await?;
+                    Ok(())
+                })
             },
         )?;
     }
     Ok(())
 }
-fn invoke(
+#[derive(serde::Serialize)]
+enum CodeRequest {
+    Read {
+        path: String,
+        start: usize,
+        limit: usize,
+    },
+    Search {
+        pattern: String,
+        options: walk::Options,
+    },
+    Glob {
+        pattern: String,
+    },
+    Tree {
+        path: String,
+        depth: usize,
+    },
+    DiffFiles {
+        first: String,
+        second: String,
+    },
+    Mutate {
+        path: String,
+        change: CodeChange,
+    },
+}
+#[derive(serde::Serialize)]
+enum CodeChange {
+    Edit {
+        old: String,
+        new: String,
+        replace_all: bool,
+        near_line: usize,
+    },
+    Insert {
+        line: usize,
+        text: String,
+    },
+    Patch {
+        patch: String,
+    },
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+enum CodeValue {
+    Json(Value),
+    Text(Vec<u16>),
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CodeResult {
+    value: CodeValue,
+    // Live native buffers remain charged through history encoding and Wasm conversion.
+    #[serde(skip)]
+    _budget: Option<Budget>,
+}
+impl crate::runtime::effects::NativeOutcome for CodeResult {
+    const DYNAMIC_MAPS: bool = true;
+    const SEQUENCE_ELEMENT_BYTES: usize = std::mem::size_of::<Value>();
+    fn decoded_heap_bound(_: usize) -> u64 {
+        0
+    }
+}
+
+async fn invoke(
     caller: &mut Caller<'_, StoreData>,
-    budget: &mut Budget,
-    op: &str,
+    op: &'static str,
     params: &[Val],
 ) -> Result<Val> {
+    let mut budget = Budget::new(caller);
     if op == "diffText" {
-        let a = units(caller, budget, abi_arg(params, 0)?)?;
-        let b = units(caller, budget, abi_arg(params, 1)?)?;
-        let result = diff(caller, budget, &a, &b)?;
+        let first = units(caller, &mut budget, abi_arg(params, 0)?)?;
+        let second = units(caller, &mut budget, abi_arg(params, 1)?)?;
+        let result = diff(caller, &mut budget, &first, &second)?;
         return Ok(Val::AnyRef(Some(
             write_submilli_string_struct_units(caller, &result)?.to_anyref(),
         )));
     }
-    let first = argument(caller, budget, abi_arg(params, 0)?)?;
-    let result = match op {
-        "search" => walk::search(caller, budget, &first, abi_arg(params, 1)?)?,
-        "glob" => walk::glob(caller, budget, &first)?,
-        "tree" => walk::tree(
-            caller,
-            budget,
-            &normalize(caller.data().vfs.cwd(), &first)?,
-            integer(abi_arg(params, 1)?, "depth", 0)?,
-        )?,
-        "read" => read_window(
-            caller,
-            budget,
-            &normalize(caller.data().vfs.cwd(), &first)?,
-            params,
-        )?,
+    let first = argument(caller, &mut budget, abi_arg(params, 0)?)?;
+    let request = match op {
+        "search" => CodeRequest::Search {
+            pattern: first,
+            options: walk::Options::read(caller, &mut budget, abi_arg(params, 1)?)?,
+        },
+        "glob" => CodeRequest::Glob { pattern: first },
+        "tree" => CodeRequest::Tree {
+            path: normalize(caller.data().vfs.cwd(), &first)?,
+            depth: integer(abi_arg(params, 1)?, "depth", 0)?,
+        },
+        "read" => CodeRequest::Read {
+            path: normalize(caller.data().vfs.cwd(), &first)?,
+            start: integer(abi_arg(params, 1)?, "offset", 1)? - 1,
+            limit: integer(abi_arg(params, 2)?, "limit", 1)?,
+        },
         "diffFiles" => {
-            let second = argument(caller, budget, abi_arg(params, 1)?)?;
-            let a = read_file(
-                caller,
-                budget,
-                &normalize(caller.data().vfs.cwd(), &first)?,
-                op,
-            )?;
-            let b = read_file(
-                caller,
-                budget,
-                &normalize(caller.data().vfs.cwd(), &second)?,
-                op,
-            )?;
-            budget.charge(caller, (a.len() + b.len()).saturating_mul(2))?;
-            let result = diff(
-                caller,
-                budget,
-                &a.encode_utf16().collect::<Vec<_>>(),
-                &b.encode_utf16().collect::<Vec<_>>(),
-            )?;
-            return Ok(Val::AnyRef(Some(
-                write_submilli_string_struct_units(caller, &result)?.to_anyref(),
-            )));
+            let second = argument(caller, &mut budget, abi_arg(params, 1)?)?;
+            CodeRequest::DiffFiles {
+                first: normalize(caller.data().vfs.cwd(), &first)?,
+                second: normalize(caller.data().vfs.cwd(), &second)?,
+            }
         }
         "edit" | "insertAt" | "applyPatch" => {
-            return mutate(
-                caller,
-                budget,
-                &normalize(caller.data().vfs.cwd(), &first)?,
-                op,
-                params,
-            );
+            let change = match op {
+                "edit" => {
+                    let old = argument(caller, &mut budget, abi_arg(params, 1)?)?;
+                    let new = argument(caller, &mut budget, abi_arg(params, 2)?)?;
+                    let Val::I32(replace_all) = abi_arg(params, 3)? else {
+                        return Err(crate::runtime::host::invariant_trap(
+                            "code.edit: invalid boolean argument",
+                        ));
+                    };
+                    CodeChange::Edit {
+                        old,
+                        new,
+                        replace_all: *replace_all != 0,
+                        near_line: integer(abi_arg(params, 4)?, "nearLine", 0)?,
+                    }
+                }
+                "insertAt" => CodeChange::Insert {
+                    line: integer(abi_arg(params, 1)?, "line", 1)?,
+                    text: argument(caller, &mut budget, abi_arg(params, 2)?)?,
+                },
+                _ => CodeChange::Patch {
+                    patch: argument(caller, &mut budget, abi_arg(params, 1)?)?,
+                },
+            };
+            CodeRequest::Mutate {
+                path: normalize(caller.data().vfs.cwd(), &first)?,
+                change,
+            }
         }
         _ => {
             return Err(crate::runtime::host::invariant_trap(
@@ -158,7 +225,73 @@ fn invoke(
             ));
         }
     };
-    encode(caller, budget, &result)
+    // Direct execution keeps the original allocation-before-publication guarantee.
+    // Recorded execution stores the native result before converting it to Wasm.
+    if caller.data().effects.is_none()
+        && let CodeRequest::Mutate { path, change } = request
+    {
+        return mutate(
+            caller,
+            &mut budget,
+            &path,
+            op,
+            change,
+            |caller, budget, value| encode(caller, budget, &value),
+        );
+    }
+
+    let result =
+        crate::runtime::effects::execute(caller, "code", request, move |caller, _, request| {
+            Box::pin(async move {
+                let value = match request {
+                    CodeRequest::Search { pattern, options } => {
+                        CodeValue::Json(walk::search(caller, &mut budget, &pattern, &options)?)
+                    }
+                    CodeRequest::Glob { pattern } => {
+                        CodeValue::Json(walk::glob(caller, &mut budget, &pattern)?)
+                    }
+                    CodeRequest::Tree { path, depth } => {
+                        CodeValue::Json(walk::tree(caller, &mut budget, &path, depth)?)
+                    }
+                    CodeRequest::Read { path, start, limit } => {
+                        CodeValue::Json(read_window(caller, &mut budget, &path, start, limit)?)
+                    }
+                    CodeRequest::DiffFiles { first, second } => {
+                        let first = read_file(caller, &mut budget, &first, op)?;
+                        let second = read_file(caller, &mut budget, &second, op)?;
+                        budget.charge(caller, (first.len() + second.len()).saturating_mul(2))?;
+                        CodeValue::Text(diff(
+                            caller,
+                            &mut budget,
+                            &first.encode_utf16().collect::<Vec<_>>(),
+                            &second.encode_utf16().collect::<Vec<_>>(),
+                        )?)
+                    }
+                    CodeRequest::Mutate { path, change } => CodeValue::Json(mutate(
+                        caller,
+                        &mut budget,
+                        &path,
+                        op,
+                        change,
+                        |_, budget, value| {
+                            budget.check_size(serde_json::to_string(&value)?.len())?;
+                            Ok(value)
+                        },
+                    )?),
+                };
+                Ok(CodeResult {
+                    value,
+                    _budget: Some(budget),
+                })
+            })
+        })
+        .await?;
+    crate::runtime::effects::convert_result(caller, |caller| match &result.value.value {
+        CodeValue::Json(value) => encode(caller, &mut Budget::new(caller), value),
+        CodeValue::Text(text) => Ok(Val::AnyRef(Some(
+            write_submilli_string_struct_units(caller, text)?.to_anyref(),
+        ))),
+    })
 }
 fn encode(caller: &mut Caller<'_, StoreData>, budget: &mut Budget, result: &Value) -> Result<Val> {
     let encoded = serde_json::to_string(result)?;
@@ -170,10 +303,9 @@ fn read_window(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     path: &str,
-    params: &[Val],
+    start: usize,
+    limit: usize,
 ) -> Result<Value> {
-    let start = integer(abi_arg(params, 1)?, "offset", 1)? - 1;
-    let limit = integer(abi_arg(params, 2)?, "limit", 1)?;
     let source = read_file(caller, budget, path, "read")?;
     budget.charge(
         caller,
@@ -197,28 +329,36 @@ fn read_window(
         json!({"path":path,"truncated":start.saturating_add(values.len()) < lines.len(),"lines":values}),
     )
 }
-fn mutate(
+fn mutate<T>(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     path: &str,
     op: &str,
-    params: &[Val],
-) -> Result<Val> {
+    change: CodeChange,
+    prepare_result: impl FnOnce(&mut Caller<'_, StoreData>, &mut Budget, Value) -> Result<T>,
+) -> Result<T> {
     let original = read_file(caller, budget, path, op)?;
     budget.charge(caller, original.len().saturating_mul(64))?;
     // Splicing the change back into the original rewrites the whole text.
     fuel::charge(&mut *caller, fuel::SCAN, original.len() as u64)?;
-    let change = match op {
-        "edit" => prepare_edit(caller, budget, &original, params)?,
-        "insertAt" => text::insert(
+    let change = match change {
+        CodeChange::Edit {
+            old,
+            new,
+            replace_all,
+            near_line,
+        } => prepare_edit(
+            caller,
+            budget,
             &original,
-            integer(abi_arg(params, 1)?, "line", 1)?,
-            &argument(caller, budget, abi_arg(params, 2)?)?,
+            &old,
+            &new,
+            replace_all,
+            near_line,
         )?,
-        "applyPatch" => {
-            let patch = argument(caller, budget, abi_arg(params, 1)?)?;
+        CodeChange::Insert { line, text } => text::insert(&original, line, &text)?,
+        CodeChange::Patch { patch } => {
             budget.charge(caller, patch.len().saturating_mul(32))?;
-            // Each hunk is located by scanning the original.
             fuel::charge(
                 &mut *caller,
                 fuel::SCAN,
@@ -226,11 +366,6 @@ fn mutate(
             )?;
             fuel::charge(&mut *caller, fuel::PARSE, patch.len() as u64)?;
             patch::apply(&original, &patch)?
-        }
-        _ => {
-            return Err(crate::runtime::host::invariant_trap(
-                "unknown code mutation",
-            ));
         }
     };
     budget.check_size(change.text.len())?;
@@ -251,10 +386,10 @@ fn mutate(
         "fs.write",
         json!({"path":path, "length": change.text.len(), "diff": patch}),
     )?;
-    // Allocate the return value before commit so a guest allocation failure cannot hide a write.
+    // Build the native result before commit; history captures it before guest conversion.
     let result =
         json!({"success":success,"changed":changed,"diff":patch,"diagnostics":change.diagnostics});
-    let result = encode(caller, budget, &result)?;
+    let result = prepare_result(caller, budget, result)?;
     if changed {
         let resolved = resolve_content_or_trap(caller.data(), path, op)?;
         require_writable(&*caller, ticket, resolved.placement(), "fs.write", path)?;
@@ -278,10 +413,11 @@ fn prepare_edit(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     original: &str,
-    params: &[Val],
+    old: &str,
+    new: &str,
+    replace_all: bool,
+    near_line: usize,
 ) -> Result<text::Edit> {
-    let old = argument(caller, budget, abi_arg(params, 1)?)?;
-    let new = argument(caller, budget, abi_arg(params, 2)?)?;
     // Naive substring search: every position against the whole needle.
     fuel::charge(
         &mut *caller,
@@ -291,15 +427,7 @@ fn prepare_edit(
     if old.is_empty() {
         bail!("code.edit: oldString must not be empty; use insertAt");
     }
-    let matches = original.match_indices(&old).count();
-    let replace_all = match abi_arg(params, 3)? {
-        Val::I32(value) => *value != 0,
-        _ => {
-            return Err(crate::runtime::host::invariant_trap(
-                "code.edit: invalid boolean argument",
-            ));
-        }
-    };
+    let matches = original.match_indices(old).count();
     let selected = if replace_all {
         matches
     } else {
@@ -327,14 +455,7 @@ fn prepare_edit(
     } else {
         budget.max_bytes
     };
-    text::replace(
-        original,
-        &old,
-        &new,
-        replace_all,
-        integer(abi_arg(params, 4)?, "nearLine", 0)?,
-        maximum,
-    )
+    text::replace(original, old, new, replace_all, near_line, maximum)
 }
 
 fn normalize(cwd: &str, path: &str) -> Result<String> {

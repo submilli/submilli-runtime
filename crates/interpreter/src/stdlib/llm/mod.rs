@@ -115,12 +115,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     read_optional_string(caller, abi_arg(params, 2)?, "llm.call (schema)")?;
                 let typed = schema.is_some();
                 let outcomes = dispatch(caller, "call", &model, vec![prompt], schema).await?;
-                let outcome = first_outcome(&model, outcomes)?;
-                *abi_result(results, 0)? = if typed {
-                    structured_value(caller, "llm.call", outcome)?
-                } else {
-                    build_completion(caller, outcome)?
-                };
+                *abi_result(results, 0)? =
+                    crate::runtime::effects::convert_result(caller, |caller| {
+                        let outcome = first_outcome(&model, outcomes.value)?;
+                        if typed {
+                            structured_value(caller, "llm.call", outcome)
+                        } else {
+                            build_completion(caller, outcome)
+                        }
+                    })?;
                 Ok(())
             })
         },
@@ -150,15 +153,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     read_optional_string(caller, abi_arg(params, 2)?, "llm.batch (schema)")?;
                 let typed = schema.is_some();
                 let outcomes = dispatch(caller, "batch", &model, prompts, schema).await?;
-                let mut built = Vec::with_capacity(outcomes.len());
-                for outcome in outcomes {
-                    built.push(if typed {
-                        structured_value(caller, "llm.batch", outcome)?
-                    } else {
-                        build_completion(caller, outcome)?
-                    });
-                }
-                *abi_result(results, 0)? = build_array(caller, built)?;
+                *abi_result(results, 0)? =
+                    crate::runtime::effects::convert_result(caller, |caller| {
+                        let mut built = Vec::with_capacity(outcomes.len());
+                        for outcome in outcomes.value {
+                            built.push(if typed {
+                                structured_value(caller, "llm.batch", outcome)?
+                            } else {
+                                build_completion(caller, outcome)?
+                            });
+                        }
+                        build_array(caller, built)
+                    })?;
                 Ok(())
             })
         },
@@ -250,16 +256,24 @@ fn install_getters(
 ///    releases its whole reservation.
 async fn dispatch(
     caller: &mut wasmtime::Caller<'_, StoreData>,
-    op: &str,
+    op: &'static str,
     model: &str,
     prompts: Vec<String>,
     schema: Option<String>,
-) -> wasmtime::Result<Vec<LlmOutcome>> {
+) -> wasmtime::Result<crate::runtime::effects::NativeResult<Vec<LlmOutcome>>> {
     let ticket = gate(caller, model, prompts.len())?;
     record_payload(&*caller, ticket, Side::Request, || {
         request_payload(op, model, &prompts, schema.as_deref())
     });
 
+    let request = LlmRequest {
+        model: model.to_owned(),
+        prompts,
+        schema,
+    };
+    crate::runtime::effects::execute(caller, if op == "call" { "llm.call" } else { "llm.batch" }, request, move |caller, _, request| Box::pin(async move {
+        let LlmRequest { model, prompts, schema } = request;
+        let model = model.as_str();
     let budget = budget(caller);
     let limits = budget
         .as_ref()
@@ -337,6 +351,14 @@ async fn dispatch(
             Err(throw(op, error))
         }
     }
+    })).await
+}
+
+#[derive(serde::Serialize)]
+struct LlmRequest {
+    model: String,
+    prompts: Vec<String>,
+    schema: Option<String>,
 }
 
 /// A call's request as the recorder keeps it.
@@ -448,21 +470,25 @@ fn gate(
 /// runtime configured with only those models would return.
 async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     preflight_models(caller, CAPABILITY, "prompt_count")?;
-    let provider = provider(caller, "models", "")?;
-    let candidates = provider.models().await.map_err(|e| throw("models", e))?;
+    let candidates = crate::runtime::effects::execute(caller, "llm.models", (), |caller, _, ()| {
+        Box::pin(async move {
+            provider(caller, "models", "")?
+                .models()
+                .await
+                .map_err(|error| throw("models", error))
+        })
+    })
+    .await?;
 
-    let mut visible = Vec::new();
-    for candidate in candidates {
-        if may_call(caller, &candidate.name)? {
-            visible.push(candidate);
+    crate::runtime::effects::convert_result(caller, |caller| {
+        let mut built = Vec::new();
+        for candidate in candidates.value {
+            if may_call(caller, &candidate.name)? {
+                built.push(build_model(caller, candidate)?);
+            }
         }
-    }
-
-    let mut built = Vec::with_capacity(visible.len());
-    for model in visible {
-        built.push(build_model(caller, model)?);
-    }
-    build_array(caller, built)
+        build_array(caller, built)
+    })
 }
 
 /// The per-candidate gate. A denial omits the model rather

@@ -30,10 +30,18 @@ pub(super) fn time_zone_id() -> &'static str {
     SYSTEM.get().and_then(TimeZone::iana_name).unwrap_or("UTC")
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(super) struct ZonedObservation {
+    pub instant: Timestamp,
+    pub id: String,
+    #[serde(skip)]
+    zone: Option<TimeZone>,
+}
+
 pub(super) fn zoned_date_time_iso(
     caller: &mut Caller<'_, StoreData>,
     time_zone: Option<&str>,
-) -> wasmtime::Result<(Zoned, String)> {
+) -> wasmtime::Result<ZonedObservation> {
     let (zone, id) = if let Some(requested) = time_zone {
         super::zoned_date_time::resolve_time_zone(caller, requested, "Now.zonedDateTimeISO")?
     } else {
@@ -45,5 +53,25 @@ pub(super) fn zoned_date_time_iso(
             .clone();
         (zone, time_zone_id().to_string())
     };
-    Ok((Timestamp::now().to_zoned(zone), id))
+    Ok(ZonedObservation {
+        instant: Timestamp::now(),
+        id,
+        zone: Some(zone),
+    })
+}
+
+impl crate::runtime::effects::NativeOutcome for ZonedObservation {
+    // The only retained allocation is the zone identifier; Timestamp is fixed size.
+    fn decoded_heap_bound(bytes: usize) -> u64 {
+        bytes as u64
+    }
+}
+impl ZonedObservation {
+    pub fn zoned(&self, _caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Zoned> {
+        let zone = match &self.zone {
+            Some(zone) => zone.clone(),
+            None => super::zoned_date_time::restore_time_zone(&self.id, "Temporal.Now")?.0,
+        };
+        Ok(self.instant.to_zoned(zone))
+    }
 }
