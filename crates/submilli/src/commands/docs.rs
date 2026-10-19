@@ -91,7 +91,10 @@ fn mcp_docs(server: &str, path: &Path) -> anyhow::Result<ExitCode> {
     let store = super::local::open_secret_store()?;
     let policy = Arc::new(NetworkPolicy::default());
     let oauth = Arc::new(OAuthTokenManager::new(
-        store.clone(),
+        Arc::new(submilli_shared::mcp_auth::SecretStoreGrants::new(
+            store.clone(),
+        )),
+        Some(store.clone()),
         Arc::new(ReqwestHttpClient::new(policy.clone())),
         Arc::new(super::mcp::provider_config::load()?),
     ));

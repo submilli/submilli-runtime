@@ -2255,6 +2255,31 @@ fn arena_failure(error: crate::arena::ArenaError) -> CompilerFailure {
     error.into_compiler_failure(CompilerStage::Codegen)
 }
 
+/// The prelude interface whose host setter a write to `receiver_ty`'s property
+/// may call (`RegExp#@set:lastIndex`, `Array#@set:length`).
+pub(crate) fn host_property_iface(receiver_ty: &Type) -> Option<crate::MangledName> {
+    match receiver_ty.lowered() {
+        Type::InterfaceRef { mangled, .. } => Some(mangled.clone()),
+        Type::Array(_) => Some(crate::mangle::prelude("Array")),
+        _ if receiver_ty.array_like_union_element().is_some() => {
+            Some(crate::mangle::prelude("Array"))
+        }
+        _ => None,
+    }
+}
+
+/// Whether a field access on `receiver_ty` may meet a value with no object
+/// payload: a built-in seen through a structural view or `unknown`.
+pub(crate) fn may_hold_builtin_value(receiver_ty: &Type) -> bool {
+    match receiver_ty.lowered() {
+        Type::InterfaceRef { .. } | Type::Unknown => true,
+        Type::Union(members) => members
+            .iter()
+            .any(|member| !matches!(member.lowered(), Type::Object { .. })),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::{SymbolTable, ValueSymbol, codegen, codegen_with_type_info};
@@ -3645,13 +3670,15 @@ function main(): string {
     #[test]
     fn symbol_table_resolves_prelude_function_indices() {
         let map = build_symbol_table("function main(): void { }");
-        // Alphabetical: isFinite, isNaN, string_cmp, string_concat, string_eq, string_length.
+        // Alphabetical: isFinite, isNaN, string_cmp, string_concat, string_eq,
+        // string_index, string_length.
         assert_eq!(map.prelude_func_idx("isFinite"), Some(0));
         assert_eq!(map.prelude_func_idx("isNaN"), Some(1));
         assert_eq!(map.prelude_func_idx("string_cmp"), Some(2));
         assert_eq!(map.prelude_func_idx("string_concat"), Some(3));
         assert_eq!(map.prelude_func_idx("string_eq"), Some(4));
-        assert_eq!(map.prelude_func_idx("string_length"), Some(5));
+        assert_eq!(map.prelude_func_idx("string_index"), Some(5));
+        assert_eq!(map.prelude_func_idx("string_length"), Some(6));
         assert_eq!(map.prelude_func_idx("missing"), None);
     }
 

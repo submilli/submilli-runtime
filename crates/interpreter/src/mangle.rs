@@ -67,6 +67,13 @@ pub fn extend(parent: &MangledName, suffix: &str) -> MangledName {
     MangledName(format!("{}{}{}", parent.as_str(), SEP, suffix))
 }
 
+/// The member name of a host-implemented property's setter, `@set:<property>`.
+/// Codegen lowers `receiver.property = value` on a prelude interface to a call
+/// of `<iface>#@set:<property>` when the prelude declares one.
+pub fn property_setter(property: &str) -> String {
+    format!("@set:{property}")
+}
+
 /// Dispatch key for a static class member: `Class#static#name`. The extra
 /// `static` segment keeps statics disjoint from instance-method export keys
 /// (`Class#name`) — a static and an instance method may share a name.

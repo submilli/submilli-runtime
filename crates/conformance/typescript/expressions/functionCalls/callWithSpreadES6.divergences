@@ -1,0 +1,4 @@
+types: 17 of 43 tsc entries compared, 0 differ
+
+errors:
+line 48: ours: override of method `foo` must declare the inherited method's 3 parameter(s) (tsc accepts)

@@ -1,4 +1,4 @@
-types: 7 of 34 tsc entries compared, 0 differ
+types: 8 of 34 tsc entries compared, 0 differ
 
 errors:
 line 7: ours: override of method `baz` is not compatible with the inherited signature (tsc accepts)

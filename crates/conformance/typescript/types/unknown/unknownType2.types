@@ -1,0 +1,935 @@
+=== unknownType2.ts ===
+
+/*pruned*/;
+/*pruned*/;
+
+type SomeResponse = 'yes' | 'no' | 'idk';
+>SomeResponse : SomeResponse
+>             : ^^^^^^^^^^^^
+
+let validate: (x: unknown) => SomeResponse = x => (x === 'yes' || x === 'no') ? x : 'idk'; // No error
+>validate : (x: unknown) => SomeResponse
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>x => (x === 'yes' || x === 'no') ? x : 'idk' : (x: unknown) => "yes" | "no" | "idk"
+>                                             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>(x === 'yes' || x === 'no') ? x : 'idk' : "yes" | "no" | "idk"
+>                                        : ^^^^^^^^^^^^^^^^^^^^
+>(x === 'yes' || x === 'no') : boolean
+>                            : ^^^^^^^
+>x === 'yes' || x === 'no' : boolean
+>                          : ^^^^^^^
+>x === 'yes' : boolean
+>            : ^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>'yes' : "yes"
+>      : ^^^^^
+>x === 'no' : boolean
+>           : ^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>'no' : "no"
+>     : ^^^^
+>x : "yes" | "no"
+>  : ^^^^^^^^^^^^
+>'idk' : "idk"
+>      : ^^^^^
+
+
+const u: unknown = undefined;
+>u : unknown
+>  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+/*pruned*/;
+/*pruned*/;
+
+if (u === 5) {
+>u === 5 : boolean
+>        : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>5 : 5
+>  : ^
+
+    const y = u.toString(10);
+>y : string
+>  : ^^^^^^
+>u.toString(10) : string
+>               : ^^^^^^
+>u.toString : (radix?: number) => string
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>u : 5
+>  : ^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>10 : 10
+>   : ^^
+
+}
+
+if (u === true || u === false) {
+>u === true || u === false : boolean
+>                          : ^^^^^^^
+>u === true : boolean
+>           : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+>u === false : boolean
+>            : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>false : false
+>      : ^^^^^
+
+    const someBool: boolean = u;
+>someBool : boolean
+>         : ^^^^^^^
+>u : boolean
+>  : ^^^^^^^
+
+}
+
+if (u === undefined) {
+>u === undefined : boolean
+>                : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+    const undef: undefined = u;
+>undef : undefined
+>      : ^^^^^^^^^
+>u : undefined
+>  : ^^^^^^^^^
+
+}
+
+if (u === null) {
+>u === null : boolean
+>           : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+
+    const someNull: null = u;
+>someNull : null
+>         : ^^^^
+>u : null
+>  : ^^^^
+
+}
+
+/*pruned*/;
+
+
+
+if (!(u === 42)) {
+>!(u === 42) : boolean
+>            : ^^^^^^^
+>(u === 42) : boolean
+>           : ^^^^^^^
+>u === 42 : boolean
+>         : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>42 : 42
+>   : ^^
+
+    /*pruned*/;
+}
+
+if (u !== 42) {
+>u !== 42 : boolean
+>         : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>42 : 42
+>   : ^^
+
+    /*pruned*/;
+}
+
+if (u == 42) {
+>u == 42 : boolean
+>        : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>42 : 42
+>   : ^^
+
+    /*pruned*/;
+}
+
+if (u == true) {
+>u == true : boolean
+>          : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+
+    /*pruned*/;
+}
+
+if (u == Object) {
+>u == Object : boolean
+>            : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>Object : ObjectConstructor
+>       : ^^^^^^^^^^^^^^^^^
+
+    /*pruned*/;
+}
+
+const aString: string = null as unknown as (string);
+>aString : string
+>        : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const aBoolean: boolean = null as unknown as (boolean);
+>aBoolean : boolean
+>         : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const aNumber: number = null as unknown as (number);
+>aNumber : number
+>        : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+const anObjectLiteral: { x: number } = null as unknown as ({ x: number });
+>anObjectLiteral : { x: number; }
+>                : ^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>null as unknown as ({ x: number }) : { x: number; }
+>                                   : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>x : number
+>  : ^^^^^^
+
+const aUnion: { x: number } | { y: string } = null as unknown as ({ x: number } | { y: string });
+>aUnion : { x: number; } | { y: string; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : string
+>  : ^^^^^^
+>null as unknown as ({ x: number } | { y: string }) : { x: number; } | { y: string; }
+>                                                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : string
+>  : ^^^^^^
+
+/*pruned*/;
+const aFunction: () => number = null as unknown as (() => number);
+>aFunction : () => number
+>          : ^^^^^^^^^^^^
+>null as unknown as (() => number) : () => number
+>                                  : ^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+if (u === aString) {
+>u === aString : boolean
+>              : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>aString : string
+>        : ^^^^^^
+
+    let uString: string = u;
+>uString : string
+>        : ^^^^^^
+>u : string
+>  : ^^^^^^
+
+}
+
+if (u === aBoolean) {
+>u === aBoolean : boolean
+>               : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>aBoolean : boolean
+>         : ^^^^^^^
+
+    let uString: boolean = u;
+>uString : boolean
+>        : ^^^^^^^
+>u : boolean
+>  : ^^^^^^^
+
+}
+
+if (u === aNumber) {
+>u === aNumber : boolean
+>              : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>aNumber : number
+>        : ^^^^^^
+
+    let uNumber: number = u;
+>uNumber : number
+>        : ^^^^^^
+>u : number
+>  : ^^^^^^
+
+}
+
+/*pruned*/;
+
+
+
+if (u === anObjectLiteral) {
+>u === anObjectLiteral : boolean
+>                      : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>anObjectLiteral : { x: number; }
+>                : ^^^^^^^^^^^^^^
+
+    /*pruned*/;
+}
+
+if (u === aUnion) {
+>u === aUnion : boolean
+>             : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>aUnion : { x: number; } | { y: string; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    /*pruned*/;
+}
+
+/*pruned*/;
+
+
+
+if (u === aFunction) {
+>u === aFunction : boolean
+>                : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>aFunction : () => number
+>          : ^^^^^^^^^^^^
+
+    /*pruned*/;
+}
+
+enum NumberEnum {
+>NumberEnum : NumberEnum
+>           : ^^^^^^^^^^
+
+    A,
+>A : NumberEnum.A
+>  : ^^^^^^^^^^^^
+
+    B,
+>B : NumberEnum.B
+>  : ^^^^^^^^^^^^
+
+    C
+>C : NumberEnum.C
+>  : ^^^^^^^^^^^^
+
+}
+
+enum StringEnum {
+>StringEnum : StringEnum
+>           : ^^^^^^^^^^
+
+    A = "A",
+>A : StringEnum.A
+>  : ^^^^^^^^^^^^
+>"A" : "A"
+>    : ^^^
+
+    B = "B",
+>B : StringEnum.B
+>  : ^^^^^^^^^^^^
+>"B" : "B"
+>    : ^^^
+
+    C = "C"
+>C : StringEnum.C
+>  : ^^^^^^^^^^^^
+>"C" : "C"
+>    : ^^^
+
+}
+
+/*pruned*/;
+
+
+
+if (u === NumberEnum.A) {
+>u === NumberEnum.A : boolean
+>                   : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>NumberEnum.A : NumberEnum.A
+>             : ^^^^^^^^^^^^
+>NumberEnum : typeof NumberEnum
+>           : ^^^^^^^^^^^^^^^^^
+>A : NumberEnum.A
+>  : ^^^^^^^^^^^^
+
+    let a: NumberEnum.A = u
+>a : NumberEnum.A
+>  : ^^^^^^^^^^^^
+>NumberEnum : any
+>           : ^^^
+>u : NumberEnum.A
+>  : ^^^^^^^^^^^^
+
+}
+
+if (u === StringEnum.B) {
+>u === StringEnum.B : boolean
+>                   : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>StringEnum.B : StringEnum.B
+>             : ^^^^^^^^^^^^
+>StringEnum : typeof StringEnum
+>           : ^^^^^^^^^^^^^^^^^
+>B : StringEnum.B
+>  : ^^^^^^^^^^^^
+
+    let b: StringEnum.B = u
+>b : StringEnum.B
+>  : ^^^^^^^^^^^^
+>StringEnum : any
+>           : ^^^
+>u : StringEnum.B
+>  : ^^^^^^^^^^^^
+
+}
+
+function switchTestEnum(x: unknown): void {
+>switchTestEnum : (x: unknown) => void
+>               : ^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    switch (x) {
+>x : unknown
+>  : ^^^^^^^
+
+        case StringEnum.A:
+>StringEnum.A : StringEnum.A
+>             : ^^^^^^^^^^^^
+>StringEnum : typeof StringEnum
+>           : ^^^^^^^^^^^^^^^^^
+>A : StringEnum.A
+>  : ^^^^^^^^^^^^
+
+            const a: StringEnum.A = x;
+>a : StringEnum.A
+>  : ^^^^^^^^^^^^
+>StringEnum : any
+>           : ^^^
+>x : StringEnum.A
+>  : ^^^^^^^^^^^^
+
+            break;
+        case StringEnum.B:
+>StringEnum.B : StringEnum.B
+>             : ^^^^^^^^^^^^
+>StringEnum : typeof StringEnum
+>           : ^^^^^^^^^^^^^^^^^
+>B : StringEnum.B
+>  : ^^^^^^^^^^^^
+
+            const b: StringEnum.B = x;
+>b : StringEnum.B
+>  : ^^^^^^^^^^^^
+>StringEnum : any
+>           : ^^^
+>x : StringEnum.B
+>  : ^^^^^^^^^^^^
+
+            break;
+        case StringEnum.C:
+>StringEnum.C : StringEnum.C
+>             : ^^^^^^^^^^^^
+>StringEnum : typeof StringEnum
+>           : ^^^^^^^^^^^^^^^^^
+>C : StringEnum.C
+>  : ^^^^^^^^^^^^
+
+            const c: StringEnum.C = x;
+>c : StringEnum.C
+>  : ^^^^^^^^^^^^
+>StringEnum : any
+>           : ^^^
+>x : StringEnum.C
+>  : ^^^^^^^^^^^^
+
+            break;
+    }
+    /*pruned*/;
+}
+
+function switchTestCollectEnum(x: unknown): void {
+>switchTestCollectEnum : (x: unknown) => void
+>                      : ^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    switch (x) {
+>x : unknown
+>  : ^^^^^^^
+
+        case StringEnum.A:
+>StringEnum.A : StringEnum.A
+>             : ^^^^^^^^^^^^
+>StringEnum : typeof StringEnum
+>           : ^^^^^^^^^^^^^^^^^
+>A : StringEnum.A
+>  : ^^^^^^^^^^^^
+
+            const a: StringEnum.A = x;
+>a : StringEnum.A
+>  : ^^^^^^^^^^^^
+>StringEnum : any
+>           : ^^^
+>x : StringEnum.A
+>  : ^^^^^^^^^^^^
+
+        case StringEnum.B:
+>StringEnum.B : StringEnum.B
+>             : ^^^^^^^^^^^^
+>StringEnum : typeof StringEnum
+>           : ^^^^^^^^^^^^^^^^^
+>B : StringEnum.B
+>  : ^^^^^^^^^^^^
+
+            const b: StringEnum.A | StringEnum.B = x;
+>b : StringEnum.A | StringEnum.B
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>StringEnum : any
+>           : ^^^
+>StringEnum : any
+>           : ^^^
+>x : StringEnum.A | StringEnum.B
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        case StringEnum.C:
+>StringEnum.C : StringEnum.C
+>             : ^^^^^^^^^^^^
+>StringEnum : typeof StringEnum
+>           : ^^^^^^^^^^^^^^^^^
+>C : StringEnum.C
+>  : ^^^^^^^^^^^^
+
+            const c: StringEnum.A | StringEnum.B | StringEnum.C = x;
+>c : StringEnum
+>  : ^^^^^^^^^^
+>StringEnum : any
+>           : ^^^
+>StringEnum : any
+>           : ^^^
+>StringEnum : any
+>           : ^^^
+>x : StringEnum
+>  : ^^^^^^^^^^
+
+            const all: StringEnum = x;
+>all : StringEnum
+>    : ^^^^^^^^^^
+>x : StringEnum
+>  : ^^^^^^^^^^
+
+            return;
+    }
+    /*pruned*/;
+}
+
+function switchTestLiterals(x: unknown): void {
+>switchTestLiterals : (x: unknown) => void
+>                   : ^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    /*pruned*/;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    /*pruned*/;
+}
+
+function switchTestObjects(x: unknown, y: () => void, z: { prop: number }): void {
+>switchTestObjects : (x: unknown, y: () => void, z: { prop: number; }) => void
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>y : () => void
+>  : ^^^^^^^^^^
+>z : { prop: number; }
+>  : ^^^^^^^^^^^^^^^^^
+>prop : number
+>     : ^^^^^^
+
+    switch (x) {
+>x : unknown
+>  : ^^^^^^^
+
+        case true:
+>true : true
+>     : ^^^^
+
+        case false:
+>false : false
+>      : ^^^^^
+
+            const bool: boolean = x;
+>bool : boolean
+>     : ^^^^^^^
+>x : boolean
+>  : ^^^^^^^
+
+            break;
+        case y:
+>y : () => void
+>  : ^^^^^^^^^^
+
+            /*pruned*/;
+            break;
+        case z:
+>z : { prop: number; }
+>  : ^^^^^^^^^^^^^^^^^
+
+            /*pruned*/{}
+            break;
+    }
+    /*pruned*/;
+}
+
+function switchResponse(x: unknown): SomeResponse {
+>switchResponse : (x: unknown) => SomeResponse
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    switch (x) {
+>x : unknown
+>  : ^^^^^^^
+
+        case 'yes':
+>'yes' : "yes"
+>      : ^^^^^
+
+        case 'no':
+>'no' : "no"
+>     : ^^^^
+
+        case 'idk':
+>'idk' : "idk"
+>      : ^^^^^
+
+            return x;
+>x : "yes" | "no" | "idk"
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+        default:
+            throw new Error('unknown response');
+>new Error('unknown response') : Error
+>                              : ^^^^^
+>Error : ErrorConstructor
+>      : ^^^^^^^^^^^^^^^^
+>'unknown response' : "unknown response"
+>                   : ^^^^^^^^^^^^^^^^^^
+
+    }
+    // Arguably this should be never.
+    /*pruned*/;
+}
+
+function switchResponseWrong(x: unknown): SomeResponse {
+>switchResponseWrong : (x: unknown) => SomeResponse
+>                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+    switch (x) {
+>x : unknown
+>  : ^^^^^^^
+
+        case 'yes':
+>'yes' : "yes"
+>      : ^^^^^
+
+        case 'no':
+>'no' : "no"
+>     : ^^^^
+
+        case 'maybe':
+>'maybe' : "maybe"
+>        : ^^^^^^^
+
+            return x; // error
+>x : "yes" | "no" | "maybe"
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+
+        default:
+            throw new Error('Can you repeat the question?');
+>new Error('Can you repeat the question?') : Error
+>                                          : ^^^^^
+>Error : ErrorConstructor
+>      : ^^^^^^^^^^^^^^^^
+>'Can you repeat the question?' : "Can you repeat the question?"
+>                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    }
+    // Arguably this should be never.
+    /*pruned*/;
+}
+
+// Repro from #33483
+
+function f2(x: unknown): string | undefined {
+>f2 : (x: unknown) => string | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
+  if (x !== undefined && typeof x !== 'string') {
+>x !== undefined && typeof x !== 'string' : boolean
+>                                         : ^^^^^^^
+>x !== undefined : boolean
+>                : ^^^^^^^
+>x : unknown
+>  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>typeof x !== 'string' : boolean
+>                      : ^^^^^^^
+>typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : {} | null
+>  : ^^^^^^^^^
+>'string' : "string"
+>         : ^^^^^^^^
+
+    throw new Error();
+>new Error() : Error
+>            : ^^^^^
+>Error : ErrorConstructor
+>      : ^^^^^^^^^^^^^^^^
+
+  }
+  return x;
+>x : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+}
+
+function notNotEquals(u: unknown): void {
+>notNotEquals : (u: unknown) => void
+>             : ^^^^^^^^^^^^^^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+
+    /*pruned*/;
+
+
+
+
+    if (u !== NumberEnum.A) { }
+>u !== NumberEnum.A : boolean
+>                   : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>NumberEnum.A : NumberEnum.A
+>             : ^^^^^^^^^^^^
+>NumberEnum : typeof NumberEnum
+>           : ^^^^^^^^^^^^^^^^^
+>A : NumberEnum.A
+>  : ^^^^^^^^^^^^
+
+    else {
+        const a: NumberEnum.A = u;
+>a : NumberEnum.A
+>  : ^^^^^^^^^^^^
+>NumberEnum : any
+>           : ^^^
+>u : NumberEnum.A
+>  : ^^^^^^^^^^^^
+
+    }
+
+
+    if (u !== NumberEnum.A && u !== NumberEnum.B && u !== StringEnum.A) { }
+>u !== NumberEnum.A && u !== NumberEnum.B && u !== StringEnum.A : boolean
+>                                                               : ^^^^^^^
+>u !== NumberEnum.A && u !== NumberEnum.B : boolean
+>                                         : ^^^^^^^
+>u !== NumberEnum.A : boolean
+>                   : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>NumberEnum.A : NumberEnum.A
+>             : ^^^^^^^^^^^^
+>NumberEnum : typeof NumberEnum
+>           : ^^^^^^^^^^^^^^^^^
+>A : NumberEnum.A
+>  : ^^^^^^^^^^^^
+>u !== NumberEnum.B : boolean
+>                   : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>NumberEnum.B : NumberEnum.B
+>             : ^^^^^^^^^^^^
+>NumberEnum : typeof NumberEnum
+>           : ^^^^^^^^^^^^^^^^^
+>B : NumberEnum.B
+>  : ^^^^^^^^^^^^
+>u !== StringEnum.A : boolean
+>                   : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>StringEnum.A : StringEnum.A
+>             : ^^^^^^^^^^^^
+>StringEnum : typeof StringEnum
+>           : ^^^^^^^^^^^^^^^^^
+>A : StringEnum.A
+>  : ^^^^^^^^^^^^
+
+    else {
+        const aOrB: NumberEnum.A | NumberEnum.B | StringEnum.A  = u;
+>aOrB : NumberEnum.A | NumberEnum.B | StringEnum.A
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>NumberEnum : any
+>           : ^^^
+>NumberEnum : any
+>           : ^^^
+>StringEnum : any
+>           : ^^^
+>u : NumberEnum.A | NumberEnum.B | StringEnum.A
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    }
+
+    // equivalent to
+    if (!(u === NumberEnum.A || u === NumberEnum.B || u === StringEnum.A)) { }
+>!(u === NumberEnum.A || u === NumberEnum.B || u === StringEnum.A) : boolean
+>                                                                  : ^^^^^^^
+>(u === NumberEnum.A || u === NumberEnum.B || u === StringEnum.A) : boolean
+>                                                                 : ^^^^^^^
+>u === NumberEnum.A || u === NumberEnum.B || u === StringEnum.A : boolean
+>                                                               : ^^^^^^^
+>u === NumberEnum.A || u === NumberEnum.B : boolean
+>                                         : ^^^^^^^
+>u === NumberEnum.A : boolean
+>                   : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>NumberEnum.A : NumberEnum.A
+>             : ^^^^^^^^^^^^
+>NumberEnum : typeof NumberEnum
+>           : ^^^^^^^^^^^^^^^^^
+>A : NumberEnum.A
+>  : ^^^^^^^^^^^^
+>u === NumberEnum.B : boolean
+>                   : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>NumberEnum.B : NumberEnum.B
+>             : ^^^^^^^^^^^^
+>NumberEnum : typeof NumberEnum
+>           : ^^^^^^^^^^^^^^^^^
+>B : NumberEnum.B
+>  : ^^^^^^^^^^^^
+>u === StringEnum.A : boolean
+>                   : ^^^^^^^
+>u : unknown
+>  : ^^^^^^^
+>StringEnum.A : StringEnum.A
+>             : ^^^^^^^^^^^^
+>StringEnum : typeof StringEnum
+>           : ^^^^^^^^^^^^^^^^^
+>A : StringEnum.A
+>  : ^^^^^^^^^^^^
+
+    else {
+        const aOrB: NumberEnum.A | NumberEnum.B | StringEnum.A  = u;
+>aOrB : NumberEnum.A | NumberEnum.B | StringEnum.A
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>NumberEnum : any
+>           : ^^^
+>NumberEnum : any
+>           : ^^^
+>StringEnum : any
+>           : ^^^
+>u : NumberEnum.A | NumberEnum.B | StringEnum.A
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    }
+}
+
+
+
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

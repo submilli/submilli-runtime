@@ -1,0 +1,126 @@
+=== parameterInitializersForwardReferencing.ts ===
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+function inside(a = b): void {
+>inside : (a?: any) => void
+>       : ^^^^^^^^^^^^^^^^^
+>a : any
+>  : ^^^
+>b : any
+>  : ^^^
+
+    /**/;
+}
+
+function outside(): void {
+>outside : () => void
+>        : ^^^^^^^^^^
+
+    /**/;
+    /*pruned*/;
+
+
+}
+
+function defaultArgFunction(a: () => number = function () { return b; }, b: number = 1): void { }
+>defaultArgFunction : (a?: () => number, b?: number) => void
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : () => number
+>  : ^^^^^^^^^^^^
+>function () { return b; } : () => number
+>                          : ^^^^^^^^^^^^
+>b : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+function defaultArgArrow(a: () => () => number = () => () => b, b: number = 3): void { }
+>defaultArgArrow : (a?: () => () => number, b?: number) => void
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : () => () => number
+>  : ^^^^^^^^^^^^^^^^^^
+>() => () => b : () => () => number
+>              : ^^^^^^^^^^^^^^^^^^
+>() => b : () => number
+>        : ^^^^^^^^^^^^
+>b : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>3 : 3
+>  : ^
+
+
+class C {
+>C : C
+>  : ^
+
+    constructor(a: number = b, b: number = 1) { }
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+    method(a: number = b, b: number = 1): void { }
+>method : (a?: number, b?: number) => void
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+}
+
+// Function expressions
+let x = (a = b, b = c, c = d) => { /**/;  };
+>x : (a?: any, b?: any, c?: any) => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(a = b, b = c, c = d) => { /**/;  } : (a?: any, b?: any, c?: any) => void
+>                                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : any
+>  : ^^^
+>b : any
+>  : ^^^
+>b : any
+>  : ^^^
+>c : any
+>  : ^^^
+>c : any
+>  : ^^^
+>d : any
+>  : ^^^
+
+
+// Should not produce errors - can reference later parameters if they occur within a function expression initializer.
+/*pruned*/;
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

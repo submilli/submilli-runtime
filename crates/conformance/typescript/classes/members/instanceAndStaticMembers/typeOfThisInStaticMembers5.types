@@ -1,0 +1,33 @@
+=== typeOfThisInStaticMembers5.ts ===
+
+class C {
+>C : C
+>  : ^
+
+    static create: () => C = () => new this("yep")
+>create : () => C
+>       : ^^^^^^^
+>() => new this("yep") : () => C
+>                      : ^^^^^^^
+>new this("yep") : C
+>                : ^
+>this : typeof C
+>     : ^^^^^^^^
+>"yep" : "yep"
+>      : ^^^^^
+
+
+    constructor (private foo: string) {
+>foo : string
+>    : ^^^^^^
+
+
+    }
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

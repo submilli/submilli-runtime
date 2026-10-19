@@ -29,6 +29,7 @@ use submilli_shared::llm::provider::DEFAULT_MAX_CONCURRENCY;
 use submilli_shared::llm::{BlueprintLlmProvider, HttpModelDispatch, ModelDispatch};
 use submilli_shared::mcp::StreamableHttpTransport;
 use submilli_shared::mcp::discovery::{DiscoveryAuth, McpCatalog, discover_all_local};
+use submilli_shared::mcp_auth::SecretStoreGrants;
 use submilli_shared::mcp_token::OAuthTokenManager;
 use submilli_shared::secret_store::SecretStore;
 use submilli_shared::{BlueprintAuthProxy, BlueprintSecretProvider, PolicyCheck};
@@ -81,10 +82,9 @@ pub struct Args {
     /// Tokens this run's `submilli:llm` calls may spend in total. A run that
     /// asks for more raises a catchable `QuotaExceededError` rather than being billed.
     ///
-    /// Finite by default, deliberately: unlike `submilli:session`, whose state
-    /// is memory-only, a blueprint-configured provider spends real money against
-    /// the operator's credential, and a CLI run has no server-wide ceiling
-    /// behind it. [default: 1000000]
+    /// Finite by default, deliberately: a blueprint-configured provider spends
+    /// real money against the operator's credential, and a CLI run has no
+    /// server-wide ceiling behind it. [default: 1000000]
     /// Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`.
     #[arg(long, value_name = "TOKENS")]
     max_llm_tokens: Option<u64>,
@@ -413,7 +413,8 @@ fn execute_on_this_thread(
             let http = Arc::new(ReqwestHttpClient::new(Arc::clone(&network_policy)))
                 as Arc<dyn HttpClient>;
             let oauth = Arc::new(OAuthTokenManager::new(
-                store.clone(),
+                Arc::new(SecretStoreGrants::new(store.clone())),
+                Some(store.clone()),
                 http,
                 Arc::new(Vec::new()),
             ));
@@ -497,6 +498,7 @@ fn execute_on_this_thread(
     }
     // Use with_vfs_and_cap directly rather than RuntimeConfig::run to keep console output streaming, not buffered.
     let mut data = StoreData::with_vfs_and_cap(vfs, cfg.max_store_bytes);
+    data.variables = Arc::clone(&variables);
     data.vfs_info.size_limit = size_limit;
     data.install_type_info(compiled.type_info.clone());
     if let Some(bp) = &blueprint {
@@ -511,7 +513,7 @@ fn execute_on_this_thread(
             data.mcp_transport = Some(transport);
         }
         // The CLI is wired where `submilli:session` deliberately is not: session
-        // state is memory-only and a CLI run has nothing to carry it across,
+        // state belongs to a server session, which a CLI run does not have,
         // whereas a blueprint-configured provider is what makes `submilli run`
         // useful for testing a program before it reaches a server — and the
         // credentials already resolve from the blueprint being loaded here.

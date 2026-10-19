@@ -177,7 +177,7 @@ spec:
           CREATED_EXEC=1
           echo "ok: registered probe blueprint {{ $execProbe }}"
 
-          # The point of this test. A server whose ephemeral VFS root is not
+          # The point of this test. A server whose volume root is not
           # writable answers /healthz perfectly happily and fails every
           # execute, so health alone would call that deployment green. The
           # program writes and reads a file to exercise the VFS rather than

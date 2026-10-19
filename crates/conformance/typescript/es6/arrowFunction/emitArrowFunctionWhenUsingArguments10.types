@@ -1,0 +1,29 @@
+=== emitArrowFunctionWhenUsingArguments10.ts ===
+
+function f(): void {
+>f : () => void
+>  : ^^^^^^^^^^
+
+    let _arguments = 10;
+>_arguments : number
+>           : ^^^^^^
+>10 : 10
+>   : ^^
+
+    let a = () => () => arguments;
+>a : () => () => IArguments
+>  : ^^^^^^^^^^^^^^^^^^^^^^
+>() => () => arguments : () => () => IArguments
+>                      : ^^^^^^^^^^^^^^^^^^^^^^
+>() => arguments : () => IArguments
+>                : ^^^^^^^^^^^^^^^^
+>arguments : IArguments
+>          : ^^^^^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

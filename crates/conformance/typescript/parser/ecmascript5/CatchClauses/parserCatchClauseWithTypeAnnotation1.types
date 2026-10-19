@@ -1,0 +1,14 @@
+=== parserCatchClauseWithTypeAnnotation1.ts ===
+try {
+} catch (e: Error) {
+>e : any
+>  : ^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

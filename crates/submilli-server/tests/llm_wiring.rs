@@ -245,7 +245,7 @@ impl Harness {
             blueprints: Some(Arc::new(
                 InMemoryBlueprintStore::seed(vec![blueprint(BLUEPRINT)]).expect("seed blueprints"),
             )),
-            session_storage_root: Some(vfs_root.path().to_path_buf()),
+            volume_root: Some(vfs_root.path().to_path_buf()),
             llm_dispatch: dispatch,
             ..in_memory_config::config()
         };

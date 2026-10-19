@@ -51,6 +51,9 @@ pub struct AddArgs {
     /// Value bound when the caller supplies none. A variable is always a string.
     #[arg(long, value_name = "VALUE")]
     default: Option<String>,
+    /// Resolve from another declared variable instead of accepting a binding.
+    #[arg(long, conflicts_with = "default", value_name = "NAME")]
+    alias: Option<String>,
     /// Blueprint file to edit (default: ./blueprint.yaml).
     #[arg(long)]
     blueprint: Option<PathBuf>,
@@ -87,6 +90,7 @@ fn add(args: &AddArgs) -> Result<String> {
     let decl = VariableDecl {
         required: args.required,
         default: args.default.clone(),
+        alias: args.alias.clone(),
     };
     let summary = summary(&decl);
     blueprint.variables.insert(args.name.clone(), decl);
@@ -131,7 +135,7 @@ fn remove(args: &RemoveArgs) -> Result<String> {
     let used_by = referencing_rules(&blueprint, &args.name);
     if !used_by.is_empty() {
         bail!(
-            "variable '{}' is still referenced by {}; remove or rewrite those rules first",
+            "variable '{}' is still referenced by {}; remove or rewrite those references first",
             args.name,
             used_by.join(", ")
         );
@@ -147,6 +151,16 @@ fn remove(args: &RemoveArgs) -> Result<String> {
 }
 
 fn summary(decl: &VariableDecl) -> String {
+    if let Some(target) = &decl.alias {
+        return format!(
+            "alias: {target}; {}",
+            if decl.required {
+                "required"
+            } else {
+                "optional"
+            }
+        );
+    }
     match (&decl.default, decl.required) {
         (Some(value), _) => format!("default: {value:?}"),
         (None, true) => "required".to_string(),
@@ -154,20 +168,28 @@ fn summary(decl: &VariableDecl) -> String {
     }
 }
 
-/// The permission rules whose filter references `${vars.<name>}`, as
-/// `<caller>/<capability>` labels, in file order.
+/// Alias names and permission-rule labels that reference this variable.
 fn referencing_rules(blueprint: &Blueprint, name: &str) -> Vec<String> {
-    blueprint
-        .permissions
+    let mut references: Vec<String> = blueprint
+        .variables
         .iter()
-        .flat_map(|(caller, rules)| rules.iter().map(move |rule| (caller, rule)))
-        .filter(|(_, rule)| {
-            rule.filter
-                .as_ref()
-                .is_some_and(|filter| filter.var_refs().contains(&name))
-        })
-        .map(|(caller, rule)| format!("{caller}/{}", rule.capability))
-        .collect()
+        .filter(|(_, decl)| decl.alias.as_deref() == Some(name))
+        .map(|(alias, _)| format!("alias {alias}"))
+        .collect();
+    references.extend(
+        blueprint
+            .permissions
+            .iter()
+            .flat_map(|(caller, rules)| rules.iter().map(move |rule| (caller, rule)))
+            .filter(|(_, rule)| {
+                rule.filter
+                    .as_ref()
+                    .is_some_and(|filter| filter.var_refs().contains(&name))
+            })
+            .map(|(caller, rule)| format!("{caller}/{}", rule.capability))
+            .collect::<Vec<_>>(),
+    );
+    references
 }
 
 #[cfg(test)]
@@ -182,6 +204,7 @@ mod tests {
             name: name.into(),
             required: false,
             default: None,
+            alias: None,
             blueprint: Some(path.to_path_buf()),
         }
     }
@@ -210,6 +233,27 @@ permissions:
 ";
 
     #[test]
+    fn adds_alias_and_refuses_removing_its_target() {
+        let (_tmp, path) = temp_blueprint("name: t\nvariables:\n  USER_ID: { required: true }\n");
+        let mut args = add_args("BROWSER_STORE_NAME", &path);
+        args.alias = Some("USER_ID".into());
+        args.required = true;
+        assert!(add(&args).unwrap().contains("alias: USER_ID"));
+        assert_eq!(
+            reload(&path).variables["BROWSER_STORE_NAME"]
+                .alias
+                .as_deref(),
+            Some("USER_ID")
+        );
+        let error = remove(&RemoveArgs {
+            name: "USER_ID".into(),
+            blueprint: Some(path),
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("alias BROWSER_STORE_NAME"));
+    }
+
+    #[test]
     fn adds_required_variable() {
         let (_tmp, path) = temp_blueprint("name: t\n");
         let mut args = add_args("customerId", &path);
@@ -221,6 +265,7 @@ permissions:
             VariableDecl {
                 required: true,
                 default: None,
+                alias: None,
             }
         );
     }
@@ -236,6 +281,7 @@ permissions:
             VariableDecl {
                 required: false,
                 default: Some("us".into()),
+                alias: None,
             }
         );
     }

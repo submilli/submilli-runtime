@@ -382,7 +382,7 @@ async fn documented_package_and_blueprint_enforce_the_bound_customer() {
             InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
         )),
         package_store_root: Some(store.join("packages")),
-        session_storage_root: Some(root.path().join("sessions")),
+        volume_root: Some(root.path().to_path_buf()),
         ..in_memory_config::config()
     })
     .await

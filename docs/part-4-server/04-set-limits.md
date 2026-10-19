@@ -10,7 +10,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "ca43aba4579bfe9834f221dd2bda7b443bda89c20837cd0aa24719664daf0e70"
+  contentHash: "d3f9e74a3f8c16b4507cd4a7128d4b43f4c91301a46c3141b35f2ff965d9b9ff"
   confirmedAt: "2026-10-06T10:27:39.000Z"
 ---
 
@@ -41,7 +41,6 @@ and the fixed limits inside the standard library.
 | Embedding tokens, all runs | 50,000,000 | `max_embedding_tokens` | `QuotaExceededError` |
 | Embedding requests, one run | 1,000 | `max_execution_embedding_requests` | `QuotaExceededError` |
 | Embedding requests in flight | 4 | `max_embedding_concurrency` | Further requests wait |
-| Session state, all sessions | 1,024 MB | `max_session_state_memory`, MB | `QuotaExceededError` |
 
 "The run ends" means the program can't catch it. The caller gets the
 error in place of a result, with a `kind` (`fuel_exhausted`, `timeout`,
@@ -243,8 +242,7 @@ times that in process memory, released when it finishes. So size a
 container as the Helm chart does, at 128 MiB plus 16 times
 `max_execution_memory`. That covers one such execution at a time.
 Several at once can use more, so if your programs handle large data,
-measure your peak. Add `max_session_state_memory` for the sessions'
-state.
+measure your peak.
 
 ## Bound recursion
 
@@ -295,11 +293,9 @@ calls](/docs/blueprints/allow-model-calls) covers.
 
 ## Bound session state and files
 
-`submilli:session` keeps keys and values for the life of a session, 16 MB
-per session. Across all open sessions, `max_session_state_memory` bounds
-the total, so a server with many sessions can't be filled by them. A
-`set` that would pass either is refused with a `QuotaExceededError`, and
-nothing another session holds is evicted to make room.
+`submilli:session` keeps keys and values in the server's database for the
+life of a session, 16 MB per session. A `set` that would pass it is
+refused with a `QuotaExceededError`, and the session keeps what it held.
 
 The Blueprint, not the server, limits the size of a session's files with
 `vfs.size_limit`, which [Keep files and

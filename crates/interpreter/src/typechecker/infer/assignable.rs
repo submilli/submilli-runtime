@@ -23,6 +23,9 @@ pub(crate) struct TypeResolver<'a> {
     /// Records an oversized type met while resolving, for the inferer's next
     /// checkpoint; the resolver itself answers as if the type were `Error`.
     pub(crate) limits: &'a crate::type_size::TypeLimits,
+    /// Relate by tsc's strict subtype relation instead of assignability; see
+    /// [`strict_subtype`].
+    pub(crate) strict_subtype: bool,
 }
 
 /// A single way a class fails to satisfy an interface it declares it `implements`.
@@ -686,6 +689,41 @@ pub(crate) fn assignable(actual: &Type, expected: &Type, types: TypeResolver) ->
     assignable_rec(actual, expected, types, &mut seen)
 }
 
+/// Whether `actual` is a subtype of `expected` by tsc's strict subtype
+/// relation, which reduces a union where tsc does (`c ? a : b`, the results of
+/// a union call): assignability, except that a primitive is no subtype of an
+/// object type, an object type is no subtype of one with an optional field it
+/// lacks, and a function is no subtype of one that takes fewer parameters or
+/// requires an argument it lets a caller omit.
+pub(crate) fn strict_subtype(actual: &Type, expected: &Type, types: TypeResolver) -> bool {
+    let types = TypeResolver {
+        strict_subtype: true,
+        ..types
+    };
+    assignable(actual, expected, types)
+}
+
+/// The union of `types` with each member that is a strict subtype of another
+/// left out, as tsc reduces a union call's results. Of members that are each
+/// other's subtypes, the first stays.
+pub(crate) fn strict_subtype_union(types: Vec<Type>, resolver: TypeResolver) -> Type {
+    let mut members = match Type::union(types) {
+        Type::Union(members) => members,
+        single => return single,
+    };
+    let mut index = members.len();
+    while index > 0 {
+        index -= 1;
+        let absorbed = members.iter().enumerate().any(|(other, member)| {
+            other != index && strict_subtype(&members[index], member, resolver)
+        });
+        if absorbed {
+            members.remove(index);
+        }
+    }
+    Type::union(members)
+}
+
 fn assignable_rec(
     actual: &Type,
     expected: &Type,
@@ -744,7 +782,7 @@ fn assignable_rec(
         }
         return ms.iter().any(|m| assignable_rec(actual, m, types, seen));
     }
-    if drops_readonly(actual, expected) {
+    if drops_readonly(actual, expected) || readonly_meets_mutator(actual, expected, types) {
         return false;
     }
     if matches!(actual, Type::Alias { .. }) || matches!(expected, Type::Alias { .. }) {
@@ -830,6 +868,25 @@ fn assignable_rec(
         (Type::Null | Type::Undefined | Type::Void, _) if expected.is_empty_object() => false,
         (Type::GenericParam { .. }, _) if expected.is_empty_object() => false,
         (_, _) if expected.is_empty_object() => true,
+        // `object` holds every value but the primitives, `null` and `undefined`.
+        (_, Type::NonPrimitive) => matches!(
+            actual,
+            Type::NonPrimitive
+                | Type::Object { .. }
+                | Type::Array(_)
+                | Type::Tuple(_)
+                | Type::Readonly(_)
+                | Type::InterfaceRef { .. }
+                | Type::ClassRef { .. }
+                | Type::Function { .. }
+                | Type::Uint8Array
+        ),
+        (Type::NonPrimitive, _) => false,
+        (_, Type::Object { .. } | Type::InterfaceRef { .. } | Type::ClassRef { .. })
+            if types.strict_subtype && is_primitive(actual) =>
+        {
+            false
+        }
         (Type::GenericParam { id: a, .. }, Type::GenericParam { id: b, .. }) => a == b,
         (Type::GenericParam { .. }, _) | (_, Type::GenericParam { .. }) => false,
         // Explicit before the `==` fallback, which would reject `StringLiteral("foo") <: String`.
@@ -1064,9 +1121,26 @@ fn assignable_rec(
                 ret: re,
                 predicate: predicate_e,
                 has_rest: rest_e,
-                optional: _,
+                optional: optional_e,
             },
         ) => {
+            if types.strict_subtype
+                && !strict_arity_fits(
+                    Arity {
+                        params: pa,
+                        optional: *optional_a,
+                        rest: *rest_a,
+                    },
+                    Arity {
+                        params: pe,
+                        optional: *optional_e,
+                        rest: *rest_e,
+                    },
+                    |a, e| assignable_rec(a, e, types, seen),
+                )
+            {
+                return false;
+            }
             // A rest function can't stand for one whose own rest arguments
             // it would have to unpack.
             if *rest_e && !rest_a {
@@ -1148,7 +1222,7 @@ fn assignable_rec(
                     }
                     assignable_rec(&a_field.read_ty(), &e_field.read_ty(), types, seen)
                 }
-                None => e_field.optional,
+                None => e_field.optional && !types.strict_subtype,
             })
         }
         // Structural compatibility for *data-only* interfaces, both directions:
@@ -1178,6 +1252,63 @@ fn assignable_rec(
         }
         _ => actual == expected,
     }
+}
+
+/// Whether a value of `ty` is a primitive, which tsc's strict subtype relation
+/// keeps apart from object types even where it is assignable to one.
+fn is_primitive(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::String
+            | Type::StringLiteral(_)
+            | Type::StringEnum { .. }
+            | Type::Number
+            | Type::NumberLiteral(_)
+            | Type::NumberEnum { .. }
+            | Type::BigInt
+            | Type::BigIntLiteral(_)
+            | Type::Boolean
+            | Type::BooleanLiteral(_)
+            | Type::Null
+            | Type::Undefined
+            | Type::Void
+    )
+}
+
+/// The parameter shape of a function type that arity rules read.
+#[derive(Clone, Copy)]
+struct Arity<'a> {
+    params: &'a [Type],
+    /// Trailing fixed parameters a caller may omit.
+    optional: usize,
+    rest: bool,
+}
+
+impl Arity<'_> {
+    fn required(self) -> usize {
+        super::expr::required_count_of_function_type(self.params, self.optional, self.rest)
+    }
+}
+
+/// tsc's strict arity rule for a function of `actual`'s shape to be a subtype
+/// of one of `expected`'s: it takes no parameter the other lacks, unless that
+/// one has a rest parameter, and makes no argument optional that the other
+/// requires at a type `actual` accepts in turn (`related`).
+fn strict_arity_fits(
+    actual: Arity<'_>,
+    expected: Arity<'_>,
+    mut related: impl FnMut(&Type, &Type) -> bool,
+) -> bool {
+    if !expected.rest && (actual.rest || actual.params.len() > expected.params.len()) {
+        return false;
+    }
+    let omittable_only_in_actual = actual.required()..expected.required();
+    omittable_only_in_actual.into_iter().all(|position| {
+        match (actual.params.get(position), expected.params.get(position)) {
+            (Some(actual), Some(expected)) => !related(actual, expected),
+            _ => true,
+        }
+    })
 }
 
 /// How one instantiation's type arguments relate to another's at the measured
@@ -1241,13 +1372,21 @@ fn args_relate_covariantly(
             .all(|(actual, expected)| assignable_rec(actual, expected, types, seen))
 }
 
-/// Whether `actual` is a `readonly` array or tuple and `expected` a mutable one.
-/// The element types still decide assignability everywhere else: `readonly` is
-/// shallow and otherwise covariant, like the array it wraps.
+/// Whether `actual` is a `readonly` array or tuple, or a `ReadonlyMap` or
+/// `ReadonlySet`, and `expected` a mutable one. The element types still decide
+/// assignability everywhere else: `readonly` is shallow and otherwise
+/// covariant, like the collection it wraps.
 pub(crate) fn drops_readonly(actual: &Type, expected: &Type) -> bool {
     actual.is_readonly_array()
         && !expected.is_readonly_array()
-        && matches!(expected.peel(), Type::Array(_) | Type::Tuple(_))
+        && match expected.peel() {
+            Type::Array(_) | Type::Tuple(_) => true,
+            Type::InterfaceRef { mangled, .. } => {
+                *mangled == crate::mangle::prelude("Map")
+                    || *mangled == crate::mangle::prelude("Set")
+            }
+            _ => false,
+        }
 }
 
 fn same_alias_instance(left: &Type, right: &Type) -> bool {
@@ -1310,6 +1449,31 @@ pub(crate) fn expand_alias_ref(ty: &Type, types: TypeResolver) -> Type {
         );
         sub.apply_or_record(body, types.limits)
     }
+}
+
+/// Whether `actual` is a `readonly` array, `ReadonlyMap` or `ReadonlySet` and
+/// `expected` an interface that requires one of the mutating methods the
+/// readonly view leaves out, as tsc reports.
+fn readonly_meets_mutator(actual: &Type, expected: &Type, types: TypeResolver) -> bool {
+    if !actual.is_readonly_array() || expected.is_readonly_array() {
+        return false;
+    }
+    let Some((mangled, _package, name, args)) = expected.interface_routing() else {
+        return false;
+    };
+    types
+        .interface_full_form(&mangled, name, &args)
+        .is_some_and(|form| {
+            form.iter()
+                .any(|(member, field)| !field.optional && is_mutating_member(member))
+        })
+}
+
+/// A method a `readonly` array, `ReadonlyMap` or `ReadonlySet` does not have,
+/// so a readonly value can't satisfy an interface that requires one.
+fn is_mutating_member(name: &str) -> bool {
+    super::expr::is_mutating_array_method(name)
+        || matches!(name, "set" | "add" | "delete" | "clear")
 }
 
 /// TS-style structural interface satisfaction: every member the expected
@@ -1575,6 +1739,7 @@ mod tests {
                 types: &types,
                 registry: &registry,
                 limits: &limits,
+                strict_subtype: false,
             },
         )
     }
@@ -1982,6 +2147,7 @@ mod tests {
                 types: ns,
                 registry: &registry,
                 limits: &limits,
+                strict_subtype: false,
             },
         )
     }

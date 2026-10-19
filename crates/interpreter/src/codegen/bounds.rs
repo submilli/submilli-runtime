@@ -118,6 +118,7 @@ fn emit_index_oob_throw(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
     ) else {
         return;
     };
+    crate::codegen::throw::emit_no_error_options(emitter);
     emitter.instruction(Instruction::Call(new_idx));
 
     crate::codegen::throw::emit_error_throw(emitter, ctx);

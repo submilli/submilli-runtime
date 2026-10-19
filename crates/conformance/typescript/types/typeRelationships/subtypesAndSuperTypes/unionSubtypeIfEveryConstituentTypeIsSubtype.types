@@ -1,0 +1,344 @@
+=== unionSubtypeIfEveryConstituentTypeIsSubtype.ts ===
+enum e {
+>e : e
+>  : ^
+
+    e1,
+>e1 : e.e1
+>   : ^^^^
+
+    e2
+>e2 : e.e2
+>   : ^^^^
+
+}
+
+// A union type U is a subtype of a type T if each type in U is a subtype of T
+/*pruned*/;
+
+
+
+
+interface I2 {
+>I2 : I2
+>   : ^^
+
+    [x: string]: number;
+>x : string
+>  : ^^^^^^
+
+    // S is union type and each constituent type of S is a subtype of T
+    foo: string | number; // error string is not subtype of number
+>foo : string | number
+>    : ^^^^^^^^^^^^^^^
+
+    foo2: e | number; // ok e and number both subtype of number
+>foo2 : number
+>     : ^^^^^^
+
+}
+
+interface I3 {
+>I3 : I3
+>   : ^^
+
+    [x: string]: string;
+>x : string
+>  : ^^^^^^
+
+    foo: string | number; // error numer is not subtype of string
+>foo : string | number
+>    : ^^^^^^^^^^^^^^^
+
+    foo2: e | number; // error e and number both not subtype of string
+>foo2 : number
+>     : ^^^^^^
+
+}
+
+// error cases
+interface I4 {
+>I4 : I4
+>   : ^^
+
+    [x: string]: boolean;
+>x : string
+>  : ^^^^^^
+
+    foo: string | number;
+>foo : string | number
+>    : ^^^^^^^^^^^^^^^
+
+    foo2: e | number;
+>foo2 : number
+>     : ^^^^^^
+
+}
+
+
+/*pruned*/;
+
+
+
+
+
+
+interface I6 {
+>I6 : I6
+>   : ^^
+
+    [x: string]: RegExp;
+>x : string
+>  : ^^^^^^
+
+    foo: string | number;
+>foo : string | number
+>    : ^^^^^^^^^^^^^^^
+
+    foo2: e | number;
+>foo2 : number
+>     : ^^^^^^
+
+}
+
+
+interface I7 {
+>I7 : I7
+>   : ^^
+
+    [x: string]: { bar: number };
+>x : string
+>  : ^^^^^^
+>bar : number
+>    : ^^^^^^
+
+    foo: string | number;
+>foo : string | number
+>    : ^^^^^^^^^^^^^^^
+
+    foo2: e | number;
+>foo2 : number
+>     : ^^^^^^
+
+}
+
+
+interface I8 {
+>I8 : I8
+>   : ^^
+
+    [x: string]: number[];
+>x : string
+>  : ^^^^^^
+
+    foo: string | number;
+>foo : string | number
+>    : ^^^^^^^^^^^^^^^
+
+    foo2: e | number;
+>foo2 : number
+>     : ^^^^^^
+
+}
+
+
+interface I9 {
+>I9 : I9
+>   : ^^
+
+    [x: string]: I8;
+>x : string
+>  : ^^^^^^
+
+    foo: string | number;
+>foo : string | number
+>    : ^^^^^^^^^^^^^^^
+
+    foo2: e | number;
+>foo2 : number
+>     : ^^^^^^
+
+}
+
+class A { foo: number; }
+>A : A
+>  : ^
+>foo : number
+>    : ^^^^^^
+
+interface I10 {
+>I10 : I10
+>    : ^^^
+
+    [x: string]: A;
+>x : string
+>  : ^^^^^^
+
+    foo: string | number;
+>foo : string | number
+>    : ^^^^^^^^^^^^^^^
+
+    foo2: e | number;
+>foo2 : number
+>     : ^^^^^^
+
+}
+
+class A2<T> { foo: T; }
+>A2 : A2<T>
+>   : ^^^^^
+>T : T
+>  : ^
+>foo : T
+>    : ^
+
+interface I11 {
+>I11 : I11
+>    : ^^^
+
+    [x: string]: A2<number>;
+>x : string
+>  : ^^^^^^
+
+    foo: string | number;
+>foo : string | number
+>    : ^^^^^^^^^^^^^^^
+
+    foo2: e | number;
+>foo2 : number
+>     : ^^^^^^
+
+}
+
+
+/*pruned*/;
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+enum E2 { A }
+>E2 : E2
+>   : ^^
+>A : E2.A
+>  : ^^^^
+
+interface I14 {
+>I14 : I14
+>    : ^^^
+
+    [x: string]: E2;
+>x : string
+>  : ^^^^^^
+
+    foo: string | number;
+>foo : string | number
+>    : ^^^^^^^^^^^^^^^
+
+    foo2: e | number;
+>foo2 : number
+>     : ^^^^^^
+
+}
+
+
+function f(): void { }
+>f : () => void
+>  : ^^^^^^^^^^
+
+/*pruned*/;
+
+
+/*pruned*/;
+
+
+
+
+
+
+class c { baz: string }
+>c : c
+>  : ^
+>baz : string
+>    : ^^^^^^
+
+/*pruned*/;
+
+
+/*pruned*/;
+
+
+
+
+
+
+interface I17<T> {
+>I17 : I17<T>
+>    : ^^^^^^
+>T : T
+>  : ^
+
+    [x: string]: T;
+>x : string
+>  : ^^^^^^
+
+    foo: string | number;
+>foo : string | number
+>    : ^^^^^^^^^^^^^^^
+
+    foo2: e | number;
+>foo2 : number
+>     : ^^^^^^
+
+}
+
+interface I19 {
+>I19 : I19
+>    : ^^^
+
+    [x: string]: Object;
+>x : string
+>  : ^^^^^^
+
+    foo: string | number;
+>foo : string | number
+>    : ^^^^^^^^^^^^^^^
+
+    foo2: e | number;
+>foo2 : number
+>     : ^^^^^^
+
+}
+
+
+interface I20 {
+>I20 : I20
+>    : ^^^
+
+    [x: string]: {};
+>x : string
+>  : ^^^^^^
+
+    foo: string | number;
+>foo : string | number
+>    : ^^^^^^^^^^^^^^^
+
+    foo2: e | number;
+>foo2 : number
+>     : ^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

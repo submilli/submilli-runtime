@@ -1,0 +1,28 @@
+=== parserArrowFunctionExpression5.ts ===
+(bar(x,
+>(bar(x,     () => {},     () => {}   ) ) : any
+>                                         : ^^^
+>bar(x,     () => {},     () => {}   ) : any
+>                                      : ^^^
+>bar : any
+>    : ^^^
+>x : any
+>  : ^^^
+
+    () => {},
+>() => {} : () => void
+>         : ^^^^^^^^^^
+
+    () => {}
+>() => {} : () => void
+>         : ^^^^^^^^^^
+
+  )
+)
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

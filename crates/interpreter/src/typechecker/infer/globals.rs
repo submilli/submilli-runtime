@@ -16,7 +16,7 @@ impl<'a> Inferer<'a> {
         // Assignments to module `let`s narrow them for later top-level
         // statements. Function bodies are inferred after this frame is gone.
         self.push_narrow_frame(super::narrowing::NarrowEnv::new());
-        for stmt_id in top_level {
+        for &stmt_id in &top_level {
             self.keep_only_global_narrowings();
             let stmt = self
                 .ast
@@ -34,7 +34,13 @@ impl<'a> Inferer<'a> {
                 // Static fields are module globals: their initializers
                 // evaluate here, in source order interleaved with `let`/`const` —
                 // the TS module-initialization order.
-                StmtKind::ClassDecl { name, members, .. } => {
+                StmtKind::ClassDecl {
+                    name,
+                    members,
+                    extends,
+                    ..
+                } => {
+                    self.reject_parent_declared_later(&name.name, extends.as_ref(), &top_level)?;
                     self.record_class_declaration_point(&name.name);
                     self.infer_static_field_globals(&name, &members)?;
                 }
@@ -52,11 +58,15 @@ impl<'a> Inferer<'a> {
                     let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
                     let (typed_value, value_ty) =
                         self.infer_expr_keeping_literals(value, hint.as_ref(), true)?;
-                    // Reassignable, so a fresh literal widens; see the block-scoped
-                    // `Let` arm in `stmt.rs`.
-                    let bound = match hint {
-                        Some(hint) => hint,
-                        None => self.widen_fresh_literals(typed_value, &value_ty)?,
+                    // Reassignable, so a fresh literal widens, except for an
+                    // annotated pattern's default; see the block-scoped `Let`
+                    // arm in `stmt.rs`.
+                    let annotated_default =
+                        self.annotated_default_binding_type(value, &value_ty)?;
+                    let bound = match (hint, annotated_default) {
+                        (Some(hint), _) => hint,
+                        (None, Some(component)) => component,
+                        (None, None) => self.widen_fresh_literals(typed_value, &value_ty)?,
                     };
                     let bound = self.pattern_binding_storage_type(value, bound)?;
                     let bound = self.global_storage_ty(&name.name, bound);
@@ -91,19 +101,7 @@ impl<'a> Inferer<'a> {
                         (value, typed_value),
                         value_ty,
                     )?;
-                    let assign_id = self
-                        .typed_ast
-                        .try_push_stmt(TypedStmt {
-                            kind: TypedStmtKind::AssignGlobal {
-                                ident: name,
-                                mangled,
-                                target_ty: bound,
-                                value: typed_value,
-                            },
-                            span,
-                        })
-                        .map_err(crate::typechecker::arena_failure)?;
-                    self.typed_ast.top_level_statements.push(assign_id);
+                    self.push_global_assignment(name, mangled, bound, typed_value, span)?;
                 }
                 StmtKind::Const {
                     name,
@@ -157,19 +155,22 @@ impl<'a> Inferer<'a> {
                         (value, typed_value),
                         value_ty,
                     )?;
-                    let assign_id = self
-                        .typed_ast
-                        .try_push_stmt(TypedStmt {
-                            kind: TypedStmtKind::AssignGlobal {
-                                ident: name,
-                                mangled,
-                                target_ty: bound,
-                                value: typed_value,
-                            },
-                            span,
-                        })
-                        .map_err(crate::typechecker::arena_failure)?;
-                    self.typed_ast.top_level_statements.push(assign_id);
+                    self.push_global_assignment(name, mangled, bound, typed_value, span)?;
+                }
+                StmtKind::ObjectRest {
+                    is_const,
+                    name,
+                    source,
+                    exclude,
+                    ty,
+                    doc,
+                } => {
+                    if self.reject_intrinsic_name(&name) {
+                        continue;
+                    }
+                    let (typed_value, bound) =
+                        self.infer_object_rest_value(source, &exclude, ty.as_ref(), span)?;
+                    self.bind_global_object_rest(name, is_const, bound, typed_value, doc, span)?;
                 }
                 _ => {
                     if let Some(typed_id) = self.infer_stmt(stmt_id)? {
@@ -179,6 +180,73 @@ impl<'a> Inferer<'a> {
             }
         }
         self.pop_narrow_frame()?;
+        Ok(())
+    }
+
+    /// Binds a module-level `{ ...rest }` as a module variable holding
+    /// `typed_value`, typed `bound`.
+    fn bind_global_object_rest(
+        &mut self,
+        name: crate::Ident,
+        is_const: bool,
+        bound: crate::Type,
+        typed_value: crate::ExprId,
+        doc: Option<crate::DocComment>,
+        span: crate::Span,
+    ) -> Result<(), CompilerFailure> {
+        let (value_kind, global_kind) = if is_const {
+            let kind = ValueKind::Const {
+                ty: bound.clone(),
+                doc: doc.clone(),
+            };
+            (kind, crate::GlobalKind::Const)
+        } else {
+            let kind = ValueKind::Let {
+                ty: bound.clone(),
+                doc: doc.clone(),
+            };
+            (kind, crate::GlobalKind::Let)
+        };
+        self.bind_top(&name, value_kind)?;
+        let mangled = self.mangle_top_symbol(&name.name)?;
+        if !is_const {
+            self.typed_ast
+                .rebindable_globals
+                .insert(mangled.clone(), name.name.clone());
+        }
+        self.add_typed_global(crate::TypedGlobal {
+            name: name.clone(),
+            mangled_name: mangled.clone(),
+            ty: bound.clone(),
+            kind: global_kind,
+            doc,
+            span,
+        })?;
+        self.push_global_assignment(name, mangled, bound, typed_value, span)
+    }
+
+    /// Runs a module variable's initializer in source order.
+    fn push_global_assignment(
+        &mut self,
+        ident: crate::Ident,
+        mangled: crate::MangledName,
+        target_ty: crate::Type,
+        value: crate::ExprId,
+        span: crate::Span,
+    ) -> Result<(), CompilerFailure> {
+        let assign_id = self
+            .typed_ast
+            .try_push_stmt(TypedStmt {
+                kind: TypedStmtKind::AssignGlobal {
+                    ident,
+                    mangled,
+                    target_ty,
+                    value,
+                },
+                span,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        self.typed_ast.top_level_statements.push(assign_id);
         Ok(())
     }
 
@@ -232,6 +300,65 @@ impl<'a> Inferer<'a> {
             .filter(|(name, _)| self.function_written_globals.contains(*name))
             .map(|(_, entry)| entry.mangled_name.clone())
             .collect()
+    }
+
+    /// `class Sub extends Later` where `Later` is declared further down this
+    /// module: the `extends` clause reads `Later` before its declaration has
+    /// run, which throws in JavaScript, and tsc rejects it (TS2449).
+    fn reject_parent_declared_later(
+        &mut self,
+        class_name: &str,
+        extends: Option<&crate::TypeAnnotation>,
+        top_level: &[crate::StmtId],
+    ) -> Result<(), CompilerFailure> {
+        let Some(annotation) = extends else {
+            return Ok(());
+        };
+        let parent = match self.types.lookup(class_name).map(|sym| &sym.kind) {
+            Some(crate::TypeKind::Class {
+                extends: Some(extends),
+                ..
+            }) => extends.parent.clone(),
+            _ => return Ok(()),
+        };
+        if self
+            .typed_ast
+            .class_declaration_points
+            .contains_key(&parent)
+        {
+            return Ok(());
+        }
+        let Some(parent_name) = self.later_class_declaration(&parent, top_level)? else {
+            return Ok(());
+        };
+        self.error(
+            annotation.span,
+            format!("class `{parent_name}` used before its declaration"),
+        );
+        Ok(())
+    }
+
+    /// The name of the class `mangled` when one of the module's `top_level`
+    /// statements declares it.
+    fn later_class_declaration(
+        &self,
+        mangled: &crate::MangledName,
+        top_level: &[crate::StmtId],
+    ) -> Result<Option<String>, CompilerFailure> {
+        for &stmt_id in top_level {
+            let stmt = self.ast.try_stmt(stmt_id).map_err(super::arena_failure)?;
+            let StmtKind::ClassDecl { name, .. } = &stmt.kind else {
+                continue;
+            };
+            let declares = self
+                .types
+                .lookup(&name.name)
+                .is_some_and(|sym| &sym.mangled_name == mangled);
+            if declares {
+                return Ok(Some(name.name.clone()));
+            }
+        }
+        Ok(None)
     }
 
     fn record_class_declaration_point(&mut self, class_name: &str) {

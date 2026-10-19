@@ -1,0 +1,2 @@
+line 7, 9, 10 type: by-design spec §Excluded-Features assigning properties onto a function is rejected, where tsc makes the function an expando object
+line 7, 10 extra: by-design spec §Excluded-Features assigning properties onto a function is rejected, where tsc makes the function an expando object

@@ -1816,3 +1816,68 @@ fn nightly_only_requested() -> bool {
         )
     })
 }
+
+#[test]
+fn package_variables_use_cli_bindings_and_lint_warns_for_missing_declarations() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_acme_util_package_with_source(
+        tmp.path(),
+        r#"
+        import { get } from "submilli:variables";
+        /** Read browser configuration. */
+        export function store(): string | undefined { return get("BROWSER_STORE_NAME"); }
+    "#,
+    );
+    let policy = r#"name: variable-test
+packages: ["@acme/util"]
+permissions:
+  '@acme/util':
+    - capability: variables.get
+      filter: name == "BROWSER_STORE_NAME"
+      action: allow
+"#;
+    let blueprint = tmp.path().join("blueprint.yaml");
+    write_blueprint(&blueprint, policy);
+    let lint = run_with_submilli_home(
+        &["blueprint".as_ref(), "lint".as_ref(), blueprint.as_os_str()],
+        tmp.path(),
+    );
+    assert!(lint.status.success(), "{}", stderr(&lint));
+    assert!(
+        stderr(&lint).contains(
+            "requires variable `BROWSER_STORE_NAME`, but `variables:` does not declare it"
+        )
+    );
+    write_blueprint(
+        &blueprint,
+        &format!(
+            "{policy}\nvariables:\n  USER_ID: {{ required: true }}\n  BROWSER_STORE_NAME: {{ alias: USER_ID, required: true }}\n"
+        ),
+    );
+    let lint = run_with_submilli_home(
+        &["blueprint".as_ref(), "lint".as_ref(), blueprint.as_os_str()],
+        tmp.path(),
+    );
+    assert!(lint.status.success(), "{}", stderr(&lint));
+    assert!(!stderr(&lint).contains("requires variable"));
+    let script = tmp.path().join("variables.ts");
+    fs::write(
+        &script,
+        r#"import { store } from "@acme/util";
+        function main(): string | undefined { return store(); }"#,
+    )
+    .unwrap();
+    let output = run_with_submilli_home(
+        &[
+            "run".as_ref(),
+            "--blueprint".as_ref(),
+            blueprint.as_os_str(),
+            "--var".as_ref(),
+            "USER_ID=alice".as_ref(),
+            script.as_os_str(),
+        ],
+        tmp.path(),
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "alice");
+}

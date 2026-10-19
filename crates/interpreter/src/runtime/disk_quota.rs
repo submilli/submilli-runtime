@@ -66,6 +66,12 @@ impl DiskQuota {
         self.used.load(Ordering::Acquire)
     }
 
+    /// Replace measured usage while the caller exclusively owns the volume and
+    /// no outstanding reservations can change this counter.
+    pub fn set_used(&self, bytes: u64) {
+        self.used.store(bytes, Ordering::Release);
+    }
+
     pub fn is_unmeasured(&self) -> bool {
         self.unmeasured
     }

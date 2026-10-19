@@ -1,0 +1,31 @@
+=== thisMethodCall.ts ===
+class C {
+>C : C
+>  : ^
+
+    method?(): void {}
+>method : (() => void) | undefined
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^
+
+    other(): void {
+>other : () => void
+>      : ^^^^^^^^^^
+
+        this.method?.();
+>this.method?.() : void | undefined
+>                : ^^^^^^^^^^^^^^^^
+>this.method : (() => void) | undefined
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^
+>this : this
+>     : ^^^^
+>method : (() => void) | undefined
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^
+
+    }
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

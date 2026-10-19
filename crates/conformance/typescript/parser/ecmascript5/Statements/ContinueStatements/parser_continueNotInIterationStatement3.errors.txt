@@ -1,0 +1,1 @@
+parser_continueNotInIterationStatement3.ts(4,5): error TS1104: A 'continue' statement can only be used within an enclosing iteration statement.

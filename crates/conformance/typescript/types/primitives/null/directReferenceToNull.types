@@ -1,0 +1,15 @@
+=== directReferenceToNull.ts ===
+let x: Null = null as unknown as (Null);
+>x : Null
+>  : ^^^^
+>null as unknown as (Null) : Null
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

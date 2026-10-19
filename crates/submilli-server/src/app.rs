@@ -30,6 +30,7 @@ use submilli_shared::embedding::{
 use submilli_shared::llm::{
     BlueprintLlmProvider, HttpModelDispatch, HttpModelDispatchError, ModelDispatch,
 };
+use submilli_shared::mcp_auth::{McpGrantStore, SecretStoreGrants};
 use submilli_shared::secret_store::SecretStore;
 use tokio::sync::{Mutex as AsyncMutex, Notify, RwLock as AsyncRwLock};
 use wasmtime::{Engine, Linker, Module};
@@ -40,18 +41,17 @@ use crate::blueprint::BlueprintStore;
 #[cfg(test)]
 use crate::blueprint::InMemoryBlueprintStore;
 use crate::config::{OAuthProvider, VolumeTable};
+use crate::domain::idempotent_request::ResponseRetention;
 use crate::graceful_shutdown::GracefulShutdownTracker;
 use crate::idempotency::Coordinator;
 
 use crate::mcp::{
     BlueprintServiceCache, McpCatalog, discover_all, discover_selected, new_service_cache,
 };
-use crate::session::{InMemorySessionStore, SessionStore};
 use crate::session_manager::{
     CapabilitySettings, DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS,
     DEFAULT_MAX_ALL_EXECUTIONS_TOKENS, DEFAULT_MAX_CONCURRENCY, DEFAULT_MAX_EMBEDDING_CONCURRENCY,
-    DEFAULT_TOTAL_SESSION_KV_BYTES, EmbeddingSettings, HttpClientFactory, LlmSettings,
-    SessionKvSettings, SessionManager,
+    EmbeddingSettings, HttpClientFactory, LlmSettings, SessionKvSettings, SessionManager,
 };
 use crate::session_store::DurableSessionStore;
 use submilli_shared::mcp::discovery::{DiscoveryAuth, DiscoveryError};
@@ -90,6 +90,12 @@ type EmbeddingDispatchFactory = Arc<
         + Sync,
 >;
 
+/// A pre-database secret-store directory, and the cipher that sealed it.
+struct LegacySecrets {
+    directory: PathBuf,
+    cipher: Option<Arc<submilli_shared::secret_store::SecretCipher>>,
+}
+
 struct AppStateInner {
     boot_lock: AsyncMutex<()>,
     booted: AtomicBool,
@@ -101,13 +107,14 @@ struct AppStateInner {
     engine: Engine,
     base_linker: Linker<StoreData>,
     runtime: RuntimeConfig,
-    sessions: Arc<dyn SessionStore>,
     blueprints: Arc<dyn BlueprintStore>,
     unit_of_work: Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory>,
     secret_store: Option<Arc<dyn SecretStore>>,
-    /// Mints/rotates `@mcp/<server>` OAuth access tokens. `Some` only when a
-    /// secret store is configured (OAuth refresh tokens have nowhere to live
-    /// otherwise).
+    /// A pre-database secret-store directory startup imports.
+    legacy_secrets: Option<LegacySecrets>,
+    /// Mints/rotates `@mcp/<server>` OAuth access tokens, and holds the grant
+    /// store. `Some` only when secrets are available (OAuth grants have nowhere
+    /// to live otherwise).
     oauth_tokens: Option<Arc<OAuthTokenManager>>,
     session_manager: Arc<SessionManager>,
     session_store: Arc<dyn DurableSessionStore>,
@@ -235,8 +242,19 @@ impl AppState {
         embedding_dispatch_factory: EmbeddingDispatchFactory,
     ) -> Result<Self> {
         let database = config.resolve_database().await?;
+        // An embedder's own store keeps its secrets; only the database imports.
+        let legacy_secrets_present = match (&config.secret_store_dir, &config.secret_store) {
+            (Some(directory), None) => {
+                crate::adapters::secret_store::legacy::LegacySecretDirectory::holds_sealed_files(
+                    directory,
+                )?
+            }
+            _ => false,
+        };
         if database.is_ephemeral()
-            && (config.blueprint_dir.is_some() || config.session_store_dir.is_some())
+            && (config.blueprint_dir.is_some()
+                || config.session_store_dir.is_some()
+                || legacy_secrets_present)
         {
             anyhow::bail!("directory import requires a persistent SQLite database");
         }
@@ -298,32 +316,17 @@ impl AppState {
                 Arc::new(ReqwestHttpClient::new(Arc::clone(&policy))) as Arc<dyn HttpClient>
             })
         };
-        let sessions = config
-            .sessions
-            .unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
-        let secret_store = config.secret_store;
         let mcp_oauth_providers = Arc::new(config.mcp_oauth_providers);
-        // Dedicated HTTP client (its own pool) for token-endpoint exchanges,
-        // governed by the same SSRF policy as script-issued requests.
-        let oauth_tokens = secret_store.clone().map(|store| {
-            let http = Arc::new(ReqwestHttpClient::new(Arc::clone(&policy))) as Arc<dyn HttpClient>;
-            Arc::new(OAuthTokenManager::new(
-                store,
-                http,
-                Arc::clone(&mcp_oauth_providers),
-            ))
-        });
         // Outbound HTTP for the OAuth handlers (discovery + code exchange), same
         // SSRF policy.
         let oauth_http =
             Arc::new(ReqwestHttpClient::new(Arc::clone(&policy))) as Arc<dyn HttpClient>;
 
-        // Both roots are created lazily on first use (`create_dir_all` makes
-        // parents), so construction never touches the filesystem — tests and
-        // read-only deploys stay happy.
-        let session_root = config
-            .session_storage_root
-            .unwrap_or_else(crate::config::default_session_storage_root);
+        // The only place the volume root and its directories are created: a
+        // configured root must already be there, the default one is made now.
+        let volume_root = crate::config::VolumeRoot::from_config(config.volume_root);
+        volume_root.prepare()?;
+        let session_root = volume_root.sessions_dir();
         let session_store_dir = config.session_store_dir;
         let session_store = Arc::new(crate::session_store::SqliteSessionStore::new(
             database.clone(),
@@ -332,23 +335,15 @@ impl AppState {
         ));
         let session_manager = Arc::new(
             SessionManager::new(
-                session_root.clone(),
-                config.ephemeral_storage_root,
-                Arc::new(crate::volumes::VolumeRegistry::new(
+                &volume_root,
+                Arc::new(crate::volumes::VolumeRegistry::in_root(
                     config.volumes,
-                    config
-                        .managed_volume_root
-                        .unwrap_or_else(crate::config::default_managed_volume_root),
+                    &volume_root,
                 )),
                 http_client_factory,
                 Arc::clone(&session_store),
                 CapabilitySettings {
-                    session_kv: SessionKvSettings::new(
-                        config.session_kv_limits,
-                        config
-                            .max_session_state_memory
-                            .unwrap_or(DEFAULT_TOTAL_SESSION_KV_BYTES),
-                    ),
+                    session_kv: SessionKvSettings::new(config.session_kv_limits),
                     llm: LlmSettings::new(
                         config.llm_limits,
                         config
@@ -370,10 +365,23 @@ impl AppState {
                 },
             )
             .with_cipher(config.session_cipher.clone())
+            .with_response_retention(ResponseRetention {
+                ttl: config
+                    .idempotency_retention
+                    .unwrap_or(ResponseRetention::default().ttl),
+                keep_last: config
+                    .idempotency_keep_last
+                    .unwrap_or(ResponseRetention::default().keep_last),
+            })
             .with_max_suspended_runs(
                 config
                     .max_suspended_runs
                     .unwrap_or(crate::runs::DEFAULT_MAX_SUSPENDED_RUNS),
+            )
+            .with_max_last_run_size(
+                config
+                    .max_last_run_size
+                    .unwrap_or(crate::session_manager::DEFAULT_MAX_LAST_RUN_BYTES),
             )
             .with_audit(audit.clone()),
         );
@@ -385,9 +393,52 @@ impl AppState {
                 session_root: session_root.clone(),
                 cipher: config.session_cipher.clone(),
             });
-        let idempotency = Arc::new(Coordinator::new(unit_of_work.clone(), generation));
+        let idempotency = Arc::new(
+            Coordinator::new(unit_of_work.clone(), generation)
+                .with_last_runs(session_manager.last_runs().clone()),
+        );
 
-        Ok(Self {
+        // An embedder's store holds both secrets and grants, as the CLI's does,
+        // and keeps its own; otherwise both live in the database, sealed with
+        // the session cipher, which imports the pre-database directory.
+        let (secret_store, mcp_grants, legacy_directory) = match config.secret_store {
+            Some(store) => (
+                Some(Arc::clone(&store)),
+                Some(Arc::new(SecretStoreGrants::new(store)) as Arc<dyn McpGrantStore>),
+                None,
+            ),
+            None if config.session_cipher.is_some() => (
+                Some(
+                    Arc::new(crate::adapters::secret_store::DatabaseSecretStore::new(
+                        unit_of_work.clone(),
+                    )) as Arc<dyn SecretStore>,
+                ),
+                Some(
+                    Arc::new(crate::adapters::mcp_grant_store::DatabaseGrantStore::new(
+                        unit_of_work.clone(),
+                    )) as Arc<dyn McpGrantStore>,
+                ),
+                config.secret_store_dir,
+            ),
+            None => (None, None, config.secret_store_dir),
+        };
+        // Dedicated HTTP client (its own pool) for token-endpoint exchanges,
+        // governed by the same SSRF policy as script-issued requests.
+        let oauth_tokens = mcp_grants.map(|grants| {
+            let http = Arc::new(ReqwestHttpClient::new(Arc::clone(&policy))) as Arc<dyn HttpClient>;
+            Arc::new(OAuthTokenManager::new(
+                grants,
+                secret_store.clone(),
+                http,
+                Arc::clone(&mcp_oauth_providers),
+            ))
+        });
+        let legacy_secrets = legacy_directory.map(|directory| LegacySecrets {
+            directory,
+            cipher: config.session_cipher.clone(),
+        });
+
+        let state = Self {
             inner: Arc::new(AppStateInner {
                 boot_lock: AsyncMutex::new(()),
                 booted: AtomicBool::new(false),
@@ -400,10 +451,10 @@ impl AppState {
                 engine,
                 base_linker,
                 runtime,
-                sessions,
                 blueprints,
                 unit_of_work,
                 secret_store,
+                legacy_secrets,
                 oauth_tokens,
                 session_manager,
                 session_store,
@@ -440,7 +491,8 @@ impl AppState {
                 pre_execute: config.pre_execute,
                 blueprint_tags: AsyncRwLock::new(HashMap::new()),
             }),
-        })
+        };
+        Ok(state)
     }
 
     /// Rehydrate persisted sessions and sweep orphan directories. Await once
@@ -454,15 +506,71 @@ impl AppState {
         if self.inner.booted.load(Ordering::Acquire) {
             return Ok(());
         }
+        self.session_manager()
+            .set_finalizer_executor(Arc::new(AppFinalizerExecutor(Arc::downgrade(&self.inner))));
         self.inner.session_manager.boot().await?;
+        self.import_legacy_secrets().await?;
         self.inner.idempotency.recover().await.map_err(|error| {
             crate::session_manager::BootError::Idempotency(crate::blueprint::StoreError::Io(
                 error.to_string(),
             ))
         })?;
+        // After recovery, which may forget last runs, and before any run can
+        // stage a spill file.
+        self.last_runs()
+            .sweep()
+            .await
+            .map_err(crate::session_manager::BootError::LastRuns)?;
         self.inner.session_manager.volume_registry().prepare();
         self.start_reaper();
         self.inner.booted.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// Bring a pre-database secret-store directory into the database, once,
+    /// and say while its archive still holds the old values.
+    async fn import_legacy_secrets(&self) -> Result<(), crate::session_manager::BootError> {
+        let (Some(legacy), Some(database)) = (&self.inner.legacy_secrets, &self.inner.database)
+        else {
+            return Ok(());
+        };
+        let directory = crate::adapters::secret_store::legacy::LegacySecretDirectory::new(
+            legacy.directory.clone(),
+            legacy.cipher.clone(),
+            database.path().to_path_buf(),
+        );
+        let imported = crate::application::secrets::import::ImportSecrets::new(
+            self.inner.unit_of_work.as_ref(),
+            &directory,
+        )
+        .execute()
+        .await
+        .map_err(crate::session_manager::BootError::Secrets)?;
+        if imported != Default::default() {
+            tracing::info!(
+                secrets = imported.secrets,
+                grants = imported.grants,
+                directory = %legacy.directory.display(),
+                "imported the secret-store directory into the database and archived it"
+            );
+        }
+        for skipped in &imported.skipped {
+            tracing::warn!(
+                entry = %skipped.entry,
+                reason = %skipped.reason,
+                "a secret-store entry was not imported; it remains in the archive"
+            );
+        }
+        for archive in crate::adapters::secret_store::legacy::LegacySecretDirectory::archives(
+            &legacy.directory,
+        ) {
+            tracing::warn!(
+                archive = %archive.display(),
+                "an archived secret store still holds the values it had when imported, so \
+                 secrets deleted and MCP grants revoked since can be recovered from it with \
+                 the secret-store key; remove it once a rollback is no longer needed"
+            );
+        }
         Ok(())
     }
 
@@ -476,6 +584,7 @@ impl AppState {
         }
         if !self.inner.booted.load(Ordering::Acquire) {
             self.inner.session_manager.validate_stores().await?;
+            self.import_legacy_secrets().await?;
             self.start_reaper();
         }
         self.inner.router_ready.store(true, Ordering::Release);
@@ -589,8 +698,8 @@ impl AppState {
         &self.inner.runtime
     }
 
-    pub(crate) fn sessions(&self) -> &Arc<dyn SessionStore> {
-        &self.inner.sessions
+    pub(crate) fn last_runs(&self) -> &Arc<crate::adapters::session::last_run::LastRuns> {
+        self.inner.session_manager.last_runs()
     }
 
     /// The blueprint a run is decided under and its version tag, read together:
@@ -1029,7 +1138,7 @@ impl AppState {
         &self,
         name: &str,
     ) -> Result<bool, crate::application::blueprints::remove::RemoveBlueprintError> {
-        crate::application::blueprints::remove::RemoveBlueprint::new(
+        let removed = crate::application::blueprints::remove::RemoveBlueprint::new(
             self.inner.unit_of_work.as_ref(),
             &crate::adapters::session::audit_log::SessionAuditLog(Some(self.audit())),
             self,
@@ -1037,7 +1146,18 @@ impl AppState {
             self,
         )
         .execute(name)
-        .await
+        .await?;
+        if removed {
+            self.session_manager()
+                .process_pending_cleanup()
+                .await
+                .map_err(|error| {
+                    crate::application::blueprints::remove::RemoveBlueprintError::Storage(
+                        crate::application::error::StoreError::Io(error.to_string()),
+                    )
+                })?;
+        }
+        Ok(removed)
     }
 }
 
@@ -1213,6 +1333,11 @@ fn routes(auth: Arc<AuthConfig>, audit: crate::audit::AuditLog) -> Routes {
         .route("/v1/execute", Access::User, post(execute::handle))
         .route("/v1/sessions", Access::User, post(sessions::create))
         .route(
+            "/v1/sessions/{session_id}/finalizers",
+            Access::User,
+            get(sessions::finalizers),
+        )
+        .route(
             "/v1/sessions/{session_id}/execute",
             Access::User,
             post(sessions::execute),
@@ -1307,6 +1432,13 @@ fn routes(auth: Arc<AuthConfig>, audit: crate::audit::AuditLog) -> Routes {
         // Read-only, and names only: the host directory behind a volume name
         // never crosses this boundary.
         .route("/v1/volumes", Access::Admin, get(volumes::list))
+        // Outside `/v1/mcp/{blueprint}/…`, so no blueprint name can shadow them.
+        .route("/v1/mcp-grants", Access::Admin, get(mcp_auth::list_grants))
+        .route(
+            "/v1/mcp-grants/{blueprint}/{server}",
+            Access::Admin,
+            delete(mcp_auth::delete_grant),
+        )
         .route(
             "/v1/mcp/{blueprint}/auth-status",
             Access::Admin,
@@ -1493,10 +1625,26 @@ mod tests {
     };
 
     #[tokio::test]
+    async fn a_configured_volume_root_that_is_missing_fails_startup() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("unmounted");
+        let Err(err) = AppState::new(ServerConfig {
+            volume_root: Some(root.clone()),
+            ..crate::config::test_config()
+        })
+        .await
+        else {
+            panic!("a missing volume root was accepted");
+        };
+        assert!(err.to_string().contains("Mount it or create it"), "{err}");
+        assert!(!root.exists());
+    }
+
+    #[tokio::test]
     async fn failed_boot_does_not_start_the_reaper() {
         let root = tempfile::tempdir().unwrap();
         let state = AppState::new(ServerConfig {
-            session_storage_root: Some(root.path().to_path_buf()),
+            volume_root: Some(root.path().to_path_buf()),
             ..crate::config::test_config()
         })
         .await
@@ -1546,7 +1694,7 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let state = AppState::new(ServerConfig {
-            session_storage_root: Some(root.path().to_path_buf()),
+            volume_root: Some(root.path().to_path_buf()),
             ..crate::config::test_config()
         })
         .await
@@ -1574,7 +1722,7 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let state = AppState::new(ServerConfig {
-            session_storage_root: Some(root.path().to_path_buf()),
+            volume_root: Some(root.path().to_path_buf()),
             ..crate::config::test_config()
         })
         .await
@@ -1725,3 +1873,18 @@ mod blueprint_mutation_tests;
 
 #[cfg(test)]
 mod local_apply_tests;
+
+struct AppFinalizerExecutor(std::sync::Weak<AppStateInner>);
+#[async_trait::async_trait]
+impl crate::application::sessions::finalization::FinalizerExecutor for AppFinalizerExecutor {
+    async fn execute(
+        &self,
+        invocation: &crate::domain::finalization::FinalizerInvocation,
+    ) -> Result<(), crate::domain::finalization::FinalizerFailure> {
+        let inner = self
+            .0
+            .upgrade()
+            .ok_or(crate::domain::finalization::FinalizerFailure::AuthorityUnavailable)?;
+        crate::finalizers::execute(&AppState { inner }, invocation).await
+    }
+}

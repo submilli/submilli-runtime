@@ -95,3 +95,10 @@ version = "0.1.0"
 description = "Use TypeSafe's Jev model when code needs language understanding: classify or route requests, rank relevance, select values from known candidates, and verify claims against supplied evidence. Ask yes/no, choice, or rubric-based scoring questions and get typed answers with probabilities. Batch independent judgments over shared state, then let code decide what to do."
 keywords = ["typesafe", "jev", "classification", "routing", "ranking", "relevance", "extraction", "verification", "agents"]
 path = "packages/typesafe"
+
+[[package]]
+name = "@submilli/scrapecreators"
+version = "0.1.0"
+description = "Typed ScrapeCreators public-data clients for Reddit, YouTube, LinkedIn, GitHub, and Twitter/X."
+keywords = ["scrapecreators", "research", "reddit", "youtube", "linkedin", "github", "twitter"]
+path = "packages/scrapecreators"

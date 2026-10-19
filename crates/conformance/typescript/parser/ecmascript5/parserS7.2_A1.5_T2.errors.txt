@@ -1,0 +1,1 @@
+parserS7.2_A1.5_T2.ts(21,3): error TS2552: Cannot find name '$ERROR'. Did you mean 'Error'?

@@ -1,7 +1,8 @@
 //! Atomic archive moves must not replace directories written by another importer.
 
+use std::fs::{self, File};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn move_directory(source: &Path, destination: &Path) -> io::Result<()> {
@@ -66,4 +67,45 @@ pub(crate) fn move_directory(_source: &Path, _destination: &Path) -> io::Result<
         io::ErrorKind::Unsupported,
         "exclusive archive moves are unsupported on this platform",
     ))
+}
+
+// Resolve each existing component so relative paths, parent components, and
+// symlink ancestors cannot hide active storage beneath the import directory.
+pub(crate) fn resolved_path(path: &Path) -> io::Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut resolved = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            component => {
+                resolved.push(component.as_os_str());
+                match fs::canonicalize(&resolved) {
+                    Ok(canonical) => resolved = canonical,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+/// Fsync `path` and every directory above it, so a completed move survives a crash.
+pub(crate) fn sync_directory_ancestry(path: &Path) -> io::Result<()> {
+    let absolute = fs::canonicalize(path)?;
+    let mut current = Some(absolute.as_path());
+    while let Some(directory) = current {
+        File::open(directory).and_then(|file| file.sync_all())?;
+        current = directory
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty());
+    }
+    Ok(())
 }

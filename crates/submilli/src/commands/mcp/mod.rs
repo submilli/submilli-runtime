@@ -17,6 +17,7 @@ use submilli_shared::mcp_auth::AuthState;
 mod auth_status;
 mod authenticate;
 mod deauthenticate;
+mod grants;
 mod provider;
 pub(crate) mod provider_config;
 
@@ -31,6 +32,8 @@ pub enum McpCmd {
     /// Show each declared MCP server's authentication state.
     #[command(name = "auth-status")]
     AuthStatus(auth_status::Args),
+    /// List the MCP OAuth grants stored locally, one per blueprint and server.
+    Grants(grants::Args),
     /// Manage local OAuth provider apps (`~/.submilli/mcp_oauth.yaml`) — the
     /// client id / secret used to authenticate confidential OAuth servers.
     #[command(subcommand)]
@@ -42,6 +45,7 @@ pub fn execute(cmd: McpCmd) -> Result<ExitCode> {
         McpCmd::Authenticate(args) => authenticate::execute(args),
         McpCmd::Deauthenticate(args) => deauthenticate::execute(args),
         McpCmd::AuthStatus(args) => auth_status::execute(args),
+        McpCmd::Grants(args) => grants::execute(args),
         McpCmd::Provider(cmd) => provider::execute(cmd),
     }
 }

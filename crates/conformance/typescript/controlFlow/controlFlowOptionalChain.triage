@@ -1,0 +1,4 @@
+line 83, 98, 257, 263, 278, 284, 299, 305, 365, 371, 498, 558 type: artifact tsc types the member name in an optional chain as the chain's result
+line 537, 538 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it
+line 174, 177, 180, 183, 186, 189, 195, 198, 201, 204, 207, 210, 237, 240, 243, 264, 306, 312, 321, 324, 333, 393, 396, 399, 402, 408, 411, 414, 417, 423, 432, 435, 444, 453, 456, 465, 468, 500, 503, 517, 520 type: bug SUB-1847 testing an optional chain's result doesn't narrow its root (or the chained member) to what the test proves
+line 174, 177, 180, 183, 186, 189, 195, 198, 201, 204, 207, 210, 237, 240, 243, 264, 306, 312, 321, 324, 333, 393, 396, 399, 402, 408, 411, 414, 417, 423, 432, 435, 444, 453, 456, 465, 468, 517, 520 extra: bug SUB-1847 testing an optional chain's result doesn't narrow its root, so the read still sees `null` or `undefined`

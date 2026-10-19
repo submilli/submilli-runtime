@@ -1,0 +1,457 @@
+{
+ "session": "5e550000-0000-4000-8000-000000000005",
+ "events": [
+  {
+   "format": 1,
+   "session_seq": 1,
+   "event_id": "chat-5e550000-0000-4000-8000-000000000005-chat-0",
+   "position": {
+    "at_micros": 1791898020000100,
+    "rank": 0
+   },
+   "body": {
+    "chat": {
+     "turn": "chat-0",
+     "role": "user",
+     "text": "Is the status service up?",
+     "agent": "chat"
+    }
+   }
+  },
+  {
+   "format": 1,
+   "session_seq": 2,
+   "event_id": "chat-5e550000-0000-4000-8000-000000000005-chat-1",
+   "position": {
+    "at_micros": 1791898020000200,
+    "rank": 0
+   },
+   "body": {
+    "chat": {
+     "turn": "chat-1",
+     "role": "assistant",
+     "text": "Checking.",
+     "agent": "chat",
+     "model": "claude-sonnet-5-5"
+    }
+   }
+  },
+  {
+   "format": 1,
+   "session_seq": 3,
+   "event_id": "00000000-0000-4000-8000-000000000021-1",
+   "position": {
+    "at_micros": 1791898020000300,
+    "rank": 0
+   },
+   "body": {
+    "event": {
+     "schema": 1,
+     "event_id": "00000000-0000-4000-8000-000000000021-1",
+     "seq": 1,
+     "at_micros": 1791898020000300,
+     "session_id": "5e550000-0000-4000-8000-000000000005",
+     "kind": "tool-call",
+     "tool": "submilli__search",
+     "ok": true,
+     "result_bytes": 2048,
+     "wall_ms": 12
+    }
+   }
+  },
+  {
+   "format": 1,
+   "session_seq": 4,
+   "event_id": "00000000-0000-4000-8000-000000000021-2",
+   "position": {
+    "at_micros": 1791898020000400,
+    "run": 10,
+    "rank": 0
+   },
+   "run": 10,
+   "body": {
+    "event": {
+     "schema": 1,
+     "event_id": "00000000-0000-4000-8000-000000000021-2",
+     "seq": 2,
+     "at_micros": 1791898020000400,
+     "session_id": "5e550000-0000-4000-8000-000000000005",
+     "run_id": "00000000-0000-4000-8000-000000000020",
+     "kind": "run-started",
+     "label": "chat",
+     "entry": "mcp",
+     "blueprint": "billing"
+    }
+   }
+  },
+  {
+   "format": 1,
+   "session_seq": 5,
+   "event_id": "00000000-0000-4000-8000-000000000021-3",
+   "position": {
+    "at_micros": 1791898020000410,
+    "run": 10,
+    "call_index": 0,
+    "rank": 0
+   },
+   "run": 10,
+   "body": {
+    "event": {
+     "schema": 1,
+     "event_id": "00000000-0000-4000-8000-000000000021-3",
+     "seq": 3,
+     "at_micros": 1791898020000410,
+     "session_id": "5e550000-0000-4000-8000-000000000005",
+     "run_id": "00000000-0000-4000-8000-000000000020",
+     "kind": "call-started",
+     "call_index": 0,
+     "caller": "main",
+     "capability": "http.get",
+     "line": {
+      "line": 3,
+      "column": 12
+     }
+    }
+   }
+  },
+  {
+   "format": 1,
+   "session_seq": 6,
+   "event_id": "00000000-0000-4000-8000-000000000021-4",
+   "position": {
+    "at_micros": 1791898020000410,
+    "run": 10,
+    "call_index": 0,
+    "rank": 1
+   },
+   "run": 10,
+   "decision": 1,
+   "body": {
+    "event": {
+     "schema": 1,
+     "event_id": "00000000-0000-4000-8000-000000000021-4",
+     "seq": 4,
+     "at_micros": 1791898020000410,
+     "session_id": "5e550000-0000-4000-8000-000000000005",
+     "run_id": "00000000-0000-4000-8000-000000000020",
+     "kind": "decision",
+     "record": {
+      "call_index": 0,
+      "caller": "main",
+      "capability": "http.get",
+      "action": "allow"
+     }
+    }
+   }
+  },
+  {
+   "format": 1,
+   "session_seq": 7,
+   "event_id": "00000000-0000-4000-8000-000000000021-5",
+   "position": {
+    "at_micros": 1791898020000420,
+    "run": 10,
+    "call_index": 0,
+    "rank": 2
+   },
+   "run": 10,
+   "body": {
+    "event": {
+     "schema": 1,
+     "event_id": "00000000-0000-4000-8000-000000000021-5",
+     "seq": 5,
+     "at_micros": 1791898020000420,
+     "session_id": "5e550000-0000-4000-8000-000000000005",
+     "run_id": "00000000-0000-4000-8000-000000000020",
+     "kind": "call-finished",
+     "call_index": 0,
+     "capability": "http.get",
+     "outcome": "returned",
+     "result_bytes": 1200
+    }
+   }
+  },
+  {
+   "format": 1,
+   "session_seq": 8,
+   "event_id": "00000000-0000-4000-8000-000000000021-6",
+   "position": {
+    "at_micros": 1791898020000430,
+    "run": 10,
+    "call_index": 1,
+    "rank": 0
+   },
+   "run": 10,
+   "body": {
+    "event": {
+     "schema": 1,
+     "event_id": "00000000-0000-4000-8000-000000000021-6",
+     "seq": 6,
+     "at_micros": 1791898020000430,
+     "session_id": "5e550000-0000-4000-8000-000000000005",
+     "run_id": "00000000-0000-4000-8000-000000000020",
+     "kind": "call-started",
+     "call_index": 1,
+     "caller": "main",
+     "capability": "fs.read"
+    }
+   }
+  },
+  {
+   "format": 1,
+   "session_seq": 9,
+   "event_id": "00000000-0000-4000-8000-000000000021-7",
+   "position": {
+    "at_micros": 1791898020000430,
+    "run": 10,
+    "call_index": 1,
+    "rank": 1
+   },
+   "run": 10,
+   "decision": 2,
+   "body": {
+    "event": {
+     "schema": 1,
+     "event_id": "00000000-0000-4000-8000-000000000021-7",
+     "seq": 7,
+     "at_micros": 1791898020000430,
+     "session_id": "5e550000-0000-4000-8000-000000000005",
+     "run_id": "00000000-0000-4000-8000-000000000020",
+     "kind": "decision",
+     "record": {
+      "call_index": 1,
+      "caller": "main",
+      "capability": "fs.read",
+      "action": "allow"
+     }
+    }
+   }
+  },
+  {
+   "format": 1,
+   "session_seq": 10,
+   "event_id": "00000000-0000-4000-8000-000000000021-8",
+   "position": {
+    "at_micros": 1791898020000440,
+    "run": 10,
+    "call_index": 1,
+    "rank": 2
+   },
+   "run": 10,
+   "body": {
+    "event": {
+     "schema": 1,
+     "event_id": "00000000-0000-4000-8000-000000000021-8",
+     "seq": 8,
+     "at_micros": 1791898020000440,
+     "session_id": "5e550000-0000-4000-8000-000000000005",
+     "run_id": "00000000-0000-4000-8000-000000000020",
+     "kind": "call-finished",
+     "call_index": 1,
+     "capability": "fs.read",
+     "outcome": "returned",
+     "result_bytes": 500
+    }
+   }
+  },
+  {
+   "format": 1,
+   "session_seq": 11,
+   "event_id": "00000000-0000-4000-8000-000000000021-9",
+   "position": {
+    "at_micros": 1791898020000450,
+    "run": 10,
+    "rank": 3
+   },
+   "run": 10,
+   "body": {
+    "event": {
+     "schema": 1,
+     "event_id": "00000000-0000-4000-8000-000000000021-9",
+     "seq": 9,
+     "at_micros": 1791898020000450,
+     "session_id": "5e550000-0000-4000-8000-000000000005",
+     "run_id": "00000000-0000-4000-8000-000000000020",
+     "kind": "run-finished",
+     "dispatched": true,
+     "wall_ms": 50,
+     "console_bytes": 0,
+     "events_dropped": 0
+    }
+   }
+  },
+  {
+   "format": 1,
+   "session_seq": 12,
+   "event_id": "00000000-0000-4000-8000-000000000021-10",
+   "position": {
+    "at_micros": 1791898020000460,
+    "run": 10,
+    "rank": 3
+   },
+   "run": 10,
+   "body": {
+    "event": {
+     "schema": 1,
+     "event_id": "00000000-0000-4000-8000-000000000021-10",
+     "seq": 10,
+     "at_micros": 1791898020000460,
+     "session_id": "5e550000-0000-4000-8000-000000000005",
+     "run_id": "00000000-0000-4000-8000-000000000020",
+     "kind": "returned",
+     "bytes": 40
+    }
+   }
+  },
+  {
+   "format": 1,
+   "session_seq": 13,
+   "event_id": "00000000-0000-4000-8000-000000000021-11",
+   "position": {
+    "at_micros": 1791898020000470,
+    "rank": 0
+   },
+   "body": {
+    "event": {
+     "schema": 1,
+     "event_id": "00000000-0000-4000-8000-000000000021-11",
+     "seq": 11,
+     "at_micros": 1791898020000470,
+     "session_id": "5e550000-0000-4000-8000-000000000005",
+     "kind": "tool-call",
+     "tool": "submilli__typescript__execute",
+     "ok": true,
+     "result_bytes": 90,
+     "wall_ms": 70
+    }
+   }
+  },
+  {
+   "format": 1,
+   "session_seq": 14,
+   "event_id": "chat-5e550000-0000-4000-8000-000000000005-chat-replaced",
+   "position": {
+    "at_micros": 1791898020000480,
+    "rank": 0
+   },
+   "body": {
+    "chat-replaced": {
+     "turns": [
+      "chat-1"
+     ]
+    }
+   }
+  },
+  {
+   "format": 1,
+   "session_seq": 15,
+   "event_id": "chat-chat-chat-1-complete",
+   "position": {
+    "at_micros": 1791898020000250,
+    "rank": 0
+   },
+   "body": {
+    "chat": {
+     "turn": "chat-1",
+     "role": "assistant",
+     "text": "Checking the status page.",
+     "agent": "chat",
+     "model": "claude-sonnet-5-5"
+    }
+   }
+  },
+  {
+   "format": 1,
+   "session_seq": 16,
+   "event_id": "chat-5e550000-0000-4000-8000-000000000005-chat-2",
+   "position": {
+    "at_micros": 1791898020000490,
+    "rank": 0
+   },
+   "body": {
+    "chat": {
+     "turn": "chat-2",
+     "role": "assistant",
+     "text": "The status service is up.",
+     "agent": "chat",
+     "model": "claude-sonnet-5-5"
+    }
+   }
+  }
+ ],
+ "show": {
+  "kind": "run",
+  "run": 10,
+  "page": "http://127.0.0.1:47100/#run=10",
+  "blueprint_version": "2",
+  "source": "chat",
+  "decision_refs": [
+   "10.1",
+   "10.2"
+  ],
+  "blueprint": "billing",
+  "entry": "mcp",
+  "started_at_micros": 1791898020000400,
+  "started_at": "2026-10-13T13:27:00Z",
+  "wall_ms": 50,
+  "outcome": {
+   "kind": "completed"
+  },
+  "denied": [],
+  "session": "5e550000-0000-4000-8000-000000000005",
+  "variables": {
+   "customerId": "cus_northwind"
+  },
+  "reruns": [],
+  "decision_count": 2,
+  "decisions": [
+   {
+    "refs": [
+     "10.1"
+    ],
+    "outcome": "allow",
+    "caller": "main",
+    "capability": "http.get",
+    "decided_by": "by `local-status`",
+    "filtered": false
+   },
+   {
+    "refs": [
+     "10.2"
+    ],
+    "outcome": "allow",
+    "caller": "main",
+    "capability": "fs.read",
+    "decided_by": "by `local-status`",
+    "filtered": false
+   }
+  ],
+  "decisions_dropped": 0,
+  "log_truncated": false,
+  "calls": {
+   "count": 2,
+   "returned": 2,
+   "failed": 0,
+   "unfinished": 0,
+   "with_bodies": 0
+  },
+  "payloads_included": false,
+  "program_recorded": true,
+  "program_included": true,
+  "next": [
+   "submilli playground explain 10.1"
+  ],
+  "untrusted": {
+   "contexts": {
+    "10.1": {
+     "host": "127.0.0.1"
+    },
+    "10.2": {
+     "path": "/billing/status.json"
+    }
+   },
+   "result": "up",
+   "program": "function main(): string {\n    const status = readStatus();\n    return http.get(\"http://127.0.0.1/status\").text;\n}\n"
+  }
+ }
+}

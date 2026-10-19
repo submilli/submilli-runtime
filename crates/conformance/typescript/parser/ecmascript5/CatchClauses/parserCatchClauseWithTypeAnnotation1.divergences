@@ -1,0 +1,4 @@
+types: 0 of 2 tsc entries compared, 0 differ
+
+errors:
+line 3: tsc TS1196: Catch clause variable type annotation must be 'any' or 'unknown' if specified. (we accept)

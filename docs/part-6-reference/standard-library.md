@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "2205a17b6f7ffe1bf404c00c1ef204a12d01aaa88a90e96d933928f9322d999c"
+  contentHash: "1b64aea0f6b4014066c678e0dada2ecd41a554cf9c4e2c70c6dda65e46cf4ccb"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -30,6 +30,7 @@ and `Temporal`, are on [Built-ins](/docs/reference/built-ins).
 | `submilli:crypto` | SHA-256, SHA-512, HMAC-SHA-256, random bytes | Nothing |
 | `submilli:url` | URL and query-string parsing and building | Nothing |
 | `submilli:uuid` | UUID v4 and v7 | Nothing |
+| `submilli:variables` | Immutable session configuration, for Packages | `variables.get` |
 | `submilli:secrets` | A declared secret's value, for Packages | `secrets.get` |
 | `submilli:security` | `check`, for Packages | The capability it names |
 | `submilli:test` | `label` and `expectException`, for test files | Nothing |
@@ -198,6 +199,118 @@ whether the Package's caller may perform `capability` with the fields in
 `label(description)` from `submilli:test` starts a named test, and
 `expectException(fn, errorType?)` checks that `fn` throws
 ([Write tests](/docs/packages/write-tests)).
+
+## Package configuration
+
+`submilli:variables.get(name: string): string | undefined` reads the session's
+resolved configuration under the `variables.get { name }` capability.
+
+Every read checks the Package's permission before looking up a value. An
+allowed missing name returns `undefined`; a denied name throws
+`PermissionDeniedError` whether it exists or not. Main-module reads are always
+denied, even under `default: allow`. There is no enumeration or write API.
+
+A browser Package can use this fragment internally:
+
+```typescript
+import * as variables from "submilli:variables";
+
+const storeName = variables.get("BROWSER_STORE_NAME");
+if (storeName === undefined) {
+  throw new Error("BROWSER_STORE_NAME is not configured");
+}
+```
+
+Grant the Package `variables.get` with `name == "BROWSER_STORE_NAME"`.
+[Variable declarations](/docs/reference/blueprint-file#variables) can alias this
+name to the session's `USER_ID`. The grant is checked against
+`BROWSER_STORE_NAME`; it does not grant access to `USER_ID`. A configured store
+name grants no access to that store: the browser service must authenticate the
+caller and authorize the resource independently.
+
+Variables hold non-secret configuration and remain fixed for the session.
+Use secrets for credentials and `submilli:session` for mutable key-value state.
+
+## Durable package finalizers
+
+Packages can register cleanup for remote resources owned by a runtime session:
+
+```typescript
+import * as session from "submilli:session";
+import * as http from "submilli:http";
+
+export interface ResourceHandle { id: string; url: string; }
+
+export function retain(handle: ResourceHandle): void {
+    session.registerFinalizer(handle.id, handle);
+}
+
+export function finalizer(key: string, value: ResourceHandle): void {
+    const response = http.delete(value.url);
+    if (response.status !== 204 && response.status !== 404) {
+        throw new Error("Resource cleanup failed");
+    }
+}
+```
+
+The package root exports one fixed, nongeneric
+`finalizer(key: string, value: T): void`. Registration arguments must match
+`T` and satisfy the same serialization rules as session KV values.
+
+| Function | Behavior |
+| --- | --- |
+| `registerFinalizer(key: string, value: unknown): void` | Durably register this package's cleanup arguments and package versions. |
+| `unregisterFinalizer(key: string): void` | Remove this package's registration after explicit remote release; absent keys are harmless. |
+
+Both operations require the package-only `session.finalize { key }` capability.
+The engine namespaces keys by session and package identity. Packages supply only
+the local key; the finalizer receives that original key. Identical keys in
+different packages do not conflict. Duplicate live keys within one package/session
+are rejected, including across package versions.
+
+Recorded test runs, including their live-call modes, refuse registration with a
+catchable error because replay cannot durably own resources. Package code must
+compensate for that refusal through its normal immediate-cleanup path. Replay
+unregistration validates the local key and treats it as absent.
+
+A successful registration survives separate executions and server restart.
+Explicit close, idle expiry, and administrative termination wait for cleanup
+attempts. Registration concurrent with termination either commits before closure
+or fails; closure stops new resource work and drains existing executions before
+finalization. Each attempt has independent fuel/memory limits and a finite timeout
+(the configured execution timeout, or 30 seconds when normal runs have none).
+
+Throws, traps, denied permissions, and exhausted budgets record terminal failure
+without automatic retry. Other registrations still run. Recovery attempts pending
+or interrupted work, so a crash after a remote effect but before its outcome commits
+can repeat that effect. Finalizers must be idempotent.
+
+Cleanup uses current blueprint permissions and credentials and loads code from
+the installed package store. Registration records the package and dependency
+versions, without retaining their code. If a version changes or a package is
+unavailable, cleanup fails terminally; upgrades may therefore lose cleanup.
+Argument data is released when its registration finishes.
+
+Registration storage has its own quota using the configured session KV limits:
+key/value limits, registration count, and total bytes including package-version
+metadata. KV writes, replacement,
+and deletion do not run finalizers. Finalizers cannot register/unregister finalizers.
+
+Remote creation and registration are separate effects. On a catchable registration
+refusal, the package should attempt immediate cleanup. A crash or uncertain storage
+failure before acknowledgment still requires a remote lease/idle timeout or other
+recovery mechanism; a stored handle does not checkpoint remote process memory.
+
+`GET /v1/sessions/{id}/finalizers` reports package, local key, status, and sanitized
+failure category, without arguments or credentials.
+
+Call `registerFinalizer` directly (namespace and named imports are supported)
+so the compiler can validate its value against the package finalizer signature.
+The REST session-close response includes sanitized finalizer outcomes when
+registrations exist; sessions without registrations retain the empty 204 response.
+Embedders can use `end_session_with_finalizers` for the same report; the existing
+`end_session` boolean API remains available.
+
 
 <!-- generated:stdlib -->
 
@@ -501,15 +614,17 @@ Policy-gated access to Blueprint-declared secrets.
 
 ## `submilli:session`
 
-Session-scoped key-value state: get/has/set/remove/list.
+Session-scoped key-value state and durable package-owned resource cleanup.
 
 | Function | Capability | Description |
 | --- | --- | --- |
 | `get<T>(key: string): T \| undefined` | `session.read { key }` | Read a session value, checked against `T`. |
 | `has(key: string): boolean` | `session.read { key }` | Whether the session holds an entry for `key`. |
 | `list(prefix: string, limit: number, cursor?: string): Page` | `session.list { prefix }`<br>`session.read { key } - per candidate key` | Enumerate session keys starting with `prefix`, in UTF-16 code-unit order. |
+| `registerFinalizer(key: string, value: unknown): void` | `session.finalize { key }` | Register package-owned resource cleanup. |
 | `remove(key: string): boolean` | `session.remove { key }` | Delete `key`. |
 | `set(key: string, value: unknown): void` | `session.write { key }` | Store `value` under `key`, replacing any previous entry. |
+| `unregisterFinalizer(key: string): void` | `session.finalize { key }` | Forget cleanup after explicitly releasing the resource. |
 
 ### `Entry`
 
@@ -528,6 +643,7 @@ One page of a `list` call: the `entries` it discloses and the `nextCursor` that 
 | --- | --- |
 | `readonly entries: Entry[]` | The keys this page discloses, in UTF-16 code-unit order. |
 | `readonly nextCursor: string \| undefined` | Opaque cursor for the next page, or `undefined` when no further matching key remains. |
+
 
 ## `submilli:url`
 
@@ -572,5 +688,13 @@ UUID v4/v7 generation and validation.
 | `v4(): string` |  | Generate a random UUID v4 (RFC 4122). |
 | `v7(): string` |  | Generate a time-ordered UUID v7 (RFC 9562). |
 | `validate(string: string): boolean` |  | Returns `true` if `string` is a valid UUID (any version), `false` otherwise. |
+
+## `submilli:variables`
+
+Immutable Blueprint/session configuration for packages.
+
+| Function | Capability | Description |
+| --- | --- | --- |
+| `get(name: string): string \| undefined` | `variables.get { name }` | Read immutable Blueprint/session configuration. |
 
 <!-- /generated:stdlib -->

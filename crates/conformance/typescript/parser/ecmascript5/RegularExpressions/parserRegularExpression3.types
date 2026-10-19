@@ -1,0 +1,17 @@
+=== parserRegularExpression3.ts ===
+Foo(!/(\\?|&)adurl=/);
+>Foo(!/(\\?|&)adurl=/) : any
+>                      : ^^^
+>Foo : any
+>    : ^^^
+>!/(\\?|&)adurl=/ : false
+>                 : ^^^^^
+>/(\\?|&)adurl=/ : RegExp
+>                : ^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

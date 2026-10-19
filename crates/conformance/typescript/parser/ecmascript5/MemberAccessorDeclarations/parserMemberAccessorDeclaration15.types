@@ -1,0 +1,18 @@
+=== parserMemberAccessorDeclaration15.ts ===
+class C {
+>C : C
+>  : ^
+
+   set Foo(public a: number) { }
+>Foo : number
+>    : ^^^^^^
+>a : number
+>  : ^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,8 +1,8 @@
 //! `submilli run` wiring for `submilli:llm`.
 //!
 //! Unlike `submilli:session` — which is deliberately not wired into the CLI,
-//! because session state is memory-only and a local run has nothing to carry it
-//! across — a blueprint-configured provider is exactly what makes `submilli run`
+//! because session state belongs to a server session, which a local run does
+//! not have — a blueprint-configured provider is exactly what makes `submilli run`
 //! useful for testing a program before it reaches a server, and the credentials
 //! already resolve from the blueprint the CLI is loading anyway.
 //!

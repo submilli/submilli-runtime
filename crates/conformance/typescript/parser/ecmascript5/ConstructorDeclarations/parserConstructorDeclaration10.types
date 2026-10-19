@@ -1,0 +1,13 @@
+=== parserConstructorDeclaration10.ts ===
+class C {
+>C : C
+>  : ^
+
+  constructor(): number { }
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

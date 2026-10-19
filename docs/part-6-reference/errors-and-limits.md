@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "8326f989f6ac01da62e3e3d870b40ffcbde54a9229eb724d3e9267053d5dec61"
-  confirmedAt: "2026-10-09T15:40:52.000Z"
+  contentHash: "daea0dd367c0399df23d7e3a4b0152467636d92d78822142961c53957d52432f"
+  confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
 This page lists the limits on a program's run, the fixed limits inside the
@@ -41,8 +41,8 @@ gives all three forms and their precedence. A Blueprint can't raise them.
 | Embedding tokens, all runs | `max_embedding_tokens` | 50,000,000 | count, with suffixes | All live runs on the server | `QuotaExceededError` | Yes |
 | Embedding requests, one run | `max_execution_embedding_requests` | 1,000 | count, with suffixes | One run | `QuotaExceededError` | Yes |
 | Embedding requests in flight | `max_embedding_concurrency` | 4 | requests | One `embed` call | Further requests wait | — |
-| Session state, all sessions | `max_session_state_memory` | 1,024 | megabytes | All live sessions on the server | `QuotaExceededError` | Yes |
 | Runs waiting on the harness | `max_suspended_runs` | 256, `0` turns tool calls off | runs | All runs on the server | `QuotaExceededError` | Yes |
+| Last run kept | `max_last_run_size` | 64 | megabytes (1,048,576 bytes) | One session's last run | `GET /v1/sessions/{id}/last-run` answers `413` | — |
 | Named volume size | `size_limit` of an entry under `volumes` | none (required) | bytes, or a size such as `1GB` (binary units), or `unlimited` | The volume, across every session and Blueprint that uses it | `QuotaExceededError` | Yes |
 
 Fuel counts work, at about one unit per WebAssembly instruction of the program,
@@ -209,7 +209,7 @@ volume can undo each other's changes.
 | One key | 256 UTF-16 code units | `RangeError` |
 
 Strings count two bytes per character. A `set` that would pass a limit is
-refused, and nothing another session holds is evicted.
+refused, and the session keeps what it held.
 
 ### `submilli:crypto`
 
@@ -298,7 +298,6 @@ call is decided.
 | Embedding requests, one run | Names the request limit and `--max-execution-embedding-requests`. |
 | Session state, one session | `session.set("v16") exceeded the session payload limit: 17001238 retained bytes exceeds the 16777216 this session may hold — remove entries this session no longer needs, or store less per key` |
 | Keys, one session | `session.set("k1024") exceeded the entry count limit: the session already holds 1024` |
-| Session state, all sessions | ``session.set("more") exceeded the server session-state budget: 1600154 retained bytes exceeds the 1048576 allowed across all live sessions — this session's own data is not what is in the way, so shrinking it need not help; the operator raises the budget with `--max-session-state-memory` `` |
 
 ### `RangeError`, `TypeError`, `SyntaxError`
 
@@ -331,6 +330,7 @@ session store.
 | An uncaught error | A thrown error no `catch` handled | `runtime_error` | `error` |
 | An uncaught denial | A gated call the Blueprint or the runtime refused, that no `catch` handled | `permission_denied` | `error` |
 | `internal host error: …` | A fault in the runtime, not the program | `runtime_error` | `error` |
+| `internal host error: session.<operation> failed: …` | The server's database failed during a `submilli:session` call, or the session closed while the run was using it. The program can't tell whether the call took effect, so it can't continue | `runtime_error` | `error` |
 
 The message names the limit and the line the run was on:
 

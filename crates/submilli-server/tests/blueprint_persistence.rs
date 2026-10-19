@@ -477,7 +477,7 @@ async fn sqlx_import_and_http_changes_survive_restart_without_reimport() {
         blueprints: Some(Arc::new(store)),
         database: Some(database.clone()),
         blueprint_dir: Some(source.clone()),
-        session_storage_root: Some(directory.path().join("sessions")),
+        volume_root: Some(directory.path().to_path_buf()),
         ..Default::default()
     })
     .await
@@ -538,7 +538,7 @@ async fn sqlx_import_and_http_changes_survive_restart_without_reimport() {
         blueprints: Some(Arc::new(store)),
         database: Some(database.clone()),
         blueprint_dir: Some(source.clone()),
-        session_storage_root: Some(directory.path().join("sessions")),
+        volume_root: Some(directory.path().to_path_buf()),
         ..Default::default()
     })
     .await

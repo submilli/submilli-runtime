@@ -332,8 +332,10 @@ mod tests {
                 "BigInt",
                 "BigIntConstructor",
                 "Boolean",
+                "BooleanConstructor",
                 "Console",
                 "Error",
+                "ErrorOptions",
                 "Iterable",
                 "Iterator",
                 "IteratorResult",
@@ -348,6 +350,8 @@ mod tests {
                 "PermissionDeniedError",
                 "QuotaExceededError",
                 "RangeError",
+                "ReadonlyMap",
+                "ReadonlySet",
                 "ReferenceError",
                 "RegExp",
                 "RegExpConstructor",
@@ -402,13 +406,16 @@ mod tests {
             ]
         );
         for name in &names {
-            // the three `IteratorResult` family aliases
-            // are `TypeKind::Alias`, not `Interface`. Skip them
-            // here — the kind invariant only applies to the
-            // interface declarations.
+            // The `IteratorResult` family and the readonly collection views
+            // are `TypeKind::Alias`, not `Interface`. Skip them here — the
+            // kind invariant only applies to the interface declarations.
             if matches!(
                 *name,
-                "IteratorResult" | "IteratorReturnResult" | "IteratorYieldResult",
+                "IteratorResult"
+                    | "IteratorReturnResult"
+                    | "IteratorYieldResult"
+                    | "ReadonlyMap"
+                    | "ReadonlySet",
             ) {
                 continue;
             }
@@ -448,6 +455,7 @@ mod tests {
             vec![
                 "Array",
                 "BigInt",
+                "Boolean",
                 "Infinity",
                 "Map",
                 "NaN",
@@ -467,6 +475,7 @@ mod tests {
                 "string_concat",
                 "string_eq",
                 "string_false",
+                "string_index",
                 "string_length",
                 "string_null",
                 "string_object_function",

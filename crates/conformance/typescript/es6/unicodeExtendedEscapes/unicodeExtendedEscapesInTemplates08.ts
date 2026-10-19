@@ -1,0 +1,9 @@
+// @target: es5,es6
+
+// ES6 Spec - 10.1.1 Static Semantics: UTF16Encoding (cp)
+//  2. If cp ≤ 65535, return cp.
+// (FFFF == 65535)
+let x = `\u{FFFF}`;
+
+
+function main(): void {}

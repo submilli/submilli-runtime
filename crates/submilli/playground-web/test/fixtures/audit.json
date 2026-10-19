@@ -1,0 +1,99 @@
+{
+ "kind": "audit",
+ "window": "the runs decided under blueprint v2, the latest edit",
+ "runs": [
+  {
+   "run": 5,
+   "page": "http://127.0.0.1:47100/#run=5",
+   "blueprint_version": "2",
+   "source": "test",
+   "decision_refs": [
+    "5.1",
+    "5.2"
+   ]
+  },
+  {
+   "run": 6,
+   "page": "http://127.0.0.1:47100/#run=6",
+   "blueprint_version": "2",
+   "source": "test",
+   "decision_refs": [
+    "6.1",
+    "6.2"
+   ]
+  },
+  {
+   "run": 7,
+   "page": "http://127.0.0.1:47100/#run=7",
+   "blueprint_version": "2",
+   "source": "rerun",
+   "decision_refs": [
+    "7.1",
+    "7.2"
+   ]
+  }
+ ],
+ "filters": [],
+ "groups": [
+  {
+   "caller": "main",
+   "capability": "acme.com/charges.list",
+   "outcome": "allow",
+   "decided_by": "allowed by `globex-support`",
+   "refs": [
+    "5.1",
+    "6.1"
+   ]
+  },
+  {
+   "caller": "@acme/billing",
+   "capability": "fs.read",
+   "outcome": "allow",
+   "decided_by": "allowed by rule 1 of `@acme/billing`, line 46",
+   "refs": [
+    "5.2",
+    "6.2",
+    "7.2"
+   ],
+   "origin": "`@acme/billing` is listed in the blueprint's packages"
+  },
+  {
+   "caller": "main",
+   "capability": "acme.com/charges.list",
+   "outcome": "allow",
+   "decided_by": "allowed by `charges-for-signed-in-customer`",
+   "refs": [
+    "7.1"
+   ]
+  }
+ ],
+ "next": [
+  "submilli playground explain 5.1",
+  "submilli playground explain 5.2",
+  "submilli playground explain 7.1",
+  "submilli playground audit --default-only",
+  "submilli playground changes"
+ ],
+ "untrusted": {
+  "contexts": {
+   "5.1": {
+    "customerId": "cus_globex"
+   },
+   "5.2": {
+    "path": "/billing/charges.json"
+   },
+   "6.1": {
+    "customerId": "cus_globex"
+   },
+   "6.2": {
+    "path": "/billing/charges.json"
+   },
+   "7.1": {
+    "customerId": "cus_northwind"
+   },
+   "7.2": {
+    "path": "/billing/charges.json"
+   }
+  }
+ }
+}

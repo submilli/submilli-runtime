@@ -1,0 +1,207 @@
+{
+  "module": "QuotaAccounting",
+  "constants": {
+    "Operation": "replace",
+    "Limit": 5,
+    "MaxCrashes": 1,
+    "Fault": "none",
+    "Witness": "",
+    "ReplacementBytes": 3
+  },
+  "invariants": [
+    "TypeOK",
+    "PublicUsage",
+    "QuotaAdmission"
+  ],
+  "properties": [],
+  "cases": [
+    {
+      "name": "replace-limit-4",
+      "kind": "safety",
+      "constants": {
+        "Operation": "replace",
+        "Limit": 4
+      }
+    },
+    {
+      "name": "replace-limit-6",
+      "kind": "safety",
+      "constants": {
+        "Operation": "replace",
+        "Limit": 6
+      }
+    },
+    {
+      "name": "replace-progress",
+      "kind": "liveness",
+      "constants": {
+        "Operation": "replace",
+        "Limit": 6
+      },
+      "specification": "LiveSpec",
+      "properties": [
+        "Progress"
+      ]
+    },
+    {
+      "name": "append-limit-4",
+      "kind": "safety",
+      "constants": {
+        "Operation": "append",
+        "Limit": 4
+      }
+    },
+    {
+      "name": "append-limit-6",
+      "kind": "safety",
+      "constants": {
+        "Operation": "append",
+        "Limit": 6
+      }
+    },
+    {
+      "name": "append-progress",
+      "kind": "liveness",
+      "constants": {
+        "Operation": "append",
+        "Limit": 6
+      },
+      "specification": "LiveSpec",
+      "properties": [
+        "Progress"
+      ]
+    },
+    {
+      "name": "remove-limit-4",
+      "kind": "safety",
+      "constants": {
+        "Operation": "remove",
+        "Limit": 4
+      }
+    },
+    {
+      "name": "remove-limit-6",
+      "kind": "safety",
+      "constants": {
+        "Operation": "remove",
+        "Limit": 6
+      }
+    },
+    {
+      "name": "remove-progress",
+      "kind": "liveness",
+      "constants": {
+        "Operation": "remove",
+        "Limit": 6
+      },
+      "specification": "LiveSpec",
+      "properties": [
+        "Progress"
+      ]
+    },
+    {
+      "name": "move-limit-4",
+      "kind": "safety",
+      "constants": {
+        "Operation": "move",
+        "Limit": 4
+      }
+    },
+    {
+      "name": "move-limit-6",
+      "kind": "safety",
+      "constants": {
+        "Operation": "move",
+        "Limit": 6
+      }
+    },
+    {
+      "name": "move-progress",
+      "kind": "liveness",
+      "constants": {
+        "Operation": "move",
+        "Limit": 6
+      },
+      "specification": "LiveSpec",
+      "properties": [
+        "Progress"
+      ]
+    },
+    {
+      "name": "negative-count-private",
+      "kind": "negative",
+      "invariant": "PublicUsage",
+      "constants": {
+        "Fault": "count-private",
+        "Limit": 5
+      }
+    },
+    {
+      "name": "negative-repeat-delta",
+      "kind": "negative",
+      "invariant": "PublicUsage",
+      "constants": {
+        "Fault": "repeat-delta",
+        "Limit": 5
+      }
+    },
+    {
+      "name": "negative-skip-rebuild",
+      "kind": "negative",
+      "invariant": "PublicUsage",
+      "constants": {
+        "Fault": "skip-rebuild",
+        "Limit": 5
+      }
+    },
+    {
+      "name": "negative-skip-admission",
+      "kind": "negative",
+      "invariant": "QuotaAdmission",
+      "constants": {
+        "Fault": "skip-admission",
+        "Limit": 4
+      }
+    },
+    {
+      "name": "witness-private-free",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "private-free"
+      }
+    },
+    {
+      "name": "witness-crash-gap",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "crash-gap"
+      }
+    },
+    {
+      "name": "replace-at-full-quota",
+      "kind": "safety",
+      "constants": {
+        "ReplacementBytes": 2,
+        "Limit": 4
+      }
+    },
+    {
+      "name": "replace-shrinks",
+      "kind": "safety",
+      "constants": {
+        "ReplacementBytes": 1,
+        "Limit": 4
+      }
+    },
+    {
+      "name": "shrink-when-already-over-quota",
+      "kind": "safety",
+      "constants": {
+        "ReplacementBytes": 1,
+        "Limit": 2
+      }
+    }
+  ]
+}

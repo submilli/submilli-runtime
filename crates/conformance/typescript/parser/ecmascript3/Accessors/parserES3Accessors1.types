@@ -1,0 +1,16 @@
+=== parserES3Accessors1.ts ===
+class C {
+>C : C
+>  : ^
+
+    get Foo(): void { }
+>Foo : void
+>    : ^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,1 @@
+importFromDot.ts(11,20): error TS2305: Module '"./index"' has no exported member 'rootA'.

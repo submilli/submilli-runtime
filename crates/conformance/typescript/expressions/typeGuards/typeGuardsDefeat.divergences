@@ -1,0 +1,21 @@
+types: 28 of 52 tsc entries compared, 4 differ
+
+line 10: x
+  tsc:  string
+  ours: number | string
+
+line 13: x
+  tsc:  number
+  ours: number | string
+
+line 21: f
+  tsc:  () => number
+  ours: () => <error>
+
+line 21: function () { return x * x; }
+  tsc:  () => number
+  ours: () => <error>
+
+errors:
+line 10: ours: cannot read field `length` on non-object type `number | string` (tsc accepts)
+line 13: ours: postfix `++` expects `number` or `bigint`, found `number | string` (tsc accepts)

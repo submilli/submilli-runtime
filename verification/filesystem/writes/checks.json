@@ -1,0 +1,100 @@
+{
+  "module": "WriteRecovery",
+  "constants": {
+    "MaxCrashes": 1,
+    "Fault": "none",
+    "Witness": "",
+    "InitiallyExists": true
+  },
+  "invariants": [
+    "TypeOK",
+    "AtomicReplacement",
+    "CompletionDurable",
+    "LaterPreserved"
+  ],
+  "properties": [],
+  "cases": [
+    {
+      "name": "crash-retry",
+      "kind": "safety"
+    },
+    {
+      "name": "two-crashes",
+      "kind": "safety",
+      "constants": {
+        "MaxCrashes": 2
+      }
+    },
+    {
+      "name": "create-missing-file",
+      "kind": "safety",
+      "constants": {
+        "InitiallyExists": false
+      }
+    },
+    {
+      "name": "eventual-completion",
+      "kind": "liveness",
+      "specification": "LiveSpec",
+      "properties": [
+        "Progress"
+      ]
+    },
+    {
+      "name": "negative-reuse-inode",
+      "kind": "negative",
+      "constants": {
+        "Fault": "reuse-inode"
+      },
+      "invariant": "AtomicReplacement"
+    },
+    {
+      "name": "negative-skip-file-sync",
+      "kind": "negative",
+      "constants": {
+        "Fault": "skip-file-sync"
+      },
+      "invariant": "CompletionDurable"
+    },
+    {
+      "name": "negative-skip-directory-sync",
+      "kind": "negative",
+      "constants": {
+        "Fault": "skip-directory-sync"
+      },
+      "invariant": "CompletionDurable"
+    },
+    {
+      "name": "negative-reapply-completed",
+      "kind": "negative",
+      "constants": {
+        "Fault": "reapply-completed"
+      },
+      "invariant": "LaterPreserved"
+    },
+    {
+      "name": "negative-advance-pending",
+      "kind": "negative",
+      "constants": {
+        "Fault": "advance-pending"
+      },
+      "invariant": "LaterPreserved"
+    },
+    {
+      "name": "witness-gap",
+      "kind": "witness",
+      "constants": {
+        "Witness": "gap"
+      },
+      "invariant": "NeverWitness"
+    },
+    {
+      "name": "witness-alias",
+      "kind": "witness",
+      "constants": {
+        "Witness": "alias"
+      },
+      "invariant": "NeverWitness"
+    }
+  ]
+}

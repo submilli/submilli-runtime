@@ -1,0 +1,86 @@
+{
+ "kind": "run",
+ "run": 9,
+ "page": "http://127.0.0.1:47100/#run=9",
+ "blueprint_version": "2",
+ "source": "test",
+ "decision_refs": [
+  "9.1"
+ ],
+ "blueprint": "billing",
+ "entry": "test",
+ "started_at_micros": 1791898030000009,
+ "started_at": "2026-10-13T13:27:10Z",
+ "wall_ms": 90,
+ "outcome": {
+  "kind": "stopped"
+ },
+ "denied": [],
+ "session": "5e550000-0000-4000-8000-000000000007",
+ "variables": {
+  "customerId": "cus_northwind"
+ },
+ "test": {
+  "source_run": 1,
+  "status": "stopped at a call with nothing recorded (what it stopped at is in run-data)",
+  "mode": "recorded",
+  "variables_filled": [],
+  "variables_dropped": [],
+  "local_state": "local files and session data came from today, not from the recorded run",
+  "served": [],
+  "stopped": {
+   "reason": "no-recording",
+   "caller": "main",
+   "capability": "http.get",
+   "line": 4,
+   "test_call": 1,
+   "nearest": null
+  },
+  "went_live": [],
+  "live_note": "nothing was recorded for this call, so the test stopped before making it; it continues only live, and live execution takes an explicit opt-in: `submilli playground test 1 --reads-live` lets unrecorded reads through, `--live` every call"
+ },
+ "reruns": [],
+ "decision_count": 2,
+ "decisions": [
+  {
+   "refs": [
+    "9.1"
+   ],
+   "outcome": "allow",
+   "caller": "main",
+   "capability": "acme.com/charges.list",
+   "decided_by": "by `charges-for-signed-in-customer`",
+   "filtered": false
+  }
+ ],
+ "decisions_dropped": 0,
+ "log_truncated": false,
+ "calls": {
+  "count": 1,
+  "returned": 1,
+  "failed": 0,
+  "unfinished": 1,
+  "with_bodies": 0
+ },
+ "payloads_included": false,
+ "program_recorded": true,
+ "program_included": true,
+ "next": [
+  "submilli playground compare 1 9"
+ ],
+ "untrusted": {
+  "contexts": {
+   "9.1": {
+    "customerId": "cus_northwind"
+   }
+  },
+  "error": "internal: execution cancelled",
+  "test": {
+   "served_keys": [],
+   "stop_key": "http GET http://127.0.0.1:18777/v1/status",
+   "stop_detail": "the recorded run never made this call",
+   "went_live_keys": []
+  },
+  "program": "import { listCharges } from \"@acme/billing\";\n\nfunction main(): string {\n    const charges = listCharges(\"cus_northwind\");\n    let total = 0;\n    for (const charge of charges) {\n        total += charge.amount;\n    }\n    return `${charges.length} charges, ${total} cents`;\n}\n"
+ }
+}

@@ -292,15 +292,8 @@ impl Inferer<'_> {
                 ty,
                 doc,
             } => {
-                let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
-                let (typed_source, source_ty) = self.infer_expr(source, hint.as_ref())?;
-                let rest = self.object_rest(typed_source, &source_ty, &exclude, span)?;
-                let (typed_value, narrowed) = if let Some(rest) = rest {
-                    rest
-                } else {
-                    self.report_unshaped_rest_source(&source_ty, span);
-                    (typed_source, Type::Error)
-                };
+                let (typed_value, narrowed) =
+                    self.infer_object_rest_value(source, &exclude, ty.as_ref(), span)?;
                 self.scopes
                     .insert(name.name.clone(), narrowed.clone(), is_const, name.span);
                 Ok(if is_const {
@@ -334,6 +327,23 @@ impl Inferer<'_> {
                 })
                 .map_err(crate::typechecker::arena_failure)?,
         ))
+    }
+
+    /// The value `{ ...rest }` binds: `source` without the `exclude`d fields.
+    pub(super) fn infer_object_rest_value(
+        &mut self,
+        source: ExprId,
+        exclude: &[Ident],
+        annotation: Option<&crate::TypeAnnotation>,
+        span: Span,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        let hint = annotation.map(|a| self.resolve_type(a)).transpose()?;
+        let (typed_source, source_ty) = self.infer_expr(source, hint.as_ref())?;
+        if let Some(rest) = self.object_rest(typed_source, &source_ty, exclude, span)? {
+            return Ok(rest);
+        }
+        self.report_unshaped_rest_source(&source_ty, span);
+        Ok((typed_source, Type::Error))
     }
 
     fn report_unshaped_rest_source(&mut self, source_ty: &Type, span: Span) {
@@ -499,11 +509,18 @@ impl Inferer<'_> {
         // let b = a;` binds `number`, not `1`. A literal type the value got from
         // a declaration stays (`let v = c` with `c: "x"` is `"x"`), and an
         // explicit annotation is honoured as written. Parameter patterns
-        // inherit their member's declared type despite being mutable.
-        let bound = match hint {
-            Some(hint) => hint,
-            None if preserve_binding_literals => value_ty.clone(),
-            None => self.widen_fresh_literals(typed_value, &value_ty)?,
+        // inherit their member's declared type despite being mutable. A fresh
+        // literal an unannotated pattern's default supplies widens, while a
+        // defaulted binding of an annotated pattern takes its member's
+        // written type.
+        let annotated_default = self.annotated_default_binding_type(value, &value_ty)?;
+        let keeps_literals =
+            preserve_binding_literals && !self.ast.binding_defaults.contains_key(&value);
+        let bound = match (hint, annotated_default) {
+            (Some(hint), _) => hint,
+            (None, Some(component)) => component,
+            (None, None) if keeps_literals => value_ty.clone(),
+            (None, None) => self.widen_fresh_literals(typed_value, &value_ty)?,
         };
         let bound = self.pattern_binding_storage_type(value, bound)?;
         let bound = self.local_storage_ty(&name, bound);
@@ -576,6 +593,40 @@ impl Inferer<'_> {
         })
     }
 
+    /// The type a binding takes from `value` of type `value_ty` when `value`
+    /// is the lowered default of a pattern whose type is written: the
+    /// component it binds, which the default must fit, without `undefined`,
+    /// as in TypeScript. The default's literal doesn't widen it, and a narrowed
+    /// initializer doesn't narrow it.
+    pub(super) fn annotated_default_binding_type(
+        &self,
+        value: ExprId,
+        value_ty: &Type,
+    ) -> Result<Option<Type>, CompilerFailure> {
+        let Some(binding_default) = self.ast.binding_defaults.get(&value) else {
+            return Ok(None);
+        };
+        if !binding_default.annotated {
+            return Ok(None);
+        }
+        let saved = &binding_default.saved;
+        // A module-level pattern saves its component in a module global.
+        let component = match self.scopes.get(&saved.name) {
+            Some(local) => local.write_type(),
+            None => match self.top_symbols.get(&saved.name).map(|entry| &entry.kind) {
+                Some(ValueKind::Const { ty, .. } | ValueKind::Let { ty, .. }) => ty,
+                _ => {
+                    return Err(
+                        super::inference_failure("missing saved destructuring component")
+                            .with_span(saved.span),
+                    );
+                }
+            },
+        };
+        let component = super::param_defaults::without_undefined(component);
+        Ok(Some(Type::union(vec![component, value_ty.clone()])))
+    }
+
     /// The type a destructuring default (`let { tags = [] } = options`) is
     /// checked against: the type of the component it replaces. When the
     /// pattern is annotated the default must fit it, as in TypeScript.
@@ -609,7 +660,7 @@ impl Inferer<'_> {
             super::inference_failure("missing saved destructuring component").with_span(saved.span)
         })?;
         // Unannotated, a component that is only `undefined` (a slot past the
-        // end of a padded tuple) or `void` says nothing of its default, which
+        // end of a tuple literal) or `void` says nothing of its default, which
         // then types alone. An annotation's component still checks it.
         let component = binding.write_type();
         let says_nothing = matches!(component.peel(), Type::Undefined | Type::Void);
@@ -1894,9 +1945,9 @@ impl Inferer<'_> {
         })
     }
 
-    /// Whether `value` reads a field of a destructured parameter.
+    /// Whether `value` reads a field or element of a destructured parameter.
     fn reads_pattern_parameter(&self, value: ExprId) -> Result<bool, CompilerFailure> {
-        let ExprKind::FieldAccess { receiver, .. } =
+        let (ExprKind::FieldAccess { receiver, .. } | ExprKind::IndexAccess { receiver, .. }) =
             &self.ast.try_expr(value).map_err(super::arena_failure)?.kind
         else {
             return Ok(false);
@@ -1970,9 +2021,11 @@ impl Inferer<'_> {
             .map(|view| view.narrowed_ty.clone()))
     }
 
+    /// What a pattern's slot at `index` reads from `source`: a slot past a
+    /// tuple's end reads `undefined`.
     pub(super) fn pattern_index_flow_type(source: &Type, index: usize) -> Option<Type> {
         match source.peel() {
-            Type::Tuple(elems) => elems.get(index).cloned(),
+            Type::Tuple(elems) => Some(elems.get(index).cloned().unwrap_or(Type::Undefined)),
             Type::Array(elem) => Some((**elem).clone()),
             Type::Union(members) => members
                 .iter()
@@ -2125,6 +2178,9 @@ impl Inferer<'_> {
             let kind_clone = entry.kind.clone();
             let prev_span = entry.declaration_span;
             let mangled = entry.mangled_name.clone();
+            if self.imported_values.contains(&target.name) {
+                return self.rejected_import_write(target, mangled, prev_span, value);
+            }
             match kind_clone {
                 ValueKind::Let { ty, .. } => {
                     let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
@@ -2198,6 +2254,25 @@ impl Inferer<'_> {
                 boxed: false,
                 narrowed_shadow_ty: None,
             }
+        })
+    }
+
+    /// Report a write to an imported binding and type its value on its own,
+    /// so the value's errors still surface.
+    fn rejected_import_write(
+        &mut self,
+        target: Ident,
+        mangled: crate::MangledName,
+        import_span: Span,
+        value: ExprId,
+    ) -> Result<TypedStmtKind, CompilerFailure> {
+        self.report_import_write(&target, import_span);
+        let (typed_value, _) = self.infer_expr(value, None)?;
+        Ok(TypedStmtKind::AssignGlobal {
+            ident: target,
+            mangled,
+            target_ty: Type::Error,
+            value: typed_value,
         })
     }
 
@@ -2305,6 +2380,9 @@ impl Inferer<'_> {
             let kind_clone = entry.kind.clone();
             let prev_span = entry.declaration_span;
             let mangled = entry.mangled_name.clone();
+            if self.imported_values.contains(&target.name) {
+                return self.rejected_import_write(target, mangled, prev_span, value);
+            }
             match kind_clone {
                 ValueKind::Let { ty, .. } => {
                     self.compound_assign_global(target, mangled, ty, op, op_span, value, span)?
@@ -2433,12 +2511,13 @@ impl Inferer<'_> {
                     value,
                     &rw,
                     stmt_span,
+                    None,
                 )?,
                 None => placeholder(self)?,
             }
         } else if self.try_report_method_assignment(name.span, &receiver_ty, &name.name) {
             placeholder(self)?
-        } else if let Some((prop_sig, _, _, _)) = self.find_property(&receiver_ty, &name.name) {
+        } else if let Some((prop_sig, _, iface, _)) = self.find_property(&receiver_ty, &name.name) {
             if prop_sig.readonly {
                 self.error(
                     name.span,
@@ -2466,6 +2545,7 @@ impl Inferer<'_> {
                     value,
                     &FieldRw::uniform(prop_sig.ty.clone()),
                     stmt_span,
+                    Some(iface),
                 )?
             }
         } else if matches!(receiver_ty, Type::Error) {
@@ -2509,6 +2589,7 @@ impl Inferer<'_> {
                         value,
                         &rw,
                         stmt_span,
+                        None,
                     )?
                 }
             } else {
@@ -2551,19 +2632,30 @@ impl Inferer<'_> {
         value: ExprId,
         rw: &FieldRw,
         stmt_span: Span,
+        host_iface: Option<crate::MangledName>,
     ) -> Result<TypedStmtKind, CompilerFailure> {
         let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
         let (typed_value, value_ty) =
             self.infer_expr(value, compound_value_hint(&rw.read).as_ref())?;
         // Built before the operator check so the check can name it as the
         // narrowing culprit.
+        // A prelude interface property is read through its host getter, not a
+        // struct field.
+        let read_kind = match host_iface {
+            Some(iface) => TypedExprKind::InterfacePropertyAccess {
+                receiver: typed_receiver,
+                iface,
+                name: name.clone(),
+            },
+            None => TypedExprKind::FieldAccess {
+                receiver: typed_receiver,
+                name: name.clone(),
+            },
+        };
         let synth_lhs = self
             .typed_ast
             .try_push_expr(TypedExpr {
-                kind: TypedExprKind::FieldAccess {
-                    receiver: typed_receiver,
-                    name: name.clone(),
-                },
+                kind: read_kind,
                 span: name.span,
                 ty: rw.read.clone(),
             })
@@ -3700,6 +3792,8 @@ impl Inferer<'_> {
             // Strings, literal ones included, iterate by code point through
             // `String#iterator`.
             ty if ty.is_string_shaped() => Some((Type::String, crate::ForOfKind::Iterable)),
+            // Bytes iterate through `Uint8Array#iterator`.
+            Type::Uint8Array => Some((Type::Number, crate::ForOfKind::Iterable)),
             // A union of arrays and tuples is one `$Array` at runtime too. It
             // follows the string arm, which takes unions of string literals.
             Type::Union(_) => {

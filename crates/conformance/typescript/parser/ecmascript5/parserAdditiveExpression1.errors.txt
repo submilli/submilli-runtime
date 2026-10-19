@@ -1,0 +1,2 @@
+parserAdditiveExpression1.ts(2,1): error TS2304: Cannot find name 'm'.
+parserAdditiveExpression1.ts(2,11): error TS2304: Cannot find name 'm'.

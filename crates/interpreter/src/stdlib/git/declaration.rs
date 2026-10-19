@@ -305,6 +305,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
                 fields: BTreeMap::from([("path".into(), FieldSig {
                     ty: Type::String, visibility: Visibility::Private, readonly: true,
                     optional: false, doc: None,
+                    method: false,
                 })]),
                 narrowing_checks: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),

@@ -95,7 +95,7 @@ impl World {
     }
 
     fn post_at(&self, post: ChatPost, now: Instant) -> usize {
-        self.intake.accept(post, &self.recorder, now)
+        self.intake.accept(post, &self.recorder, now).logged
     }
 
     fn log(&self, session: &str) -> EventLog {
@@ -204,6 +204,31 @@ fn the_transcript_gives_the_task_the_report_and_every_call_claude_code_sent() {
     assert_eq!(read.calls, sent);
     assert_eq!(task.before_call.as_ref(), sent.first());
     assert_eq!(report.before_call, None);
+}
+
+#[test]
+fn a_message_relayed_to_the_stand_in_later_is_a_user_message_and_reminders_are_not() {
+    let lines = [
+        json!({"type": "user", "uuid": "u1", "message": {"role": "user", "content": "List my charges."}}),
+        json!({"type": "user", "uuid": "u2", "isMeta": true, "message": {"role": "user", "content": "<system-reminder>\nReport through SubagentHandback.</system-reminder>"}}),
+        json!({"type": "user", "uuid": "u3", "isMeta": true, "origin": {"kind": "coordinator"}, "message": {"role": "user", "content": "The coordinator sent a message while you were working:\nUse my packages."}}),
+        json!({"type": "assistant", "uuid": "a1", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_9", "name": "mcp__playground__submilli__typescript__packages__search", "input": {}}]}}),
+    ];
+    let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+    let read = transcript(&text);
+    let said: Vec<(&str, ChatRole)> = read
+        .messages
+        .iter()
+        .map(|message| (message.text.as_str(), message.role))
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ("List my charges.", ChatRole::User),
+            ("Use my packages.", ChatRole::User)
+        ]
+    );
+    assert_eq!(read.messages[1].before_call.as_deref(), Some("toolu_9"));
 }
 
 #[test]
@@ -438,6 +463,22 @@ fn chat_is_held_until_a_tool_call_ties_the_stand_in_to_its_session() {
 }
 
 #[test]
+fn the_intake_says_when_it_first_places_a_stand_in_in_a_session() {
+    let mut world = World::new();
+    let post = live("agent-1", "toolu_1", vec![says("t1", "first")]);
+    let placed = |world: &World, post: ChatPost| {
+        world
+            .intake
+            .accept(post, &world.recorder, Instant::now())
+            .placed
+    };
+    assert_eq!(placed(&world, post.clone()), None, "held: no call yet");
+    world.call("sess-1", "toolu_1");
+    assert_eq!(placed(&world, post.clone()), Some("sess-1".to_owned()));
+    assert_eq!(placed(&world, post), None, "already there");
+}
+
+#[test]
 fn a_live_message_is_logged_once_however_often_it_is_posted() {
     let mut world = World::new();
     world.call("sess-1", "toolu_1");
@@ -508,6 +549,143 @@ fn a_stand_in_back_after_a_long_silence_still_finds_its_session() {
     };
     assert_eq!(world.post_at(stop, later), 2);
     assert_eq!(texts(&world.log("sess-1")), ["first", "report"]);
+}
+
+#[test]
+fn a_resumed_stand_in_goes_on_in_the_session_its_next_call_runs_in() {
+    let mut world = World::new();
+    let asked = |turn: &str, text: &str, call: &str| Message {
+        role: ChatRole::User,
+        before_call: Some(call.into()),
+        ..says(turn, text)
+    };
+    let stop = |calls: &[&str], messages: Vec<Message>| ChatPost {
+        agent: "agent-1".into(),
+        calls: calls.iter().map(|call| (*call).to_owned()).collect(),
+        messages,
+        complete: true,
+    };
+    // The first task, in sess-1.
+    world.post(live(
+        "agent-1",
+        "toolu_1",
+        vec![asked("t1", "Northwind?", "toolu_1")],
+    ));
+    world.call("sess-1", "toolu_1");
+    world.post(live("agent-1", "toolu_1", Vec::new()));
+    let first = vec![
+        asked("t1", "Northwind?", "toolu_1"),
+        says("t2", "Two charges."),
+    ];
+    world.post(stop(&["toolu_1"], first.clone()));
+
+    // Resumed: the next question, then its call, which runs in a new session.
+    let mut again = first.clone();
+    again.push(asked("t3", "Globex?", "toolu_2"));
+    assert_eq!(
+        world.post(live("agent-1", "toolu_2", again.clone())),
+        0,
+        "held until the call says where"
+    );
+    world.call("sess-2", "toolu_2");
+    world.post(live("agent-1", "toolu_2", again.clone()));
+    again.push(says("t4", "Refused."));
+    world.post(stop(&["toolu_1", "toolu_2"], again));
+
+    assert_eq!(texts(&world.log("sess-1")), ["Northwind?", "Two charges."]);
+    assert_eq!(texts(&world.log("sess-2")), ["Globex?", "Refused."]);
+    assert_eq!(
+        order(&world.log("sess-2")),
+        ["chat user", "call toolu_2", "chat assistant"]
+    );
+}
+
+#[test]
+fn a_stand_in_resumed_after_a_long_silence_keeps_its_old_turns_where_they_were() {
+    let mut world = World::new();
+    let start = Instant::now();
+    world.call("sess-1", "toolu_1");
+    let first = vec![says("t1", "Northwind?"), says("t2", "Two charges.")];
+    world.post_at(
+        ChatPost {
+            agent: "agent-1".into(),
+            calls: vec!["toolu_1".into()],
+            messages: first.clone(),
+            complete: true,
+        },
+        start,
+    );
+
+    let later = start + HELD_FOR + Duration::from_secs(1);
+    let mut again = first;
+    again.push(says("t3", "Globex?"));
+    world.post_at(live("agent-1", "toolu_2", again.clone()), later);
+    world.call("sess-2", "toolu_2");
+    world.post_at(live("agent-1", "toolu_2", again), later);
+
+    assert_eq!(texts(&world.log("sess-1")), ["Northwind?", "Two charges."]);
+    assert_eq!(texts(&world.log("sess-2")), ["Globex?"]);
+}
+
+#[test]
+fn a_resumed_stand_in_whose_first_call_takes_long_keeps_its_old_turns_where_they_were() {
+    let mut world = World::new();
+    let start = Instant::now();
+    world.call("sess-1", "toolu_1");
+    let first = vec![says("t1", "Northwind?"), says("t2", "Two charges.")];
+    world.post_at(
+        ChatPost {
+            agent: "agent-1".into(),
+            calls: vec!["toolu_1".into()],
+            messages: first.clone(),
+            complete: true,
+        },
+        start,
+    );
+
+    // Resumed; its next call waits on a run past the time held chat is kept.
+    let mut again = first;
+    again.push(says("t3", "Globex?"));
+    world.post_at(live("agent-1", "toolu_2", again.clone()), start);
+    world.call("sess-2", "toolu_2");
+    let later = start + HELD_FOR + Duration::from_secs(1);
+    world.post_at(live("agent-1", "toolu_2", again), later);
+
+    assert_eq!(texts(&world.log("sess-1")), ["Northwind?", "Two charges."]);
+    assert_eq!(texts(&world.log("sess-2")), ["Globex?"]);
+}
+
+#[test]
+fn a_late_copy_of_a_message_cut_from_the_complete_one_is_not_a_resume() {
+    let mut world = World::new();
+    world.call("sess-1", "toolu_1");
+    let messages = vec![says("t1", "task"), says("t2", "middle"), says("t3", "end")];
+    world.post(live("agent-1", "toolu_1", messages.clone()));
+    world.post(ChatPost {
+        agent: "agent-1".into(),
+        calls: vec!["toolu_1".into()],
+        messages: vec![says("t1", "task"), says("t3", "end")],
+        complete: true,
+    });
+    assert_eq!(world.post(live("agent-1", "toolu_1", messages)), 0);
+    let mut kept = texts(&world.log("sess-1"));
+    kept.sort();
+    assert_eq!(kept, ["end", "middle", "task"]);
+}
+
+#[test]
+fn a_late_copy_after_the_stop_is_not_a_resume() {
+    let mut world = World::new();
+    world.call("sess-1", "toolu_1");
+    let messages = vec![says("t1", "task"), says("t2", "report")];
+    world.post(ChatPost {
+        agent: "agent-1".into(),
+        calls: vec!["toolu_1".into()],
+        messages: messages.clone(),
+        complete: true,
+    });
+    assert_eq!(world.post(live("agent-1", "toolu_1", messages)), 0);
+    assert_eq!(texts(&world.log("sess-1")), ["task", "report"]);
 }
 
 #[test]
@@ -612,6 +790,6 @@ fn after_a_restart_the_complete_copy_still_finds_its_session() {
         messages: vec![says("t1", "done")],
         complete: true,
     };
-    assert_eq!(intake.accept(post, &restarted, Instant::now()), 1);
+    assert_eq!(intake.accept(post, &restarted, Instant::now()).logged, 1);
     assert_eq!(texts(&world.log("sess-1")), ["done"]);
 }

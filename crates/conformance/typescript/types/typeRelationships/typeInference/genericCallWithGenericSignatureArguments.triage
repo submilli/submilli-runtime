@@ -1,0 +1,1 @@
+line 20, 21 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it (tsc prints `typeof a` and `typeof b` by name)

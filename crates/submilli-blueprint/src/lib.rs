@@ -47,7 +47,7 @@ pub use submilli_policy::{
     FilterExpr, NearMiss, PermissionRule, Resolution, ResolutionCause, RuleRef, VarBindings,
     validate_scoped_name,
 };
-pub use variables::{VariableDecl, VariableError, resolve_variables};
+pub use variables::{VariableDecl, VariableError, resolve_variables, validate_resolved_variables};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -1906,6 +1906,13 @@ permissions:
     fn duplicate_keys_are_reported_at_the_repeat() {
         for (yaml, key, line, column) in [
             ("name: x\ndefault: deny\n# again\nname: y\n", "name", 4, 1),
+            // The repeat's value is still being typed, so the text doesn't parse past it.
+            (
+                "name: x\ndefault: deny\npermissions:\n  main: []\ndefault: [unclosed\n",
+                "default",
+                5,
+                1,
+            ),
             (
                 "name: x\npermissions:\n  main: []\ndefault: deny\npermissions:\n  other: []\n",
                 "permissions",

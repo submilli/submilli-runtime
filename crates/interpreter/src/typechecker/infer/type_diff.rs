@@ -86,8 +86,13 @@ pub(super) fn format_type_diff(expected: &Type, got: &Type) -> Result<Option<Str
             write_type(out, got)?;
             out.push("` is `readonly` and cannot be assigned to the mutable type `")?;
             write_type(out, expected)?;
-            return out
-                .push("`; copy it with `[...value]`, or make the target type `readonly` too");
+            let copy = match expected.peel() {
+                Type::InterfaceRef { name, .. } => format!("`new {name}(value)`"),
+                _ => "`[...value]`".to_string(),
+            };
+            out.push("`; copy it with ")?;
+            out.push(&copy)?;
+            return out.push(", or make the target type `readonly` too");
         }
         match (expected, got) {
             (

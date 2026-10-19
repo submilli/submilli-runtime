@@ -1,0 +1,15 @@
+=== parserFunctionPropertyAssignment1.ts ===
+let v = { foo() { } };
+>v : { foo(): void; }
+>  : ^^^^^^^^^^^^^^^^
+>{ foo() { } } : { foo(): void; }
+>              : ^^^^^^^^^^^^^^^^
+>foo : () => void
+>    : ^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

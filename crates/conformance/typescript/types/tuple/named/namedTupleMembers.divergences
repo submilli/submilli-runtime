@@ -1,0 +1,25 @@
+types: 48 of 68 tsc entries compared, 6 differ
+
+line 27: a
+  tsc:  Segment
+  ours: [number, number]
+
+line 31: a
+  tsc:  Segment
+  ours: [number, number]
+
+line 32: b
+  tsc:  SegmentAnnotated
+  ours: [number, number]
+
+line 35: a
+  tsc:  Segment
+  ours: [number, number]
+
+line 36: b
+  tsc:  SegmentAnnotated
+  ours: [number, number]
+
+line 65: q
+  tsc:  RecursiveTupleA
+  ours: RecursiveTupleB

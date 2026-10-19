@@ -1,0 +1,8 @@
+=== parser_continueNotInIterationStatement1.ts ===
+continue;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

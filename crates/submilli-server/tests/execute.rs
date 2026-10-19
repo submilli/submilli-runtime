@@ -684,7 +684,7 @@ async fn void_main_returns_null_result() {
         execute(r#"function main(): void { console.log("hello"); console.log("world"); }"#).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["result"], Value::Null);
-    assert_eq!(body["console"], json!([]));
+    assert_eq!(body["console"], json!(["hello", "world"]));
     assert_eq!(body["error"], Value::Null);
 }
 
@@ -713,12 +713,12 @@ async fn undefined_main_uses_no_result_while_null_is_serialized() {
 }
 
 #[tokio::test]
-async fn console_suppressed_on_success_nonvoid() {
+async fn a_one_shot_success_returns_its_console() {
     let (status, body) =
         execute(r#"function main(): number { console.log("debug"); return 7; }"#).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["result"], json!("7"));
-    assert_eq!(body["console"], json!([]));
+    assert_eq!(body["console"], json!(["debug"]));
     assert_eq!(body["error"], Value::Null);
 }
 
@@ -1002,6 +1002,7 @@ async fn configured_execution_timeout_interrupts_loop_without_expiring_early() {
         .expect("seed blueprints"),
     );
     let router = app(AppState::new(ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
         blueprints: Some(blueprints),
         runtime: RuntimeConfig {
             timeout: Some(Duration::from_secs(1)),

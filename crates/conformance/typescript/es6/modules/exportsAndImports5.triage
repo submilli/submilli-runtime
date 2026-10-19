@@ -1,0 +1,1 @@
+line 9 extra: bug SUB-1734 an exported function whose signature names an imported type is rejected as using a private type

@@ -1,0 +1,1 @@
+line 5 extra: by-design spec §2.2 there is no `this` in a static member

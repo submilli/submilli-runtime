@@ -349,6 +349,35 @@ fn packs_rest_arguments(source: &crate::Type, target: ClosureSig) -> bool {
     )
 }
 
+/// Whether a cast from `source` to `target` adapts a union call's callee to
+/// the fixed-arity signature the call passes arguments by, when the union has
+/// a member with a rest parameter. Such a member may have `target`'s arity and
+/// still expect its rest arguments packed, which only the adapter's call
+/// through the host does.
+pub fn is_union_call_cast(source: &crate::Type, target: &crate::Type) -> bool {
+    matches!(
+        target.lowered(),
+        crate::Type::Function {
+            has_rest: false,
+            ..
+        }
+    ) && matches!(source.lowered(), crate::Type::Union(members) if members.iter().any(|member| {
+        matches!(member.lowered(), crate::Type::Function { has_rest: true, .. })
+    }))
+}
+
+/// Adapt the closure on the stack, of a union of function types, to the
+/// fixed-arity signature `target`; see [`is_union_call_cast`].
+pub fn emit_union_call_cast(
+    emitter: &mut FunctionEmitter<'_>,
+    ctx: &CodegenCtx<'_>,
+    target: &crate::Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let original = emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown)?)?;
+    emitter.instruction(Instruction::LocalSet(original));
+    emit_wrap(emitter, ctx, super::closures::classify(target)?, original)
+}
+
 /// A function statically known to declare fewer parameters than `target`
 /// passes, and no rest parameter, always needs the adapter, so the runtime
 /// check [`emit_erased_cast`] makes is skipped.

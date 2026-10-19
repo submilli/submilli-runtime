@@ -308,11 +308,13 @@ impl RunRecorderFactory for Recorder {
             },
         );
         drop(tracks);
-        if let Err(error) =
-            shared
-                .store
-                .mark_running(id, &run.label, run.session_id.as_deref(), started_at_micros)
-        {
+        if let Err(error) = shared.store.mark_running(
+            id,
+            &run.label,
+            run.session_id.as_deref(),
+            started_at_micros,
+            run.code.as_deref(),
+        ) {
             warn(&format!("run {id} not listed as running: {error}"));
         }
         Some(Arc::new(RunRecording {

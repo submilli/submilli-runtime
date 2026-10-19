@@ -1,0 +1,9 @@
+types: 2 of 9 tsc entries compared, 2 differ
+
+line 2: 1 /notregexp/a.foo()
+  tsc:  number
+  ours: <error>
+
+line 2: 1 /notregexp
+  tsc:  number
+  ours: <error>

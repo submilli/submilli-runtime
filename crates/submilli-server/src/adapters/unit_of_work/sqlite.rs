@@ -8,10 +8,17 @@ use futures::future::BoxFuture;
 use sqlx::SqliteConnection;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::adapters::sealing::Sealer;
 use crate::adapters::session::credentials::CredentialCodec;
+use crate::adapters::session::kv;
+use crate::adapters::session::last_run;
+use crate::application::sessions::ports::StagedLastRun;
+use crate::application::unit_of_work::{SessionStateKeys, SessionStateSize, SessionStateUsage};
 use crate::application::unit_of_work::{UnitOfWork, UnitOfWorkFactory};
 use crate::blueprint::StoreError;
 use crate::database::{DatabaseError, ServerDatabase};
+use crate::domain::mcp_grant::{GrantOverview, GrantVersion, McpGrant};
+use crate::domain::secret::{Secret, SecretName};
 
 pub(crate) struct SqliteUnitOfWorkFactory {
     pub database: Arc<ServerDatabase>,
@@ -34,6 +41,7 @@ impl UnitOfWorkFactory for SqliteUnitOfWorkFactory {
             driver: Some(driver),
             session_root: self.session_root.clone(),
             codec: Arc::new(CredentialCodec::new(self.cipher.clone())),
+            sealer: Sealer::new(self.cipher.clone()),
         };
         unit.query(|_| Box::pin(async { Ok(()) })).await?;
         Ok(Box::new(unit))
@@ -55,6 +63,7 @@ struct SqliteUnitOfWork {
     driver: Option<BoxFuture<'static, Result<(), DatabaseError>>>,
     session_root: PathBuf,
     codec: Arc<CredentialCodec>,
+    sealer: Sealer,
 }
 
 impl SqliteUnitOfWork {
@@ -94,6 +103,32 @@ impl SqliteUnitOfWork {
                 Err(_) => self.finish().await.and(Err(DatabaseError::Closed.into())),
             }
         }
+    }
+
+    /// [`Self::query`] for an operation that can also fail without SQL failing,
+    /// such as a sealed value that does not open or a conditional write that
+    /// lost: those come back to the caller and leave the transaction usable.
+    /// A database failure still ends the transaction, since SQLite may already
+    /// have rolled it back.
+    async fn query_recoverable<T, F>(&mut self, operation: F) -> Result<T, StoreError>
+    where
+        T: Send + 'static,
+        F: for<'a> FnOnce(&'a mut SqliteConnection) -> BoxFuture<'a, Result<T, StoreError>>
+            + Send
+            + 'static,
+    {
+        self.query(move |connection| {
+            Box::pin(async move {
+                match operation(connection).await {
+                    Err(StoreError::Database(source)) => Err(match source.downcast() {
+                        Ok(error) => *error,
+                        Err(other) => DatabaseError::Import(other.to_string()),
+                    }),
+                    outcome => Ok(outcome),
+                }
+            })
+        })
+        .await?
     }
 
     async fn finish(&mut self) -> Result<(), StoreError> {
@@ -216,62 +251,305 @@ impl UnitOfWork for SqliteUnitOfWork {
         .await
     }
 
-    async fn get_request(
+    async fn get_run(&mut self, id: &str) -> Result<Option<crate::domain::run::Run>, StoreError> {
+        let id = id.to_owned();
+        self.query(move |connection| {
+            Box::pin(async move { crate::adapters::run::get_run(connection, &id).await })
+        })
+        .await
+    }
+    async fn run_for_key(
         &mut self,
         session_id: &str,
         key: &str,
-    ) -> Result<Option<crate::domain::idempotent_request::IdempotentRequest>, StoreError> {
+    ) -> Result<Option<crate::domain::run::Run>, StoreError> {
         let session_id = session_id.to_owned();
         let key = key.to_owned();
         self.query(move |connection| {
-            Box::pin(async move {
-                crate::adapters::idempotency::get(connection, &session_id, &key).await
-            })
+            Box::pin(async move { crate::adapters::run::get(connection, &session_id, &key).await })
         })
         .await
     }
-    async fn save_request(
-        &mut self,
-        request: crate::domain::idempotent_request::IdempotentRequest,
-    ) -> Result<(), StoreError> {
-        self.query(move |connection| {
-            Box::pin(crate::adapters::idempotency::save(connection, request))
-        })
-        .await
-    }
-    async fn remove_request(&mut self, session_id: &str, key: &str) -> Result<(), StoreError> {
-        let session_id = session_id.to_owned();
-        let key = key.to_owned();
-        self.query(move |connection| {
-            Box::pin(async move {
-                sqlx::query("DELETE FROM idempotent_requests WHERE session_id=? AND request_key=?")
-                    .bind(session_id)
-                    .bind(key)
-                    .execute(connection)
-                    .await?;
-                Ok(())
-            })
-        })
-        .await
-    }
-    async fn remove_session_requests(&mut self, session_id: &str) -> Result<(), StoreError> {
-        let session_id = session_id.to_owned();
-        self.query(move |connection| {
-            Box::pin(async move {
-                sqlx::query("DELETE FROM idempotent_requests WHERE session_id=?")
-                    .bind(session_id)
-                    .execute(connection)
-                    .await?;
-                Ok(())
-            })
-        })
-        .await
-    }
-    async fn unfinished_requests(
-        &mut self,
-    ) -> Result<Vec<crate::domain::idempotent_request::IdempotentRequest>, StoreError> {
-        self.query(|connection| Box::pin(crate::adapters::idempotency::unfinished(connection)))
+    async fn save_run(&mut self, request: crate::domain::run::Run) -> Result<(), StoreError> {
+        self.query(move |connection| Box::pin(crate::adapters::run::save(connection, request)))
             .await
+    }
+    async fn active_session_runs(
+        &mut self,
+        session_id: &str,
+    ) -> Result<Vec<crate::domain::run::Run>, StoreError> {
+        let id = session_id.to_owned();
+        self.query(move |connection| {
+            Box::pin(async move { crate::adapters::run::active_for_session(connection, &id).await })
+        })
+        .await
+    }
+
+    async fn unfinished_runs(&mut self) -> Result<Vec<crate::domain::run::Run>, StoreError> {
+        self.query(|connection| Box::pin(crate::adapters::run::unfinished(connection)))
+            .await
+    }
+    async fn sessions_with_responses_to_expire(
+        &mut self,
+        cutoff: SystemTime,
+        kept: usize,
+    ) -> Result<Vec<String>, StoreError> {
+        self.query(move |connection| {
+            Box::pin(crate::adapters::run::sessions_with_responses_to_expire(
+                connection, cutoff, kept,
+            ))
+        })
+        .await
+    }
+    async fn completed_responses(
+        &mut self,
+        session_id: &str,
+    ) -> Result<Vec<crate::domain::idempotent_request::CompletedResponse>, StoreError> {
+        let session_id = session_id.to_owned();
+        self.query(move |connection| {
+            Box::pin(async move {
+                crate::adapters::run::completed_responses(connection, &session_id).await
+            })
+        })
+        .await
+    }
+    async fn expire_responses(
+        &mut self,
+        session_id: &str,
+        keys: Vec<String>,
+    ) -> Result<u64, StoreError> {
+        let session_id = session_id.to_owned();
+        self.query(move |connection| {
+            Box::pin(async move {
+                crate::adapters::run::expire_responses(connection, &session_id, &keys).await
+            })
+        })
+        .await
+    }
+
+    async fn get_secret(&mut self, name: &SecretName) -> Result<Option<Secret>, StoreError> {
+        let (name, sealer) = (name.clone(), self.sealer.clone());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move { crate::adapters::secret::get(connection, &sealer, &name).await })
+        })
+        .await
+    }
+
+    async fn save_secret(&mut self, secret: Secret, now: SystemTime) -> Result<(), StoreError> {
+        let sealer = self.sealer.clone();
+        self.query_recoverable(move |connection| {
+            Box::pin(async move {
+                crate::adapters::secret::save(connection, &sealer, &secret, now).await
+            })
+        })
+        .await
+    }
+
+    async fn remove_secret(&mut self, name: &SecretName) -> Result<bool, StoreError> {
+        let name = name.clone();
+        self.query_recoverable(move |connection| {
+            Box::pin(async move { crate::adapters::secret::remove(connection, &name).await })
+        })
+        .await
+    }
+
+    async fn secret_names(&mut self, prefix: Option<&str>) -> Result<Vec<String>, StoreError> {
+        let prefix = prefix.map(str::to_owned);
+        self.query_recoverable(move |connection| {
+            Box::pin(
+                async move { crate::adapters::secret::names(connection, prefix.as_deref()).await },
+            )
+        })
+        .await
+    }
+
+    async fn get_grant(
+        &mut self,
+        blueprint: &str,
+        server: &str,
+    ) -> Result<Option<McpGrant>, StoreError> {
+        let (blueprint, server, sealer) =
+            (blueprint.to_owned(), server.to_owned(), self.sealer.clone());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move {
+                crate::adapters::mcp_grant::get(connection, &sealer, &blueprint, &server).await
+            })
+        })
+        .await
+    }
+
+    async fn save_grant(&mut self, grant: McpGrant) -> Result<(), StoreError> {
+        let sealer = self.sealer.clone();
+        self.query_recoverable(move |connection| {
+            Box::pin(
+                async move { crate::adapters::mcp_grant::save(connection, &sealer, &grant).await },
+            )
+        })
+        .await
+    }
+
+    async fn remove_grant(&mut self, blueprint: &str, server: &str) -> Result<bool, StoreError> {
+        let (blueprint, server) = (blueprint.to_owned(), server.to_owned());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move {
+                crate::adapters::mcp_grant::remove(connection, &blueprint, &server).await
+            })
+        })
+        .await
+    }
+
+    async fn grant_version(
+        &mut self,
+        blueprint: &str,
+        server: &str,
+    ) -> Result<Option<GrantVersion>, StoreError> {
+        let (blueprint, server) = (blueprint.to_owned(), server.to_owned());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move {
+                crate::adapters::mcp_grant::version(connection, &blueprint, &server).await
+            })
+        })
+        .await
+    }
+
+    async fn list_grants(
+        &mut self,
+        blueprint: Option<&str>,
+    ) -> Result<Vec<GrantOverview>, StoreError> {
+        let blueprint = blueprint.map(str::to_owned);
+        self.query_recoverable(move |connection| {
+            Box::pin(async move {
+                crate::adapters::mcp_grant::overviews(connection, blueprint.as_deref()).await
+            })
+        })
+        .await
+    }
+
+    async fn remove_blueprint_grants(&mut self, blueprint: &str) -> Result<(), StoreError> {
+        let blueprint = blueprint.to_owned();
+        self.query_recoverable(move |connection| {
+            Box::pin(async move {
+                crate::adapters::mcp_grant::remove_for_blueprint(connection, &blueprint).await
+            })
+        })
+        .await
+    }
+
+    async fn session_is_active(&mut self, id: &str) -> Result<bool, StoreError> {
+        let id = id.to_owned();
+        self.query_recoverable(move |connection| {
+            Box::pin(async move { kv::is_active(connection, &id).await })
+        })
+        .await
+    }
+
+    async fn session_state_get(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<Option<Vec<u16>>, StoreError> {
+        let (session_id, key, sealer) = (session_id.to_owned(), key.to_vec(), self.sealer.clone());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move { kv::get(connection, &sealer, &session_id, &key).await })
+        })
+        .await
+    }
+
+    async fn session_state_has(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<bool, StoreError> {
+        let (session_id, key) = (session_id.to_owned(), key.to_vec());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move { kv::has(connection, &session_id, &key).await })
+        })
+        .await
+    }
+
+    async fn session_state_usage(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<SessionStateUsage, StoreError> {
+        let (session_id, key) = (session_id.to_owned(), key.to_vec());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move { kv::usage(connection, &session_id, &key).await })
+        })
+        .await
+    }
+
+    async fn session_state_put(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+        payload: &[u16],
+        size: SessionStateSize,
+    ) -> Result<(), StoreError> {
+        let (session_id, key, payload, sealer) = (
+            session_id.to_owned(),
+            key.to_vec(),
+            payload.to_vec(),
+            self.sealer.clone(),
+        );
+        self.query_recoverable(move |connection| {
+            Box::pin(async move {
+                kv::put(connection, &sealer, &session_id, &key, &payload, size).await
+            })
+        })
+        .await
+    }
+
+    async fn session_state_remove(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<bool, StoreError> {
+        let (session_id, key) = (session_id.to_owned(), key.to_vec());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move { kv::remove(connection, &session_id, &key).await })
+        })
+        .await
+    }
+
+    async fn session_state_keys(
+        &mut self,
+        session_id: &str,
+        after: Option<&[u16]>,
+        max_keys: usize,
+    ) -> Result<SessionStateKeys, StoreError> {
+        let (session_id, after) = (session_id.to_owned(), after.map(<[u16]>::to_vec));
+        self.query_recoverable(move |connection| {
+            Box::pin(
+                async move { kv::keys(connection, &session_id, after.as_deref(), max_keys).await },
+            )
+        })
+        .await
+    }
+
+    async fn put_last_run(
+        &mut self,
+        session_id: &str,
+        run_id: &str,
+        completed_at: SystemTime,
+        staged: &StagedLastRun,
+    ) -> Result<Option<String>, StoreError> {
+        let (session_id, run_id, staged) =
+            (session_id.to_owned(), run_id.to_owned(), staged.clone());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move {
+                last_run::put(connection, &session_id, &run_id, completed_at, &staged).await
+            })
+        })
+        .await
+    }
+
+    async fn remove_last_run(&mut self, session_id: &str) -> Result<Option<String>, StoreError> {
+        let session_id = session_id.to_owned();
+        self.query(move |connection| {
+            Box::pin(async move { Ok(last_run::remove(connection, &session_id).await?) })
+        })
+        .await
     }
 
     async fn commit(mut self: Box<Self>) -> Result<(), StoreError> {

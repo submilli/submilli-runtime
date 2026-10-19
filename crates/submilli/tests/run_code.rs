@@ -170,8 +170,8 @@ async fn void_with_stdio() {
     .await
     .unwrap();
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    // Result is null for void main; console reaches us via
-    // /v1/last-run and lands on stderr.
+    // Result is null for void main; the one-shot response carries the
+    // console, which lands on stderr.
     assert_eq!(stdout(&out), "");
     assert_eq!(stderr(&out), "hi\nthere\n");
 }

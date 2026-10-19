@@ -1,4 +1,4 @@
-types: 63 of 133 tsc entries compared, 1 differ
+types: 64 of 133 tsc entries compared, 1 differ
 
 line 48: x.h ? x.h() : 0
   tsc:  number
@@ -9,4 +9,3 @@ line 15: ours: method `f` must be called — a method reference is not a value (
 line 42: ours: method `f` must be called — a method reference is not a value (tsc accepts)
 line 47: ours: method `h` must be called — a method reference is not a value (tsc accepts)
 line 48: ours: method `h` must be called — a method reference is not a value (tsc accepts)
-line 58: ours: `f` redeclares an inherited field as a method (tsc accepts)

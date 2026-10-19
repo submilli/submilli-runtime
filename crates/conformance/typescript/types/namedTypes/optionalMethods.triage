@@ -1,4 +1,3 @@
 line 15, 42, 47 extra: by-design spec §2.2 a method reference without a call is not a value
 line 48 type: by-design spec §2.2 a method reference without a call is not a value (we reject `x.h` in the condition, so the call's type is lost)
 line 48 extra: by-design spec §2.2 a method reference without a call is not a value (we reject `x.h` in the condition, so the call's type is lost)
-line 58 extra: bug SUB-1621 an optional class method is a field, so a subclass can't override it with a method

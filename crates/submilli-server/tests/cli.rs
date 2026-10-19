@@ -36,7 +36,7 @@ async fn health_check_follows_the_resolved_address() {
     let home = tempfile::tempdir().expect("temp home");
     let config = ServerConfig {
         blueprints: Some(Arc::new(InMemoryBlueprintStore::default())),
-        session_storage_root: Some(home.path().join("vfs")),
+        volume_root: Some(home.path().to_path_buf()),
         package_store_root: Some(home.path().join("packages")),
         ..ServerConfig::default()
     };
@@ -68,7 +68,7 @@ async fn health_check_resolves_from_env_and_config_without_flags() {
     let home = tempfile::tempdir().expect("temp home");
     let config = ServerConfig {
         blueprints: Some(Arc::new(InMemoryBlueprintStore::default())),
-        session_storage_root: Some(home.path().join("vfs")),
+        volume_root: Some(home.path().to_path_buf()),
         package_store_root: Some(home.path().join("packages")),
         ..ServerConfig::default()
     };

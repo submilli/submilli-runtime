@@ -1,0 +1,18 @@
+=== parser_continueNotInIterationStatement2.ts ===
+while (true) {
+>true : true
+>     : ^^^^
+
+  function f(): void {
+>f : () => void
+>  : ^^^^^^^^^^
+
+    continue;
+  }
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

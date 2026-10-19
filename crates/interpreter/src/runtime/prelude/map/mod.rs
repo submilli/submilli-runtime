@@ -289,7 +289,7 @@ fn new_index_array(
 // ---------------------------------------------------------------------------
 
 /// `Map#get(self, key) -> V | undefined`.
-pub(super) async fn get(
+pub(crate) async fn get(
     caller: &mut Caller<'_, StoreData>,
     recv: &Val,
     key: &Val,
@@ -354,7 +354,7 @@ async fn find_slot_hashed(
 /// `Map#set(self, key, value) -> self`. Resizes/compacts to keep a free slot,
 /// then probes; an existing key overwrites in place (insertion order kept), a
 /// new key takes the first tombstone or empty slot and appends to the ledger.
-pub(super) async fn set(
+pub(crate) async fn set(
     caller: &mut Caller<'_, StoreData>,
     recv: &Val,
     key: &Val,
@@ -874,7 +874,7 @@ pub(crate) fn string_entries(
 }
 
 /// A fresh empty `$MapBacking` carrying the host object vtable.
-fn build_empty(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
+pub(crate) fn build_empty(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     let intr = intrinsic_types(&mut *caller)?;
     let ty = map_backing_struct(caller.engine(), &intr)?;
     let vtable = host_object_vtable(caller)?;

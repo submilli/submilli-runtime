@@ -1,0 +1,42 @@
+=== propertyOverridesAccessors6.ts ===
+
+class A {
+>A : A
+>  : ^
+
+  get x(): number {
+>x : number
+>  : ^^^^^^
+
+    return 2;
+>2 : 2
+>  : ^
+
+  }
+}
+class B extends A {}
+>B : B
+>  : ^
+>A : A
+>  : ^
+
+class C extends B {
+>C : C
+>  : ^
+>B : B
+>  : ^
+
+  x: number = 1;
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

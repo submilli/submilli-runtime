@@ -229,6 +229,7 @@ pub(super) fn erase_generic_params(ty: &Type) -> Type {
         | Type::Void
         | Type::Never
         | Type::Unknown
+        | Type::NonPrimitive
         | Type::Error
         | Type::NumberEnum { .. }
         | Type::StringEnum { .. } => ty.clone(),
@@ -591,6 +592,17 @@ impl Inferer<'_> {
         for (k, v) in interface_bindings {
             sub.insert(k, v);
         }
+        // The receiver instantiates the signature before the call is checked,
+        // so a parameter it makes `void` may go unpassed (`Box<void>.put()`), as
+        // in tsc. Type arguments the call writes or infers come too late for that.
+        let receiver_params: Vec<crate::Param> = sig
+            .params
+            .iter()
+            .map(|param| crate::Param {
+                ty: sub.apply_or_record(&param.ty, &self.type_limits),
+                ..param.clone()
+            })
+            .collect();
 
         if let Some(targs) = &type_args {
             if targs.len() != sig.generics.len() {
@@ -628,7 +640,7 @@ impl Inferer<'_> {
         } else {
             sig.params.len()
         };
-        let min_args = super::expr::required_parameter_count(&sig.params);
+        let min_args = super::expr::required_parameter_count(&receiver_params);
         let arity_ok = args.len() >= min_args && args.len() <= max_args;
         if !arity_ok {
             let help = self.format_signature(SignatureKind::Method {
@@ -713,7 +725,7 @@ impl Inferer<'_> {
                 .record_authored_arguments(span, typed_args.clone());
         }
         if arity_ok {
-            self.fill_omitted_defaults(&sig.params, args.len(), span, &mut typed_args)?;
+            self.fill_omitted_defaults(&receiver_params, args.len(), span, &mut typed_args)?;
         }
         if arity_ok && has_rest {
             self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args)?;
@@ -920,7 +932,7 @@ impl Inferer<'_> {
         errors_before_args: usize,
     ) {
         if let Some(want) = expected.filter(|want| !pins_type_parameters(want)) {
-            let _ = sub.unify(ret, want, self.resolver());
+            let _ = sub.unify(ret, &writable_view_for(ret, want), self.resolver());
         }
         if self.error_count() > errors_before_args
             && let Err(exceeded) = bind_remaining(sub, generics, Type::Error, &self.type_limits)
@@ -957,6 +969,7 @@ impl Inferer<'_> {
     /// A mismatch is reported later, where the call's result is checked
     /// against the expected type.
     fn bind_from_expected_type(&self, sub: &mut TypeParamSubstitution, ret: &Type, want: &Type) {
+        let want = &writable_view_for(ret, want);
         // A result with several bare type parameters (`A | B`) can't say which
         // of them takes which part of `want`: tsc gives each the whole of it,
         // where pairing members would bind `A` to one literal of a `Mode`.
@@ -1656,6 +1669,27 @@ impl Inferer<'_> {
             .is_some_and(|params| params.iter().all(|p| p.ty.is_some())))
     }
 
+    /// The type parameters a context-sensitive callback fixes by typing a
+    /// parameter of its own, and the parameter types such callbacks are
+    /// passed for.
+    fn type_params_fixed_by_callbacks<'p>(
+        &mut self,
+        args_with_param_types: &'p [(ExprId, Type)],
+        inferred_generics: &[String],
+    ) -> Result<(std::collections::BTreeSet<String>, Vec<&'p Type>), CompilerFailure> {
+        let mut callback_params = Vec::new();
+        for (arg_id, param_ty) in args_with_param_types {
+            if self.is_context_sensitive_function(*arg_id)?
+                || self.literal_holds_context_sensitive_function(*arg_id)?
+            {
+                callback_params.push(param_ty);
+            }
+        }
+        let names =
+            self.type_params_bindable_by_later_arguments(args_with_param_types, inferred_generics)?;
+        Ok((names, callback_params))
+    }
+
     /// Infer a generic call's arguments against `params`, binding its type
     /// parameters in `sub`. A function literal with an unannotated parameter,
     /// passed for a function-typed parameter, is inferred after the others,
@@ -1699,6 +1733,8 @@ impl Inferer<'_> {
                 (arg_id, param_ty)
             })
             .collect();
+        let (fixed_by_callbacks, callback_params) =
+            self.type_params_fixed_by_callbacks(&args_with_param_types, inferred_generics)?;
         let arguments = GenericArguments {
             inferred_generics,
             sourced_by_literals: self
@@ -1707,6 +1743,10 @@ impl Inferer<'_> {
                 &args_with_param_types,
                 ret,
                 inferred_generics,
+                FixedByCallbacks {
+                    names: &fixed_by_callbacks,
+                    callback_params: &callback_params,
+                },
             ),
         };
         let mut typed_slots: Vec<Option<ExprId>> = vec![None; args.len()];
@@ -1786,7 +1826,9 @@ impl Inferer<'_> {
     /// Check each argument against its parameter once the call's type
     /// parameters are all bound, as tsc does after inference: unification
     /// takes an argument as a candidate, which a later one may widen past
-    /// what an earlier one accepts. One `already_reported` at is skipped.
+    /// what an earlier one accepts. One `already_reported` at is skipped. An
+    /// argument that fits takes the literal types it keeps against the
+    /// instantiated parameter, as tsc types it in that second check.
     fn check_arguments_after_inference(
         &mut self,
         sub: &TypeParamSubstitution,
@@ -1795,9 +1837,13 @@ impl Inferer<'_> {
     ) -> Result<(), CompilerFailure> {
         for check in checks {
             let param = sub.apply_or_record(&check.param_ty, &self.type_limits);
-            if super::expr::type_contains_type_var(&param)
-                || super::assignable(&check.arg_ty, &param, self.resolver())
-            {
+            if super::expr::type_contains_type_var(&param) {
+                continue;
+            }
+            if super::assignable(&check.arg_ty, &param, self.resolver()) {
+                if super::expr::type_contains_type_var(&check.param_ty) {
+                    self.retype_argument_literals(check.arg, &param)?;
+                }
                 continue;
             }
             let span = self.argument_span(check.arg)?;
@@ -2637,7 +2683,12 @@ struct LiteralTypeArguments {
 }
 
 impl LiteralTypeArguments {
-    fn new(args: &[(ExprId, Type)], ret: &Type, inferred_generics: &[String]) -> Self {
+    fn new(
+        args: &[(ExprId, Type)],
+        ret: &Type,
+        inferred_generics: &[String],
+        fixed: FixedByCallbacks<'_>,
+    ) -> Self {
         let in_result = top_level_type_params(ret);
         let mut kept = Vec::new();
         let mut sole = Vec::new();
@@ -2648,6 +2699,10 @@ impl LiteralTypeArguments {
                 .map(|(_, param)| param)
                 .filter(|param| super::expr::mentions_type_var(param, &|var| var == name))
                 .collect();
+            if fixed.widens(name, &mentioning) {
+                widened.push(name.clone());
+                continue;
+            }
             let only_top_level = mentioning
                 .iter()
                 .all(|param| top_level_type_params(param).contains(&name.as_str()));
@@ -2690,6 +2745,51 @@ impl LiteralTypeArguments {
         top_level_type_params(param)
             .iter()
             .any(|name| self.widened.iter().any(|widened| widened == name))
+    }
+}
+
+/// The type parameters a context-sensitive callback fixes by typing a
+/// parameter of its own (see `type_params_bindable_by_later_arguments`), and the
+/// parameters that callbacks are passed for.
+struct FixedByCallbacks<'a> {
+    names: &'a std::collections::BTreeSet<String>,
+    callback_params: &'a [&'a Type],
+}
+
+impl FixedByCallbacks<'_> {
+    /// Whether the fresh literals passed for `name` widen. tsc widens the
+    /// candidates of a type parameter it fixes before a callback's parameter
+    /// when every candidate was inferred at the top level of a parameter:
+    /// `iterate((x) => x + 1, c ? 1 : 2)` binds `number`. So every parameter
+    /// mentioning `name` either is it at the top level or is a callback's
+    /// parameter that mentions it only inside function types.
+    fn widens(&self, name: &str, mentioning: &[&Type]) -> bool {
+        self.names.contains(name)
+            && mentioning.iter().all(|param| {
+                top_level_type_params(param).contains(&name)
+                    || (self.callback_params.contains(param)
+                        && mentions_only_in_functions(param, name))
+            })
+    }
+}
+
+/// Whether every mention of type parameter `name` in `ty` is inside a
+/// function type, so a value of `ty` gives no candidate for it but a
+/// function's.
+fn mentions_only_in_functions(ty: &Type, name: &str) -> bool {
+    match ty.peel() {
+        Type::Function { .. } => true,
+        Type::TypeVar(var) => var != name,
+        Type::Union(members) => members
+            .iter()
+            .all(|member| mentions_only_in_functions(member, name)),
+        Type::Object { fields, index } => {
+            index.is_none()
+                && fields
+                    .values()
+                    .all(|field| mentions_only_in_functions(&field.ty, name))
+        }
+        other => !super::expr::mentions_type_var(other, &|var| var == name),
     }
 }
 
@@ -3081,6 +3181,21 @@ fn admits_undefined(ty: &Type) -> bool {
         Type::Error => true,
         Type::Union(members) => members.iter().any(holds_undefined),
         other => holds_undefined(other),
+    }
+}
+
+/// `want` without a top-level `readonly` when the call returns a fresh
+/// mutable collection (`Array.of()`, `new Set()`), which a `readonly` slot
+/// accepts: unifying the two as they stand fails on the dropped `readonly`.
+/// A bare type parameter result keeps `want` whole, so it binds as readonly.
+fn writable_view_for(ret: &Type, want: &Type) -> Type {
+    match want.peel_preserving_readonly() {
+        Type::Readonly(inner)
+            if !ret.is_readonly_array() && !matches!(ret.peel(), Type::TypeVar(_)) =>
+        {
+            (**inner).clone()
+        }
+        _ => want.clone(),
     }
 }
 

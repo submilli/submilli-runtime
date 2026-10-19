@@ -1,0 +1,48 @@
+=== emitArrowFunctionThisCapturing.ts ===
+let f1 = () => {
+>f1 : () => void
+>   : ^^^^^^^^^^
+>() => {     /*pruned*/;   } : () => void
+>                            : ^^^^^^^^^^
+
+    /*pruned*/;
+};
+
+let f2 = (x: string) => {
+>f2 : (x: string) => void
+>   : ^^^^^^^^^^^^^^^^^^^
+>(x: string) => {     /*pruned*/;   } : (x: string) => void
+>                                     : ^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+
+    /*pruned*/;
+}
+
+function foo(func: () => boolean): void { }
+>foo : (func: () => boolean) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>func : () => boolean
+>     : ^^^^^^^^^^^^^
+
+foo(() => {
+>foo(() => {     /*pruned*/;         return true; }) : void
+>                                                    : ^^^^
+>foo : (func: () => boolean) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>() => {     /*pruned*/;         return true; } : () => true
+>                                               : ^^^^^^^^^^
+
+    /*pruned*/;
+    return true;
+>true : true
+>     : ^^^^
+
+});
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

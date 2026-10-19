@@ -1,0 +1,21 @@
+line 18 extra: artifact tsc reports the property on line 20 that breaks the index signature, we report the interface declaring it, here
+line 20 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 18
+line 24 extra: artifact tsc reports the property on line 26 that breaks the index signature, we report the interface declaring it, here
+line 26 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 24
+line 36 extra: artifact tsc reports the property on line 38 that breaks the index signature, we report the interface declaring it, here
+line 38 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 36
+line 42 extra: artifact tsc reports the property on line 44 that breaks the index signature, we report the interface declaring it, here
+line 44 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 42
+line 48 extra: artifact tsc reports the property on line 50 that breaks the index signature, we report the interface declaring it, here
+line 50 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 48
+line 54 extra: artifact tsc reports the property on line 56 that breaks the index signature, we report the interface declaring it, here
+line 56 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 54
+line 60 extra: artifact tsc reports the property on line 62 that breaks the index signature, we report the interface declaring it, here
+line 62 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 60
+line 66 extra: artifact tsc reports the property on line 68 that breaks the index signature, we report the interface declaring it, here
+line 68 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 66
+line 85 extra: artifact tsc reports the property on line 87 that breaks the index signature, we report the interface declaring it, here
+line 87 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 85
+line 111 extra: artifact tsc reports the property on line 113 that breaks the index signature, we report the interface declaring it, here
+line 113 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 111
+line 55 extra: bug SUB-1722 an interface member that breaks its index signature is reported again at every reference to the interface (`I8`)

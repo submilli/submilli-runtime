@@ -36,6 +36,10 @@ pub fn emit_expr(
     ctx: &CodegenCtx,
     id: ExprId,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    // `Sub.hello()` reads `Sub` before it reaches `Base`'s static method.
+    if let Some(class) = ctx.ta.inherited_static_receivers.get(&id) {
+        crate::codegen::init_guard::emit_check(emitter, ctx, class);
+    }
     emit_expr_value(emitter, ctx, id)?;
     // Preserve concrete field validators while the expression still carries
     // its class arguments, before a surrounding cast or slot erases them.
@@ -180,11 +184,13 @@ fn emit_expr_value(
             })?;
             emitter.instruction(Instruction::LocalGet(this));
             let ctor_abi = ctx.symbols.class_ctor_abi(parent).map(<[ValType]>::to_vec);
-            emit_args_into_slots(emitter, ctx, args, ctor_abi.as_deref())?;
             let init = ctx
                 .symbols
                 .class_ctor_init_func_idx(parent)
                 .ok_or_else(|| crate::codegen::internal_failure("parent ctor init fn allocated"))?;
+            // A host parent's declared defaults replace an `undefined` argument.
+            let defaults = ctx.symbols.host_call_defaults(init, args.len()).to_vec();
+            emit_args_into_slots_with_defaults(emitter, ctx, args, ctor_abi.as_deref(), &defaults)?;
             emitter.instruction(Instruction::Call(init));
             // Own field initializers / parameter-property copies run right after
             // the parent is initialized, before the rest of the constructor body.
@@ -924,6 +930,9 @@ fn emit_index_access(
     } else if recv_ty.lowered() == &Type::Uint8Array {
         emit_expr(emitter, ctx, *receiver)?;
         emit_uint8_index_with_receiver_on_stack(emitter, ctx, *index)?;
+    } else if recv_ty.is_string_shaped() {
+        emit_expr(emitter, ctx, *receiver)?;
+        emit_string_index_with_receiver_on_stack(emitter, ctx, *index)?;
     } else {
         emit_expr(emitter, ctx, *receiver)?;
         emit_bounds_checked_index_with_receiver_on_stack(
@@ -935,6 +944,46 @@ fn emit_index_access(
         )?;
     }
 
+    Ok(())
+}
+
+/// `s[index]`, with `s` on the stack: the host helper reads the code unit,
+/// throwing `RangeError` out of range as an array read does.
+fn emit_string_index_with_receiver_on_stack(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    index: ExprId,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let Some(helper) = ctx.require(
+        ctx.symbols.prelude_func_idx("string_index"),
+        "string index helper imported",
+    ) else {
+        return Ok(());
+    };
+    // A chain step's receiver may sit on the stack in a wider slot, such as
+    // `string | undefined`'s, so it is cast to `$string` after the index runs.
+    let receiver = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
+    emitter.instruction(Instruction::LocalSet(receiver));
+    emit_expr(emitter, ctx, index)?;
+    emit_index_number(
+        emitter,
+        ctx,
+        &ctx.ta
+            .try_expr(index)
+            .map_err(crate::codegen::arena_failure)?
+            .ty,
+    )?;
+    let index_local = emitter.add_anonymous_local(ValType::F64)?;
+    emitter.instruction(Instruction::LocalSet(index_local));
+    emitter.instruction(Instruction::LocalGet(receiver));
+    crate::codegen::cast_check::emit_operation_cast_on_stack(
+        emitter,
+        ctx,
+        &Type::Unknown,
+        &Type::String,
+    )?;
+    emitter.instruction(Instruction::LocalGet(index_local));
+    emitter.instruction(Instruction::Call(helper));
     Ok(())
 }
 
@@ -1929,6 +1978,18 @@ fn emit_postfix_unary(
                 )?;
                 return Ok(());
             }
+            if let Some((getter, setter)) = host_property_accessors(ctx, &receiver_ty, name)? {
+                emit_host_property_postfix(
+                    emitter,
+                    ctx,
+                    *receiver,
+                    &receiver_ty,
+                    (getter, setter),
+                    op,
+                    target_ty,
+                )?;
+                return Ok(());
+            }
             // Mirror AssignField + FieldAccess's vtable-dispatched calls.
             let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
                 crate::codegen::internal_failure("intrinsics declared by codegen entry")
@@ -1962,6 +2023,76 @@ fn emit_postfix_unary(
             emit_index_postfix(emitter, ctx, *receiver, *index, op)?;
         }
     };
+    Ok(())
+}
+
+/// How a writable prelude property with a host setter is read.
+enum HostPropertyGetter {
+    Func(u32),
+    /// `Array#length`, read inline from the array struct.
+    InlineLength(u32),
+}
+
+/// The getter and setter of a writable prelude interface property backed by
+/// host functions (`RegExp.lastIndex`, `Array.length`).
+fn host_property_accessors(
+    ctx: &CodegenCtx,
+    receiver_ty: &Type,
+    name: &Ident,
+) -> Result<Option<(HostPropertyGetter, u32)>, crate::compiler_error::CompilerFailure> {
+    let Some(iface) = crate::codegen::host_property_iface(receiver_ty) else {
+        return Ok(None);
+    };
+    let setter_key = crate::mangle::extend(&iface, &crate::mangle::property_setter(&name.name));
+    let Some(setter) = ctx.symbols.func_idx(&setter_key) else {
+        return Ok(None);
+    };
+    if let Some(struct_idx) = inline_length_struct_idx(ctx, &iface, &name.name)? {
+        return Ok(Some((HostPropertyGetter::InlineLength(struct_idx), setter)));
+    }
+    let getter = ctx
+        .symbols
+        .func_idx(&crate::mangle::extend(&iface, &name.name))
+        .ok_or_else(|| {
+            crate::codegen::internal_failure("host property getter recorded beside its setter")
+        })?;
+    Ok(Some((HostPropertyGetter::Func(getter), setter)))
+}
+
+fn emit_host_property_postfix(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    receiver: ExprId,
+    receiver_ty: &Type,
+    (getter, setter): (HostPropertyGetter, u32),
+    op: crate::PostfixOp,
+    target_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    // The host accessors trade `f64`; a widened target boxes the old value.
+    let recv = emitter.add_anonymous_local(ctx.symbols.value_type(receiver_ty)?)?;
+    let old = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Number)?)?;
+    emit_receiver(emitter, ctx, receiver)?;
+    emitter.instruction(Instruction::LocalSet(recv));
+    // Setter receiver first, then the updated value computed from the getter.
+    emitter.instruction(Instruction::LocalGet(recv));
+    emitter.instruction(Instruction::RefAsNonNull);
+    emitter.instruction(Instruction::LocalGet(recv));
+    emitter.instruction(Instruction::RefAsNonNull);
+    match getter {
+        HostPropertyGetter::Func(getter) => {
+            emitter.instruction(Instruction::Call(getter));
+        }
+        HostPropertyGetter::InlineLength(struct_idx) => {
+            emit_inline_length(emitter, ctx, struct_idx);
+        }
+    }
+    emitter.instruction(Instruction::LocalTee(old));
+    emit_postfix_delta(emitter, ctx, op, &Type::Number);
+    emitter.instruction(Instruction::Call(setter));
+    emitter.instruction(Instruction::LocalGet(old));
+    if target_ty != &Type::Number {
+        cast::emit_box(emitter, ctx, &Type::Number)?;
+    }
     Ok(())
 }
 
@@ -2595,10 +2726,11 @@ fn emit_object_spread(
             .ta
             .source_type(source.expr_id())
             .map_err(crate::codegen::arena_failure)?;
-        // A source that may hold `null` or a falsy primitive copies nothing
-        // when it does: the merge then takes no source, which still applies
+        // A source that may hold something other than an object branches on
+        // it: `null` or a primitive copies nothing, while a string or array
+        // held in `{}` copies its indices. Either way the merge still applies
         // the final shape.
-        let accumulator = if may_hold_non_object(narrowed_ty) {
+        let non_object_source = if may_hold_non_object(narrowed_ty) {
             Some(emit_object_source_test(
                 emitter,
                 ctx,
@@ -2619,10 +2751,19 @@ fn emit_object_spread(
             emitter.instruction(null_object.clone());
         }
         emitter.instruction(Instruction::Call(merge));
-        if let Some(accumulator) = accumulator {
+        if let Some(NonObjectSource {
+            accumulator,
+            opaque,
+        }) = non_object_source
+        {
             emitter.emit_else();
             emitter.instruction(Instruction::LocalGet(accumulator));
-            emitter.instruction(null_object.clone());
+            // A string or an array held in `{}` copies its indices, which the
+            // merge reads from it; a nullish or other primitive copies nothing.
+            match opaque {
+                Some(source) => emitter.instruction(Instruction::LocalGet(source)),
+                None => emitter.instruction(null_object.clone()),
+            }
             emit_spread_shape_argument(emitter, ctx, final_shape, &null_object);
             emitter.instruction(null_object.clone());
             emitter.instruction(Instruction::Call(merge));
@@ -2666,17 +2807,25 @@ fn may_hold_non_object(ty: &Type) -> bool {
     }
 }
 
+/// The locals the `else` arm of [`emit_object_source_test`] reads.
+struct NonObjectSource {
+    accumulator: u32,
+    /// The source, when it is held as an opaque `$Object` (as `{}` is), which
+    /// may be a string or an array.
+    opaque: Option<u32>,
+}
+
 /// With the accumulator and then the source on the stack, opens an `if` on
 /// whether the source is an object, whose result is the merged object. Inside
 /// it, the accumulator and the source, as an `$ObjectShape`, are on the stack.
-/// Returns the local holding the accumulator, for the `else` arm.
+/// Returns the locals the `else` arm reads.
 fn emit_object_source_test(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     source_ty: &Type,
     object: u32,
     object_shape: u32,
-) -> Result<u32, crate::compiler_error::CompilerFailure> {
+) -> Result<NonObjectSource, crate::compiler_error::CompilerFailure> {
     let source_type = match ctx.symbols.value_type(source_ty)? {
         ValType::Ref(reference) => ValType::Ref(RefType {
             nullable: true,
@@ -2684,6 +2833,7 @@ fn emit_object_source_test(
         }),
         other => other,
     };
+    let opaque = source_type == object_ref(object);
     let source = emitter.add_anonymous_local(source_type)?;
     emitter.instruction(Instruction::LocalSet(source));
     let accumulator = emitter.add_anonymous_local(object_ref(object))?;
@@ -2701,7 +2851,10 @@ fn emit_object_source_test(
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
         object_shape,
     )));
-    Ok(accumulator)
+    Ok(NonObjectSource {
+        accumulator,
+        opaque: opaque.then_some(source),
+    })
 }
 
 /// Union sources may carry a known field with an incompatible hidden value.
@@ -2865,14 +3018,7 @@ fn coerce_field_receiver_to_object_shape(
     receiver_ty: &Type,
     object_shape: u32,
 ) {
-    let universal = match receiver_ty.lowered() {
-        Type::InterfaceRef { .. } | Type::Unknown => true,
-        Type::Union(members) => members
-            .iter()
-            .any(|m| !matches!(m.lowered(), Type::Object { .. })),
-        _ => false,
-    };
-    if universal {
+    if crate::codegen::may_hold_builtin_value(receiver_ty) {
         emitter.instruction(Instruction::RefAsNonNull);
         emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
             object_shape,
@@ -3001,6 +3147,8 @@ fn emit_chain_access(
                 cast::emit_coerce_to_slot(emitter, ctx, check_ty, result_ty)?;
             } else if receiver_ty.lowered() == &Type::Uint8Array {
                 emit_uint8_index_with_receiver_on_stack(emitter, ctx, *idx)?;
+            } else if receiver_ty.is_string_shaped() {
+                emit_string_index_with_receiver_on_stack(emitter, ctx, *idx)?;
             } else {
                 let source_ty = match receiver_ty.lowered() {
                     Type::Array(element) => element.as_ref(),
@@ -3068,6 +3216,11 @@ fn emit_chain_access(
             // call_refs, unboxing the erased return to the function's
             // declared `ret` — which is this part's `result_ty`, so the
             // value already sits in the slot the next step expects.
+            if let Some(signature) = union_signature
+                && crate::codegen::closure_coercions::is_union_call_cast(receiver_ty, signature)
+            {
+                crate::codegen::closure_coercions::emit_union_call_cast(emitter, ctx, signature)?;
+            }
             emit_indirect_closure_call_with_receiver_on_stack(
                 emitter,
                 ctx,
@@ -4398,11 +4551,12 @@ fn is_optional_tuple_position(
     Ok(index.fract() == 0.0 && tuple_permits_missing_index(receiver, index))
 }
 
+/// Whether a read at `index` may find no element: an optional position, or,
+/// in a union a destructuring pattern reads, one past a shorter tuple's end.
+/// Inference rejects any other read past a tuple's end.
 fn tuple_permits_missing_index(receiver: &Type, index: f64) -> bool {
     match receiver.lowered() {
-        Type::Tuple(elements) => {
-            index >= elements.required_len() as f64 && index < elements.len() as f64
-        }
+        Type::Tuple(elements) => index >= elements.required_len() as f64,
         Type::Union(members) => members
             .iter()
             .any(|member| tuple_permits_missing_index(member, index)),
@@ -4951,33 +5105,7 @@ fn emit_typeof_tag(
                     .ty,
             )?;
             emitter.instruction(Instruction::LocalSet(scratch));
-
-            // Stated as the complement of the primitive tags rather than a list
-            // of object-like types: every runtime value is an `$Object`
-            // subtype, so a positive list silently answers "not an object" for
-            // any struct nobody remembered to add. The exclusions below are
-            // exhaustive by construction — they are the `$Object` subtypes that
-            // carry a primitive tag of their own.
-            let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
-                crate::codegen::internal_failure("intrinsics declared by codegen entry")
-            })?;
-            emitter.instruction(Instruction::LocalGet(scratch));
-            emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
-                intrinsics.object,
-            )));
-            for primitive in [
-                intrinsics.string,
-                intrinsics.boxed_number,
-                intrinsics.boxed_boolean,
-                intrinsics.bigint,
-                intrinsics.closure,
-                intrinsics.undefined,
-            ] {
-                emitter.instruction(Instruction::LocalGet(scratch));
-                emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(primitive)));
-                emitter.instruction(Instruction::I32Eqz);
-                emitter.instruction(Instruction::I32And);
-            }
+            emit_is_non_primitive(emitter, ctx, scratch, Closures::AreNotObjects)?;
             if nullable {
                 // JS quirk: `typeof null === "object"`. Only OR in
                 // the null check when the source's Wasm type admits
@@ -4989,6 +5117,55 @@ fn emit_typeof_tag(
             }
         }
     };
+    Ok(())
+}
+
+/// Whether a closure passes [`emit_is_non_primitive`]: it does for the
+/// `object` type, but `typeof` tags it `"function"`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Closures {
+    AreObjects,
+    AreNotObjects,
+}
+
+/// Test whether the value in `local` is an object rather than `null`,
+/// `undefined` or a primitive, leaving an `i32` on the stack.
+///
+/// Stated as the complement of the primitive tags rather than a list of
+/// object-like types: every runtime value is an `$Object` subtype, so a
+/// positive list silently answers "not an object" for any struct nobody
+/// remembered to add. The exclusions below are exhaustive by construction —
+/// they are the `$Object` subtypes that carry a primitive tag of their own.
+pub(crate) fn emit_is_non_primitive(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    local: u32,
+    closures: Closures,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
+    emitter.instruction(Instruction::LocalGet(local));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        intrinsics.object,
+    )));
+    let mut excluded = vec![
+        intrinsics.string,
+        intrinsics.boxed_number,
+        intrinsics.boxed_boolean,
+        intrinsics.bigint,
+        intrinsics.undefined,
+    ];
+    if closures == Closures::AreNotObjects {
+        excluded.push(intrinsics.closure);
+    }
+    for primitive in excluded {
+        emitter.instruction(Instruction::LocalGet(local));
+        emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(primitive)));
+        emitter.instruction(Instruction::I32Eqz);
+        emitter.instruction(Instruction::I32And);
+    }
     Ok(())
 }
 
@@ -5997,6 +6174,7 @@ fn emit_intrinsic_call(
                 .ok_or_else(|| {
                     crate::codegen::internal_failure("Error#constructor exported from prelude")
                 })?;
+            crate::codegen::throw::emit_no_error_options(emitter);
             emitter.instruction(Instruction::Call(ctor_idx));
             crate::codegen::throw::emit_error_throw(emitter, ctx);
             emitter.emit_end();
@@ -6028,6 +6206,21 @@ fn emit_intrinsic_call(
                 .prelude_func_idx("__value_to_string")
                 .ok_or_else(|| {
                     crate::codegen::internal_failure("dynamic string conversion collected")
+                })?;
+            emitter.instruction(Instruction::Call(function));
+        }
+        Intrinsic::ToObject => {
+            let [value] = args else {
+                return Err(crate::codegen::internal_failure(
+                    "object conversion requires one argument",
+                ));
+            };
+            emit_expr(emitter, ctx, *value)?;
+            let function = ctx
+                .symbols
+                .prelude_func_idx("ObjectConstructor##toObject")
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure("object conversion helper collected")
                 })?;
             emitter.instruction(Instruction::Call(function));
         }

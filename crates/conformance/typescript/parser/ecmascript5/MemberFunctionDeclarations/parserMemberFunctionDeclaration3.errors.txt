@@ -1,0 +1,1 @@
+parserMemberFunctionDeclaration3.ts(3,12): error TS1029: 'public' modifier must precede 'static' modifier.

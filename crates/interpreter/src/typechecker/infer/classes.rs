@@ -219,6 +219,7 @@ impl<'a> Inferer<'a> {
                             visibility: modifiers.visibility,
                             readonly: modifiers.readonly.is_some(),
                             optional: false,
+                            method: false,
                             doc: f_doc.clone(),
                         },
                     );
@@ -267,6 +268,7 @@ impl<'a> Inferer<'a> {
                     name: f_name,
                     modifiers,
                     optional,
+                    method_signature,
                     ty,
                     doc: f_doc,
                     ..
@@ -282,6 +284,7 @@ impl<'a> Inferer<'a> {
                             visibility: modifiers.visibility,
                             readonly: modifiers.readonly.is_some(),
                             optional: *optional,
+                            method: *method_signature,
                             doc: f_doc.clone(),
                         },
                     );
@@ -407,6 +410,7 @@ impl<'a> Inferer<'a> {
                                 visibility: modifiers.visibility,
                                 readonly: modifiers.readonly.is_some(),
                                 optional: false,
+                                method: false,
                                 doc: None,
                             },
                         );
@@ -459,6 +463,7 @@ impl<'a> Inferer<'a> {
                                     visibility,
                                     readonly: true,
                                     optional: false,
+                                    method: false,
                                     doc: None,
                                 });
                             accessor_sigs.push(AccessorSig::Getter {
@@ -484,6 +489,7 @@ impl<'a> Inferer<'a> {
                                     visibility,
                                     readonly: false,
                                     optional: false,
+                                    method: false,
                                     doc: None,
                                 });
                             accessor_sigs.push(AccessorSig::Setter {
@@ -1214,6 +1220,15 @@ impl<'a> Inferer<'a> {
         if inherited_kind == member.kind {
             return Ok(false);
         }
+        if member.kind == MemberKind::Method
+            && inherited_kind == MemberKind::Field
+            && let Some((field, _)) = self
+                .ancestor_field_decl(&member.child_class, &member.name, &opaque)
+                .filter(|(field, _)| field.method)
+        {
+            self.check_optional_method_override(member, &field, &opaque)?;
+            return Ok(true);
+        }
         let owner_name = self.class_name_of(&owner);
         let (child, parent) = (member.kind.noun(), inherited_kind.noun());
         self.error_with_help(
@@ -1234,6 +1249,61 @@ impl<'a> Inferer<'a> {
             ],
         );
         Ok(true)
+    }
+
+    /// A method may override an inherited optional method declared without a
+    /// body (`f?(): T;`), which is a field: the method also fills that field,
+    /// so its type has to fit the field's, and only a non-generic method gets
+    /// the closure that fills it.
+    fn check_optional_method_override(
+        &mut self,
+        member: &RedeclarationCandidate,
+        inherited: &FieldSig,
+        opaque: &BTreeMap<String, Type>,
+    ) -> Result<(), CompilerFailure> {
+        let Some(child_sig) = self.class_method_sig(&member.child_class, &member.name) else {
+            return Ok(());
+        };
+        let name = &member.name;
+        if !child_sig.generics.is_empty() {
+            self.error_with_help(
+                member.span,
+                format!("override of optional method `{name}` cannot declare type parameters"),
+                vec![format!(
+                    "the inherited `{name}` holds one function value, so its override must be \
+                     non-generic"
+                )],
+            );
+            return Ok(());
+        }
+        let child_fn = substitute_typevars(&method_fn_type(&child_sig), opaque, &self.type_limits)
+            .map_err(type_limit_at(member.span))?;
+        if !super::assignable(&child_fn, &inherited.ty, self.resolver()) {
+            self.error_with_help(
+                member.span,
+                format!("method `{name}` is not compatible with the inherited optional method"),
+                vec![
+                    format!("inherited: {}", inherited.ty),
+                    format!("override:  {child_fn}"),
+                    format!("give `{name}` a type assignable to `{}`", inherited.ty),
+                ],
+            );
+            return Ok(());
+        }
+        let visibility = self
+            .class_method_visibility(&member.child_class, name)
+            .unwrap_or(Visibility::Public);
+        if visibility != inherited.visibility {
+            let expected = visibility_keyword(inherited.visibility);
+            self.error_with_help(
+                member.span,
+                format!("override of optional method `{name}` changes its visibility"),
+                vec![format!(
+                    "declare `{name}` {expected}, as the inherited method is"
+                )],
+            );
+        }
+        Ok(())
     }
 
     /// An accessor redeclaring an inherited accessor shares its vtable slot, so
@@ -1397,7 +1467,10 @@ impl<'a> Inferer<'a> {
                 vec![
                     format!("inherited: {parent_fn}"),
                     format!("override:  {child_fn}"),
-                ],
+                ]
+                .into_iter()
+                .chain(required_where_omittable(&parent_sig, &child_sig))
+                .collect(),
             );
         }
         Ok(())
@@ -1422,6 +1495,22 @@ impl<'a> Inferer<'a> {
         else {
             return Ok(());
         };
+        // As in tsc, a bodyless optional method can't redeclare a property:
+        // a subclass method could then override the property through it.
+        if child_field.method && !parent_field.method {
+            self.error_with_help(
+                member.span,
+                format!(
+                    "`{}` redeclares an inherited property as an optional method",
+                    member.name
+                ),
+                vec![format!(
+                    "declare `{0}` as a property (`{0}?: (...) => T`), or rename it",
+                    member.name
+                )],
+            );
+            return Ok(());
+        }
 
         let child_ty =
             substitute_typevars(&field_read_ty(&child_field), &opaque, &self.type_limits)
@@ -3333,6 +3422,15 @@ impl<'a> Inferer<'a> {
         }
     }
 
+    fn class_method_visibility(&self, mangled: &MangledName, method: &str) -> Option<Visibility> {
+        match self.class_by_mangled(mangled)?.kind {
+            TypeKind::Class {
+                method_visibility, ..
+            } => method_visibility.get(method).copied(),
+            _ => None,
+        }
+    }
+
     fn class_method_sig(&self, mangled: &MangledName, method: &str) -> Option<MethodSig> {
         match self.class_by_mangled(mangled)?.kind {
             TypeKind::Class { methods, .. } => methods.get(method).cloned(),
@@ -3717,6 +3815,7 @@ impl<'a> Inferer<'a> {
                 optional: sig.optional,
                 initializer: typed_init,
                 auto_assigned: false,
+                method_signature: sig.method,
                 narrowing_check: self.narrowing_check_for(mangled, &name.name),
                 doc: doc.clone(),
             });
@@ -3749,6 +3848,7 @@ impl<'a> Inferer<'a> {
                     optional: sig.optional,
                     initializer: None,
                     auto_assigned: true,
+                    method_signature: false,
                     narrowing_check: self.narrowing_check_for(mangled, &param.name.name),
                     doc: None,
                 });
@@ -4642,6 +4742,23 @@ fn substitute_accessor_sig(
     })
 }
 
+/// Help for an override that requires a parameter the inherited method lets
+/// callers omit. Unlike tsc, which accepts it, the override would receive
+/// `undefined` in a parameter whose type excludes it when called through the
+/// parent's type, since an omitted argument takes the callee's own default.
+fn required_where_omittable(parent: &MethodSig, child: &MethodSig) -> Option<String> {
+    let (_, param) = parent
+        .params
+        .iter()
+        .zip(&child.params)
+        .find(|(inherited, own)| inherited.is_omittable() && !own.is_omittable() && !own.rest)?;
+    Some(format!(
+        "a call through the inherited method may omit `{}`, which the override would then \
+         receive as undefined — give it a default, or make it optional",
+        param.name
+    ))
+}
+
 /// How a visibility renders as the source keyword that produces it. `public` is
 /// the default and usually written implicitly, but a diagnostic naming the fix
 /// has to spell it.
@@ -5297,15 +5414,15 @@ mod tests {
             class Base extends Nope { }
         "#;
         let (_, diags) = run(src);
+        let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
         assert_eq!(
-            diags.len(),
-            1,
+            messages,
+            [
+                "unknown type `Nope`",
+                "class `Base` used before its declaration"
+            ],
             "conformance is checked after every signature binds, so declaration \
-             order must not resurrect the cascade, got: {diags:?}"
-        );
-        assert!(
-            diags[0].message.contains("unknown type `Nope`"),
-            "got: {diags:?}"
+             order must not resurrect the cascade"
         );
     }
 
@@ -5328,14 +5445,19 @@ mod tests {
     }
 
     #[test]
-    fn implements_satisfied_by_a_later_declared_parent() {
+    fn a_later_declared_parent_reports_only_the_order() {
         let src = r#"
             interface Named { name(): string; }
             class Sub extends Base implements Named { }
             class Base { name(): string { return "b"; } }
         "#;
         let (_, diags) = run(src);
-        assert!(diags.is_empty(), "got: {diags:?}");
+        let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            ["class `Base` used before its declaration"],
+            "only the order is wrong; the interface is satisfied"
+        );
     }
 
     #[test]

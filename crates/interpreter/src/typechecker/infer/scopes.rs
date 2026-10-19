@@ -116,6 +116,17 @@ impl Scopes {
         }
     }
 
+    pub(super) fn set_parameter_read_type(&mut self, name: &str, ty: Type) {
+        if let Some(entry) = self
+            .stack
+            .iter_mut()
+            .rev()
+            .find_map(|scope| scope.bindings.get_mut(name))
+        {
+            entry.ty = ty;
+        }
+    }
+
     /// A write invalidates the initial refinement established by a default.
     pub(super) fn reset_parameter_read_type(&mut self, name: &str) {
         if let Some(entry) = self

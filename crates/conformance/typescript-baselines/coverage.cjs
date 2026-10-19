@@ -126,6 +126,7 @@ const FEATURES = [
     ] },
     { name: "Numeric separators (`1_000`)", spec: "1.1", node: numeral(/_/) },
     { name: "`unknown`", spec: "2.11", type: typeWord("unknown"), node: is(K.UnknownKeyword) },
+    { name: "`object`", spec: "2.11", type: typeWord("object"), node: is(K.ObjectKeyword) },
     { name: "Object types (`{ x: T }`)", spec: "1.2", type: /^\{ /, node: is(K.TypeLiteral, K.ObjectLiteralExpression) },
     { name: "Optional properties (`a?: T`)", spec: "1.2", node: (n) => ts.isPropertySignature(n) && !!n.questionToken },
     { name: "Object literal shorthand (`{ x }`)", spec: "1.2", node: is(K.ShorthandPropertyAssignment) },

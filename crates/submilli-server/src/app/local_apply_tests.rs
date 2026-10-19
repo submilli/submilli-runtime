@@ -5,6 +5,7 @@ use super::*;
 #[tokio::test]
 async fn a_local_apply_evicts_the_blueprints_mcp_catalogs_only() {
     let state = AppState::new(ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
         blueprints: Some(Arc::new(InMemoryBlueprintStore::default())),
         ..Default::default()
     })
@@ -38,6 +39,7 @@ async fn a_local_apply_evicts_the_blueprints_mcp_catalogs_only() {
 #[tokio::test]
 async fn a_refused_local_apply_evicts_nothing() {
     let state = AppState::new(ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
         blueprints: Some(Arc::new(InMemoryBlueprintStore::default())),
         ..Default::default()
     })

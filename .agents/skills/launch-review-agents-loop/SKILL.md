@@ -19,12 +19,16 @@ are optional; use the user's requirements and intended behavior when absent.
   proposed diff: committed changes since its merge base, plus intended staged,
   unstaged, and untracked files. Do not assume `git diff` alone covers a PR.
   If the base cannot be determined, resolve it before claiming complete coverage.
+- Establish the current contract, agreed assumptions, and deferred work before
+  judging the implementation. Challenge machinery against that scope; existing
+  code and possible future requirements do not establish necessity.
 - Reuse existing focused verification evidence; do not run tests merely to start
   a review round. Review by reading code and existing results by default. A
   narrowly scoped test or scratch reproduction is allowed to resolve a concrete
   correctness question or edge case. Never run full workspace, fixture, package,
-  or conformance sweeps in this workflow; full verification belongs to `open-pr`
-  after rebasing onto main (or the selected PR base).
+  or ECMA-262 conformance sweeps in this workflow; full suites run in PR CI and
+  nightly-only sweeps run nightly. The TypeScript conformance suite is an
+  affected check for compiler changes (see `AGENTS.md`).
 - For TypeScript syntax, typing, or runtime changes, provide comparisons with
   the installed/project-pinned TypeScript compiler under strict options and its
   emitted JavaScript under Node. Record versions, options, commands, acceptance,
@@ -43,10 +47,11 @@ If delegation is unavailable, perform three separate passes yourself and disclos
 that the review was not independent. Reviewers report to the parent; they must
 not launch this loop recursively or create a PR.
 
-1. **Clean code:** assess readability, naming, control flow, and organization
-   against the rubric below and repository guidance. For non-Rust changes,
-   apply the relevant language/documentation conventions. Do not hunt bugs,
-   repeat lint findings, or manufacture findings.
+1. **Clean code:** challenge unnecessary state, abstractions, and indirection;
+   assess readability, naming, control flow, and organization against the rubric
+   below and repository guidance. For non-Rust changes, apply the relevant
+   language/documentation conventions. Do not hunt bugs, repeat lint findings,
+   or manufacture findings.
 2. **Correctness:** trace changes through callers and shared mechanisms;
    challenge assumptions, invariants, interactions, and TypeScript compatibility
    where applicable. Apply the no-panic review below to execution-path changes.
@@ -57,8 +62,10 @@ not launch this loop recursively or create a PR.
 
 Give every reviewer a self-contained packet containing:
 
-- Exact checkout, requirements, intended behavior, root cause when applicable,
-  changed files, full proposed diff, invariants, and useful sibling implementations.
+- Exact checkout, requirements, intended behavior, agreed assumptions and deferred
+  work, root cause when applicable, changed files, full proposed diff, invariants,
+  and useful sibling implementations. Carry forward decisions that narrow scope
+  or simplify the design so later rounds do not reintroduce rejected machinery.
 - This skill's rubric, applicable repository guidance, and resolved paths to
   relevant design documents. Do not require private documents for this public
   repository or assume personal skills are installed.
@@ -174,21 +181,45 @@ the finding or claim all required review steps completed.
 Repository guidance takes precedence. Review changed/added code and surrounding
 context; report untouched readability issues only if the change worsens them.
 
-- Functions should do one coherent thing. Extract meaningful phases with small
-  interfaces; do not split merely to meet a line count.
-- Use descriptive domain names, question-like boolean names, and established
-  abbreviations. Avoid cryptic names and redundant type encodings.
+Ask explicitly: **What state or machinery can we remove while preserving the
+current contract?** Aim for code whose purpose and sequence are apparent on a
+first read. Judge elegance through concrete reader costs and necessary behavior,
+not personal taste, line count, or file count.
+
+- Challenge abstractions, wrappers, modes, and state machines that have no current
+  need or obscure a direct operation. Suggest the simpler flow and explain why
+  it preserves the contract. Preserve necessary correctness and safety guarantees.
+- For stored state, identify the behavior or failure scenario requiring it and
+  whether arguments or authoritative state can reconstruct it. Challenge duplicated
+  inputs and derived facts; keep progress and evidence needed across real failures.
+- Read a representative operation from entry to result as plain English: names
+  should describe the actions in order, with visible state changes and failure
+  boundaries. Call out scenario switches, tuple plumbing, nested closures, or
+  generic adapters when they obscure that story; explain the specific cost.
+- Functions should handle one coherent scenario. Prefer separate operations over
+  one function serving several scenarios through switches. Extract a helper when
+  its name and interface clarify the caller; keep cohesive steps inline when
+  extraction only adds navigation. Limited duplication can be clearer than a
+  shared abstraction that couples different scenarios.
+- Use descriptive domain names and consistent vocabulary across functions, return
+  types, and variables. Avoid overloaded or vague names, cryptic abbreviations,
+  and redundant type encodings. Boolean names should express a clear question.
 - Keep public flow before helpers and helpers below callers. Prefer guard
   clauses to nesting and data/iterators only when they clarify the operation.
-- Comments explain invariants or reasons; follow repository error conventions.
+- Make the ordinary flow self-documenting through names and structure. Comments
+  explain invariants, ordering constraints, and reasons. If basic behavior needs
+  a prose walkthrough, first consider clearer code; retain essential explanations
+  of non-obvious guarantees. Follow repository error conventions.
 - Ordered index/declaration tables encode layout: length is not a finding.
   Do not obscure or reorder their sequence through incidental cleanup.
 - Keep exhaustive match dispatchers intact. Consider extracting substantial arm
   bodies, not splitting the dispatcher itself.
 - Generated/encoding sequences, tests, and fixtures may be long and repetitive.
   Do not flag that alone or turn a review into an unrelated structural refactor.
-- Exclude mechanical lint nits. Each finding must identify the specific reader
-  cost and an actionable direction for improvement.
+- Exclude mechanical lint nits and unsupported claims that code is ugly or too
+  complex. Each finding must identify the specific reader cost or unnecessary
+  mechanism and an actionable improvement; a behavioral reproducer is not needed
+  for a supported readability finding. An empty findings list remains valid.
 
 ## Triage and repeat
 
@@ -241,10 +272,9 @@ explicitly tracked in the handoff without expanding the patch's scope.
 
 After convergence, confirm that affected areas have focused verification for the
 final changes, running only missing or invalidated checks. Do not run a full suite
-as a review exit gate. Defer full verification to `open-pr` after its rebase; a
-clean review does not claim that the later PR verification has passed.
-For documentation-only changes, verify relevant
-links, paths, and instructions; run documentation-site checks only when that site
+as a review exit gate. Full suites run in PR CI; a clean review does not claim
+that CI has passed. For documentation-only changes, verify relevant links,
+paths, and instructions; run documentation-site checks only when that site
 is affected. Do not run Rust suites for documentation-only changes.
 
 If final checks expose a regression, fix it, repeat the review round, and rerun
@@ -256,7 +286,8 @@ content and a rebase without conflicts do not require another review cycle.
 Preserve a review completion record in the handoff: reviewed scope and base,
 commit or working-tree diff identity, roles/rounds completed, findings and their
 priorities/dispositions, final low-priority fixes checked by the parent, and
-focused verification results. `open-pr` must reuse this completed review when
+focused verification results. Include assumptions and simplification decisions
+needed by the next round or handoff. `open-pr` must reuse this completed review when
 it covers the proposed changes, including after a conflict-free rebase; changed
 commit SHAs alone do not invalidate it. Report whether completion followed an
 empty round or a low-priority-only round, rather than claiming zero findings.
@@ -264,7 +295,7 @@ empty round or a low-priority-only round, rather than claiming zero findings.
 Report scope/base reviewed, rounds, independent reviews or fallback, findings
 fixed/rejected/filed/deferred with evidence and links where available, introduced
 versus pre-existing defects, checks and compatibility results, and outstanding
-work. Report full verification as deferred to `open-pr`. A clean review requires
+work. State that full suites are left to PR CI. A clean review requires
 completed applicable focused checks and no unresolved in-scope findings.
 
 This skill does not stage, commit, push, create a PR, close issues, or invoke a

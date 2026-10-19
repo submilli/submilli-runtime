@@ -1,0 +1,89 @@
+=== nonPrimitiveNarrow.ts ===
+/*pruned*/;
+
+
+
+let a: object = null as unknown as (object);
+>a : object
+>  : ^^^^^^
+>null as unknown as (object) : object
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+/*pruned*/;
+
+
+
+
+if (typeof a === 'number') {
+>typeof a === 'number' : boolean
+>                      : ^^^^^^^
+>typeof a : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : object
+>  : ^^^^^^
+>'number' : "number"
+>         : ^^^^^^^^
+
+    a.toFixed(); // error, never
+>a.toFixed() : any
+>            : ^^^
+>a.toFixed : any
+>          : ^^^
+>a : never
+>  : ^^^^^
+>toFixed : any
+>        : ^^^
+
+}
+
+let b: object | null = null as unknown as (object | null);
+>b : object | null
+>  : ^^^^^^^^^^^^^
+>null as unknown as (object | null) : object | null
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+if (typeof b === 'object') {
+>typeof b === 'object' : boolean
+>                      : ^^^^^^^
+>typeof b : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : object | null
+>  : ^^^^^^^^^^^^^
+>'object' : "object"
+>         : ^^^^^^^^
+
+   b.toString(); // ok, object | null
+>b.toString() : string
+>             : ^^^^^^
+>b.toString : () => string
+>           : ^^^^^^^^^^^^
+>b : object | null
+>  : ^^^^^^^^^^^^^
+>toString : () => string
+>         : ^^^^^^^^^^^^
+
+} else {
+   b.toString(); // error, never
+>b.toString() : any
+>             : ^^^
+>b.toString : any
+>           : ^^^
+>b : never
+>  : ^^^^^
+>toString : any
+>         : ^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,7 +1,7 @@
 types: 33 of 76 tsc entries compared, 0 differ
 
 errors:
-line 4: ours: field `substr` does not exist on `string` (tsc accepts)
+line 4: ours: method `substr` must be called — a method reference is not a value (tsc accepts)
 line 6: ours: method `toFixed` must be called — a method reference is not a value (tsc accepts)
-line 8: ours: field `substr` does not exist on `string` (tsc accepts)
+line 8: ours: method `substr` must be called — a method reference is not a value (tsc accepts)
 line 10: ours: method `toFixed` must be called — a method reference is not a value (tsc accepts)

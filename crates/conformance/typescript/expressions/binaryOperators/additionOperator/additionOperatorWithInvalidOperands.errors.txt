@@ -1,0 +1,13 @@
+additionOperatorWithInvalidOperands.ts(5,12): error TS2564: Property 'a' has no initializer and is not definitely assigned in the constructor.
+additionOperatorWithInvalidOperands.ts(17,10): error TS2365: Operator '+' cannot be applied to types 'boolean' and 'boolean'.
+additionOperatorWithInvalidOperands.ts(18,10): error TS2365: Operator '+' cannot be applied to types 'boolean' and 'number'.
+additionOperatorWithInvalidOperands.ts(22,10): error TS2365: Operator '+' cannot be applied to types 'number' and 'boolean'.
+additionOperatorWithInvalidOperands.ts(32,11): error TS2365: Operator '+' cannot be applied to types 'boolean' and 'boolean'.
+additionOperatorWithInvalidOperands.ts(33,11): error TS2365: Operator '+' cannot be applied to types 'boolean' and 'boolean'.
+additionOperatorWithInvalidOperands.ts(34,11): error TS2365: Operator '+' cannot be applied to types 'boolean' and 'number'.
+additionOperatorWithInvalidOperands.ts(35,11): error TS2365: Operator '+' cannot be applied to types '{}' and '{}'.
+additionOperatorWithInvalidOperands.ts(37,11): error TS2365: Operator '+' cannot be applied to types 'number' and '() => void'.
+additionOperatorWithInvalidOperands.ts(38,11): error TS2365: Operator '+' cannot be applied to types 'number' and 'void'.
+additionOperatorWithInvalidOperands.ts(39,11): error TS2365: Operator '+' cannot be applied to types 'number' and 'typeof C'.
+additionOperatorWithInvalidOperands.ts(40,11): error TS2365: Operator '+' cannot be applied to types 'E' and 'C'.
+additionOperatorWithInvalidOperands.ts(41,11): error TS2365: Operator '+' cannot be applied to types 'E' and 'void'.

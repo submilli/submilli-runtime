@@ -1,9 +1,1 @@
-types: 10 of 13 tsc entries compared, 2 differ
-
-line 2: [["", true]]
-  tsc:  [string, true][]
-  ours: [string, boolean][]
-
-line 2: ["", true]
-  tsc:  [string, true]
-  ours: [string, boolean]
+types: 10 of 13 tsc entries compared, 0 differ

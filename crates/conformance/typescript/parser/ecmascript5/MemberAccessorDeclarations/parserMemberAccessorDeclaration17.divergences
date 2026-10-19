@@ -1,0 +1,4 @@
+types: 0 of 4 tsc entries compared, 0 differ
+
+errors:
+line 3: tsc TS1051: A 'set' accessor cannot have an optional parameter. (we accept)

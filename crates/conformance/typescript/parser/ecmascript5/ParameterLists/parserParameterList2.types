@@ -1,0 +1,20 @@
+=== parserParameterList2.ts ===
+class C {
+>C : C
+>  : ^
+
+  F(A?: number= 0): void { }
+>F : (A?: number) => void
+>  : ^^^^^^^^^^^^^^^^^^^^
+>A : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

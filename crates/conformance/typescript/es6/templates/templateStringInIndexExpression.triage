@@ -1,0 +1,1 @@
+line 2 extra: bug SUB-1615 indexing a string with brackets is rejected

@@ -1,0 +1,37 @@
+=== emitClassDeclarationWithStaticPropertyAssignmentInES6.ts ===
+class C {
+>C : C
+>  : ^
+
+    static z: string = "Foo";
+>z : string
+>  : ^^^^^^
+>"Foo" : "Foo"
+>      : ^^^^^
+
+}
+
+class D {
+>D : D
+>  : ^
+
+    x: number = 20000;
+>x : number
+>  : ^^^^^^
+>20000 : 20000
+>      : ^^^^^
+
+    static b: boolean = true;
+>b : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

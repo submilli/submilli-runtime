@@ -48,6 +48,12 @@ pub use throwaway::{
     ForkedSessionKv, LOCAL_STATE_CAP_BYTES, LocalState, Throwaway, ThrowawayError,
 };
 
+pub use session::{
+    FinalizerDiagnostic, SessionCloseReport, end_session_with_finalizers, session_finalizers,
+};
+
+pub(crate) use throwaway::ReplayFinalizers;
+
 /// How a run reached the server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunEntry {

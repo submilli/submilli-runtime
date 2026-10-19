@@ -1,4 +1,4 @@
-types: 169 of 308 tsc entries compared, 38 differ
+types: 172 of 308 tsc entries compared, 38 differ
 
 line 55: nt && { x: nt }
   tsc:  0 | { x: number; }

@@ -133,7 +133,11 @@ pub fn emit_box(
         | Type::Function { .. } => {
             // Already an $Object subtype — upcast is implicit.
         }
-        Type::TypeVar(_) | Type::GenericParam { .. } | Type::Unknown | Type::Never => {
+        Type::TypeVar(_)
+        | Type::GenericParam { .. }
+        | Type::Unknown
+        | Type::NonPrimitive
+        | Type::Never => {
             // Never: the call always throws before producing a value, but
             // the wasm sig still has the slot — lowered same as Unknown.
         }
@@ -667,7 +671,11 @@ pub fn emit_cast_to(
                 .ok_or_else(|| crate::codegen::internal_failure("uint8_array type registered"))?;
             emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(idx)));
         }
-        Type::TypeVar(_) | Type::GenericParam { .. } | Type::Unknown | Type::Never => {
+        Type::TypeVar(_)
+        | Type::GenericParam { .. }
+        | Type::Unknown
+        | Type::NonPrimitive
+        | Type::Never => {
             // Never: the call always throws before producing a value; reuses
             // Unknown's (ref null $Object) lowering — see value_type.
         }

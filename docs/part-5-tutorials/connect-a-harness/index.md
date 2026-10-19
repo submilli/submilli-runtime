@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "4aced2a0d7f4e27fa7ff7a24354168d871da7632985f2f14acdf8fdfe7cc5d72"
+  contentHash: "d294d0fe28100c86607cf48c9d57a5dc57b593388dfb9ccfe9a09997292b688e"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -24,7 +24,7 @@ connects. Take the page for yours when you are done:
 | Harness | Language | Connects over |
 | --- | --- | --- |
 | [Mastra](/docs/tutorials/connect-mastra) | TypeScript | MCP |
-| [LangChain deepagents](/docs/tutorials/connect-deepagents) | Python | MCP |
+| [LangChain deepagents](/docs/tutorials/connect-deepagents) | Python | `langchain-submilli`, on the HTTP API |
 | [OpenAI Agents SDK](/docs/tutorials/connect-openai-agents) | Python | MCP |
 | [Claude Agent SDK](/docs/tutorials/connect-claude-agent-sdk) | TypeScript | MCP |
 | [Vercel AI SDK](/docs/tutorials/use-the-http-api) | TypeScript | The HTTP API |
@@ -357,6 +357,14 @@ application](/docs/application#what-the-agent-gets) describes, with
 the execute tool's description already carrying this Blueprint's
 Packages and rules. The harness adds the brief from step 3 and nothing
 else.
+
+With `langchain-submilli`, the middleware the [deepagents
+tutorial](/docs/tutorials/connect-deepagents) uses, your application
+makes the same decisions over the HTTP API, with no
+`submilli-variables` or `submilli-secrets` header. The middleware's
+`blueprint` argument names the Blueprint, each run's context gives the
+variables, and its secrets when you ask for them, and each conversation
+thread keeps one session.
 
 Now take the tutorial for your harness:
 [Mastra](/docs/tutorials/connect-mastra),

@@ -240,6 +240,7 @@ struct Setup {
     git: bool,
     session: bool,
     session_limits: Option<SessionKvLimits>,
+    variables: Vec<(&'static str, &'static str)>,
     /// Mounts a read-only volume at `/ro`.
     read_only_volume: bool,
     /// Installs a fake model provider (`open`, `secret`) with this token ceiling.
@@ -359,6 +360,13 @@ async fn run(source: &str, setup: Setup) -> Outcome {
     }
     let mut data = StoreData::with_vfs(vfs);
     data.install_type_info(script.type_info.clone());
+    data.variables = Arc::new(
+        setup
+            .variables
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect(),
+    );
     data.http_client = Arc::new(Web {
         redirect_to: setup.redirect_to,
         egress: setup.egress,
@@ -1619,6 +1627,65 @@ fn body_text(copy: Option<&BodyCopy>) -> Option<&str> {
     match copy? {
         BodyCopy::Text(text) => Some(text),
         BodyCopy::Base64(_) => None,
+    }
+}
+
+#[tokio::test]
+async fn variable_reads_record_completed_calls_without_value_payloads() {
+    let outcome = run(
+        r#"
+            import { read } from "@acme/config";
+            import { get } from "submilli:variables";
+            function main(): string {
+                const value = read("CONFIG");
+                assert(read("MISSING") === undefined);
+                let denied = false;
+                try { get("CONFIG"); } catch (error: unknown) {
+                    denied = error instanceof PermissionDeniedError;
+                }
+                assert(denied);
+                if (value === undefined) throw new Error("missing CONFIG");
+                return value;
+            }
+        "#,
+        Setup {
+            record: recording(),
+            variables: vec![("CONFIG", "configured")],
+            packages: vec![(
+                "@acme/config",
+                r#"
+                import { get } from "submilli:variables";
+                export function read(name: string): string | undefined { return get(name); }
+            "#,
+            )],
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("configured".into()));
+    assert_eq!(outcome.calls().len(), 3);
+    for ((call, decision), expected) in outcome.calls().iter().zip(outcome.records()).zip([
+        CallOutcome::Returned,
+        CallOutcome::Returned,
+        CallOutcome::Failed,
+    ]) {
+        assert_eq!(call.capability, "variables.get");
+        assert_eq!(call.outcome, Some(expected));
+        assert!(
+            call.ended_micros
+                .is_some_and(|ended| ended >= call.started_micros)
+        );
+        assert_eq!(call.call_index, decision.call_index);
+        assert_eq!(
+            call.caller,
+            if expected == CallOutcome::Failed {
+                "main"
+            } else {
+                "@acme/config"
+            }
+        );
+        assert!(call.request.is_none());
+        assert!(call.response.is_none());
     }
 }
 

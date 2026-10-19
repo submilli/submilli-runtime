@@ -42,7 +42,7 @@ pub(super) fn emit_stringify(
     }
     // Erasure can widen the operand to unknown while the checked expression
     // still promises a string. Restore that result representation at the edge.
-    let emitted_ty = if may_stringify_undefined(&arg_ty) {
+    let emitted_ty = if may_stringify_undefined(ctx, &arg_ty) {
         Type::union(vec![Type::String, Type::Undefined])
     } else {
         Type::String
@@ -55,7 +55,7 @@ pub(super) fn emit_stringify(
 /// Shared by `JSON.stringify` codegen and `main`'s output shim (for the structured
 /// returns it routes here — primitives take the `toString` path instead).
 pub(crate) fn emit_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_ty: &Type) {
-    if !may_stringify_undefined(arg_ty) {
+    if !may_stringify_undefined(ctx, arg_ty) {
         emit_defined_stringify_value(emitter, ctx, arg_ty);
         return;
     }
@@ -92,8 +92,22 @@ pub(crate) fn emit_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenC
     emitter.emit_end();
 }
 
-fn may_stringify_undefined(ty: &Type) -> bool {
-    ty.any_member(&Type::stringifies_to_undefined)
+fn may_stringify_undefined(ctx: &CodegenCtx, ty: &Type) -> bool {
+    ty.any_member(&|member| {
+        Type::stringifies_to_undefined(member) || is_constructor_value(ctx, member)
+    })
+}
+
+/// A constructor binding used as a value (`Number`) is a function, which JSON
+/// leaves out. Its tag (`static_value_tag`) is the native-function text the
+/// runtime also builds the closure from, so both read the kind from it.
+fn is_constructor_value(ctx: &CodegenCtx, ty: &Type) -> bool {
+    let Type::InterfaceRef { mangled, .. } = ty else {
+        return false;
+    };
+    ctx.symbols
+        .static_value_tag(mangled)
+        .is_some_and(|tag| tag.starts_with("function "))
 }
 
 fn emit_defined_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_ty: &Type) {
@@ -242,7 +256,7 @@ fn emit_stringify_optional_args(
 
     emitter.instruction(Instruction::LocalGet(arg_local));
     emit_stringify_value(emitter, ctx, arg_ty);
-    let may_be_undefined = may_stringify_undefined(arg_ty);
+    let may_be_undefined = may_stringify_undefined(ctx, arg_ty);
     if may_be_undefined {
         let intr = ctx
             .symbols
@@ -465,7 +479,7 @@ pub(crate) fn emit_main_output_shim(
 ) -> Result<Function, crate::compiler_error::CompilerFailure> {
     let mut emitter = FunctionEmitter::new(ctx, &[])?;
     emitter.instruction(Instruction::Call(main_func_idx));
-    let optional_output = may_stringify_undefined(return_ty);
+    let optional_output = may_stringify_undefined(ctx, return_ty);
     if optional_output {
         let intr = ctx
             .symbols

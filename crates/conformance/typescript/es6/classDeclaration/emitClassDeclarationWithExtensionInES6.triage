@@ -1,2 +1,2 @@
-line 7 extra: bug SUB-1545 an override that makes an inherited defaulted parameter required is rejected
+line 7 extra: by-design spec §2.2 an override may not require a parameter the inherited method lets callers omit (a call through the parent type would pass undefined to it)
 line 20 extra: by-design spec §1.4 a method override must declare every parameter of the inherited method

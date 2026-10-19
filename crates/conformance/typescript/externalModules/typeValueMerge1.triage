@@ -1,0 +1,2 @@
+line 5, 7, 9, 11 extra: bug SUB-1730 exporting a type alias and a value of the same name is rejected as a duplicate export
+line 16, 18 extra: bug SUB-1730 exporting a type alias and a value of the same name is rejected as a duplicate export (so the importer can't resolve the value)

@@ -113,8 +113,7 @@ impl Fixture {
         let blueprints = Arc::new(Flaky::new(database));
         let state = AppState::new(ServerConfig {
             blueprints: Some(blueprints.clone()),
-            session_storage_root: Some(dir.join("sessions")),
-            managed_volume_root: Some(dir.join("volumes")),
+            volume_root: Some(dir.to_path_buf()),
             package_store_root: Some(dir.join("packages")),
             ..ServerConfig::default()
         })
@@ -556,6 +555,44 @@ async fn a_save_during_an_apply_is_applied_after_it() {
         fixture.registered().await,
         submilli_blueprint::parse(&last).unwrap()
     );
+}
+
+#[tokio::test]
+async fn a_run_started_during_an_apply_waits_for_its_version() {
+    let fixture = Fixture::new(PINNED).await;
+    let saved = PINNED.replace("amount < 500", "amount < 100");
+    fixture.blueprints.hold_next.store(true, Ordering::SeqCst);
+    std::fs::write(fixture.dir.path().join("demo.yaml"), &saved).unwrap();
+    let applying = tokio::spawn({
+        let applier = Arc::clone(&fixture.applier);
+        async move { applier.apply_file().await }
+    });
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        fixture.blueprints.entered.notified(),
+    )
+    .await
+    .expect("the save's apply started");
+
+    // The apply already read the file, so catching up must wait for it, not skip it.
+    let catching_up = tokio::spawn({
+        let applier = Arc::clone(&fixture.applier);
+        async move { applier.catch_up().await }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!catching_up.is_finished(), "catch_up returned mid-apply");
+    fixture.blueprints.release.add_permits(1);
+
+    tokio::time::timeout(Duration::from_secs(20), catching_up)
+        .await
+        .expect("catch_up finished")
+        .unwrap();
+    assert_eq!(fixture.current().bytes, saved);
+    assert_eq!(
+        fixture.registered().await,
+        submilli_blueprint::parse(&saved).unwrap()
+    );
+    applying.await.unwrap();
 }
 
 // An explicit `default: deny` reads as a different blueprint from an absent default,

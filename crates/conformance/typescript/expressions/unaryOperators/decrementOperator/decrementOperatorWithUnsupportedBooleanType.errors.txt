@@ -1,0 +1,12 @@
+decrementOperatorWithUnsupportedBooleanType.ts(8,12): error TS2564: Property 'a' has no initializer and is not definitely assigned in the constructor.
+decrementOperatorWithUnsupportedBooleanType.ts(20,23): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedBooleanType.ts(27,23): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedBooleanType.ts(28,23): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedBooleanType.ts(29,23): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedBooleanType.ts(37,24): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedBooleanType.ts(38,24): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedBooleanType.ts(39,24): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedBooleanType.ts(50,1): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedBooleanType.ts(51,1): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedBooleanType.ts(52,1): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.
+decrementOperatorWithUnsupportedBooleanType.ts(53,1): error TS2356: An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.

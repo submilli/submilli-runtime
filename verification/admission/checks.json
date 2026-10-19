@@ -1,0 +1,79 @@
+{
+  "module": "RunAdmission",
+  "constants": {
+    "MaxRuns": 2,
+    "Fault": "none",
+    "Witness": ""
+  },
+  "invariants": [
+    "TypeOK",
+    "AdmissionUnique",
+    "KeyReserved",
+    "CommitBarrier",
+    "OrderUnique",
+    "NoStaleWrites"
+  ],
+  "properties": [],
+  "cases": [
+    {
+      "name": "safety",
+      "kind": "safety"
+    },
+    {
+      "name": "negative-duplicate-key",
+      "kind": "negative",
+      "invariant": "AdmissionUnique",
+      "constants": {
+        "Fault": "duplicate-key"
+      }
+    },
+    {
+      "name": "negative-release-admitted",
+      "kind": "negative",
+      "invariant": "KeyReserved",
+      "constants": {
+        "Fault": "release-admitted"
+      }
+    },
+    {
+      "name": "negative-stale-write",
+      "kind": "negative",
+      "invariant": "NoStaleWrites",
+      "constants": {
+        "Fault": "stale-write"
+      }
+    },
+    {
+      "name": "witness-lost-ack",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "lost-ack"
+      }
+    },
+    {
+      "name": "witness-unkeyed",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "unkeyed"
+      }
+    },
+    {
+      "name": "witness-interrupted",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "interrupted"
+      }
+    },
+    {
+      "name": "witness-late-dispatch",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "late-dispatch"
+      }
+    }
+  ]
+}

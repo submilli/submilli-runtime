@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
-const { rangesToBlank, fileOfError } = require("./prune-case.cjs");
+const { rangesToBlank, fileOfError, portCausedErrors } = require("./prune-case.cjs");
 
 /** The text each range to blank covers, for an error at the first occurrence of
  * each needle. */
@@ -55,4 +55,22 @@ test("an error outside every statement waits while another is in one", () => {
 test("two errors widening to the same statement blank it once", () => {
   const source = "class C {\n  x: number = 1;\n  m(): number {\n    return 1;\n  }\n}\n";
   assert.deepEqual(blanked(source, "x:", "return"), [source.slice(0, source.lastIndexOf("}") + 1)]);
+});
+
+test("an error the port caused outside every statement isn't recovered from", () => {
+  const source = "let a = 1;\n\\\nlet b = 2;\n";
+  const errors = [{ offset: source.indexOf("\\"), file: 0, statementOnly: true }];
+  assert.deepEqual(rangesToBlank(fileOfError("case.ts", source), errors), []);
+});
+
+test("an error on an option line blanks nothing", () => {
+  assert.deepEqual(blanked("// @target: es2015\nlet a = 1;\n", "// @"), []);
+});
+
+test("the port caused the errors tsc reported before pruning whose codes upstream lacks", () => {
+  const error = (line, code) => ({ line, code, message: "m" });
+  const before = new Set(["1:7006:m", "2:2322:m"]);
+  const after = [error(1, 7006), error(2, 2322), error(3, 7006)];
+  assert.deepEqual(portCausedErrors(after, before, new Set([2322])), [error(1, 7006)]);
+  assert.deepEqual(portCausedErrors(after, before, null), []);
 });

@@ -1,0 +1,21 @@
+=== templateStringWithEmbeddedArray.ts ===
+let x = `abc${ [1,2,3] }def`;
+>x : string
+>  : ^^^^^^
+>`abc${ [1,2,3] }def` : string
+>                     : ^^^^^^
+>[1,2,3] : number[]
+>        : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+>3 : 3
+>  : ^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

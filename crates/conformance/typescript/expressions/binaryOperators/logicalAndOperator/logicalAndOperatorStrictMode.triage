@@ -1,4 +1,3 @@
-line 22, 24, 25, 26, 27, 28, 29, 31, 32, 34, 35, 36, 37, 38, 40, 41, 42, 44, 45, 46, 47, 58, 59, 60, 61, 64, 67, 68, 69, 70, 71, 72, 74, 76, 78, 79, 82 type: by-design spec §1.6 `a && b` is `falsy_part(a) | b`, even when `a` is always falsy
+line 22, 24, 25, 26, 27, 28, 29, 31, 32, 34, 35, 36, 37, 38, 40, 41, 42, 44, 45, 46, 47, 58, 59, 60, 61, 64, 67, 68, 69, 70, 71, 72, 74, 76, 77, 78, 79, 82 type: by-design spec §1.6 `a && b` is `falsy_part(a) | b`, even when `a` is always falsy
 line 53 type: by-design spec §1.1 a `void` result may hold any value, since a value-returning function stored as a `void` one returns it (so truthiness doesn't narrow a `void` to `never`)
 line 62, 80 type: by-design spec §1.6 `a && b` is `falsy_part(a) | b`, even when `a` is always falsy (`undefined | void` prints as `void`)
-line 77 type: bug SUB-1623 a variable an always-falsy `z` was built from reads as `never` in the right operand of `z && …`

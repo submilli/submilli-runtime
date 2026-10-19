@@ -1,0 +1,1 @@
+parserCatchClauseWithTypeAnnotation1.ts(3,13): error TS1196: Catch clause variable type annotation must be 'any' or 'unknown' if specified.

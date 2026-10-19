@@ -1,0 +1,2 @@
+unicodeExtendedEscapesInRegularExpressions14.ts(4,13): error TS1125: Hexadecimal digit expected.
+unicodeExtendedEscapesInRegularExpressions14.ts(4,18): error TS1508: Unexpected '}'. Did you mean to escape it with backslash?

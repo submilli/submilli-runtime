@@ -1409,6 +1409,15 @@ impl ClassPlan {
                 emitter.instruction(Instruction::I64Const(0));
                 emitter.instruction(Instruction::StructNew(closure_struct));
                 emitter.instruction(Instruction::ArraySet(intrinsics.object_fields));
+                if let Some(field_slot) = class.fields.iter().position(|f| f.name == method.name) {
+                    emit_fill_optional_method(
+                        &mut emitter,
+                        (this_slot, class.struct_type_idx),
+                        intrinsics.object_fields,
+                        method_slot,
+                        wasm_u32(field_slot)?,
+                    );
+                }
             }
         }
 
@@ -1732,12 +1741,16 @@ fn class_decl<'a>(
 /// there — a value the redeclaration's (possibly narrower) type need not admit.
 /// Only the optional case arises: a non-optional field with no initializer must
 /// be assigned in the constructor (`definite_assignment`), which runs after this
-/// setup.
+/// setup. A bodyless optional method emits nothing, so it keeps what the slot
+/// holds, such as a subclass method's closure.
 fn redeclares_uninitialized_slot(
     field: &crate::TypedClassField,
     inherited: &BTreeSet<String>,
 ) -> bool {
-    field.optional && !field.auto_assigned && inherited.contains(&field.name.name)
+    field.optional
+        && !field.auto_assigned
+        && !field.method_signature
+        && inherited.contains(&field.name.name)
 }
 
 /// Export/linker field name of a class's vtable-singleton global. The space in
@@ -1839,6 +1852,31 @@ fn accessor_methods(decl: &TypedClassDecl) -> Vec<(crate::TypedClassMethod, Stri
             (method, frame_name)
         })
         .collect()
+}
+
+/// A method overriding an inherited optional method (`f?(): T;`, a data
+/// field) also fills that field, so a read through the ancestor's type sees the
+/// override. The field gets the same closure as the method's payload slot.
+fn emit_fill_optional_method(
+    emitter: &mut crate::codegen::function_emitter::FunctionEmitter<'_>,
+    (this_slot, struct_type_index): (u32, u32),
+    object_fields: u32,
+    method_slot: u32,
+    field_slot: u32,
+) {
+    let payload = |emitter: &mut crate::codegen::function_emitter::FunctionEmitter<'_>| {
+        emitter.instruction(Instruction::LocalGet(this_slot));
+        emitter.instruction(Instruction::StructGet {
+            struct_type_index,
+            field_index: 2,
+        });
+    };
+    payload(emitter);
+    emitter.instruction(Instruction::I32Const(field_slot.cast_signed()));
+    payload(emitter);
+    emitter.instruction(Instruction::I32Const(method_slot.cast_signed()));
+    emitter.instruction(Instruction::ArrayGet(object_fields));
+    emitter.instruction(Instruction::ArraySet(object_fields));
 }
 
 fn slot_closure_sig(
@@ -2480,6 +2518,7 @@ fn may_hold_function(ty: &crate::Type) -> bool {
         crate::Type::Union(members) => members.iter().any(may_hold_function),
         crate::Type::Function { .. }
         | crate::Type::Unknown
+        | crate::Type::NonPrimitive
         | crate::Type::TypeVar(_)
         | crate::Type::GenericParam { .. }
         | crate::Type::Error => true,

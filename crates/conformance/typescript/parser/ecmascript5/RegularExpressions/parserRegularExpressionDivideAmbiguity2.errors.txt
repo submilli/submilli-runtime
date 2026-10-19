@@ -1,0 +1,2 @@
+parserRegularExpressionDivideAmbiguity2.ts(2,6): error TS2552: Cannot find name 'notregexp'. Did you mean 'RegExp'?
+parserRegularExpressionDivideAmbiguity2.ts(2,16): error TS2304: Cannot find name 'a'.

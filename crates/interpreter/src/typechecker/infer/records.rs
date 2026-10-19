@@ -63,7 +63,7 @@ impl Inferer<'_> {
                 }),
             });
         }
-        let Some(keys) = string_literal_keys(&key) else {
+        let Some(keys) = finite_string_keys(&key, self.resolver()) else {
             if !matches!(key, Type::Error) {
                 self.error_with_help(span, format!("unsupported Record key type `{key}`"), vec!["use `string` or a finite union of string literals; unresolved generic keys are not supported".into()]);
             }
@@ -219,7 +219,7 @@ impl Inferer<'_> {
         }
         let fields = self.assignment_target_fields(receiver).unwrap_or_default();
         let index = self.resolver().index_signature(receiver);
-        if let Some(keys) = string_literal_keys(key) {
+        if let Some(keys) = finite_string_keys(key, self.resolver()) {
             let mut values = Vec::new();
             for key in keys {
                 if let Some(field) = fields.get(&key) {
@@ -274,7 +274,7 @@ impl Inferer<'_> {
         }
         let fields = self.assignment_target_fields(receiver).unwrap_or_default();
         let index = self.resolver().index_signature(receiver);
-        let keys = string_literal_keys(key);
+        let keys = finite_string_keys(key, self.resolver());
         let mut targets = Vec::new();
         if let Some(keys) = keys {
             for key in keys {
@@ -338,13 +338,36 @@ impl Inferer<'_> {
     }
 }
 
-pub(super) fn string_literal_keys(ty: &Type) -> Option<Vec<String>> {
+/// The keys a key type names, when it names finitely many: string literals, and
+/// string enums, whose members' values are the keys, as in TypeScript.
+pub(super) fn finite_string_keys(ty: &Type, types: TypeResolver) -> Option<Vec<String>> {
     match ty.peel() {
         Type::StringLiteral(key) => Some(vec![key.clone()]),
+        Type::StringEnum {
+            member: Some(member),
+            ..
+        } => Some(vec![member.value.clone()]),
+        // The declaration's values, read directly: a member type of a
+        // one-member enum is the enum itself again.
+        Type::StringEnum {
+            mangled,
+            name,
+            member: None,
+            ..
+        } => {
+            let declaration = types.lookup(mangled, name)?;
+            super::comparable::enum_variant_values(&declaration.kind)?
+                .into_iter()
+                .map(|(_, value)| match value {
+                    crate::types::EnumValue::String(key) => Some(key),
+                    _ => None,
+                })
+                .collect()
+        }
         Type::Union(members) => {
             let mut keys = Vec::new();
             for member in members {
-                keys.extend(string_literal_keys(member)?);
+                keys.extend(finite_string_keys(member, types)?);
             }
             Some(keys)
         }

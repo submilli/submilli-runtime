@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "cdf3fdb1d810a1bc20c4f3cc6014e43b0f8a457bdf23369787ad5c3b38d97929"
+  contentHash: "aa6cb8e08dc740b8dac121db6ad9a266b363f0d3740888a405012f4b81ea5f1d"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -115,8 +115,10 @@ value, use `x === null || x === undefined`.
 
 A parameter declared `name?: string` accepts omission or explicit undefined.
 A required parameter declared `name: string | undefined` still requires an
-argument. Default parameter and destructuring initializers run for omission
-or undefined, never null. Defaults run once, in order, in the callee's scope.
+argument. As in TypeScript, a call may leave out trailing arguments whose
+parameter type includes `void`, such as `resolve: (value: void) => void`
+called as `resolve()`; the parameter receives undefined. Default parameter
+and destructuring initializers run for omission or undefined, never null. Defaults run once, in order, in the callee's scope.
 A callback created in a default may capture a later parameter. Reading or
 assigning that parameter before its initialization throws `ReferenceError`.
 
@@ -136,7 +138,10 @@ interface Reporter {
 An omitted optional tuple element does not extend the array; reading that
 position returns undefined. Required tuple elements must precede optional
 ones. Call an optional method with `reporter.report?.("done")`, or narrow it
-before calling. Optional calls preserve the method's receiver.
+before calling. Optional calls preserve the method's receiver. A subclass
+may override a class's optional method declared without a body, such as
+`report?(message: string): void;`, with a method of a compatible type; reads
+through the base class then see the override.
 
 Bare returns and falling off a function produce undefined when its return
 contract permits it. `void expression` evaluates the expression once and
@@ -190,6 +195,7 @@ for (const word of words) {
 | `==` and `!=` | Strict, like `===` and `!==`, so `1 == "1"` and `x == null` are compile errors |
 | Return types | Declared on functions and methods; arrow functions infer them |
 | `items[i]` | Out-of-range reads and writes throw `RangeError`. `items.at(i)` returns `undefined`. `push` appends |
+| `text[i]` | Reads one UTF-16 code unit as a string; out of range it throws `RangeError`. `text.charAt(i)` returns `""` |
 | `let x: T;` | Needs an initializer unless `T` includes `undefined` |
 | Runtime APIs | The standard library and Submilli Packages, in place of Node.js APIs, browser globals, and npm |
 | Dates and times | `Temporal`, in place of `Date` |
