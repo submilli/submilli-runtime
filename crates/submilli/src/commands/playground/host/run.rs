@@ -578,29 +578,45 @@ pub(crate) struct RunHost {
     finalizers: Option<Arc<dyn FinalizerRegistry>>,
 }
 
-/// The discovered `@mcp/<server>` catalogs, keyed by the servers imported.
+/// The discovered `@mcp/<server>` catalogs, keyed by the servers imported, each
+/// beside the blueprint it was discovered from.
 #[derive(Default)]
 struct McpCatalogs {
-    entries: HashMap<String, Arc<McpCatalog>>,
+    entries: HashMap<String, (Arc<Blueprint>, Arc<McpCatalog>)>,
     /// Bumped by every clear, so a discovery that started before one does not
     /// put its result back.
     generation: u64,
 }
 
 impl McpCatalogs {
-    /// Keep a catalog discovered since `generation`, returning the one now
-    /// cached under `key`. A clear during discovery means the blueprint changed
-    /// under it: the caller still gets what it discovered, but it is not kept.
+    /// The catalog kept under `key`, when it was discovered from `blueprint`.
+    fn cached(&self, key: &str, blueprint: &Arc<Blueprint>) -> Option<Arc<McpCatalog>> {
+        self.entries
+            .get(key)
+            .filter(|(from, _)| Arc::ptr_eq(from, blueprint))
+            .map(|(_, catalog)| Arc::clone(catalog))
+    }
+
+    /// Keep a catalog discovered from `blueprint` since `generation`, returning
+    /// the one now cached under `key`. A clear during discovery means the
+    /// blueprint changed under it: the caller still gets what it discovered, but
+    /// it is not kept.
     fn keep(
         &mut self,
         key: String,
+        blueprint: &Arc<Blueprint>,
         generation: u64,
         discovered: Arc<McpCatalog>,
     ) -> Arc<McpCatalog> {
         if self.generation != generation {
             return discovered;
         }
-        Arc::clone(self.entries.entry(key).or_insert(discovered))
+        if let Some(cached) = self.cached(&key, blueprint) {
+            return cached;
+        }
+        self.entries
+            .insert(key, (Arc::clone(blueprint), Arc::clone(&discovered)));
+        discovered
     }
 }
 
@@ -1088,10 +1104,13 @@ impl RunHost {
         }
         let key = declared.iter().cloned().collect::<Vec<_>>().join("\u{1f}");
         let session_scoped = !harness_secrets.is_empty();
+        // A run takes its blueprint before it gets here, so a save's clear can
+        // land in between; the generation alone would then keep the old
+        // blueprint's catalog, which is why entries only match their blueprint.
         let generation = {
             let catalogs = self.lock_catalogs();
-            if !session_scoped && let Some(cached) = catalogs.entries.get(&key) {
-                return Ok(Arc::clone(cached));
+            if !session_scoped && let Some(cached) = catalogs.cached(&key, blueprint) {
+                return Ok(cached);
             }
             catalogs.generation
         };
@@ -1113,7 +1132,9 @@ impl RunHost {
         if session_scoped {
             return Ok(discovered);
         }
-        Ok(self.lock_catalogs().keep(key, generation, discovered))
+        Ok(self
+            .lock_catalogs()
+            .keep(key, blueprint, generation, discovered))
     }
 
     fn mcp_transport(

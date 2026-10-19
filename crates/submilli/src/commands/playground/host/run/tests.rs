@@ -814,17 +814,55 @@ async fn the_finalizer_registry_is_asked_with_the_linked_versions_before_the_run
 
 #[test]
 fn a_catalog_discovered_before_a_clear_is_returned_but_not_kept() {
+    let blueprint = applied(PLAIN).blueprint;
     let mut catalogs = McpCatalogs::default();
     let generation = catalogs.generation;
     catalogs.entries.clear();
     catalogs.generation += 1;
     let stale = Arc::new(McpCatalog::empty());
-    let returned = catalogs.keep("server".to_owned(), generation, Arc::clone(&stale));
+    let returned = catalogs.keep(
+        "server".to_owned(),
+        &blueprint,
+        generation,
+        Arc::clone(&stale),
+    );
     assert!(Arc::ptr_eq(&returned, &stale));
     assert!(catalogs.entries.is_empty());
 
     let fresh = Arc::new(McpCatalog::empty());
-    let kept = catalogs.keep("server".to_owned(), catalogs.generation, Arc::clone(&fresh));
+    let kept = catalogs.keep(
+        "server".to_owned(),
+        &blueprint,
+        catalogs.generation,
+        Arc::clone(&fresh),
+    );
     assert!(Arc::ptr_eq(&kept, &fresh));
-    assert!(Arc::ptr_eq(&catalogs.entries["server"], &fresh));
+    assert!(Arc::ptr_eq(
+        &catalogs.cached("server", &blueprint).unwrap(),
+        &fresh
+    ));
+}
+
+#[test]
+fn a_catalog_from_a_blueprint_taken_before_a_clear_is_never_served_after_it() {
+    let old = applied(PLAIN).blueprint;
+    let new = applied(PLAIN).blueprint;
+    let mut catalogs = McpCatalogs::default();
+    // The run took `old`, then a save applied `new` and cleared, and only then
+    // did the run read the generation and discover.
+    catalogs.entries.clear();
+    catalogs.generation += 1;
+    let generation = catalogs.generation;
+    let stale = Arc::new(McpCatalog::empty());
+    let returned = catalogs.keep("server".to_owned(), &old, generation, Arc::clone(&stale));
+    assert!(Arc::ptr_eq(&returned, &stale));
+    assert!(catalogs.cached("server", &new).is_none());
+
+    let fresh = Arc::new(McpCatalog::empty());
+    let kept = catalogs.keep("server".to_owned(), &new, generation, Arc::clone(&fresh));
+    assert!(Arc::ptr_eq(&kept, &fresh));
+    assert!(Arc::ptr_eq(
+        &catalogs.cached("server", &new).unwrap(),
+        &fresh
+    ));
 }

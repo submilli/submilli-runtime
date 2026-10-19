@@ -21,6 +21,8 @@ use tokio::sync::oneshot;
 use interpreter::runtime::{DecisionLogConfig, SessionKvStore};
 use submilli_shared::mcp::McpCatalog;
 
+use crate::commands::playground::log::warn;
+
 use super::super::blueprints::AppliedBlueprint;
 use super::super::finalizers::ReplayFinalizers;
 use super::super::run::{
@@ -252,15 +254,16 @@ pub(crate) async fn test_program(
     .await
     .map_err(TestError::LocalState)?;
     let local_state = local.report.clone();
+    let vfs_failed = |error| TestError::Session(format!("internal: vfs init failed: {error}"));
     let vfs = local
         .volumes
         .build_vfs(&blueprint, &resolved, local.session_root.as_deref())
-        .map_err(|error| TestError::Session(format!("internal: vfs init failed: {error}")))?;
+        .map_err(vfs_failed)?;
     let vfs = local
         .volumes
         .attach_limits(vfs, &blueprint)
         .await
-        .map_err(|error| TestError::Session(format!("internal: vfs init failed: {error}")))?;
+        .map_err(vfs_failed)?;
     let session = host
         .sessions
         .open(&blueprint, &supplied)
@@ -312,9 +315,7 @@ pub(crate) async fn test_program(
         })
         .await;
     if let Err(error) = host.sessions.close(&session.id).await {
-        super::super::super::log::warn(&format!(
-            "closing the test run's session failed: {error:#}"
-        ));
+        warn(&format!("closing the test run's session failed: {error:#}"));
     }
     drop(local);
     // Refused before it ran, so there is no run to report.

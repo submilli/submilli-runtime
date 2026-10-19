@@ -103,7 +103,9 @@ impl HostSessionManager {
             .open_as(id.to_string(), blueprint, &supplied)
             .await
             .map_err(|error| init_error(error.to_string()))?;
-        self.shared.bind_secrets(id.as_ref(), secrets);
+        self.shared
+            .sessions
+            .bind_secrets(id.as_ref(), Arc::new(secrets));
         let message = redact_secrets(message);
         let params = match &message {
             JsonRpcMessage::Request(JsonRpcRequest {
@@ -140,6 +142,7 @@ impl HostSessionManager {
             &blueprint.secrets,
             &self
                 .shared
+                .sessions
                 .secrets(id.as_ref())
                 .as_deref()
                 .cloned()
@@ -451,7 +454,7 @@ impl SessionManager for HostSessionManager {
             .close(id.as_ref())
             .await
             .map_err(|error| init_error(format!("{error:#}")))?;
-        self.shared.forget_secrets(id.as_ref());
+        self.shared.sessions.forget_secrets(id.as_ref());
         self.inner.close_session(id).await
     }
 
@@ -530,7 +533,7 @@ impl SessionStore for HostSessionStore {
 
     async fn delete(&self, session_id: &str) -> Result<(), SessionStoreError> {
         self.shared.sessions.close(session_id).await?;
-        self.shared.forget_secrets(session_id);
+        self.shared.sessions.forget_secrets(session_id);
         Ok(())
     }
 }

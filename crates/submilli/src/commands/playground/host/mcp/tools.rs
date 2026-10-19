@@ -287,7 +287,7 @@ impl SubmilliMcp {
             .await
             .map_err(|error| ErrorData::internal_error(format!("{error:#}"), None))?
             .ok_or_else(|| ErrorData::internal_error("unknown or expired session", None))?;
-        let harness_secrets = match self.shared.secrets(&session_id) {
+        let harness_secrets = match self.shared.sessions.secrets(&session_id) {
             Some(secrets) => secrets,
             None if required_harness_secrets(&blueprint.secrets).is_empty() => {
                 Arc::new(HarnessSecretBindings::new())

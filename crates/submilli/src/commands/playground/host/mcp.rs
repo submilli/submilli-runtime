@@ -18,7 +18,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use rmcp::transport::common::http_header::HEADER_SESSION_ID;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
-use submilli_blueprint::{Blueprint, HarnessSecretBindings};
+use submilli_blueprint::Blueprint;
 use submilli_build::PackageStore;
 use tower::ServiceExt;
 
@@ -40,24 +40,14 @@ use session::{EXPLICIT_DELETE, HostSessionManager, HostSessionStore, initialize_
 use tools::SubmilliMcp;
 
 /// What the endpoint's sessions and tools share.
-pub(crate) struct McpParts {
+pub(crate) struct Shared {
     pub(crate) run: Arc<RunHost>,
     pub(crate) sessions: Arc<Sessions>,
     pub(crate) blueprints: Arc<Blueprints>,
     pub(crate) volumes: Arc<Volumes>,
     pub(crate) package_store: PackageStore,
-    pub(crate) tokens: Arc<[ApiToken]>,
     /// Where each tool call is reported; `None` reports none.
     pub(crate) events: Option<Arc<EventHub>>,
-}
-
-struct Shared {
-    run: Arc<RunHost>,
-    sessions: Arc<Sessions>,
-    blueprints: Arc<Blueprints>,
-    volumes: Arc<Volumes>,
-    package_store: PackageStore,
-    events: Option<Arc<EventHub>>,
 }
 
 impl Shared {
@@ -67,18 +57,6 @@ impl Shared {
             .for_run()
             .await
             .filter(|applied| applied.blueprint.name == name)
-    }
-
-    fn secrets(&self, id: &str) -> Option<Arc<HarnessSecretBindings>> {
-        self.sessions.secrets(id)
-    }
-
-    fn bind_secrets(&self, id: &str, secrets: HarnessSecretBindings) {
-        self.sessions.bind_secrets(id, Arc::new(secrets));
-    }
-
-    fn forget_secrets(&self, id: &str) {
-        self.sessions.forget_secrets(id);
     }
 }
 
@@ -97,16 +75,10 @@ pub(crate) struct McpHost {
 struct Caller(String);
 
 impl McpHost {
-    /// The endpoint for the blueprint the host serves, `blueprint_name`.
-    pub(crate) fn new(parts: McpParts, blueprint_name: &str) -> Self {
-        let shared = Arc::new(Shared {
-            run: parts.run,
-            sessions: parts.sessions,
-            blueprints: parts.blueprints,
-            volumes: parts.volumes,
-            package_store: parts.package_store,
-            events: parts.events,
-        });
+    /// The endpoint for the blueprint the host serves, `blueprint_name`, open to
+    /// callers holding one of `tokens`.
+    pub(crate) fn new(shared: Shared, tokens: Arc<[ApiToken]>, blueprint_name: &str) -> Self {
+        let shared = Arc::new(shared);
         // Every session is stateful, so each connection has an `MCP-Session-Id`,
         // the id its runs, files and values are kept under. The default allowed
         // hosts stay: `localhost`, `127.0.0.1` and `::1`.
@@ -131,7 +103,7 @@ impl McpHost {
             transport: StreamableHttpService::new(factory, Arc::clone(&sessions), config),
             sessions,
             shared,
-            tokens: parts.tokens,
+            tokens,
             deletion: tokio::sync::Mutex::new(()),
         }
     }
@@ -170,25 +142,10 @@ async fn handle(
 
     let terminates_session = req.method() == Method::DELETE;
     let _deletion = if terminates_session {
-        let guard = host.deletion.lock().await;
-        if let Some(id) = req
-            .headers()
-            .get(HEADER_SESSION_ID)
-            .and_then(|v| v.to_str().ok())
-        {
-            match host.sessions.contains_session(id).await {
-                Ok(true) => {}
-                Ok(false) => return StatusCode::NOT_FOUND.into_response(),
-                Err(error) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("session storage unavailable: {error:#}"),
-                    )
-                        .into_response();
-                }
-            }
+        match hold_deletion(&host, req.headers()).await {
+            Ok(guard) => Some(guard),
+            Err(response) => return *response,
         }
-        Some(guard)
     } else {
         None
     };
@@ -207,6 +164,31 @@ async fn handle(
         *response.status_mut() = StatusCode::NO_CONTENT;
     }
     response
+}
+
+/// Hold the DELETE lock, so a retry sees the first one's close; a DELETE for a
+/// session that is not open is answered 404 here.
+async fn hold_deletion<'a>(
+    host: &'a McpHost,
+    headers: &axum::http::HeaderMap,
+) -> Result<tokio::sync::MutexGuard<'a, ()>, Box<Response>> {
+    let guard = host.deletion.lock().await;
+    if let Some(id) = headers.get(HEADER_SESSION_ID).and_then(|v| v.to_str().ok()) {
+        match host.sessions.contains_session(id).await {
+            Ok(true) => {}
+            Ok(false) => return Err(Box::new(StatusCode::NOT_FOUND.into_response())),
+            Err(error) => {
+                return Err(Box::new(
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("session storage unavailable: {error:#}"),
+                    )
+                        .into_response(),
+                ));
+            }
+        }
+    }
+    Ok(guard)
 }
 
 /// Refuse, with a 400, an `initialize` whose variables or secrets do not satisfy

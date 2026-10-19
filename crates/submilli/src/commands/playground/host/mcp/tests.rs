@@ -62,15 +62,15 @@ async fn harness_in(dir: &Path, yaml: &str) -> Harness {
     config.recorder = Some(Arc::new(TestRecorder(Arc::clone(&starts))));
     let run = Arc::new(RunHost::new(config, Arc::clone(&sessions), Arc::clone(&volumes)).unwrap());
     let host = Arc::new(McpHost::new(
-        McpParts {
+        Shared {
             run,
             sessions: Arc::clone(&sessions),
             blueprints: Arc::clone(&blueprints),
             volumes,
             package_store,
-            tokens: Arc::from([ApiToken::new("app", Role::User, TOKEN).unwrap()]),
             events: None,
         },
+        Arc::from([ApiToken::new("app", Role::User, TOKEN).unwrap()]),
         "fixture",
     ));
     Harness {
