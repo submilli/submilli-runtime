@@ -1,7 +1,7 @@
 //! HTTP-facing coordination; the application and database decide ownership.
-use crate::application::idempotency::{
-    RecoverRequests, RequestDisposition, RequestFailure, RequestResolution, ReserveRequest,
-    ResolveRequest,
+use crate::application::sessions::ports::{LastRunStaging, StagedLastRun};
+use crate::application::sessions::runs::{
+    PrepareRun, RecoverRuns, ResolveRun, RunDisposition, RunFailure, RunResolution,
 };
 use crate::application::unit_of_work::UnitOfWorkFactory;
 pub use crate::domain::idempotent_request::RecordedOutcome;
@@ -121,6 +121,7 @@ pub(crate) struct Coordinator {
     tasks: TaskTracker,
     waiter_timeout: Duration,
     attached: AttachedRuns,
+    last_runs: Option<Arc<dyn LastRunStaging>>,
 }
 
 impl Coordinator {
@@ -131,11 +132,19 @@ impl Coordinator {
             tasks: TaskTracker::new(),
             waiter_timeout: DEFAULT_WAITER_TIMEOUT,
             attached: AttachedRuns::default(),
+            last_runs: None,
         }
     }
 
-    pub async fn recover(&self) -> Result<(), RequestFailure> {
-        RecoverRequests::new(self.units.as_ref())
+    /// Keep each session's last run with its run's end, staged through
+    /// `last_runs`. Without it, a run's end forgets the session's last run.
+    pub fn with_last_runs(mut self, last_runs: Arc<dyn LastRunStaging>) -> Self {
+        self.last_runs = Some(last_runs);
+        self
+    }
+
+    pub async fn recover(&self) -> Result<(), RunFailure> {
+        RecoverRuns::new(self.units.as_ref())
             .execute(&self.generation)
             .await
     }
@@ -145,23 +154,46 @@ impl Coordinator {
         self.tasks.wait().await;
     }
 
+    #[cfg(test)]
     pub async fn reserve(self: &Arc<Self>, session: &str, key: &str, code: &str) -> Reservation {
-        if IdempotentRequest::validate_key(key).is_err() {
-            return Reservation::Refused(Refusal::InvalidKey(
-                "Idempotency-Key must contain between 1 and 120 bytes",
-            ));
-        }
-        let fingerprint = format!("{:x}", Sha256::digest(code.as_bytes()));
         let mut identity = [0u8; 16];
         if let Err(error) = getrandom::getrandom(&mut identity) {
             return Reservation::Refused(Refusal::Unavailable(error.to_string()));
         }
-        let Ok(request) = IdempotentRequest::reserve(
+        self.prepare(
+            session,
+            Some(key),
+            code,
+            &uuid::Uuid::from_bytes(identity).to_string(),
+            None,
+            "http_session",
+        )
+        .await
+    }
+
+    pub async fn prepare(
+        self: &Arc<Self>,
+        session: &str,
+        key: Option<&str>,
+        code: &str,
+        run_id: &str,
+        principal: Option<&str>,
+        entry: &str,
+    ) -> Reservation {
+        let fingerprint = format!("{:x}", Sha256::digest(code.as_bytes()));
+        let identity = crate::domain::run::RunIdentity {
+            execution_id: Some(run_id.to_owned()),
+            principal: principal.map(str::to_owned),
+            entry: entry.to_owned(),
+            ..Default::default()
+        };
+        let Ok(request) = IdempotentRequest::prepare(
             session.to_owned(),
-            key.to_owned(),
+            key.map(str::to_owned),
             fingerprint,
-            uuid::Uuid::from_bytes(identity).to_string(),
+            run_id.to_owned(),
             self.generation.clone(),
+            identity,
             SystemTime::now(),
         ) else {
             return Reservation::Refused(Refusal::InvalidKey("invalid idempotency key"));
@@ -173,7 +205,7 @@ impl Coordinator {
         let mut waiting_for = None;
         loop {
             let reserve = async {
-                ReserveRequest::new(self.units.as_ref())
+                PrepareRun::new(self.units.as_ref())
                     .execute(request.clone())
                     .await
             };
@@ -189,8 +221,8 @@ impl Coordinator {
                 }
             };
             match disposition {
-                Ok(RequestDisposition::Proceed) => return Reservation::Proceed(guard),
-                Ok(RequestDisposition::Wait(id)) => {
+                Ok(RunDisposition::Proceed) => return Reservation::Proceed(guard),
+                Ok(RunDisposition::Wait(id)) => {
                     // A run that may wait on the harness for minutes is answered
                     // with its current state rather than waited for.
                     if let Some(run_id) = self.attached_run(&id) {
@@ -198,14 +230,14 @@ impl Coordinator {
                     }
                     waiting_for = Some(id);
                 }
-                Ok(RequestDisposition::Completed(outcome)) => return Reservation::Replay(outcome),
-                Err(RequestFailure::Rule(RequestError::Conflict)) => {
+                Ok(RunDisposition::Completed(outcome)) => return Reservation::Replay(outcome),
+                Err(RunFailure::Rule(RequestError::Conflict)) => {
                     return Reservation::Refused(Refusal::Conflict);
                 }
-                Err(RequestFailure::Indeterminate) => {
+                Err(RunFailure::Indeterminate) => {
                     return Reservation::Refused(Refusal::Indeterminate);
                 }
-                Err(RequestFailure::Expired) => {
+                Err(RunFailure::Expired) => {
                     return Reservation::Refused(Refusal::Expired);
                 }
                 Err(error) => {
@@ -223,6 +255,11 @@ impl Coordinator {
         }
     }
 
+    pub async fn claim(&self, run_id: &str) -> Result<(), RunFailure> {
+        crate::application::sessions::runs::claim_run(self.units.as_ref(), run_id, &self.generation)
+            .await
+    }
+
     fn attached_run(&self, reservation_id: &str) -> Option<String> {
         lock_attached(&self.attached).get(reservation_id).cloned()
     }
@@ -232,34 +269,33 @@ impl Coordinator {
         let (finished, completion) = oneshot::channel();
         let reservation_id = request.reservation_id().to_owned();
         let units = self.units.clone();
+        let last_runs = self.last_runs.clone();
         self.tasks.spawn(async move {
-            let resolution = receiver.await.unwrap_or(RequestResolution::Indeterminate);
-            let resolver = ResolveRequest::new(units.clone());
-            let first = resolver.execute(&request, &resolution).await;
-            if first.is_ok() {
-                let _ = finished.send(());
-                return;
-            }
-            // A failed acknowledgement may hide a successful commit. Reapplying
-            // this identity-checked transition is safe and never dispatches work.
-            let second = resolver.execute(&request, &resolution).await;
-            let _ = finished.send(());
-            if second.is_ok() {
-                return;
-            }
-            tracing::warn!(error = ?second.err(), "idempotency finalization remains uncertain");
-            // Preserve evidence when storage recovers, without withholding the
-            // original caller's result. Startup recovery covers process termination.
-            let fallback = match resolution {
-                RequestResolution::Undispatched => RequestResolution::Undispatched,
-                _ => RequestResolution::Indeterminate,
-            };
-            loop {
-                match resolver.execute(&request, &fallback).await {
-                    Ok(()) => break,
-                    Err(error) if database_has_closed(&error) => break,
-                    Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+            let (resolution, last_run) = receiver
+                .await
+                .unwrap_or((RunResolution::Indeterminate, None));
+            let mut files = match last_runs.as_deref() {
+                Some(last_runs) => {
+                    Some(LastRunFiles::before(last_runs, request.session_id()).await)
                 }
+                None => None,
+            };
+            let staged = match (&mut files, last_run) {
+                (Some(files), Some(json)) => files.stage(json).await,
+                _ => None,
+            };
+            let resolver = ResolveRun::new(units.clone());
+            let resolved = resolve(&resolver, &request, &resolution, staged.as_ref()).await;
+            let _ = finished.send(());
+            let replaced = match resolved {
+                Ok(replaced) => replaced,
+                Err(error) => {
+                    tracing::warn!(?error, "idempotency finalization remains uncertain");
+                    resolve_until_recorded(&resolver, &request, &resolution).await
+                }
+            };
+            if let Some(files) = files {
+                files.release(replaced).await;
             }
         });
         ReservationGuard {
@@ -267,7 +303,94 @@ impl Coordinator {
             completion: Some(completion),
             reservation_id,
             attached: self.attached.clone(),
+            last_run: None,
         }
+    }
+}
+
+/// Record the run's end, trying twice: a failed acknowledgement may hide a
+/// successful commit, and reapplying this identity-checked transition is safe
+/// and never dispatches work. Returns the spill file the end replaced or
+/// forgot, to release once the end is settled.
+async fn resolve(
+    resolver: &ResolveRun,
+    request: &IdempotentRequest,
+    resolution: &RunResolution,
+    staged: Option<&StagedLastRun>,
+) -> Result<Option<String>, RunFailure> {
+    match resolver.execute(request, resolution, staged).await {
+        Ok(replaced) => Ok(replaced),
+        Err(_) => resolver.execute(request, resolution, staged).await,
+    }
+}
+
+/// Preserve evidence when storage recovers, without withholding the original
+/// caller's result: record the run as never started, or else as ended unknown,
+/// once storage takes it. Startup recovery covers process termination.
+async fn resolve_until_recorded(
+    resolver: &ResolveRun,
+    request: &IdempotentRequest,
+    resolution: &RunResolution,
+) -> Option<String> {
+    let fallback = match resolution {
+        RunResolution::Undispatched => RunResolution::Undispatched,
+        _ => RunResolution::Indeterminate,
+    };
+    loop {
+        match resolver.execute(request, &fallback, None).await {
+            Ok(replaced) => return replaced,
+            Err(error) if database_has_closed(&error) => return None,
+            Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+        }
+    }
+}
+
+/// The spill files a run's end may leave no record naming: the one the
+/// session's last run was in before the run ended, the one the end replaced
+/// (another run's may have come between), and the one staged for this run.
+struct LastRunFiles<'a> {
+    last_runs: &'a dyn LastRunStaging,
+    session_id: &'a str,
+    before: Option<String>,
+    staged: Option<String>,
+}
+
+impl<'a> LastRunFiles<'a> {
+    async fn before(last_runs: &'a dyn LastRunStaging, session_id: &'a str) -> Self {
+        // If this read fails, the only file lost track of is one replaced by
+        // an end whose acknowledgement was lost; the startup sweep deletes it.
+        let before = last_runs.spill_file(session_id).await.ok().flatten();
+        Self {
+            last_runs,
+            session_id,
+            before,
+            staged: None,
+        }
+    }
+
+    /// Seal the run's last-run JSON once, so a retry records the same spill
+    /// file. One that cannot be staged leaves the session with no last run.
+    async fn stage(&mut self, json: Vec<u8>) -> Option<StagedLastRun> {
+        match self.last_runs.stage(self.session_id, json).await {
+            Ok(staged) => {
+                self.staged = staged.spill_file().map(str::to_owned);
+                Some(staged)
+            }
+            Err(error) => {
+                tracing::error!(session = self.session_id, %error, "last run not kept");
+                None
+            }
+        }
+    }
+
+    /// Delete those no record names now that the run's end is settled, however
+    /// it settled: replaced, never written, or written and then lost.
+    async fn release(self, replaced: Option<String>) {
+        let files = [self.before, replaced, self.staged]
+            .into_iter()
+            .flatten()
+            .collect();
+        self.last_runs.release(self.session_id, files).await;
     }
 }
 
@@ -279,9 +402,8 @@ fn lock_attached(
     attached.lock().expect("attached runs poisoned")
 }
 
-fn database_has_closed(error: &RequestFailure) -> bool {
-    let RequestFailure::Store(crate::application::error::StoreError::Database(source)) = error
-    else {
+fn database_has_closed(error: &RunFailure) -> bool {
+    let RunFailure::Store(crate::application::error::StoreError::Database(source)) = error else {
         return false;
     };
     matches!(
@@ -293,10 +415,12 @@ fn database_has_closed(error: &RequestFailure) -> bool {
 }
 
 pub struct ReservationGuard {
-    sender: Option<oneshot::Sender<RequestResolution>>,
+    sender: Option<oneshot::Sender<(RunResolution, Option<Vec<u8>>)>>,
     completion: Option<oneshot::Receiver<()>>,
     reservation_id: String,
     attached: AttachedRuns,
+    /// The run's last-run JSON, recorded with its end.
+    last_run: Option<Vec<u8>>,
 }
 impl ReservationGuard {
     /// Name the run executing under this reservation, so a duplicate request is
@@ -305,20 +429,29 @@ impl ReservationGuard {
         lock_attached(&self.attached).insert(self.reservation_id.clone(), run_id.to_owned());
     }
 
+    /// What the session's last run becomes when this run ends on its own. A run
+    /// that ends without one leaves the session with none.
+    pub fn set_last_run(&mut self, run: &crate::session::LastRun) {
+        match run.encode() {
+            Ok(json) => self.last_run = Some(json),
+            Err(error) => tracing::error!(%error, "last run not kept"),
+        }
+    }
+
     pub async fn complete(self, status: u16, body: String) {
-        self.resolve(RequestResolution::Completed(RecordedOutcome {
-            status,
-            body,
-        }))
-        .await;
+        self.resolve(RunResolution::Completed(RecordedOutcome { status, body }))
+            .await;
+    }
+    pub async fn finish_unkeyed(self) {
+        self.resolve(RunResolution::Finished).await;
     }
     pub async fn release(self) {
-        self.resolve(RequestResolution::Undispatched).await;
+        self.resolve(RunResolution::Undispatched).await;
     }
-    async fn resolve(mut self, resolution: RequestResolution) {
+    async fn resolve(mut self, resolution: RunResolution) {
         self.detach();
         if let Some(sender) = self.sender.take() {
-            let _ = sender.send(resolution);
+            let _ = sender.send((resolution, self.last_run.take()));
         }
         if let Some(completion) = self.completion.take() {
             let _ = completion.await;
@@ -357,7 +490,7 @@ mod tests {
         session: &str,
         key: &str,
     ) -> Result<Option<IdempotentRequest>, crate::application::error::StoreError> {
-        units.begin().await?.get_request(session, key).await
+        units.begin().await?.run_for_key(session, key).await
     }
 
     pub(super) async fn fixture() -> (
@@ -430,7 +563,7 @@ mod tests {
 
     #[tokio::test]
     async fn responses_past_retention_become_tombstones_that_still_refuse_to_run() {
-        use crate::application::idempotency::ExpireResponses;
+        use crate::application::sessions::runs::ExpireResponses;
         use crate::domain::idempotent_request::{RequestState, ResponseRetention};
         let (_, units, coordinator) = fixture().await;
         drop(proceed(coordinator.reserve("session", "k0", "code").await));
@@ -499,7 +632,7 @@ mod tests {
 
     #[tokio::test]
     async fn each_session_due_expires_in_its_own_unit_and_the_counts_add_up() {
-        use crate::application::idempotency::ExpireResponses;
+        use crate::application::sessions::runs::ExpireResponses;
         use crate::domain::idempotent_request::{RequestState, ResponseRetention};
         let (_, units, coordinator) = fixture().await;
         let mut unit = units.begin().await.unwrap();
@@ -629,14 +762,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn closure_removes_requests_atomically_and_completion_cannot_resurrect_them() {
+    async fn closure_fences_runs_atomically_and_completion_cannot_resurrect_them() {
         let (_, units, coordinator) = fixture().await;
         let guard = proceed(coordinator.reserve("session", "key", "code").await);
         let mut unit = units.begin().await.unwrap();
         let mut session = unit.get_session("session").await.unwrap().unwrap();
         session.close(crate::domain::session::ClosedReason::Deleted);
         unit.save_session(session).await.unwrap();
-        unit.remove_session_requests("session").await.unwrap();
+        crate::application::sessions::runs::cancel_session_runs(unit.as_mut(), "session")
+            .await
+            .unwrap();
         drop(unit);
         assert!(
             read_request(units.as_ref(), "session", "key")
@@ -654,7 +789,7 @@ mod tests {
             read_request(units.as_ref(), "session", "key")
                 .await
                 .unwrap()
-                .is_none()
+                .is_some_and(|run| run.state() == &RequestState::Cancelled)
         );
         assert!(matches!(
             coordinator.reserve("session", "key", "code").await,
@@ -667,7 +802,7 @@ mod tests {
         let (database, _, coordinator) = fixture().await;
         let guard = proceed(coordinator.reserve("session", "key", "code").await);
         database.transaction(|connection| Box::pin(async move {
-            sqlx::query("CREATE TRIGGER reject_completion BEFORE UPDATE ON idempotent_requests WHEN NEW.state='completed' BEGIN SELECT RAISE(FAIL, 'injected'); END").execute(connection).await?;
+            sqlx::query("CREATE TRIGGER reject_completion BEFORE UPDATE ON runs WHEN NEW.state='completed' BEGIN SELECT RAISE(FAIL, 'injected'); END").execute(connection).await?;
             Ok(())
         })).await.unwrap();
         guard
@@ -682,3 +817,9 @@ mod tests {
 
 #[cfg(test)]
 mod fault_tests;
+
+#[cfg(test)]
+mod admission_tests;
+
+#[cfg(test)]
+mod last_run_tests;

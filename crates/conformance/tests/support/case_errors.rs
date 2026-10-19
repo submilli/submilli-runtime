@@ -38,6 +38,7 @@ const SHARED_SYNTAX_CHECKS: &[&str] = &[
     "can't be the body of a statement without braces",
     "built-in type and can't be used as",
     "`<>` is not allowed",
+    "can't name a binding in strict mode",
 ];
 
 /// Errors from any phase that name a feature we lack.
@@ -106,7 +107,6 @@ const LIBRARY_TYPES: &[&str] = &[
     "Symbol",
     "TemplateStringsArray",
     "Window",
-    "object",
     "symbol",
 ];
 

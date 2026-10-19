@@ -51,9 +51,12 @@ impl<'a> RecoverSessions<'a> {
             }
             if session.recover(now) {
                 events.push((id.clone(), SessionEvent::Expired));
-                unit.remove_session_requests(session.id().as_str())
-                    .await
-                    .map_err(BootError::Sessions)?;
+                crate::application::sessions::runs::cancel_session_runs(
+                    unit.as_mut(),
+                    session.id().as_str(),
+                )
+                .await
+                .map_err(BootError::Sessions)?;
                 unit.save_session(session)
                     .await
                     .map_err(BootError::Sessions)?;

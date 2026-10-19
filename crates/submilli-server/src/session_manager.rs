@@ -30,9 +30,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use interpreter::runtime::{
-    Access as RtAccess, EmbeddingLimits, EmbeddingTokenBudget, ExecutionTokenBudget, HttpClient,
-    InMemorySessionKv, LlmLimits, MountError, MountSpec, SessionKvLimits, SessionKvStore,
-    SharedKvBudget, SharedTokenBudget, Vfs, VfsInfo, VfsMode as RtVfsMode,
+    Access as RtAccess, CursorKey, CursorKeys, EmbeddingLimits, EmbeddingTokenBudget,
+    ExecutionTokenBudget, HttpClient, LlmLimits, MountError, MountSpec, SessionKvLimits,
+    SessionKvStore, SharedTokenBudget, Vfs, VfsInfo, VfsMode as RtVfsMode,
 };
 use submilli_blueprint::{Blueprint, HarnessSecretBindings, VarBindings, VfsConfig};
 use uuid::Uuid;
@@ -48,7 +48,7 @@ use crate::domain::idempotent_request::ResponseRetention;
 
 use crate::adapters::session::repository::{LoadedSession, SessionPersistence};
 use crate::blueprint::StoreError;
-use crate::config::VolumeTable;
+use crate::config::{VolumeRoot, VolumeTable};
 use crate::domain::session::{RootVfs, Session, SessionBinding, SessionId};
 use crate::domain::tools::SessionTools;
 use crate::runs::RunRegistry;
@@ -69,15 +69,6 @@ pub enum ReaperStartError {
     DeadlineOverflow,
 }
 
-/// Server-wide ceiling on retained `submilli:session` bytes across every live
-/// session. Deliberately generous — 64 sessions at the 16 MiB per-session cap,
-/// or thousands of realistically-sized ones — because the per-session limit is
-/// the bound an operator reasons about, and a tight aggregate would refuse
-/// writes for a reason no single program could see coming. It exists so a
-/// process cannot be pushed out of memory by session count alone; an operator
-/// sizing for many concurrent sessions raises it via `max_session_state_memory`.
-pub const DEFAULT_TOTAL_SESSION_KV_BYTES: u64 = 1024 * 1024 * 1024;
-
 /// Server-wide ceiling on `submilli:llm` tokens across every live execution.
 /// Re-exported from the runtime rather than chosen again here, so the number an
 /// operator raises is the number the refusal message names.
@@ -96,6 +87,8 @@ pub const DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS: u64 = 50_000_000;
 /// Sub-batches one embedding call sends at once.
 pub use submilli_shared::embedding::DEFAULT_MAX_CONCURRENCY as DEFAULT_MAX_EMBEDDING_CONCURRENCY;
 
+pub use crate::adapters::session::last_run::DEFAULT_MAX_LAST_RUN_BYTES;
+use crate::adapters::session::last_run::LastRuns;
 pub use crate::application::sessions::error::{BootError, SessionError};
 
 impl From<CredentialError> for SessionError {
@@ -105,15 +98,23 @@ impl From<CredentialError> for SessionError {
 }
 
 pub struct SessionManager {
+    finalizers: crate::adapters::session::finalizers::StoredFinalizers,
+    finalizer_executor:
+        std::sync::OnceLock<Arc<dyn crate::application::sessions::finalization::FinalizerExecutor>>,
+    finalization_lock: tokio::sync::Mutex<()>,
+    /// Poisoning can leave execution scopes partly installed; never recover that map.
+    resource_scopes:
+        std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<ResourceScope>>>,
     audit: Option<crate::audit::AuditLog>,
     resources: resources::SessionResources,
     reaper_started: AtomicBool,
     credentials: CredentialCodec,
     unit_of_work: Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory>,
-    /// Durable root for `per_session` directories (keyed by session id).
+    /// Durable root for `per_session` directories (keyed by session id): the
+    /// volume root's `sessions/`.
     session_root: PathBuf,
-    /// Root for `ephemeral` scratch dirs; `None` uses the OS temp dir.
-    ephemeral_root: Option<PathBuf>,
+    /// Where `ephemeral` scratch dirs go: the volume root's `ephemeral/`.
+    ephemeral_root: EphemeralRoot,
     /// Operator-declared named volumes every blueprint resolves through.
     /// Passed in rather than looked up globally, so every mount path takes the
     /// same table and shares the same size limits.
@@ -122,6 +123,7 @@ pub struct SessionManager {
     database: Arc<crate::database::ServerDatabase>,
     repository: SessionPersistence,
     session_kv: SessionKvSettings,
+    cursor_keys: Option<Arc<CursorKeys>>,
     llm: LlmSettings,
     embedding: EmbeddingSettings,
     /// Runs that may suspend at an application tool call. A session with one
@@ -129,43 +131,34 @@ pub struct SessionManager {
     runs: Arc<RunRegistry>,
     /// How long keyed executes keep their responses for replay.
     response_retention: ResponseRetention,
+    /// Each session's last run, which ends with it.
+    last_runs: Arc<LastRuns>,
 }
 
 /// How long ending a session waits for its cancelled runs to stop before it
 /// removes their files anyway.
 const RUN_DRAIN: Duration = Duration::from_secs(10);
 
-/// How a session's `submilli:session` store is built. Cloned into every session
-/// that allocates one, so the aggregate budget is shared across them all.
-#[derive(Clone)]
+/// How a session's `submilli:session` store is bounded. The state itself is in
+/// the database, so every limit is per session. Kept a struct beside
+/// [`LlmSettings`] and [`EmbeddingSettings`], which [`CapabilitySettings`]
+/// groups the same way.
+#[derive(Clone, Default)]
 pub struct SessionKvSettings {
     pub limits: SessionKvLimits,
-    /// Server-wide ceiling on retained session-KV bytes across live sessions.
-    /// Reserved compare-and-swap, so two sessions cannot both claim the same
-    /// headroom.
-    pub budget: SharedKvBudget,
-}
-
-impl Default for SessionKvSettings {
-    fn default() -> Self {
-        Self::new(SessionKvLimits::default(), DEFAULT_TOTAL_SESSION_KV_BYTES)
-    }
 }
 
 impl SessionKvSettings {
-    pub fn new(limits: SessionKvLimits, total_bytes: u64) -> Self {
-        Self {
-            limits,
-            budget: SharedKvBudget::new(total_bytes),
-        }
+    pub fn new(limits: SessionKvLimits) -> Self {
+        Self { limits }
     }
+}
 
-    fn build(&self) -> Arc<dyn SessionKvStore> {
-        Arc::new(InMemorySessionKv::with_shared_budget(
-            self.limits,
-            self.budget.clone(),
-        ))
-    }
+/// Cursor keys derived from the server's key. Replacing that key changes their
+/// id, so a cursor sealed before names a key the server no longer holds.
+fn derive_cursor_keys(cipher: &SecretCipher) -> Arc<CursorKeys> {
+    let (id, secret) = cipher.derive(b"submilli:session-list-cursor:v1");
+    Arc::new(CursorKeys::new(CursorKey::new(id, secret), Vec::new()))
 }
 
 /// How an execution's `submilli:llm` token budget is built. Cloned into every
@@ -266,9 +259,10 @@ pub struct CapabilitySettings {
 }
 
 impl SessionManager {
+    /// A manager whose `per_session` and `ephemeral` directories live under
+    /// `volume_root`, which [`VolumeRoot::prepare`] has made ready.
     pub fn new(
-        session_root: PathBuf,
-        ephemeral_root: Option<PathBuf>,
+        volume_root: &VolumeRoot,
         volumes: Arc<VolumeRegistry>,
         http_client_factory: HttpClientFactory,
         store: Arc<crate::session_store::SqliteSessionStore>,
@@ -280,7 +274,19 @@ impl SessionManager {
             llm,
             embedding,
         } = capabilities;
+        let session_root = volume_root.sessions_dir();
+        let cursor_keys = database
+            .ephemeral_cipher()
+            .as_deref()
+            .map(derive_cursor_keys);
         Self {
+            finalizers: crate::adapters::session::finalizers::StoredFinalizers {
+                database: database.clone(),
+                sealer: crate::adapters::sealing::Sealer::new(database.ephemeral_cipher()),
+            },
+            finalizer_executor: std::sync::OnceLock::new(),
+            finalization_lock: tokio::sync::Mutex::new(()),
+            resource_scopes: std::sync::Mutex::new(std::collections::HashMap::new()),
             audit: None,
             credentials: CredentialCodec::new(database.ephemeral_cipher()),
             unit_of_work: crate::adapters::unit_of_work::for_sessions(
@@ -288,20 +294,38 @@ impl SessionManager {
                 session_root.clone(),
                 None,
             ),
-            resources: resources::SessionResources::new(http_client_factory, session_kv.clone()),
+            resources: resources::SessionResources::new(http_client_factory),
             reaper_started: AtomicBool::new(false),
             repository: SessionPersistence::new(store.clone(), session_root.clone()),
             session_root,
-            ephemeral_root,
+            ephemeral_root: EphemeralRoot::in_root(volume_root),
             volumes,
             store,
-            database,
             session_kv,
+            cursor_keys,
             llm,
             embedding,
             runs: Arc::new(RunRegistry::default()),
             response_retention: ResponseRetention::default(),
+            last_runs: Arc::new(LastRuns::new(
+                database.clone(),
+                database.ephemeral_cipher(),
+                DEFAULT_MAX_LAST_RUN_BYTES,
+            )),
+            database,
         }
+    }
+
+    /// Keep a session's last run only up to `max_bytes` of JSON; a larger one
+    /// keeps only its size.
+    pub fn with_max_last_run_size(mut self, max_bytes: u64) -> Self {
+        self.last_runs = Arc::new(self.last_runs.with_max_bytes(max_bytes));
+        self
+    }
+
+    /// Each session's last run.
+    pub(crate) fn last_runs(&self) -> &Arc<LastRuns> {
+        &self.last_runs
     }
 
     /// Hold at most `max` runs waiting on the harness at once.
@@ -333,21 +357,30 @@ impl SessionManager {
         self.resources.http_client(session_id)
     }
 
-    /// The `submilli:session` store for `session_id`, built once and cached on
-    /// the session so every execute in it — REST or MCP — reads and writes one
-    /// set of entries, and no other session does.
-    ///
-    /// The cache entry is created on first access. One-shot execution closes
-    /// its session after the run, releasing cached resources and their budget.
+    /// The `submilli:session` store for `session_id`. The state is in the
+    /// database, so every execute in the session — REST or MCP, before a
+    /// restart or after — reads and writes one set of entries, and no other
+    /// session does. Closing the session deletes them.
     pub fn session_kv_for_execute(&self, session_id: &str) -> Arc<dyn SessionKvStore> {
-        self.resources.session_kv_for_execute(session_id)
+        Arc::new(crate::adapters::session_kv_store::DatabaseSessionKv::new(
+            self.unit_of_work.clone(),
+            session_id,
+            self.session_kv.limits,
+        ))
+    }
+
+    /// The keys `session.list` cursors are sealed with: derived from the
+    /// server's secret-store key, so a cursor handed out before a restart still
+    /// works after it. `None` without a key, which leaves cursors to the
+    /// runtime's per-process key.
+    pub fn cursor_keys(&self) -> Option<Arc<CursorKeys>> {
+        self.cursor_keys.clone()
     }
 
     /// A fresh `submilli:llm` token budget for one execution, sharing this
     /// server's aggregate ceiling.
     ///
-    /// Unlike [`Self::session_kv_for_execute`] this is deliberately *not* cached
-    /// on the session: the reservation releases on `Drop`, so a budget held by a
+    /// This is deliberately *not* cached on the session: the reservation releases on `Drop`, so a budget held by a
     /// session entry would keep every past execute's spend charged until the
     /// session ended — and the per-execution ceiling would silently become a
     /// per-session one. Every execute gets its own, and the aggregate is what
@@ -406,11 +439,6 @@ impl SessionManager {
         &self.llm.budget
     }
 
-    /// The server-wide session-KV budget, for operator-facing reporting.
-    pub fn session_kv_budget(&self) -> &SharedKvBudget {
-        &self.session_kv.budget
-    }
-
     pub fn with_cipher(mut self, cipher: Option<Arc<SecretCipher>>) -> Self {
         let cipher = cipher.or_else(|| self.database.ephemeral_cipher());
         self.unit_of_work = crate::adapters::unit_of_work::for_sessions(
@@ -418,6 +446,13 @@ impl SessionManager {
             self.session_root.clone(),
             cipher.clone(),
         );
+        self.cursor_keys = cipher.as_deref().map(derive_cursor_keys);
+        self.last_runs = Arc::new(LastRuns::new(
+            self.database.clone(),
+            cipher.clone(),
+            self.last_runs.max_bytes(),
+        ));
+        self.finalizers.sealer = crate::adapters::sealing::Sealer::new(cipher.clone());
         self.credentials = CredentialCodec::new(cipher);
         self
     }
@@ -516,9 +551,9 @@ impl SessionManager {
             .await
     }
 
-    /// Root for `ephemeral` scratch directories, if one was configured.
-    pub(crate) fn ephemeral_root(&self) -> Option<&Path> {
-        self.ephemeral_root.as_deref()
+    /// Where `ephemeral` scratch directories go.
+    pub(crate) fn ephemeral_root(&self) -> &EphemeralRoot {
+        &self.ephemeral_root
     }
 
     /// The declared volume table, for registration checks and listings.
@@ -617,7 +652,7 @@ impl SessionManager {
             blueprint,
             variables,
             loaded.session().root().owned_path(),
-            self.ephemeral_root.as_deref(),
+            &self.ephemeral_root,
             &self.volumes,
         )?;
         if resolving_legacy {
@@ -629,7 +664,7 @@ impl SessionManager {
     fn workspaces(&self) -> LocalSessionWorkspaces<'_> {
         LocalSessionWorkspaces {
             session_root: &self.session_root,
-            ephemeral_root: self.ephemeral_root.as_deref(),
+            ephemeral_root: &self.ephemeral_root,
             volumes: &self.volumes,
         }
     }
@@ -688,7 +723,7 @@ impl SessionManager {
             blueprint,
             variables,
             session_root,
-            self.ephemeral_root.as_deref(),
+            &self.ephemeral_root,
             volumes,
         )?;
         Ok((
@@ -710,43 +745,81 @@ impl SessionManager {
         )
         .execute(id, ClosedReason::Deleted)
         .await?;
-        if closed && let Err(error) = self.cleanup(id).await {
-            tracing::warn!(%error, "session cleanup will retry");
-        }
+        self.cleanup(id).await?;
         Ok(closed)
     }
 
     async fn cleanup(&self, id: &str) -> Result<(), SessionError> {
-        if self
-            .store
-            .load(id)
-            .await?
-            .is_some_and(|record| record.status == SessionStatus::Active)
+        let _finalization = self.finalization_lock.lock().await;
+        if let Some(record) = self.store.load(id).await?
+            && (record.status == SessionStatus::Active || !record.cleanup_pending)
         {
             return Ok(());
         }
         // Its waiting runs stop before their files go and before their
         // idempotency entries are purged. One still going after the drain
         // writes no outcome back when it ends (`RunEntry::cancel_unrecorded`).
+        let scope = self.resource_scope(id);
+        scope.cancel.cancel();
         self.runs.end_session(id, RUN_DRAIN).await;
+        // The runner holds its read permit until blocking host work has drained.
+        let _drained = scope.work.write().await;
+        if let Some(executor) = self.finalizer_executor.get() {
+            crate::application::sessions::finalization::finalize_session(
+                &self.finalizers,
+                executor.as_ref(),
+                id,
+            )
+            .await?;
+        } else {
+            if self.finalizers.has_unfinished(id).await? {
+                return Err(SessionError::Io("finalizer executor is unavailable".into()));
+            }
+        }
+        if self.finalizers.has_unfinished(id).await? {
+            return Err(SessionError::Io(
+                "finalization completion could not be recorded; recovery is required".into(),
+            ));
+        }
         self.resources.evict(id);
+        self.last_runs.remove_session_files(id).await;
         let Some(task) = self.store.cleanup_task(id).await? else {
             return Ok(());
         };
         if let Some(folder) = task.folder {
             validate_session_id(id)?;
             let root = self.session_root.join(id);
-            if folder != root {
-                return Err(SessionError::Io(
-                    "session workspace ownership mismatch".into(),
-                ));
-            }
-            match std::fs::remove_dir_all(root) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(SessionError::Io(error.to_string())),
+            if folder == root {
+                match std::fs::remove_dir_all(root) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(SessionError::Io(error.to_string())),
+                }
+            } else {
+                // A folder recorded anywhere else was made under an earlier
+                // layout (`server/vfs/sessions/` before the volume root) or an
+                // earlier `volume_dir`. It is not this server's to delete, and
+                // refusing would fail every boot, so it stays for the operator.
+                tracing::warn!(
+                    session_id = id,
+                    folder = %folder.display(),
+                    "session workspace is not this session's directory under the volume root; left in place"
+                );
             }
         }
+        let owned_id = id.to_owned();
+        self.database
+            .transaction(move |connection| {
+                Box::pin(async move {
+                    sqlx::query("DELETE FROM finalizer_context WHERE session_id=?")
+                        .bind(owned_id)
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .map_err(|error| SessionError::Io(error.to_string()))?;
         self.store.complete_cleanup(id).await?;
         Ok(())
     }
@@ -779,7 +852,7 @@ impl SessionManager {
     /// Drop the keyed-execute responses past their retention, leaving tombstones
     /// that still refuse to run the request again. Returns how many expired.
     async fn expire_responses(&self, now: SystemTime) -> Result<u64, SessionError> {
-        Ok(crate::application::idempotency::ExpireResponses::new(
+        Ok(crate::application::sessions::runs::ExpireResponses::new(
             self.unit_of_work.as_ref(),
             self.response_retention,
         )
@@ -787,7 +860,7 @@ impl SessionManager {
         .await?)
     }
 
-    async fn process_pending_cleanup(&self) -> Result<(), SessionError> {
+    pub(crate) async fn process_pending_cleanup(&self) -> Result<(), SessionError> {
         self.resources
             .retain_active(&self.store.active_ids().await?);
         for task in self.store.pending_cleanup().await? {
@@ -802,7 +875,17 @@ impl SessionManager {
 
     pub async fn boot(&self) -> Result<(), BootError> {
         self.store.initialize().await.map_err(BootError::Sessions)?;
+        self.finalizers
+            .recover()
+            .await
+            .map_err(BootError::Sessions)?;
         self.store.load_all().await.map_err(BootError::Sessions)?;
+        self.ephemeral_root
+            .sweep()
+            .map_err(|source| BootError::Scratch {
+                path: self.ephemeral_root.path.clone(),
+                source,
+            })?;
         crate::application::sessions::recover::RecoverSessions::new(
             self.unit_of_work.as_ref(),
             &SessionAuditLog(self.audit.as_ref()),
@@ -909,6 +992,76 @@ fn validate_session_id(id: &str) -> Result<(), SessionError> {
         .map_err(Into::into)
 }
 
+/// Where `ephemeral` scratch directories are allocated: the volume root's
+/// `ephemeral/`, created at startup and never again.
+#[derive(Debug, Clone)]
+pub(crate) struct EphemeralRoot {
+    path: PathBuf,
+}
+
+impl EphemeralRoot {
+    pub(crate) fn in_root(root: &VolumeRoot) -> Self {
+        Self {
+            path: root.ephemeral_dir(),
+        }
+    }
+
+    fn tempdir(&self) -> std::io::Result<Vfs> {
+        Vfs::tempdir_in(&self.path)
+    }
+
+    /// Remove scratch directories an earlier process left behind: a scratch
+    /// directory is removed when its execute ends, so at boot every one is a
+    /// leftover from a crash. Entries without the scratch prefix are left alone,
+    /// and a link with it is removed without following it. Only a root that
+    /// cannot be opened fails the sweep; an entry that cannot be read or removed
+    /// is logged and left for the next boot.
+    ///
+    /// This assumes one server per root. Workers sharing a root would remove
+    /// each other's live scratch (SUB-1343).
+    fn sweep(&self) -> std::io::Result<()> {
+        let entries = std::fs::read_dir(&self.path)?;
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                // The listing may not move past a failed entry; stop rather than
+                // spin, and leave what is left for the next boot.
+                Err(error) => {
+                    tracing::warn!(
+                        path = %self.path.display(),
+                        %error,
+                        "listing leftover ephemeral scratch failed; it is retried at the next boot"
+                    );
+                    break;
+                }
+            };
+            let is_scratch = entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(interpreter::runtime::vfs::TEMPDIR_PREFIX));
+            if !is_scratch {
+                continue;
+            }
+            let path = entry.path();
+            let removed = entry.file_type().and_then(|file_type| {
+                if file_type.is_dir() {
+                    std::fs::remove_dir_all(&path)
+                } else {
+                    std::fs::remove_file(&path)
+                }
+            });
+            if let Err(error) = removed {
+                tracing::warn!(
+                    path = %path.display(),
+                    %error,
+                    "removing leftover ephemeral scratch failed; it is retried at the next boot"
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Build the `Vfs` for one execute. Every named volume — a `named` root or a
 /// mount — resolves through `volumes` here, at the single point every VFS is
 /// constructed, so no route into a session can mount a directory the operator
@@ -918,7 +1071,7 @@ pub(crate) fn build_vfs(
     blueprint: &Blueprint,
     variables: &VarBindings,
     session_root: Option<&Path>,
-    ephemeral_root: Option<&Path>,
+    ephemeral_root: &EphemeralRoot,
     volumes: &VolumeRegistry,
 ) -> Result<Vfs, SessionError> {
     // `Vfs` formats the host root into its error, and these roots are the server's own
@@ -938,10 +1091,7 @@ pub(crate) fn build_vfs(
         .map_err(|e| SessionError::InvalidVfs(e.to_string()))?;
     let root = match &config {
         VfsConfig::None => return Ok(Vfs::none()),
-        VfsConfig::Ephemeral { .. } => match ephemeral_root {
-            Some(root) => Vfs::tempdir_in(root).map_err(io("ephemeral"))?,
-            None => Vfs::tempdir().map_err(io("ephemeral"))?,
-        },
+        VfsConfig::Ephemeral { .. } => ephemeral_root.tempdir().map_err(io("ephemeral"))?,
         VfsConfig::PerSession { .. } => {
             let root = session_root
                 .ok_or_else(|| SessionError::Io("per_session vfs root missing".into()))?;
@@ -1130,6 +1280,7 @@ pub(crate) fn vfs_info(blueprint: &Blueprint) -> VfsInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use interpreter::runtime::SessionKvError;
     use std::time::UNIX_EPOCH;
 
     use crate::request_records::{Record as LedgerEntry, RequestRecords, code_fingerprint};
@@ -1339,6 +1490,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_idle_session_expires_with_its_last_run() {
+        use crate::application::sessions::ports::LastRunStaging;
+        let (manager, _root) = manager();
+        let blueprint = per_session(HOUR);
+        manager.ensure("idle", &blueprint).await.unwrap();
+        let staged = manager
+            .last_runs
+            .stage("idle", b"{}".to_vec())
+            .await
+            .unwrap();
+        let mut unit = manager.unit_of_work.begin().await.unwrap();
+        unit.put_last_run("idle", "run", SystemTime::now(), &staged)
+            .await
+            .unwrap();
+        unit.commit().await.unwrap();
+        assert!(manager.last_runs.get("idle").await.unwrap().is_some());
+        set_last_activity(&manager, "idle", UNIX_EPOCH).await;
+        assert_eq!(manager.reap_now().await.unwrap(), 1);
+        assert_eq!(manager.last_runs.get("idle").await.unwrap(), None);
+    }
+
+    #[tokio::test]
     async fn recovery_and_reaping_audit_the_session_lifecycle() {
         let (manager, root) = manager();
         let audit_path = root.path().join("audit.log");
@@ -1439,7 +1612,7 @@ mod tests {
             &blueprint,
             &VarBindings::new(),
             Some(&root),
-            None,
+            &EphemeralRoot::in_root(&VolumeRoot::default_root(outer.path())),
             &VolumeRegistry::default(),
         )
         .expect_err("mounting a file as a session root must fail");
@@ -1476,6 +1649,13 @@ mod tests {
         });
     }
 
+    /// A volume root at `dir`, prepared as at startup.
+    fn test_root(dir: &Path) -> VolumeRoot {
+        let root = VolumeRoot::configured(dir);
+        root.prepare().expect("prepare the volume root");
+        root
+    }
+
     fn mem_store() -> Arc<crate::session_store::SqliteSessionStore> {
         let database = Arc::new(
             futures::executor::block_on(crate::database::ServerDatabase::open_ephemeral()).unwrap(),
@@ -1503,7 +1683,7 @@ mod tests {
         ))
     }
 
-    fn reserved(session_id: &str, key: &str) -> LedgerEntry {
+    fn indeterminate_run(session_id: &str, key: &str) -> LedgerEntry {
         LedgerEntry::indeterminate(session_id, key, code_fingerprint("main"))
     }
 
@@ -1511,8 +1691,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         (
             SessionManager::new(
-                dir.path().to_path_buf(),
-                None,
+                &test_root(dir.path()),
                 Arc::default(),
                 no_http(),
                 mem_store(),
@@ -1522,15 +1701,14 @@ mod tests {
         )
     }
 
-    /// A manager plus a handle on the ledger it purges, for the cleanup tests.
+    /// A manager plus its retained run records, for the cleanup tests.
     fn manager_with_ledger() -> (SessionManager, tempfile::TempDir, Arc<RequestRecords>) {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = mem_store();
         let ledger = Arc::new(RequestRecords::with_database(store.database_owner()));
         (
             SessionManager::new(
-                dir.path().to_path_buf(),
-                None,
+                &test_root(dir.path()),
                 Arc::default(),
                 no_http(),
                 store,
@@ -1580,7 +1758,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert!(!root.path().join("new").exists());
+        assert!(!root.path().join("sessions/new").exists());
         assert!(!mgr.contains("new").await.unwrap());
         let good = submilli_blueprint::parse("name: x\nvfs: per_session\nvariables:\n  user: {}\n")
             .unwrap();
@@ -1588,7 +1766,7 @@ mod tests {
         mgr.bind("existing", &good, original.clone(), no_secrets())
             .await
             .unwrap();
-        std::fs::write(root.path().join("existing/kept"), "keep").unwrap();
+        std::fs::write(root.path().join("sessions/existing/kept"), "keep").unwrap();
         assert!(
             mgr.bind("existing", &bad, Arc::new(VarBindings::new()), no_secrets())
                 .await
@@ -1596,7 +1774,7 @@ mod tests {
         );
         assert_eq!(mgr.variables("existing").await.unwrap(), original);
         assert_eq!(
-            std::fs::read_to_string(root.path().join("existing/kept")).unwrap(),
+            std::fs::read_to_string(root.path().join("sessions/existing/kept")).unwrap(),
             "keep"
         );
     }
@@ -1612,7 +1790,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(root.path().join(&id).is_dir());
+        assert!(root.path().join("sessions").join(&id).is_dir());
     }
 
     #[tokio::test]
@@ -1622,7 +1800,7 @@ mod tests {
             .create(&none_bp(), Arc::new(VarBindings::new()), no_secrets())
             .await
             .unwrap();
-        assert!(!root.path().join(&id).exists());
+        assert!(!root.path().join("sessions").join(&id).exists());
     }
 
     #[tokio::test]
@@ -1644,17 +1822,15 @@ mod tests {
             .unwrap();
         let (vfs, info) = mgr.vfs_for_execute(&id, &bp).await.unwrap();
         assert_eq!(vfs.mode(), RtVfsMode::PerSession);
-        assert_eq!(vfs.root(), root.path().join(&id));
+        assert_eq!(vfs.root(), root.path().join("sessions").join(&id));
         assert_eq!(info.mode, RtVfsMode::PerSession);
     }
 
     #[tokio::test]
     async fn ephemeral_uses_configured_root() {
-        let session_dir = tempfile::tempdir().expect("session dir");
-        let eph_dir = tempfile::tempdir().expect("ephemeral dir");
+        let root = tempfile::tempdir().expect("volume root");
         let mgr = SessionManager::new(
-            session_dir.path().to_path_buf(),
-            Some(eph_dir.path().to_path_buf()),
+            &test_root(root.path()),
             Arc::default(),
             no_http(),
             mem_store(),
@@ -1672,8 +1848,8 @@ mod tests {
         mgr.ensure("sid", &bp).await.unwrap();
         let (vfs, _) = mgr.vfs_for_execute("sid", &bp).await.unwrap();
         assert!(
-            vfs.root().starts_with(eph_dir.path()),
-            "ephemeral scratch should live under the configured root"
+            vfs.root().starts_with(root.path().join("ephemeral")),
+            "ephemeral scratch should live under the volume root"
         );
     }
 
@@ -1684,8 +1860,7 @@ mod tests {
 
         // First boot: write a file into the session's VFS.
         let mgr = SessionManager::new(
-            dir.path().to_path_buf(),
-            None,
+            &test_root(dir.path()),
             Arc::default(),
             no_http(),
             mem_store(),
@@ -1698,8 +1873,7 @@ mod tests {
         // Restart: a fresh manager over the same durable root, in-memory state
         // gone. Reconnecting with the same session id finds the files intact.
         let restarted = SessionManager::new(
-            dir.path().to_path_buf(),
-            None,
+            &test_root(dir.path()),
             Arc::default(),
             no_http(),
             mem_store(),
@@ -1718,8 +1892,7 @@ mod tests {
         let bp = per_session(HOUR);
 
         let mgr = SessionManager::new(
-            root.path().to_path_buf(),
-            None,
+            &test_root(root.path()),
             Arc::default(),
             no_http(),
             store.clone(),
@@ -1729,8 +1902,7 @@ mod tests {
 
         // Restart: fresh manager + empty cache, same store + root.
         let restarted = SessionManager::new(
-            root.path().to_path_buf(),
-            None,
+            &test_root(root.path()),
             Arc::default(),
             no_http(),
             store,
@@ -1768,12 +1940,11 @@ mod tests {
             })
             .await
             .unwrap();
-        let dir = root.path().join("old");
+        let dir = root.path().join("sessions/old");
         std::fs::create_dir_all(&dir).unwrap();
 
         let mgr = SessionManager::new(
-            root.path().to_path_buf(),
-            None,
+            &test_root(root.path()),
             Arc::default(),
             no_http(),
             store,
@@ -1791,8 +1962,7 @@ mod tests {
         let store_dir = tempfile::tempdir().expect("store dir");
         let root = tempfile::tempdir().expect("session root");
         let mgr = SessionManager::new(
-            root.path().to_path_buf(),
-            None,
+            &test_root(root.path()),
             Arc::default(),
             no_http(),
             file_store(store_dir.path()),
@@ -1805,15 +1975,24 @@ mod tests {
         mgr.bind("s1", &per_session(HOUR), Arc::default(), no_secrets())
             .await
             .unwrap();
-        let mut request = IdempotentRequest::reserve(
+        let completed_at = SystemTime::now() - Duration::from_secs(1);
+        let request = IdempotentRequest::reserve(
             "s1".into(),
             "k".into(),
             "f".into(),
             "r".into(),
             "g".into(),
-            SystemTime::now(),
+            completed_at,
         )
         .unwrap();
+        let mut unit = mgr.unit_of_work.begin().await.unwrap();
+        unit.save_run(request).await.unwrap();
+        unit.commit().await.unwrap();
+        crate::application::sessions::runs::claim_run(mgr.unit_of_work.as_ref(), "r", "g")
+            .await
+            .unwrap();
+        let mut unit = mgr.unit_of_work.begin().await.unwrap();
+        let mut request = unit.get_run("r").await.unwrap().unwrap();
         request
             .complete(
                 "r",
@@ -1821,17 +2000,16 @@ mod tests {
                     status: 200,
                     body: "bytes".into(),
                 },
-                SystemTime::now() - Duration::from_secs(1),
+                completed_at,
             )
             .unwrap();
-        let mut unit = mgr.unit_of_work.begin().await.unwrap();
-        unit.save_request(request).await.unwrap();
+        unit.save_run(request).await.unwrap();
         unit.commit().await.unwrap();
 
         assert_eq!(mgr.reap_now().await.unwrap(), 0, "the session stays");
         let mut unit = mgr.unit_of_work.begin().await.unwrap();
         assert_eq!(
-            unit.get_request("s1", "k").await.unwrap().unwrap().state(),
+            unit.run_for_key("s1", "k").await.unwrap().unwrap().state(),
             &RequestState::Expired
         );
     }
@@ -1853,8 +2031,7 @@ mod tests {
 
         {
             let mgr = SessionManager::new(
-                root.path().to_path_buf(),
-                None,
+                &test_root(root.path()),
                 Arc::default(),
                 no_http(),
                 file_store(store_dir.path()),
@@ -1888,8 +2065,7 @@ mod tests {
         // A fresh manager over the same store + root: boot rehydrates the entry,
         // and its variable bindings come back with it.
         let mgr = SessionManager::new(
-            root.path().to_path_buf(),
-            None,
+            &test_root(root.path()),
             Arc::default(),
             no_http(),
             file_store(store_dir.path()),
@@ -1921,13 +2097,12 @@ mod tests {
         let store_dir = tempfile::tempdir().expect("store dir");
         let root = tempfile::tempdir().expect("session root");
         // A leftover per_session dir whose session was never persisted.
-        let orphan = root.path().join("ghost");
+        let orphan = root.path().join("sessions/ghost");
         std::fs::create_dir_all(&orphan).unwrap();
         std::fs::write(orphan.join("a.txt"), b"x").unwrap();
 
         let mgr = SessionManager::new(
-            root.path().to_path_buf(),
-            None,
+            &test_root(root.path()),
             Arc::default(),
             no_http(),
             file_store(store_dir.path()),
@@ -1961,8 +2136,7 @@ mod tests {
             .unwrap();
 
         let mgr = SessionManager::new(
-            root.path().to_path_buf(),
-            None,
+            &test_root(root.path()),
             Arc::default(),
             no_http(),
             store.clone(),
@@ -1997,7 +2171,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let dir = root.path().join(&id);
+        let dir = root.path().join("sessions").join(&id);
         std::fs::write(dir.join("a.txt"), b"hi").unwrap();
         assert!(mgr.wipe_now(&id).await.unwrap());
         assert!(
@@ -2008,7 +2182,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wipe_now_purges_the_session_ledger() {
+    async fn wipe_now_preserves_indeterminate_run_evidence() {
         let (mgr, _root, ledger) = manager_with_ledger();
         let id = mgr
             .create(
@@ -2018,14 +2192,18 @@ mod tests {
             )
             .await
             .unwrap();
-        ledger.put(reserved(&id, "k")).await.unwrap();
+        ledger.put(indeterminate_run(&id, "k")).await.unwrap();
 
         assert!(mgr.wipe_now(&id).await.unwrap());
-        assert_eq!(ledger.load(&id, "k").await.unwrap(), None);
+        assert!(!mgr.contains(&id).await.unwrap());
+        assert_eq!(
+            ledger.load(&id, "k").await.unwrap(),
+            Some(indeterminate_run(&id, "k"))
+        );
     }
 
     #[tokio::test]
-    async fn reap_purges_the_session_ledger() {
+    async fn reap_preserves_indeterminate_run_evidence() {
         let (mgr, _root, ledger) = manager_with_ledger();
         let id = mgr
             .create(
@@ -2035,10 +2213,14 @@ mod tests {
             )
             .await
             .unwrap();
-        ledger.put(reserved(&id, "k")).await.unwrap();
+        ledger.put(indeterminate_run(&id, "k")).await.unwrap();
 
         assert_eq!(mgr.reap(way_later()).await.unwrap(), 1);
-        assert_eq!(ledger.load(&id, "k").await.unwrap(), None);
+        assert!(!mgr.contains(&id).await.unwrap());
+        assert_eq!(
+            ledger.load(&id, "k").await.unwrap(),
+            Some(indeterminate_run(&id, "k"))
+        );
     }
 
     #[tokio::test]
@@ -2060,11 +2242,13 @@ mod tests {
             })
             .await
             .unwrap();
-        ledger.put(reserved("vanished", "k")).await.unwrap();
+        ledger
+            .put(indeterminate_run("vanished", "k"))
+            .await
+            .unwrap();
 
         let mgr = SessionManager::new(
-            root.path().to_path_buf(),
-            None,
+            &test_root(root.path()),
             Arc::default(),
             no_http(),
             store,
@@ -2084,19 +2268,17 @@ mod tests {
         let bp = per_session(HOUR);
 
         let mgr = SessionManager::new(
-            root.path().to_path_buf(),
-            None,
+            &test_root(root.path()),
             Arc::default(),
             no_http(),
             Arc::clone(&store),
             CapabilitySettings::default(),
         );
         mgr.ensure("sid", &bp).await.unwrap();
-        ledger.put(reserved("sid", "k")).await.unwrap();
+        ledger.put(indeterminate_run("sid", "k")).await.unwrap();
 
         let restarted = SessionManager::new(
-            root.path().to_path_buf(),
-            None,
+            &test_root(root.path()),
             Arc::default(),
             no_http(),
             store,
@@ -2128,7 +2310,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(mgr.reap(way_later()).await.unwrap(), 1);
-        assert!(!root.path().join(&id).exists());
+        assert!(!root.path().join("sessions").join(&id).exists());
     }
 
     #[tokio::test]
@@ -2143,7 +2325,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(mgr.reap(SystemTime::now()).await.unwrap(), 0);
-        assert!(root.path().join(&id).is_dir());
+        assert!(root.path().join("sessions").join(&id).is_dir());
     }
 
     #[tokio::test]
@@ -2166,9 +2348,9 @@ mod tests {
             ]),
             data.path().join("volumes"),
         );
+        std::fs::create_dir(data.path().join("volumes")).unwrap();
         let mgr = SessionManager::new(
-            session_root.path().to_path_buf(),
-            None,
+            &test_root(session_root.path()),
             Arc::new(registry),
             no_http(),
             mem_store(),
@@ -2199,7 +2381,7 @@ mod tests {
         drop(vfs);
         mgr.reap(way_later()).await.unwrap();
         assert!(
-            !session_root.path().join(&id).exists(),
+            !session_root.path().join("sessions").join(&id).exists(),
             "the session dir is wiped"
         );
         mgr.boot().await.expect("boot");
@@ -2259,7 +2441,7 @@ mod tests {
             );
         }
         mgr.wipe_now(&id).await.unwrap();
-        assert!(!root.path().join(id).exists());
+        assert!(!root.path().join("sessions").join(id).exists());
     }
 
     #[tokio::test]
@@ -2281,8 +2463,7 @@ mod tests {
         };
         let make_manager = |volume: &Path| {
             SessionManager::new(
-                root.path().to_path_buf(),
-                None,
+                &test_root(root.path()),
                 Arc::new(VolumeRegistry::new(
                     VolumeTable::from([(
                         "shared".into(),
@@ -2352,7 +2533,7 @@ mod tests {
         let record = mgr.store.load(&id).await.unwrap().unwrap();
         assert_eq!(record.root_vfs_type, RootVfsType::Named);
         assert_eq!(record.root_vfs_path, Some(volume.path().join("users/ada")));
-        assert!(!root.path().join(&id).exists());
+        assert!(!root.path().join("sessions").join(&id).exists());
         let changed = Blueprint {
             vfs: VfsConfig::PerSession {
                 size_limit: None,
@@ -2379,10 +2560,10 @@ mod tests {
         s.encode_utf16().collect()
     }
 
-    /// One store per session, cached — so every execute in a session, by either
-    /// route, reads and writes the same entries.
+    /// Every execute in a session, by either route, reads and writes the same
+    /// entries, and no other session sees them.
     #[tokio::test]
-    async fn one_store_per_session_shared_across_calls() {
+    async fn one_state_per_session_shared_across_calls() {
         let (mgr, _root) = manager();
         let id = mgr
             .create(&none_bp(), Arc::new(VarBindings::new()), no_secrets())
@@ -2391,9 +2572,13 @@ mod tests {
 
         mgr.session_kv_for_execute(&id)
             .set(&key("k"), &key("\"v\""))
+            .await
             .expect("set");
         assert!(
-            mgr.session_kv_for_execute(&id).has(&key("k")).expect("has"),
+            mgr.session_kv_for_execute(&id)
+                .has(&key("k"))
+                .await
+                .expect("has"),
             "a later execute in the same session must see the write"
         );
 
@@ -2404,28 +2589,28 @@ mod tests {
         assert!(
             !mgr.session_kv_for_execute(&other)
                 .has(&key("k"))
+                .await
                 .expect("has"),
             "a different session must not see it"
         );
     }
 
     #[tokio::test]
-    async fn session_resources_are_cached_without_registration() {
+    async fn a_session_that_was_never_created_has_no_state() {
         let (mgr, _root) = manager();
-        let first = mgr.session_kv_for_execute("lazy");
-        first.set(&key("k"), &key("\"v\"")).expect("set");
-        let second = mgr.session_kv_for_execute("lazy");
-        assert!(Arc::ptr_eq(&first, &second));
-        assert!(second.has(&key("k")).expect("has"));
+        let error = mgr
+            .session_kv_for_execute("unknown")
+            .set(&key("k"), &key("\"v\""))
+            .await
+            .expect_err("no session to hold it");
         assert!(
-            !mgr.session_kv_for_execute("other")
-                .has(&key("k"))
-                .expect("has")
+            matches!(error, SessionKvError::SessionClosed { .. }),
+            "{error:?}"
         );
     }
 
     #[tokio::test]
-    async fn idle_expiry_drops_the_session_store() {
+    async fn idle_expiry_ends_the_session_state() {
         let (mgr, _root) = manager();
         let bp = Blueprint {
             name: "n".into(),
@@ -2439,35 +2624,56 @@ mod tests {
             .unwrap();
         mgr.session_kv_for_execute(&id)
             .set(&key("k"), &key("\"v\""))
+            .await
             .expect("set");
 
         assert_eq!(mgr.reap(way_later()).await.unwrap(), 1);
-        assert!(
-            !mgr.session_kv_for_execute(&id).has(&key("k")).expect("has"),
-            "a reaped session's state must not survive its entry"
-        );
+        assert_eq!(kv_rows(&mgr, &id).await, 0, "the expiry deleted them");
+        assert!(matches!(
+            mgr.session_kv_for_execute(&id).has(&key("k")).await,
+            Err(SessionKvError::SessionClosed { .. })
+        ));
     }
 
-    /// A handle a run is still holding keeps answering — an execution never sees
-    /// its store vanish mid-call — but the session id can no longer reach it, so
-    /// the state is unreachable rather than resurrectable.
+    /// A run still holding the store when its session closes cannot read the
+    /// state, and cannot write it back.
     #[tokio::test]
-    async fn a_handle_outliving_its_session_cannot_be_reached_again() {
+    async fn a_handle_outliving_its_session_cannot_restore_it() {
         let (mgr, _root) = manager();
         let id = mgr
             .create(&none_bp(), Arc::new(VarBindings::new()), no_secrets())
             .await
             .unwrap();
         let held = mgr.session_kv_for_execute(&id);
-        held.set(&key("k"), &key("\"v\"")).expect("set");
+        held.set(&key("k"), &key("\"v\"")).await.expect("set");
 
         assert!(mgr.wipe_now(&id).await.unwrap());
 
-        assert!(held.has(&key("k")).expect("has"), "the in-flight handle");
-        assert!(
-            !mgr.session_kv_for_execute(&id).has(&key("k")).expect("has"),
-            "the session id resolves to a fresh, empty store"
-        );
+        assert!(matches!(
+            held.has(&key("k")).await,
+            Err(SessionKvError::SessionClosed { .. })
+        ));
+        assert!(matches!(
+            held.set(&key("k2"), &key("\"v\"")).await,
+            Err(SessionKvError::SessionClosed { .. })
+        ));
+        assert_eq!(kv_rows(&mgr, &id).await, 0);
+    }
+
+    async fn kv_rows(mgr: &SessionManager, id: &str) -> i64 {
+        let id = id.to_owned();
+        mgr.database
+            .read(move |connection| {
+                Box::pin(async move {
+                    sqlx::query_scalar("SELECT COUNT(*) FROM session_kv WHERE session_id=?")
+                        .bind(id)
+                        .fetch_one(connection)
+                        .await
+                        .map_err(Into::into)
+                })
+            })
+            .await
+            .unwrap()
     }
 
     /// Every execution's budget reserves against *one* aggregate, so two live
@@ -2547,25 +2753,20 @@ mod tests {
         assert_eq!(settings.max_concurrency, 1);
     }
 
-    /// The aggregate budget is reserved atomically across sessions and released
-    /// when a session ends — not by evicting another session's entries.
+    /// Two managers over one database are two views of the same state: a write
+    /// through one is read through the other, and a close through one ends the
+    /// state the other's store reaches.
     #[tokio::test]
-    async fn reaper_releases_resources_closed_by_another_manager() {
+    async fn managers_over_one_database_share_session_state() {
         let root = tempfile::tempdir().unwrap();
         let store = mem_store();
-        let settings = SessionKvSettings::new(SessionKvLimits::default(), 128);
-        let budget = settings.budget.clone();
         let make_manager = || {
             SessionManager::new(
-                root.path().to_path_buf(),
-                None,
+                &test_root(root.path()),
                 Arc::default(),
                 no_http(),
                 store.clone(),
-                CapabilitySettings {
-                    session_kv: settings.clone(),
-                    ..CapabilitySettings::default()
-                },
+                CapabilitySettings::default(),
             )
         };
         let first = make_manager();
@@ -2574,77 +2775,387 @@ mod tests {
             .create(&none_bp(), Arc::default(), no_secrets())
             .await
             .unwrap();
-        second.start_execution(&id).await.unwrap();
         second
             .session_kv_for_execute(&id)
             .set(&key("k"), &key("\"v\""))
+            .await
             .unwrap();
-        assert!(budget.used() > 0);
+        assert_eq!(
+            first
+                .session_kv_for_execute(&id)
+                .get(&key("k"))
+                .await
+                .unwrap(),
+            Some(key("\"v\""))
+        );
         first.wipe_now(&id).await.unwrap();
-        assert!(store.pending_cleanup().await.unwrap().is_empty());
-        second.reap_now().await.unwrap();
-        assert_eq!(budget.used(), 0);
+        assert!(matches!(
+            second.session_kv_for_execute(&id).get(&key("k")).await,
+            Err(SessionKvError::SessionClosed { .. })
+        ));
     }
 
+    /// Writers through independent stores cannot both spend the same headroom:
+    /// the limit holds for the session's rows, not for what one store has seen.
     #[tokio::test]
-    async fn the_aggregate_budget_is_shared_and_released_on_teardown() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        // Room for exactly one entry of the size written below.
-        let settings = SessionKvSettings::new(SessionKvLimits::default(), 128);
-        let budget = settings.budget.clone();
-        let mgr = SessionManager::new(
-            dir.path().to_path_buf(),
-            None,
-            Arc::default(),
-            no_http(),
-            mem_store(),
-            CapabilitySettings {
-                session_kv: settings,
-                ..CapabilitySettings::default()
-            },
-        );
-
-        let first = mgr
-            .create(&none_bp(), Arc::new(VarBindings::new()), no_secrets())
+    async fn concurrent_writers_cannot_overspend_the_session_limit() {
+        let root = tempfile::tempdir().unwrap();
+        let store = mem_store();
+        let one_entry = interpreter::runtime::entry_bytes(&key("k0"), &key("\"v\""));
+        let settings = SessionKvSettings::new(SessionKvLimits {
+            max_session_bytes: one_entry * 3,
+            ..SessionKvLimits::default()
+        });
+        let managers: Vec<_> = (0..4)
+            .map(|_| {
+                SessionManager::new(
+                    &test_root(root.path()),
+                    Arc::default(),
+                    no_http(),
+                    store.clone(),
+                    CapabilitySettings {
+                        session_kv: settings.clone(),
+                        ..CapabilitySettings::default()
+                    },
+                )
+            })
+            .collect();
+        let id = managers[0]
+            .create(&none_bp(), Arc::default(), no_secrets())
             .await
             .unwrap();
-        let second = mgr
-            .create(&none_bp(), Arc::new(VarBindings::new()), no_secrets())
-            .await
-            .unwrap();
-
-        mgr.session_kv_for_execute(&first)
-            .set(&key("k"), &key("\"v\""))
-            .expect("the first session fits");
-        assert!(budget.used() > 0);
-        mgr.session_kv_for_execute(&second)
-            .set(&key("k"), &key("\"v\""))
-            .expect_err("the second exceeds the shared budget");
+        let writes = managers.iter().enumerate().flat_map(|(m, mgr)| {
+            let id = id.clone();
+            (0..2).map(move |n| {
+                let kv = mgr.session_kv_for_execute(&id);
+                async move { kv.set(&key(&format!("{m}{n}")), &key("\"v\"")).await }
+            })
+        });
+        let outcomes = futures::future::join_all(writes).await;
+        let written = outcomes.iter().filter(|outcome| outcome.is_ok()).count();
+        assert_eq!(written, 3, "{outcomes:?}");
         assert!(
-            mgr.session_kv_for_execute(&first)
-                .has(&key("k"))
-                .expect("has"),
-            "an exhausted budget must never evict another session's entries"
+            outcomes.iter().all(|outcome| matches!(
+                outcome,
+                Ok(()) | Err(SessionKvError::LimitExceeded { .. })
+            ))
         );
-
-        assert!(mgr.wipe_now(&first).await.unwrap());
-        assert_eq!(
-            budget.used(),
-            0,
-            "ending a session must release its reservation"
-        );
-        mgr.session_kv_for_execute(&second)
-            .set(&key("k"), &key("\"v\""))
-            .expect("capacity released");
+        assert_eq!(kv_rows(&managers[0], &id).await, 3);
     }
 
     #[tokio::test]
     async fn database_failure_prevents_boot_folder_cleanup() {
         let (manager, root) = manager();
-        let orphan = root.path().join("orphan");
+        let orphan = root.path().join("sessions/orphan");
         std::fs::create_dir_all(&orphan).unwrap();
         manager.database.close().await.unwrap();
         assert!(manager.boot().await.is_err());
         assert!(orphan.exists());
+    }
+
+    /// A workspace recorded under the layout before the volume root, or under
+    /// an earlier `volume_dir`, neither blocks boot nor is deleted.
+    #[tokio::test]
+    async fn boot_completes_cleanup_of_a_folder_outside_the_volume_root() {
+        let store_dir = tempfile::tempdir().expect("store dir");
+        let root = tempfile::tempdir().expect("volume root");
+        let elsewhere = tempfile::tempdir().expect("old layout");
+        let folder = elsewhere.path().join("vfs/sessions/old");
+        std::fs::create_dir_all(&folder).unwrap();
+        let store = file_store(store_dir.path());
+        store
+            .put(SessionRecord {
+                session_id: "old".into(),
+                blueprint_name: "p".into(),
+                status: SessionStatus::Closed,
+                closed_reason: Some(ClosedReason::Deleted),
+                root_vfs_type: crate::session_store::RootVfsType::PerSession,
+                ..SessionRecord::default()
+            })
+            .await
+            .unwrap();
+        store
+            .schedule_cleanup(crate::session_store::SessionCleanup {
+                session_id: "old".into(),
+                folder: Some(folder.clone()),
+            })
+            .await
+            .unwrap();
+
+        let mgr = SessionManager::new(
+            &test_root(root.path()),
+            Arc::default(),
+            no_http(),
+            store.clone(),
+            CapabilitySettings::default(),
+        );
+        mgr.boot().await.expect("boot");
+        assert!(store.pending_cleanup().await.unwrap().is_empty());
+        assert!(folder.exists(), "a folder outside the root is not ours");
+    }
+
+    fn ephemeral_bp() -> Blueprint {
+        Blueprint {
+            name: "e".into(),
+            vfs: VfsConfig::Ephemeral {
+                size_limit: None,
+                mounts: Default::default(),
+                cwd: None,
+            },
+            ..Default::default()
+        }
+    }
+
+    /// A manager over a volume root at `root` that was never prepared, so its
+    /// directories exist only where a test creates them: as after a lost mount.
+    fn lost_mount_manager(root: &Path) -> SessionManager {
+        SessionManager::new(
+            &VolumeRoot::configured(root),
+            Arc::default(),
+            no_http(),
+            mem_store(),
+            CapabilitySettings::default(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_lost_session_root_fails_the_session_and_is_not_recreated() {
+        let root = tempfile::tempdir().unwrap();
+        let mgr = lost_mount_manager(root.path());
+        mgr.ensure("sid", &per_session(HOUR))
+            .await
+            .expect_err("a session needs its root");
+        assert!(!root.path().join("sessions").exists());
+        // With scratch present, it is the session sweep that refuses.
+        std::fs::create_dir(root.path().join("ephemeral")).unwrap();
+        let err = mgr.boot().await.expect_err("the sweep needs its root");
+        assert!(matches!(err, BootError::Sessions(_)), "{err}");
+        assert!(!root.path().join("sessions").exists());
+    }
+
+    #[tokio::test]
+    async fn boot_refuses_a_lost_ephemeral_root() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("sessions")).unwrap();
+        let err = lost_mount_manager(root.path())
+            .boot()
+            .await
+            .expect_err("the sweep needs its root");
+        assert!(matches!(err, BootError::Scratch { .. }), "{err}");
+        assert!(!root.path().join("ephemeral").exists());
+    }
+
+    #[tokio::test]
+    async fn a_lost_ephemeral_root_fails_the_run_and_is_not_recreated() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("sessions")).unwrap();
+        let mgr = lost_mount_manager(root.path());
+        let bp = ephemeral_bp();
+        mgr.ensure("sid", &bp)
+            .await
+            .expect_err("an ephemeral run needs its root");
+        assert!(!root.path().join("ephemeral").exists());
+
+        std::fs::create_dir(root.path().join("ephemeral")).unwrap();
+        mgr.ensure("sid", &bp).await.unwrap();
+        let (vfs, _) = mgr.vfs_for_execute("sid", &bp).await.unwrap();
+        assert!(vfs.root().starts_with(root.path().join("ephemeral")));
+    }
+
+    #[tokio::test]
+    async fn boot_removes_leftover_scratch_and_nothing_else() {
+        let root = tempfile::tempdir().unwrap();
+        let ephemeral = root.path().join("ephemeral");
+        let leftover = ephemeral.join(format!(
+            "{}crashed",
+            interpreter::runtime::vfs::TEMPDIR_PREFIX
+        ));
+        std::fs::create_dir_all(leftover.join("deep")).unwrap();
+        std::fs::write(leftover.join("deep/a.txt"), b"x").unwrap();
+        let foreign = ephemeral.join("not-scratch");
+        std::fs::create_dir(&foreign).unwrap();
+        let stray_file =
+            ephemeral.join(format!("{}file", interpreter::runtime::vfs::TEMPDIR_PREFIX));
+        std::fs::write(&stray_file, b"x").unwrap();
+        std::fs::create_dir(root.path().join("sessions")).unwrap();
+        // A link with the prefix goes, but what it points at stays.
+        #[cfg(unix)]
+        let (link, target) = {
+            let target = tempfile::tempdir().unwrap();
+            std::fs::write(target.path().join("kept.txt"), b"x").unwrap();
+            let link = ephemeral.join(format!("{}link", interpreter::runtime::vfs::TEMPDIR_PREFIX));
+            std::os::unix::fs::symlink(target.path(), &link).unwrap();
+            (link, target)
+        };
+
+        lost_mount_manager(root.path()).boot().await.expect("boot");
+        assert!(!leftover.exists());
+        assert!(!stray_file.exists());
+        assert!(foreign.exists());
+        #[cfg(unix)]
+        {
+            assert!(std::fs::symlink_metadata(&link).is_err());
+            assert!(target.path().join("kept.txt").exists());
+        }
+    }
+}
+
+#[derive(Default)]
+struct ResourceScope {
+    work: Arc<tokio::sync::RwLock<()>>,
+    cancel: tokio_util::sync::CancellationToken,
+}
+pub(crate) struct ResourceUse {
+    _scope: Arc<ResourceScope>,
+    _permit: tokio::sync::OwnedRwLockReadGuard<()>,
+    pub cancel: tokio_util::sync::CancellationToken,
+}
+impl SessionManager {
+    fn resource_scope(&self, id: &str) -> Arc<ResourceScope> {
+        let mut scopes = self
+            .resource_scopes
+            .lock()
+            .expect("session resource scopes poisoned");
+        scopes.retain(|_, scope| scope.strong_count() > 0);
+        if let Some(scope) = scopes.get(id).and_then(std::sync::Weak::upgrade) {
+            return scope;
+        }
+        let scope = Arc::new(ResourceScope::default());
+        scopes.insert(id.to_owned(), Arc::downgrade(&scope));
+        scope
+    }
+    pub(crate) async fn admit_resource_work(&self, id: &str) -> Result<ResourceUse, SessionError> {
+        let scope = self.resource_scope(id);
+        let permit = scope.work.clone().read_owned().await;
+        self.available(id).await?;
+        if scope.cancel.is_cancelled() {
+            return Err(SessionError::UnknownSession);
+        }
+        Ok(ResourceUse {
+            _permit: permit,
+            cancel: scope.cancel.clone(),
+            _scope: scope,
+        })
+    }
+    pub(crate) fn set_finalizer_executor(
+        &self,
+        executor: Arc<dyn crate::application::sessions::finalization::FinalizerExecutor>,
+    ) {
+        // Boot installs this once under its initialization lock, before recovery.
+        let _ = self.finalizer_executor.set(executor);
+    }
+    pub(crate) fn finalizer_store(&self) -> crate::adapters::session::finalizers::StoredFinalizers {
+        self.finalizers.clone()
+    }
+    pub(crate) fn finalizer_provider(
+        &self,
+        id: &str,
+        packages: &crate::app::PreparedBlueprintPackages,
+    ) -> Result<Arc<dyn interpreter::runtime::session_finalizers::SessionFinalizers>, String> {
+        let mut package_versions = std::collections::BTreeMap::new();
+        for module in &packages.modules {
+            if !module.declaration.values.contains_key("finalizer") {
+                continue;
+            }
+            let required =
+                crate::finalizers::dependency_names(packages, &module.metadata.package_name)?;
+            let versions: std::collections::BTreeMap<_, _> = packages
+                .modules
+                .iter()
+                .filter(|module| required.contains(&module.metadata.package_name))
+                .map(|module| {
+                    (
+                        module.metadata.package_name.clone(),
+                        module.metadata.package_version.clone(),
+                    )
+                })
+                .collect();
+            let versions = serde_json::to_string(&versions).map_err(|error| error.to_string())?;
+            package_versions.insert(module.metadata.package_name.clone(), versions);
+        }
+        Ok(Arc::new(
+            crate::adapters::session::finalizers::RegistrationProvider {
+                store: self.finalizers.clone(),
+                session: id.to_owned(),
+                package_versions,
+                limits: self.session_kv.limits,
+            },
+        ))
+    }
+    pub(crate) async fn finalizer_bindings(
+        &self,
+        id: &str,
+    ) -> Result<
+        (
+            crate::domain::session::SessionBinding,
+            Arc<HarnessSecretBindings>,
+        ),
+        SessionError,
+    > {
+        let loaded = self
+            .repository
+            .find(id)
+            .await?
+            .ok_or(SessionError::UnknownSession)?;
+        let binding = loaded.session().binding().clone();
+        let session_id = id.to_owned();
+        let id = id.to_owned();
+        let sealed: Option<Vec<u8>> = self.database.read(move |connection| Box::pin(async move {
+            sqlx::query_scalar("SELECT encrypted_harness_bindings FROM finalizer_context WHERE session_id=?").bind(id).fetch_one(connection).await.map_err(Into::into)
+        })).await.map_err(|error| SessionError::Io(error.to_string()))?;
+        let credentials = sealed.map_or(
+            crate::adapters::session::credentials::SessionCredentials::Absent,
+            crate::adapters::session::credentials::SessionCredentials::Encrypted,
+        );
+        let secrets = self
+            .credentials
+            .open(&session_id, &credentials)?
+            .unwrap_or_default();
+        Ok((binding, secrets))
+    }
+}
+
+impl SessionManager {
+    pub async fn close_owned(self: &Arc<Self>, id: &str) -> Result<bool, SessionError> {
+        let manager = self.clone();
+        let id = id.to_owned();
+        tokio::spawn(async move { manager.wipe_now(&id).await })
+            .await
+            .map_err(|_| SessionError::Io("session cleanup task failed".into()))?
+    }
+    pub(crate) async fn finalizer_vfs(
+        &self,
+        id: &str,
+        blueprint: &Blueprint,
+        variables: &VarBindings,
+    ) -> Result<(Vfs, VfsInfo), SessionError> {
+        let loaded = self
+            .repository
+            .find(id)
+            .await?
+            .ok_or(SessionError::UnknownSession)?;
+        let root = match loaded.session().root() {
+            RootVfs::PerSession { path } => path.clone(),
+            _ => self.session_root.join(id),
+        };
+        let vfs = build_vfs(
+            blueprint,
+            variables,
+            Some(&root),
+            &self.ephemeral_root,
+            &self.volumes,
+        )?;
+        Ok((
+            attach_limits(vfs, blueprint, &self.volumes).await?,
+            vfs_info(blueprint),
+        ))
+    }
+}
+
+impl SessionManager {
+    pub(crate) fn replay_finalizers(
+        &self,
+    ) -> Arc<dyn interpreter::runtime::session_finalizers::SessionFinalizers> {
+        Arc::new(crate::record::ReplayFinalizers::new(self.session_kv.limits))
     }
 }

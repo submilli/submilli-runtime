@@ -27,6 +27,8 @@ mod bridge;
 #[cfg(unix)]
 mod chat;
 #[cfg(unix)]
+mod claude_code;
+#[cfg(unix)]
 mod client;
 #[cfg(unix)]
 mod control_auth;
@@ -36,6 +38,8 @@ mod controls;
 mod fsx;
 #[cfg(unix)]
 mod host;
+#[cfg(unix)]
+mod keys;
 #[cfg(unix)]
 mod labels;
 #[cfg(unix)]
@@ -87,14 +91,20 @@ pub struct Args {
 #[derive(Subcommand)]
 pub enum PlaygroundCmd {
     /// Start the playground in the background, or attach to the running one,
-    /// and print its ready record with a fresh login link (the default).
+    /// print its ready record with a fresh login link, and open the link in your
+    /// browser (the default).
     Start(StartArgs),
     /// Report whether the playground is running, where, and with what.
     Status(OutputArgs),
-    /// Print a fresh single-use login link for the running playground.
-    Open(OutputArgs),
+    /// Print a fresh single-use login link for the running playground, and open it in
+    /// your browser.
+    Open(OpenArgs),
     /// Stop the running playground: drain its runs and end browser sessions.
     Stop(OutputArgs),
+    /// Stop the running playground and start it again, with its blueprint and egress
+    /// grants unless given here, and open a fresh login link. Browser sessions end,
+    /// and bound secrets have to be bound again.
+    Restart(StartArgs),
     /// Create a `submilli/` folder with a starter billing package, a blueprint that
     /// pins charges to the signed-in customer, and an example program. Writes
     /// nothing outside `submilli/`.
@@ -146,6 +156,13 @@ pub enum PlaygroundCmd {
     /// session already idle it prints the events so far and exits at once, so start it
     /// after the run it is to follow has started, or pass `--follow`.
     Watch(WatchArgs),
+    /// Set Claude Code up in this project to try tasks through the playground on your
+    /// Claude subscription: writes the `submilli-standin` subagent, which has only the
+    /// playground's tools, and adds to your own `.claude/settings.local.json` the hooks
+    /// that show its chat on the page and a rule that lets it use those tools without
+    /// asking, so your blueprint decides its calls. Run it again to check; it changes
+    /// only what's missing.
+    ClaudeCode(ClaudeCodeArgs),
     /// Serve the running playground's tools over stdio, for a coding assistant's
     /// stand-in subagent to launch. Uses the binding and the development secrets; its
     /// runs are labeled `stand-in`.
@@ -153,9 +170,9 @@ pub enum PlaygroundCmd {
     /// Chat with an agent using your own model key, the way a production agent runs: it uses
     /// the playground's tools and prints its answer. Each chat starts a session; send the
     /// next message in it with `--session`. The session stays open until it sits idle past
-    /// the blueprint's idle timeout or `session end` ends it. The key comes from the
-    /// playground's environment
-    /// (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY), the model from `--model` or
+    /// the blueprint's idle timeout or `session end` ends it. The key (ANTHROPIC_API_KEY,
+    /// OPENAI_API_KEY, or GEMINI_API_KEY) comes from the playground's environment, else the
+    /// project's `.env`, else `submilli secret put <NAME>`; the model from `--model` or
     /// SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
     Chat(ChatArgs),
     /// Copy a coding assistant's stand-in conversation to the running playground: a
@@ -437,7 +454,7 @@ pub struct ChangesArgs {
 
 #[derive(ClapArgs)]
 pub struct SessionsArgs {
-    /// How many sessions to list.
+    /// How many sessions to list; tests' and reruns' own sessions come on top, up to as many.
     #[arg(long, default_value_t = 20)]
     limit: usize,
     /// Print JSON.
@@ -450,6 +467,10 @@ pub struct StartArgs {
     /// Print the ready record as JSON.
     #[arg(long)]
     json: bool,
+    /// Don't open the login link in your browser. A start in a terminal opens it;
+    /// one with `--json`, or whose output isn't a terminal, never does.
+    #[arg(long)]
+    no_open: bool,
     /// Serve in this terminal until `submilli playground stop` or a signal,
     /// instead of in the background.
     #[arg(long)]
@@ -484,6 +505,60 @@ pub struct EgressArgs {
     /// Env: `$SUBMILLI_ALLOW_IP` (comma-separated), additive.
     #[arg(long = "allow-ip", value_name = "IP|CIDR", value_parser = parse_ip_or_cidr)]
     allow_ip: Vec<IpNet>,
+}
+
+#[derive(ClapArgs, Clone, Copy)]
+pub struct ClaudeCodeArgs {
+    /// Replace a `submilli-standin` subagent file that differs from the playground's.
+    #[arg(long)]
+    force: bool,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(ClapArgs)]
+pub struct OpenArgs {
+    /// A run to open the page at, or a decision as `<run>.<n>` (for example `12` or `12.3`).
+    #[arg(value_name = "RUN", value_parser = parse_page_target)]
+    target: Option<PageTarget>,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
+    /// Only print the link. In a terminal it is opened too; with `--json`, or when the
+    /// output isn't a terminal, it never is.
+    #[arg(long)]
+    no_open: bool,
+}
+
+/// Where `open` takes the page: a run, or a decision in it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PageTarget {
+    run: u64,
+    decision: Option<u64>,
+}
+
+fn parse_page_target(text: &str) -> std::result::Result<PageTarget, String> {
+    let number = |part: &str| {
+        part.parse::<u64>()
+            .ok()
+            .filter(|_| part.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let (run, decision) = match text.split_once('.') {
+        Some((run, n)) => (number(run), Some(number(n))),
+        None => (number(text), None),
+    };
+    match (run, decision) {
+        (Some(run), None) => Ok(PageTarget {
+            run,
+            decision: None,
+        }),
+        (Some(run), Some(Some(n))) => Ok(PageTarget {
+            run,
+            decision: Some(n),
+        }),
+        _ => Err("give a run (`12`) or a decision (`12.3`)".to_owned()),
+    }
 }
 
 #[derive(ClapArgs, Clone, Copy)]
@@ -523,6 +598,7 @@ impl Args {
             Some(PlaygroundCmd::Status(_)) => "playground.status",
             Some(PlaygroundCmd::Open(_)) => "playground.open",
             Some(PlaygroundCmd::Stop(_)) => "playground.stop",
+            Some(PlaygroundCmd::Restart(_)) => "playground.restart",
             Some(PlaygroundCmd::Init(_)) => "playground.init",
             Some(PlaygroundCmd::Runs(_)) => "playground.runs",
             Some(PlaygroundCmd::Show(_)) => "playground.show",
@@ -546,6 +622,7 @@ impl Args {
             Some(PlaygroundCmd::Clear(_)) => "playground.clear",
             Some(PlaygroundCmd::Cancel(_)) => "playground.cancel",
             Some(PlaygroundCmd::Watch(_)) => "playground.watch",
+            Some(PlaygroundCmd::ClaudeCode(_)) => "playground.claude-code",
             Some(PlaygroundCmd::Mcp) => "playground.mcp",
             Some(PlaygroundCmd::Chat(_)) => "playground.chat",
             Some(PlaygroundCmd::ChatHook) => "playground.chat-hook",
@@ -574,8 +651,9 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
     match cmd {
         PlaygroundCmd::Start(start) => unix::start(start),
         PlaygroundCmd::Status(output) => unix::status(Output::from_json(output.json)),
-        PlaygroundCmd::Open(output) => unix::open(Output::from_json(output.json)),
+        PlaygroundCmd::Open(args) => unix::open(&args),
         PlaygroundCmd::Stop(output) => unix::stop(Output::from_json(output.json)),
+        PlaygroundCmd::Restart(start) => unix::restart(start),
         PlaygroundCmd::Init(output) => unix::init(Output::from_json(output.json)),
         PlaygroundCmd::Runs(args) => runs(args),
         PlaygroundCmd::Show(args) => read(
@@ -635,6 +713,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         PlaygroundCmd::Watch(args) => {
             execute_watch(args.session, args.follow, Output::from_json(args.json))
         }
+        PlaygroundCmd::ClaudeCode(args) => unix::claude_code(&args),
         PlaygroundCmd::Mcp => bridge::execute(),
         PlaygroundCmd::Chat(args) => act(
             ActionRequest::Chat(controls::act::ChatRequest {
@@ -645,6 +724,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
                 max_output: args.max_output,
                 provider_settings: args.provider_settings,
                 max_calls_per_answer: Some(args.max_calls_per_answer),
+                variables: std::collections::BTreeMap::new(),
             }),
             args.json,
         ),
@@ -812,6 +892,27 @@ fn secret_value(name: &str) -> Result<String, String> {
     })
 }
 
+/// What an agent is told about its session's variables, as an application tells its
+/// agent who it serves: the values the blueprint's checks compare against. Never a
+/// secret. `None` when there are none.
+#[cfg(unix)]
+pub(crate) fn variables_note(
+    variables: &std::collections::BTreeMap<String, String>,
+) -> Option<String> {
+    if variables.is_empty() {
+        return None;
+    }
+    let values: Vec<String> = variables
+        .iter()
+        .map(|(name, value)| format!("{name} = {}", serde_json::Value::from(value.as_str())))
+        .collect();
+    Some(format!(
+        "The application set this session's variables for the user it serves: {}. Use \
+         these values where a call needs them.",
+        values.join(", ")
+    ))
+}
+
 /// `text` cut to at most `max` bytes at a character boundary, and whether it was cut.
 pub(crate) fn within_bytes(text: &str, max: usize) -> (&str, bool) {
     if text.len() <= max {
@@ -911,6 +1012,44 @@ fn env_flag(key: &str) -> bool {
     })
 }
 
+impl StartArgs {
+    fn opens_browser(&self) -> bool {
+        opens_browser(self.no_open, self.json)
+    }
+}
+
+/// Whether a command opens the login link in a browser: only for a person at a
+/// terminal, never for a script or an assistant reading its output.
+fn opens_browser(no_open: bool, json: bool) -> bool {
+    use std::io::IsTerminal;
+    !no_open && !json && std::io::stdout().is_terminal()
+}
+
+impl EgressArgs {
+    fn is_empty(&self) -> bool {
+        !self.allow_localhost && !self.allow_private && self.allow_ip.is_empty()
+    }
+
+    /// The flags that give `grants`, as [`Egress::grants`] names them.
+    #[cfg(unix)]
+    fn from_grants(grants: &[String]) -> anyhow::Result<Self> {
+        let mut args = Self::default();
+        for grant in grants {
+            match grant.split_once(' ') {
+                None if grant == "allow-localhost" => args.allow_localhost = true,
+                None if grant == "allow-private" => args.allow_private = true,
+                Some(("allow-ip", net)) => args
+                    .allow_ip
+                    .push(parse_ip_or_cidr(net).map_err(anyhow::Error::msg)?),
+                _ => anyhow::bail!(
+                    "the running playground reports an egress grant it can't restart with: {grant}"
+                ),
+            }
+        }
+        Ok(args)
+    }
+}
+
 fn parse_ip_or_cidr(value: &str) -> Result<IpNet, String> {
     if let Ok(net) = value.parse::<IpNet>() {
         return Ok(net);
@@ -950,7 +1089,13 @@ impl<'a> ReadyRecord<'a> {
         }
     }
 
-    pub(crate) fn print(&self, output: Output) {
+    /// Prints the record, after opening its login link in the browser when `open`.
+    pub(crate) fn announce(&self, output: Output, open: bool, state: &state::StateDir) {
+        let opened = open && open_in_browser(state, &self.login_url);
+        self.print(output, opened);
+    }
+
+    fn print(&self, output: Output, opened: bool) {
         match output {
             Output::Json => match serde_json::to_string(self) {
                 Ok(json) => println!("{json}"),
@@ -964,11 +1109,18 @@ impl<'a> ReadyRecord<'a> {
                 };
                 println!("{heading} (pid {}).", self.description.pid);
                 print_description(self.description, self.packages_error);
-                println!(
-                    "  open:       {}  (single use, expires in {})",
-                    self.login_url,
-                    login_code_ttl_text()
-                );
+                if opened {
+                    println!(
+                        "  open:       {}  (opened in your browser; it signs in one browser)",
+                        self.login_url
+                    );
+                } else {
+                    println!(
+                        "  open:       {}  (signs in one browser; open it within {})",
+                        self.login_url,
+                        login_code_ttl_text()
+                    );
+                }
                 println!(
                     "Point an app at the server with the token in the app token file. Stop it with \
                      `submilli playground stop`."
@@ -978,11 +1130,65 @@ impl<'a> ReadyRecord<'a> {
     }
 }
 
+/// Opens `url` in the default browser, through a page in the state directory that
+/// sends the browser on to it: an opener's arguments show in every user's process
+/// list, and the login code would show with them. `false` when it could not be.
+#[cfg(unix)]
+fn open_in_browser(state: &state::StateDir, url: &str) -> bool {
+    use std::process::{Command, Stdio};
+
+    let page = state.root().join("open.html");
+    let html = format!(
+        "<!doctype html><meta charset=\"utf-8\"><meta name=\"referrer\" content=\"no-referrer\">\
+         <meta http-equiv=\"refresh\" content=\"0;url={url}\"><title>Submilli playground</title>\n"
+    );
+    if state::write_private(&page, html.as_bytes()).is_err() {
+        return false;
+    }
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let child = Command::new(opener)
+        .arg(&page)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    match child {
+        Ok(mut child) => {
+            // Reaped in the background, so a playground serving in the foreground
+            // leaves no finished opener behind.
+            std::thread::spawn(move || child.wait());
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 /// The page's address with a login code in its fragment, which the browser never
 /// sends to a server.
 #[cfg(unix)]
 fn login_url(url: &str, code: &str) -> String {
     format!("{url}#login={code}")
+}
+
+/// [`login_url`], opening the page at a run or a decision in it.
+#[cfg(unix)]
+fn login_url_at(url: &str, code: &str, target: Option<PageTarget>) -> String {
+    let at = match target {
+        None => String::new(),
+        Some(PageTarget {
+            run,
+            decision: None,
+        }) => format!("&run={run}"),
+        Some(PageTarget {
+            run,
+            decision: Some(n),
+        }) => format!("&run={run}&decision={n}"),
+    };
+    format!("{}{at}", login_url(url, code))
 }
 
 /// How long a login code lasts, for people: "5 minutes".
@@ -1014,7 +1220,10 @@ fn print_description(description: &host::Description, packages_error: Option<&st
     }
     match &description.provider {
         Some(provider) => {
-            println!("  provider:   {provider} (keys exported after start need a restart)");
+            match &description.key_from {
+                Some(from) => println!("  provider:   {provider} (key from {from})"),
+                None => println!("  provider:   {provider}"),
+            }
             if !description.chat_models.is_empty() {
                 println!(
                     "  chat:       {} (another: chat --model <provider>:<model>)",
@@ -1023,9 +1232,15 @@ fn print_description(description: &host::Description, packages_error: Option<&st
             }
         }
         None => println!(
-            "  provider:   none; export ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY \
-             and restart"
+            "  provider:   none; put ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY in \
+             the project's .env, or `submilli secret put OPENAI_API_KEY` (no restart needed)"
         ),
+    }
+    if description.env_file_tracked {
+        println!(
+            "  warning:    the project's .env isn't ignored by git; add it to .gitignore so \
+             its keys aren't committed"
+        );
     }
     println!("  log:        {}", description.log_file.display());
     print_packages(&description.packages, packages_error);
@@ -1084,7 +1299,7 @@ mod unix {
     use super::watch::describe_refusal;
     use super::{
         EXIT_BUSY, EXIT_NO_PROJECT, EXIT_PACKAGE_RESOLUTION, EXIT_UNREACHABLE, Egress, Output,
-        ReadyRecord, StartArgs, login_code_ttl_text, login_url, print_description,
+        ReadyRecord, StartArgs, login_code_ttl_text, print_description,
     };
 
     /// How long a background start waits for its child to be ready.
@@ -1125,6 +1340,7 @@ mod unix {
                 nonce,
                 start_lock: None,
                 print: None,
+                open: false,
             })?;
             return Ok(ExitCode::SUCCESS);
         }
@@ -1134,7 +1350,9 @@ mod unix {
         // the start lock, so concurrent first starts agree on them.
         state.tokens()?;
         match client::probe(&state)? {
-            Probe::Running(running) => return attach(&running, &project, &egress, output),
+            Probe::Running(running) => {
+                return attach(&running, &project, &egress, output, args.opens_browser());
+            }
             Probe::Stale(stale) => state.remove_if_ours(&stale.nonce),
             Probe::Busy(busy) => {
                 // Its lock stays: the instance holding it may answer in a moment.
@@ -1157,6 +1375,7 @@ mod unix {
                 nonce,
                 start_lock: Some(start_lock),
                 print: Some(output),
+                open: args.opens_browser(),
             })?;
             return Ok(match served {
                 Served::Drained => ExitCode::SUCCESS,
@@ -1195,7 +1414,7 @@ mod unix {
                 if status.stopping {
                     return Ok(stopped_while_starting());
                 }
-                print_ready(&running, &status, output, false)
+                print_ready(&running, &status, output, false, args.opens_browser())
             }
             Probe::Busy(busy) if busy.is_stopping() => Ok(stopped_while_starting()),
             Probe::NotRunning | Probe::Stale(_) | Probe::Busy(_) => {
@@ -1249,8 +1468,132 @@ mod unix {
             return Ok(false);
         }
         let scaffolded = scaffold::init(&root)?;
-        report_init(&scaffolded, Output::Text);
+        // The starter's data has a customer to try it with, so its playground starts
+        // bound to it: the page's New session form opens filled in.
+        let state = StateDir::for_project(&scaffolded.root);
+        state.create()?;
+        let binding = super::state::RememberedBinding {
+            variables: [(STARTER_VARIABLE.0.to_owned(), STARTER_VARIABLE.1.to_owned())].into(),
+            ..Default::default()
+        };
+        super::state::write_binding_at(&state.binding_path(), &binding)?;
+        for file in &scaffolded.files {
+            eprintln!("created {}", file.display());
+        }
+        eprintln!(
+            "Created a starter project: package {}, blueprint `{}`, and {}={} bound, a customer in its data.",
+            scaffold::PACKAGE_NAME,
+            scaffold::BLUEPRINT_NAME,
+            STARTER_VARIABLE.0,
+            STARTER_VARIABLE.1,
+        );
         Ok(true)
+    }
+
+    /// The variable the starter's example runs under, and a customer in its data.
+    const STARTER_VARIABLE: (&str, &str) = ("customerId", "cus_northwind");
+
+    pub(super) fn claude_code(args: &super::ClaudeCodeArgs) -> Result<ExitCode> {
+        use super::claude_code::{Outcome, set_up};
+        let cwd = std::env::current_dir().context("reading the current directory")?;
+        let Some(root) = project::find_project_root(&cwd) else {
+            eprintln!(
+                "No Submilli project here; create one with `submilli playground init`, \
+                 then set Claude Code up in it"
+            );
+            return Ok(ExitCode::from(EXIT_NO_PROJECT));
+        };
+        let setup = match set_up(&root, args.force) {
+            Ok(setup) => setup,
+            Err(error) => {
+                eprintln!("{error}");
+                return Ok(ExitCode::from(1));
+            }
+        };
+        let (agent, agent_outcome) = &setup.agent;
+        let (settings, settings_outcome) = &setup.settings;
+        // A stand-in that differs was kept: it isn't the playground's, so not ready.
+        let ready = *agent_outcome != Outcome::Kept;
+        if args.json {
+            println!(
+                "{}",
+                json!({
+                    "project": root,
+                    "agent": { "path": agent, "outcome": agent_outcome.word() },
+                    "hooks": { "path": settings, "outcome": settings_outcome.word() },
+                    "ready": ready,
+                })
+            );
+        } else {
+            print_claude_code_report(&setup, &root, &cwd);
+        }
+        Ok(ExitCode::from(if ready { 0 } else { 1 }))
+    }
+
+    /// What `claude-code` did, in sentences, with paths under the project root, and how
+    /// to start: in the project root, named when it isn't the folder the command ran in.
+    fn print_claude_code_report(
+        setup: &super::claude_code::Setup,
+        root: &std::path::Path,
+        cwd: &std::path::Path,
+    ) {
+        use super::claude_code::Outcome;
+        let relative = |path: &std::path::Path| {
+            path.strip_prefix(root)
+                .unwrap_or(path)
+                .display()
+                .to_string()
+        };
+        let (agent, agent_outcome) = (relative(&setup.agent.0), setup.agent.1);
+        let (settings, settings_outcome) = (relative(&setup.settings.0), setup.settings.1);
+        println!("Stand-in subagent: {}", agent_line(agent_outcome, &agent));
+        println!(
+            "Chat hooks, and permission for its playground tools: {}",
+            settings_line(settings_outcome, &settings)
+        );
+        if agent_outcome == Outcome::Kept {
+            return;
+        }
+        let folder = if cwd == root {
+            "in this folder".to_owned()
+        } else {
+            format!("in {}", root.display())
+        };
+        let changed = [agent_outcome, settings_outcome]
+            .iter()
+            .any(|outcome| matches!(outcome, Outcome::Written | Outcome::Updated));
+        let restart = if changed {
+            " If Claude Code is already running there, restart it first."
+        } else {
+            ""
+        };
+        println!(
+            "Start `claude` {folder}, signed in with your Claude subscription, and ask: \
+             \"Use the {} agent to <your task>.\" Its session shows on the playground page.\
+             {restart}",
+            super::chat::STAND_IN_AGENT
+        );
+    }
+
+    fn agent_line(outcome: super::claude_code::Outcome, agent: &str) -> String {
+        use super::claude_code::Outcome;
+        match outcome {
+            Outcome::Written => format!("wrote {agent}"),
+            Outcome::Updated => format!("replaced {agent}"),
+            Outcome::Unchanged => format!("{agent} is in place"),
+            Outcome::Kept => format!(
+                "{agent} is different from the playground's, so it was left alone; \
+                 --force replaces it"
+            ),
+        }
+    }
+
+    fn settings_line(outcome: super::claude_code::Outcome, settings: &str) -> String {
+        use super::claude_code::Outcome;
+        match outcome {
+            Outcome::Written | Outcome::Updated => format!("added to {settings}"),
+            Outcome::Unchanged | Outcome::Kept => format!("in place in {settings}"),
+        }
     }
 
     pub(super) fn init(output: Output) -> Result<ExitCode> {
@@ -1309,6 +1652,7 @@ mod unix {
         project: &Project,
         egress: &Egress,
         output: Output,
+        open: bool,
     ) -> Result<ExitCode> {
         let status = running.status()?;
         if let Some(busy) = draining(status.stopping, status.description.pid) {
@@ -1333,7 +1677,7 @@ mod unix {
                 }
             );
         }
-        print_ready(running, &status, output, true)
+        print_ready(running, &status, output, true, open)
     }
 
     fn same_path(one: &std::path::Path, other: &std::path::Path) -> bool {
@@ -1350,15 +1694,17 @@ mod unix {
         status: &Status,
         output: Output,
         attached: bool,
+        open: bool,
     ) -> Result<ExitCode> {
         let code = running.mint_login_code()?;
+        let state = StateDir::for_project(&status.description.project);
         ReadyRecord::new(
             &status.description,
             status.packages_error.as_deref(),
             &code,
             attached,
         )
-        .print(output);
+        .announce(output, open, &state);
         Ok(ExitCode::SUCCESS)
     }
 
@@ -1558,7 +1904,8 @@ mod unix {
         parts.join("; ")
     }
 
-    pub(super) fn open(output: Output) -> Result<ExitCode> {
+    pub(super) fn open(args: &super::OpenArgs) -> Result<ExitCode> {
+        let output = Output::from_json(args.json);
         let Some(state) = state_for_cwd()? else {
             return not_running(output);
         };
@@ -1573,7 +1920,7 @@ mod unix {
         }
         let code = running.mint_login_code()?;
         let url = &page.url;
-        let login_url = login_url(url, &code);
+        let login_url = super::login_url_at(url, &code, args.target);
         match output {
             Output::Json => println!(
                 "{}",
@@ -1584,8 +1931,17 @@ mod unix {
                 })
             ),
             Output::Text => {
+                let opened = super::opens_browser(args.no_open, args.json)
+                    && super::open_in_browser(&state, &login_url);
                 println!("{login_url}");
-                println!("Single use; expires in {}.", login_code_ttl_text());
+                if opened {
+                    println!("Opened in your browser; it signs in one browser.");
+                } else {
+                    println!(
+                        "Signs in one browser; open it within {}.",
+                        login_code_ttl_text()
+                    );
+                }
             }
         }
         Ok(ExitCode::SUCCESS)
@@ -1595,25 +1951,78 @@ mod unix {
         let Some(state) = state_for_cwd()? else {
             return stopped(output, None, "not running");
         };
-        let running = match client::probe(&state)? {
-            Probe::NotRunning => return stopped(output, None, "not running"),
+        match halt(&state)? {
+            Halt::Stopped { pid, message } => stopped(output, pid, message),
+            Halt::Busy(busy) => busy_exit(output, &busy),
+        }
+    }
+
+    /// `start` after `stop`, keeping the stopped playground's blueprint and egress
+    /// grants unless `args` gives its own.
+    pub(super) fn restart(mut args: StartArgs) -> Result<ExitCode> {
+        if let Some(state) = state_for_cwd()? {
+            if let Probe::Running(running) = client::probe(&state)? {
+                let description = running.status()?.description;
+                if args.blueprint.is_none() {
+                    args.blueprint = Some(description.blueprint.path.clone());
+                }
+                if args.egress.is_empty() {
+                    args.egress = super::EgressArgs::from_grants(&description.egress_grants)?;
+                }
+            }
+            match halt(&state)? {
+                // Said before the start's own lines; JSON prints only the start's record.
+                Halt::Stopped { pid, message } if !args.json => {
+                    stopped(Output::Text, pid, message)?;
+                }
+                Halt::Stopped { .. } => {}
+                Halt::Busy(busy) => return busy_exit(Output::from_json(args.json), &busy),
+            }
+        }
+        start(args)
+    }
+
+    /// How a stop ended: the playground is gone (`pid` when this stop ended one), or
+    /// a process holds the project that can't be reached.
+    enum Halt {
+        Stopped {
+            pid: Option<u32>,
+            message: &'static str,
+        },
+        Busy(Busy),
+    }
+
+    fn halt(state: &StateDir) -> Result<Halt> {
+        let running = match client::probe(state)? {
+            Probe::NotRunning => {
+                return Ok(Halt::Stopped {
+                    pid: None,
+                    message: "not running",
+                });
+            }
             Probe::Stale(stale) => {
                 state.remove_if_ours(&stale.nonce);
-                return stopped(output, None, "not running (removed a stale lock)");
+                return Ok(Halt::Stopped {
+                    pid: None,
+                    message: "not running (removed a stale lock)",
+                });
             }
             Probe::Busy(Busy::Starting(holder)) => {
                 return match starting_target(&holder) {
-                    Some(pid) => stop_starting(&state, output, pid),
-                    None => busy_exit(output, &Busy::Starting(holder)),
+                    Some(pid) => stop_starting(state, pid),
+                    None => Ok(Halt::Busy(Busy::Starting(holder))),
                 };
             }
             Probe::Busy(Busy::Stopping { pid: Some(pid) }) => {
-                if !wait_for_exit(&state, pid, None)? {
+                if !wait_for_exit(state, pid, None)? {
                     bail!("{}", did_not_stop(pid));
                 }
-                return stopped(output, Some(pid), "stopped");
+                return Ok(Halt::Stopped {
+                    pid: Some(pid),
+                    message: "stopped",
+                });
             }
-            Probe::Busy(busy) => return busy_exit(output, &busy),
+            Probe::Busy(busy) => return Ok(Halt::Busy(busy)),
             Probe::Running(running) => running,
         };
         let record = running.record.clone();
@@ -1624,11 +2033,14 @@ mod unix {
             .and_then(|holder| holder.pid())
             .unwrap_or(record.pid);
         running.stop()?;
-        if !wait_for_exit(&state, holder_pid, Some(&record.nonce))? {
+        if !wait_for_exit(state, holder_pid, Some(&record.nonce))? {
             bail!("{}", did_not_stop(record.pid));
         }
         state.remove_if_ours(&record.nonce);
-        stopped(output, Some(record.pid), "stopped")
+        Ok(Halt::Stopped {
+            pid: Some(record.pid),
+            message: "stopped",
+        })
     }
 
     /// The busy answer for an instance that answered that it is draining, if it did.
@@ -1645,7 +2057,7 @@ mod unix {
 
     /// An instance still starting has no control listener yet: it is sent SIGTERM,
     /// which ends it before it serves (or drains it if it just began to).
-    fn stop_starting(state: &StateDir, output: Output, pid: u32) -> Result<ExitCode> {
+    fn stop_starting(state: &StateDir, pid: u32) -> Result<Halt> {
         // Asked again just before the signal: it goes to the process the kernel
         // says holds the instance lock, never to a pid since reused.
         if state
@@ -1653,7 +2065,10 @@ mod unix {
             .and_then(|holder| starting_target(&holder))
             != Some(pid)
         {
-            return stopped(output, None, "not running");
+            return Ok(Halt::Stopped {
+                pid: None,
+                message: "not running",
+            });
         }
         let target = libc::pid_t::try_from(pid)
             .with_context(|| format!("pid {pid} is not a process id here"))?;
@@ -1673,7 +2088,10 @@ mod unix {
                 did_not_stop(pid)
             );
         }
-        stopped(output, Some(pid), "stopped")
+        Ok(Halt::Stopped {
+            pid: Some(pid),
+            message: "stopped",
+        })
     }
 
     /// Wait until `pid` (as [`Holder::pid`] names it) no longer holds the instance

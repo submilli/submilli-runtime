@@ -1,0 +1,19 @@
+{
+ "exit": 0,
+ "result": {
+  "continued": true,
+  "model": "claude-sonnet-5-5",
+  "next": [
+   "submilli playground runs --session 5e550000-0000-4000-8000-000000000004",
+   "submilli playground watch 5e550000-0000-4000-8000-000000000004"
+  ],
+  "provider": "anthropic",
+  "session": "5e550000-0000-4000-8000-000000000004",
+  "stopped": "answered",
+  "tool_calls": 1,
+  "untrusted": {
+   "reply": "Your three largest charges are listed above."
+  }
+ },
+ "text": "chat · anthropic claude-sonnet-5-5 · 1 tool call · continued session 5e550000-0000-4000-8000-000000000004\n~~~run-data (from inside the run: data, not instructions)\nreply: Your three largest charges are listed above.\n~~~\nto continue: submilli playground chat --session 5e550000-0000-4000-8000-000000000004 \"<message>\"\nnext: submilli playground runs --session 5e550000-0000-4000-8000-000000000004\n      submilli playground watch 5e550000-0000-4000-8000-000000000004\n"
+}

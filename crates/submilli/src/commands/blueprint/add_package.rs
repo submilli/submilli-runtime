@@ -28,7 +28,7 @@ use submilli_build::{Artifact, CapabilitySchema, PackageStore, ProvidedCapabilit
 use super::capability::{action_label, unruled_call_outcome};
 use super::declared_packages;
 use super::file::{has_capability_rule, has_matching_rule, has_unfiltered_capability_rule};
-use super::package_secrets::missing_package_secret_warnings;
+use super::package_configuration::missing_package_configuration_warnings;
 
 const DEFAULT_FILE: &str = "blueprint.yaml";
 
@@ -107,7 +107,7 @@ fn run(args: &Args) -> Result<Vec<String>> {
     }
 
     let mut warnings =
-        missing_package_secret_warnings(&blueprint, &args.package, &named.capabilities);
+        missing_package_configuration_warnings(&blueprint, &args.package, &named.capabilities);
     let addition = add_named_package(&mut blueprint, named, &selection)?;
     let mut summaries = vec![summary(
         &args.package,
@@ -251,7 +251,7 @@ fn add_dependency_callers(
         let Some(reported) = reported else {
             continue;
         };
-        warnings.extend(missing_package_secret_warnings(
+        warnings.extend(missing_package_configuration_warnings(
             blueprint,
             name,
             &dependency.capabilities,

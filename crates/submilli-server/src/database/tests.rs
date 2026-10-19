@@ -613,8 +613,14 @@ async fn failed_sqlx_migration_rolls_back_schema_and_completion() {
         .read(|connection| {
             Box::pin(async move {
                 let mut migrations: Vec<_> = MIGRATOR.iter().cloned().collect();
+                let failing_version = migrations
+                    .iter()
+                    .map(|migration| migration.version)
+                    .max()
+                    .unwrap()
+                    + 1;
                 migrations.push(sqlx::migrate::Migration::new(
-                    7,
+                    failing_version,
                     "failing".into(),
                     sqlx::migrate::MigrationType::Simple,
                     "CREATE TABLE partial (value INTEGER); INSERT INTO missing VALUES (1);"
@@ -634,7 +640,8 @@ async fn failed_sqlx_migration_rolls_back_schema_and_completion() {
                         .await?;
                 assert_eq!(count, 0);
                 let count: i64 =
-                    sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE version=7")
+                    sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE version=?")
+                        .bind(failing_version)
                         .fetch_one(connection)
                         .await?;
                 assert_eq!(count, 0);
@@ -662,10 +669,19 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
                 "_sqlx_migrations",
                 "blueprint_revisions",
                 "blueprints",
-                "idempotent_requests",
+                "durable_filesystem_chunks",
+                "durable_filesystem_listings",
+                "durable_filesystem_operations",
+                "durable_filesystem_readers",
+                "durable_filesystem_writers",
+                "finalizer_context",
+                "last_runs",
                 "mcp_grants",
+                "runs",
                 "secrets",
                 "session_cleanup",
+                "session_finalizers",
+                "session_kv",
                 "session_mcp",
                 "session_mcp_icon_sizes",
                 "session_mcp_icons",
@@ -685,7 +701,84 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
             })
             .await
             .unwrap();
-        assert_eq!(versions, [1, 2, 3, 4, 5, 6]);
+        assert_eq!(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        database.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn durability_migrations_preserve_existing_session_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    let mut connection = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .foreign_keys(true),
+    )
+    .await
+    .unwrap();
+    let before = MIGRATOR
+        .iter()
+        .filter(|migration| migration.version <= 10)
+        .cloned()
+        .collect();
+    sqlx::migrate::Migrator::with_migrations(before)
+        .run_direct(None, &mut connection, false)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO sessions(session_id,record_version,status,blueprint_name,idle_timeout_ms,last_activity_unix_ms,root_vfs_type) VALUES ('s',1,'active','test',0,0,'none');
+         INSERT INTO session_kv(session_id,key,payload,value_bytes,retained_bytes) VALUES ('s',X'006b',X'0076',2,4);
+         INSERT INTO last_runs(session_id,run_id,completed_at_unix_ms,storage,encoded_bytes,payload) VALUES ('s','run',1,'inline',2,X'7b7d');
+         INSERT INTO session_finalizers(id,session_id,package,local_key,sealed,retained_bytes,status) VALUES ('finalizer','s','@test/resource',X'006b',0,2,'registered');",
+    )
+    .execute(&mut connection)
+    .await
+    .unwrap();
+    connection.close().await.unwrap();
+
+    for _ in 0..2 {
+        let database = ServerDatabase::open(&path).await.unwrap();
+        let payload: Vec<u8> = database
+            .read(|connection| {
+                Box::pin(async move {
+                    Ok(sqlx::query_scalar(
+                        "SELECT payload FROM session_kv WHERE session_id='s' AND key=X'006b'",
+                    )
+                    .fetch_one(connection)
+                    .await?)
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(payload, [0, b'v']);
+        let last_run: (String, Vec<u8>) = database
+            .read(|connection| {
+                Box::pin(async move {
+                    Ok(
+                        sqlx::query_as("SELECT run_id,payload FROM last_runs WHERE session_id='s'")
+                            .fetch_one(connection)
+                            .await?,
+                    )
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(last_run, ("run".into(), b"{}".to_vec()));
+        let finalizer_status: String = database
+            .read(|connection| {
+                Box::pin(async move {
+                    Ok(sqlx::query_scalar(
+                        "SELECT status FROM session_finalizers WHERE id='finalizer'",
+                    )
+                    .fetch_one(connection)
+                    .await?)
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(finalizer_status, "registered");
         database.close().await.unwrap();
     }
 }
@@ -730,7 +823,7 @@ async fn expiry_migration_keeps_every_request_and_dates_completed_ones_by_creati
     let rows: Vec<RequestRow> = database
         .read(|connection| {
             Box::pin(async move {
-                Ok(sqlx::query_as("SELECT request_key,state,response_status,response_body,completed_at_unix_ms FROM idempotent_requests ORDER BY created_at_unix_ms")
+                Ok(sqlx::query_as("SELECT request_key,state,response_status,response_body,completed_at_unix_ms FROM runs ORDER BY created_at_unix_ms")
                     .fetch_all(connection)
                     .await?)
             })
@@ -740,7 +833,7 @@ async fn expiry_migration_keeps_every_request_and_dates_completed_ones_by_creati
     assert_eq!(
         rows,
         [
-            ("reserved".into(), "reserved".into(), None, None, None),
+            ("reserved".into(), "indeterminate".into(), None, None, None),
             (
                 "indeterminate".into(),
                 "indeterminate".into(),
@@ -760,11 +853,9 @@ async fn expiry_migration_keeps_every_request_and_dates_completed_ones_by_creati
     let refused = database
         .transaction(|connection| {
             Box::pin(async move {
-                sqlx::query(
-                    "UPDATE idempotent_requests SET state='expired' WHERE request_key='completed'",
-                )
-                .execute(connection)
-                .await?;
+                sqlx::query("UPDATE runs SET state='expired' WHERE request_key='completed'")
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -826,4 +917,127 @@ async fn native_close_unlocks_even_when_a_child_descriptor_remains() {
     let reopened = ServerDatabase::open(&path).await.unwrap();
     reopened.close().await.unwrap();
     drop(inherited);
+}
+
+#[tokio::test]
+async fn run_migration_preserves_v6_tombstones_identity_and_exact_bytes_across_reopen() {
+    use sqlx::Row;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    let mut connection = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .foreign_keys(true),
+    )
+    .await
+    .unwrap();
+    let before = MIGRATOR
+        .iter()
+        .filter(|migration| migration.version <= 6)
+        .cloned()
+        .collect();
+    sqlx::migrate::Migrator::with_migrations(before)
+        .run_direct(None, &mut connection, false)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO sessions(session_id,record_version,status,blueprint_name,idle_timeout_ms,last_activity_unix_ms,root_vfs_type) VALUES ('s',1,'active','test',0,0,'none'),('empty',1,'active','test',0,0,'none')")
+        .execute(&mut connection).await.unwrap();
+    let bodies: [&[u8]; 4] = [
+        b"{ \"execution_id\": \"public-id\", \"result\": \"ok\" }\n",
+        b"{\"result\":null}",
+        b"{\"execution_id\":123}",
+        b"not json",
+    ];
+    for (index, body) in bodies.into_iter().enumerate() {
+        sqlx::query("INSERT INTO idempotent_requests(session_id,request_key,fingerprint,reservation_id,owner_generation,created_at_unix_ms,state,response_status,response_body,completed_at_unix_ms) VALUES ('s',?,'fingerprint',?,'old-startup',10,'completed',201,?,20)")
+            .bind(format!("key-{index}")).bind(format!("reservation-{index}")).bind(body)
+            .execute(&mut connection).await.unwrap();
+    }
+    sqlx::raw_sql("INSERT INTO idempotent_requests(session_id,request_key,fingerprint,reservation_id,owner_generation,created_at_unix_ms,state,completed_at_unix_ms) VALUES
+        ('s','expired','f','reservation-4','old-startup',11,'expired',21),
+        ('s','unfinished','f','reservation-5','old-startup',12,'reserved',NULL)")
+        .execute(&mut connection).await.unwrap();
+    connection.close().await.unwrap();
+
+    for _ in 0..2 {
+        let database = ServerDatabase::open(&path).await.unwrap();
+        database
+            .read(|connection| {
+                Box::pin(async move {
+                    let rows = sqlx::query("SELECT * FROM runs ORDER BY admission_order")
+                        .fetch_all(&mut *connection)
+                        .await?;
+                    assert_eq!(rows.len(), 6);
+                    let expected_bodies: [&[u8]; 4] = [
+                        b"{ \"execution_id\": \"public-id\", \"result\": \"ok\" }\n",
+                        b"{\"result\":null}",
+                        b"{\"execution_id\":123}",
+                        b"not json",
+                    ];
+                    for (index, row) in rows.iter().enumerate() {
+                        assert_eq!(
+                            row.get::<String, _>("run_id"),
+                            format!("reservation-{index}")
+                        );
+                        assert_eq!(
+                            row.get::<String, _>("reservation_id"),
+                            format!("reservation-{index}")
+                        );
+                        assert_eq!(row.get::<i64, _>("admission_order"), index as i64 + 1);
+                        assert_eq!(row.get::<String, _>("owner_generation"), "old-startup");
+                        assert_eq!(row.get::<String, _>("recovery_mode"), "unrecorded");
+                        assert_eq!(row.get::<i64, _>("history_position"), 0);
+                        let expected_id = (index == 0).then_some("public-id");
+                        assert_eq!(
+                            row.get::<Option<String>, _>("execution_id").as_deref(),
+                            expected_id
+                        );
+                        if index < 4 {
+                            assert_eq!(row.get::<String, _>("state"), "completed");
+                            assert_eq!(row.get::<String, _>("request_key"), format!("key-{index}"));
+                            assert_eq!(row.get::<String, _>("fingerprint"), "fingerprint");
+                            assert_eq!(row.get::<i64, _>("response_status"), 201);
+                            assert_eq!(
+                                row.get::<Vec<u8>, _>("response_body"),
+                                expected_bodies[index]
+                            );
+                            assert_eq!(row.get::<i64, _>("created_at_unix_ms"), 10);
+                            assert_eq!(row.get::<i64, _>("completed_at_unix_ms"), 20);
+                        } else {
+                            assert_eq!(row.get::<Option<Vec<u8>>, _>("response_body"), None);
+                            assert_eq!(row.get::<Option<i64>, _>("response_status"), None);
+                        }
+                    }
+                    assert_eq!(rows[4].get::<String, _>("state"), "expired");
+                    assert_eq!(rows[4].get::<String, _>("request_key"), "expired");
+                    assert_eq!(rows[4].get::<i64, _>("completed_at_unix_ms"), 21);
+                    assert_eq!(rows[5].get::<String, _>("state"), "indeterminate");
+                    assert_eq!(rows[5].get::<String, _>("reason"), "legacy_without_history");
+                    assert_eq!(rows[5].get::<Option<i64>, _>("completed_at_unix_ms"), None);
+                    let last_order: i64 = sqlx::query_scalar(
+                        "SELECT last_run_order FROM sessions WHERE session_id='s'",
+                    )
+                    .fetch_one(&mut *connection)
+                    .await?;
+                    assert_eq!(last_order, 6);
+                    let empty_order: i64 = sqlx::query_scalar(
+                        "SELECT last_run_order FROM sessions WHERE session_id='empty'",
+                    )
+                    .fetch_one(&mut *connection)
+                    .await?;
+                    assert_eq!(empty_order, 0);
+                    let old_tables: i64 = sqlx::query_scalar(
+                        "SELECT count(*) FROM sqlite_master WHERE name='idempotent_requests'",
+                    )
+                    .fetch_one(connection)
+                    .await?;
+                    assert_eq!(old_tables, 0);
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
+        database.close().await.unwrap();
+    }
 }

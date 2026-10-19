@@ -82,15 +82,10 @@ tests:
             name: SUBMILLI_PORT
             value: "8128"
 
-  - it: gives the ephemeral VFS somewhere writable to live
+  - it: gives the process a writable /tmp
     asserts:
-      # SUBMILLI_HOME relocates five of the server's six state directories (under
-      # its server/ subdirectory); the ephemeral VFS root is the sixth and still
-      # defaults to the OS temp dir.
-      # Under readOnlyRootFilesystem, a missing mount breaks /v1/execute — the
-      # product — while /healthz stays green. The config side of this, the
-      # `vfs_ephemeral_dir` that points the server here, is asserted in
-      # auth_config_test.yaml.
+      # Every VFS directory lives on the state volume, but the root filesystem is
+      # read-only, so anything else that asks the OS for a temp file needs this.
       - contains:
           path: spec.template.spec.containers[0].volumeMounts
           content:

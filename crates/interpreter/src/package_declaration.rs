@@ -102,6 +102,13 @@ impl PackageDeclaration {
         }
     }
 
+    /// The source import surface for consumers outside this package. The engine
+    /// invokes the reserved lifecycle entry point through the full declaration.
+    pub(crate) fn without_finalizer(mut self) -> Self {
+        self.values.remove("finalizer");
+        self
+    }
+
     /// First-occurrence wins on duplicate names — typecheck has already emitted the diagnostic.
     pub fn from_typed_ast(ast: &TypedAst) -> Self {
         let mut defs = PackageDeclaration::with_package(ast.package_name.clone());
@@ -660,6 +667,7 @@ impl PackageShapeCollector {
             | Type::Void
             | Type::Never
             | Type::Unknown
+            | Type::NonPrimitive
             | Type::Error
             | Type::TypeVar(_)
             | Type::GenericParam { .. }

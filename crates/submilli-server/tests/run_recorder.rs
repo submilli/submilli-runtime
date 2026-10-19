@@ -197,7 +197,7 @@ fn server_with(
         auth: AuthConfig::Tokens(vec![
             ApiToken::new("app", Role::User, APP_TOKEN).expect("token"),
         ]),
-        session_storage_root: Some(dirs.path().join("sessions")),
+        volume_root: Some(dirs.path().to_path_buf()),
         database_path: Some(dirs.path().join("server.db")),
         package_store_root: Some(dirs.path().join("packages")),
         runtime,

@@ -12,8 +12,8 @@
 
 mod install;
 
-pub(crate) use install::declare_types;
 pub use install::{declare, install};
+pub(crate) use install::{declare_types, install_constants};
 
 use base64::Engine as _;
 use base64::alphabet;
@@ -30,7 +30,7 @@ use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::number::{format_number_js, to_uint8};
 use crate::runtime::prelude::array::{ElementCallback, merge_sort};
 use crate::runtime::prelude::closure::Closure;
-use crate::runtime::prelude::iterator::as_struct;
+use crate::runtime::prelude::iterator::{IterKind, IteratorSource, as_struct, make_index_iterator};
 use crate::runtime::prelude::keep::KeptValue;
 use crate::runtime::prelude::vtable::{read_object_entries, read_string_units};
 
@@ -187,6 +187,44 @@ fn at(
         }
         None => super::undefined::value(caller),
     }
+}
+
+/// The `keys`/`values`/`entries` step: the index and the byte at `pos` of the
+/// live receiver, so bytes written during iteration are seen.
+fn byte_step(
+    caller: &mut Caller<'_, StoreData>,
+    payload: &Val,
+    pos: i32,
+) -> wasmtime::Result<Option<(Val, Val)>> {
+    let arr = uint8_array_backing(caller, payload, "Uint8Array iterator")?;
+    let Ok(index) = usize::try_from(pos) else {
+        return Ok(None);
+    };
+    if index >= arr.len(&mut *caller)? as usize {
+        return Ok(None);
+    }
+    let byte = read_uint8(caller, arr, index)?;
+    let key = box_byte_index(caller, index)?;
+    Ok(Some((key, box_byte(caller, byte)?)))
+}
+
+fn box_byte_index(caller: &mut Caller<'_, StoreData>, index: usize) -> wasmtime::Result<Val> {
+    let st = crate::runtime::host::write_boxed_number_struct(caller, index as f64)?;
+    Ok(Val::AnyRef(Some(st.to_anyref())))
+}
+
+/// `values()`, the bytes as `Array.from` collects them.
+pub(crate) fn values(caller: &mut Caller<'_, StoreData>, receiver: &Val) -> wasmtime::Result<Val> {
+    iterate(caller, receiver, IterKind::Values)
+}
+
+/// `keys()`, `values()` (also `iterator()`) and `entries()`.
+fn iterate(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: &Val,
+    kind: IterKind,
+) -> wasmtime::Result<Val> {
+    make_index_iterator(caller, IteratorSource::Bytes, *receiver, kind, byte_step)
 }
 
 /// `slice` / `subarray`: only the kept range is copied.

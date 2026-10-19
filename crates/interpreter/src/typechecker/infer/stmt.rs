@@ -2178,6 +2178,9 @@ impl Inferer<'_> {
             let kind_clone = entry.kind.clone();
             let prev_span = entry.declaration_span;
             let mangled = entry.mangled_name.clone();
+            if self.imported_values.contains(&target.name) {
+                return self.rejected_import_write(target, mangled, prev_span, value);
+            }
             match kind_clone {
                 ValueKind::Let { ty, .. } => {
                     let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
@@ -2251,6 +2254,25 @@ impl Inferer<'_> {
                 boxed: false,
                 narrowed_shadow_ty: None,
             }
+        })
+    }
+
+    /// Report a write to an imported binding and type its value on its own,
+    /// so the value's errors still surface.
+    fn rejected_import_write(
+        &mut self,
+        target: Ident,
+        mangled: crate::MangledName,
+        import_span: Span,
+        value: ExprId,
+    ) -> Result<TypedStmtKind, CompilerFailure> {
+        self.report_import_write(&target, import_span);
+        let (typed_value, _) = self.infer_expr(value, None)?;
+        Ok(TypedStmtKind::AssignGlobal {
+            ident: target,
+            mangled,
+            target_ty: Type::Error,
+            value: typed_value,
         })
     }
 
@@ -2358,6 +2380,9 @@ impl Inferer<'_> {
             let kind_clone = entry.kind.clone();
             let prev_span = entry.declaration_span;
             let mangled = entry.mangled_name.clone();
+            if self.imported_values.contains(&target.name) {
+                return self.rejected_import_write(target, mangled, prev_span, value);
+            }
             match kind_clone {
                 ValueKind::Let { ty, .. } => {
                     self.compound_assign_global(target, mangled, ty, op, op_span, value, span)?
@@ -2486,12 +2511,13 @@ impl Inferer<'_> {
                     value,
                     &rw,
                     stmt_span,
+                    None,
                 )?,
                 None => placeholder(self)?,
             }
         } else if self.try_report_method_assignment(name.span, &receiver_ty, &name.name) {
             placeholder(self)?
-        } else if let Some((prop_sig, _, _, _)) = self.find_property(&receiver_ty, &name.name) {
+        } else if let Some((prop_sig, _, iface, _)) = self.find_property(&receiver_ty, &name.name) {
             if prop_sig.readonly {
                 self.error(
                     name.span,
@@ -2519,6 +2545,7 @@ impl Inferer<'_> {
                     value,
                     &FieldRw::uniform(prop_sig.ty.clone()),
                     stmt_span,
+                    Some(iface),
                 )?
             }
         } else if matches!(receiver_ty, Type::Error) {
@@ -2562,6 +2589,7 @@ impl Inferer<'_> {
                         value,
                         &rw,
                         stmt_span,
+                        None,
                     )?
                 }
             } else {
@@ -2604,19 +2632,30 @@ impl Inferer<'_> {
         value: ExprId,
         rw: &FieldRw,
         stmt_span: Span,
+        host_iface: Option<crate::MangledName>,
     ) -> Result<TypedStmtKind, CompilerFailure> {
         let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
         let (typed_value, value_ty) =
             self.infer_expr(value, compound_value_hint(&rw.read).as_ref())?;
         // Built before the operator check so the check can name it as the
         // narrowing culprit.
+        // A prelude interface property is read through its host getter, not a
+        // struct field.
+        let read_kind = match host_iface {
+            Some(iface) => TypedExprKind::InterfacePropertyAccess {
+                receiver: typed_receiver,
+                iface,
+                name: name.clone(),
+            },
+            None => TypedExprKind::FieldAccess {
+                receiver: typed_receiver,
+                name: name.clone(),
+            },
+        };
         let synth_lhs = self
             .typed_ast
             .try_push_expr(TypedExpr {
-                kind: TypedExprKind::FieldAccess {
-                    receiver: typed_receiver,
-                    name: name.clone(),
-                },
+                kind: read_kind,
                 span: name.span,
                 ty: rw.read.clone(),
             })
@@ -3753,6 +3792,8 @@ impl Inferer<'_> {
             // Strings, literal ones included, iterate by code point through
             // `String#iterator`.
             ty if ty.is_string_shaped() => Some((Type::String, crate::ForOfKind::Iterable)),
+            // Bytes iterate through `Uint8Array#iterator`.
+            Type::Uint8Array => Some((Type::Number, crate::ForOfKind::Iterable)),
             // A union of arrays and tuples is one `$Array` at runtime too. It
             // follows the string arm, which takes unions of string literals.
             Type::Union(_) => {

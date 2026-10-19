@@ -2,12 +2,12 @@
   "films": [
     {
       "id": "support-demo",
-      "title": "Submilli in action",
+      "title": "Support agent example",
+      "description": "An online store’s support agent handles a replacement request within a shipping limit set by its Blueprint.",
+      "language": "en",
       "status": "published",
-      "description": "Follow a support agent from an allowed replacement to a blocked rush delivery, then change its Blueprint to permit the same code.",
-      "canonicalPath": "/docs/videos/",
-      "embedUrl": "https://submilli-videos.onrender.com/embed/support-demo/",
-      "language": "en"
+      "canonicalPath": "/docs/videos/#video-support-demo-title",
+      "embedUrl": "https://submilli-videos.onrender.com/embed/support-demo/"
     },
     {
       "id": "code-execution-introduction",
@@ -41,16 +41,6 @@
       "language": "en"
     },
     {
-      "id": "packages",
-      "title": "Packages",
-      "status": "published",
-      "destination": "Start here → Packages",
-      "description": "Curated and custom packages, typed operations, and how package checks and blueprint permissions control access.",
-      "canonicalPath": "/docs/packages/",
-      "embedUrl": "https://submilli-videos.onrender.com/embed/packages/",
-      "language": "en"
-    },
-    {
       "id": "blueprints",
       "title": "Blueprints",
       "status": "published",
@@ -61,13 +51,13 @@
       "language": "en"
     },
     {
-      "id": "using",
-      "title": "Submilli quickstart",
+      "id": "packages",
+      "title": "Packages",
       "status": "published",
-      "destination": "Start here → Quickstart",
-      "description": "Install the skill, create a package and blueprint, and run your first program with the Submilli server.",
-      "canonicalPath": "/docs/quickstart/",
-      "embedUrl": "https://submilli-videos.onrender.com/embed/using/",
+      "destination": "Start here → Packages",
+      "description": "Curated and custom packages, typed operations, and how package checks and blueprint permissions control access.",
+      "canonicalPath": "/docs/packages/",
+      "embedUrl": "https://submilli-videos.onrender.com/embed/packages/",
       "language": "en"
     },
     {
@@ -78,6 +68,16 @@
       "description": "Why Submilli uses a constrained TypeScript language, WebAssembly execution, and packages with actionable errors.",
       "canonicalPath": "/docs/server/#what-happens-to-a-program",
       "embedUrl": "https://submilli-videos.onrender.com/embed/works/",
+      "language": "en"
+    },
+    {
+      "id": "using",
+      "title": "Submilli quickstart",
+      "status": "published",
+      "destination": "Start here → Quickstart",
+      "description": "Install the skill, create a package and blueprint, and run your first program with the Submilli server.",
+      "canonicalPath": "/docs/quickstart/",
+      "embedUrl": "https://submilli-videos.onrender.com/embed/using/",
       "language": "en"
     }
   ]

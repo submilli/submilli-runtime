@@ -1,0 +1,21 @@
+{
+ "kind": "changes",
+ "versions": [
+  {
+   "version": 1,
+   "at_micros": 1791898015981929,
+   "at": "2026-10-13T13:26:55Z",
+   "classification": "initial",
+   "summary": "The first version the playground served.",
+   "pin_removals": [],
+   "current": false,
+   "after_run": 0,
+   "changes": [],
+   "text": "kind: blueprint\nname: billing\n\n# Bound once per request by the application, never by the program.\nvariables:\n  customerId:\n    required: true\n\npackages:\n- '@acme/billing'\n\n# The billing fixture, read-only, from the project's `billing` volume\n# (submilli/volumes/billing/).\nvfs:\n  mode: ephemeral\n  mounts:\n    /billing:\n      mode: named\n      volume: billing\n      access: read_only\n\ndefault: deny\n\npermissions:\n  # What generated code may do.\n  main:\n  - name: charges-for-signed-in-customer\n    capability: acme.com/charges.list\n    filter: customerId == ${vars.customerId}\n    action: allow\n  - name: local-status\n    capability: http.get\n    filter: host == \"127.0.0.1\"\n    action: allow\n  - name: acme-support\n    capability: acme.com/charges.list\n    filter: customerId == \"cus_acme\"\n    action: allow\n\n  # What the package itself may do: read its fixture.\n  '@acme/billing':\n  - capability: fs.read\n    filter: path == \"/billing/charges.json\"\n    action: allow\n  - capability: http.get\n    filter: host == \"127.0.0.1\"\n    action: allow\n"
+  }
+ ],
+ "voided": [],
+ "next": [
+  "submilli playground audit"
+ ]
+}

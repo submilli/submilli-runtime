@@ -1,1 +1,0 @@
-line 3 missed: bug SUB-1614 a binding named `arguments` is accepted, where strict mode rejects it (here a function expression named `eval`)

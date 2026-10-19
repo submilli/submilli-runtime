@@ -96,6 +96,11 @@ package resolves the value internally and never returns it — e.g.
 no route around this: not another package, not asking a package to
 fetch the value and hand it back, not raw HTTP.
 
+Packages own cleanup for session-owned remote resources. Do not call
+`registerFinalizer`, `unregisterFinalizer`, or a package's reserved `finalizer`
+entry point from generated programs. Removing session KV does not release a
+remote resource; use the package's explicit close operation when finished.
+
 Budget refusals (filesystem space, model tokens, and session state) throw
 `QuotaExceededError`, a catchable `Error`. Free space, reduce the request,
 or report the budget to the operator. Argument-size caps remain `RangeError`.

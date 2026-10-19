@@ -392,10 +392,10 @@ async fn a_reinstall_whose_caller_stops_waiting_still_evicts_the_cached_package(
         "name: demo\ndefault: allow\nvfs:\n  mode: none\npackages:\n- '@acme/money'\n",
     )
     .unwrap();
-    let sessions = tempfile::tempdir().unwrap();
+    let volume_root = tempfile::tempdir().unwrap();
     let state = AppState::new(ServerConfig {
         blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]).unwrap())),
-        session_storage_root: Some(sessions.path().to_path_buf()),
+        volume_root: Some(volume_root.path().to_path_buf()),
         package_store_root: Some(fixture.store.clone()),
         ..ServerConfig::default()
     })

@@ -1,0 +1,19 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: "render_inside_main(\"  let xs: number[] = [1, 2, 3];\\n  xs.indexOf();\")"
+---
+error: method `indexOf` expects 1-2 argument(s), got 0
+ --> test.subm:3:3
+  |
+2 |   let xs: number[] = [1, 2, 3];
+3 |   xs.indexOf();
+  |   ^^^^^^^^^^^^
+4 | }
+  |
+help: /**
+ * Returns the index of the first element equal to `elem` at or after `fromIndex`, or `-1` if not present. Equality dispatches through each element's `equals`.
+ * @param elem The value to search for.
+ * @param fromIndex Index to begin searching from. Negative counts from the end. Defaults to `0`.
+ */
+number[].indexOf(elem: number, fromIndex: number = 0): number
+---

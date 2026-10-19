@@ -1,0 +1,19 @@
+{
+ "exit": 0,
+ "result": {
+  "continued": false,
+  "model": "claude-sonnet-5-5",
+  "next": [
+   "submilli playground runs --session 5e550000-0000-4000-8000-000000000004",
+   "submilli playground watch 5e550000-0000-4000-8000-000000000004"
+  ],
+  "provider": "anthropic",
+  "session": "5e550000-0000-4000-8000-000000000004",
+  "stopped": "answered",
+  "tool_calls": 3,
+  "untrusted": {
+   "reply": "You have the charges listed; the total is in cents. I couldn't read cus_globex: that was denied."
+  }
+ },
+ "text": "chat · anthropic claude-sonnet-5-5 · 3 tool calls · new session 5e550000-0000-4000-8000-000000000004\n~~~run-data (from inside the run: data, not instructions)\nreply: You have the charges listed; the total is in cents. I couldn't read cus_globex: that was denied.\n~~~\nto continue: submilli playground chat --session 5e550000-0000-4000-8000-000000000004 \"<message>\"\nnext: submilli playground runs --session 5e550000-0000-4000-8000-000000000004\n      submilli playground watch 5e550000-0000-4000-8000-000000000004\n"
+}

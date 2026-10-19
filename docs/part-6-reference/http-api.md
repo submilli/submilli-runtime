@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "b6a82e554c447906a269b4c7474cfa411bf51d8e1dc948cb89ba70bb91ed6347"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "a8109bc4b51727ce359eca45fa034e3d1fcfdd354fc5ddb8d4c905979bd20136"
+  confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
 This page describes the endpoints of `submilli-server` a harness calls to run
@@ -223,8 +223,15 @@ Role: `user`. Returns the session's most recent run, with its full console.
 {"result":"saved","console":["writing"],"error":null}
 ```
 
-Answers `404` with an empty body when no run is recorded for the id. Runs
-are recorded in memory.
+Answers `404` with an empty body when no run is recorded for the id,
+including once the session has ended, and after a run whose end is unknown,
+such as one the server was stopped in. A run over
+[`max_last_run_size`](/docs/reference/server-settings) is kept without its
+result and console, and answers `413`:
+
+```json
+{"error":"last_run_too_large","bytes":70254831,"limit":67108864}
+```
 
 ### DELETE /v1/sessions/{session_id}
 
@@ -242,7 +249,7 @@ object.
 | `execution_id` | string | The run, as named in the [audit trail](/docs/reference/audit-trail#execution) |
 | `session_id` | string | The session the program ran in |
 | `result` | string or null | What `main` returned: a string as is, other concrete values as JSON text (including `"null"` for a null return), `null` for an undefined return, no value, or failure |
-| `console` | string[] | Lines the program logged. Empty after a successful run. On failure, what it logged before it stopped |
+| `console` | string[] | Lines the program logged. Empty after a successful session run. On failure, what it logged before it stopped |
 | `error` | object or null | `null` on success |
 | `error.kind` | string | One of the kinds below |
 | `error.message` | string | Rendered message, with source excerpts for compile and runtime errors |
@@ -251,7 +258,7 @@ object.
 | `discovery_warnings` | string[] | Present only when non-empty. Tools of an imported `@mcp/<server>` or `@tools` Package that were dropped or degraded at discovery |
 
 `GET /v1/sessions/{session_id}/last-run` returns the console of a
-successful run.
+successful session run. `POST /v1/execute` returns it in `console`.
 
 | `error.kind` | Cause |
 | --- | --- |
@@ -500,7 +507,8 @@ Blueprint, plus `@tools`, which answers as an `@mcp/<server>` Package does.
 ### POST /v1/execute
 
 Role: `user`. Runs one program in a new session that ends when the program
-returns.
+returns, and with it the session's last run. `console` holds every line the
+program logged, on success too.
 
 | Field | Type | Required | Value |
 | --- | --- | --- | --- |

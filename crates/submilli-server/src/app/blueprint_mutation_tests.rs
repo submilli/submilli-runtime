@@ -91,6 +91,7 @@ async fn check_mutations(cancel: bool) {
         let audit_path = directory.path().join("audit.log");
         let token = "test_admin_token_012345678901234567890";
         let mut state = AppState::new(ServerConfig {
+            volume_root: Some(tempfile::tempdir().unwrap().keep()),
             auth: crate::auth::AuthConfig::Tokens(vec![
                 crate::auth::ApiToken::new("operator", crate::auth::Role::Admin, token).unwrap(),
             ]),
@@ -205,7 +206,12 @@ async fn check_mutations(cancel: bool) {
 
 #[tokio::test]
 async fn a_failed_http_write_keeps_the_version_tag() {
-    let state = AppState::new(ServerConfig::default()).await.unwrap();
+    let state = AppState::new(ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
+        ..ServerConfig::default()
+    })
+    .await
+    .unwrap();
     state
         .apply_local_blueprint("name: demo\n", "v1")
         .await

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "65b6061693829686e7f3759f6416233c5f6b1f8a75cb1cefcbfe1604a8023cb1"
+  contentHash: "aa6cb8e08dc740b8dac121db6ad9a266b363f0d3740888a405012f4b81ea5f1d"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -195,6 +195,7 @@ for (const word of words) {
 | `==` and `!=` | Strict, like `===` and `!==`, so `1 == "1"` and `x == null` are compile errors |
 | Return types | Declared on functions and methods; arrow functions infer them |
 | `items[i]` | Out-of-range reads and writes throw `RangeError`. `items.at(i)` returns `undefined`. `push` appends |
+| `text[i]` | Reads one UTF-16 code unit as a string; out of range it throws `RangeError`. `text.charAt(i)` returns `""` |
 | `let x: T;` | Needs an initializer unless `T` includes `undefined` |
 | Runtime APIs | The standard library and Submilli Packages, in place of Node.js APIs, browser globals, and npm |
 | Dates and times | `Temporal`, in place of `Date` |

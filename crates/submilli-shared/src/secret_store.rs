@@ -83,6 +83,8 @@ pub const KEY_ID_LEN: usize = 8;
 pub struct SecretCipher {
     cipher: XChaCha20Poly1305,
     key_id: [u8; KEY_ID_LEN],
+    /// Root for [`Self::derive`], kept apart from the encryption key itself.
+    derivation: [u8; KEY_LEN],
 }
 
 impl SecretCipher {
@@ -91,6 +93,7 @@ impl SecretCipher {
         Self {
             cipher: XChaCha20Poly1305::new(&key.into()),
             key_id: key_id(&key),
+            derivation: hmac_sha256(&key, b"submilli:derive:v1"),
         }
     }
 
@@ -102,6 +105,14 @@ impl SecretCipher {
     /// sealed it: a domain-separated hash prefix of the key.
     pub fn key_id(&self) -> [u8; KEY_ID_LEN] {
         self.key_id
+    }
+
+    /// A key for another purpose, derived from this one and named like it: the
+    /// same `label` under the same key always derives the same key, and no
+    /// derived key reveals this one or another label's.
+    pub fn derive(&self, label: &[u8]) -> ([u8; KEY_ID_LEN], [u8; KEY_LEN]) {
+        let derived = hmac_sha256(&self.derivation, label);
+        (key_id(&derived), derived)
     }
 
     pub fn seal(&self, plaintext: &[u8], owner: &[u8]) -> Result<Vec<u8>, SecretStoreError> {
@@ -302,6 +313,15 @@ fn key_id(key: &[u8; KEY_LEN]) -> [u8; KEY_ID_LEN] {
         .finalize();
     // A SHA-256 digest is 32 bytes, longer than a key id.
     digest.first_chunk().copied().unwrap_or_default()
+}
+
+fn hmac_sha256(key: &[u8; KEY_LEN], message: &[u8]) -> [u8; KEY_LEN] {
+    use hmac::{Hmac, Mac};
+    // HMAC accepts keys of any length.
+    let mut mac =
+        <Hmac<sha2::Sha256> as Mac>::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(message);
+    mac.finalize().into_bytes().into()
 }
 
 fn cipher_for(key_src: &KeySource) -> Result<XChaCha20Poly1305, SecretStoreError> {
@@ -580,6 +600,17 @@ mod tests {
         let good = tmp.path().join("good.b64");
         fs::write(&good, test_key_b64()).unwrap();
         assert_eq!(load_key(&KeySource::File(good)).unwrap(), [7u8; KEY_LEN]);
+    }
+
+    #[test]
+    fn derived_keys_are_stable_per_label_and_independent_of_each_other() {
+        let one = SecretCipher::from_key([1; KEY_LEN]);
+        let (id, key) = one.derive(b"a");
+        assert_eq!((id, key), SecretCipher::from_key([1; KEY_LEN]).derive(b"a"));
+        assert_ne!(key, one.derive(b"b").1);
+        assert_ne!(key, SecretCipher::from_key([2; KEY_LEN]).derive(b"a").1);
+        assert_ne!(key, [1; KEY_LEN]);
+        assert_ne!(id, one.key_id());
     }
 
     #[test]

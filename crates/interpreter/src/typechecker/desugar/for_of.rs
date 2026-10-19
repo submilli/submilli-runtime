@@ -348,6 +348,7 @@ fn lower_iterator_like(
                 // Matches `classify_for_of_source`: literal strings iterate as
                 // strings too.
                 ty if ty.is_string_shaped() => crate::mangle::prelude("String"),
+                Type::Uint8Array => crate::mangle::prelude("Uint8Array"),
                 _ => crate::mangle::prelude("Iterable"),
             };
             ctx.ta

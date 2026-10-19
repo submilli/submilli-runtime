@@ -903,9 +903,12 @@ fn module_description(name: &str) -> &'static str {
         "submilli:http" => "Outbound HTTP: get/post/put/patch/delete/head.",
         "submilli:llm" => "Gated model calls: call/batch, and models() to discover them.",
         "submilli:secrets" => "Policy-gated access to Blueprint-declared secrets.",
-        "submilli:session" => "Session-scoped key-value state: get/has/set/remove/list.",
+        "submilli:session" => {
+            "Session-scoped key-value state and durable package-owned resource cleanup."
+        }
         "submilli:skills" => "Harness skills: list(), load(name) and readFile(name, path).",
         "submilli:url" => "URL parse/build and query-string handling. Pure compute.",
+        "submilli:variables" => "Immutable Blueprint/session configuration for packages.",
         "submilli:uuid" => "UUID v4/v7 generation and validation.",
         _ => "",
     }
@@ -1268,14 +1271,43 @@ pub fn render_lib_submilli_d_ts() -> String {
     let mut out = String::new();
     render_ts_declarations(&mut out, &defs, "", "declare ", &parent);
     render_ts_compiler_globals(&mut out, &defs);
+    render_ts_declarations(&mut out, &global_functions(), "", "declare ", &|_| None);
     let json = json_package_declaration();
     render_ts_declarations(&mut out, &json, "", "declare ", &|_| None);
     out.trim_end().to_string()
 }
 
+/// The global functions declared outside the prelude's type surface: the URI
+/// functions with the prelude's host ABI, and `parseInt`/`parseFloat` in the
+/// number host module.
+fn global_functions() -> PackageDeclaration {
+    const NAMES: [&str; 6] = [
+        "parseInt",
+        "parseFloat",
+        "encodeURIComponent",
+        "encodeURI",
+        "decodeURIComponent",
+        "decodeURI",
+    ];
+    let mut globals = PackageDeclaration::with_package(crate::mangle::PRELUDE_PACKAGE);
+    let sources = crate::runtime::host_package_declarations()
+        .into_iter()
+        .chain([crate::runtime::prelude::package_declaration()]);
+    for source in sources {
+        for symbol in source.values.into_values() {
+            if NAMES.contains(&symbol.name.as_str()) {
+                globals.values.insert(symbol.name.clone(), symbol);
+            }
+        }
+    }
+    globals
+}
+
 fn render_ts_compiler_globals(out: &mut String, defs: &PackageDeclaration) {
     if !defs.types.contains_key("Function") {
-        out.push_str("interface Function {}\n\n");
+        out.push_str(
+            "interface Function {\n  /** The parameters before the first optional, defaulted or rest one. */\n  readonly length: number;\n}\n\n",
+        );
     }
     out.push_str("interface CallableFunction extends Function {}\n\n");
     out.push_str("interface NewableFunction extends Function {}\n\n");
@@ -1749,6 +1781,7 @@ fn ts_type(ty: &Type) -> String {
         Type::Undefined => "undefined".to_string(),
         Type::Void => "void".to_string(),
         Type::Unknown => "unknown".to_string(),
+        Type::NonPrimitive => "object".to_string(),
         Type::Function {
             params,
             ret,
@@ -1817,6 +1850,9 @@ fn ts_type(ty: &Type) -> String {
                 .join(", ");
             format!("[{elements}]")
         }
+        Type::Readonly(inner) if matches!(inner.as_ref(), Type::InterfaceRef { .. }) => {
+            format!("Readonly{}", ts_type(inner))
+        }
         Type::Readonly(inner) => format!("readonly {}", ts_type(inner)),
         Type::Error => "never".to_string(),
         Type::Never => "never".to_string(),
@@ -1844,6 +1880,7 @@ fn ts_named_type(name: &str, args: &[Type]) -> String {
 
 fn ts_type_array_element(ty: &Type) -> String {
     match ty {
+        Type::Readonly(inner) if matches!(inner.as_ref(), Type::InterfaceRef { .. }) => ts_type(ty),
         Type::Function { .. } | Type::Union(_) | Type::Readonly(_) => format!("({})", ts_type(ty)),
         _ => ts_type(ty),
     }
@@ -2467,7 +2504,7 @@ mod tests {
     }
 
     #[test]
-    fn fs_and_secrets_docs_render_capabilities() {
+    fn fs_and_package_configuration_docs_render_capabilities() {
         let fs = docs("submilli:fs").expect("fs module");
         assert!(fs.declarations.contains("@capability fs.read"));
         assert!(fs.declarations.contains("@capability fs.write"));
@@ -2475,6 +2512,13 @@ mod tests {
 
         let secrets = docs("submilli:secrets").expect("secrets module");
         assert!(secrets.declarations.contains("@capability secrets.get"));
+        let variables = docs("submilli:variables").expect("variables module");
+        assert!(variables.declarations.contains("@capability variables.get"));
+        assert!(
+            variables
+                .declarations
+                .contains("get(name: string): string | undefined")
+        );
     }
 
     #[test]
@@ -3352,6 +3396,26 @@ mod tests {
     }
 
     #[test]
+    fn global_functions_are_in_the_editor_declarations() {
+        let lib = render_lib_submilli_d_ts();
+        for function in [
+            "parseInt(",
+            "parseFloat(",
+            "encodeURIComponent(",
+            "encodeURI(",
+            "decodeURIComponent(",
+            "decodeURI(",
+            "isNaN(",
+            "isFinite(",
+        ] {
+            assert!(
+                lib.contains(&format!("declare function {function}")),
+                "{function}"
+            );
+        }
+    }
+
+    #[test]
     fn builtin_errors_extend_error_in_the_editor_declarations() {
         let lib = render_lib_submilli_d_ts();
         for class in [
@@ -3450,7 +3514,7 @@ mod tests {
         assert!(docs.contains(
             "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string | undefined;"
         ));
-        assert!(docs.contains("interface Function {}"));
+        assert!(docs.contains("interface Function {\n  /** The parameters before the first optional, defaulted or rest one. */\n  readonly length: number;\n}"));
         assert!(docs.contains("interface IArguments {}"));
         assert!(docs.contains("declare class Error {"));
         assert!(docs.contains("static isError(value?: unknown): value is Error;"));

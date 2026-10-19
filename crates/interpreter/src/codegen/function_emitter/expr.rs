@@ -184,11 +184,13 @@ fn emit_expr_value(
             })?;
             emitter.instruction(Instruction::LocalGet(this));
             let ctor_abi = ctx.symbols.class_ctor_abi(parent).map(<[ValType]>::to_vec);
-            emit_args_into_slots(emitter, ctx, args, ctor_abi.as_deref())?;
             let init = ctx
                 .symbols
                 .class_ctor_init_func_idx(parent)
                 .ok_or_else(|| crate::codegen::internal_failure("parent ctor init fn allocated"))?;
+            // A host parent's declared defaults replace an `undefined` argument.
+            let defaults = ctx.symbols.host_call_defaults(init, args.len()).to_vec();
+            emit_args_into_slots_with_defaults(emitter, ctx, args, ctor_abi.as_deref(), &defaults)?;
             emitter.instruction(Instruction::Call(init));
             // Own field initializers / parameter-property copies run right after
             // the parent is initialized, before the rest of the constructor body.
@@ -928,6 +930,9 @@ fn emit_index_access(
     } else if recv_ty.lowered() == &Type::Uint8Array {
         emit_expr(emitter, ctx, *receiver)?;
         emit_uint8_index_with_receiver_on_stack(emitter, ctx, *index)?;
+    } else if recv_ty.is_string_shaped() {
+        emit_expr(emitter, ctx, *receiver)?;
+        emit_string_index_with_receiver_on_stack(emitter, ctx, *index)?;
     } else {
         emit_expr(emitter, ctx, *receiver)?;
         emit_bounds_checked_index_with_receiver_on_stack(
@@ -939,6 +944,46 @@ fn emit_index_access(
         )?;
     }
 
+    Ok(())
+}
+
+/// `s[index]`, with `s` on the stack: the host helper reads the code unit,
+/// throwing `RangeError` out of range as an array read does.
+fn emit_string_index_with_receiver_on_stack(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    index: ExprId,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let Some(helper) = ctx.require(
+        ctx.symbols.prelude_func_idx("string_index"),
+        "string index helper imported",
+    ) else {
+        return Ok(());
+    };
+    // A chain step's receiver may sit on the stack in a wider slot, such as
+    // `string | undefined`'s, so it is cast to `$string` after the index runs.
+    let receiver = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
+    emitter.instruction(Instruction::LocalSet(receiver));
+    emit_expr(emitter, ctx, index)?;
+    emit_index_number(
+        emitter,
+        ctx,
+        &ctx.ta
+            .try_expr(index)
+            .map_err(crate::codegen::arena_failure)?
+            .ty,
+    )?;
+    let index_local = emitter.add_anonymous_local(ValType::F64)?;
+    emitter.instruction(Instruction::LocalSet(index_local));
+    emitter.instruction(Instruction::LocalGet(receiver));
+    crate::codegen::cast_check::emit_operation_cast_on_stack(
+        emitter,
+        ctx,
+        &Type::Unknown,
+        &Type::String,
+    )?;
+    emitter.instruction(Instruction::LocalGet(index_local));
+    emitter.instruction(Instruction::Call(helper));
     Ok(())
 }
 
@@ -1933,6 +1978,18 @@ fn emit_postfix_unary(
                 )?;
                 return Ok(());
             }
+            if let Some((getter, setter)) = host_property_accessors(ctx, &receiver_ty, name)? {
+                emit_host_property_postfix(
+                    emitter,
+                    ctx,
+                    *receiver,
+                    &receiver_ty,
+                    (getter, setter),
+                    op,
+                    target_ty,
+                )?;
+                return Ok(());
+            }
             // Mirror AssignField + FieldAccess's vtable-dispatched calls.
             let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
                 crate::codegen::internal_failure("intrinsics declared by codegen entry")
@@ -1966,6 +2023,76 @@ fn emit_postfix_unary(
             emit_index_postfix(emitter, ctx, *receiver, *index, op)?;
         }
     };
+    Ok(())
+}
+
+/// How a writable prelude property with a host setter is read.
+enum HostPropertyGetter {
+    Func(u32),
+    /// `Array#length`, read inline from the array struct.
+    InlineLength(u32),
+}
+
+/// The getter and setter of a writable prelude interface property backed by
+/// host functions (`RegExp.lastIndex`, `Array.length`).
+fn host_property_accessors(
+    ctx: &CodegenCtx,
+    receiver_ty: &Type,
+    name: &Ident,
+) -> Result<Option<(HostPropertyGetter, u32)>, crate::compiler_error::CompilerFailure> {
+    let Some(iface) = crate::codegen::host_property_iface(receiver_ty) else {
+        return Ok(None);
+    };
+    let setter_key = crate::mangle::extend(&iface, &crate::mangle::property_setter(&name.name));
+    let Some(setter) = ctx.symbols.func_idx(&setter_key) else {
+        return Ok(None);
+    };
+    if let Some(struct_idx) = inline_length_struct_idx(ctx, &iface, &name.name)? {
+        return Ok(Some((HostPropertyGetter::InlineLength(struct_idx), setter)));
+    }
+    let getter = ctx
+        .symbols
+        .func_idx(&crate::mangle::extend(&iface, &name.name))
+        .ok_or_else(|| {
+            crate::codegen::internal_failure("host property getter recorded beside its setter")
+        })?;
+    Ok(Some((HostPropertyGetter::Func(getter), setter)))
+}
+
+fn emit_host_property_postfix(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    receiver: ExprId,
+    receiver_ty: &Type,
+    (getter, setter): (HostPropertyGetter, u32),
+    op: crate::PostfixOp,
+    target_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    // The host accessors trade `f64`; a widened target boxes the old value.
+    let recv = emitter.add_anonymous_local(ctx.symbols.value_type(receiver_ty)?)?;
+    let old = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Number)?)?;
+    emit_receiver(emitter, ctx, receiver)?;
+    emitter.instruction(Instruction::LocalSet(recv));
+    // Setter receiver first, then the updated value computed from the getter.
+    emitter.instruction(Instruction::LocalGet(recv));
+    emitter.instruction(Instruction::RefAsNonNull);
+    emitter.instruction(Instruction::LocalGet(recv));
+    emitter.instruction(Instruction::RefAsNonNull);
+    match getter {
+        HostPropertyGetter::Func(getter) => {
+            emitter.instruction(Instruction::Call(getter));
+        }
+        HostPropertyGetter::InlineLength(struct_idx) => {
+            emit_inline_length(emitter, ctx, struct_idx);
+        }
+    }
+    emitter.instruction(Instruction::LocalTee(old));
+    emit_postfix_delta(emitter, ctx, op, &Type::Number);
+    emitter.instruction(Instruction::Call(setter));
+    emitter.instruction(Instruction::LocalGet(old));
+    if target_ty != &Type::Number {
+        cast::emit_box(emitter, ctx, &Type::Number)?;
+    }
     Ok(())
 }
 
@@ -2891,14 +3018,7 @@ fn coerce_field_receiver_to_object_shape(
     receiver_ty: &Type,
     object_shape: u32,
 ) {
-    let universal = match receiver_ty.lowered() {
-        Type::InterfaceRef { .. } | Type::Unknown => true,
-        Type::Union(members) => members
-            .iter()
-            .any(|m| !matches!(m.lowered(), Type::Object { .. })),
-        _ => false,
-    };
-    if universal {
+    if crate::codegen::may_hold_builtin_value(receiver_ty) {
         emitter.instruction(Instruction::RefAsNonNull);
         emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
             object_shape,
@@ -3027,6 +3147,8 @@ fn emit_chain_access(
                 cast::emit_coerce_to_slot(emitter, ctx, check_ty, result_ty)?;
             } else if receiver_ty.lowered() == &Type::Uint8Array {
                 emit_uint8_index_with_receiver_on_stack(emitter, ctx, *idx)?;
+            } else if receiver_ty.is_string_shaped() {
+                emit_string_index_with_receiver_on_stack(emitter, ctx, *idx)?;
             } else {
                 let source_ty = match receiver_ty.lowered() {
                     Type::Array(element) => element.as_ref(),
@@ -4983,33 +5105,7 @@ fn emit_typeof_tag(
                     .ty,
             )?;
             emitter.instruction(Instruction::LocalSet(scratch));
-
-            // Stated as the complement of the primitive tags rather than a list
-            // of object-like types: every runtime value is an `$Object`
-            // subtype, so a positive list silently answers "not an object" for
-            // any struct nobody remembered to add. The exclusions below are
-            // exhaustive by construction — they are the `$Object` subtypes that
-            // carry a primitive tag of their own.
-            let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
-                crate::codegen::internal_failure("intrinsics declared by codegen entry")
-            })?;
-            emitter.instruction(Instruction::LocalGet(scratch));
-            emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
-                intrinsics.object,
-            )));
-            for primitive in [
-                intrinsics.string,
-                intrinsics.boxed_number,
-                intrinsics.boxed_boolean,
-                intrinsics.bigint,
-                intrinsics.closure,
-                intrinsics.undefined,
-            ] {
-                emitter.instruction(Instruction::LocalGet(scratch));
-                emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(primitive)));
-                emitter.instruction(Instruction::I32Eqz);
-                emitter.instruction(Instruction::I32And);
-            }
+            emit_is_non_primitive(emitter, ctx, scratch, Closures::AreNotObjects)?;
             if nullable {
                 // JS quirk: `typeof null === "object"`. Only OR in
                 // the null check when the source's Wasm type admits
@@ -5021,6 +5117,55 @@ fn emit_typeof_tag(
             }
         }
     };
+    Ok(())
+}
+
+/// Whether a closure passes [`emit_is_non_primitive`]: it does for the
+/// `object` type, but `typeof` tags it `"function"`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Closures {
+    AreObjects,
+    AreNotObjects,
+}
+
+/// Test whether the value in `local` is an object rather than `null`,
+/// `undefined` or a primitive, leaving an `i32` on the stack.
+///
+/// Stated as the complement of the primitive tags rather than a list of
+/// object-like types: every runtime value is an `$Object` subtype, so a
+/// positive list silently answers "not an object" for any struct nobody
+/// remembered to add. The exclusions below are exhaustive by construction —
+/// they are the `$Object` subtypes that carry a primitive tag of their own.
+pub(crate) fn emit_is_non_primitive(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    local: u32,
+    closures: Closures,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
+    emitter.instruction(Instruction::LocalGet(local));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        intrinsics.object,
+    )));
+    let mut excluded = vec![
+        intrinsics.string,
+        intrinsics.boxed_number,
+        intrinsics.boxed_boolean,
+        intrinsics.bigint,
+        intrinsics.undefined,
+    ];
+    if closures == Closures::AreNotObjects {
+        excluded.push(intrinsics.closure);
+    }
+    for primitive in excluded {
+        emitter.instruction(Instruction::LocalGet(local));
+        emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(primitive)));
+        emitter.instruction(Instruction::I32Eqz);
+        emitter.instruction(Instruction::I32And);
+    }
     Ok(())
 }
 
@@ -6029,6 +6174,7 @@ fn emit_intrinsic_call(
                 .ok_or_else(|| {
                     crate::codegen::internal_failure("Error#constructor exported from prelude")
                 })?;
+            crate::codegen::throw::emit_no_error_options(emitter);
             emitter.instruction(Instruction::Call(ctor_idx));
             crate::codegen::throw::emit_error_throw(emitter, ctx);
             emitter.emit_end();

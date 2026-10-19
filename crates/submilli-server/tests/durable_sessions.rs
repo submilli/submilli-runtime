@@ -14,7 +14,7 @@ use submilli_server::{AppState, ServerConfig, app};
 use submilli_shared::secret_store::{KeySource, SecretCipher};
 use tower::ServiceExt;
 
-const POLICY: &str = "name: durable\ndefault: deny\nvfs: per_session\nvariables:\n  tenant:\n    required: true\nsecrets:\n  TOKEN:\n    harness:\n      required: true\n";
+const POLICY: &str = "name: durable\ndefault: deny\nvfs: per_session\nvariables:\n  tenant:\n    required: true\n  store: { alias: tenant, required: true }\nsecrets:\n  TOKEN:\n    harness:\n      required: true\n";
 const CANARY: &str = "durable-secret-canary-7c5d91e0";
 
 async fn open(root: &Path, with_key: bool) -> (Router, Arc<ServerDatabase>) {
@@ -37,7 +37,8 @@ async fn open(root: &Path, with_key: bool) -> (Router, Arc<ServerDatabase>) {
     let state = AppState::new(ServerConfig {
         database: Some(database.clone()),
         blueprints: Some(blueprints),
-        session_storage_root: Some(root.join("workspaces")),
+        volume_root: Some(root.to_path_buf()),
+        package_store_root: Some(root.join("packages")),
         session_cipher: cipher,
         ..Default::default()
     })
@@ -252,7 +253,7 @@ async fn mcp_delete_checks_host_and_closes_the_persisted_session() {
             .status(),
         StatusCode::FORBIDDEN
     );
-    let store = SqliteSessionStore::new(database.clone(), None, root.path().join("workspaces"));
+    let store = SqliteSessionStore::new(database.clone(), None, root.path().join("sessions"));
     assert!(store.load(&id).await.unwrap().unwrap().status == SessionStatus::Active);
     assert_eq!(
         router
@@ -313,7 +314,7 @@ async fn failed_mcp_restore_preserves_session_for_rebinding() {
         .unwrap();
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     }
-    let store = SqliteSessionStore::new(database.clone(), None, root.path().join("workspaces"));
+    let store = SqliteSessionStore::new(database.clone(), None, root.path().join("sessions"));
     let record = store.load(&id).await.unwrap().unwrap();
     assert!(record.status == SessionStatus::Active);
     assert!(record.root_vfs_path.unwrap().is_dir());
@@ -335,6 +336,124 @@ async fn failed_mcp_restore_preserves_session_for_rebinding() {
     assert!(output.get("error").is_none(), "{output}");
     assert_ne!(output["result"]["isError"], true, "{output}");
     assert_no_plaintext(root.path());
+    drop(router);
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn package_variables_are_isolated_immutable_and_survive_restart() {
+    use interpreter::{ModulePath, PackageSourceModule, compile_package};
+    use submilli_build::{ArtifactMetadata, derive_capability_schema, write_package_artifact};
+
+    let root = tempfile::tempdir().unwrap();
+    let package = compile_package(
+        "@acme/browser",
+        ModulePath::from("lib"),
+        &[PackageSourceModule {
+            path: ModulePath::from("lib"),
+            source: r#"import { get } from "submilli:variables";
+                /** Read the configured store. */
+                export function store(): string | undefined { return get("BROWSER_STORE_NAME"); }"#,
+        }],
+        &[],
+    )
+    .unwrap();
+    write_package_artifact(
+        root.path().join("packages/@acme/browser"),
+        &package.wasm,
+        &package.type_info,
+        &derive_capability_schema(&package.declaration, &[], &package.required_capabilities),
+        &package.declaration,
+        &ArtifactMetadata::new("@acme/browser", "0.0.0-test", vec![]),
+    )
+    .unwrap();
+    let policy = r#"
+name: variables
+packages: ["@acme/browser"]
+variables:
+  USER_ID: { default: original }
+  BROWSER_STORE_NAME: { alias: USER_ID, required: true }
+permissions:
+  '@acme/browser':
+    - capability: variables.get
+      filter: name == "BROWSER_STORE_NAME"
+      action: allow
+  main:
+    - capability: session.write
+      action: allow
+"#;
+    let (router, database) = open(root.path(), true).await;
+    let blueprints = SqliteBlueprintStore::new(database.clone(), None);
+    blueprints
+        .add_yaml(StoredBlueprint::new(
+            submilli_blueprint::parse(policy).unwrap(),
+            policy.into(),
+        ))
+        .await
+        .unwrap();
+    let mut ids = vec![];
+    for variables in [
+        json!({"USER_ID":"alice"}),
+        json!({"USER_ID":"bob"}),
+        json!({}),
+    ] {
+        let (status, _, output) = request(
+            &router,
+            "/v1/sessions",
+            json!({"blueprint":"variables","variables":variables}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{output}");
+        ids.push(output["session_id"].as_str().unwrap().to_owned());
+    }
+    let (status, _, _) = request(
+        &router,
+        "/v1/sessions",
+        json!({"blueprint":"variables","variables":{"BROWSER_STORE_NAME":"forged"}}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let code = r#"import { store } from "@acme/browser";
+        import { set } from "submilli:session";
+        function main(): string | undefined {
+            set("BROWSER_STORE_NAME", "forged");
+            return store();
+        }"#;
+    let first_path = format!("/v1/sessions/{}/execute", ids[0]);
+    let second_path = format!("/v1/sessions/{}/execute", ids[1]);
+    let (alice, bob) = tokio::join!(
+        request(
+            &router,
+            &first_path,
+            json!({"code":code,"variables":{"USER_ID":"forged"}}),
+            None
+        ),
+        request(&router, &second_path, json!({"code":code}), None),
+    );
+    assert_eq!(alice.2["result"], "alice", "{:?}", alice.2);
+    assert_eq!(bob.2["result"], "bob", "{:?}", bob.2);
+    blueprints
+        .upsert(
+            submilli_blueprint::parse(&policy.replace("default: original", "default: updated"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    drop(blueprints);
+    drop(router);
+    database.close().await.unwrap();
+    drop(database);
+    let (router, database) = open(root.path(), true).await;
+    for (id, expected) in ids.iter().zip(["alice", "bob", "original"]) {
+        let path = format!("/v1/sessions/{id}/execute");
+        for _ in 0..2 {
+            let (status, _, output) = request(&router, &path, json!({"code":code}), None).await;
+            assert_eq!(status, StatusCode::OK, "{output}");
+            assert_eq!(output["result"], expected, "{output}");
+        }
+    }
     drop(router);
     database.close().await.unwrap();
 }

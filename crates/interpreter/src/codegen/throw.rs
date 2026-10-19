@@ -80,8 +80,18 @@ fn emit_builtin_error_throw(
     ) else {
         return;
     };
+    emit_no_error_options(emitter);
     emitter.instruction(Instruction::Call(new_idx));
     emit_error_throw(emitter, ctx);
+}
+
+/// Push the absent `options` a built-in error constructor takes after its
+/// message, for an error the compiler raises itself.
+pub(crate) fn emit_no_error_options(emitter: &mut FunctionEmitter) {
+    emitter.instruction(Instruction::RefNull(wasm_encoder::HeapType::Abstract {
+        shared: false,
+        ty: wasm_encoder::AbstractHeapType::None,
+    }));
 }
 
 /// Emit the throw tail: with an `Error` value already on the stack, narrow it

@@ -1,7 +1,12 @@
 //! A guest closure pulled from a `$Closure`, shared by the ported higher-order
 //! methods. Calling one re-enters the guest, so any host fn that does is async.
 
-use wasmtime::{Caller, Func, Val};
+use wasmtime::{Caller, Func, FuncType, HeapType, Linker, RefType, Val, ValType};
+
+use super::MODULE_NAME;
+use crate::runtime::host::{abi_arg, abi_result, register_host_fn};
+use crate::runtime::intrinsic_types::build_intrinsic_types;
+use crate::{PackageDeclaration, Param, Type};
 
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
@@ -138,6 +143,21 @@ impl Closure {
         Ok(match super::arguments::metadata(caller, &self.env)? {
             Some(params) if params.iter().any(|(_, rest)| *rest) => usize::MAX,
             Some(params) => params.len(),
+            None => declared,
+        })
+    }
+
+    /// The function's `length`: its parameters before the first optional,
+    /// defaulted or rest one. The argument metadata records `x?` and `x = v`
+    /// alike, so an optional parameter ends the count too, where the
+    /// JavaScript TypeScript emits for `x?` would count it.
+    pub(crate) fn length(&self, caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<usize> {
+        let declared = self.declared_arity(caller)?;
+        Ok(match super::arguments::metadata(caller, &self.env)? {
+            Some(params) => params
+                .iter()
+                .take_while(|(default, rest)| default.is_none() && !*rest)
+                .count(),
             None => declared,
         })
     }
@@ -362,6 +382,43 @@ fn bind_receiver(
     Ok(Val::AnyRef(Some(
         wasmtime::StructRef::new(&mut *caller, &pre, &[inner, receiver])?.to_anyref(),
     )))
+}
+
+/// `fn.length` reads the function an adapter wraps, so a function keeps its
+/// length when it flows into a wider function type.
+pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    let engine = linker.engine().clone();
+    let object = ValType::Ref(RefType::new(
+        true,
+        HeapType::ConcreteStruct(build_intrinsic_types(&engine)?.object),
+    ));
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        length_key(),
+        FuncType::new(&engine, [object], [ValType::F64]),
+        /* deterministic = */ true,
+        |caller, params, results| -> wasmtime::Result<()> {
+            let function = read_callback(caller, abi_arg(params, 0)?, "Function#length")?;
+            let length = function.length(caller)?;
+            *abi_result(results, 0)? = Val::F64((length as f64).to_bits());
+            Ok(())
+        },
+    )
+}
+
+fn length_key() -> crate::MangledName {
+    crate::mangle::extend(&crate::mangle::prelude("Function"), "length")
+}
+
+pub(super) fn declare(defs: &mut PackageDeclaration) {
+    super::declare_method(
+        defs,
+        "length",
+        length_key(),
+        vec![Param::new("fn", Type::Unknown)],
+        Type::Number,
+    );
 }
 
 #[cfg(test)]

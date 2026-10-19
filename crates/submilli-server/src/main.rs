@@ -93,27 +93,27 @@ pub struct Cli {
     #[arg(long, value_name = "PATH")]
     database_path: Option<PathBuf>,
 
-    /// Durable root for `per_session` VFS directories. Mount on a
-    /// PersistentVolume so a session's files survive a server restart.
-    /// [default: ~/.submilli/server/vfs/sessions]
-    /// Env: `$SUBMILLI_VFS_SESSION_DIR`.
-    #[arg(long)]
-    vfs_session_dir: Option<PathBuf>,
-
-    /// Root for `ephemeral` scratch directories. Defaults to the OS temp dir;
-    /// point it at volatile storage (tmpfs / `emptyDir`) to keep them off the
-    /// durable volume.
-    /// Env: `$SUBMILLI_VFS_EPHEMERAL_DIR`.
-    #[arg(long)]
-    vfs_ephemeral_dir: Option<PathBuf>,
-
-    /// Root for `managed-local` named volumes, one directory per volume name.
-    /// Mount on durable storage: named volumes outlive sessions and restarts.
-    /// The server creates a volume's directory on first use and never deletes
-    /// it. [default: ~/.submilli/server/volumes]
+    /// Durable root for `managed-local` named volumes (`managed-local/<name>`),
+    /// `per_session` workspaces (`sessions/<session id>`) and `ephemeral`
+    /// scratch (`ephemeral/`). Mount on durable storage: named volumes and
+    /// session files outlive restarts. A path set here must already exist. The
+    /// server does not create it unless given `--create-volume-dir`, so a
+    /// missing mount fails startup.
+    /// [default: ~/.submilli/server/volumes, created at startup]
     /// Env: `$SUBMILLI_VOLUME_DIR`.
     #[arg(long)]
     volume_dir: Option<PathBuf>,
+
+    /// Create the volume directory (from `--volume-dir`, `$SUBMILLI_VOLUME_DIR`
+    /// or `volume_dir`) when it is missing, instead of failing startup. For a
+    /// host where nothing else can create the directory before the server
+    /// starts. Only use it when the directory is on durable storage that is
+    /// always mounted when the server starts: otherwise named volumes and
+    /// session files go to a fresh empty directory in its place. Does nothing
+    /// when no volume directory is set, since the server creates its default
+    /// one anyway. No config-file key or environment variable.
+    #[arg(long)]
+    create_volume_dir: bool,
 
     /// Directory of a secret store from before secrets and MCP OAuth grants
     /// were kept in the database (one sealed file per secret). When it exists,
@@ -217,15 +217,6 @@ pub struct Cli {
     #[arg(long, value_name = "KIBIBYTES")]
     max_execution_stack: Option<u64>,
 
-    /// Memory every live session's `submilli:session` state may hold *in total*,
-    /// in megabytes. Unlike `--max-execution-memory`, which bounds one execution,
-    /// this bounds the process against session count: reservations are taken
-    /// atomically, so a `set` that would push the server past this is refused
-    /// rather than evicting another session's state. [default: 1024]
-    /// Env: `$SUBMILLI_MAX_SESSION_STATE_MEMORY`, which outranks the config file.
-    #[arg(long, value_name = "MEGABYTES")]
-    max_session_state_memory: Option<u64>,
-
     /// Tokens every live execution's `submilli:llm` calls may spend *in total*.
     /// This is the ceiling on what the server can spend against the operator's
     /// provider credential: reservations cover the prompt plus the reserved
@@ -257,6 +248,13 @@ pub struct Cli {
     /// Env: `$SUBMILLI_MAX_SUSPENDED_RUNS`, which outranks the config file.
     #[arg(long, value_name = "RUNS")]
     max_suspended_runs: Option<usize>,
+
+    /// The largest last run a session keeps, in megabytes of its
+    /// `{result, console, error}` JSON. A larger run keeps only its size, and
+    /// `GET /v1/sessions/{id}/last-run` answers `413`. [default: 64]
+    /// Env: `$SUBMILLI_MAX_LAST_RUN_SIZE`, which outranks the config file.
+    #[arg(long, value_name = "MEGABYTES")]
+    max_last_run_size: Option<u64>,
 
     /// Seconds a keyed execute's response is kept for replay after it
     /// completes. Past that, the key still refuses to run again, with
@@ -331,6 +329,8 @@ fn main() -> Result<()> {
         return health_check(&cli);
     }
 
+    // Read before `resolve` takes the flags: no config field carries it.
+    let create_volume_dir = cli.create_volume_dir;
     let mut resolved = file_config::resolve(cli)?;
 
     // Init before the async runtime starts so the guard binds the Sentry hub for
@@ -374,6 +374,10 @@ fn main() -> Result<()> {
         );
     }
 
+    if create_volume_dir {
+        create_missing_volume_root(&resolved.config)?;
+    }
+
     let runtime = submilli_server::runtime(&resolved.config)?;
     let audit = submilli_server::audit::AuditLog::new(
         resolved.config.audit.clone(),
@@ -409,6 +413,21 @@ fn main() -> Result<()> {
     // preceding it — the drop is what would otherwise wait indefinitely.
     runtime.shutdown_timeout(RUNTIME_TEARDOWN_BUDGET);
     result.and_then(|()| reopen_result.map_err(Into::into))
+}
+
+/// `--create-volume-dir`: create a configured volume root that is missing,
+/// before startup checks that it exists. Called once logging is up, so the
+/// warning is recorded. The default root needs nothing here,
+/// since startup creates it anyway.
+fn create_missing_volume_root(config: &submilli_server::ServerConfig) -> Result<()> {
+    if let Some(dir) = &config.volume_root
+        && !dir.exists()
+    {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("cannot create the volume root {}", dir.display()))?;
+        tracing::warn!(path = %dir.display(), "created the missing volume root");
+    }
+    Ok(())
 }
 
 /// `GET /healthz` against the address this process's configuration resolves

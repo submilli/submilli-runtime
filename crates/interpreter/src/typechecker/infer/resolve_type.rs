@@ -365,6 +365,7 @@ impl<'a> Inferer<'a> {
                     // Resolves to Type::Uint8Array (not InterfaceRef) — the prelude interface exists for method dispatch only.
                     "Uint8Array" => Some(Type::Uint8Array),
                     "unknown" => Some(Type::Unknown),
+                    "object" => Some(Type::NonPrimitive),
                     // `any` is rejected in the parser (spec §2.11); resolve to the
                     // poison type so a program that still reaches here doesn't
                     // cascade an "unknown type name `any`" on top of that error.

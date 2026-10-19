@@ -782,7 +782,7 @@ fn assignable_rec(
         }
         return ms.iter().any(|m| assignable_rec(actual, m, types, seen));
     }
-    if drops_readonly(actual, expected) {
+    if drops_readonly(actual, expected) || readonly_meets_mutator(actual, expected, types) {
         return false;
     }
     if matches!(actual, Type::Alias { .. }) || matches!(expected, Type::Alias { .. }) {
@@ -868,6 +868,20 @@ fn assignable_rec(
         (Type::Null | Type::Undefined | Type::Void, _) if expected.is_empty_object() => false,
         (Type::GenericParam { .. }, _) if expected.is_empty_object() => false,
         (_, _) if expected.is_empty_object() => true,
+        // `object` holds every value but the primitives, `null` and `undefined`.
+        (_, Type::NonPrimitive) => matches!(
+            actual,
+            Type::NonPrimitive
+                | Type::Object { .. }
+                | Type::Array(_)
+                | Type::Tuple(_)
+                | Type::Readonly(_)
+                | Type::InterfaceRef { .. }
+                | Type::ClassRef { .. }
+                | Type::Function { .. }
+                | Type::Uint8Array
+        ),
+        (Type::NonPrimitive, _) => false,
         (_, Type::Object { .. } | Type::InterfaceRef { .. } | Type::ClassRef { .. })
             if types.strict_subtype && is_primitive(actual) =>
         {
@@ -1358,13 +1372,21 @@ fn args_relate_covariantly(
             .all(|(actual, expected)| assignable_rec(actual, expected, types, seen))
 }
 
-/// Whether `actual` is a `readonly` array or tuple and `expected` a mutable one.
-/// The element types still decide assignability everywhere else: `readonly` is
-/// shallow and otherwise covariant, like the array it wraps.
+/// Whether `actual` is a `readonly` array or tuple, or a `ReadonlyMap` or
+/// `ReadonlySet`, and `expected` a mutable one. The element types still decide
+/// assignability everywhere else: `readonly` is shallow and otherwise
+/// covariant, like the collection it wraps.
 pub(crate) fn drops_readonly(actual: &Type, expected: &Type) -> bool {
     actual.is_readonly_array()
         && !expected.is_readonly_array()
-        && matches!(expected.peel(), Type::Array(_) | Type::Tuple(_))
+        && match expected.peel() {
+            Type::Array(_) | Type::Tuple(_) => true,
+            Type::InterfaceRef { mangled, .. } => {
+                *mangled == crate::mangle::prelude("Map")
+                    || *mangled == crate::mangle::prelude("Set")
+            }
+            _ => false,
+        }
 }
 
 fn same_alias_instance(left: &Type, right: &Type) -> bool {
@@ -1427,6 +1449,31 @@ pub(crate) fn expand_alias_ref(ty: &Type, types: TypeResolver) -> Type {
         );
         sub.apply_or_record(body, types.limits)
     }
+}
+
+/// Whether `actual` is a `readonly` array, `ReadonlyMap` or `ReadonlySet` and
+/// `expected` an interface that requires one of the mutating methods the
+/// readonly view leaves out, as tsc reports.
+fn readonly_meets_mutator(actual: &Type, expected: &Type, types: TypeResolver) -> bool {
+    if !actual.is_readonly_array() || expected.is_readonly_array() {
+        return false;
+    }
+    let Some((mangled, _package, name, args)) = expected.interface_routing() else {
+        return false;
+    };
+    types
+        .interface_full_form(&mangled, name, &args)
+        .is_some_and(|form| {
+            form.iter()
+                .any(|(member, field)| !field.optional && is_mutating_member(member))
+        })
+}
+
+/// A method a `readonly` array, `ReadonlyMap` or `ReadonlySet` does not have,
+/// so a readonly value can't satisfy an interface that requires one.
+fn is_mutating_member(name: &str) -> bool {
+    super::expr::is_mutating_array_method(name)
+        || matches!(name, "set" | "add" | "delete" | "clear")
 }
 
 /// TS-style structural interface satisfaction: every member the expected

@@ -921,7 +921,7 @@ fn mark_literal_source(
 }
 
 /// The properties every object literal inherits from `Object.prototype`.
-const OBJECT_PROTOTYPE_MEMBERS: &[&str] = &[
+pub(crate) const OBJECT_PROTOTYPE_MEMBERS: &[&str] = &[
     "constructor",
     "hasOwnProperty",
     "isPrototypeOf",
@@ -930,6 +930,10 @@ const OBJECT_PROTOTYPE_MEMBERS: &[&str] = &[
     "toString",
     "valueOf",
     "__proto__",
+    "__defineGetter__",
+    "__defineSetter__",
+    "__lookupGetter__",
+    "__lookupSetter__",
 ];
 
 /// The defaults of an array pattern's slots from `len` on, when each is a

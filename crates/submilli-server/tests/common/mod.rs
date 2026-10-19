@@ -24,6 +24,18 @@ pub fn spawn_server(
     shutdown_grace_secs: u64,
     extra_env: &[(&str, &str)],
 ) -> Child {
+    server_command(home, port, shutdown_grace_secs, extra_env)
+        .spawn()
+        .expect("spawn server")
+}
+
+/// The command [`spawn_server`] runs, for a test that adds flags of its own.
+pub fn server_command(
+    home: &Path,
+    port: u16,
+    shutdown_grace_secs: u64,
+    extra_env: &[(&str, &str)],
+) -> Command {
     let mut command = Command::new(BIN);
     command
         .args(["--bind", "127.0.0.1", "--port"])
@@ -39,8 +51,8 @@ pub fn spawn_server(
         .env_remove("SUBMILLI_CONFIG")
         .env_remove("SUBMILLI_BLUEPRINT_DIR")
         .env_remove("SUBMILLI_SESSION_STORE_DIR")
-        .env_remove("SUBMILLI_VFS_SESSION_DIR")
-        .env_remove("SUBMILLI_VFS_EPHEMERAL_DIR")
+        // The server sweeps scratch and orphan session directories under it.
+        .env_remove("SUBMILLI_VOLUME_DIR")
         .env_remove("SUBMILLI_SECRET_STORE_DIR")
         .env_remove("SUBMILLI_PACKAGE_STORE_DIR")
         .env_remove("SUBMILLI_SECRET_STORE_KEY_ENV")
@@ -53,7 +65,7 @@ pub fn spawn_server(
     for (key, value) in extra_env {
         command.env(key, value);
     }
-    command.spawn().expect("spawn server")
+    command
 }
 
 #[cfg(unix)]

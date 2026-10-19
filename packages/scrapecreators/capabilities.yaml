@@ -1,0 +1,150 @@
+namespace: submilli
+provides:
+- name: scrapecreators.com/github.getContributions
+  description: getContributions through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/github.getRepository
+  description: getRepository through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/github.getUser
+  description: getUser through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/github.listFollowers
+  description: listFollowers through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/github.listFollowing
+  description: listFollowing through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/github.listTrendingDevelopers
+  description: listTrendingDevelopers through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/github.listTrendingRepositories
+  description: listTrendingRepositories through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/github.listUserActivity
+  description: listUserActivity through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/github.listUserPullRequests
+  description: listUserPullRequests through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/github.listUserRepositories
+  description: listUserRepositories through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/linkedin.getCompany
+  description: getCompany through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/linkedin.getPost
+  description: getPost through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/linkedin.getProfile
+  description: getProfile through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/linkedin.getTranscript
+  description: getTranscript through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/linkedin.listCompanyPosts
+  description: listCompanyPosts through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/linkedin.searchPosts
+  description: searchPosts through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/reddit.getPost
+  description: getPost through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/reddit.getSubreddit
+  description: getSubreddit through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/reddit.getTranscript
+  description: getTranscript through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/reddit.listComments
+  description: listComments through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/reddit.listSubredditPosts
+  description: listSubredditPosts through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/reddit.search
+  description: search through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/reddit.searchSubreddit
+  description: searchSubreddit through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/twitter.getCommunity
+  description: getCommunity through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/twitter.getProfile
+  description: getProfile through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/twitter.getTranscript
+  description: getTranscript through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/twitter.getTweet
+  description: getTweet through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/twitter.listCommunityTweets
+  description: listCommunityTweets through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/twitter.listUserTweets
+  description: listUserTweets through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/twitter.searchPosts
+  description: searchPosts through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/youtube.getChannel
+  description: getChannel through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/youtube.getCommunityPost
+  description: getCommunityPost through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/youtube.getPlaylist
+  description: getPlaylist through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/youtube.getSponsors
+  description: getSponsors through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/youtube.getTranscript
+  description: getTranscript through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/youtube.getVideo
+  description: getVideo through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/youtube.listChannelCommunityPosts
+  description: listChannelCommunityPosts through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/youtube.listChannelLives
+  description: listChannelLives through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/youtube.listChannelPlaylists
+  description: listChannelPlaylists through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/youtube.listChannelShorts
+  description: listChannelShorts through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/youtube.listChannelVideos
+  description: listChannelVideos through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/youtube.listCommentReplies
+  description: listCommentReplies through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/youtube.listComments
+  description: listComments through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/youtube.listTrendingShorts
+  description: listTrendingShorts through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/youtube.search
+  description: search through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/youtube.searchHashtag
+  description: searchHashtag through ScrapeCreators.
+  fields: {}
+- name: scrapecreators.com/youtube.searchTypeahead
+  description: searchTypeahead through ScrapeCreators.
+  fields: {}
+requires:
+- capability: http.get
+  filter: host == "api.scrapecreators.com"
+- capability: http.post
+  filter: host == "api.scrapecreators.com" and path == "/v1/reddit/post/comments"
+- capability: secrets.get
+  filter: name == "SCRAPECREATORS_API_KEY"

@@ -319,9 +319,11 @@ mod tests {
             assert!(stats.allocations > 0 && stats.allocations < 32, "{stats:?}");
             assert!(stats.allocated_slots < 5 * n, "{stats:?}");
             assert!(stats.copied_slots < 3 * n, "{stats:?}");
+            // Each call reads its packed rest argument (one slot here) and
+            // never the elements already in the array.
             assert_eq!(
-                stats.snapshot_slots, 0,
-                "push must not snapshot existing elements"
+                stats.snapshot_slots, n,
+                "push must snapshot only its arguments, not existing elements"
             );
         }
         assert!(

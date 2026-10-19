@@ -13,7 +13,6 @@ use submilli_shared::secret_store::SecretStore;
 
 use crate::auth::AuthConfig;
 use crate::blueprint::BlueprintStore;
-use crate::session::SessionStore;
 
 #[derive(Clone, Default)]
 pub struct ServerConfig {
@@ -28,8 +27,6 @@ pub struct ServerConfig {
     /// Outbound HTTP egress policy (SSRF guard). Defaults to allow-all; the
     /// `submilli-server` binary installs `deny_private` via its CLI flags.
     pub network_policy: NetworkPolicy,
-    /// When `None`, `AppState::new` installs an in-memory store.
-    pub sessions: Option<Arc<dyn SessionStore>>,
     /// Optional startup blueprint source. Stores on the shared database are reused;
     /// other sources are copied into SQLite before requests are admitted.
     pub blueprints: Option<Arc<dyn BlueprintStore>>,
@@ -54,17 +51,15 @@ pub struct ServerConfig {
     /// it to `<parent>/archive/secrets`.
     pub secret_store_dir: Option<PathBuf>,
     pub session_cipher: Option<Arc<submilli_shared::secret_store::SecretCipher>>,
-    /// Root for `ephemeral` scratch directories (one temp dir per execute,
-    /// wiped at return). `None` uses the OS temp dir. Mount this on volatile
-    /// storage (tmpfs / k8s `emptyDir`) — ephemeral VFSes are not meant to
-    /// survive a restart.
-    pub ephemeral_storage_root: Option<PathBuf>,
-    /// Root for `per_session` directories. Defaults to
-    /// [`default_session_storage_root`] (under the user's data dir). Mount this
-    /// on **durable** storage (a PersistentVolume): a `per_session` VFS is keyed
-    /// by session id, so a client that reconnects with the same id after a
-    /// restart finds its files intact.
-    pub session_storage_root: Option<PathBuf>,
+    /// Root of every VFS directory the server allocates: `managed-local`
+    /// volumes, `per_session` workspaces and `ephemeral` scratch (see
+    /// [`VolumeRoot`]). Mount it on **durable** storage (a PersistentVolume): a
+    /// named volume outlives sessions, and a client that reconnects with the
+    /// same session id after a restart finds its files intact. `None` uses
+    /// [`default_volume_root`], created at startup. A path given here must
+    /// already exist, so a missing mount fails startup instead of being
+    /// replaced by an empty local directory.
+    pub volume_root: Option<PathBuf>,
     /// Root of the package store the server owns: installs and uninstalls go
     /// here, and reads check it first. Defaults to [`default_package_store_dir`].
     pub package_store_root: Option<PathBuf>,
@@ -85,14 +80,6 @@ pub struct ServerConfig {
     /// count, key length, retained bytes per session). Defaults to
     /// [`SessionKvLimits::default`].
     pub session_kv_limits: SessionKvLimits,
-    /// Server-wide ceiling on retained `submilli:session` bytes summed across
-    /// every live session, reserved atomically so two sessions cannot both
-    /// claim the same headroom. `None` uses
-    /// [`crate::session_manager::DEFAULT_TOTAL_SESSION_KV_BYTES`]. Unlike the
-    /// per-session limits, this
-    /// bounds the *process*: it is the only aggregate memory knob the server
-    /// has, `max_store_bytes` being per-execute.
-    pub max_session_state_memory: Option<u64>,
     /// Per-execution bounds on `submilli:llm` (token ceiling, indeterminate-spend
     /// ceiling, default output cap, prompt count and size). Embedder-only, like
     /// [`Self::session_kv_limits`]: the aggregate below is the knob an operator
@@ -112,6 +99,10 @@ pub struct ServerConfig {
     /// Runs that may wait on the harness at once, server-wide. `None` uses
     /// [`crate::runs::DEFAULT_MAX_SUSPENDED_RUNS`].
     pub max_suspended_runs: Option<usize>,
+    /// The largest last run a session keeps, in bytes of its JSON; a larger
+    /// one keeps only its size. `None` uses
+    /// [`crate::session_manager::DEFAULT_MAX_LAST_RUN_BYTES`].
+    pub max_last_run_size: Option<u64>,
     /// How long a keyed execute's response is kept for replay after it
     /// completes. `None` uses [`ResponseRetention::default`]'s.
     ///
@@ -161,10 +152,6 @@ pub struct ServerConfig {
     /// [`validate_volumes`] refuses a declaration that overlaps a server-owned
     /// directory; it runs on the config-file path, not here.
     pub volumes: VolumeTable,
-    /// Where `managed-local` volumes are stored, one directory per volume name.
-    /// Defaults to [`default_managed_volume_root`]. Mount it on **durable**
-    /// storage: a named volume is meant to outlive sessions and restarts.
-    pub managed_volume_root: Option<PathBuf>,
     /// The file holding the GitHub token package installs send. Kept as a
     /// path and read on every install, so replacing the file rotates the
     /// token without a restart.
@@ -243,13 +230,12 @@ pub fn default_data_root() -> PathBuf {
 }
 
 /// The subtree of the data root that belongs to the server: `<root>/server`.
-/// Every state directory the server defaults lands under it — the ephemeral
-/// VFS root, which defaults to the system temp dir, is the exception — so the
-/// CLI's own `packages/`, `secrets/`, and `mcp_oauth.yaml` siblings are never
-/// written by a running server (`packages/` is read, as the fallback package
-/// store) and the two never share a directory (the CLI's plaintext secret
-/// store and the server's sealed one share a file-name scheme, so a shared
-/// directory would let each overwrite the other's entries).
+/// Every state directory the server defaults lands under it, so the CLI's own
+/// `packages/`, `secrets/`, and `mcp_oauth.yaml` siblings are never written by
+/// a running server (`packages/` is read, as the fallback package store) and
+/// the two never share a directory (the CLI's plaintext secret store and the
+/// server's sealed one share a file-name scheme, so a shared directory would
+/// let each overwrite the other's entries).
 pub fn default_server_root() -> PathBuf {
     default_data_root().join("server")
 }
@@ -259,16 +245,217 @@ pub fn default_blueprint_dir() -> PathBuf {
     default_server_root().join("blueprints")
 }
 
-/// Default root for `managed-local` volumes: `<server root>/volumes`, one
-/// directory per volume name.
-pub fn default_managed_volume_root() -> PathBuf {
+/// Default root of the server's VFS directories: `<server root>/volumes`,
+/// created at startup.
+pub fn default_volume_root() -> PathBuf {
     default_server_root().join("volumes")
 }
 
-/// Default durable root for `per_session` VFS directories.
-pub fn default_session_storage_root() -> PathBuf {
-    default_server_root().join("vfs/sessions")
+/// Where the server's VFS directories live:
+///
+/// ```text
+/// <root>/managed-local/<volume name>
+/// <root>/sessions/<session id>
+/// <root>/ephemeral/submilli-vfs-*   one per execute, removed when it ends
+/// ```
+///
+/// Ephemeral scratch sits on the same storage as the rest so that, once runs
+/// can pause and resume elsewhere, their files are where another worker can
+/// reach them.
+///
+/// [`Self::prepare`] runs once at startup and is the only place the root and
+/// its three directories are created. After it nothing recreates them, so a
+/// mount that disappears fails the work that needs it rather than filling an
+/// empty local directory at the mountpoint. A root the operator configured is
+/// a mount the server must not stand in for, so it must already exist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeRoot {
+    path: PathBuf,
+    /// Whether the operator named this root, rather than it being the default.
+    configured: bool,
 }
+
+impl VolumeRoot {
+    /// The root [`ServerConfig::volume_root`] names, else the default.
+    pub fn from_config(configured: Option<PathBuf>) -> Self {
+        match configured {
+            Some(path) => Self::configured(path),
+            None => Self::default_root(default_volume_root()),
+        }
+    }
+
+    /// A root the operator configured, which must already exist.
+    pub fn configured(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            configured: true,
+        }
+    }
+
+    /// A root the server creates at startup.
+    pub fn default_root(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            configured: false,
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Where `managed-local` volumes live, one directory per volume name.
+    pub fn managed_dir(&self) -> PathBuf {
+        self.path.join("managed-local")
+    }
+
+    /// Where `per_session` workspaces live, one directory per session id.
+    pub fn sessions_dir(&self) -> PathBuf {
+        self.path.join("sessions")
+    }
+
+    /// Where `ephemeral` scratch lives, one directory per execute.
+    pub fn ephemeral_dir(&self) -> PathBuf {
+        self.path.join("ephemeral")
+    }
+
+    /// Make the root ready at startup. A configured root must be an existing
+    /// directory; the default one is created. Then `managed-local/`,
+    /// `sessions/` and `ephemeral/` are created beneath it when missing.
+    pub fn prepare(&self) -> Result<(), VolumeRootError> {
+        let unusable = |source: std::io::Error| VolumeRootError::Root {
+            path: self.path.clone(),
+            configured: self.configured,
+            source,
+        };
+        if !self.configured && !self.path.exists() {
+            std::fs::create_dir_all(&self.path).map_err(unusable)?;
+        }
+        let meta = std::fs::metadata(&self.path).map_err(unusable)?;
+        if !meta.is_dir() {
+            return Err(unusable(std::io::Error::other("it is not a directory")));
+        }
+        for dir in [
+            self.managed_dir(),
+            self.sessions_dir(),
+            self.ephemeral_dir(),
+        ] {
+            create_plain_dir(&dir, false)
+                .map_err(|source| VolumeRootError::Subdirectory { path: dir, source })?;
+        }
+        Ok(())
+    }
+}
+
+/// Create `dir`, one managed volume's or session's directory directly under
+/// `managed-local/` or `sessions/`, owner-only on Unix, unless a plain
+/// directory is already there. The parent is never created: after
+/// [`VolumeRoot::prepare`] a missing one means a lost mount. A link at `dir` is
+/// refused: the directory is opened with the server's full authority, so a link
+/// swapped in would aim it anywhere.
+pub(crate) fn create_owned_dir(dir: &Path) -> std::io::Result<()> {
+    create_plain_dir(dir, true)
+}
+
+/// Create `dir` (owner-only on Unix when `private`) unless a plain directory is
+/// already there. The parent must exist.
+fn create_plain_dir(dir: &Path, private: bool) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(dir) {
+        Ok(meta) => require_plain_dir(&meta),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            if private {
+                std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+            }
+            #[cfg(not(unix))]
+            let _ = private;
+            match builder.create(dir) {
+                Ok(()) => Ok(()),
+                // Another first user created it in between; check what it made.
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    require_plain_dir(&std::fs::symlink_metadata(dir)?)
+                }
+                Err(err) => Err(err),
+            }
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn require_plain_dir(meta: &std::fs::Metadata) -> std::io::Result<()> {
+    if meta.is_dir() {
+        return Ok(());
+    }
+    Err(std::io::Error::other(
+        "the path exists and is not a plain directory",
+    ))
+}
+
+/// Why the volume root could not be made ready at startup.
+#[derive(Debug)]
+pub enum VolumeRootError {
+    /// The root itself is missing, not a directory, or could not be created.
+    Root {
+        path: PathBuf,
+        /// Whether the operator configured it, so it must exist already.
+        configured: bool,
+        source: std::io::Error,
+    },
+    /// One of the three directories under it could not be created or is not a
+    /// plain directory.
+    Subdirectory {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+}
+
+impl fmt::Display for VolumeRootError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            VolumeRootError::Root {
+                path,
+                configured: true,
+                source,
+            } => {
+                write!(
+                    f,
+                    "the volume root {} is not usable ({source}). Mount it or create it, \
+                     then restart. The server does not create a configured `volume_dir`, so \
+                     a missing mount is not replaced by an empty local directory",
+                    path.display(),
+                )?;
+                // The one failure `submilli-server --create-volume-dir` fixes.
+                if source.kind() == std::io::ErrorKind::NotFound {
+                    f.write_str(
+                        ". If nothing else can create it, start `submilli-server` with \
+                         `--create-volume-dir`",
+                    )?;
+                }
+                Ok(())
+            }
+            VolumeRootError::Root {
+                path,
+                configured: false,
+                source,
+            } => write!(
+                f,
+                "the default volume root {} is not usable ({source}). Make sure it is a \
+                 directory the server can create and write, or set `volume_dir` to an \
+                 existing directory",
+                path.display(),
+            ),
+            VolumeRootError::Subdirectory { path, source } => write!(
+                f,
+                "{} under the volume root is not usable ({source}). It must be a plain \
+                 directory the server can write, not a link or a file",
+                path.display(),
+            ),
+        }
+    }
+}
+
+impl std::error::Error for VolumeRootError {}
 
 /// Default directory the file-backed session store persists lifecycle metadata
 /// to — sibling to the VFS directories under the server root.
@@ -330,7 +517,7 @@ impl VolumeSpec {
         }
     }
 
-    /// A directory Submilli allocates under the managed volume root.
+    /// A directory Submilli allocates under the volume root's `managed-local/`.
     pub fn managed(size_limit: SizeLimit) -> Self {
         Self {
             kind: VolumeKind::ManagedLocal,
@@ -506,8 +693,8 @@ impl<'de> serde::de::Visitor<'de> for VolumeSpecSeed<'_> {
 /// Where a named volume's files live.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VolumeKind {
-    /// `<managed volume root>/<name>`, created by the server on first use and
-    /// never deleted by it.
+    /// `<volume root>/managed-local/<name>`, created by the server on first use
+    /// and never deleted by it.
     ManagedLocal,
     /// A directory the operator owns. The server neither creates nor deletes it.
     LocalPath { path: PathBuf },
@@ -549,20 +736,15 @@ pub struct ServerDirectories {
     /// The TLS private key must never be reachable through a named volume.
     pub tls_key_file: Option<PathBuf>,
     pub tls_cert_file: Option<PathBuf>,
-    pub session_storage_root: Option<PathBuf>,
     /// The durable session store — lifecycle records plus the idempotency
-    /// ledger in a subdirectory of it. A different directory from
-    /// [`Self::session_storage_root`], with a different default.
+    /// ledger in a subdirectory of it. A different directory from the
+    /// `per_session` workspaces under [`Self::volume_root`].
     pub session_store_dir: Option<PathBuf>,
     pub database_path: Option<PathBuf>,
-    /// `None` means the OS temp directory, which is where ephemeral scratch
-    /// lands when the operator configures no root.
-    pub ephemeral_storage_root: Option<PathBuf>,
-    /// Where `managed-local` volumes live. Always guarded against `local-path`
-    /// volumes; checked against the other server-owned directories only when
-    /// some volume is managed, since otherwise the server never creates it.
-    /// `None` means [`default_managed_volume_root`].
-    pub managed_volume_root: Option<PathBuf>,
+    /// The root of the server's VFS directories ([`VolumeRoot`]): `managed-local`
+    /// volumes, `per_session` workspaces and `ephemeral` scratch. `None` means
+    /// [`default_volume_root`].
+    pub volume_root: Option<PathBuf>,
     /// The config file this server was started from, when it was started from one.
     /// It is not reachable from [`ServerConfig`] — the file is consumed during
     /// resolution and nothing keeps the path — so only the config-file channel can
@@ -599,12 +781,6 @@ impl ServerDirectories {
             // config file's survive into `ServerConfig`; an embedder that wants
             // them guarded fills them in.
             config_file: None,
-            session_storage_root: Some(
-                config
-                    .session_storage_root
-                    .clone()
-                    .unwrap_or_else(default_session_storage_root),
-            ),
             session_store_dir: Some(
                 config
                     .session_store_dir
@@ -616,12 +792,11 @@ impl ServerDirectories {
                 .as_ref()
                 .map(|database| database.path().to_path_buf())
                 .or_else(|| config.database_path.clone()),
-            ephemeral_storage_root: config.ephemeral_storage_root.clone(),
-            managed_volume_root: Some(
+            volume_root: Some(
                 config
-                    .managed_volume_root
+                    .volume_root
                     .clone()
-                    .unwrap_or_else(default_managed_volume_root),
+                    .unwrap_or_else(default_volume_root),
             ),
         }
     }
@@ -660,11 +835,12 @@ pub enum VolumeError {
         target: PathBuf,
     },
     /// A `managed-local` volume name that cannot be used as one directory name
-    /// under the managed root.
+    /// under the volume root's `managed-local/`.
     BadManagedName { name: String },
-    /// The managed volume root overlaps a directory the server owns. Managed
-    /// volumes are created by name beneath it, so either direction is unsafe.
-    ManagedRootOverlap(ManagedRootOverlap),
+    /// The volume root overlaps a directory the server owns. Managed volumes and
+    /// session workspaces are created by name beneath it, so either direction is
+    /// unsafe.
+    VolumeRootOverlap(VolumeRootOverlap),
 }
 
 /// One volume declaration overlapping one server-owned directory, in the
@@ -682,9 +858,9 @@ pub struct Overlap {
     pub reason: &'static str,
 }
 
-/// The managed volume root overlapping one server-owned directory.
+/// The volume root overlapping one server-owned directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManagedRootOverlap {
+pub struct VolumeRootOverlap {
     pub root: PathBuf,
     pub owned: &'static str,
     pub owned_path: PathBuf,
@@ -694,7 +870,7 @@ pub struct ManagedRootOverlap {
 }
 
 /// Which way containment is unsafe. The two directions fail for different
-/// reasons, and a directory can be guarded in both: the `per_session` VFS root
+/// reasons, and a directory can be guarded in both: the volume root
 /// leaks outward and loses data inward, while the package store and the durable
 /// session store have nested layouts, so a volume one level down still lands on
 /// server-owned files.
@@ -774,9 +950,9 @@ impl fmt::Display for VolumeError {
                  must be 1-64 characters of letters, digits, `.`, `_` and `-`, starting with a \
                  letter or digit"
             ),
-            VolumeError::ManagedRootOverlap(o) => write!(
+            VolumeError::VolumeRootOverlap(o) => write!(
                 f,
-                "the managed volume root ({root}) {direction} the {owned} ({owned_path}): \
+                "the volume root ({root}) {direction} the {owned} ({owned_path}): \
                  {reason}. Set `volume_dir` to a directory outside it",
                 root = o.root.display(),
                 direction = o.direction.verb(),
@@ -802,33 +978,25 @@ impl std::error::Error for VolumeError {}
 /// [`Shape`]), so an overlap that appears only once a link is followed and one
 /// that appears only in the operator's spelling are both refused.
 ///
-/// A `managed-local` volume lives at `<managed root>/<name>`: its name must be
-/// a plain directory name, and the managed root itself must stay clear of every
-/// server-owned directory.
+/// A `managed-local` volume lives at `<volume root>/managed-local/<name>`: its
+/// name must be a plain directory name, and the volume root itself must stay
+/// clear of every other server-owned directory.
 pub fn validate_volumes(
     volumes: &VolumeTable,
     dirs: &ServerDirectories,
 ) -> Result<(), VolumeError> {
-    let guarded = guarded_dirs(dirs);
-    let managed_root = dirs
-        .managed_volume_root
-        .clone()
-        .unwrap_or_else(default_managed_volume_root);
-    let has_managed = volumes
-        .values()
-        .any(|spec| spec.kind == VolumeKind::ManagedLocal);
-    if has_managed {
-        let ephemeral = dirs
-            .ephemeral_storage_root
-            .clone()
-            .unwrap_or_else(std::env::temp_dir);
-        // Every guarded directory but the managed root itself.
-        let others = guarded_dirs(&ServerDirectories {
-            managed_volume_root: None,
-            ..dirs.clone()
-        });
-        check_managed_root(&managed_root, &ephemeral, &others)?;
-    }
+    let root = VolumeRoot::from_config(dirs.volume_root.clone());
+    let guarded = guarded_dirs(&ServerDirectories {
+        volume_root: Some(root.path().to_path_buf()),
+        ..dirs.clone()
+    });
+    // Every guarded directory but the volume root itself.
+    let others = guarded_dirs(&ServerDirectories {
+        volume_root: None,
+        ..dirs.clone()
+    });
+    check_volume_root(root.path(), &others)?;
+    let managed_root = root.managed_dir();
     let mut checked: Vec<Volume> = Vec::new();
     for (name, spec) in volumes {
         let volume = match &spec.kind {
@@ -866,28 +1034,19 @@ pub fn is_managed_name(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
-/// Refuse a managed volume root that overlaps a server-owned directory in either
-/// direction. A root inside the ephemeral root, the OS temp dir by default, is
-/// allowed: that is the operator's choice, as it is for a `local-path` volume.
-fn check_managed_root(
-    root: &Path,
-    ephemeral: &Path,
-    guarded: &[GuardedDir],
-) -> Result<(), VolumeError> {
+/// Refuse a volume root that overlaps a server-owned directory in either
+/// direction.
+fn check_volume_root(root: &Path, guarded: &[GuardedDir]) -> Result<(), VolumeError> {
     let shape = Shape::of(root);
-    let ephemeral = Shape::of(ephemeral);
     for guard in guarded {
         let direction = if guard.shape.beneath(&shape) {
             Direction::VolumeContains
         } else if shape.beneath(&guard.shape) {
-            if guard.shape.same_as(&ephemeral) {
-                continue;
-            }
             Direction::VolumeInside
         } else {
             continue;
         };
-        return Err(VolumeError::ManagedRootOverlap(ManagedRootOverlap {
+        return Err(VolumeError::VolumeRootOverlap(VolumeRootOverlap {
             root: root.to_path_buf(),
             owned: guard.owned,
             owned_path: guard.path.clone(),
@@ -1061,16 +1220,8 @@ struct GuardedDir {
 /// The refusal table: one row per guarded directory, with the *one*
 /// direction that is unsafe for it and why. Ordered so the most damaging
 /// collisions are reported first; leave the order alone.
-///
-/// A volume *inside* the OS temp directory is deliberately absent: that is
-/// where ephemeral scratch lands by default, and containment there runs the
-/// other way.
 fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
-    let ephemeral = dirs
-        .ephemeral_storage_root
-        .clone()
-        .unwrap_or_else(std::env::temp_dir);
-    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 19] = [
+    let rows: [(&'static str, Option<PathBuf>, Direction, &'static str); 16] = [
         (
             "secret store",
             dirs.secret_store_dir.clone(),
@@ -1158,36 +1309,19 @@ fn guarded_dirs(dirs: &ServerDirectories) -> Vec<GuardedDir> {
              forge the recorded outcome of a keyed execute",
         ),
         (
-            "per-session VFS root",
-            dirs.session_storage_root.clone(),
+            "volume root",
+            dirs.volume_root.clone(),
             Direction::VolumeContains,
-            "the volume would expose every other session's files to any caller",
+            "the volume would expose every session's files, every execute's scratch and every \
+             managed volume, whatever access each declares",
         ),
         (
-            "per-session VFS root",
-            dirs.session_storage_root.clone(),
+            "volume root",
+            dirs.volume_root.clone(),
             Direction::VolumeInside,
-            "orphan reconciliation deletes unclaimed directories under that root on every boot, \
-             so the volume's contents would be wiped",
-        ),
-        (
-            "managed volume root",
-            dirs.managed_volume_root.clone(),
-            Direction::VolumeContains,
-            "the volume would expose every managed volume, whatever access each declares",
-        ),
-        (
-            "managed volume root",
-            dirs.managed_volume_root.clone(),
-            Direction::VolumeInside,
-            "managed volumes are created by name under that root, so the volume would share a \
-             directory with one of them",
-        ),
-        (
-            "ephemeral storage root",
-            Some(ephemeral),
-            Direction::VolumeContains,
-            "the volume would expose every concurrent execute's scratch directory",
+            "managed volumes and session workspaces are created by name under that root, and \
+             orphan reconciliation deletes unclaimed directories under its sessions/ on every \
+             boot, so the volume's contents could be shared or wiped",
         ),
         (
             "server config file",
@@ -1246,6 +1380,7 @@ fn resolve_links(path: &Path) -> PathBuf {
 #[cfg(test)]
 pub(crate) fn test_config() -> ServerConfig {
     ServerConfig {
+        volume_root: Some(tempfile::tempdir().unwrap().keep()),
         blueprints: Some(Arc::new(crate::blueprint::InMemoryBlueprintStore::default())),
         ..Default::default()
     }
@@ -1267,5 +1402,100 @@ impl ServerConfig {
             None => crate::database::ServerDatabase::open_ephemeral().await?,
         };
         Ok(Arc::new(database))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_configured_root_that_is_missing_is_refused_and_not_created() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("mnt/volumes");
+        let err = VolumeRoot::configured(&root)
+            .prepare()
+            .expect_err("a missing configured root must be refused");
+        assert!(err.to_string().contains("Mount it or create it"), "{err}");
+        assert!(!root.exists());
+        assert!(!parent.path().join("mnt").exists());
+    }
+
+    #[test]
+    fn a_configured_root_gets_its_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let volume_root = VolumeRoot::configured(root.path());
+        volume_root.prepare().unwrap();
+        for dir in [
+            volume_root.managed_dir(),
+            volume_root.sessions_dir(),
+            volume_root.ephemeral_dir(),
+        ] {
+            assert!(dir.is_dir(), "{}", dir.display());
+        }
+        // Preparing again keeps what is there.
+        std::fs::write(volume_root.sessions_dir().join("kept"), b"x").unwrap();
+        volume_root.prepare().unwrap();
+        assert!(volume_root.sessions_dir().join("kept").exists());
+    }
+
+    #[test]
+    fn a_configured_root_that_is_a_file_is_refused() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("volumes");
+        std::fs::write(&root, b"x").unwrap();
+        let err = VolumeRoot::configured(&root)
+            .prepare()
+            .expect_err("a file is no root");
+        assert!(err.to_string().contains("not a directory"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_place_of_a_root_directory_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), root.path().join("sessions")).unwrap();
+        let err = VolumeRoot::configured(root.path())
+            .prepare()
+            .expect_err("a link at sessions/ must be refused");
+        let err = err.to_string();
+        assert!(err.contains("sessions"), "{err}");
+        assert!(err.contains("not a link or a file"), "{err}");
+    }
+
+    #[test]
+    fn the_default_root_is_created_with_its_directories() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("server/volumes");
+        let volume_root = VolumeRoot::default_root(&root);
+        volume_root.prepare().unwrap();
+        for dir in [
+            volume_root.managed_dir(),
+            volume_root.sessions_dir(),
+            volume_root.ephemeral_dir(),
+        ] {
+            assert!(dir.is_dir(), "{}", dir.display());
+        }
+    }
+
+    #[test]
+    fn a_file_at_the_default_root_is_refused() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("volumes");
+        std::fs::write(&root, b"x").unwrap();
+        let err = VolumeRoot::default_root(&root)
+            .prepare()
+            .expect_err("a file is no root");
+        assert!(err.to_string().contains("not a directory"), "{err}");
+    }
+
+    #[test]
+    fn a_workspace_under_a_lost_parent_is_not_recreated() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let err = create_owned_dir(&sessions.join("s1")).expect_err("a missing parent must fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(!sessions.exists());
     }
 }

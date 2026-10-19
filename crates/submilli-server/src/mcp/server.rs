@@ -3,6 +3,7 @@
 //! `/v1/execute` handler; the blueprint is fixed per service instance (one per
 //! `/mcp/{blueprint}` endpoint), so the tool takes only `code`.
 
+use crate::session::StoredLastRun;
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -436,12 +437,19 @@ impl SubmilliMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let session_id = session_header(&parts)
             .ok_or_else(|| ErrorData::invalid_request("no session for lastRun", None))?;
-        match self.state.sessions().get(&session_id).await {
-            Ok(Some(run)) => structured_result(ExecuteOutput {
-                result: run.result,
-                console: run.console,
-                error: run.error,
-            }),
+        match self.state.last_runs().get(&session_id).await {
+            Ok(Some(StoredLastRun::Json(json))) => {
+                let value: serde_json::Value = serde_json::from_slice(&json)
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+                Ok(CallToolResult::structured(value))
+            }
+            Ok(Some(StoredLastRun::TooLarge { bytes, limit })) => Err(ErrorData::invalid_request(
+                format!(
+                    "the last run's output ({bytes} bytes) is over the retained limit \
+                     ({limit} bytes)"
+                ),
+                None,
+            )),
             Ok(None) => Err(ErrorData::invalid_request(
                 "no previous run in this session",
                 None,

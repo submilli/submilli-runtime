@@ -1,2 +1,0 @@
-line 7 missed: bug SUB-1614 a binding named `arguments` is accepted, where strict mode rejects it
-line 9 extra: bug SUB-1615 indexing a string with brackets is rejected

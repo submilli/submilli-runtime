@@ -473,7 +473,26 @@ const SECRETS: &[Capability] = &[Capability {
     example_filter: "name == \"STRIPE_API_KEY\"",
 }];
 
+const VARIABLES: &[Capability] = &[Capability {
+    name: "variables.get",
+    main_denial: Some(
+        "configuration variables are available only to packages; no policy can grant main-module access",
+    ),
+    summary: "Read an immutable Blueprint/session configuration variable",
+    filter_fields: &[field("name", "string", "Variable name being read")],
+    example_filter: "name == \"BROWSER_STORE_NAME\"",
+}];
+
 const SESSION: &[Capability] = &[
+    Capability {
+        name: "session.finalize",
+        main_denial: Some(
+            "finalizer registrations belong to packages; main-module access cannot be granted",
+        ),
+        summary: "Register or unregister durable package-owned session cleanup",
+        filter_fields: &[KEY],
+        example_filter: "key glob \"browser/*\"",
+    },
     Capability {
         name: "session.read",
         main_denial: None,
@@ -541,6 +560,10 @@ const CORE_CATALOG: &[CapabilityGroup] = &[
     CapabilityGroup {
         module: "@tools",
         capabilities: TOOLS,
+    },
+    CapabilityGroup {
+        module: "submilli:variables",
+        capabilities: VARIABLES,
     },
 ];
 
@@ -675,13 +698,16 @@ mod tests {
     /// Marking a capability not-grantable-to-`main` changes the runtime's
     /// answer for every caller, so growing the set is a deliberate act.
     #[test]
-    fn only_secrets_get_is_refused_to_main() {
+    fn package_configuration_and_secrets_are_refused_to_main() {
         let refused: Vec<&str> = all_groups()
             .flat_map(|group| group.capabilities)
             .filter(|cap| !cap.grantable_to_main())
             .map(|cap| cap.name)
             .collect();
-        assert_eq!(refused, ["secrets.get"]);
+        assert_eq!(
+            refused,
+            ["secrets.get", "session.finalize", "variables.get"]
+        );
     }
 
     /// The core set lists exactly the core catalog, in the same order, so every
@@ -745,6 +771,7 @@ mod tests {
         assert_eq!(
             names,
             [
+                "session.finalize",
                 "session.read",
                 "session.write",
                 "session.remove",

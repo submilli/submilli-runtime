@@ -13,8 +13,8 @@ mod install;
 pub(crate) mod search;
 mod transforms;
 
-pub(crate) use install::declare_types;
 pub use install::{declare, install};
+pub(crate) use install::{declare_types, string_ctor_call};
 
 use unicode_normalization::UnicodeNormalization;
 
@@ -221,6 +221,12 @@ pub(super) fn unit_index(len: usize, index: f64) -> Option<usize> {
     (i >= 0 && (i as usize) < len).then_some(i as usize)
 }
 
+/// The unit `s[index]` reads, on the terms `arr[index]` has: a non-negative
+/// integer below the length (`-0` reads unit 0). Anything else throws.
+pub(super) fn string_index_unit(len: usize, index: f64) -> Option<usize> {
+    (index >= 0.0 && index < len as f64 && index == index.floor()).then_some(index as usize)
+}
+
 /// The unit `at` reads for `index`, a negative one counting from the end.
 pub(super) fn at_index(len: usize, index: f64) -> Option<usize> {
     let len = len as i64;
@@ -247,6 +253,14 @@ pub(super) fn slice_range(len: usize, start: f64, end: f64) -> std::ops::Range<u
     let si = normalize_slice_index(trunc_sat_i32(start), len);
     let ei = normalize_slice_index(trunc_sat_i32(end), len);
     si..ei.max(si)
+}
+
+/// The units `substr(start, length)` keeps: a negative start counts from the
+/// end, and the length clamps into what remains.
+pub(super) fn substr_range(len: usize, start: f64, length: f64) -> std::ops::Range<usize> {
+    let from = normalize_slice_index(trunc_sat_i32(start), len);
+    let count = clamp_to_len(trunc_sat_i32(length), len - from);
+    from..from + count
 }
 
 /// The units `substring(start, end)` keeps: negatives clamp to 0 and the

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "4286a65c3578d11de730c26a60cc7acaac29fe860ddbb123744401615e91aea9"
+  contentHash: "70be5582ead46b73b55d6a0aca59324ae34a66c902c09202c8d295f2bafbd020"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -233,7 +233,7 @@ that limit covers all sessions and Blueprints using it.
 
 Files are one way for a program to leave something for the next.
 `submilli:session` is the other. It is a key-value store that lasts the
-session, kept in memory, and checked against a type when read:
+session and is checked against a type when read:
 
 ```sh
 submilli docs submilli:session

@@ -3,8 +3,10 @@
 //!
 //! The run index already names the session each run executed in; this log adds the
 //! sessions the playground started with fixed variables, so one is listed before it
-//! has runs, and says whether it is still open. A session own-key chat started names
-//! its model, which every later message in it uses.
+//! has runs, and says whether it is still open; and the sessions a stand-in chatted in,
+//! so one that ran no program is listed too. An older playground skips a kind of line it
+//! doesn't know. A session own-key chat started names its model, which every later
+//! message in it uses.
 
 use std::collections::BTreeMap;
 
@@ -48,12 +50,21 @@ pub(crate) enum SessionEntry {
     },
     /// The session was closed.
     Ended { session_id: String },
+    /// A coding assistant's stand-in first chatted in a session the playground did not
+    /// start, so one that ran no program is listed too.
+    Chatted {
+        session_id: String,
+        variables: BTreeMap<String, String>,
+        label: String,
+    },
 }
 
 impl SessionEntry {
     pub(crate) fn session_id(&self) -> &str {
         match self {
-            Self::Started { session_id, .. } | Self::Ended { session_id } => session_id,
+            Self::Started { session_id, .. }
+            | Self::Ended { session_id }
+            | Self::Chatted { session_id, .. } => session_id,
         }
     }
 }

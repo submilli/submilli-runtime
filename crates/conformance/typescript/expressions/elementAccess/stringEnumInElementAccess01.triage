@@ -1,1 +1,0 @@
-line 17 extra: bug SUB-1624 indexing an object by a string enum whose values are its keys is rejected

@@ -480,3 +480,62 @@ a developer machine with `submilli install org/repo[@ref] [@scope/name]`, pinned
 to a commit. Local publication uploads nothing anywhere. Maintained examples
 live under `packages/` in https://github.com/submilli/submilli-runtime:
 `linear` (GraphQL), `github` (REST with page tokens), and `slack-bot`.
+
+## Session-owned remote resources
+
+When a package creates a remote resource that must survive individual executions,
+register its cleanup internally before returning the handle. Use
+`submilli:session.registerFinalizer(key, value)` and export the fixed entry point
+`finalizer(key: string, value: T): void` from the package root. The engine owns
+package namespacing: supply only the local resource key. Two packages can use
+the same key without conflict; the finalizer receives the original local key.
+A duplicate live key in the same package/session is rejected.
+
+```typescript
+import * as session from "submilli:session";
+import * as http from "submilli:http";
+
+export interface ResourceHandle { id: string; url: string; }
+
+export function finalizer(key: string, value: ResourceHandle): void {
+    const response = http.delete(value.url);
+    if (response.status !== 204 && response.status !== 404) {
+        throw new Error("Resource cleanup failed");
+    }
+}
+```
+
+After creating the resource, call `session.registerFinalizer(handle.id, handle)`.
+Recorded test runs (including live-call modes) refuse registration with a catchable
+error; release newly created resources through the same compensation path.
+Registration commits serializable arguments and package/dependency versions
+before returning. Code stays in the installed package store; upgrades, removals,
+or unavailable versions may lose cleanup. If a registration refusal is catchable, attempt immediate
+remote cleanup and rethrow the original error. Storage failures with an uncertain
+commit terminate execution; a remote lease/idle timeout must cover that uncertainty
+and a crash between creation and registration.
+
+For explicit early release, close the remote resource first, then call
+`session.unregisterFinalizer(handle.id)`. Missing registrations are harmless.
+Make remote closure idempotent: recovery can repeat an attempt interrupted after
+the remote effect but before success was recorded.
+
+Build derives `session.finalize` requirements, filtered by local key. Cleanup
+runs under current policy and credentials, with independent execution budgets;
+revoked access may make it fail. Session close waits for every attempt.
+Thrown errors and traps are terminal and are never automatically retried;
+restart recovery attempts unfinished work. Inspect
+`GET /v1/sessions/{id}/finalizers` for sanitized status.
+
+Finalizers cannot register/unregister other finalizers. Treat them as resource
+lifecycle hooks, not background jobs. Removing/replacing a session KV value does
+not run cleanup. Store a serializable handle in KV to reuse the resource across
+executions; registration does not checkpoint remote process memory.
+
+
+Call `registerFinalizer` directly (namespace and named imports are supported)
+so the compiler can validate its value against the package finalizer signature.
+The REST session-close response includes sanitized finalizer outcomes when
+registrations exist; sessions without registrations retain the empty 204 response.
+Embedders can use `end_session_with_finalizers` for the same report; the existing
+`end_session` boolean API remains available.

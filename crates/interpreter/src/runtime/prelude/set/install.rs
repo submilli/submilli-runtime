@@ -14,6 +14,7 @@ use crate::runtime::host::{register_host_fn, register_host_fn_async};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::{MODULE_NAME, closure, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
+use std::collections::BTreeMap;
 
 /// The dispatch key codegen looks up for `Set#<method>`.
 fn method_key(method: &str) -> MangledName {
@@ -262,7 +263,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
     let iter = |ty: Type| Type::prelude_interface("Iterator".to_string(), vec![ty]);
     let set = || Param::new("set", set_ty());
     let value = || Param::new("value", t());
-    let other = || Param::new("other", set_ty());
+    let other = || Param::new("other", Type::Readonly(Box::new(set_ty())));
     let m = |defs: &mut PackageDeclaration, name: &str, params: Vec<Param>, ret: Type| {
         declare_method(defs, name, method_key(name), params, ret);
     };
@@ -328,7 +329,24 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         Dispatch, MethodSig, Param, PropertySig, Span, Type, TypeKind, TypeSymbol, ValueKind,
         ValueSymbol,
     };
-    use std::collections::BTreeMap;
+    // `ReadonlySet` is `Set` seen through `readonly`: the typechecker rejects
+    // the mutating methods, and the value is the same `Set` at runtime.
+    defs.types.insert(
+        "ReadonlySet".to_string(),
+        TypeSymbol {
+            name: "ReadonlySet".to_string(),
+            mangled_name: crate::mangle::prelude("ReadonlySet"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: TypeKind::Alias {
+                generics: vec!["T".to_string()],
+                ty: Type::Readonly(Box::new(Type::prelude_interface(
+                    "Set".to_string(),
+                    vec![Type::TypeVar("T".to_string())],
+                ))),
+                doc: doc("/** A `Set` that can only be read: `has`, `size`, `forEach`, iteration and the set algebra, but not `add`, `delete` or `clear`. Every `Set<T>` is a `ReadonlySet<T>`. */"),
+            },
+        },
+    );
     defs.types.insert(
         "Set".to_string(),
         TypeSymbol {
@@ -478,17 +496,20 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "union".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
-                                Type::prelude_interface(
+                                Type::Readonly(Box::new(Type::prelude_interface(
                                     "Set".to_string(),
-                                    vec![Type::TypeVar("T".to_string())],
-                                ),
+                                    vec![Type::TypeVar("U".to_string())],
+                                ))),
                             )],
                             ret: Type::prelude_interface(
                                 "Set".to_string(),
-                                vec![Type::TypeVar("T".to_string())],
+                                vec![Type::union(vec![
+                                    Type::TypeVar("T".to_string()),
+                                    Type::TypeVar("U".to_string()),
+                                ])],
                             ),
                             predicate: None,
                             doc: doc(
@@ -500,13 +521,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "intersection".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
-                                Type::prelude_interface(
+                                Type::Readonly(Box::new(Type::prelude_interface(
                                     "Set".to_string(),
-                                    vec![Type::TypeVar("T".to_string())],
-                                ),
+                                    vec![Type::TypeVar("U".to_string())],
+                                ))),
                             )],
                             ret: Type::prelude_interface(
                                 "Set".to_string(),
@@ -522,13 +543,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "difference".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
-                                Type::prelude_interface(
+                                Type::Readonly(Box::new(Type::prelude_interface(
                                     "Set".to_string(),
-                                    vec![Type::TypeVar("T".to_string())],
-                                ),
+                                    vec![Type::TypeVar("U".to_string())],
+                                ))),
                             )],
                             ret: Type::prelude_interface(
                                 "Set".to_string(),
@@ -544,17 +565,20 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "symmetricDifference".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
-                                Type::prelude_interface(
+                                Type::Readonly(Box::new(Type::prelude_interface(
                                     "Set".to_string(),
-                                    vec![Type::TypeVar("T".to_string())],
-                                ),
+                                    vec![Type::TypeVar("U".to_string())],
+                                ))),
                             )],
                             ret: Type::prelude_interface(
                                 "Set".to_string(),
-                                vec![Type::TypeVar("T".to_string())],
+                                vec![Type::union(vec![
+                                    Type::TypeVar("T".to_string()),
+                                    Type::TypeVar("U".to_string()),
+                                ])],
                             ),
                             predicate: None,
                             doc: doc(
@@ -566,13 +590,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "isSubsetOf".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
-                                Type::prelude_interface(
+                                Type::Readonly(Box::new(Type::prelude_interface(
                                     "Set".to_string(),
-                                    vec![Type::TypeVar("T".to_string())],
-                                ),
+                                    vec![Type::TypeVar("U".to_string())],
+                                ))),
                             )],
                             ret: Type::Boolean,
                             predicate: None,
@@ -585,13 +609,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "isSupersetOf".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
-                                Type::prelude_interface(
+                                Type::Readonly(Box::new(Type::prelude_interface(
                                     "Set".to_string(),
-                                    vec![Type::TypeVar("T".to_string())],
-                                ),
+                                    vec![Type::TypeVar("U".to_string())],
+                                ))),
                             )],
                             ret: Type::Boolean,
                             predicate: None,
@@ -604,13 +628,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "isDisjointFrom".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: vec!["U".to_string()],
                             params: vec![Param::new(
                                 "other",
-                                Type::prelude_interface(
+                                Type::Readonly(Box::new(Type::prelude_interface(
                                     "Set".to_string(),
-                                    vec![Type::TypeVar("T".to_string())],
-                                ),
+                                    vec![Type::TypeVar("U".to_string())],
+                                ))),
                             )],
                             ret: Type::Boolean,
                             predicate: None,

@@ -2518,6 +2518,7 @@ fn may_hold_function(ty: &crate::Type) -> bool {
         crate::Type::Union(members) => members.iter().any(may_hold_function),
         crate::Type::Function { .. }
         | crate::Type::Unknown
+        | crate::Type::NonPrimitive
         | crate::Type::TypeVar(_)
         | crate::Type::GenericParam { .. }
         | crate::Type::Error => true,

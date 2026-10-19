@@ -125,6 +125,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         typed_ast: crate::TypedAst::with_package(package_name),
         diagnostics: bindings.diagnostics,
         top_symbols: BTreeMap::new(),
+        imported_values: std::collections::HashSet::new(),
         types: super::TypeNamespace::new(),
         type_registry: super::TypeRegistry::new(),
         scopes: super::Scopes::default(),

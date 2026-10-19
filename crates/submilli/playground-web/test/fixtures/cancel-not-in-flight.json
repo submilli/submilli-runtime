@@ -1,0 +1,16 @@
+{
+ "exit": 2,
+ "result": {
+  "error": {
+   "kind": "not-in-flight",
+   "message": "run 1 already finished; there is nothing to cancel"
+  },
+  "next": [
+   "submilli playground runs"
+  ]
+ },
+ "text": "",
+ "notes": [
+  "run 1 already finished; there is nothing to cancel"
+ ]
+}

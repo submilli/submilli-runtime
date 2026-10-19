@@ -10,6 +10,10 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::adapters::sealing::Sealer;
 use crate::adapters::session::credentials::CredentialCodec;
+use crate::adapters::session::kv;
+use crate::adapters::session::last_run;
+use crate::application::sessions::ports::StagedLastRun;
+use crate::application::unit_of_work::{SessionStateKeys, SessionStateSize, SessionStateUsage};
 use crate::application::unit_of_work::{UnitOfWork, UnitOfWorkFactory};
 use crate::blueprint::StoreError;
 use crate::database::{DatabaseError, ServerDatabase};
@@ -247,61 +251,42 @@ impl UnitOfWork for SqliteUnitOfWork {
         .await
     }
 
-    async fn get_request(
+    async fn get_run(&mut self, id: &str) -> Result<Option<crate::domain::run::Run>, StoreError> {
+        let id = id.to_owned();
+        self.query(move |connection| {
+            Box::pin(async move { crate::adapters::run::get_run(connection, &id).await })
+        })
+        .await
+    }
+    async fn run_for_key(
         &mut self,
         session_id: &str,
         key: &str,
-    ) -> Result<Option<crate::domain::idempotent_request::IdempotentRequest>, StoreError> {
+    ) -> Result<Option<crate::domain::run::Run>, StoreError> {
         let session_id = session_id.to_owned();
         let key = key.to_owned();
         self.query(move |connection| {
-            Box::pin(async move {
-                crate::adapters::idempotency::get(connection, &session_id, &key).await
-            })
+            Box::pin(async move { crate::adapters::run::get(connection, &session_id, &key).await })
         })
         .await
     }
-    async fn save_request(
+    async fn save_run(&mut self, request: crate::domain::run::Run) -> Result<(), StoreError> {
+        self.query(move |connection| Box::pin(crate::adapters::run::save(connection, request)))
+            .await
+    }
+    async fn active_session_runs(
         &mut self,
-        request: crate::domain::idempotent_request::IdempotentRequest,
-    ) -> Result<(), StoreError> {
+        session_id: &str,
+    ) -> Result<Vec<crate::domain::run::Run>, StoreError> {
+        let id = session_id.to_owned();
         self.query(move |connection| {
-            Box::pin(crate::adapters::idempotency::save(connection, request))
+            Box::pin(async move { crate::adapters::run::active_for_session(connection, &id).await })
         })
         .await
     }
-    async fn remove_request(&mut self, session_id: &str, key: &str) -> Result<(), StoreError> {
-        let session_id = session_id.to_owned();
-        let key = key.to_owned();
-        self.query(move |connection| {
-            Box::pin(async move {
-                sqlx::query("DELETE FROM idempotent_requests WHERE session_id=? AND request_key=?")
-                    .bind(session_id)
-                    .bind(key)
-                    .execute(connection)
-                    .await?;
-                Ok(())
-            })
-        })
-        .await
-    }
-    async fn remove_session_requests(&mut self, session_id: &str) -> Result<(), StoreError> {
-        let session_id = session_id.to_owned();
-        self.query(move |connection| {
-            Box::pin(async move {
-                sqlx::query("DELETE FROM idempotent_requests WHERE session_id=?")
-                    .bind(session_id)
-                    .execute(connection)
-                    .await?;
-                Ok(())
-            })
-        })
-        .await
-    }
-    async fn unfinished_requests(
-        &mut self,
-    ) -> Result<Vec<crate::domain::idempotent_request::IdempotentRequest>, StoreError> {
-        self.query(|connection| Box::pin(crate::adapters::idempotency::unfinished(connection)))
+
+    async fn unfinished_runs(&mut self) -> Result<Vec<crate::domain::run::Run>, StoreError> {
+        self.query(|connection| Box::pin(crate::adapters::run::unfinished(connection)))
             .await
     }
     async fn sessions_with_responses_to_expire(
@@ -310,11 +295,9 @@ impl UnitOfWork for SqliteUnitOfWork {
         kept: usize,
     ) -> Result<Vec<String>, StoreError> {
         self.query(move |connection| {
-            Box::pin(
-                crate::adapters::idempotency::sessions_with_responses_to_expire(
-                    connection, cutoff, kept,
-                ),
-            )
+            Box::pin(crate::adapters::run::sessions_with_responses_to_expire(
+                connection, cutoff, kept,
+            ))
         })
         .await
     }
@@ -325,7 +308,7 @@ impl UnitOfWork for SqliteUnitOfWork {
         let session_id = session_id.to_owned();
         self.query(move |connection| {
             Box::pin(async move {
-                crate::adapters::idempotency::completed_responses(connection, &session_id).await
+                crate::adapters::run::completed_responses(connection, &session_id).await
             })
         })
         .await
@@ -338,7 +321,7 @@ impl UnitOfWork for SqliteUnitOfWork {
         let session_id = session_id.to_owned();
         self.query(move |connection| {
             Box::pin(async move {
-                crate::adapters::idempotency::expire_responses(connection, &session_id, &keys).await
+                crate::adapters::run::expire_responses(connection, &session_id, &keys).await
             })
         })
         .await
@@ -448,6 +431,123 @@ impl UnitOfWork for SqliteUnitOfWork {
             Box::pin(async move {
                 crate::adapters::mcp_grant::remove_for_blueprint(connection, &blueprint).await
             })
+        })
+        .await
+    }
+
+    async fn session_is_active(&mut self, id: &str) -> Result<bool, StoreError> {
+        let id = id.to_owned();
+        self.query_recoverable(move |connection| {
+            Box::pin(async move { kv::is_active(connection, &id).await })
+        })
+        .await
+    }
+
+    async fn session_state_get(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<Option<Vec<u16>>, StoreError> {
+        let (session_id, key, sealer) = (session_id.to_owned(), key.to_vec(), self.sealer.clone());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move { kv::get(connection, &sealer, &session_id, &key).await })
+        })
+        .await
+    }
+
+    async fn session_state_has(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<bool, StoreError> {
+        let (session_id, key) = (session_id.to_owned(), key.to_vec());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move { kv::has(connection, &session_id, &key).await })
+        })
+        .await
+    }
+
+    async fn session_state_usage(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<SessionStateUsage, StoreError> {
+        let (session_id, key) = (session_id.to_owned(), key.to_vec());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move { kv::usage(connection, &session_id, &key).await })
+        })
+        .await
+    }
+
+    async fn session_state_put(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+        payload: &[u16],
+        size: SessionStateSize,
+    ) -> Result<(), StoreError> {
+        let (session_id, key, payload, sealer) = (
+            session_id.to_owned(),
+            key.to_vec(),
+            payload.to_vec(),
+            self.sealer.clone(),
+        );
+        self.query_recoverable(move |connection| {
+            Box::pin(async move {
+                kv::put(connection, &sealer, &session_id, &key, &payload, size).await
+            })
+        })
+        .await
+    }
+
+    async fn session_state_remove(
+        &mut self,
+        session_id: &str,
+        key: &[u16],
+    ) -> Result<bool, StoreError> {
+        let (session_id, key) = (session_id.to_owned(), key.to_vec());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move { kv::remove(connection, &session_id, &key).await })
+        })
+        .await
+    }
+
+    async fn session_state_keys(
+        &mut self,
+        session_id: &str,
+        after: Option<&[u16]>,
+        max_keys: usize,
+    ) -> Result<SessionStateKeys, StoreError> {
+        let (session_id, after) = (session_id.to_owned(), after.map(<[u16]>::to_vec));
+        self.query_recoverable(move |connection| {
+            Box::pin(
+                async move { kv::keys(connection, &session_id, after.as_deref(), max_keys).await },
+            )
+        })
+        .await
+    }
+
+    async fn put_last_run(
+        &mut self,
+        session_id: &str,
+        run_id: &str,
+        completed_at: SystemTime,
+        staged: &StagedLastRun,
+    ) -> Result<Option<String>, StoreError> {
+        let (session_id, run_id, staged) =
+            (session_id.to_owned(), run_id.to_owned(), staged.clone());
+        self.query_recoverable(move |connection| {
+            Box::pin(async move {
+                last_run::put(connection, &session_id, &run_id, completed_at, &staged).await
+            })
+        })
+        .await
+    }
+
+    async fn remove_last_run(&mut self, session_id: &str) -> Result<Option<String>, StoreError> {
+        let session_id = session_id.to_owned();
+        self.query(move |connection| {
+            Box::pin(async move { Ok(last_run::remove(connection, &session_id).await?) })
         })
         .await
     }
