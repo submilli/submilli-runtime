@@ -496,3 +496,5 @@ mod tests {
 pub(crate) mod audit_log;
 pub(crate) mod cleanup_queue;
 pub(crate) mod workspaces;
+
+pub(crate) mod finalizers;

@@ -1,0 +1,163 @@
+{
+  "module": "ResourceRecovery",
+  "constants": {
+    "MaxCrashes": 1,
+    "Fault": "none",
+    "Witness": "gap",
+    "MaxCancels": 1
+  },
+  "invariants": [
+    "TypeOK",
+    "ReaderRetained",
+    "ProgressBeforeHistory",
+    "OneUncommittedRead",
+    "LogicalProgress",
+    "ReadPositionCorrect",
+    "ReadResultStable",
+    "HistoryCorrect",
+    "SameFile"
+  ],
+  "properties": [],
+  "cases": [
+    {
+      "name": "reader-replay-safety",
+      "kind": "safety"
+    },
+    {
+      "name": "reader-replay-progress",
+      "kind": "liveness",
+      "specification": "LiveSpec",
+      "properties": [
+        "Progress"
+      ]
+    },
+    {
+      "name": "negative-no-checkpoint",
+      "kind": "negative",
+      "invariant": "ProgressBeforeHistory",
+      "constants": {
+        "Fault": "no-checkpoint"
+      }
+    },
+    {
+      "name": "negative-ignore-effect",
+      "kind": "negative",
+      "invariant": "ReadPositionCorrect",
+      "constants": {
+        "Fault": "ignore-effect"
+      }
+    },
+    {
+      "name": "negative-prefetched-offset",
+      "kind": "negative",
+      "invariant": "LogicalProgress",
+      "constants": {
+        "Fault": "prefetched-offset"
+      }
+    },
+    {
+      "name": "negative-history-first",
+      "kind": "negative",
+      "invariant": "ProgressBeforeHistory",
+      "constants": {
+        "Fault": "history-first"
+      }
+    },
+    {
+      "name": "negative-finalizer-deletes",
+      "kind": "negative",
+      "invariant": "ReaderRetained",
+      "constants": {
+        "Fault": "finalizer-deletes"
+      }
+    },
+    {
+      "name": "negative-mutable-pending",
+      "kind": "negative",
+      "invariant": "ReadResultStable",
+      "constants": {
+        "Fault": "mutable-pending"
+      }
+    },
+    {
+      "name": "negative-restore-path",
+      "kind": "negative",
+      "invariant": "SameFile",
+      "constants": {
+        "Fault": "restore-path"
+      }
+    },
+    {
+      "name": "negative-advance-early",
+      "kind": "negative",
+      "invariant": "OneUncommittedRead",
+      "constants": {
+        "Fault": "advance-early"
+      }
+    },
+    {
+      "name": "witness-gap",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "gap"
+      }
+    },
+    {
+      "name": "witness-skip",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "skip"
+      }
+    },
+    {
+      "name": "witness-finalize",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "finalize"
+      }
+    },
+    {
+      "name": "witness-changed",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "changed"
+      }
+    },
+    {
+      "name": "witness-cleanup",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "cleanup"
+      }
+    },
+    {
+      "name": "negative-trust-native",
+      "kind": "negative",
+      "invariant": "ReadPositionCorrect",
+      "constants": {
+        "Fault": "trust-native"
+      }
+    },
+    {
+      "name": "witness-cancel-before",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "cancel-before"
+      }
+    },
+    {
+      "name": "witness-cancel-after",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "cancel-after"
+      }
+    }
+  ]
+}

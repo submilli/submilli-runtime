@@ -31,7 +31,7 @@ use crate::runtime::fs::{FileIdentity, dir_identity};
 /// Which blueprint VFS mode this directory backs. Kept independent of the
 /// `submilli-blueprint` enum so the interpreter doesn't depend on that crate;
 /// the server maps one onto the other.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum VfsMode {
     None,
     Ephemeral,
@@ -40,7 +40,7 @@ pub enum VfsMode {
 }
 
 /// Whether guest code may change what a volume holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Access {
     ReadOnly,
     ReadWrite,
@@ -115,8 +115,12 @@ impl Mount {
         &self.rel
     }
 
-    pub(crate) fn dir(&self) -> &Arc<Dir> {
+    pub fn dir(&self) -> &Arc<Dir> {
         &self.dir
+    }
+
+    pub fn host(&self) -> &Path {
+        &self.host
     }
 
     pub(crate) fn placeholders(&self) -> &[Placeholder] {
@@ -397,6 +401,11 @@ impl Vfs {
         self.mode
     }
 
+    /// Whether dropping the last owner automatically removes this directory.
+    pub fn is_disposable(&self) -> bool {
+        self._owned.is_some()
+    }
+
     /// Enforce `limit` bytes on the files this VFS holds, starting from what the
     /// directory holds now; see [`with_measured_limit`](Self::with_measured_limit).
     pub fn with_size_limit(self, limit: u64) -> Self {
@@ -614,15 +623,10 @@ impl Vfs {
         &self.cwd
     }
 
-    pub fn with_cwd(mut self, cwd: &str) -> Result<Self, crate::runtime::fs::ContainError> {
-        use crate::runtime::fs::{ContainError, guest_normalize, resolve_content};
-        if !cwd.starts_with('/') || cwd.len() > 4096 || guest_normalize("/", cwd)? != cwd {
-            return Err(ContainError::Io(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "cwd must be an absolute normalized guest path",
-            )));
-        }
-        let target = resolve_content(&self, "/", cwd)?;
+    pub fn with_cwd(self, cwd: &str) -> Result<Self, crate::runtime::fs::ContainError> {
+        use crate::runtime::fs::{ContainError, resolve_content};
+        let vfs = self.with_cwd_path(cwd)?;
+        let target = resolve_content(&vfs, "/", cwd)?;
         match target.open_dir() {
             Ok(_) => {}
             Err(ContainError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
@@ -630,6 +634,18 @@ impl Vfs {
                 target.open_dir()?;
             }
             Err(error) => return Err(error),
+        }
+        Ok(vfs)
+    }
+
+    /// Set the logical working directory without creating it on disk.
+    pub fn with_cwd_path(mut self, cwd: &str) -> Result<Self, crate::runtime::fs::ContainError> {
+        use crate::runtime::fs::{ContainError, guest_normalize};
+        if !cwd.starts_with('/') || cwd.len() > 4096 || guest_normalize("/", cwd)? != cwd {
+            return Err(ContainError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cwd must be an absolute normalized guest path",
+            )));
         }
         self.cwd = Arc::from(cwd);
         Ok(self)

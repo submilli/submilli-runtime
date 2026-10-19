@@ -97,6 +97,7 @@ fn every_route_declares_the_access_it_requires() {
         ("/v1/shutdown", Admin),
         ("/v1/execute", User),
         ("/v1/sessions", User),
+        ("/v1/sessions/{session_id}/finalizers", User),
         ("/v1/sessions/{session_id}/execute", User),
         ("/v1/sessions/{session_id}/rebind", User),
         ("/v1/sessions/{session_id}/last-run", User),

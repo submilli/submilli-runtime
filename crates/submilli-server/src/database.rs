@@ -20,6 +20,8 @@ type CloseResult = Option<Result<(), Arc<DatabaseError>>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DatabaseError {
+    #[error("finalizer registration refused: {0}")]
+    FinalizerRegistrationRejected(&'static str),
     #[error("session revision conflict or retired binding")]
     SessionConflict,
     #[error("database path {0} has no file name or parent directory")]

@@ -5,9 +5,12 @@ pub(crate) mod array_storage;
 pub mod blocking;
 pub mod call_log;
 pub mod decision;
+pub mod default_filesystem;
 pub mod disk_quota;
+pub mod durable;
 pub mod embedding;
 pub mod exec;
+pub mod filesystem;
 pub mod fs;
 pub mod fuel;
 pub mod gc_singleton;
@@ -23,6 +26,7 @@ pub mod number;
 pub mod prelude;
 pub mod secrets;
 pub mod security;
+pub mod session_finalizers;
 pub mod session_kv;
 pub mod skills;
 pub mod token_ledger;
@@ -130,6 +134,7 @@ pub struct StoreData {
     pub(crate) git_history: Option<Arc<crate::stdlib::git::log_cache::Cache>>,
     pub console: Box<dyn Write + Send>,
     pub vfs: Vfs,
+    pub filesystem: Arc<dyn filesystem::Filesystem>,
     pub vfs_info: VfsInfo,
     pub security_check: Arc<dyn SecurityCheck>,
     pub fs_max_read_size: u64,
@@ -178,6 +183,9 @@ pub struct StoreData {
     /// becoming per-execution scratch state that no later `execute` can read —
     /// the guest surface reports that as a configuration error.
     pub session_kv: Option<Arc<dyn SessionKvStore>>,
+    /// Durable package-owned resource cleanup supplied by the embedder.
+    pub session_finalizers: Option<Arc<dyn session_finalizers::SessionFinalizers>>,
+    pub finalizing: bool,
     /// The keys `session.list` cursors are sealed with. `None` seals them with a
     /// per-process key, so they stop working when the process restarts.
     pub cursor_keys: Option<Arc<CursorKeys>>,
@@ -287,6 +295,7 @@ impl StoreData {
             #[cfg(test)]
             array_growth: array_storage::GrowthStats::default(),
             console: Box::new(std::io::stderr()),
+            filesystem: Arc::new(default_filesystem::DefaultFilesystem::new(vfs.clone())),
             vfs,
             vfs_info,
             security_check: security::default_check(),
@@ -308,6 +317,8 @@ impl StoreData {
             embedding_provider: None,
             embedding_budget: None,
             session_kv: None,
+            session_finalizers: None,
+            finalizing: false,
             cursor_keys: None,
             agent_provider: None,
             skill_provider: None,

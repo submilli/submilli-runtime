@@ -438,7 +438,7 @@ impl AppState {
             cipher: config.session_cipher.clone(),
         });
 
-        Ok(Self {
+        let state = Self {
             inner: Arc::new(AppStateInner {
                 boot_lock: AsyncMutex::new(()),
                 booted: AtomicBool::new(false),
@@ -491,7 +491,8 @@ impl AppState {
                 pre_execute: config.pre_execute,
                 blueprint_tags: AsyncRwLock::new(HashMap::new()),
             }),
-        })
+        };
+        Ok(state)
     }
 
     /// Rehydrate persisted sessions and sweep orphan directories. Await once
@@ -505,6 +506,8 @@ impl AppState {
         if self.inner.booted.load(Ordering::Acquire) {
             return Ok(());
         }
+        self.session_manager()
+            .set_finalizer_executor(Arc::new(AppFinalizerExecutor(Arc::downgrade(&self.inner))));
         self.inner.session_manager.boot().await?;
         self.import_legacy_secrets().await?;
         self.inner.idempotency.recover().await.map_err(|error| {
@@ -1135,7 +1138,7 @@ impl AppState {
         &self,
         name: &str,
     ) -> Result<bool, crate::application::blueprints::remove::RemoveBlueprintError> {
-        crate::application::blueprints::remove::RemoveBlueprint::new(
+        let removed = crate::application::blueprints::remove::RemoveBlueprint::new(
             self.inner.unit_of_work.as_ref(),
             &crate::adapters::session::audit_log::SessionAuditLog(Some(self.audit())),
             self,
@@ -1143,7 +1146,18 @@ impl AppState {
             self,
         )
         .execute(name)
-        .await
+        .await?;
+        if removed {
+            self.session_manager()
+                .process_pending_cleanup()
+                .await
+                .map_err(|error| {
+                    crate::application::blueprints::remove::RemoveBlueprintError::Storage(
+                        crate::application::error::StoreError::Io(error.to_string()),
+                    )
+                })?;
+        }
+        Ok(removed)
     }
 }
 
@@ -1318,6 +1332,11 @@ fn routes(auth: Arc<AuthConfig>, audit: crate::audit::AuditLog) -> Routes {
         .route("/v1/shutdown", Access::Admin, post(admin::shutdown))
         .route("/v1/execute", Access::User, post(execute::handle))
         .route("/v1/sessions", Access::User, post(sessions::create))
+        .route(
+            "/v1/sessions/{session_id}/finalizers",
+            Access::User,
+            get(sessions::finalizers),
+        )
         .route(
             "/v1/sessions/{session_id}/execute",
             Access::User,
@@ -1854,3 +1873,18 @@ mod blueprint_mutation_tests;
 
 #[cfg(test)]
 mod local_apply_tests;
+
+struct AppFinalizerExecutor(std::sync::Weak<AppStateInner>);
+#[async_trait::async_trait]
+impl crate::application::sessions::finalization::FinalizerExecutor for AppFinalizerExecutor {
+    async fn execute(
+        &self,
+        invocation: &crate::domain::finalization::FinalizerInvocation,
+    ) -> Result<(), crate::domain::finalization::FinalizerFailure> {
+        let inner = self
+            .0
+            .upgrade()
+            .ok_or(crate::domain::finalization::FinalizerFailure::AuthorityUnavailable)?;
+        crate::finalizers::execute(&AppState { inner }, invocation).await
+    }
+}

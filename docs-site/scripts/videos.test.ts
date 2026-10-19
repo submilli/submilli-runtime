@@ -25,7 +25,6 @@ test('the independent series has stable embeds and book destinations', async () 
   assert.equal(works?.embedUrl, 'https://submilli-videos.onrender.com/embed/works/');
   const chapters = await readChapters();
   for (const film of films) assert.ok(chapters.some((chapter) => `/docs/${chapter.slug}/` === film.canonicalPath?.split('#')[0]), `${film.id} book destination`);
-  assert.equal(introduction.transcriptPath, '/docs/videos/code-execution-introduction/');
   assert.equal(introduction.embedUrl, 'https://submilli-videos.onrender.com/embed/why-code/');
   await assert.rejects(access(new URL('../public/videos', import.meta.url)));
 });

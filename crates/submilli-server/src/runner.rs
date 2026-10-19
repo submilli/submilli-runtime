@@ -99,6 +99,9 @@ pub struct HostServices {
     pub tool_provider: Option<Arc<dyn ToolProvider>>,
     /// `submilli:session` storage for the session this run belongs to.
     pub session_kv: Arc<dyn SessionKvStore>,
+    pub session_finalizers:
+        Option<Arc<dyn interpreter::runtime::session_finalizers::SessionFinalizers>>,
+    pub(crate) resource_use: Option<crate::session_manager::ResourceUse>,
     /// What `session.list` cursors are sealed with. `None` leaves them to the
     /// runtime's per-process key.
     pub cursor_keys: Option<Arc<CursorKeys>>,
@@ -185,6 +188,21 @@ pub(crate) async fn run(
     let owner = tokio::spawn(async move {
         let mut services = services;
         let session_manager = services.session_manager.take();
+        let resource_use = services.resource_use.take();
+        let resource_cancel = resource_use.as_ref().map(|scope| scope.cancel.clone());
+        let mut services = services;
+        if let Some(cancel) = resource_cancel {
+            let (mut sender, receiver) = tokio::sync::oneshot::channel();
+            let previous = services.cancel_requested.take();
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = cancel.cancelled() => { let _ = sender.send(()); }
+                    _ = async { if let Some(previous) = previous && previous.await.is_ok() { return; } std::future::pending::<()>().await; } => { let _ = sender.send(()); }
+                    _ = sender.closed() => {}
+                }
+            });
+            services.cancel_requested = Some(receiver);
+        }
         let throwaway = services.throwaway.take();
         let audit = services.audit.clone();
         let budget = services.llm_budget.clone();
@@ -246,6 +264,7 @@ pub(crate) async fn run(
         log_execution(&blueprint, &session, started, &outcome);
         // Dropped here, once the run is done; deleting the copies is kept off this worker.
         drop(throwaway);
+        drop(resource_use);
         outcome
     });
     let outcome = match owner.await {
@@ -356,6 +375,7 @@ async fn run_inner(
     data.mcp_transport = Some(services.mcp_transport);
     data.tool_provider = services.tool_provider;
     data.session_kv = Some(services.session_kv);
+    data.session_finalizers = services.session_finalizers;
     data.cursor_keys = services.cursor_keys;
     data.llm_provider = services.llm_provider;
     data.llm_budget = services.llm_budget;
@@ -1155,6 +1175,8 @@ mod tests {
             mcp_transport: Arc::new(UnusedMcp),
             tool_provider: None,
             session_kv: Arc::new(InMemorySessionKv::default()),
+            session_finalizers: None,
+            resource_use: None,
             cursor_keys: None,
             llm_provider: None,
             llm_budget: None,

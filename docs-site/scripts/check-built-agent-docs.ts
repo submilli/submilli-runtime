@@ -4,7 +4,7 @@ import { films, introduction } from '../src/lib/videos.ts';
 import videoRegistry from '../src/data/videos.json' with { type: 'json' };
 import { createAgentDocs, readChapters, markdownPath } from '../src/lib/agent-docs.ts';
 
-import { legacyDocsRoutes } from '../src/lib/legacy-docs.ts';
+import { legacyDocsRoutes, legacyRedirectRoutes } from '../src/lib/legacy-docs.ts';
 
 const directory = new URL('../dist/', import.meta.url);
 const chapters = await readChapters();
@@ -90,8 +90,6 @@ for (const film of films) {
   assert.ok(legacyEmbed.includes(film.embedUrl), `${film.id} legacy embed target`);
   assert.ok(!legacyEmbed.includes('<video') && !legacyEmbed.includes('/docs/videos/releases/'), `${film.id} legacy embed has no bundled media`);
 }
-const transcriptPage = await readFile(new URL('docs/videos/code-execution-introduction/index.html', directory), 'utf8');
-assert.ok(transcriptPage.includes('https://submilli-videos.onrender.com/watch/why-code/'));
 for (const file of await readdir(directory, { recursive: true })) {
   if (!file.endsWith('.html')) continue;
   const html = await readFile(new URL(file, directory), 'utf8');
@@ -108,6 +106,14 @@ for (const film of videoRegistry.films.filter((film) => film.status !== 'publish
 const oldExecutionPage = await readFile(new URL('docs/concepts/execution-model/index.html', directory), 'utf8');
 assert.ok(oldExecutionPage.includes('/docs/why/'));
 assert.equal(introduction.id, 'code-execution-introduction');
+const retiredTranscriptPage = await readFile(new URL('docs/videos/code-execution-introduction/index.html', directory), 'utf8');
+assert.ok(retiredTranscriptPage.includes('http-equiv="refresh"') || retiredTranscriptPage.includes('http-equiv=\"refresh\"'));
+assert.ok(retiredTranscriptPage.includes('/docs/why/#video-code-execution-introduction'));
+assert.ok(retiredTranscriptPage.includes('name="robots" content="noindex"'));
+assert.ok(!retiredTranscriptPage.includes('complete narration'));
+assert.deepEqual(Object.keys(legacyRedirectRoutes), ['/videos/code-execution-introduction']);
+const sitemap = await readFile(new URL('docs/sitemap-0.xml', directory), 'utf8');
+assert.ok(!sitemap.includes('/docs/videos/code-execution-introduction'), 'retired transcript is absent from sitemap');
 console.log(`Verified stable video embeds and HTML discovery for ${chapters.length} visible chapters.`);
 
 for (const file of ['agent.py', 'requirements.txt']) {

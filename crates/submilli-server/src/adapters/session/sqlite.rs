@@ -324,6 +324,9 @@ pub(crate) async fn write_record(
         .revision
         .checked_add(1)
         .ok_or_else(|| DatabaseError::Import("session revision exhausted".into()))?;
+    if record.status == SessionStatus::Closed {
+        super::finalizers::terminate(connection, &record.session_id).await?;
+    }
     records::write(connection, &record).await?;
     if record.status == SessionStatus::Closed {
         // A session's state and last run end in the transaction that closes

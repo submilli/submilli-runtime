@@ -5441,6 +5441,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "submilli-durable"
+version = "0.4.1"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "cap-fs-ext",
+ "cap-std",
+ "futures",
+ "getrandom 0.2.17",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "submilli-engine",
+ "submilli-shared",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "submilli-engine"
 version = "0.4.1"
 dependencies = [
@@ -5477,6 +5498,7 @@ dependencies = [
  "similar",
  "submilli-wasm",
  "tempfile",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-rustls",
  "unicode-ident",
@@ -5532,6 +5554,7 @@ dependencies = [
  "sqlx",
  "submilli-blueprint",
  "submilli-build",
+ "submilli-durable",
  "submilli-engine",
  "submilli-shared",
  "submilli-wasm",

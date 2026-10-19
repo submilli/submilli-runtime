@@ -376,7 +376,7 @@ impl ContentPath {
 /// A file's device and inode, which outlive any one name: how a writer checks that
 /// a path still names the file it created, and how the size limit keys the files
 /// programs hold open.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct FileIdentity {
     dev: u64,
     ino: u64,
@@ -851,7 +851,7 @@ fn relative(cwd: &str, guest_path: &str) -> Result<PathBuf, ResolveError> {
     Ok(out)
 }
 
-pub(crate) fn protected_metadata(path: &Path) -> bool {
+pub fn protected_metadata(path: &Path) -> bool {
     path.components().any(|part| {
         let name = part.as_os_str().to_string_lossy();
         let options = gix::validate::path::component::Options {
@@ -902,7 +902,7 @@ pub(crate) fn check_repository_clear_of_mounts(
 /// than the volume. Both are checked on the path as written and on where it
 /// lands once the root's links are followed, so a link to an ancestor cannot
 /// spell its way past the guard.
-fn check_mount_points(
+pub fn check_mount_points(
     root: &Dir,
     path: &Path,
     placement: &Placement,

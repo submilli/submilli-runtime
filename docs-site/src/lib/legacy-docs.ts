@@ -25,3 +25,8 @@ export const legacyDocsRoutes = {
 	"/tutorials/connect-claude-agent-sdk": "/docs/how-to/connect-claude-agent-sdk/",
 	"/tutorials/use-the-http-api": "/docs/how-to/use-the-http-api/",
 };
+
+// Retired pages whose destinations are anchors, so they have no Markdown alias.
+export const legacyRedirectRoutes = {
+	"/videos/code-execution-introduction": "/docs/why/#video-code-execution-introduction",
+};
