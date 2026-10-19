@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "69d09aab36634136d16e773b0f684876ec79980ca4af6d13dc4fcb7c03564764"
+  contentHash: "3018d9e376e63936617718db9845825f955b9f40d85fd0c2688a091b75aad71c"
   confirmedAt: "2026-10-05T16:46:31.966Z"
 ---
 
@@ -233,6 +233,10 @@ reference covers the block and its settings.
 To upgrade, run the installer again and restart the service:
 
 ```sh
+sudo systemctl stop submilli
+sudo tar czf /var/backups/submilli-pre-0.4.2.tgz -C /var/lib submilli
+# Retain /etc/submilli's store key and tokens in your secrets manager.
+# The 0.4.2 SQLite migrations are forward-only. Rollback needs this backup.
 curl -fsSL https://submilli.ai/install.sh | sudo sh -s -- --install-dir /usr/local/bin
 sudo systemctl restart submilli
 ```

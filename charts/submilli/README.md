@@ -14,11 +14,11 @@ Install a published chart version from GHCR. The chart and its default runtime
 image can be pulled without a registry login or an image pull secret:
 
 ```bash
-helm install submilli oci://ghcr.io/submilli/charts/submilli --version 0.4.2 --wait
+helm install submilli oci://ghcr.io/submilli/charts/submilli --version 0.4.3 --wait
 helm test submilli
 ```
 
-Chart 0.4.2 deploys runtime 0.4.1. Pin the chart version to control upgrades.
+Chart 0.4.3 deploys runtime 0.4.2. Pin the chart version to control upgrades.
 See [Publishing](PUBLISHING.md) for the workflow and first-publication steps.
 
 If you installed an early development checkout that used a Deployment and one
@@ -425,6 +425,18 @@ files. The revisions and active selections commit in one SQLite transaction,
 then the whole blueprint directory moves to `server/archive/blueprints/` inside the state volume.
 Subsequent blueprint changes live only in SQLite. Back up the state
 volume while the server is stopped.
+
+Chart 0.4.3 selects runtime 0.4.2. This release adds SQLite storage for runs,
+session key-value state, secrets, OAuth grants, and package finalizers. Back up
+the stopped server's whole state volume and secret-store key before upgrading.
+These migrations are forward-only. Rollback requires the pre-upgrade backup.
+The chart now refuses `config.volume_dir` and keeps all filesystem directories
+under `server/volumes/` on the claim. Remove an existing `config.volume_dir`
+override before upgrading. The old `server/vfs/sessions/<id>` and
+`server/volumes/<name>` filesystem layouts are not migrated automatically.
+Existing sessions using the old workspace layout cannot execute until they
+expire, and their old directories remain on disk. Preserve and migrate any
+required files before switching to the new layout.
 
 Chart 0.4.2 selects runtime 0.4.1. Upgrading from chart 0.4.1 adds the
 sessions' application tools and the `Idempotency-Key` ledger to SQLite. Ledger

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1b64aea0f6b4014066c678e0dada2ecd41a554cf9c4e2c70c6dda65e46cf4ccb"
+  contentHash: "0c4c411fad1721bd805a8cf0216d0834573b9af3e9862ccdb2d4d75d60d48693"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -621,10 +621,10 @@ Session-scoped key-value state and durable package-owned resource cleanup.
 | `get<T>(key: string): T \| undefined` | `session.read { key }` | Read a session value, checked against `T`. |
 | `has(key: string): boolean` | `session.read { key }` | Whether the session holds an entry for `key`. |
 | `list(prefix: string, limit: number, cursor?: string): Page` | `session.list { prefix }`<br>`session.read { key } - per candidate key` | Enumerate session keys starting with `prefix`, in UTF-16 code-unit order. |
-| `registerFinalizer(key: string, value: unknown): void` | `session.finalize { key }` | Register package-owned resource cleanup. |
+| `registerFinalizer(key: string, value: unknown): void` | `session.finalize { key }` | Register durable cleanup using this package's finalizer(key, value). |
 | `remove(key: string): boolean` | `session.remove { key }` | Delete `key`. |
 | `set(key: string, value: unknown): void` | `session.write { key }` | Store `value` under `key`, replacing any previous entry. |
-| `unregisterFinalizer(key: string): void` | `session.finalize { key }` | Forget cleanup after explicitly releasing the resource. |
+| `unregisterFinalizer(key: string): void` | `session.finalize { key }` | Forget cleanup after releasing the resource. |
 
 ### `Entry`
 
@@ -643,7 +643,6 @@ One page of a `list` call: the `entries` it discloses and the `nextCursor` that 
 | --- | --- |
 | `readonly entries: Entry[]` | The keys this page discloses, in UTF-16 code-unit order. |
 | `readonly nextCursor: string \| undefined` | Opaque cursor for the next page, or `undefined` when no further matching key remains. |
-
 
 ## `submilli:url`
 
