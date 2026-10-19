@@ -607,7 +607,9 @@ fn actions(
 struct Announce {
     /// Released once the ready file is written; until then a concurrent start waits.
     start_lock: Option<File>,
+    /// Where to print the ready record, when the caller waits for it.
     print: Option<super::Output>,
+    /// Whether to open the page once announced.
     open: bool,
 }
 
@@ -634,9 +636,12 @@ async fn announce(
     // The record first, so the ready file never names an instance without one.
     state_dir.write_record(record)?;
     state_dir.write_ready(record)?;
+    let print = match announcing.print.take() {
+        Some(output) => Some((output, auth.mint_login_code(Now::current())?)),
+        None => None,
+    };
     drop(announcing.start_lock.take());
-    if let Some(output) = announcing.print.take() {
-        let code = auth.mint_login_code(Now::current())?;
+    if let Some((output, code)) = print {
         ReadyRecord::new(description, None, &code, false).announce(
             output,
             announcing.open,

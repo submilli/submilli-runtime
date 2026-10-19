@@ -601,8 +601,7 @@ impl McpCatalogs {
     /// Keep a catalog discovered from `blueprint` since `generation`, returning
     /// the one now cached under `key`. A clear since `generation` means a save
     /// replaced `blueprint`: the caller still gets what it discovered, but it is
-    /// not kept, so the old blueprint is not held. The tag on each entry stops
-    /// another blueprint's run from being served it.
+    /// not kept, so the old blueprint is not held.
     fn keep(
         &mut self,
         key: String,
@@ -1106,10 +1105,8 @@ impl RunHost {
         }
         let key = declared.iter().cloned().collect::<Vec<_>>().join("\u{1f}");
         let session_scoped = !harness_secrets.is_empty();
-        // A run takes its blueprint before it gets here, so a save's clear can
-        // land in between: the blueprint tag keeps this run from another
-        // blueprint's catalog, and the generation keeps it from caching its own
-        // old one after the clear.
+        // A save's clear can land between taking the blueprint and here;
+        // McpCatalogs handles it.
         let generation = {
             let catalogs = self.lock_catalogs();
             if !session_scoped && let Some(cached) = catalogs.cached(&key, blueprint) {
