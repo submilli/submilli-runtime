@@ -8,26 +8,59 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "23944832279eac4935f16b3ce0c4243fc745e7a2e16f08a1ec331814d15ea9d4"
+  contentHash: "0793078b34bc88399391502d4039b2098b010dd4afc913fbcb990d702a3bc539"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
 
-Use `SubmilliMiddleware` to connect your existing deepagents agent to the Submilli runtime.
+Connect your existing deepagents harness to Submilli for code execution.
+
+## Use your coding agent
+
+Open your existing deepagents project in your coding agent.
+[Install the Submilli skill](/docs/install#the-skill) if needed, then restart
+the coding agent to load it. Give it this prompt:
+
+```text agent-prompt
+Use the Submilli skill to connect this existing deepagents project
+to Submilli over MCP.
+Inspect the project. Preserve the existing agent, model, instructions,
+tools, and configuration. Make only the changes needed to add Submilli.
+Find any existing Submilli server, credentials, and registered Blueprint
+in local configuration. If setup is missing, help me prepare it. Ask me
+which operations the agent needs before defining Blueprint permissions.
+Install the integration and configure the connection. Keep tokens out of
+source code and responses, and help me configure missing credentials locally.
+Verify the connection and tool discovery without a model request.
+Tell me what changed and anything I still need to do.
+```
+
+Once the connection is verified, you can stop here. The manual path is for
+setting it up yourself.
+
+The [released skill](https://github.com/submilli/submilli-runtime/blob/v0.4.1/skills/submilli/references/deepagents.md) uses MCP, a protocol for calling server tools.
+The manual path uses native middleware.
+
+## Set up manually
+
+Use `SubmilliMiddleware` to give your existing deepagents harness a tool for
+running code under your Blueprint's permissions.
 [Middleware](https://docs.langchain.com/oss/python/langchain/middleware/overview)
-lets you add code before or after an agent's model and tool calls.
+adds behavior around an agent's model and tool calls.
 
 :::note[Before you start]
+You'll need:
+
 - An existing deepagents project with a configured model.
 - A [running Submilli server](/docs/server/run-the-server) and a token it accepts.
-- A [registered Blueprint](/docs/server/register-a-blueprint), which sets the
-  permissions for code sent to Submilli.
+- A [registered Blueprint](/docs/server/register-a-blueprint) that defines the
+  permissions for the code your agent runs.
 :::
 
-## Set connection variables
+### Set connection variables
 
-Use the server address, token, and Blueprint name prepared in **Before you start**.
-Assign those values to these environment variables in the process that runs your agent:
+Set these in the process that runs your agent, using the values prepared in
+**Before you start**:
 
 | Environment variable | Value |
 | --- | --- |
@@ -35,41 +68,19 @@ Assign those values to these environment variables in the process that runs your
 | `SUBMILLI_SERVER_TOKEN` | Server token |
 | `SUBMILLI_BLUEPRINT` | Registered Blueprint name |
 
-## Use your coding agent (optional)
+### Install the integration
 
-The [skill bundled with Submilli 0.4.1](https://github.com/submilli/submilli-runtime/blob/v0.4.1/skills/submilli/references/deepagents.md)
-connects deepagents over [MCP](https://docs.langchain.com/oss/python/langchain/mcp),
-a protocol for calling server tools. The manual steps below use native middleware.
-
-[Install the Submilli skill](/docs/install#the-skill), restart your coding agent,
-and open this project. Make the prepared values available to its terminal through
-your local environment or existing project configuration, then give it this prompt:
-
-```text title="Prompt for your coding agent"
-Use the Submilli skill to connect this existing deepagents project
-to Submilli over MCP. Reuse the prepared server and Blueprint. Read
-SUBMILLI_SERVER, SUBMILLI_SERVER_TOKEN, and SUBMILLI_BLUEPRINT from the
-local environment or project configuration. Map those values to the
-integration's settings.
-Keep my model and existing agent configuration. Keep token values out of
-source code and responses. Verify the connection without a model request.
-```
-
-For manual setup, continue below.
-
-## Install the integration
-
-In your project's Python environment, install the deepagents integration:
+In your project's Python environment:
 
 ```sh
 python -m pip install "langchain-submilli[deepagents]>=0.1"
 ```
 
-## Add Submilli to your agent
+### Add Submilli to your agent
 
-Import `SubmilliMiddleware` and add it to the `middleware` argument of your
-existing `create_deep_agent` call. Keep your model, prompt, and other agent
-settings. In this fragment, `model` is the model you already configured.
+Add `SubmilliMiddleware` to your existing `create_deep_agent` call. Keep your
+model, prompt, tools, and other settings. If you already use middleware,
+append `submilli` to that list.
 
 ```python title="Agent configuration (fragment)"
 import os
@@ -88,51 +99,50 @@ agent = create_deep_agent(
 )
 ```
 
-The middleware reads `SUBMILLI_SERVER` and `SUBMILLI_SERVER_TOKEN` from the
-environment. If you already use middleware, append `submilli` to that list.
-Replace `variables={}` with the values your Blueprint requires, if any.
-See [Blueprint variables](/docs/reference/blueprint-file#variables).
+Here, `model` is your configured model. The middleware reads the server address
+and token from the environment.
 
-If your Blueprint requires secrets from your application (the `harness`
-source), pass a mapping of their names to values in the middleware's
-`secrets` argument. See
-[Blueprint secrets](/docs/reference/blueprint-file#secrets).
+<details>
+<summary>Does your Blueprint require variables or secrets?</summary>
 
-Run the agent through its async API. The middleware does not support
-`agent.invoke` or `agent.stream`. In your existing async call, use
-`ainvoke` (or `astream`) with your application's messages:
+Replace `variables={}` with your [Blueprint's variable values](/docs/reference/blueprint-file#variables).
+For secrets supplied by your application (the `harness` source), pass their
+names and values through the middleware's `secrets` argument.
+See [Blueprint secrets](/docs/reference/blueprint-file#secrets).
 
-```python title="Agent call (fragment)"
-result = await agent.ainvoke({"messages": messages})
-```
+</details>
 
-## Verify the connection
+### Verify the connection
 
-Before starting an agent run, fetch the Blueprint's tool description through
-the same client. Run this in your application's async startup code after
-creating `submilli`:
+In your application's async startup code, after creating `submilli`:
 
 ```python
 await submilli.client.blueprints.prompt(submilli.blueprint)
 print("Connected to Submilli.")
 ```
 
-`Connected to Submilli.` confirms that the server address, token, and
-Blueprint work. No model call is made by this request. The middleware makes
-`submilli__typescript__execute` available when your agent runs.
+`Connected to Submilli.` confirms the server address, token, and Blueprint work,
+without a model request.
 
-Keep the client open while the agent uses it. Close it during application
-shutdown:
+Run your agent with `ainvoke` or `astream`. The middleware uses an async
+client to communicate with the Submilli server, so synchronous `invoke` and
+`stream` are not supported.
+
+```python title="Agent call (fragment)"
+result = await agent.ainvoke({"messages": messages})
+```
+
+Your agent now has the `submilli__typescript__execute` tool. Keep the client open
+while the agent uses it, then close it during application shutdown:
 
 ```python
 await submilli.client.aclose()
 ```
 
-## Troubleshooting
+### Troubleshooting
 
 - Connection refused: check `SUBMILLI_SERVER` and whether the server is running.
 - `401`: use a token accepted by that server.
-- Blueprint not found: check `SUBMILLI_BLUEPRINT` against the name registered
-  on that server.
+- Blueprint not found: check `SUBMILLI_BLUEPRINT` against the registered name.
 
 See [server settings](/docs/reference/server-settings) for server configuration.

@@ -1,0 +1,31 @@
+<script>
+  function bindPrompts() {
+    for (const block of document.querySelectorAll<HTMLElement>('[data-agent-prompt]')) {
+      if (block.dataset.bound) continue;
+      const button = block.querySelector<HTMLButtonElement>('[data-copy-prompt]');
+      const prompt = block.querySelector<HTMLTextAreaElement>('textarea');
+      const fallback = block.querySelector<HTMLElement>('.agent-prompt-fallback');
+      const status = block.querySelector<HTMLElement>('[role="status"]');
+      const label = block.querySelector<HTMLElement>('[data-copy-label]');
+      if (!button || !prompt || !fallback || !status || !label) continue;
+      block.dataset.bound = 'true';
+      button.disabled = false;
+      button.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(prompt.value);
+          fallback.hidden = true;
+          label.textContent = 'Copied';
+          status.textContent = 'Prompt copied.';
+          window.setTimeout(() => { label.textContent = 'Copy prompt'; }, 2000);
+        } catch {
+          fallback.hidden = false;
+          prompt.focus();
+          prompt.select();
+          status.textContent = 'Select and copy the prompt.';
+        }
+      });
+    }
+  }
+  bindPrompts();
+  document.addEventListener('astro:page-load', bindPrompts);
+</script>

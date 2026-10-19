@@ -8,23 +8,52 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "fda1d222fe4b65469cd5c529d31287f9828277ceafce7c244015273af414cf14"
+  contentHash: "cbbc3f56edf00bb2de1f0cf838df74456c775a5df61d72fbc39a1f57a58d43c3"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
+
+Connect your existing Claude Agent SDK harness to Submilli for code execution.
+
+## Use your coding agent
+
+Open your existing Claude Agent SDK project in your coding agent.
+[Install the Submilli skill](/docs/install#the-skill) if needed, then restart
+the coding agent to load it. Give it this prompt:
+
+```text agent-prompt
+Use the Submilli skill to connect this existing Claude Agent SDK project
+to Submilli over MCP.
+Inspect the project. Preserve the existing agent, model, instructions,
+tools, and configuration. Make only the changes needed to add Submilli.
+Find any existing Submilli server, credentials, and registered Blueprint
+in local configuration. If setup is missing, help me prepare it. Ask me
+which operations the agent needs before defining Blueprint permissions.
+Install the integration and configure the connection. Keep tokens out of
+source code and responses, and help me configure missing credentials locally.
+Verify the connection and tool discovery without a model request.
+Tell me what changed and anything I still need to do.
+```
+
+Once the connection is verified, you can stop here. The manual path is for
+setting it up yourself.
+
+## Set up manually
 
 Connect through [MCP](https://code.claude.com/docs/en/agent-sdk/mcp)
 (Model Context Protocol) by adding Submilli to your existing `query` options.
 MCP lets an agent discover and call tools on a server.
 
 :::note[Before you start]
+You’ll need:
+
 - An existing Claude Agent SDK project with a configured model.
 - A [running Submilli server](/docs/server/run-the-server) and a token it accepts.
 - A [registered Blueprint](/docs/server/register-a-blueprint), which sets the
   permissions for code sent to Submilli.
 :::
 
-## Set connection variables
+### Set connection variables
 
 Use the server address, token, and Blueprint name prepared in **Before you start**.
 Assign those values to these environment variables in the process that runs your agent:
@@ -35,25 +64,8 @@ Assign those values to these environment variables in the process that runs your
 | `SUBMILLI_SERVER_TOKEN` | Server token |
 | `SUBMILLI_BLUEPRINT` | Registered Blueprint name |
 
-## Use your coding agent (optional)
 
-[Install the Submilli skill](/docs/install#the-skill), restart your coding agent,
-and open this project. Make the prepared values available to its terminal through
-your local environment or existing project configuration, then give it this prompt:
-
-```text title="Prompt for your coding agent"
-Use the Submilli skill to connect this existing Claude Agent SDK project
-to Submilli over MCP. Reuse the prepared server and Blueprint. Read
-SUBMILLI_SERVER, SUBMILLI_SERVER_TOKEN, and SUBMILLI_BLUEPRINT from the
-local environment or project configuration. Map those values to the
-integration's settings.
-Keep my model and existing agent configuration. Keep token values out of
-source code and responses. Verify the connection without a model request.
-```
-
-For manual setup, continue below.
-
-## Install Claude Agent SDK
+### Install Claude Agent SDK
 
 If it is not already installed in your TypeScript project:
 
@@ -61,7 +73,7 @@ If it is not already installed in your TypeScript project:
 npm install @anthropic-ai/claude-agent-sdk
 ```
 
-## Add Submilli to the query options
+### Add Submilli to the query options
 
 Add a `submilli` entry under `mcpServers` and allow its tools.
 The URL selects the Blueprint, and the header supplies the server token.
@@ -102,7 +114,7 @@ source), add `submilli-secrets` containing a base64url-encoded JSON object
 of their names and values. See
 [Blueprint secrets](/docs/reference/blueprint-file#secrets).
 
-## Verify the connection
+### Verify the connection
 
 While the query is open, inspect its MCP connections:
 
@@ -116,7 +128,7 @@ The status should become `connected`, and `submilli.tools` should include
 `submilli__typescript__execute`. A `pending` status means the SDK is still
 connecting. Inspect `submilli.error` if the status becomes `failed`.
 
-## Troubleshooting
+### Troubleshooting
 
 - Connection refused: check `SUBMILLI_SERVER` and whether the server is running.
 - `401`: use a token accepted by that server.

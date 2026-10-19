@@ -47,8 +47,27 @@ each answers the question the previous one raised.
 Open with why: one paragraph on the situation that makes the reader need this
 page, then the task. Cover the whole lifecycle of the thing, author, test
 locally, register, run on the server, and link to the page that owns each
-detail. Put the bread and butter early and options late; advanced options
-belong in reference. A how-to is read on its own: never explain its output by
+detail. When a task has a supported coding-agent path, put it first and make it
+self-contained. Readers should be able to hand off the task without first reading
+the manual prerequisites or setting environment variables themselves. Include
+only the prerequisites needed to start that handoff, such as opening the project
+and loading the skill. The prompt should have the agent inspect existing setup,
+prepare missing configuration, ask for necessary choices, and verify completion.
+Keep credentials local and state any remaining human steps. Once verified, make
+clear that the reader can stop. Put manual prerequisites and environment variables
+under a separate manual path. Check that the released skill supports the task;
+don't imply an untested prompt guarantees setup. This applies especially to
+harness connection guides.
+
+Mark actionable coding-agent prompts with `agent-prompt` in the fence metadata,
+for example `text agent-prompt`. The shared renderer shows Codex, Claude Code,
+and Cursor icons, in that order, followed by **Copy prompt**. Launch links prefill
+the same prompt for the reader to review and send. Keep these controls in the
+shared renderer, with accessible names, focus states, and a copy fallback.
+Use this pattern throughout the docs. Do not mark command output, example
+conversations, or runtime task inputs as coding-agent prompts.
+
+Put advanced options in reference. A how-to is read on its own: never explain its output by
 what another page did. Don't hedge; one sentence beside the rule it qualifies
 is enough.
 

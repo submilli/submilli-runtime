@@ -11,7 +11,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "294e7fac27abcc2851a886665dea39e6a367325c494f963b06aa855fd27d4ada"
+  contentHash: "12479098defd22ba37feb1bc975a2ae2dd4955fa99384553f4f55fc6eb75beb3"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -43,7 +43,7 @@ ATTIO_API_KEY=…
 
 ## Ask for the Package
 
-```text
+```text agent-prompt
 Build a read-only Submilli package over the Attio REST API (https://docs.attio.com/rest-api/overview) for our support agent. The agent may look up the company it is serving and read that company's people, notes, and tasks. It must never read any other company's records. The Attio API key is in the ATTIO_API_KEY environment variable.
 ```
 
@@ -171,7 +171,7 @@ Now the same skill on a machine that has no key, with the billing
 Package from [Packages](/docs/packages/write-tests), which has one
 test:
 
-```text
+```text agent-prompt
 Add tests for @acme/billing. I don't have the billing API key on this machine.
 ```
 

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "34ee8870fbb1cab6ce8003304001fc31d16729ffb99e10756d8253f9f0d0fd1a"
+  contentHash: "05ba57767d34d77738a4dee0b5bdd77410e3dd79deb73fa7e33b7756c3304ddf"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -62,7 +62,7 @@ Now open your assistant in that directory and invoke the skill, with
 
 Start by asking what there is to grant:
 
-```text
+```text agent-prompt
 What capabilities does the @submilli/jina package offer, and what fields can a rule filter on?
 ```
 
@@ -93,7 +93,7 @@ function read(url: string, options?: ReaderOptions): string;
 
 Then the grant:
 
-```text
+```text agent-prompt
 Add Jina to my blueprint so the agent can read pages from docs.python.org and nothing else.
 ```
 
@@ -178,7 +178,7 @@ minutes. Most of that time goes to testing the rule and reviewing it.
 
 ## Call an API without handing over its token
 
-```text
+```text agent-prompt
 The agent also needs to read our status API at status.acme.com. The token is in STATUS_TOKEN, and the program must never see it.
 ```
 
@@ -215,7 +215,7 @@ the conversation. Expect this whenever a credential is involved.
 Start Playwright's MCP server first, as [Add an MCP
 server](/docs/blueprints/add-an-mcp-server) does, then:
 
-```text
+```text agent-prompt
 Add Playwright's MCP server, running at http://localhost:8931/mcp, so programs can open and read web pages but can't run JavaScript in them.
 ```
 
@@ -263,7 +263,7 @@ Start a local server with a secret store, as [Run the
 server](/docs/server/run-the-server) does, with its token in
 `SUBMILLI_SERVER_TOKEN` in the assistant's shell, then:
 
-```text
+```text agent-prompt
 Put this blueprint on my local server with Jina's key, and show me it works.
 ```
 

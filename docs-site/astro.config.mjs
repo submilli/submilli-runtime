@@ -37,6 +37,7 @@ export default defineConfig({
         "@fontsource/ibm-plex-mono/500.css",
         "@fontsource/ibm-plex-mono/600.css",
         "./src/styles/theme.css",
+        "./src/styles/agent-prompts.css",
       ],
       lastUpdated: true,
       // The book lives outside the default docs collection directory, so
