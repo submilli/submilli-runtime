@@ -5403,6 +5403,7 @@ dependencies = [
  "submilli-server",
  "submilli-shared",
  "submilli-wasm",
+ "subtle",
  "tempfile",
  "tokio",
  "tower",

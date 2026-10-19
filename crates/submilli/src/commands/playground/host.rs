@@ -43,6 +43,17 @@ use super::store::{KnownSecrets, Recorder, Store};
 use super::watch::{self, Applier, BlueprintStatus};
 use super::{Egress, ReadyRecord};
 
+#[allow(
+    dead_code,
+    reason = "the playground switches its server listener onto these next"
+)]
+mod auth;
+#[allow(
+    dead_code,
+    reason = "the playground switches its server listener onto these next"
+)]
+mod serve;
+
 /// How long in-flight requests may finish after a stop before they are dropped.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 /// How long the control listener may take to close once the server has drained.
