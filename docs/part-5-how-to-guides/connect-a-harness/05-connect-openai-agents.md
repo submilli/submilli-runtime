@@ -9,7 +9,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "658542f22e60b1abe818cc63eb142dc36682f5e3f55ac6bbea13c2ba8e506330"
+  contentHash: "badd9bb87f17304cd16e06dd5f161ec533c9068f2b7603ee307d009f9756c5ed"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
@@ -132,14 +132,28 @@ print("Connected to Submilli.")
 
 ## Try it out
 
-Test the agent in your application, using the connection you just configured.
-Send the following message through your application's chat or test input. This
-is a request to your running agent, not to the coding assistant that set it up.
-It makes a model request using your application's existing model configuration.
+1. Open your application's chat or test input with the connected agent.
+2. Send this message:
 
-> Use Submilli to run `export function main(): number { return 2 + 2; }` and report the result.
+   > Run this TypeScript program in Submilli and report its return value:
 
-For the manual example, use this message as the input to
+   ```typescript
+   export function main(): number {
+     return 2 + 2;
+   }
+   ```
+
+3. Check for the answer `4` and a Submilli execution call returning `4` in
+   your application's tool activity. If your app hides tool activity, use the
+   inspection steps below.
+
+The tool call confirms that your agent reached Submilli and ran the program.
+The answer alone does not prove execution. Test your business permissions separately.
+
+<details>
+<summary>Inspect the Submilli call</summary>
+
+To inspect a run in code, use the test message as the input to
 `await Runner.run(connected_agent, ...)`, inside the existing `async with`
 block. Preserve your other run arguments. Add this after the call to print
 its [run items](https://openai.github.io/openai-agents-python/results/)
@@ -157,20 +171,15 @@ contain the program. Find the output item with the same `call_id` and inspect
 its `output` for the returned `4`. This prints the local run data; no tracing
 service is needed.
 
-A successful test shows the agent requesting Submilli's execution tool with
-the program, the tool returning `4` without an error, and the agent reporting
-that result. Match the tool call and result by their call ID. A chat answer of
-`4` alone is insufficient: the model can calculate it without using Submilli.
-
-This verifies the path from your agent through the Submilli server, code
-execution, and the returned result. It does not test access to your business
-systems or whether your Blueprint denies forbidden operations.
+Match the tool call and result by their call ID and check for an error.
 
 If there is no execution call, check that this run uses the agent configuration
 with Submilli attached and that its tool settings allow the call. If the call
 fails, read the tool error and [check the connection settings](#troubleshooting).
 If the tool returns `4` but the agent gives no final answer, check your agent's
 step or turn limit so it can continue after the tool result.
+
+</details>
 
 ## Troubleshooting
 

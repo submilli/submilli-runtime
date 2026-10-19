@@ -9,7 +9,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "144a29d5bdabd7af5eb9d5f26bc15edd34fd7d6c3efbe29909f8f96c4daa7456"
+  contentHash: "f54a599a383fc6210266db9ce99afecf72cd89bbc5e62fc2c515a58f47742af9"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
@@ -155,14 +155,28 @@ server and received the expected result. This request does not call a model.
 
 ## Try it out
 
-Test the agent in your application, using the connection you just configured.
-Send the following message through your application's chat or test input. This
-is a request to your running agent, not to the coding assistant that set it up.
-It makes a model request using your application's existing model configuration.
+1. Open your application's chat or test input with the connected agent.
+2. Send this message:
 
-> Use Submilli to run `export function main(): number { return 2 + 2; }` and report the result.
+   > Run this TypeScript program in Submilli and report its return value:
 
-For the manual example, put this message in your existing `generateText`
+   ```typescript
+   export function main(): number {
+     return 2 + 2;
+   }
+   ```
+
+3. Check for the answer `4` and a Submilli execution call returning `4` in
+   your application's tool activity. If your app hides tool activity, use the
+   inspection steps below.
+
+The tool call confirms that your agent reached Submilli and ran the program.
+The answer alone does not prove execution. Test your business permissions separately.
+
+<details>
+<summary>Inspect the Submilli call</summary>
+
+To inspect a run in code, put the test message in your `generateText`
 input, either as its `prompt` or as a user entry in its `messages`. Keep the
 model, Submilli tool, and other options. After `await generateText(...)`, print
 the [completed steps](https://ai-sdk.dev/docs/reference/ai-sdk-core/generate-text)
@@ -182,20 +196,15 @@ successful tool result's `output` should be `4`. If setup connected through
 MCP, inspect the execution tool supplied by that connection; its output may
 wrap the value in MCP text content.
 
-A successful test shows the agent requesting Submilli's execution tool with
-the program, the tool returning `4` without an error, and the agent reporting
-that result. Match the tool call and result by their call ID. A chat answer of
-`4` alone is insufficient: the model can calculate it without using Submilli.
-
-This verifies the path from your agent through the Submilli server, code
-execution, and the returned result. It does not test access to your business
-systems or whether your Blueprint denies forbidden operations.
+Match the tool call and result by their call ID and check for an error.
 
 If there is no execution call, check that this run uses the agent configuration
 with Submilli attached and that its tool settings allow the call. If the call
 fails, read the tool error and [check the connection settings](#troubleshooting).
 If the tool returns `4` but the agent gives no final answer, check your agent's
 step or turn limit so it can continue after the tool result.
+
+</details>
 
 ## Troubleshooting
 

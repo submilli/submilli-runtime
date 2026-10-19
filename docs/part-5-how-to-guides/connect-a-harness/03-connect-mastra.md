@@ -9,7 +9,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "fe78e461382f906d74b71cd5f72a793728f737dbc64f36aab8f200c04c3c5a29"
+  contentHash: "e621ccde9fb1b8bc896611bdd3a22ad2385aca92d90794a5610ce341c2c091e6"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
@@ -146,14 +146,28 @@ disconnects if it fails.
 
 ## Try it out
 
-Test the agent in your application, using the connection you just configured.
-Send the following message through your application's chat or test input. This
-is a request to your running agent, not to the coding assistant that set it up.
-It makes a model request using your application's existing model configuration.
+1. Open your application's chat or test input with the connected agent.
+2. Send this message:
 
-> Use Submilli to run `export function main(): number { return 2 + 2; }` and report the result.
+   > Run this TypeScript program in Submilli and report its return value:
 
-For the manual example, use this message as `messages` in the existing
+   ```typescript
+   export function main(): number {
+     return 2 + 2;
+   }
+   ```
+
+3. Check for the answer `4` and a Submilli execution call returning `4` in
+   your application's tool activity. If your app hides tool activity, use the
+   inspection steps below.
+
+The tool call confirms that your agent reached Submilli and ran the program.
+The answer alone does not prove execution. Test your business permissions separately.
+
+<details>
+<summary>Inspect the Submilli call</summary>
+
+To inspect a run in code, use the test message as `messages` in your
 `agent.generate(messages, ...)` call. Keep its Submilli toolsets and your
 other call options. Add this immediately after that call, inside the `try`
 block, to see the [generation steps](https://mastra.ai/reference/agents/generate)
@@ -171,20 +185,15 @@ tool details in `payload`: the call includes `toolName`, `toolCallId`, and
 `args`, and its result includes `toolCallId` and `result`. Inspect the code
 argument and the returned value inside those records.
 
-A successful test shows the agent requesting Submilli's execution tool with
-the program, the tool returning `4` without an error, and the agent reporting
-that result. Match the tool call and result by their call ID. A chat answer of
-`4` alone is insufficient: the model can calculate it without using Submilli.
-
-This verifies the path from your agent through the Submilli server, code
-execution, and the returned result. It does not test access to your business
-systems or whether your Blueprint denies forbidden operations.
+Match the tool call and result by their call ID and check for an error.
 
 If there is no execution call, check that this run uses the agent configuration
 with Submilli attached and that its tool settings allow the call. If the call
 fails, read the tool error and [check the connection settings](#troubleshooting).
 If the tool returns `4` but the agent gives no final answer, check your agent's
 step or turn limit so it can continue after the tool result.
+
+</details>
 
 ## Troubleshooting
 
