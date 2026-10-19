@@ -2,7 +2,8 @@
 //! production server sees, served over rmcp's streamable-HTTP transport.
 //!
 //! Copied from `submilli-server`'s `mcp/router.rs` (the handler, the
-//! `initialize` pre-check, DELETE answered 204 once the session is closed). The
+//! `initialize` pre-check, DELETE answered 204 once the session is closed) and
+//! `mcp/server.rs` (`call_tool`, which reports each tool call as an event). The
 //! host serves one blueprint, so it builds one service, at start. Every request
 //! needs one of the playground's tokens, and rmcp's default `Host` check stays
 //! on, so only a loopback name reaches the endpoint.
@@ -23,6 +24,7 @@ use tower::ServiceExt;
 
 use super::auth::{ApiToken, authenticate};
 use super::blueprints::{AppliedBlueprint, Blueprints};
+use super::record::events::EventHub;
 use super::run::RunHost;
 use super::sessions::Sessions;
 use super::volumes::Volumes;
@@ -45,6 +47,8 @@ pub(crate) struct McpParts {
     pub(crate) volumes: Arc<Volumes>,
     pub(crate) package_store: PackageStore,
     pub(crate) tokens: Arc<[ApiToken]>,
+    /// Where each tool call is reported; `None` reports none.
+    pub(crate) events: Option<Arc<EventHub>>,
 }
 
 struct Shared {
@@ -53,6 +57,7 @@ struct Shared {
     blueprints: Arc<Blueprints>,
     volumes: Arc<Volumes>,
     package_store: PackageStore,
+    events: Option<Arc<EventHub>>,
 }
 
 impl Shared {
@@ -100,6 +105,7 @@ impl McpHost {
             blueprints: parts.blueprints,
             volumes: parts.volumes,
             package_store: parts.package_store,
+            events: parts.events,
         });
         // Every session is stateful, so each connection has an `MCP-Session-Id`,
         // the id its runs, files and values are kept under. The default allowed

@@ -52,13 +52,11 @@ pub(crate) enum VolumeProblem {
     AccessExceeds(String),
 }
 
-/// A blueprint as runs read it: parsed, as written, and the tag of the version it
-/// was applied as.
+/// A blueprint as runs read it: parsed, and the tag of the version it was applied
+/// as.
 #[derive(Debug, Clone)]
 pub(crate) struct AppliedBlueprint {
     pub(crate) blueprint: Arc<Blueprint>,
-    /// The file's text, `permissions:` moved last with its comments.
-    pub(crate) yaml: String,
     pub(crate) version_tag: String,
 }
 
@@ -190,7 +188,6 @@ impl Blueprints {
         let created = current.is_none();
         *current = Some(AppliedBlueprint {
             blueprint: Arc::new(blueprint),
-            yaml: permissions_last_preserving_comments(yaml),
             version_tag: version_tag.to_owned(),
         });
         Ok(LocalApplied {
@@ -388,79 +385,4 @@ fn verify_packages(store: &PackageStore, blueprint: &Blueprint) -> Result<(), Lo
             Some(yaml_path!["packages"]),
         )
     })
-}
-
-/// `yaml` with its top-level `permissions:` block, and the comments just above it,
-/// moved to the end.
-fn permissions_last_preserving_comments(yaml: &str) -> String {
-    let lines = split_lines_preserving_endings(yaml);
-    let Some(permissions_start) = lines
-        .iter()
-        .position(|line| top_level_key(line) == Some("permissions"))
-    else {
-        return yaml.to_string();
-    };
-
-    let permissions_end = lines
-        .iter()
-        .enumerate()
-        .skip(permissions_start + 1)
-        .find_map(|(idx, line)| top_level_key(line).map(|_| idx))
-        .unwrap_or(lines.len());
-    if permissions_end == lines.len() {
-        return yaml.to_string();
-    }
-
-    let block_start = leading_comment_start(&lines, permissions_start);
-    let mut reordered = Vec::with_capacity(lines.len());
-    reordered.extend_from_slice(&lines[..block_start]);
-    reordered.extend_from_slice(&lines[permissions_end..]);
-    ensure_trailing_newline(&mut reordered);
-    if !reordered.last().is_some_and(|line| line.trim().is_empty()) {
-        reordered.push("\n");
-    }
-    reordered.extend_from_slice(&lines[block_start..permissions_end]);
-    reordered.concat()
-}
-
-fn split_lines_preserving_endings(yaml: &str) -> Vec<&str> {
-    if yaml.is_empty() {
-        Vec::new()
-    } else {
-        yaml.split_inclusive('\n')
-            .chain(yaml.ends_with('\n').then_some(""))
-            .filter(|line| !line.is_empty())
-            .collect()
-    }
-}
-
-fn leading_comment_start(lines: &[&str], start: usize) -> usize {
-    let mut block_start = start;
-    while block_start > 0 && is_blank_or_top_level_comment(lines[block_start - 1]) {
-        block_start -= 1;
-    }
-    block_start
-}
-
-fn is_blank_or_top_level_comment(line: &str) -> bool {
-    let trimmed = line.trim();
-    trimmed.is_empty() || line.starts_with('#')
-}
-
-fn ensure_trailing_newline(lines: &mut Vec<&str>) {
-    if let Some(last) = lines.last()
-        && !last.ends_with('\n')
-    {
-        lines.push("\n");
-    }
-}
-
-fn top_level_key(line: &str) -> Option<&str> {
-    let first = line.chars().next()?;
-    if first.is_whitespace() || first == '#' {
-        return None;
-    }
-    let (key, _) = line.split_once(':')?;
-    let key = key.trim();
-    (!key.is_empty()).then_some(key)
 }

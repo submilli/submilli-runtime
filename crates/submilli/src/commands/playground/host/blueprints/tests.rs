@@ -340,30 +340,3 @@ async fn an_uninstalled_package_is_refused() {
         .await;
     assert_eq!(error.code, "package_missing", "{error:?}");
 }
-
-#[test]
-fn keeps_permissions_last_and_preserves_comments() {
-    let yaml = "\
-name: demo
-
-# operator policy
-permissions:
-  # main script rules
-  main:
-    - capability: fs.read
-      action: allow
-
-mcp:
-  linear:
-    # endpoint comment
-    url: https://mcp.linear.app/mcp
-";
-
-    let updated = permissions_last_preserving_comments(yaml);
-    assert!(updated.contains("# operator policy\npermissions:"));
-    assert!(updated.contains("# endpoint comment"));
-    assert!(
-        updated.rfind("permissions:").unwrap() > updated.rfind("mcp:").unwrap(),
-        "{updated}"
-    );
-}

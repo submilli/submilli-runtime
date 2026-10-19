@@ -8,7 +8,8 @@
 //! `<state>/volumes/managed-local/`, where the embedded server kept them; scratch
 //! lives under `<state>/host/`. Adding a `managed-local` volume a blueprint apply
 //! names follows `volumes.rs` (`check_managed`, `declare_managed`,
-//! `withdraw_managed`).
+//! `withdraw_managed`). The volume declarations are copied from its
+//! `config.rs` (`VolumeTable`, `VolumeSpec`, `VolumeKind`, `SizeLimit`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -18,14 +19,80 @@ use interpreter::runtime::{
     Access as RtAccess, DiskQuota, MountError, MountSpec, Vfs, VfsMode as RtVfsMode,
     measure_host_dir,
 };
+pub(crate) use submilli_blueprint::Access;
 use submilli_blueprint::{Blueprint, VarBindings, VfsConfig};
-use submilli_server::config::is_managed_name;
-pub(crate) use submilli_server::config::{Access, SizeLimit, VolumeKind, VolumeSpec, VolumeTable};
 use tokio::sync::OnceCell;
 
 use super::super::log::warn;
 use super::super::state::StateDir;
-use super::blueprints::{LocalVolumes, VolumeProblem};
+use super::blueprints::{LocalVolumes, VolumeProblem, is_managed_name};
+
+/// The project's volumes: name to declaration. A blueprint's
+/// `vfs: { mode: named, volume: <name> }` and every entry under `vfs.mounts`
+/// resolve through this table, so a blueprint never names a host directory of
+/// its own.
+pub(crate) type VolumeTable = BTreeMap<String, VolumeSpec>;
+
+/// One named volume the playground declares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VolumeSpec {
+    pub(crate) kind: VolumeKind,
+    /// The most a blueprint may do with the volume; a blueprint's own `access`
+    /// can only narrow it.
+    pub(crate) access: Access,
+    /// One limit shared by every session and blueprint that uses the volume.
+    pub(crate) size_limit: SizeLimit,
+}
+
+impl VolumeSpec {
+    /// A directory the project owns, read-write, with no size limit.
+    pub(crate) fn local_path(path: impl Into<PathBuf>) -> Self {
+        Self {
+            kind: VolumeKind::LocalPath { path: path.into() },
+            access: Access::ReadWrite,
+            size_limit: SizeLimit::Unlimited,
+        }
+    }
+
+    /// A directory the playground allocates under the volume root's `managed-local/`.
+    pub(crate) fn managed(size_limit: SizeLimit) -> Self {
+        Self {
+            kind: VolumeKind::ManagedLocal,
+            access: Access::ReadWrite,
+            size_limit,
+        }
+    }
+
+    pub(crate) fn with_access(mut self, access: Access) -> Self {
+        self.access = access;
+        self
+    }
+}
+
+/// Where a named volume's files live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum VolumeKind {
+    /// `<volume root>/managed-local/<name>`, created on first use and never
+    /// deleted.
+    ManagedLocal,
+    /// A directory the project owns, never created or deleted here.
+    LocalPath { path: PathBuf },
+}
+
+/// A volume's size limit. Declared explicitly, so no volume is unbounded by
+/// accident.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SizeLimit {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the project's volumes are unlimited; a test run's copies keep the rule"
+        )
+    )]
+    Bytes(u64),
+    Unlimited,
+}
 
 /// Why a run's file system could not be built. The messages are the server's,
 /// and name a volume, never its directory.

@@ -188,11 +188,13 @@ pub(crate) struct RecheckReport {
 
 impl RecheckReport {
     /// Whether any decision's outcome changed.
+    #[cfg(test)]
     pub(crate) fn changed(&self) -> bool {
         self.first_changed.is_some()
     }
 
     /// The bindings a test run would use: kept and filled values together.
+    #[cfg(test)]
     pub(crate) fn bindings(&self) -> VarBindings {
         self.variables.bindings()
     }

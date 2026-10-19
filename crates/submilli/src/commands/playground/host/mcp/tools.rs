@@ -667,7 +667,6 @@ impl SubmilliMcp {
             tool_call_id: parts.extensions.get::<McpToolCall>().map(|c| c.0.clone()),
             session_id: session_header(parts).unwrap_or_default(),
             blueprint_name: self.blueprint_name.clone(),
-            blueprint: Arc::clone(&applied.blueprint),
             blueprint_version: applied.version_tag.clone(),
             variables: Arc::clone(variables),
             // A file tool runs no program and reads no secret.
@@ -970,8 +969,37 @@ impl ServerHandler for SubmilliMcp {
         mut context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let tool_call_id = tool_call_id(&context);
-        attach_run_context(&mut context, tool_call_id);
-        self.dispatch_tool(request, context).await
+        attach_run_context(&mut context, tool_call_id.clone());
+        let Some(hub) = self.shared.events.clone() else {
+            return self.dispatch_tool(request, context).await;
+        };
+        let started = std::time::Instant::now();
+        let tool = request.name.to_string();
+        let session = context
+            .extensions
+            .get::<axum::http::request::Parts>()
+            .and_then(session_header);
+        let result = self.dispatch_tool(request, context).await;
+        let (ok, bytes) = match &result {
+            Ok(result) => (
+                !result.is_error.unwrap_or(false),
+                serde_json::to_vec(result).map_or(0, |bytes| bytes.len() as u64),
+            ),
+            Err(error) => (
+                false,
+                serde_json::to_vec(error).map_or(0, |bytes| bytes.len() as u64),
+            ),
+        };
+        super::super::record::events::tool_call(
+            &hub,
+            session.as_deref(),
+            tool_call_id.as_deref(),
+            &tool,
+            ok,
+            bytes,
+            started.elapsed(),
+        );
+        result
     }
 
     async fn list_tools(

@@ -129,7 +129,6 @@ async fn host_recording(records: bool) -> Host {
 fn applied(yaml: &str) -> AppliedBlueprint {
     AppliedBlueprint {
         blueprint: Arc::new(submilli_blueprint::parse(yaml).unwrap()),
-        yaml: yaml.to_owned(),
         version_tag: "v1".to_owned(),
     }
 }

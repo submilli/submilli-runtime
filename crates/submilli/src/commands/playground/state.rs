@@ -4,8 +4,9 @@
 //! self-ignoring `.gitignore`, the lock and ready files, the tokens, the start
 //! lock that serializes concurrent starts, the instance lock the serving process
 //! holds for its whole life, the detached child's log, the remembered binding
-//! (variable values and secret names, never a secret's value), and the embedded
-//! server's blueprint, session, VFS, and volume directories, and the run store.
+//! (variable values and secret names, never a secret's value), the host's
+//! database and session directories, the volumes, and the run store. An embedded
+//! server's `server/` directory, from an earlier version, is left as it is.
 //!
 //! Nothing here is trusted as found: the directory and `.submilli` above it must
 //! be real directories (not symlinks) owned by this user, and a file the
@@ -18,11 +19,11 @@ use std::io::{self, Read};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use super::host::auth::{ApiToken, Role};
 use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
-use submilli_server::{ApiToken, Role};
 
 /// Every token the playground's server accepts, with its role. Names are what
 /// runs are labeled with (KTD5); none of them ever appears in output or a link.
@@ -206,18 +207,6 @@ impl StateDir {
         self.root.join("tokens").join(name)
     }
 
-    pub(crate) fn database_path(&self) -> PathBuf {
-        self.root.join("server").join("server.db")
-    }
-
-    pub(crate) fn blueprints_dir(&self) -> PathBuf {
-        self.root.join("server").join("blueprints")
-    }
-
-    pub(crate) fn sessions_dir(&self) -> PathBuf {
-        self.root.join("server").join("sessions")
-    }
-
     /// The host's own state: its database, session directories and ephemeral
     /// scratch. The embedded server's `server/` beside it is never read here.
     pub(crate) fn host_dir(&self) -> PathBuf {
@@ -244,17 +233,24 @@ impl StateDir {
         self.volume_root().join("managed-local")
     }
 
-    /// [`Self::create`], and the one-line notice to print when this is the first
-    /// start since the embedded server kept sessions here: `server/` is there and
-    /// `host/` is not. Creating `host/` records that the notice was shown.
+    /// [`Self::create`] with the host's own directories, and the one-line notice to
+    /// print when this is the first start since the embedded server kept sessions
+    /// here: `server/` is there and `host/` is not. Creating `host/` records that
+    /// the notice was shown.
     pub(crate) fn create_noting_upgrade(&self) -> Result<Option<&'static str>> {
-        let upgraded = self.root.join("server").is_dir() && !self.host_dir().exists();
         self.create()?;
+        let upgraded = self.root.join("server").is_dir() && !self.host_dir().exists();
+        for dir in [
+            self.host_dir(),
+            self.host_sessions_dir(),
+            self.host_ephemeral_dir(),
+        ] {
+            owned_private_dir(&dir)?;
+        }
         Ok(upgraded.then_some(SESSIONS_LEFT_BEHIND))
     }
 
-    /// The server's volume root: managed volumes, session workspaces and
-    /// ephemeral scratch.
+    /// The volume root: managed volumes.
     pub(crate) fn volume_root(&self) -> PathBuf {
         self.root.join("volumes")
     }
@@ -290,10 +286,6 @@ impl StateDir {
         for dir in [
             self.root.clone(),
             self.root.join("tokens"),
-            self.root.join("server"),
-            self.host_dir(),
-            self.host_sessions_dir(),
-            self.host_ephemeral_dir(),
             self.volume_root(),
         ] {
             owned_private_dir(&dir)?;

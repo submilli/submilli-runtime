@@ -364,7 +364,6 @@ fn a_recorded_run_is_built_from_its_start_and_end_and_serializes() {
         tool_call_id: None,
         session_id: "session-1".into(),
         blueprint_name: "bp".into(),
-        blueprint: Arc::new(blueprint(DENY_ALL)),
         blueprint_version: "v3".into(),
         variables: Arc::new(VarBindings::from([("a".to_owned(), "b".to_owned())])),
         harness_secrets: Arc::default(),

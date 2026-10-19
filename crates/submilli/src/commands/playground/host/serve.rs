@@ -186,13 +186,13 @@ async fn forced_stop(
 
 /// One signal, held as a stream registered when it is made, or not watched at all
 /// when this process ignores it and should keep ignoring it.
-struct WatchedSignal(Option<tokio::signal::unix::Signal>);
+pub(crate) struct WatchedSignal(Option<tokio::signal::unix::Signal>);
 
 impl WatchedSignal {
     /// Watch `kind` unless this process ignores it now, which is then left ignored:
     /// a background job of a non-interactive shell ignores SIGINT, and installing a
     /// handler would undo that.
-    fn unless_ignored(kind: tokio::signal::unix::SignalKind) -> Result<Self> {
+    pub(crate) fn unless_ignored(kind: tokio::signal::unix::SignalKind) -> Result<Self> {
         if is_ignored(kind.as_raw_value())? {
             return Ok(Self(None));
         }
@@ -202,7 +202,7 @@ impl WatchedSignal {
     }
 
     /// The next delivery of the signal; never, for one left ignored.
-    async fn next(&mut self) {
+    pub(crate) async fn next(&mut self) {
         match &mut self.0 {
             Some(signal) => {
                 signal.recv().await;

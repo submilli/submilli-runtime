@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
+use super::super::volumes::VolumeTable;
 use submilli_build::PackageStore;
-use submilli_server::config::VolumeTable;
 
 use super::super::super::state::StateDir;
 use super::super::blueprints::AppliedBlueprint;
@@ -46,6 +46,8 @@ struct Host {
     sessions: Arc<Sessions>,
     host: Arc<RunHost>,
     blueprint: AppliedBlueprint,
+    /// The blueprint's text, for a restart.
+    yaml: String,
     current: Arc<Current>,
 }
 
@@ -102,7 +104,6 @@ fn publish_with(root: &Path, name: &str, source: &str, version: &str, dependenci
 fn applied(yaml: &str) -> AppliedBlueprint {
     AppliedBlueprint {
         blueprint: Arc::new(submilli_blueprint::parse(yaml).unwrap()),
-        yaml: yaml.to_owned(),
         version_tag: "v1".to_owned(),
     }
 }
@@ -153,6 +154,7 @@ async fn boot_with(
         sessions,
         host,
         blueprint,
+        yaml: yaml.to_owned(),
         current,
     }
 }
@@ -207,13 +209,13 @@ impl Host {
             dir,
             sessions,
             host,
-            blueprint,
+            yaml,
             ..
         } = self;
         sessions.close_database().await.unwrap();
         drop(host);
         drop(sessions);
-        boot_with(dir, &blueprint.yaml, install, |_, _| {}).await
+        boot_with(dir, &yaml, install, |_, _| {}).await
     }
 
     fn database_bytes(&self) -> Vec<u8> {

@@ -70,6 +70,7 @@ impl ApiToken {
         &self.name
     }
 
+    #[cfg(test)]
     pub(crate) fn role(&self) -> Role {
         self.role
     }

@@ -328,11 +328,6 @@ impl EventHub {
         self.lock().dropped.insert(run_id.to_owned(), 0);
     }
 
-    #[cfg(test)]
-    pub(super) fn tracked_runs(&self) -> usize {
-        self.lock().dropped.len()
-    }
-
     /// The events dropped for `run_id`, forgetting the run.
     fn take_dropped(&self, run_id: &str) -> u64 {
         self.lock().dropped.remove(run_id).unwrap_or(0)
@@ -547,7 +542,9 @@ fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-fn entry_name(entry: &RunEntry) -> String {
+/// How a run's entry reads in its events and the store. Runs the embedded server
+/// recorded before also read `http`.
+pub(crate) fn entry_name(entry: &RunEntry) -> String {
     match entry {
         RunEntry::Session => "session".into(),
         RunEntry::Mcp => "mcp".into(),

@@ -127,7 +127,7 @@ pub(crate) struct ExecuteError {
 }
 
 impl ExecuteError {
-    fn new(kind: ErrorKind, message: String) -> Self {
+    pub(crate) fn new(kind: ErrorKind, message: String) -> Self {
         Self {
             kind,
             message,
@@ -254,7 +254,6 @@ pub(crate) struct RunStart {
     pub(crate) tool_call_id: Option<String>,
     pub(crate) session_id: String,
     pub(crate) blueprint_name: String,
-    pub(crate) blueprint: Arc<Blueprint>,
     /// The version tag the blueprint was applied as.
     pub(crate) blueprint_version: String,
     pub(crate) variables: Arc<VarBindings>,
@@ -1216,7 +1215,6 @@ fn run_start(execution_id: &str, request: &RunRequest) -> RunStart {
         tool_call_id: request.tool_call_id.clone(),
         session_id: request.session_id.clone(),
         blueprint_name: request.blueprint.blueprint.name.clone(),
-        blueprint: Arc::clone(&request.blueprint.blueprint),
         blueprint_version: request.blueprint.version_tag.clone(),
         variables: Arc::clone(&request.variables),
         harness_secrets: Arc::clone(&request.harness_secrets),

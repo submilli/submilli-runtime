@@ -13,7 +13,7 @@
 //! it and carrying the build diagnostic, so the stale copy never runs; the failure is
 //! remembered against everything the build read (the manifest, the sources, and the
 //! installed copies of the packages it depends on), so any change to those retries. A
-//! watcher on the package store evicts the server's prepared packages after an
+//! watcher on the package store evicts the host's prepared packages after an
 //! install from outside the playground, such as `submilli build publish-local`.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -31,7 +31,6 @@ use submilli_build::{
     PackageStoreError, ProjectManifest, build_packages_configured, install_packages,
     package_sources, parse_manifest, read_installed_sources,
 };
-use submilli_server::{AppState, PreExecute, PreExecuteHook, PreExecuteRefusal};
 
 use super::log::note;
 
@@ -678,7 +677,7 @@ fn fingerprint(manifest_text: &str, store: &PackageStore, inputs: &[PackageInput
     u64::from_le_bytes(first)
 }
 
-/// The server's pre-execute hook: a run's project packages are brought up to date
+/// The host's package check before each run: a run's project packages are brought up to date
 /// before it compiles. The blueprint watcher brings the project packages an edit newly
 /// names up to date through it too, before the edit is validated. Checks are
 /// serialized, so two runs after one edit rebuild once.
@@ -701,16 +700,17 @@ impl Freshness {
     /// that the store lacks or that the version in force did not list. A package both
     /// list stays the pre-execute check's to refresh, so an edit elsewhere in the
     /// blueprint is not refused while that package's source is mid-change.
+    /// `evict` drops the host's prepared packages when one was replaced.
     pub(crate) async fn prepare_edit(
         &self,
-        state: &AppState,
+        evict: impl FnOnce() + Send + 'static,
         blueprint: Blueprint,
         in_force: Option<Blueprint>,
     ) -> Result<(), ResolutionFailure> {
         if blueprint.packages.is_empty() {
             return Ok(());
         }
-        self.check(state, move |packages| {
+        self.check_evicting(evict, move |packages| {
             let store = packages.store();
             let wanted: BTreeSet<String> = blueprint
                 .packages
@@ -726,20 +726,6 @@ impl Freshness {
             packages.sync(&wanted)
         })
         .await
-    }
-
-    /// Run one check on a blocking thread, one at a time, and evict the server's
-    /// prepared packages when it replaced one. The eviction and the notes happen on
-    /// that thread too, so a caller that stops waiting cannot skip them and leave a
-    /// replaced package's cached copy to serve the next run.
-    async fn check(
-        &self,
-        state: &AppState,
-        check: impl FnOnce(&ProjectPackages) -> Result<Synced, ResolutionFailure> + Send + 'static,
-    ) -> Result<(), ResolutionFailure> {
-        let state = state.clone();
-        self.check_evicting(move || state.evict_all_prepared_packages(), check)
-            .await
     }
 
     /// Before a run is compiled: bring the project packages in `wanted` up to date,
@@ -758,7 +744,10 @@ impl Freshness {
             .map_err(|failure| failure.for_run())
     }
 
-    /// [`Self::check`], evicting through `evict`.
+    /// Run one check on a blocking thread, one at a time, and call `evict` when it
+    /// replaced a package. The eviction and the notes happen on that thread too, so a
+    /// caller that stops waiting cannot skip them and leave a replaced package's cached
+    /// copy to serve the next run.
     async fn check_evicting(
         &self,
         evict: impl FnOnce() + Send + 'static,
@@ -798,31 +787,19 @@ impl Freshness {
     }
 }
 
-#[async_trait::async_trait]
-impl PreExecuteHook for Freshness {
-    async fn before_execute(&self, run: PreExecute<'_>) -> Result<(), PreExecuteRefusal> {
-        let state = run.state.clone();
-        self.before_run(run.packages.clone(), move || {
-            state.evict_all_prepared_packages();
-        })
-        .await
-        .map_err(|message| PreExecuteRefusal { message })
-    }
-}
-
-/// Watches the package store and evicts the server's prepared packages after any
+/// Watches the package store and evicts the host's prepared packages after any
 /// change there, so an install from outside the playground is picked up.
 pub(crate) struct StoreWatch {
     _debouncer: notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>,
 }
 
-pub(crate) fn watch_store(state: AppState, root: &Path) -> Result<StoreWatch> {
+pub(crate) fn watch_store(evict: impl Fn() + Send + 'static, root: &Path) -> Result<StoreWatch> {
     std::fs::create_dir_all(root).with_context(|| format!("creating {}", root.display()))?;
     let mut debouncer = notify_debouncer_mini::new_debouncer(
         STORE_DEBOUNCE,
         move |_: notify_debouncer_mini::DebounceEventResult| {
             // An error may have dropped events; evicting costs only a reload.
-            state.evict_all_prepared_packages();
+            evict();
         },
     )
     .context("starting the package store watcher")?;

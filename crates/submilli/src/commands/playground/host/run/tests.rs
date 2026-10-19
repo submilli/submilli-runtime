@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use super::super::volumes::VolumeTable;
 use serde_json::{Value, json};
-use submilli_server::config::VolumeTable;
 
 use super::super::super::packages::ProjectPackages;
 use super::super::super::scaffold;
@@ -102,7 +102,6 @@ async fn host_in(
 fn applied(yaml: &str) -> AppliedBlueprint {
     AppliedBlueprint {
         blueprint: Arc::new(submilli_blueprint::parse(yaml).unwrap()),
-        yaml: yaml.to_owned(),
         version_tag: "v1".to_owned(),
     }
 }

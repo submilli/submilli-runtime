@@ -1,11 +1,11 @@
 use std::path::Path;
 use std::sync::Mutex;
 
+use super::super::volumes::VolumeTable;
 use axum::http::{HeaderMap, StatusCode};
 use base64::Engine;
 use rmcp::transport::streamable_http_server::session::{SessionId, SessionManager};
 use serde_json::{Value, json};
-use submilli_server::config::VolumeTable;
 
 use super::super::super::state::StateDir;
 use super::super::auth::Role;
@@ -69,6 +69,7 @@ async fn harness_in(dir: &Path, yaml: &str) -> Harness {
             volumes,
             package_store,
             tokens: Arc::from([ApiToken::new("app", Role::User, TOKEN).unwrap()]),
+            events: None,
         },
         "fixture",
     ));

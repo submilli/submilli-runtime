@@ -963,9 +963,9 @@ impl Egress {
 
     /// The deployed server's policy with these grants.
     #[cfg(unix)]
-    fn policy(&self) -> submilli_server::NetworkPolicy {
+    fn policy(&self) -> interpreter::runtime::NetworkPolicy {
         self.allow_ip.iter().fold(
-            submilli_server::NetworkPolicy::deny_private()
+            interpreter::runtime::NetworkPolicy::deny_private()
                 .allow_localhost(self.allow_localhost)
                 .allow_private(self.allow_private),
             |policy, net| policy.allow_cidr(*net),
@@ -1122,8 +1122,9 @@ impl<'a> ReadyRecord<'a> {
                     );
                 }
                 println!(
-                    "Point an app at the server with the token in the app token file. Stop it with \
-                     `submilli playground stop`."
+                    "Apps connect over MCP at the server's /mcp/{} with the token in the app \
+                     token file. Stop it with `submilli playground stop`.",
+                    self.description.blueprint.name
                 );
             }
         }

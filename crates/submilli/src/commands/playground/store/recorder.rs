@@ -1,9 +1,8 @@
-//! The run recorder: every run the playground's server or its host executes, whoever
-//! sent it, is stored as it finishes, and its session's events as they arrive.
+//! The run recorder: every run the playground's host executes, whoever sent it, is
+//! stored as it finishes, and its session's events as they arrive.
 //!
-//! [`Recorder`] is both the server's [`RunRecorderFactory`] and the host's
-//! [`RunRecorder`](host::RunRecorder). The host's events come through a hub of the
-//! recorder's own and are stored in the server's event shape, which is the same.
+//! [`Recorder`] is the host's [`RunRecorder`](host::RunRecorder). A run's events come
+//! through a hub of the recorder's own.
 //!
 //! Redaction happens here, on the way to disk: a run and each event are serialized,
 //! every known secret is cut out of the serialized form, and only that is written.
@@ -14,16 +13,14 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use interpreter::runtime::{CallRecord, DecisionLogConfig, DecisionRecord};
-use submilli_server::record::{
-    EVENT_SCHEMA, EventKind, FinishedRun, RetryLink, RunRecorder, RunRecorderFactory, RunStart,
-    SessionEvent,
-};
 
-use super::super::host::record::events::{self as host_events, EventHub, EventSink, RunEvents};
+use super::super::host::record::events::{
+    EVENT_SCHEMA, EventHub, EventKind, EventSink, RunEvents, SessionEvent,
+};
 use super::super::host::run as host;
 use super::super::log::warn;
 use super::events::{EventBody, Gap, Position, StoredEvent};
-use super::run::{RetryRecord, RunLink, StoredRun};
+use super::run::{RunLink, StoredRun};
 use super::{FORMAT, KnownSecrets, Store, json_line, now_micros};
 
 /// The recording caps for every run the playground serves, raised from the server's
@@ -66,13 +63,13 @@ pub(crate) struct Recorder {
 struct Shared {
     store: Arc<Store>,
     secrets: KnownSecrets,
-    /// Runs in progress or recently finished, by the server's execution id.
+    /// Runs in progress or recently finished, by the host's execution id.
     tracks: Mutex<HashMap<String, Track>>,
-    /// Runs the store could not take, by the server's execution id, with when their end
+    /// Runs the store could not take, by the host's execution id, with when their end
     /// event arrived: they run unrecorded, and their events are logged without a run id.
     untracked: Mutex<HashMap<String, Option<Instant>>>,
-    /// The server-wide sequence number of the last event delivered; a jump past the next
-    /// one means the server dropped events in between.
+    /// The host-wide sequence number of the last event delivered; a jump past the next
+    /// one means the host dropped events in between.
     last_seq: AtomicU64,
     /// The session of each recent MCP tool call its client named, by that name: how chat
     /// from a coding assistant finds the session its tool calls ran in.
@@ -115,13 +112,13 @@ struct Track {
     started_at_micros: u64,
     /// Decisions and finished calls whose events are in the log.
     seen: HashSet<EventKey>,
-    /// The run's end event arrived, with the count of its events the server dropped.
+    /// The run's end event arrived, with the count of its events the host dropped.
     end_event: Option<u64>,
     /// Decision events delivered for the run: the last one's number in the run, while
     /// none was dropped before it.
     decisions_delivered: u64,
-    /// The server dropped an event while the run's events were still coming, so a
-    /// decision's number can no longer be told from the count. The server's sequence
+    /// The host dropped an event while the run's events were still coming, so a
+    /// decision's number can no longer be told from the count. The host's sequence
     /// shows that an event was dropped, not whose, so a drop marks every run whose end
     /// has not arrived, including runs that lost nothing: their later decisions go
     /// unnumbered. Numbers are never wrong, only missing.
@@ -186,6 +183,11 @@ impl Recorder {
         }
     }
 
+    /// The hub the host's events go through, for the MCP endpoint's tool calls.
+    pub(crate) fn events(&self) -> &Arc<EventHub> {
+        self.shared.host_events()
+    }
+
     pub(crate) fn store(&self) -> &Arc<Store> {
         &self.shared.store
     }
@@ -246,9 +248,9 @@ impl Recorder {
         );
     }
 
-    /// The server's execution id of run `id` while it is in flight: started, and not yet
+    /// The host's execution id of run `id` while it is in flight: started, and not yet
     /// finished. A run's id is handed out when it starts, so this is how a playground run
-    /// id reaches the server's cancellation.
+    /// id reaches the host's cancellation.
     pub(crate) fn in_flight(&self, id: u64) -> Option<String> {
         self.shared
             .tracks()
@@ -257,7 +259,7 @@ impl Recorder {
             .map(|track| track.execution_id.clone())
     }
 
-    /// Whether the run with server execution id `execution_id` started under this
+    /// Whether the run with host execution id `execution_id` started under this
     /// recorder (recorded, or left unrecorded when the store could not take it) and is
     /// still followed: in flight, or finished less than [`FINISHED_RUN_MEMORY`] ago. A
     /// run a previous playground started is never followed.
@@ -275,46 +277,6 @@ impl Recorder {
             },
         };
         still_followed(finished_at, now)
-    }
-}
-
-impl RunRecorderFactory for Recorder {
-    fn start(&self, run: RunStart) -> Option<Arc<dyn RunRecorder>> {
-        let core = self.shared.begin(Begin {
-            execution_id: &run.execution_id,
-            label: &run.label,
-            session: run.session_id.as_deref(),
-            tool_call_id: run.tool_call_id.as_deref(),
-            test_of: run.test_of.as_deref(),
-            code: run.code.as_deref(),
-            harness_secrets: run.harness_secrets.values(),
-        })?;
-        Some(Arc::new(RunRecording { core, start: run }))
-    }
-
-    fn retried(&self, retry: RetryLink) {
-        let original = retry.original_execution_id.map(|execution_id| RunLink {
-            run: self.shared.run_id_of(&execution_id),
-            execution_id,
-        });
-        let record = RetryRecord {
-            format: FORMAT,
-            at_micros: now_micros(),
-            session_id: retry.session_id,
-            idempotency_key: retry.idempotency_key,
-            original,
-        };
-        if let Err(error) = self.shared.store.record_retry(&record) {
-            warn(&format!("retry not recorded: {error}"));
-        }
-    }
-
-    fn wants_events(&self) -> bool {
-        true
-    }
-
-    fn event(&self, event: SessionEvent) {
-        self.shared.event(event);
     }
 }
 
@@ -338,7 +300,29 @@ impl host::RunRecorder for Recorder {
     }
 }
 
-/// What the recorder takes from a run as it starts, from the server or the host.
+#[cfg(test)]
+impl Recorder {
+    /// This recorder with its runs' own events left out: a test sends events with
+    /// [`Self::event`], numbered as it chooses.
+    pub(crate) fn with_events_sent_by_hand(self) -> Self {
+        struct Ignored;
+        impl EventSink for Ignored {
+            fn event(&self, _event: SessionEvent) {}
+        }
+        let _ = self
+            .shared
+            .host_events
+            .set(EventHub::new(Arc::new(Ignored) as Arc<dyn EventSink>));
+        self
+    }
+
+    /// Takes `event` as if the host's hub delivered it.
+    pub(crate) fn event(&self, event: SessionEvent) {
+        self.shared.event(event);
+    }
+}
+
+/// What the recorder takes from a run as it starts.
 struct Begin<'a, S> {
     execution_id: &'a str,
     label: &'a str,
@@ -425,7 +409,7 @@ impl Shared {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The store's id for a server execution id: a run in memory, or one stored earlier.
+    /// The store's id for a host execution id: a run in memory, or one stored earlier.
     fn run_id_of(&self, execution_id: &str) -> Option<u64> {
         if let Some(track) = self.tracks().get(execution_id) {
             return Some(track.id);
@@ -564,7 +548,7 @@ impl Shared {
                     check();
                 });
             }
-            // Finished outside the server's runtime (a run dropped while unwinding):
+            // Finished outside the host's runtime (a run dropped while unwinding):
             // nothing will deliver its end now.
             Err(_) => check(),
         }
@@ -682,7 +666,7 @@ impl Shared {
     }
 }
 
-/// Where a server event goes in its session's log, and what the log says of it.
+/// Where an event goes in its session's log, and what the log says of it.
 struct Placement {
     position: Position,
     /// The store's id of its run, when the recorder follows the run.
@@ -770,9 +754,8 @@ fn call_finished(call: &CallRecord) -> EventKind {
     }
 }
 
-/// One run the recorder follows, from the server or the host: stores it as it
-/// finishes, and however it ended, finished or dropped, it is no longer in flight
-/// once this drops.
+/// One run the recorder follows: stores it as it finishes, and however it ended,
+/// finished or dropped, it is no longer in flight once this drops.
 struct Core {
     shared: Arc<Shared>,
     execution_id: String,
@@ -837,30 +820,6 @@ impl Drop for Core {
     }
 }
 
-/// Records one server run.
-struct RunRecording {
-    core: Core,
-    start: RunStart,
-}
-
-impl RunRecorder for RunRecording {
-    fn log_config(&self) -> DecisionLogConfig {
-        PLAYGROUND_LOG_CONFIG
-    }
-
-    fn finish(&self, run: FinishedRun) {
-        let core = &self.core;
-        let stored = StoredRun::from_parts(
-            core.id,
-            &self.start,
-            &run,
-            core.test_of.clone(),
-            core.started_at_micros,
-        );
-        core.store(&stored, run.console.len() as u64);
-    }
-}
-
 /// Records one host run, with its events.
 struct HostRunRecording {
     core: Core,
@@ -886,7 +845,7 @@ impl host::RecordedRun for HostRunRecording {
             console_bytes,
         );
         let core = &self.core;
-        let stored = StoredRun::from_host_parts(
+        let stored = StoredRun::from_parts(
             core.id,
             &self.start,
             &run,
@@ -901,116 +860,13 @@ impl host::RecordedRun for HostRunRecording {
     }
 }
 
-/// Takes the host's events into the recorder, as the server's arrive.
+/// Takes the host's events into the recorder.
 struct HostEvents(Weak<Shared>);
 
 impl EventSink for HostEvents {
-    fn event(&self, event: host_events::SessionEvent) {
+    fn event(&self, event: SessionEvent) {
         if let Some(shared) = self.0.upgrade() {
-            shared.event(server_event(event));
+            shared.event(event);
         }
-    }
-}
-
-/// A host event in the server's shape, which is the same field for field.
-fn server_event(event: host_events::SessionEvent) -> SessionEvent {
-    use host_events::EventKind as Host;
-    let kind = match event.kind {
-        Host::RunStarted {
-            label,
-            entry,
-            client,
-            blueprint,
-            blueprint_hash,
-            code_hash,
-        } => EventKind::RunStarted {
-            label,
-            entry,
-            client,
-            blueprint,
-            blueprint_hash,
-            code_hash,
-        },
-        Host::CallStarted {
-            call_index,
-            caller,
-            capability,
-            started_micros,
-            line,
-            package_line,
-        } => EventKind::CallStarted {
-            call_index,
-            caller,
-            capability,
-            started_micros,
-            line,
-            package_line,
-        },
-        Host::Decision { record } => EventKind::Decision { record },
-        Host::CallFinished {
-            call_index,
-            capability,
-            started_micros,
-            ended_micros,
-            outcome,
-            sent_bytes,
-            result_bytes,
-            usage,
-        } => EventKind::CallFinished {
-            call_index,
-            capability,
-            started_micros,
-            ended_micros,
-            outcome,
-            sent_bytes,
-            result_bytes,
-            usage,
-        },
-        Host::RunFinished {
-            dispatched,
-            error,
-            wall_ms,
-            console_bytes,
-            events_dropped,
-        } => EventKind::RunFinished {
-            dispatched,
-            error: error.map(super::run::error_kind),
-            wall_ms,
-            console_bytes,
-            events_dropped,
-        },
-        Host::Returned { bytes } => EventKind::Returned { bytes },
-        Host::ToolCall {
-            tool,
-            ok,
-            result_bytes,
-            wall_ms,
-        } => EventKind::ToolCall {
-            tool,
-            ok,
-            result_bytes,
-            wall_ms,
-        },
-        Host::Console {
-            line,
-            written_micros,
-            after_call,
-            truncated,
-        } => EventKind::Console {
-            line,
-            written_micros,
-            after_call,
-            truncated,
-        },
-    };
-    SessionEvent {
-        schema: event.schema,
-        event_id: event.event_id,
-        seq: event.seq,
-        at_micros: event.at_micros,
-        session_id: event.session_id,
-        run_id: event.run_id,
-        tool_call_id: event.tool_call_id,
-        kind,
     }
 }

@@ -10,6 +10,7 @@ use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::sync::Arc;
 
+use super::host::record::events::EventKind;
 use axum::Json;
 use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::extract::{Path, Query, State};
@@ -19,7 +20,6 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodRouter, get, post};
 use serde::Deserialize;
 use serde_json::json;
-use submilli_server::record::EventKind;
 
 use super::chat::ChatPost;
 use super::control_auth::Caller;
@@ -936,7 +936,7 @@ async fn events(
 /// serves the stream rather than answering 404 for a real session.
 async fn session_known(state: &ControlState, session: &str) -> bool {
     if matches!(
-        submilli_server::record::session_variables(&state.actions().app, session).await,
+        state.actions().app.session_variables(session).await,
         Ok(Some(_)) | Err(_)
     ) {
         return true;
@@ -1009,7 +1009,10 @@ impl Feed {
     /// the feed keeps following.
     async fn session_open(&self) -> bool {
         !matches!(
-            submilli_server::record::session_variables(&self.state.actions().app, &self.session)
+            self.state
+                .actions()
+                .app
+                .session_variables(&self.session)
                 .await,
             Ok(None)
         )

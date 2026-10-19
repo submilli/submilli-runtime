@@ -128,7 +128,10 @@ impl From<anyhow::Error> for SessionsError {
 pub(crate) struct Booted {
     pub(crate) sessions: Sessions,
     /// The sessions still open from the last start.
+    #[cfg(test)]
     pub(crate) open: Vec<Session>,
+    /// The notice printed, if any.
+    #[cfg(test)]
     pub(crate) notice: Option<&'static str>,
 }
 
@@ -220,7 +223,9 @@ impl Sessions {
         sessions.remove_leftover_dirs(&kept);
         Ok(Booted {
             sessions,
+            #[cfg(test)]
             open,
+            #[cfg(test)]
             notice,
         })
     }
@@ -325,16 +330,6 @@ impl Sessions {
 
     pub(crate) async fn get(&self, id: &str) -> Result<Option<Session>> {
         Ok(self.database.session(id).await?.map(Session::from))
-    }
-
-    pub(crate) async fn list(&self) -> Result<Vec<Session>> {
-        Ok(self
-            .database
-            .sessions()
-            .await?
-            .into_iter()
-            .map(Session::from)
-            .collect())
     }
 
     /// Where a `per_session` session's files live.
@@ -524,14 +519,6 @@ impl Sessions {
     pub(crate) async fn finish_closing(&self) -> Result<()> {
         for id in self.database.closing_ids().await? {
             self.cleanup(&id).await?;
-        }
-        Ok(())
-    }
-
-    /// Close every session.
-    pub(crate) async fn wipe(&self) -> Result<()> {
-        for session in self.database.sessions().await? {
-            self.close(&session.id).await?;
         }
         Ok(())
     }

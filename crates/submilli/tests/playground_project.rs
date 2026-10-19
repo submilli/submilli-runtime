@@ -308,17 +308,12 @@ mod unix {
         std::fs::read_to_string(workspace.submilli().join("examples/total.ts")).unwrap()
     }
 
-    /// `POST /v1/execute` with `token`, as an app or the stand-in sends it.
+    /// The MCP execute tool with `token`, as an app or the stand-in sends it: the tool's
+    /// structured result.
     fn execute(record: &Value, token: &str, code: &str) -> Value {
-        let url = format!("{}/v1/execute", record["server_url"].as_str().unwrap());
-        let body = json!({
-            "code": code,
-            "blueprint": "billing",
-            "variables": { "customerId": "cus_northwind" },
-        });
-        let (status, _, text) = post(&url, token, &[], &body);
-        assert_eq!(status, 200, "execute: {text}");
-        serde_json::from_str(&text).unwrap()
+        let response = mcp_execute(record, token, code);
+        assert!(response["error"].is_null(), "execute: {response}");
+        tool_result(&response)
     }
 
     /// The MCP execute tool on a fresh MCP session: the bridge's path.
@@ -537,7 +532,7 @@ mod unix {
         );
         assert_eq!(workspace.reinstalls(), 0);
 
-        // A run through REST, as `exec` will send it, sees the edit.
+        // A run through the MCP execute tool, as an app sends it, sees the edit.
         edit(
             &workspace.lib(),
             "return found;",
@@ -587,10 +582,13 @@ mod unix {
             "the old copy did not run: {failed}"
         );
 
-        // REST gets the same kind, and nothing ran.
-        let rest = execute(&record, &workspace.token("app"), &code);
-        assert_eq!(rest["error"]["kind"], "package_resolution", "{rest}");
-        assert!(rest["result"].is_null(), "{rest}");
+        // An app gets the same refusal, and nothing ran.
+        let app = mcp_execute(&record, &workspace.token("app"), &code);
+        let message = app["error"]["message"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a JSON-RPC error: {app}"));
+        assert!(message.contains("no longer builds"), "{message}");
+        assert!(tool_result(&app).is_null(), "{app}");
 
         let runs = workspace.wait_for_runs(3);
         let failed_runs: Vec<_> = runs

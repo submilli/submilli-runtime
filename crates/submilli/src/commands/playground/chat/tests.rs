@@ -6,9 +6,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::commands::playground::host::record::events::{EVENT_SCHEMA, EventKind, SessionEvent};
 use base64::Engine as _;
 use serde_json::json;
-use submilli_server::record::{EVENT_SCHEMA, EventKind, RunRecorderFactory, SessionEvent};
 
 use super::*;
 use crate::commands::playground::store::KnownSecrets;
@@ -41,7 +41,8 @@ impl World {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(Store::open(&dir.path().join("store")).unwrap());
         let secrets = KnownSecrets::default();
-        let recorder = Recorder::new(Arc::clone(&store), secrets.clone());
+        let recorder =
+            Recorder::new(Arc::clone(&store), secrets.clone()).with_events_sent_by_hand();
         Self {
             dir,
             store,
@@ -70,7 +71,7 @@ impl World {
             .collect()
     }
 
-    /// The server recording MCP tool call `call` in `session`.
+    /// The host recording MCP tool call `call` in `session`.
     fn call(&mut self, session: &str, call: &str) {
         self.seq += 1;
         self.recorder.event(SessionEvent {

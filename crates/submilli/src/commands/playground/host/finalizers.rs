@@ -60,7 +60,6 @@ impl FinalizerFailure {
 /// One registration, already claimed for an attempt.
 pub(crate) struct FinalizerInvocation {
     pub(crate) id: String,
-    pub(crate) session_id: String,
     pub(crate) package: String,
     pub(crate) key: Vec<u16>,
     pub(crate) value: Result<Vec<u16>, FinalizerFailure>,
@@ -185,6 +184,7 @@ pub(crate) struct Registrations {
 }
 
 /// A registration as stored, for reading its outcome.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FinalizerRow {
     pub(crate) package: String,
@@ -241,7 +241,6 @@ impl Registrations {
         }
         let invocation = FinalizerInvocation {
             id: id.clone(),
-            session_id: session.to_owned(),
             package: row.try_get("package")?,
             key: bytes_to_units(&row.try_get::<Vec<u8>, _>("local_key")?)
                 .ok_or_else(|| anyhow!("corrupt finalizer key"))?,
@@ -304,6 +303,7 @@ impl Registrations {
     }
 
     /// The session's registrations, oldest first.
+    #[cfg(test)]
     pub(crate) async fn rows(&self, session: &str) -> Result<Vec<FinalizerRow>> {
         let rows = sqlx::query(
             "SELECT package,local_key,status,failure FROM session_finalizers \
