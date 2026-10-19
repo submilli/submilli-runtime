@@ -26,6 +26,7 @@ export default defineConfig({
     // Standalone embeds are noindex duplicates of the canonical video pages.
     sitemap({ filter: (page) => !new URL(page).pathname.startsWith("/docs/videos/embed/") }),
     starlight({
+      routeMiddleware: "./src/video-route-data.ts",
       title: "Submilli",
       description:
         "The runtime for the code your agent writes — under rules you set.",
@@ -98,8 +99,9 @@ export default defineConfig({
             inlineButtonBorder: "var(--sl-color-hairline)",
             inlineButtonBorderOpacity: "0",
             inlineButtonForeground: "var(--sl-color-gray-2)",
-            tooltipSuccessBackground: "var(--sub-tip)",
-            tooltipSuccessForeground: "#000000",
+            // Neutral feedback keeps a successful copy action quiet in both themes.
+            tooltipSuccessBackground: "var(--sl-color-gray-6)",
+            tooltipSuccessForeground: "var(--sl-color-gray-1)",
           },
           textMarkers: {
             markBackground: "var(--sub-code-hl)",

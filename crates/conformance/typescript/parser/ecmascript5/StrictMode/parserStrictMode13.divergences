@@ -1,4 +1,1 @@
 types: 0 of 3 tsc entries compared, 0 differ
-
-errors:
-line 5: tsc TS1100: Invalid use of 'eval' in strict mode. (we accept)

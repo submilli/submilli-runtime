@@ -18,6 +18,22 @@ use crate::runtime::prelude::{MODULE_NAME, closure, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
 
 /// Dispatch key for an instance method `Uint8Array#<m>`.
+/// `Uint8Array.BYTES_PER_ELEMENT`, and the instance property of that name.
+const BYTES_PER_ELEMENT: f64 = 1.0;
+
+/// `Uint8Array.BYTES_PER_ELEMENT` as a host-owned global, like the `Number`
+/// statics: a value symbol the guest imports.
+pub(crate) fn install_constants(
+    linker: &mut Linker<StoreData>,
+    store: &mut wasmtime::Store<StoreData>,
+) -> wasmtime::Result<()> {
+    let gty = wasmtime::GlobalType::new(ValType::F64, wasmtime::Mutability::Var);
+    let global = wasmtime::Global::new(&mut *store, gty, Val::F64(BYTES_PER_ELEMENT.to_bits()))?;
+    let mangled = ctor_key("BYTES_PER_ELEMENT");
+    linker.define(&mut *store, MODULE_NAME, mangled.as_str(), global)?;
+    Ok(())
+}
+
 fn method_key(method: &str) -> MangledName {
     crate::mangle::extend(&crate::mangle::prelude("Uint8Array"), method)
 }
@@ -84,6 +100,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     register_host_fn(
         linker,
         MODULE_NAME,
+        method_key("BYTES_PER_ELEMENT"),
+        ft(vec![uint8.clone()], vec![num.clone()]),
+        true,
+        |_caller, _params, results| {
+            *abi_result(results, 0)? = Val::F64(BYTES_PER_ELEMENT.to_bits());
+            Ok(())
+        },
+    )?;
+    register_host_fn(
+        linker,
+        MODULE_NAME,
         method_key("byteLength"),
         ft(vec![uint8.clone()], vec![num.clone()]),
         true,
@@ -110,6 +137,24 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Ok(())
         },
     )?;
+    for (name, kind) in [
+        ("keys", super::IterKind::Keys),
+        ("values", super::IterKind::Values),
+        ("iterator", super::IterKind::Values),
+        ("entries", super::IterKind::Entries),
+    ] {
+        register_host_fn(
+            linker,
+            MODULE_NAME,
+            method_key(name),
+            ft(vec![uint8.clone()], vec![obj.clone()]),
+            true,
+            move |caller, params, results| {
+                *abi_result(results, 0)? = super::iterate(caller, abi_arg(params, 0)?, kind)?;
+                Ok(())
+            },
+        )?;
+    }
     for name in ["slice", "subarray"] {
         register_host_fn(
             linker,
@@ -733,6 +778,20 @@ fn byte_callback_params(leading: Vec<Type>) -> Vec<Type> {
 
 pub fn declare(defs: &mut PackageDeclaration) {
     let u8a = || Param::new("a", Type::Uint8Array);
+    // The static constant imports as a global, like `Number.EPSILON`.
+    let bytes_per_element = ctor_key("BYTES_PER_ELEMENT");
+    defs.values.insert(
+        bytes_per_element.as_str().to_string(),
+        crate::ValueSymbol {
+            name: "BYTES_PER_ELEMENT".to_string(),
+            mangled_name: bytes_per_element,
+            declaration_span: crate::Span::at(crate::FileId::PRELUDE),
+            kind: crate::ValueKind::Const {
+                ty: Type::Number,
+                doc: None,
+            },
+        },
+    );
     // A callback's slot is erased (see `install`); its type for checking calls
     // is in `declare_types`.
     let callback = || Param::new("f", Type::Unknown);
@@ -763,11 +822,22 @@ pub fn declare(defs: &mut PackageDeclaration) {
 
     m(defs, "length", vec![u8a()], Type::Number);
     m(defs, "byteLength", vec![u8a()], Type::Number);
+    m(defs, "BYTES_PER_ELEMENT", vec![u8a()], Type::Number);
     m(
         defs,
         "at",
         vec![u8a(), n("index")],
         Type::Union(vec![Type::Number, Type::Undefined]),
+    );
+    let iter = |ty: Type| Type::prelude_interface("Iterator".to_string(), vec![ty]);
+    m(defs, "keys", vec![u8a()], iter(Type::Number));
+    m(defs, "values", vec![u8a()], iter(Type::Number));
+    m(defs, "iterator", vec![u8a()], iter(Type::Number));
+    m(
+        defs,
+        "entries",
+        vec![u8a()],
+        iter(Type::Tuple(vec![Type::Number, Type::Number].into())),
     );
     for name in ["slice", "subarray"] {
         m(
@@ -890,9 +960,10 @@ pub fn declare(defs: &mut PackageDeclaration) {
         defs,
         "new",
         ctor_key("new"),
-        vec![Param::new(
+        vec![Param::with_default(
             "values",
             Type::Union(vec![Type::Array(Box::new(Type::Number)), Type::Number]),
+            crate::DefaultValue::Number(0.0),
         )],
         u8_ret.clone(),
     );
@@ -1229,6 +1300,50 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         },
                     ),
                     (
+                        "keys".to_string(),
+                        MethodSig {
+                            optional: false,
+                            generics: Vec::new(),
+                            params: Vec::new(),
+                            ret: Type::prelude_interface("Iterator".to_string(), vec![Type::Number]),
+                            predicate: None,
+                            doc: doc("/** Returns a live `Iterator<number>` of the indices. */"),
+                        },
+                    ),
+                    (
+                        "values".to_string(),
+                        MethodSig {
+                            optional: false,
+                            generics: Vec::new(),
+                            params: Vec::new(),
+                            ret: Type::prelude_interface("Iterator".to_string(), vec![Type::Number]),
+                            predicate: None,
+                            doc: doc("/** Returns a live `Iterator<number>` of the bytes; writes during iteration are seen. */"),
+                        },
+                    ),
+                    (
+                        "iterator".to_string(),
+                        MethodSig {
+                            optional: false,
+                            generics: Vec::new(),
+                            params: Vec::new(),
+                            ret: Type::prelude_interface("Iterator".to_string(), vec![Type::Number]),
+                            predicate: None,
+                            doc: doc("/** Returns a live `Iterator<number>` of the bytes, which `for-of` and spread use. */"),
+                        },
+                    ),
+                    (
+                        "entries".to_string(),
+                        MethodSig {
+                            optional: false,
+                            generics: Vec::new(),
+                            params: Vec::new(),
+                            ret: Type::prelude_interface("Iterator".to_string(), vec![Type::Tuple(vec![Type::Number, Type::Number].into())]),
+                            predicate: None,
+                            doc: doc("/** Returns a live `Iterator<[number, number]>` of index/byte pairs. */"),
+                        },
+                    ),
+                    (
                         "at".to_string(),
                         MethodSig {
                             optional: false,
@@ -1450,6 +1565,16 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         },
                     ),
                     (
+                        "BYTES_PER_ELEMENT".to_string(),
+                        PropertySig {
+                            ty: Type::Number,
+                            readonly: true,
+                            intrinsic: false,
+                            optional: false,
+                            doc: doc("/** The size in bytes of each element: always `1`. */"),
+                        },
+                    ),
+                    (
                         "byteLength".to_string(),
                         PropertySig {
                             ty: Type::Number,
@@ -1482,17 +1607,18 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             optional: false,
                             generics: Vec::new(),
-                            params: vec![Param::new(
+                            params: vec![Param::with_default(
                                 "values",
                                 Type::Union(vec![
                                     Type::Array(Box::new(Type::Number)),
                                     Type::Number,
                                 ]),
+                                crate::DefaultValue::Number(0.0),
                             )],
                             ret: Type::Uint8Array,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Build a new `Uint8Array`. Given an array, truncates each element and reduces it modulo 256, as JavaScript does, so `-1` is 255. Given a number, allocates that many zero bytes (the same as `Uint8Array.alloc`, including its `RangeError` on a negative or too-large length).\n * @param values Numeric values to copy into the new array, or the length to allocate.\n */",
+                                "/**\n * Build a new `Uint8Array`. Given an array, truncates each element and reduces it modulo 256, as JavaScript does, so `-1` is 255. Given a number, allocates that many zero bytes (the same as `Uint8Array.alloc`, including its `RangeError` on a negative or too-large length). With no argument, the array is empty.\n * @param values Numeric values to copy into the new array, or the length to allocate. Defaults to `0`.\n */",
                             ),
                         },
                     ),
@@ -1591,7 +1717,16 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         },
                     ),
                 ]),
-                properties: BTreeMap::new(),
+                properties: BTreeMap::from([(
+                    "BYTES_PER_ELEMENT".to_string(),
+                    PropertySig {
+                        ty: Type::Number,
+                        readonly: true,
+                        intrinsic: false,
+                        optional: false,
+                        doc: doc("/** The size in bytes of each element: always `1`. */"),
+                    },
+                )]),
                 dispatch: Dispatch::Static,
                 doc: doc(
                     "/** Constructor object for `Uint8Array`. Accessed via the global `Uint8Array` binding. */",

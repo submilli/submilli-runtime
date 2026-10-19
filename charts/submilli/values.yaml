@@ -110,9 +110,10 @@ resources:
 
 persistence:
   # -- Persist server state to a PersistentVolumeClaim. On by default: blueprints
-  # registered through the API, sessions, installed packages, and secrets all
-  # live here, and the failure mode of `false` is silent data loss on reschedule
-  # while the failure mode of `true` is a loud unbound-PVC error at install.
+  # registered through the API, sessions and their files, named volumes,
+  # ephemeral scratch, installed packages, and secrets all live here, and the
+  # failure mode of `false` is silent data loss on reschedule while the failure
+  # mode of `true` is a loud unbound-PVC error at install.
   #
   # Note that node-local storage cannot follow a pod to another node. Surviving
   # a node drain needs a StorageClass whose volumes are not node-local.
@@ -206,10 +207,12 @@ auth:
 #         size_limit: 1GiB
 #
 # Keys the chart sets itself are refused here, with an error naming the value to
-# use instead: `bind`, `port`, `vfs_ephemeral_dir`, `max_execution_memory`,
-# `shutdown_grace`, `allow_unauthenticated`, and
-# `secret_store.key_file`. Most of them also size something in the pod spec, and
-# two sources for one number is how those drift apart.
+# use instead: `tls`, `bind`, `port`, `max_execution_memory`, `shutdown_grace`,
+# `allow_unauthenticated`, `github_token_file`, and `secret_store.key_file`.
+# Most of them also size something in the pod spec, and two sources for one
+# number is how those drift apart. `volume_dir` is refused because the chart
+# keeps the volume root on the claim, where a configured root would not exist
+# yet.
 #
 # `api_tokens` entries are added after the chart's `admin` and `user`, whose
 # names are reserved. An extra token is read from a file (`token_file`); mount a

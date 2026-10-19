@@ -228,13 +228,13 @@ tests:
       - matchRegex:
           path: data["server.yaml"]
           pattern: "(?m)^bind: 0\\.0\\.0\\.0$"
-      # SUBMILLI_HOME relocates five of the server's six state directories; the
-      # ephemeral VFS root is the sixth and still defaults to the OS temp dir.
-      # Under readOnlyRootFilesystem, omitting this breaks /v1/execute — the
-      # product — while /healthz stays green.
-      - matchRegex:
+      # Every VFS directory, ephemeral scratch included, sits under the volume
+      # root the server keeps beneath SUBMILLI_HOME, on the state volume. A
+      # configured volume_dir would have to exist before the first boot, so the
+      # chart leaves it at its default.
+      - notMatchRegex:
           path: data["server.yaml"]
-          pattern: "(?m)^vfs_ephemeral_dir: /tmp$"
+          pattern: "(?m)^volume_dir:"
       # A bare integer: the server rejects "50Mi" for this setting.
       - matchRegex:
           path: data["server.yaml"]
@@ -324,6 +324,17 @@ tests:
       - failedTemplate:
           errorPattern: "config.github_token_file is owned by the chart"
 
+  - it: refuses the volume root in config
+    template: statefulset.yaml
+    set:
+      config:
+        volume_dir: /var/lib/submilli/vols
+    asserts:
+      # A configured root must exist before the server starts, and nothing
+      # creates one on a fresh claim.
+      - failedTemplate:
+          errorPattern: "config.volume_dir is owned by the chart: it stays on the state volume"
+
   - it: passes config through for settings the chart has no value for
     template: configmap-config.yaml
     set:
@@ -341,7 +352,7 @@ tests:
       # Added to the chart's keys, not substituted for them.
       - matchRegex:
           path: data["server.yaml"]
-          pattern: "(?m)^vfs_ephemeral_dir: /tmp$"
+          pattern: "(?m)^bind: 0\\.0\\.0\\.0$"
 
   - it: merges config.secret_store beside the chart's key file
     template: configmap-config.yaml
@@ -543,7 +554,7 @@ tests:
       # re-run and copy the reported `Actual:` value.
       - equal:
           path: spec.template.metadata.annotations["checksum/config"]
-          value: 7862e7ad63c75bfc15fb06df5e79f81be7b29c23db22060d35674819949cd5ed
+          value: 6b6f2528c40a42f7ff15cfa03d680d6fef8f369b5745ef24c88a69f308a644ac
 
   - it: produces a different rollout trigger for different config
     template: statefulset.yaml
@@ -552,7 +563,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.metadata.annotations["checksum/config"]
-          value: 5130498cc44102914635980433ad2c518821dac6d6a5cf490f167149ae1fba0b
+          value: e182183c3e798b30572bb854b9683af5c717be660136c61a4e0f7880095f38d4
 
   - it: keeps the generated names inside the DNS label limit
     set:

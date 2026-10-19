@@ -910,6 +910,9 @@ pub struct TypedAst {
     pub authored_arguments: std::collections::BTreeMap<(u32, u32, u32), Vec<ExprId>>,
     /// Parameter declaration types before optional/default ABI input widening.
     pub authored_parameter_types: std::collections::BTreeMap<(u32, u32, u32), Type>,
+    /// The type a binding's postfix `++`/`--` reads it at, keyed by the name's
+    /// span: its narrowed type, where the target records the declared one.
+    pub postfix_operand_types: std::collections::BTreeMap<(u32, u32, u32), Type>,
     /// Synthetic reads of incoming arguments before a parameter becomes initialized.
     pub parameter_inputs: std::collections::BTreeSet<ExprId>,
     /// Callee prologue statements that initialize parameters and pattern bindings.
@@ -1136,6 +1139,9 @@ pub struct TypedClassField {
     /// assigned from the constructor parameter, so it's exempt from the
     /// definite-assignment check.
     pub auto_assigned: bool,
+    /// Declared as a bodyless optional method (`f?(): T;`), which, as in
+    /// TypeScript, emits nothing: it neither initializes nor resets the slot.
+    pub method_signature: bool,
     /// Set when this declaration *narrows* an inherited one. See
     /// [`FieldNarrowingCheck`]. Boxed because every class field carries this and
     /// almost none of them narrow.

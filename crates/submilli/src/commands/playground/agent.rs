@@ -41,10 +41,23 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 /// The most of a tool's result handed back to the model.
 const MAX_RESULT_BYTES: usize = 64 * 1024;
 
+// A refusal holds under the blueprint that made it, which the developer may change
+// between messages, so a refused call is made again when asked rather than recalled.
 const SYSTEM: &str = "You are the production agent for this application, running in a \
     local playground. Do the task with the tools you are given: write TypeScript-subset \
     programs and run them. When the playground refuses something, report the refusal; do \
-    not work around it. Finish with a short answer.";
+    not look for another way to get it. A refusal stands only under the blueprint that \
+    made it, and the developer may change the blueprint between messages, so when asked \
+    to try again, call the tool again rather than repeating an earlier answer. Finish with \
+    a short answer.";
+
+/// [`SYSTEM`], and what the session's variables are.
+fn system_prompt(variables: &BTreeMap<String, String>) -> String {
+    match super::variables_note(variables) {
+        Some(note) => format!("{SYSTEM} {note}"),
+        None => SYSTEM.to_owned(),
+    }
+}
 
 /// The providers, each with the variables its key may be in and its default model.
 struct ProviderRow {
@@ -69,7 +82,7 @@ const PROVIDERS: [ProviderRow; 3] = [
         name: "openai",
         kind: ProviderKind::OpenAi,
         keys: &["OPENAI_API_KEY"],
-        default_model: "gpt-5.5",
+        default_model: "gpt-6-luna",
         base_url_variable: "OPENAI_BASE_URL",
         default_base_url: "https://api.openai.com",
     },
@@ -106,8 +119,9 @@ pub(crate) fn choose(env: impl Fn(&str) -> Option<String>) -> Result<Choice, Str
             key_of(&env, row).map(|key| choice(&env, row, row.default_model.to_owned(), key))
         })
         .ok_or_else(|| {
-            "no provider configured: start the playground with ANTHROPIC_API_KEY, \
-             OPENAI_API_KEY, or GEMINI_API_KEY set (and optionally \
+            "no provider configured: set ANTHROPIC_API_KEY, OPENAI_API_KEY, or \
+             GEMINI_API_KEY in the project's .env, with `submilli secret put <NAME>`, or \
+             in the shell before the playground starts (and optionally \
              SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>)"
                 .to_owned()
         })
@@ -238,19 +252,73 @@ pub(crate) fn max_calls_per_answer(requested: Option<u16>) -> Result<usize, Stri
     Ok(usize::from(limit))
 }
 
-/// [`choose`] from this process's environment.
+/// Whether `name` is one the playground reads for chat: a provider's key or address,
+/// or the model variable. Only these come from the project's `.env` or the secret store.
+pub(crate) fn reads(name: &str) -> bool {
+    name == MODEL_VARIABLE
+        || PROVIDERS
+            .iter()
+            .any(|row| row.keys.contains(&name) || row.base_url_variable == name)
+}
+
+/// [`choose`] from where the playground finds keys (see [`super::keys`]).
 pub(crate) fn configured() -> Result<Choice, String> {
-    choose(|name| std::env::var(name).ok())
+    choose(super::keys::value)
 }
 
-/// [`choose_named`] from this process's environment.
+/// [`choose_named`] from where the playground finds keys.
 pub(crate) fn configured_named(named: &str, source: &str) -> Result<Choice, String> {
-    choose_named(|name| std::env::var(name).ok(), named, source)
+    choose_named(super::keys::value, named, source)
 }
 
-/// [`offered`] from this process's environment.
+/// [`offered`] from where the playground finds keys.
 pub(crate) fn offered_here() -> Vec<String> {
-    offered(|name| std::env::var(name).ok())
+    offered(super::keys::value)
+}
+
+/// The variable a key saved for `provider` goes under: its first.
+pub(crate) fn key_variable(provider: &str) -> Option<&'static str> {
+    PROVIDERS
+        .iter()
+        .find(|row| row.name == provider)
+        .and_then(|row| row.keys.first().copied())
+}
+
+/// Where chat finds `provider`'s key now, under any of its variables.
+pub(crate) fn key_from(provider: &str) -> Option<super::keys::Source> {
+    let row = PROVIDERS.iter().find(|row| row.name == provider)?;
+    row.keys
+        .iter()
+        .find_map(|key| super::keys::lookup(key).map(|(_, source)| source))
+}
+
+/// For each provider chat works with: the variable its key goes under, its default
+/// model, and where its key is found now.
+pub(crate) fn keys_now() -> Vec<ProviderKey> {
+    PROVIDERS
+        .iter()
+        .map(|row| ProviderKey {
+            provider: row.name.to_owned(),
+            variable: row.keys[0].to_owned(),
+            default_model: row.default_model.to_owned(),
+            from: key_from(row.name),
+        })
+        .collect()
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct ProviderKey {
+    pub(crate) provider: String,
+    pub(crate) variable: String,
+    /// The model a session with this provider gets unless it names one.
+    pub(crate) default_model: String,
+    pub(crate) from: Option<super::keys::Source>,
+}
+
+/// Where `choice`'s key was found.
+pub(crate) fn key_source(choice: &Choice) -> Option<super::keys::Source> {
+    super::keys::lookup(choice.key_variable).map(|(_, source)| source)
 }
 
 impl Choice {
@@ -297,7 +365,7 @@ pub(crate) fn check_settings(choice: &Choice, settings: &Settings) -> Result<(),
             "the provider settings are {size} bytes; the most taken is {MAX_PROVIDER_SETTINGS_BYTES}"
         ));
     }
-    request(choice, "", &[], &[], settings).map(|_| ())
+    request(choice, "", &[], &[], settings, SYSTEM).map(|_| ())
 }
 
 /// The request for the conversation's next turn under `settings`: the effort's fields,
@@ -309,12 +377,13 @@ fn request(
     turns: &[Turn],
     tools: &[ToolSpec],
     settings: &Settings,
+    system: &str,
 ) -> Result<submilli_shared::llm::wire::WireRequest, String> {
     let mut request = build_tool_request(&ToolRequest {
         kind: choice.kind,
         base_url: &choice.base_url,
         model: &choice.model,
-        system: SYSTEM,
+        system,
         turns,
         tools,
         max_tokens: settings.max_output.unwrap_or(MAX_OUTPUT_TOKENS),
@@ -424,6 +493,8 @@ pub(crate) struct Resume {
     pub(crate) history: Vec<Turn>,
     /// How many messages the session's log holds, so new ones are numbered after them.
     pub(crate) said: usize,
+    /// The variables the session was started with.
+    pub(crate) variables: BTreeMap<String, String>,
 }
 
 /// One entry of a session's chat log, as [`history`] reads it.
@@ -577,7 +648,7 @@ pub(crate) enum Stopped {
 /// it sits idle past the blueprint's idle timeout, or `session end` does.
 pub(crate) fn run(setup: &Setup<'_>, task: &str) -> Result<Outcome, String> {
     // Trimmed as `choose` read it, so the header and the redaction use the same text.
-    let key = std::env::var(setup.choice.key_variable)
+    let key = super::keys::value(setup.choice.key_variable)
         .map(|key| key.trim().to_owned())
         .unwrap_or_default();
     let clean = |message: String| {
@@ -631,6 +702,12 @@ fn converse(
     };
     log.say(0, ChatRole::User, task, false);
     let mut turns = with_task(history, task);
+    // Told who the session serves, as the application would tell its agent.
+    let variables = setup
+        .resume
+        .as_ref()
+        .map_or(setup.variables, |resume| &resume.variables);
+    let system = system_prompt(variables);
     let mut tool_calls = 0;
     let mut said = 0;
     let mut last_text = None;
@@ -640,7 +717,7 @@ fn converse(
             text,
             calls,
             finish,
-        } = ask(&setup.choice, key, &turns, &tools, setup.settings)?;
+        } = ask(&setup.choice, key, &turns, &tools, setup.settings, &system)?;
         if let Some(text) = &text {
             said += 1;
             log.say(
@@ -882,8 +959,9 @@ fn ask(
     turns: &[Turn],
     tools: &[ToolSpec],
     settings: &Settings,
+    system: &str,
 ) -> Result<Reply, String> {
-    let request = request(choice, key, turns, tools, settings)?;
+    let request = request(choice, key, turns, tools, settings, system)?;
     // No redirects: a redirect would carry the key's header to wherever it points.
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .max_redirects(0)
@@ -1041,10 +1119,22 @@ mod tests {
     }
 
     #[test]
+    fn the_model_is_told_the_session_s_variables() {
+        let variables = BTreeMap::from([("customerId".to_owned(), "cus_northwind".to_owned())]);
+        let system = system_prompt(&variables);
+        assert!(system.starts_with(SYSTEM), "{system}");
+        assert!(
+            system.contains(r#"customerId = "cus_northwind""#),
+            "{system}"
+        );
+        assert_eq!(system_prompt(&BTreeMap::new()), SYSTEM);
+    }
+
+    #[test]
     fn without_it_the_first_key_set_picks_with_its_default_model() {
         let chosen = choose(env(&[("OPENAI_API_KEY", "o"), ("GOOGLE_API_KEY", "g")])).unwrap();
         assert_eq!(chosen.provider, "openai");
-        assert_eq!(chosen.model, "gpt-5.5");
+        assert_eq!(chosen.model, "gpt-6-luna");
         assert_eq!(chosen.base_url, "https://api.openai.com");
         let chosen = choose(env(&[("GOOGLE_API_KEY", "g")])).unwrap();
         assert_eq!(chosen.key_variable, "GOOGLE_API_KEY");
@@ -1271,7 +1361,9 @@ mod tests {
             Some(8000),
             json!({ "temperature": 0.2, "reasoning": { "summary": "auto" } }),
         );
-        let body = request(&openai, "o", &[], &[], &asked).unwrap().body;
+        let body = request(&openai, "o", &[], &[], &asked, SYSTEM)
+            .unwrap()
+            .body;
         assert_eq!(
             body["reasoning"],
             json!({ "effort": "high", "summary": "auto" })
@@ -1311,6 +1403,7 @@ mod tests {
             &[],
             &[],
             &settings(None, Some(1234), json!({ "top_k": 5 })),
+            SYSTEM,
         )
         .unwrap()
         .body;

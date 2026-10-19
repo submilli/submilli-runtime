@@ -3,9 +3,9 @@
 //! The OAuth dance runs on the operator's machine (the CLI); the server's role
 //! is to (a) hand the CLI the resolved client config to run the flow with,
 //! (b) store the resulting credential, and (c) report each blueprint's
-//! PENDING/ACTIVE state. Credentials land in the SecretStore at
-//! `mcp_oauth/<blueprint>/<server>/credential`; access tokens never touch
-//! this surface.
+//! PENDING/ACTIVE state. Credentials are kept as grants, one per blueprint and
+//! server, which can be listed and revoked; access tokens never touch this
+//! surface.
 
 use std::sync::Arc;
 
@@ -21,9 +21,9 @@ use submilli_shared::BlueprintSecretResolver;
 use crate::app::AppState;
 use crate::handlers::execute::blueprint_miss_message;
 use submilli_shared::mcp_auth::{
-    AuthState, OAuthCredential, ServerKind, blueprint_auth_state, server_kind,
+    AuthState, GrantSummary, OAuthCredential, ServerKind, blueprint_auth_state, server_kind,
 };
-use submilli_shared::secret_store::SecretStore;
+use submilli_shared::mcp_token::OAuthTokenManager;
 
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
@@ -37,10 +37,10 @@ fn err(status: StatusCode, error: &'static str, message: String) -> Failure {
     (status, Json(ErrorResponse { error, message }))
 }
 
-/// The configured store, or a 503 if none is installed (OAuth needs somewhere to
-/// keep the refresh token).
-fn store(state: &AppState) -> Result<&Arc<dyn SecretStore>, Failure> {
-    state.secret_store().ok_or_else(|| {
+/// The token manager holding the grants, or a 503 when secrets are off (OAuth
+/// needs somewhere to keep the refresh token).
+fn tokens(state: &AppState) -> Result<&Arc<OAuthTokenManager>, Failure> {
+    state.oauth_token_manager().ok_or_else(|| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
             "no_secret_store",
@@ -264,7 +264,7 @@ pub async fn oauth_exchange(
     crate::audit::annotate(serde_json::json!({"blueprint": blueprint, "server": server}));
     let bp = get_blueprint(&state, &blueprint).await?;
     let (entry, auth) = oauth_server(&bp, &server)?;
-    let store = store(&state)?;
+    let tokens = tokens(&state)?;
     let http = state.oauth_http();
 
     // Resolve the token endpoint: blueprint pin, else discover.
@@ -320,6 +320,13 @@ pub async fn oauth_exchange(
     )
     .await
     .map_err(|e| err(StatusCode::BAD_GATEWAY, "exchange_failed", e))?;
+    if grant.refresh_token.is_none() && grant.access_token.is_none() {
+        return Err(err(
+            StatusCode::BAD_GATEWAY,
+            "exchange_failed",
+            "the token endpoint returned neither a refresh token nor an access token".into(),
+        ));
+    }
 
     // Refresh token preferred; else store the static access token (no refresh).
     let credential = if grant.refresh_token.is_some() {
@@ -339,8 +346,12 @@ pub async fn oauth_exchange(
             scopes: Vec::new(),
         }
     };
-    update_credential(&state, &blueprint, &server, Some(&credential)).await?;
-    Ok(Json(blueprint_auth_state(&bp, Some(store)).await.into()))
+    deposit(&state, tokens, &blueprint, &server, &credential).await?;
+    Ok(Json(
+        blueprint_auth_state(&bp, Some(tokens.grants()))
+            .await
+            .into(),
+    ))
 }
 
 /// Mirror of [`AuthState`] for the wire.
@@ -399,7 +410,7 @@ pub async fn put_refresh_token(
     crate::audit::annotate(serde_json::json!({"blueprint": blueprint, "server": server}));
     let bp = get_blueprint(&state, &blueprint).await?;
     oauth_server(&bp, &server)?;
-    let store = store(&state)?;
+    let tokens = tokens(&state)?;
     // Exactly one token mode: a refresh token (needs a token endpoint to redeem
     // it) or a static access token.
     let credential = match (req.refresh_token, req.access_token) {
@@ -434,8 +445,12 @@ pub async fn put_refresh_token(
             ));
         }
     };
-    update_credential(&state, &blueprint, &server, Some(&credential)).await?;
-    Ok(Json(blueprint_auth_state(&bp, Some(store)).await.into()))
+    deposit(&state, tokens, &blueprint, &server, &credential).await?;
+    Ok(Json(
+        blueprint_auth_state(&bp, Some(tokens.grants()))
+            .await
+            .into(),
+    ))
 }
 
 /// `DELETE /v1/mcp/{blueprint}/{server}/refresh-token` — deauthenticate.
@@ -446,26 +461,79 @@ pub async fn delete_refresh_token(
     crate::audit::annotate(serde_json::json!({"blueprint": blueprint, "server": server}));
     let bp = get_blueprint(&state, &blueprint).await?;
     oauth_server(&bp, &server)?;
-    let store = store(&state)?;
-    update_credential(&state, &blueprint, &server, None).await?;
-    Ok(Json(blueprint_auth_state(&bp, Some(store)).await.into()))
+    let tokens = tokens(&state)?;
+    revoke(&state, tokens, &blueprint, &server).await?;
+    Ok(Json(
+        blueprint_auth_state(&bp, Some(tokens.grants()))
+            .await
+            .into(),
+    ))
 }
 
-async fn update_credential(
+/// Keep a new login, then drop the blueprint's catalog so its next discovery
+/// sees the server.
+async fn deposit(
     state: &AppState,
+    tokens: &OAuthTokenManager,
     blueprint: &str,
     server: &str,
-    credential: Option<&OAuthCredential>,
+    credential: &OAuthCredential,
 ) -> Result<(), Failure> {
-    let manager = state.oauth_token_manager().ok_or_else(|| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "no_secret_store",
-            "OAuth token manager is unavailable".into(),
-        )
-    })?;
-    manager
-        .set_credential(blueprint, server, credential)
+    tokens
+        .deposit(blueprint, server, credential)
+        .await
+        .map_err(token_store_error)?;
+    state.evict_mcp_catalog(blueprint);
+    Ok(())
+}
+
+/// Forget a grant; whether one was on file.
+async fn revoke(
+    state: &AppState,
+    tokens: &OAuthTokenManager,
+    blueprint: &str,
+    server: &str,
+) -> Result<bool, Failure> {
+    let revoked = tokens
+        .revoke(blueprint, server)
+        .await
+        .map_err(token_store_error)?;
+    state.evict_mcp_catalog(blueprint);
+    Ok(revoked)
+}
+
+fn token_store_error(error: submilli_shared::mcp_token::McpTokenError) -> Failure {
+    match error {
+        submilli_shared::mcp_token::McpTokenError::InvalidGrant(message) => {
+            err(StatusCode::BAD_REQUEST, "invalid_credential", message)
+        }
+        error => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "store_error",
+            error.to_string(),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GrantsQuery {
+    #[serde(default)]
+    pub blueprint: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GrantsResponse {
+    pub grants: Vec<GrantSummary>,
+}
+
+/// `GET /v1/mcp-grants?blueprint=` — the grants on file, never their tokens.
+pub async fn list_grants(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<GrantsQuery>,
+) -> Result<Json<GrantsResponse>, Failure> {
+    let grants = tokens(&state)?
+        .grants()
+        .list(query.blueprint.as_deref())
         .await
         .map_err(|error| {
             err(
@@ -474,8 +542,31 @@ async fn update_credential(
                 error.to_string(),
             )
         })?;
-    state.evict_mcp_catalog(blueprint);
-    Ok(())
+    Ok(Json(GrantsResponse { grants }))
+}
+
+#[derive(Debug, Serialize)]
+pub struct GrantRef {
+    pub blueprint: String,
+    pub server: String,
+}
+
+/// `DELETE /v1/mcp-grants/{blueprint}/{server}` — revoke a grant, whether or not
+/// its blueprint still declares the server.
+pub async fn delete_grant(
+    State(state): State<AppState>,
+    Path((blueprint, server)): Path<(String, String)>,
+) -> Result<Json<GrantRef>, Failure> {
+    crate::audit::annotate(serde_json::json!({"blueprint": blueprint, "server": server}));
+    let tokens = tokens(&state)?;
+    if !revoke(&state, tokens, &blueprint, &server).await? {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            "grant_not_found",
+            format!("no MCP grant for '{server}' in blueprint '{blueprint}'"),
+        ));
+    }
+    Ok(Json(GrantRef { blueprint, server }))
 }
 
 #[derive(Debug, Serialize)]
@@ -501,7 +592,11 @@ pub async fn auth_status(
     Path(blueprint): Path<String>,
 ) -> Result<Json<AuthStatusResponse>, Failure> {
     let bp = get_blueprint(&state, &blueprint).await?;
-    let derived = blueprint_auth_state(&bp, state.secret_store()).await;
+    let derived = blueprint_auth_state(
+        &bp,
+        state.oauth_token_manager().map(|tokens| tokens.grants()),
+    )
+    .await;
     let unauthenticated: Vec<&String> = match &derived {
         AuthState::Pending { unauthenticated } => unauthenticated.iter().collect(),
         AuthState::Active => Vec::new(),

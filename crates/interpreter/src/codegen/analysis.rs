@@ -751,13 +751,22 @@ impl CodegenAnalysis {
                 self.visit_type_at(target_ty, stmt.span)?;
             }
             TypedStmtKind::AssignField { receiver, name, .. } => {
+                let receiver_ty = ta
+                    .source_type(*receiver)
+                    .map_err(crate::codegen::arena_failure)?;
+                // A prelude interface's host setter, if it declares one; an
+                // unused name imports nothing.
+                if let Some(iface) = crate::codegen::host_property_iface(receiver_ty) {
+                    self.dependency_usage.note_member(crate::mangle::extend(
+                        &iface,
+                        &crate::mangle::property_setter(&name.name),
+                    ));
+                }
+                if crate::codegen::may_hold_builtin_value(receiver_ty) {
+                    self.note_record_helpers();
+                }
                 self.extra_field_names.push(name.name.clone());
-                self.note_shaped_property_access(
-                    ta.source_type(*receiver)
-                        .map_err(crate::codegen::arena_failure)?,
-                    &name.name,
-                    AccessorKind::Set,
-                );
+                self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Set);
             }
             TypedStmtKind::AssignIndex {
                 receiver, elem_ty, ..
@@ -1112,8 +1121,12 @@ impl CodegenAnalysis {
                     AccessorKind::Get,
                 );
             }
-            TypedExprKind::IndexAccess { .. } => {
+            TypedExprKind::IndexAccess { receiver, .. } => {
                 self.note_index_check();
+                self.note_string_index(
+                    ta.source_type(*receiver)
+                        .map_err(crate::codegen::arena_failure)?,
+                );
             }
             TypedExprKind::Closure {
                 runtime_generics,
@@ -1161,6 +1174,14 @@ impl CodegenAnalysis {
                         .map_err(crate::codegen::arena_failure)?;
                     self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Get);
                     self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Set);
+                    if let Some(iface) = crate::codegen::host_property_iface(receiver_ty) {
+                        self.dependency_usage
+                            .note_member(crate::mangle::extend(&iface, &name.name));
+                        self.dependency_usage.note_member(crate::mangle::extend(
+                            &iface,
+                            &crate::mangle::property_setter(&name.name),
+                        ));
+                    }
                 }
                 PostfixTarget::Index { elem_ty, .. } => {
                     self.note_postfix_target(elem_ty)?;
@@ -1335,6 +1356,7 @@ impl CodegenAnalysis {
                     // A chain index is bounds-checked like any other, so it
                     // needs the same message in the pool.
                     self.note_index_check();
+                    self.note_string_index(receiver_ty);
                 }
                 TypedChainPart::Call {
                     result_ty,
@@ -1427,6 +1449,15 @@ impl CodegenAnalysis {
             // where the receiver turns out to be getter-backed.
             self.string_pool
                 .intern_text(throw::READ_ONLY_PROPERTY_MESSAGE);
+        }
+    }
+
+    /// `s[i]` reads through the prelude's string index helper. A chain step's
+    /// receiver may still be typed nullable: `s?.[i]` reads the non-null part.
+    fn note_string_index(&mut self, receiver_ty: &Type) {
+        if crate::typechecker::infer::narrowing::strip_nullish(receiver_ty).is_string_shaped() {
+            self.dependency_usage
+                .note_value(crate::mangle::prelude("string_index"));
         }
     }
 

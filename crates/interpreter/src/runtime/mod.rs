@@ -5,9 +5,12 @@ pub(crate) mod array_storage;
 pub mod blocking;
 pub mod call_log;
 pub mod decision;
+pub mod default_filesystem;
 pub mod disk_quota;
+pub mod durable;
 pub mod embedding;
 pub mod exec;
+pub mod filesystem;
 pub mod fs;
 pub mod fuel;
 pub mod gc_singleton;
@@ -23,6 +26,7 @@ pub mod number;
 pub mod prelude;
 pub mod secrets;
 pub mod security;
+pub mod session_finalizers;
 pub mod session_kv;
 pub mod skills;
 pub mod token_ledger;
@@ -78,8 +82,9 @@ pub use prelude::temporal::shared::TEMPORAL_MODULE_NAME;
 pub use secrets::{NoopSecretProvider, SecretProvider};
 pub use security::{AllowAllCheck, AuditDecision, CheckOutcome, SecurityCheck};
 pub use session_kv::{
-    InMemorySessionKv, SessionKvEntry, SessionKvError, SessionKvLimitKind, SessionKvLimits,
-    SessionKvPage, SessionKvStore, SharedKvBudget,
+    CURSOR_KEY_ID_LEN, CursorKey, CursorKeys, InMemorySessionKv, SessionKvEntry, SessionKvError,
+    SessionKvFuture, SessionKvLimitKind, SessionKvLimits, SessionKvPage, SessionKvStore,
+    SessionKvUsage, entry_bytes, render_key, value_bytes,
 };
 pub use skills::{SKILLS_MODULE_NAME, Skill, SkillError, SkillInfo, SkillProvider};
 pub use tools::{
@@ -129,6 +134,7 @@ pub struct StoreData {
     pub(crate) git_history: Option<Arc<crate::stdlib::git::log_cache::Cache>>,
     pub console: Box<dyn Write + Send>,
     pub vfs: Vfs,
+    pub filesystem: Arc<dyn filesystem::Filesystem>,
     pub vfs_info: VfsInfo,
     pub security_check: Arc<dyn SecurityCheck>,
     pub fs_max_read_size: u64,
@@ -137,6 +143,8 @@ pub struct StoreData {
     /// Operator ceiling for a download, including streaming its body.
     pub http_max_download_timeout_ms: u64,
     pub auth_proxy: Arc<dyn AuthProxy>,
+    /// Immutable configuration resolved by the trusted session creator.
+    pub variables: Arc<std::collections::BTreeMap<String, String>>,
     pub secret_provider: Arc<dyn SecretProvider>,
     /// The outbound `@mcp/<server>` transport the `submilli:mcp.call` host fn
     /// dispatches through, present when the embedder wires one. `None` in the
@@ -175,6 +183,12 @@ pub struct StoreData {
     /// becoming per-execution scratch state that no later `execute` can read —
     /// the guest surface reports that as a configuration error.
     pub session_kv: Option<Arc<dyn SessionKvStore>>,
+    /// Durable package-owned resource cleanup supplied by the embedder.
+    pub session_finalizers: Option<Arc<dyn session_finalizers::SessionFinalizers>>,
+    pub finalizing: bool,
+    /// The keys `session.list` cursors are sealed with. `None` seals them with a
+    /// per-process key, so they stop working when the process restarts.
+    pub cursor_keys: Option<Arc<CursorKeys>>,
     /// The harness `submilli:agents` runs sub-agents through, present only when
     /// the embedder wires one. `None` makes every call a catchable
     /// [`AgentCallError::NotConfigured`].
@@ -222,7 +236,7 @@ pub struct StoreData {
     /// The call-metadata closure environment type, built on first use for the
     /// same reason as [`Self::intrinsic_types`].
     pub(crate) call_metadata_type: Option<wasmtime::StructType>,
-    pub(crate) iterator_functions: [Option<wasmtime::Func>; 10],
+    pub(crate) iterator_functions: [Option<wasmtime::Func>; 13],
     pub(crate) iterator_constants: [Option<wasmtime::Global>; 6],
     /// The object each static-dispatch binding is as a value, by its string
     /// form; see `prelude::object::static_value`.
@@ -281,6 +295,7 @@ impl StoreData {
             #[cfg(test)]
             array_growth: array_storage::GrowthStats::default(),
             console: Box::new(std::io::stderr()),
+            filesystem: Arc::new(default_filesystem::DefaultFilesystem::new(vfs.clone())),
             vfs,
             vfs_info,
             security_check: security::default_check(),
@@ -292,6 +307,7 @@ impl StoreData {
             http_max_response_size: DEFAULT_HTTP_MAX_RESPONSE_SIZE,
             http_max_download_timeout_ms: 60_000,
             auth_proxy: crate::stdlib::http::default_auth_proxy(),
+            variables: Arc::default(),
             secret_provider: Arc::new(secrets::NoopSecretProvider),
             mcp_transport: None,
             tool_provider: None,
@@ -301,6 +317,9 @@ impl StoreData {
             embedding_provider: None,
             embedding_budget: None,
             session_kv: None,
+            session_finalizers: None,
+            finalizing: false,
+            cursor_keys: None,
             agent_provider: None,
             skill_provider: None,
             metrics: Arc::new(metrics::NoopMetricsSink),
@@ -319,7 +338,7 @@ impl StoreData {
             undefined_value: None,
             closure_receiver_type: None,
             call_metadata_type: None,
-            iterator_functions: [None; 10],
+            iterator_functions: [None; 13],
             iterator_constants: [None; 6],
             static_values: std::collections::BTreeMap::new(),
             parameter_cache: Default::default(),

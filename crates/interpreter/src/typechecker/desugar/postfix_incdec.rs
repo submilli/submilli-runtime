@@ -1,7 +1,8 @@
 //! Lowers statement-position field/index postfix to assignment. Binding postfix
 //! stays as `PostfixUnary` so codegen retains both the declared storage type and
 //! the narrowed numeric result type. Byte postfix also stays an expression so
-//! its modulo wrapping is identical in statement and expression positions.
+//! its modulo wrapping is identical in statement and expression positions, and
+//! so does postfix on a prelude interface property.
 
 use crate::{
     BinOp, PostfixOp, PostfixTarget, StmtId, Type, TypedExpr, TypedExprKind, TypedStmtKind,
@@ -54,10 +55,25 @@ pub(super) fn run(ctx: &mut DesugarCtx) -> Result<(), crate::compiler_error::Com
             {
                 continue;
             }
+            // A prelude property is read and written through host functions
+            // (`RegExp.lastIndex`, `Array.length`), which only the expression form dispatches.
+            if matches!(&target, PostfixTarget::Field { receiver, .. }
+                if is_prelude_property_receiver(&ctx.ta.try_expr(*receiver).map_err(crate::typechecker::arena_failure)?.ty))
+            {
+                continue;
+            }
             lower(ctx, id, op, target)?;
         }
     }
     Ok(())
+}
+
+fn is_prelude_property_receiver(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Array(_) => true,
+        Type::InterfaceRef { package, .. } => package.as_str() == crate::mangle::PRELUDE_PACKAGE,
+        _ => false,
+    }
 }
 
 fn lower(

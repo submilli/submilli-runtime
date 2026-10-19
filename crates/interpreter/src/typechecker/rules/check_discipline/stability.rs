@@ -23,7 +23,7 @@ pub(super) fn is_primitive(ty: &Type) -> bool {
         | Type::Error => true,
         Type::Union(members) => members.iter().all(is_primitive),
         Type::Uint8Array
-        | Type::Unknown
+        | Type::Unknown | Type::NonPrimitive
         | Type::Function { .. }
         | Type::Object { .. }
         | Type::Array(_)

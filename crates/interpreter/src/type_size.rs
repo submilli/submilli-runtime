@@ -314,6 +314,7 @@ pub fn for_each_child<'t>(ty: &'t Type, mut visit: impl FnMut(&'t Type)) {
         | Type::Undefined
         | Type::Void
         | Type::Unknown
+        | Type::NonPrimitive
         | Type::Error
         | Type::Never
         | Type::TypeVar(_)
@@ -457,6 +458,7 @@ pub fn map_children<E>(
         | Type::Undefined
         | Type::Void
         | Type::Unknown
+        | Type::NonPrimitive
         | Type::Error
         | Type::Never
         | Type::TypeVar(_)
@@ -521,6 +523,7 @@ impl<'a> TypeChildren<'a> {
             | Type::Undefined
             | Type::Void
             | Type::Unknown
+            | Type::NonPrimitive
             | Type::Error
             | Type::Never
             | Type::TypeVar(_)

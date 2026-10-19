@@ -411,6 +411,7 @@ pub(crate) fn walk_type(
         | Type::TypeVar(_)
         | Type::GenericParam { .. }
         | Type::Unknown
+        | Type::NonPrimitive
         | Type::NumberEnum { .. }
         | Type::StringEnum { .. } => {}
     };

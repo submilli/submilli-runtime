@@ -831,6 +831,99 @@ fn a_test_run_shows_its_source_its_variables_and_where_local_state_came_from() {
 }
 
 #[test]
+fn sessions_list_each_sessions_first_message_and_its_tests_and_reruns() {
+    use crate::commands::playground::store::events::{
+        ChatRole, ChatTurn, EventBody, Position, StoredEvent,
+    };
+    let mut fixture = Fixture::new();
+    let source =
+        fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]).session("s-a"));
+    fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]).session("s-b"));
+    let mut stopped = RunSpec::new(Vec::new()).session("s-b");
+    stopped.error = Some(cancelled());
+    fixture.run(stopped);
+    let mut broken = RunSpec::new(Vec::new()).session("s-b");
+    broken.error = Some(crate::commands::playground::store::run::StoredError {
+        kind: submilli_server::error::ErrorKind::CompileError,
+        message: "error: unresolved identifier".into(),
+        ..cancelled()
+    });
+    fixture.run(broken);
+    let mut crashed = RunSpec::new(Vec::new()).session("s-b");
+    crashed.error = Some(crate::commands::playground::store::run::StoredError {
+        kind: submilli_server::error::ErrorKind::RuntimeError,
+        message: "error: index out of range".into(),
+        ..cancelled()
+    });
+    fixture.run(crashed);
+    let mut test = RunSpec::new(vec![charges_allowed(0, "cus_northwind")]).label("test");
+    test.entry = "test".into();
+    test.test_of = Some(source);
+    fixture.run(test);
+    let rerun = fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]).label("rerun"));
+    fixture.store.append_link(rerun, source).unwrap();
+    let long = "x".repeat(300);
+    for (n, (role, text)) in [
+        (ChatRole::User, long.as_str()),
+        (ChatRole::Assistant, "Done."),
+        (ChatRole::User, "And the next one?"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let event = StoredEvent {
+            format: 1,
+            session_seq: 0,
+            event_id: format!("chat-{n}"),
+            position: Position::at(10 + n as u64),
+            run: None,
+            backfilled: false,
+            decision: None,
+            body: EventBody::Chat(ChatTurn {
+                turn: format!("turn-{n}"),
+                role,
+                text: text.to_owned(),
+                truncated: false,
+                agent: "agent".into(),
+                model: None,
+            }),
+        };
+        fixture
+            .store
+            .events
+            .append(Some("s-a"), event, |e| {
+                let mut line = serde_json::to_vec(e).unwrap();
+                line.push(b'\n');
+                Some(line)
+            })
+            .unwrap();
+    }
+    let (reader, _dir) = fixture.reader();
+    let listed = read::sessions(&reader, 20, 0).unwrap();
+    let row = |id: &str| listed.sessions.iter().find(|s| s.session == id).unwrap();
+    assert_eq!(row("s-a").follow_ups, 2);
+    assert_eq!(row("s-a").asks, 2);
+    assert_eq!(
+        row("s-a").untrusted.task.as_deref(),
+        Some("x".repeat(200).as_str())
+    );
+    assert_eq!(row("s-b").follow_ups, 0);
+    assert_eq!(row("s-b").asks, 0);
+    // Each session says how many of its runs were cancelled, didn't compile, or failed.
+    let ends = |id: &str| (row(id).cancelled, row(id).rejected, row(id).failed);
+    assert_eq!(ends("s-a"), (0, 0, 0));
+    assert_eq!(ends("s-b"), (1, 1, 1));
+    // The message is the session's driver's own text, so it travels under `untrusted`.
+    let value = json_of(&listed);
+    let untrusted = |id: &str| {
+        let rows = value["sessions"].as_array().unwrap();
+        rows.iter().find(|s| s["session"] == id).unwrap()["untrusted"].clone()
+    };
+    assert_eq!(untrusted("s-a")["task"].as_str().map(str::len), Some(200));
+    assert_eq!(untrusted("s-b"), serde_json::json!({}));
+}
+
+#[test]
 fn a_run_lists_its_tests_and_reruns_oldest_first() {
     let mut fixture = Fixture::new();
     let source = fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]));
@@ -1068,12 +1161,18 @@ fn runs_in_flight_are_listed_first_with_cancel_only_while_the_playground_runs() 
     let stored = fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]));
     fixture
         .store
-        .mark_running(stored + 1, "assistant", Some("s-9"), 1_700_000_000_000_000)
+        .mark_running(
+            stored + 1,
+            "assistant",
+            Some("s-9"),
+            1_700_000_000_000_000,
+            None,
+        )
         .unwrap();
     // A note for a run already stored is not listed twice.
     fixture
         .store
-        .mark_running(stored, "stand-in", None, 1_700_000_000_000_000)
+        .mark_running(stored, "stand-in", None, 1_700_000_000_000_000, None)
         .unwrap();
     let query = RunsQuery {
         limit: 5,
@@ -1109,6 +1208,136 @@ fn runs_in_flight_are_listed_first_with_cancel_only_while_the_playground_runs() 
         Vec::new(),
     );
     assert!(read::runs(&stopped, &query).unwrap().running.is_empty());
+}
+
+#[test]
+fn tests_and_reruns_take_no_place_in_the_sessions_limit() {
+    let mut fixture = Fixture::new();
+    let at = |seconds: u64| Some(1_700_000_000_000_000 + seconds * 1_000_000);
+    let mut older = RunSpec::new(vec![charges_allowed(0, "cus_northwind")]);
+    older.session = Some("s-old".into());
+    older.started_at = at(1);
+    fixture.run(older);
+    let mut newer = RunSpec::new(vec![charges_allowed(0, "cus_northwind")]);
+    newer.started_at = at(2);
+    let source = fixture.run(newer);
+    for (n, label) in ["test", "rerun", "test"].into_iter().enumerate() {
+        let mut follow_up = RunSpec::new(vec![charges_allowed(0, "cus_northwind")]);
+        follow_up.label = label.into();
+        follow_up.session = Some(format!("s-follow-{n}"));
+        follow_up.test_of = (label == "test").then_some(source);
+        follow_up.started_at = at(3 + n as u64);
+        fixture.run(follow_up);
+    }
+    let (reader, _dir) = fixture.reader();
+
+    let listed = read::sessions(&reader, 1, 1_700_000_000_000_000).unwrap();
+    let ids: Vec<&str> = listed
+        .sessions
+        .iter()
+        .map(|row| row.session.as_str())
+        .collect();
+    assert_eq!(ids, ["s-follow-2", "s-1"]);
+    assert_eq!(
+        listed.more, 1,
+        "only the older session is counted as left out"
+    );
+
+    let listed = read::sessions(&reader, 2, 1_700_000_000_000_000).unwrap();
+    let ids: Vec<&str> = listed
+        .sessions
+        .iter()
+        .map(|row| row.session.as_str())
+        .collect();
+    assert_eq!(ids, ["s-follow-2", "s-follow-1", "s-1", "s-old"]);
+    assert_eq!(listed.more, 0);
+}
+
+#[test]
+fn tests_and_reruns_are_listed_up_to_the_limit_and_only_newer_than_the_last_session_kept() {
+    let mut fixture = Fixture::new();
+    let at = |seconds: u64| Some(1_700_000_000_000_000 + seconds * 1_000_000);
+    let follow_up = |fixture: &mut Fixture, session: &str, seconds: u64| {
+        let mut spec = RunSpec::new(vec![charges_allowed(0, "cus_northwind")]);
+        spec.label = "rerun".into();
+        spec.session = Some(session.into());
+        spec.started_at = at(seconds);
+        fixture.run(spec);
+    };
+    follow_up(&mut fixture, "s-older", 1);
+    let mut session = RunSpec::new(vec![charges_allowed(0, "cus_northwind")]);
+    session.started_at = at(2);
+    fixture.run(session);
+    for n in 0..3 {
+        follow_up(&mut fixture, &format!("s-newer-{n}"), 3 + n);
+    }
+    let (reader, _dir) = fixture.reader();
+
+    // One rerun of the three newer ones, and none older than the session kept.
+    let listed = read::sessions(&reader, 1, 1_700_000_000_000_000).unwrap();
+    let ids: Vec<&str> = listed
+        .sessions
+        .iter()
+        .map(|row| row.session.as_str())
+        .collect();
+    assert_eq!(ids, ["s-newer-2", "s-1"]);
+
+    // The session the page shows is listed however old it is.
+    let listed = read::sessions_with(&reader, 1, 1_700_000_000_000_000, Some("s-older")).unwrap();
+    assert!(listed.sessions.iter().any(|row| row.session == "s-older"));
+    // One the limit already lists takes its own place, not one more.
+    let listed = read::sessions_with(&reader, 1, 1_700_000_000_000_000, Some("s-1")).unwrap();
+    let ids: Vec<&str> = listed
+        .sessions
+        .iter()
+        .map(|row| row.session.as_str())
+        .collect();
+    assert_eq!(ids, ["s-newer-2", "s-1"]);
+    let listed = read::sessions_with(&reader, 1, 1_700_000_000_000_000, Some("s-none")).unwrap();
+    assert_eq!(listed.sessions.len(), 2);
+}
+
+#[test]
+fn a_session_whose_run_is_still_in_flight_is_listed_while_the_playground_runs() {
+    let mut fixture = Fixture::new();
+    let stored = fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]));
+    fixture
+        .store
+        .mark_running(
+            stored + 1,
+            "rerun",
+            Some("s-rerun"),
+            1_700_000_000_000_000,
+            None,
+        )
+        .unwrap();
+    let (reader, _dir) = fixture.reader_with(
+        Page {
+            base: Some("http://127.0.0.1:9/".into()),
+        },
+        Vec::new(),
+    );
+    let listed = read::sessions(&reader, 20, 1_700_000_000_000_000).unwrap();
+    let row = listed
+        .sessions
+        .iter()
+        .find(|row| row.session == "s-rerun")
+        .expect("the rerun's session is listed");
+    assert_eq!(row.sources, ["rerun"]);
+    // Its run shows once it is stored; until then it has none.
+    assert!(row.runs.is_empty());
+
+    // With the playground stopped, the notes are not trusted.
+    let stopped = Reader::for_tests(
+        crate::commands::playground::store::Store::open_read_only(
+            reader.store.as_ref().unwrap().root(),
+        )
+        .unwrap(),
+        Page::default(),
+        Vec::new(),
+    );
+    let listed = read::sessions(&stopped, 20, 1_700_000_000_000_000).unwrap();
+    assert!(listed.sessions.iter().all(|row| row.session != "s-rerun"));
 }
 
 #[test]

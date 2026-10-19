@@ -235,7 +235,7 @@ impl<'a> TypeDeclarations<'a> {
             | Type::Null
         | Type::Undefined
             | Type::Void
-            | Type::Unknown
+            | Type::Unknown | Type::NonPrimitive
             | Type::Function { .. }
             | Type::Array(_)
             | Type::Tuple(_)

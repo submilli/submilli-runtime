@@ -82,7 +82,9 @@ pub fn locate_key(text: &str, path: &[&str]) -> Option<RuleLocation> {
 /// first occurrence, which is the one a deserializer has entered by the
 /// time it meets a repeat.
 pub(crate) fn repeated_key(text: &str, map_path: &[PathSeg], key: &str) -> Option<(usize, usize)> {
-    let source = Source::parse(text)?;
+    let Some(source) = Source::parse(text) else {
+        return repeated_top_level_key(text, map_path, key);
+    };
     let mut node = &source.root;
     for segment in map_path {
         node = match segment {
@@ -95,6 +97,24 @@ pub(crate) fn repeated_key(text: &str, map_path: &[PathSeg], key: &str) -> Optio
     }
     let (repeat, _) = entries(node)?.filter(|(k, _)| is_key(k, key)).nth(1)?;
     Some((repeat.line, repeat.col + 1))
+}
+
+/// When the text doesn't parse further on (a repeat whose value is still being
+/// typed), a top-level key is found by its line: written at the start of a line
+/// and followed by `:`.
+fn repeated_top_level_key(text: &str, map_path: &[PathSeg], key: &str) -> Option<(usize, usize)> {
+    if !map_path.is_empty() {
+        return None;
+    }
+    let (index, _) = text
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| {
+            line.strip_prefix(key)
+                .is_some_and(|rest| rest.trim_start().starts_with(':'))
+        })
+        .nth(1)?;
+    Some((index + 1, 1))
 }
 
 fn find_rule(text: &str, caller: &str, index: usize) -> Option<RuleLocation> {

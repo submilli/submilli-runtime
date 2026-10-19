@@ -39,8 +39,7 @@ impl Harness {
         let state = AppState::with_embedding_dispatch_factory(
             ServerConfig {
                 blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]).unwrap())),
-                session_storage_root: Some(root.path().join("sessions")),
-                ephemeral_storage_root: Some(root.path().join("ephemeral")),
+                volume_root: Some(root.path().to_path_buf()),
                 audit: crate::audit::AuditConfig {
                     file: Some(audit_path.clone()),
                     ..Default::default()

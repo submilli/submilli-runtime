@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub(crate) mod credentials;
+pub(crate) mod kv;
+pub(crate) mod last_run;
 pub(crate) mod repository;
 pub(crate) mod sqlite;
 
@@ -494,3 +496,5 @@ mod tests {
 pub(crate) mod audit_log;
 pub(crate) mod cleanup_queue;
 pub(crate) mod workspaces;
+
+pub(crate) mod finalizers;

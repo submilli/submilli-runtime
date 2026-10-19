@@ -1,6 +1,6 @@
 // expect-error: non-exhaustive
 
-function eval(t: ["add", number, number] | ["mul", number, number] | ["sub", number, number]): number {
+function evaluate(t: ["add", number, number] | ["mul", number, number] | ["sub", number, number]): number {
   switch (t[0]) {
     case "add": return t[1] + t[2];
     case "mul": return t[1] * t[2];
@@ -9,5 +9,5 @@ function eval(t: ["add", number, number] | ["mul", number, number] | ["sub", num
 
 function main(): void {
   const add: ["add", number, number] = ["add", 5, 3];
-  assert(eval(add) === 8, "add");
+  assert(evaluate(add) === 8, "add");
 }

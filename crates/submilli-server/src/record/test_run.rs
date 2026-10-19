@@ -219,7 +219,7 @@ pub async fn test_program(state: &AppState, test: TestRun) -> Result<TestOutcome
     };
     let blueprint = &found.blueprint;
     let variables = reconcile_variables(blueprint, &bindings, &recorded.variables);
-    let supplied = variables.bindings();
+    let supplied = variables.supplied_bindings(blueprint);
     let resolved = variables
         .resolve(blueprint)
         .map_err(|error| TestError::InvalidVariables(error.to_string()))?;

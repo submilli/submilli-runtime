@@ -1,1 +1,1 @@
-line 19 extra: bug SUB-1674 a primitive isn't assignable to an object type whose members its wrapper has, such as `{ toString(): string }`
+line 19 extra: by-design spec §1.2 a primitive is not assignable to an object type with members, even one its wrapper satisfies such as `{ toString(): string }`, since object types compile to structs

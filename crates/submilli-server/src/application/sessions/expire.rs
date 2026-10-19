@@ -31,7 +31,11 @@ impl<'a> ExpireSessions<'a> {
             }
             if session.expire(now) {
                 expired.push(session.id().as_str().to_owned());
-                unit.remove_session_requests(session.id().as_str()).await?;
+                crate::application::sessions::runs::cancel_session_runs(
+                    unit.as_mut(),
+                    session.id().as_str(),
+                )
+                .await?;
                 unit.save_session(session).await?;
             }
         }

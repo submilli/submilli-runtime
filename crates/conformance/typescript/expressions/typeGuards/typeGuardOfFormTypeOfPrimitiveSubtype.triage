@@ -1,1 +1,1 @@
-line 15, 17, 18, 20, 21 type: bug SUB-1674 a primitive isn't assignable to an object type its wrapper's members satisfy (`number` to `{ toString(): string }`)
+line 15, 17, 18, 20, 21 type: by-design spec §1.2 a primitive is not assignable to an object type with members, even one its wrapper satisfies such as `{ toString(): string }`, so a `typeof` test for a primitive narrows such a type to `never`

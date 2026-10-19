@@ -164,17 +164,18 @@ deterministic: `toYaml` sorts map keys, and nothing random may be added here.
 Refused rather than merged. Each of these either also sizes something in the
 pod spec (the memory limit, the termination grace, a mount path), so a second
 source for it would let the two drift apart, or is outranked by the environment
-and would do nothing.
+and would do nothing. `volume_dir` is the exception: the chart keeps the volume
+root on the state volume, and a configured one would not exist on a fresh claim.
 */ -}}
 {{- $owned := dict
       "tls" "set tls.enabled and tls.existingSecret instead, which also mount the certificate and key"
       "bind" "set server.bind instead"
       "port" "set server.port instead; it also drives the container port, the Services, and the NetworkPolicy"
-      "vfs_ephemeral_dir" "the chart fixes it at /tmp, the only writable path outside the state volume"
       "max_execution_memory" "set execution.maxMemoryMB instead; the pod's memory limit is derived from it"
       "shutdown_grace" "set server.shutdownGrace instead; terminationGracePeriodSeconds is derived from it"
       "allow_unauthenticated" "set auth.enabled=false instead"
       "github_token_file" "set githubToken.existingSecret and githubToken.key instead, which also mount the token"
+      "volume_dir" "it stays on the state volume, under server/volumes, where the server creates it"
     -}}
 {{- range $key, $instead := $owned -}}
 {{-   if hasKey $extra $key -}}
@@ -202,15 +203,6 @@ and would do nothing.
 {{-   end -}}
 {{-   $_ := set $config "tls" (dict "cert_file" "/etc/submilli/tls/server.crt" "key_file" "/etc/submilli/tls/server.key") -}}
 {{- end -}}
-{{- /*
-SUBMILLI_HOME relocates five of the server's six state directories (kept under
-its server/ subdirectory; an older volume is moved into that shape on the first
-boot). The ephemeral VFS root is the sixth and still defaults to the OS temp
-dir, so under readOnlyRootFilesystem it must be pointed at a writable volume.
-Omitting this breaks /v1/execute — the product — while /healthz stays green,
-which is why the chart's own test exercises execute rather than health alone.
-*/ -}}
-{{- $_ := set $config "vfs_ephemeral_dir" "/tmp" -}}
 {{- if .Values.secretStore.enabled -}}
 {{- /*
 A file, never an env var holding the key itself: environment is readable

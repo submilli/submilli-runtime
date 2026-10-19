@@ -1,0 +1,107 @@
+=== nonPrimitiveInGeneric.ts ===
+function generic<T>(t: T): void {
+>generic : <T>(t: T) => void
+>        : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>t : T
+>  : ^
+
+    let o: object = t; // expect error
+>o : object
+>  : ^^^^^^
+>t : T
+>  : ^
+
+}
+let a = {};
+>a : {}
+>  : ^^
+>{} : {}
+>   : ^^
+
+let b = "42";
+>b : string
+>  : ^^^^^^
+>"42" : "42"
+>     : ^^^^
+
+
+generic<object>({});
+>generic<object>({}) : void
+>                    : ^^^^
+>generic : <T>(t: T) => void
+>        : ^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+generic<object>(a);
+>generic<object>(a) : void
+>                   : ^^^^
+>generic : <T>(t: T) => void
+>        : ^^^^^^^^^^^^^^^^^
+>a : {}
+>  : ^^
+
+generic<object>(123); // expect error
+>generic<object>(123) : void
+>                     : ^^^^
+>generic : <T>(t: T) => void
+>        : ^^^^^^^^^^^^^^^^^
+>123 : 123
+>    : ^^^
+
+generic<object>(b); // expect error
+>generic<object>(b) : void
+>                   : ^^^^
+>generic : <T>(t: T) => void
+>        : ^^^^^^^^^^^^^^^^^
+>b : string
+>  : ^^^^^^
+
+
+/*pruned*/;
+
+
+
+/**/;
+/**/;
+/*pruned*/; // expect error
+/**/;     // expect error
+
+/*pruned*/;
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;       // expect error
+/*pruned*/;       // expect error
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+/*pruned*/;                                                // error
+/*pruned*/;                                            // ok
+/*pruned*/;                                                       // ok
+
+
+interface Blah {
+>Blah : Blah
+>     : ^^^^
+
+    foo: number;
+>foo : number
+>    : ^^^^^^
+
+}
+
+/*pruned*/;                                            // ok
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

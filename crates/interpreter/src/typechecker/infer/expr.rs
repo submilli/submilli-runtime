@@ -15,13 +15,14 @@ use crate::{
     TypedExpr, TypedExprKind, TypedParam, UnOp, ValueKind, ValueSymbol,
 };
 
-use super::assignable::TypeResolver;
+use super::assignable::{TypeResolver, strict_subtype};
 use super::format_signature::SignatureKind;
 use super::namespace_symbol;
 use super::reserved::{is_reserved_object_field, override_field_signature, reserved_field_message};
 use super::stmt::StaticWrite;
 use super::value_operand::ValueOperand;
 use crate::did_you_mean;
+use crate::lower_patterns::OBJECT_PROTOTYPE_MEMBERS;
 use crate::type_size::{TypeBudget, TypeTooLarge, map_children};
 use crate::types::{EnumValue, LiteralF64};
 
@@ -254,7 +255,7 @@ fn excess_field_fix_help(
 /// Array methods that mutate the receiver. Rejected on tuple-typed and `readonly`
 /// receivers: tuples are fixed-length, so mutation would break their arity and
 /// per-position types, and a `readonly` array only permits reading.
-fn is_mutating_array_method(name: &str) -> bool {
+pub(super) fn is_mutating_array_method(name: &str) -> bool {
     matches!(
         name,
         "push"
@@ -267,6 +268,26 @@ fn is_mutating_array_method(name: &str) -> bool {
             | "fill"
             | "copyWithin"
     )
+}
+
+/// `"Map"` or `"Set"` for a `ReadonlyMap` or `ReadonlySet` receiver, or a
+/// union with one as a member.
+fn readonly_collection(ty: &Type) -> Option<&'static str> {
+    if let Type::Union(members) = ty.peel() {
+        return members.iter().find_map(readonly_collection);
+    }
+    if !ty.is_readonly_array() {
+        return None;
+    }
+    match ty.peel() {
+        Type::InterfaceRef { mangled, .. } if *mangled == crate::mangle::prelude("Map") => {
+            Some("Map")
+        }
+        Type::InterfaceRef { mangled, .. } if *mangled == crate::mangle::prelude("Set") => {
+            Some("Set")
+        }
+        _ => None,
+    }
 }
 
 /// The copying counterpart of a mutating array method, where the prelude has one.
@@ -1612,7 +1633,12 @@ impl Inferer<'_> {
         {
             joined
         } else {
-            branch_result_type(lhs_kept, rhs_ty, self.resolver())
+            conditional_result_type(
+                lhs_kept,
+                rhs_ty,
+                has_object_literal(self.ast, [lhs, rhs])?,
+                self.resolver(),
+            )
         };
         Ok((
             TypedExprKind::Binary {
@@ -1645,7 +1671,7 @@ impl Inferer<'_> {
         }
         let (typed_rhs, rhs_ty) = self.infer_expr(rhs, None)?;
         let receiver_ok = match rhs_ty.peel() {
-            Type::Unknown | Type::Error => true,
+            Type::Unknown | Type::NonPrimitive | Type::Error => true,
             ty if Self::is_field_bearing(ty) => true,
             // A union discriminated by field presence is the reason `in` exists;
             // its members are as often named (interfaces, classes) as inline.
@@ -2108,6 +2134,19 @@ impl Inferer<'_> {
     /// whether it reported, in which case the caller poisons the call.
     fn reject_unsupported_array_call(&mut self, recv_ty: &Type, name: &crate::Ident) -> bool {
         if self.reject_array_like_union_call(recv_ty, name) {
+            return true;
+        }
+        if let Some(collection) = readonly_collection(recv_ty)
+            && matches!(name.name.as_str(), "set" | "add" | "delete" | "clear")
+        {
+            self.error_with_help(
+                name.span,
+                format!("cannot call `{}` on `{}`", name.name, recv_ty),
+                vec![format!(
+                    "`{}` mutates the {collection}, and a `Readonly{collection}` only permits reading",
+                    name.name
+                )],
+            );
             return true;
         }
         if !is_mutating_array_method(&name.name) {
@@ -2584,7 +2623,8 @@ impl Inferer<'_> {
         }
 
         let (typed_callee, callee_ty) = self.infer_expr(callee, None)?;
-        let (typed_callee, callee_ty) = self.cast_up_to_union_signature(typed_callee, callee_ty)?;
+        let (typed_callee, callee_ty) =
+            self.cast_up_to_union_signature(typed_callee, callee_ty, args.len())?;
         // call-signature dispatch — when the callee types
         // as an `InterfaceRef` declaring `@call`, route through the
         // same method-call pipeline as `find_method(_, "new")` for
@@ -2726,16 +2766,13 @@ impl Inferer<'_> {
                 (min, max)
             }
             (None, Some(ts)) => {
-                if callee_has_rest {
-                    // Trailing rest in the function type: callsite
-                    // accepts `(ts.len() - 1)+` args.
-                    (
-                        ts.len().saturating_sub(1).saturating_sub(callee_optional),
-                        usize::MAX,
-                    )
+                let min = required_count_of_function_type(ts, callee_optional, callee_has_rest);
+                let max = if callee_has_rest {
+                    usize::MAX
                 } else {
-                    (ts.len().saturating_sub(callee_optional), ts.len())
-                }
+                    ts.len()
+                };
+                (min, max)
             }
             (None, None) => (0, 0),
         };
@@ -3228,7 +3265,7 @@ impl Inferer<'_> {
         for p in &params[supplied..fixed_count] {
             let id = match &p.default {
                 Some(default) => self.synthesize_default_arg(default, &p.ty, span)?,
-                None if p.optional => {
+                None if p.optional || p.ty.carries_void() => {
                     self.synthesize_default_arg(&crate::DefaultValue::Undefined, &p.ty, span)?
                 }
                 None => {
@@ -5681,6 +5718,10 @@ impl Inferer<'_> {
                 }
                 _ => None,
             };
+        let union_shapes = match (peeled, &expected_fields) {
+            (Some(Type::Union(union_members)), None) => self.union_shape_fields(union_members),
+            _ => Vec::new(),
+        };
         let expected_index = expected.and_then(|ty| self.resolver().index_signature(ty));
         if let Some(want) = expected_fields.as_ref()
             && expected_index.is_none()
@@ -5758,12 +5799,20 @@ impl Inferer<'_> {
                     // wins (the override is invariant, the surrounding
                     // hint can only restate it).
                     let override_sig = override_field_signature(&field.name.name);
-                    let hint = self.object_field_hint(
-                        literal,
-                        &field.name.name,
-                        expected_fields.as_ref(),
-                        expected_index.as_ref(),
-                    );
+                    let hint = self
+                        .object_field_hint(
+                            literal,
+                            &field.name.name,
+                            expected_fields.as_ref(),
+                            expected_index.as_ref(),
+                        )
+                        .or_else(|| {
+                            self.function_literal_union_hint(
+                                field.value,
+                                &field.name.name,
+                                &union_shapes,
+                            )
+                        });
                     let expected_field_ty = expected_fields
                         .as_ref()
                         .and_then(|m| m.get(&field.name.name))
@@ -6174,6 +6223,59 @@ impl Inferer<'_> {
         ))
     }
 
+    /// The fields of each member of a union an object literal is checked
+    /// against, when no single member was chosen for it; empty unless every
+    /// member other than `null` and `undefined` is an object shape.
+    fn union_shape_fields(
+        &self,
+        union_members: &[Type],
+    ) -> Vec<BTreeMap<String, crate::ObjectField>> {
+        let mut shapes = Vec::new();
+        for member in union_members {
+            match member.peel() {
+                Type::Null | Type::Undefined => {}
+                Type::Object { fields, .. } => shapes.push(fields.clone()),
+                Type::InterfaceRef {
+                    mangled,
+                    name,
+                    args,
+                    ..
+                } => match self.structural_form(mangled, name, args) {
+                    Some(fields) => shapes.push(fields),
+                    None => return Vec::new(),
+                },
+                _ => return Vec::new(),
+            }
+        }
+        shapes
+    }
+
+    /// The contextual type of a function literal in field `name` of an object
+    /// literal checked against a union of object shapes: as in tsc, the union
+    /// of the field's types in the members that declare it, from which the
+    /// function's parameters take their types.
+    fn function_literal_union_hint(
+        &self,
+        value: ExprId,
+        name: &str,
+        shapes: &[BTreeMap<String, crate::ObjectField>],
+    ) -> Option<Type> {
+        let is_function_literal = self.ast.try_expr(value).is_ok_and(|expr| {
+            matches!(
+                expr.kind,
+                ExprKind::Arrow { .. } | ExprKind::FunctionExpression { .. }
+            )
+        });
+        if !is_function_literal {
+            return None;
+        }
+        let types: Vec<Type> = shapes
+            .iter()
+            .filter_map(|fields| fields.get(name).map(|field| field.ty.clone()))
+            .collect();
+        (!types.is_empty()).then(|| Type::union(types))
+    }
+
     /// The type an object literal checked against `expected` keeps as its own,
     /// as in tsc: `{ value: 10 }` against `{ value: number; error?: string }` is
     /// `{ value: number }`. Codegen builds it from its field origins instead.
@@ -6402,6 +6504,8 @@ impl Inferer<'_> {
                 .map(|index| *index.value);
             let fields = match alternative {
                 Type::Object { fields, .. } => fields,
+                // Like `{}`, `object` names no field to copy.
+                Type::NonPrimitive => ObjectFields::new(),
                 // A spread copies nothing from a value that is always falsy, as
                 // `c && { a: 1 }` is when `c` is false, or from `null` or
                 // `undefined`, when
@@ -6557,7 +6661,7 @@ impl Inferer<'_> {
         self.collect_spread_alternatives(typed_source, source_ty, &mut alternatives)?;
         Ok(!alternatives.is_empty()
             && alternatives.iter().all(|alternative| {
-                matches!(alternative.peel(), Type::Object { .. })
+                matches!(alternative.peel(), Type::Object { .. } | Type::NonPrimitive)
                     || self.resolver().index_signature(alternative).is_some()
             }))
     }
@@ -7919,6 +8023,18 @@ impl Inferer<'_> {
                 length_ty,
             ));
         }
+        // A function's `length` without a `Function` interface: the spec has
+        // no `Function` type, and `length` is the one property it reads.
+        if name.name == "length" && matches!(receiver_ty.peel(), Type::Function { .. }) {
+            return Ok((
+                TypedExprKind::InterfacePropertyAccess {
+                    receiver: typed_receiver,
+                    iface: crate::mangle::prelude("Function"),
+                    name,
+                },
+                Type::Number,
+            ));
+        }
         // interface-property dispatch lands here BEFORE the
         // user-object field path. `lookup_interface_property` returns `None`
         // for `Object` so user-object reads aren't shadowed by a hypothetical
@@ -8042,12 +8158,14 @@ impl Inferer<'_> {
                         .try_expr(typed_receiver)
                         .map_err(crate::typechecker::arena_failure)?,
                 )?;
+                let fresh_shapes = self.fresh_literal_shapes(typed_receiver, members)?;
                 self.union_field_read_ty(
                     name.span,
                     path.as_ref(),
                     &receiver_ty,
                     members,
                     &name.name,
+                    &fresh_shapes,
                 )
             }
             Type::Error => Type::Error,
@@ -8184,6 +8302,8 @@ impl Inferer<'_> {
         }
         let is_array = matches!(recv_ty.peel(), Type::Array(_));
         let method = name.name.clone();
+        let is_set = iface_mangled == crate::mangle::prelude("Set");
+        let is_array_iface = iface_mangled == crate::mangle::prelude("Array");
         let call = self.infer_generic_method_call(
             typed_receiver,
             iface_mangled,
@@ -8195,10 +8315,119 @@ impl Inferer<'_> {
             expected,
             span,
         )?;
+        if is_array_iface
+            && method == "concat"
+            && let Type::Array(element) = call.1.peel()
+        {
+            self.reject_concat_arrays_as_elements(&call.0, element)?;
+        }
         if is_array {
             return self.narrow_by_callback_predicate(&method, call, span);
         }
+        if is_set && method == "intersection" {
+            return self.narrow_set_intersection(call);
+        }
         Ok(call)
+    }
+
+    /// `concat` spreads every array argument, as JavaScript does, so an array
+    /// may not stand for one element even where the element type is itself an
+    /// array: `rows.concat([1, 2])` on `number[][]` appends `1` and `2`. tsc
+    /// accepts that call through its `T` arm; Submilli reports it, since the
+    /// result would hold numbers typed as arrays.
+    fn reject_concat_arrays_as_elements(
+        &mut self,
+        call: &TypedExprKind,
+        element: &Type,
+    ) -> Result<(), CompilerFailure> {
+        let TypedExprKind::MethodCall { args, .. } = call else {
+            return Ok(());
+        };
+        let Some(&packed) = args.last() else {
+            return Ok(());
+        };
+        let TypedExprKind::ArrayLiteral { elements, .. } = &self
+            .typed_ast
+            .try_expr(packed)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        else {
+            return Ok(());
+        };
+        let spread_target = Type::Readonly(Box::new(Type::Array(Box::new(element.clone()))));
+        for item in elements.clone() {
+            let (id, spread) = match item {
+                crate::TypedArrayElement::Value(id) => (id, false),
+                crate::TypedArrayElement::Spread(id) => (id, true),
+            };
+            let typed = self
+                .typed_ast
+                .try_expr(id)
+                .map_err(crate::typechecker::arena_failure)?;
+            let span = typed.span;
+            let arg_ty = match (spread, typed.ty.peel()) {
+                (false, _) => typed.ty.peel_preserving_readonly().clone(),
+                (true, Type::Array(inner)) => inner.as_ref().clone(),
+                (true, _) => continue,
+            };
+            let members = match arg_ty.peel() {
+                Type::Union(members) => members.clone(),
+                _ => vec![arg_ty.clone()],
+            };
+            let spreads_wrongly = members.iter().any(|member| {
+                matches!(member.peel(), Type::Array(_) | Type::Tuple(_))
+                    && !super::assignable::assignable(member, &spread_target, self.resolver())
+            });
+            if spreads_wrongly {
+                self.error_with_help(
+                    span,
+                    format!("`concat` spreads `{arg_ty}` into elements of type `{element}`"),
+                    vec![
+                        "`concat` appends an array argument's elements, not the array; \
+                         wrap it to append it as one element: `concat([value])`"
+                            .to_string(),
+                    ],
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// `a.intersection(b)` holds only elements of both sets, so where `b`'s
+    /// element type is the narrower one the result has it. tsc types the result
+    /// `Set<T & U>`; this matches it whenever one element type contains the
+    /// other. Sets share one representation, so only the static type changes.
+    fn narrow_set_intersection(
+        &mut self,
+        (kind, ty): (TypedExprKind, Type),
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let set_element = |ty: &Type| match ty.peel() {
+            Type::InterfaceRef { mangled, args, .. }
+                if *mangled == crate::mangle::prelude("Set") && args.len() == 1 =>
+            {
+                Some(args[0].clone())
+            }
+            _ => None,
+        };
+        let TypedExprKind::MethodCall { args, .. } = &kind else {
+            return Ok((kind, ty));
+        };
+        let Some(&other) = args.first() else {
+            return Ok((kind, ty));
+        };
+        let other_ty = self
+            .typed_ast
+            .try_expr(other)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .clone();
+        let (Some(own), Some(theirs)) = (set_element(&ty), set_element(&other_ty)) else {
+            return Ok((kind, ty));
+        };
+        if own == theirs || !assignable(&theirs, &own, self.resolver()) {
+            return Ok((kind, ty));
+        }
+        Ok((kind, Type::prelude_interface("Set", vec![theirs])))
     }
 
     /// `u.name(args)` where `u` is a union of strings with arrays or tuples,
@@ -8481,6 +8710,8 @@ impl Inferer<'_> {
             // "invalid assignment target"), so no separate check
             // needed here.
             Type::Uint8Array => Type::Number,
+            // A code unit, as in TypeScript; out of range throws as an array read does.
+            _ if pattern_origin.is_none() && receiver_ty.is_string_shaped() => Type::String,
             Type::Error => Type::Error,
             // indexing into un-narrowed `unknown` is rejected.
             Type::Unknown => {
@@ -9958,6 +10189,7 @@ impl Inferer<'_> {
             let operand_ty = self
                 .lookup_narrowed_view(&path)
                 .map_or_else(|| entry.ty.clone(), |view| view.narrowed_ty.clone());
+            self.record_postfix_operand(&target, &operand_ty);
             if !takes_postfix(&operand_ty) {
                 self.error(
                     target.span,
@@ -10013,6 +10245,15 @@ impl Inferer<'_> {
             let kind_clone = entry.kind.clone();
             let prev_span = entry.declaration_span;
             let mangled = entry.mangled_name.clone();
+            if self.imported_values.contains(&target.name) {
+                self.report_import_write(&target, prev_span);
+                let target = crate::PostfixTarget::Global {
+                    name: target,
+                    mangled,
+                    target_ty: Type::Error,
+                };
+                return Ok((TypedExprKind::PostfixUnary { op, target }, Type::Error));
+            }
             match kind_clone {
                 ValueKind::Let { ty, .. } => {
                     self.postfix_on_global(op, op_symbol, target, mangled, ty, span)?
@@ -10228,6 +10469,15 @@ impl Inferer<'_> {
         ))
     }
 
+    /// Record the narrowed type `++`/`--` reads binding `name` at, keyed by the
+    /// name's span (see `TypedAst::postfix_operand_types`).
+    fn record_postfix_operand(&mut self, name: &Ident, operand_ty: &Type) {
+        self.typed_ast.postfix_operand_types.insert(
+            (name.span.file.0, name.span.start, name.span.end),
+            operand_ty.clone(),
+        );
+    }
+
     /// `g++` on a module global — shared by a module `let` and by a writable
     /// static field, which is the same global under a mangled key.
     fn postfix_on_global(
@@ -10243,6 +10493,7 @@ impl Inferer<'_> {
         let operand_ty = self
             .lookup_narrowed_view(&path)
             .map_or_else(|| ty.clone(), |view| view.narrowed_ty.clone());
+        self.record_postfix_operand(&name, &operand_ty);
         if !takes_postfix(&operand_ty) {
             self.error(
                     name.span,
@@ -10435,7 +10686,12 @@ impl Inferer<'_> {
         if let Some(joined) = empty_literal_join(self.ast, (then_, &then_ty), (else_, &else_ty))? {
             return Ok(joined);
         }
-        Ok(conditional_result_type(then_ty, else_ty, self.resolver()))
+        Ok(conditional_result_type(
+            then_ty,
+            else_ty,
+            has_object_literal(self.ast, [then_, else_])?,
+            self.resolver(),
+        ))
     }
 
     /// The type of `a || b` or `a ?? b` when `a` decides the result: `a`'s own,
@@ -10652,8 +10908,14 @@ impl Inferer<'_> {
             match empty_literal_join(self.ast, (lhs, &present), (rhs, &rhs_ty))? {
                 Some(joined) => joined,
                 // TypeScript reduces `a ?? b` by subtype, so `{} | "d"` is `{}`.
-                None => match conditional_result_type(present, rhs_ty, self.resolver()) {
-                    Type::Union(members) => {
+                // A fresh `{}` literal is no supertype there: `o ?? {}` keeps `o`.
+                None => match conditional_result_type(
+                    present,
+                    rhs_ty,
+                    has_object_literal(self.ast, [lhs, rhs])?,
+                    self.resolver(),
+                ) {
+                    Type::Union(members) if !is_empty_object_literal(self.ast, rhs)? => {
                         Type::union(crate::types::without_members_of_empty_object(members))
                     }
                     joined => joined,
@@ -11007,6 +11269,7 @@ impl Inferer<'_> {
                     }
                     Type::Error => Type::Error,
                     Type::Unknown => Type::Unknown,
+                    _ if receiver_ty.is_string_shaped() => Type::String,
                     other => {
                         self.error(
                             span,
@@ -11174,7 +11437,7 @@ impl Inferer<'_> {
                 }
 
                 // Closure-typed receiver: ordinary `Call` part.
-                let union_signature = self.union_signature_of(receiver_ty);
+                let union_signature = self.union_signature_of(receiver_ty, Some(args.len()));
                 let callee_ty = union_signature.as_ref().unwrap_or(receiver_ty);
                 let (ret_ty, typed_args) = match callee_ty.peel() {
                     Type::Function {
@@ -11434,6 +11697,13 @@ impl Inferer<'_> {
     /// Reports the first member that cannot back the field and returns
     /// `Type::Error`. `receiver_path` anchors the "what killed the narrowing"
     /// hint; `None` omits it.
+    ///
+    /// A plain object member whose field names are one of `fresh_shapes`, the
+    /// fresh object literals the receiver may evaluate to, reads a field it
+    /// lacks as `undefined`, as tsc's normalization of such a literal has it.
+    /// Codegen reads a union's field by name, finds no slot in that member at
+    /// run time, and yields `undefined`. A name every object inherits, such as
+    /// `valueOf`, is not lacking: the literal reads the inherited member.
     fn union_field_read_ty(
         &mut self,
         span: Span,
@@ -11441,11 +11711,20 @@ impl Inferer<'_> {
         receiver_ty: &Type,
         members: &[Type],
         name: &str,
+        fresh_shapes: &[BTreeSet<String>],
     ) -> Type {
+        let fresh_shapes = if OBJECT_PROTOTYPE_MEMBERS.contains(&name) {
+            &[][..]
+        } else {
+            fresh_shapes
+        };
         let mut per_member_tys: Vec<Type> = Vec::with_capacity(members.len());
         for m in members {
             match self.union_member_field_read_ty(m, name) {
                 Ok(ty) => per_member_tys.push(ty),
+                Err(_) if is_fresh_literal_member(m, fresh_shapes) => {
+                    per_member_tys.push(Type::Undefined);
+                }
                 Err(miss) => {
                     let missing = m.clone();
                     self.report_union_field_miss(
@@ -11461,6 +11740,113 @@ impl Inferer<'_> {
             }
         }
         Type::union(per_member_tys)
+    }
+
+    /// The field names of each fresh object literal the typed `expr` may
+    /// evaluate to through `||`, `??`, `&&` and conditionals. tsc normalizes
+    /// such a literal against the other object types it joins, so a field only
+    /// they declare reads from it as `undefined`: `(options || {}).a` is
+    /// `string | undefined` for an `options?: { a: string }`.
+    ///
+    /// A receiver member with a literal's shape could instead hold a value the
+    /// join folded into it, so the rule applies only when it can tell them
+    /// apart: every non-literal operand is a plain object type or nullish
+    /// (`object`, a generic `T`, a class or a refinement may fold into a
+    /// literal's type), every operand's object type is itself still a member of
+    /// the receiver, and a literal's shape is not one a non-literal declares.
+    fn fresh_literal_shapes(
+        &self,
+        expr: ExprId,
+        receiver_members: &[Type],
+    ) -> Result<Vec<BTreeSet<String>>, CompilerFailure> {
+        let mut literals = Vec::new();
+        let mut non_literals = Vec::new();
+        self.collect_joined_operands(expr, &mut literals, &mut non_literals)?;
+        let Some(non_literal_members) = plain_object_members(&non_literals) else {
+            return Ok(Vec::new());
+        };
+        let Some(literal_members) = plain_object_members(&literals) else {
+            return Ok(Vec::new());
+        };
+        let is_kept = |member: &Type| {
+            receiver_members
+                .iter()
+                .any(|kept| kept.without_aliases() == member.without_aliases())
+        };
+        if !non_literal_members
+            .iter()
+            .chain(&literal_members)
+            .all(|(member, _)| is_kept(member))
+        {
+            return Ok(Vec::new());
+        }
+        Ok(literal_members
+            .into_iter()
+            .map(|(_, names)| names)
+            .filter(|names| {
+                !non_literal_members
+                    .iter()
+                    .any(|(_, declared_names)| declared_names == names)
+            })
+            .collect())
+    }
+
+    /// Splits the operands `expr` joins through `||`, `??`, `&&` and
+    /// conditionals into the types of fresh object literals and of everything
+    /// else. An `&&` left operand contributes only what may be falsy
+    /// ([`may_be_falsy_part`]), the part that can reach the result.
+    ///
+    /// A literal with a spread counts as a non-literal: the spread copies
+    /// whatever fields its source has at run time.
+    fn collect_joined_operands(
+        &self,
+        expr: ExprId,
+        literals: &mut Vec<Type>,
+        non_literals: &mut Vec<Type>,
+    ) -> Result<(), CompilerFailure> {
+        let typed = self
+            .typed_ast
+            .try_expr(expr)
+            .map_err(crate::typechecker::arena_failure)?;
+        match &typed.kind {
+            TypedExprKind::Narrowed { inner, .. } => {
+                self.collect_joined_operands(*inner, literals, non_literals)
+            }
+            TypedExprKind::Binary {
+                op: BinOp::And,
+                lhs,
+                rhs,
+            } => {
+                let lhs_ty = &self
+                    .typed_ast
+                    .try_expr(*lhs)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .ty;
+                non_literals.push(may_be_falsy_part(lhs_ty));
+                self.collect_joined_operands(*rhs, literals, non_literals)
+            }
+            TypedExprKind::Binary {
+                op: BinOp::Or,
+                lhs,
+                rhs,
+            }
+            | TypedExprKind::NullishCoalesce { lhs, rhs } => {
+                self.collect_joined_operands(*lhs, literals, non_literals)?;
+                self.collect_joined_operands(*rhs, literals, non_literals)
+            }
+            TypedExprKind::Ternary { then_, else_, .. } => {
+                self.collect_joined_operands(*then_, literals, non_literals)?;
+                self.collect_joined_operands(*else_, literals, non_literals)
+            }
+            TypedExprKind::ObjectLiteral { members, .. } if !has_spread(members) => {
+                literals.push(typed.ty.clone());
+                Ok(())
+            }
+            _ => {
+                non_literals.push(typed.ty.clone());
+                Ok(())
+            }
+        }
     }
 
     /// Look up a field on an optional-chain receiver. The resolution carries
@@ -11504,10 +11890,18 @@ impl Inferer<'_> {
             Type::Error => ChainField::plain(Type::Error),
             Type::Unknown => ChainField::plain(Type::Unknown),
             // A union reads the same way it does off a chain; `union_field_read_ty`
-            // owns the rule, and this arm exists so `u?.v` and `u.v` agree.
+            // owns the rule, and this arm exists so `u?.v` and `u.v` agree. A
+            // chain receiver is not checked for fresh literals, so
+            // `(o || {})?.a` still rejects a field the literal lacks.
             Type::Union(members) if members.iter().all(Self::is_field_bearing) => {
-                let ty =
-                    self.union_field_read_ty(span, receiver_path, receiver_ty, members, &name.name);
+                let ty = self.union_field_read_ty(
+                    span,
+                    receiver_path,
+                    receiver_ty,
+                    members,
+                    &name.name,
+                    &[],
+                );
                 ChainField::plain(ty)
             }
             // Class receivers resolve against the class field map before the
@@ -12554,7 +12948,8 @@ fn unsupported_cast_target_reason(
         | Type::Void
         | Type::Uint8Array
         | Type::Function { .. }
-        | Type::Unknown => None,
+        | Type::Unknown
+        | Type::NonPrimitive => None,
         Type::BigIntLiteral(_) => Some(
             "bigint literal types aren't supported as `as` targets — cast to `bigint` \
              and compare the value",
@@ -12683,33 +13078,50 @@ fn string_key_as_field(ast: &crate::Ast, part: ChainPart) -> Result<ChainPart, C
     Ok(part)
 }
 
-/// The type of an expression that evaluates to one of two operands. `void`
-/// has no value to join with the other operand's, so an expression that may
-/// produce it is `void` as a whole: usable for its effects, and refused
-/// wherever a value is needed.
+/// The type of an expression that evaluates to one of two operands: the union
+/// of their types reduced by tsc's strict subtype relation, as tsc reduces
+/// `c ? a : b`, `a || b` and `a ?? b`. `object_literal_operand` says whether
+/// either operand is an object literal, which tsc normalizes rather than
+/// reduces, so distinct object shapes stay apart.
 fn conditional_result_type(
     left: Type,
     right: Type,
+    either_is_object_literal: bool,
     types: super::assignable::TypeResolver<'_>,
 ) -> Type {
-    branch_result_type(left, right, types)
-}
-
-fn branch_result_type(left: Type, right: Type, types: super::assignable::TypeResolver<'_>) -> Type {
     // `c ? 1 : {}` is `1 | {}` in TypeScript; only widening reduces it to `{}`.
     let one_is_empty_object = left.is_empty_object() != right.is_empty_object();
     let distinct_object_shapes = matches!(left.peel(), Type::Object { .. })
         && matches!(right.peel(), Type::Object { .. })
         && left.peel() != right.peel();
-    if distinct_object_shapes || one_is_empty_object {
+    if one_is_empty_object || (distinct_object_shapes && either_is_object_literal) {
         Type::union(vec![left, right])
-    } else if assignable(&left, &right, types) {
+    } else if matches!(left.peel(), Type::Error) || matches!(right.peel(), Type::Error) {
+        // `Error` relates to everything both ways, so the subtype checks below
+        // would let an operand that already failed decide the result; the
+        // right operand's type keeps later diagnostics about the valid side.
         right
-    } else if assignable(&right, &left, types) {
+    } else if strict_subtype(&right, &left, types) {
         left
+    } else if strict_subtype(&left, &right, types) {
+        right
     } else {
         Type::union(vec![left, right])
     }
+}
+
+/// Whether either of `operands` is an object literal, under any parentheses.
+fn has_object_literal(ast: &crate::Ast, operands: [ExprId; 2]) -> Result<bool, CompilerFailure> {
+    for operand in operands {
+        let id = peel_parens(ast, operand)?;
+        if matches!(
+            &ast.try_expr(id).map_err(super::arena_failure)?.kind,
+            ExprKind::ObjectLiteral { .. }
+        ) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// An empty object literal reads as none of an all-optional object's fields,
@@ -12736,6 +13148,71 @@ fn holds_no_element(ty: &Type) -> bool {
         Type::Array(element) => matches!(element.peel(), Type::Never) || holds_no_element(element),
         _ => false,
     }
+}
+
+/// Whether `member` is the type of a fresh object literal with one of
+/// `shapes`' sets of field names.
+fn is_fresh_literal_member(member: &Type, shapes: &[BTreeSet<String>]) -> bool {
+    plain_object_field_names(member).is_some_and(|names| shapes.contains(&names))
+}
+
+/// The object members of `operands` with their field names, skipping the
+/// nullish ones and `never`, or `None` when one is not a plain object type.
+fn plain_object_members(operands: &[Type]) -> Option<Vec<(&Type, BTreeSet<String>)>> {
+    let mut members = Vec::new();
+    for member in operands.iter().flat_map(|ty| narrowing::union_members(ty)) {
+        if matches!(
+            member.peel(),
+            Type::Null | Type::Undefined | Type::Void | Type::Never
+        ) {
+            continue;
+        }
+        members.push((member, plain_object_field_names(member)?));
+    }
+    Some(members)
+}
+
+/// The fields of a plain object type: one with no index signature and no
+/// refinement (`T & {}` may hold any field), so these fields are all it
+/// declares and two such members compare by their names.
+fn plain_object_fields(ty: &Type) -> Option<&ObjectFields> {
+    let mut plain = ty;
+    while let Type::Alias { ty, .. } | Type::Readonly(ty) = plain {
+        plain = ty;
+    }
+    match plain {
+        Type::Object {
+            fields,
+            index: None,
+        } => Some(fields),
+        _ => None,
+    }
+}
+
+fn plain_object_field_names(ty: &Type) -> Option<BTreeSet<String>> {
+    plain_object_fields(ty).map(|fields| fields.keys().cloned().collect())
+}
+
+/// `ty` less the plain object types with a required field: those are truthy,
+/// while `{}`, a weak type or an interface may hold a falsy primitive.
+fn may_be_falsy_part(ty: &Type) -> Type {
+    Type::union(
+        narrowing::union_members(ty)
+            .into_iter()
+            .filter(|member| !is_truthy_plain_object(member))
+            .cloned()
+            .collect(),
+    )
+}
+
+fn is_truthy_plain_object(ty: &Type) -> bool {
+    plain_object_fields(ty).is_some_and(|fields| fields.values().any(|field| !field.optional))
+}
+
+fn has_spread(members: &[crate::TypedObjectMember]) -> bool {
+    members
+        .iter()
+        .any(|member| matches!(member, crate::TypedObjectMember::Spread { .. }))
 }
 
 fn is_empty_object_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
@@ -13163,10 +13640,34 @@ pub(super) fn callable_parameter_type(param: &crate::Param) -> Type {
     crate::ObjectField::widen_optional(param.is_omittable(), param.ty.clone())
 }
 
+/// How many leading arguments a call must pass. As in tsc, a trailing
+/// parameter whose type accepts `void` may be left out too: the call passes
+/// `undefined`, which such a parameter holds.
 pub(super) fn required_parameter_count(params: &[crate::Param]) -> usize {
     params
         .iter()
-        .rposition(|p| !p.rest && !p.is_omittable())
+        .rposition(|p| !p.rest && !p.is_omittable() && !p.ty.carries_void())
+        .map_or(0, |index| index + 1)
+}
+
+/// [`required_parameter_count`] for a function type's `params`, of which the
+/// last `optional` fixed ones may be omitted. Shared by every arity check on
+/// function types, so a trailing `void` parameter is optional in each, as in
+/// tsc's minimum argument count.
+pub(super) fn required_count_of_function_type(
+    params: &[Type],
+    optional: usize,
+    has_rest: bool,
+) -> usize {
+    let fixed = if has_rest {
+        &params[..params.len().saturating_sub(1)]
+    } else {
+        params
+    };
+    let required = fixed.len().saturating_sub(optional);
+    fixed[..required]
+        .iter()
+        .rposition(|ty| !ty.carries_void())
         .map_or(0, |index| index + 1)
 }
 
@@ -13406,7 +13907,12 @@ fn reads_object_fields(ty: &Type) -> bool {
 /// A `toString` call would throw on the nullish ones.
 fn interpolates_at_run_time(ty: &Type) -> bool {
     match ty.peel() {
-        Type::Null | Type::Unknown | Type::TypeVar(_) | Type::GenericParam { .. } => true,
+        // `object` may hold a closure, which has no vtable `toString`.
+        Type::Null
+        | Type::Unknown
+        | Type::NonPrimitive
+        | Type::TypeVar(_)
+        | Type::GenericParam { .. } => true,
         Type::Union(members) => members.iter().any(|member| {
             matches!(member.peel(), Type::Undefined | Type::Void)
                 || interpolates_at_run_time(member)
@@ -13446,6 +13952,7 @@ fn has_to_string(ty: &Type) -> bool {
             | Type::TypeVar(_)
             | Type::GenericParam { .. }
             | Type::Unknown
+            | Type::NonPrimitive
             | Type::Error
     )
 }
@@ -13517,8 +14024,13 @@ fn merge_spread_field_type(
     let Some(earlier) = earlier.filter(|_| field.optional) else {
         return field;
     };
+    // Without `exactOptionalPropertyTypes`, `a?: T` and `a?: T | undefined`
+    // are one type, so the spread adds `T` either way, as in TypeScript.
     crate::ObjectField {
-        ty: Type::union(vec![earlier.ty, field.ty]),
+        ty: Type::union(vec![
+            earlier.ty,
+            super::param_defaults::without_undefined(&field.ty),
+        ]),
         optional: earlier.optional,
         readonly: false,
         method: false,

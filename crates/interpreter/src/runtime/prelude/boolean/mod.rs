@@ -1,5 +1,6 @@
 //! The Rust port of the prelude's `Boolean` surface — `toString` / `toJson`,
 //! both `"true"` / `"false"`. The receiver is the unboxed `i32` (0 = false).
+//! `Boolean(value)`, the `BooleanConstructor` call signature, is truthiness.
 
 use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
@@ -11,6 +12,10 @@ use crate::{MangledName, PackageDeclaration, Param, Type};
 
 fn method_key(method: &str) -> MangledName {
     crate::mangle::extend(&crate::mangle::prelude("Boolean"), method)
+}
+
+fn call_key() -> MangledName {
+    crate::mangle::extend(&crate::mangle::prelude("BooleanConstructor"), "@call")
 }
 
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
@@ -43,6 +48,26 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             },
         )?;
     }
+
+    // `Boolean(value?: unknown)` (`Dispatch::Static`, only the value arrives).
+    let object = ValType::Ref(RefType::new(
+        true,
+        HeapType::ConcreteStruct(
+            crate::runtime::intrinsic_types::build_intrinsic_types(&engine)?.object,
+        ),
+    ));
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        call_key(),
+        FuncType::new(&engine, [object], [ValType::I32]),
+        true,
+        |caller, params, results| {
+            let truthy = super::value::truthy(caller, abi_arg(params, 0)?)?;
+            *abi_result(results, 0)? = Val::I32(i32::from(truthy));
+            Ok(())
+        },
+    )?;
     Ok(())
 }
 
@@ -62,6 +87,11 @@ pub fn declare(defs: &mut PackageDeclaration) {
         vec![recv()],
         Type::String,
     );
+    declare_method(defs, "@call", call_key(), vec![call_value()], Type::Boolean);
+}
+
+fn call_value() -> Param {
+    Param::with_default("value", Type::Unknown, crate::DefaultValue::Undefined)
 }
 
 /// The type/interface surface this module implements — its slice of the
@@ -69,7 +99,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
 #[allow(clippy::too_many_lines)]
 pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
     use crate::runtime::prelude::declaration::doc;
-    use crate::{Dispatch, MethodSig, Span, Type, TypeKind, TypeSymbol};
+    use crate::{Dispatch, MethodSig, Span, Type, TypeKind, TypeSymbol, ValueKind, ValueSymbol};
     use std::collections::BTreeMap;
     defs.types.insert(
         "Boolean".to_string(),
@@ -108,6 +138,50 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 properties: BTreeMap::new(),
                 dispatch: Dispatch::Direct,
                 doc: doc("/** The boolean type — `true` or `false`. */"),
+            },
+        },
+    );
+    defs.types.insert(
+        "BooleanConstructor".to_string(),
+        TypeSymbol {
+            name: "BooleanConstructor".to_string(),
+            mangled_name: crate::mangle::prelude("BooleanConstructor"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: TypeKind::Interface {
+                index: None,
+                generics: Vec::new(),
+                methods: BTreeMap::from([(
+                    "@call".to_string(),
+                    MethodSig {
+                        optional: false,
+                        generics: Vec::new(),
+                        params: vec![call_value()],
+                        ret: Type::Boolean,
+                        predicate: None,
+                        doc: doc(
+                            "/**\n * Convert any value to a boolean by its truthiness: `false`, `0`, `NaN`, `\"\"`, `0n`, `null` and `undefined` are `false`; everything else is `true`.\n */",
+                        ),
+                    },
+                )]),
+                properties: BTreeMap::new(),
+                dispatch: Dispatch::Static,
+                doc: doc(
+                    "/** Constructor object for `boolean`. Accessed via the global `Boolean` binding. */",
+                ),
+            },
+        },
+    );
+    defs.values.insert(
+        "Boolean".to_string(),
+        ValueSymbol {
+            name: "Boolean".to_string(),
+            mangled_name: crate::mangle::prelude("Boolean"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: ValueKind::Const {
+                ty: Type::prelude_interface("BooleanConstructor".to_string(), Vec::new()),
+                doc: doc(
+                    "/** The `Boolean` constructor — call `Boolean(x)` to convert any value to a boolean by its truthiness. */",
+                ),
             },
         },
     );

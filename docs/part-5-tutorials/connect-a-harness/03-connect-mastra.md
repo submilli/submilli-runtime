@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "4f82a647cc45f81ac5341a018c8c042b06a2f77be38df924eb4ce0d56940981f"
+  contentHash: "1f712e5720fff2c420fcc9a1356365c5e1f7d8492c889f78f60e2066d18646bf"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -17,7 +17,7 @@ Blueprint from [Connect a harness](/docs/tutorials/connect-a-harness),
 with `SUBMILLI_SERVER_TOKEN` still exported, Node.js 20 or later, and a
 key from your model provider for the conversation. The agent file
 names Claude. For Google or OpenAI, the `model` argument takes
-`google/gemini-3.8-flash` or `openai/gpt-4o-mini` instead, with that
+`google/gemini-3.8-flash` or `openai/gpt-5.5` instead, with that
 provider's key in the environment.
 
 ## Start the project

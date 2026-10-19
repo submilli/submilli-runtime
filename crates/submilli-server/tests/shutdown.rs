@@ -141,7 +141,7 @@ async fn start() -> Server {
     let home = tempfile::tempdir().expect("temp home");
     let config = ServerConfig {
         blueprints: Some(Arc::new(InMemoryBlueprintStore::default())),
-        session_storage_root: Some(home.path().join("vfs")),
+        volume_root: Some(home.path().to_path_buf()),
         package_store_root: Some(home.path().join("packages")),
         ..ServerConfig::default()
     };

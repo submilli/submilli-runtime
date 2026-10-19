@@ -36,17 +36,18 @@ services:
       - submilli-net
 
     # Persist SQLite at /var/lib/submilli/server/db/submilli.db together with
-    # its journal and lock files. Sessions, VFS files, secrets, and packages
-    # remain under the same server/ root. Existing blueprint revision files
-    # are imported at startup, then the directory moves to server/archive/blueprints/.
+    # its journal and lock files. Sessions, secrets, packages, and every VFS
+    # directory (named volumes, session files, and ephemeral scratch, under
+    # server/volumes/) remain under the same server/ root. Existing blueprint
+    # revision files are imported at startup, then the directory moves to
+    # server/archive/blueprints/.
     volumes:
       - submilli-state:/var/lib/submilli
 
-    # Ephemeral execution storage. The ephemeral VFS root is a separate setting
-    # that defaults to the system temp dir, so it is not moved by SUBMILLI_HOME;
-    # left on the container filesystem it would grow the writable layer instead
-    # of a volume. A tmpfs is the right home for it — the data is per-execution
-    # scratch by definition. mode=1777 matches the base image's /tmp.
+    # A writable /tmp for anything that asks the OS for a temp file: the root
+    # filesystem is read-only. Programs' ephemeral scratch is not here. It lives
+    # on the state volume with the rest of the VFS directories. mode=1777
+    # matches the base image's /tmp.
     tmpfs:
       - /tmp:mode=1777,size=256m
 

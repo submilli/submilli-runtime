@@ -810,3 +810,39 @@ export function v(customer: string, total: number): void {{
         );
     }
 }
+
+#[test]
+fn variables_requirements_include_literal_names_and_keep_dynamic_names_unfiltered() {
+    for (expression, expected) in [
+        (
+            "\"BROWSER_STORE_NAME\"",
+            Some("name == \"BROWSER_STORE_NAME\""),
+        ),
+        ("name", None),
+    ] {
+        let source = format!(
+            r#"
+            import {{ get }} from "submilli:variables";
+            /** Read browser configuration.
+             * @param name Variable name.
+             */
+            export function read(name: string): string | undefined {{ return get({expression}); }}
+        "#
+        );
+        let package = compile_package(
+            "@acme/browser",
+            ModulePath::from("lib"),
+            &[PackageSourceModule {
+                path: ModulePath::from("lib"),
+                source: &source,
+            }],
+            &[],
+        )
+        .expect("package compiles");
+        let schema =
+            derive_capability_schema(&package.declaration, &[], &package.required_capabilities);
+        assert_eq!(schema.requires.len(), 1);
+        assert_eq!(schema.requires[0].capability, "variables.get");
+        assert_eq!(schema.requires[0].filter.as_deref(), expected);
+    }
+}

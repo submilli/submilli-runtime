@@ -1,0 +1,3 @@
+nonPrimitiveNarrow.ts(14,7): error TS2339: Property 'toFixed' does not exist on type 'never'.
+nonPrimitiveNarrow.ts(20,4): error TS18047: 'b' is possibly 'null'.
+nonPrimitiveNarrow.ts(22,6): error TS2339: Property 'toString' does not exist on type 'never'.

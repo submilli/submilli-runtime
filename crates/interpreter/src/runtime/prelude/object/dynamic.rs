@@ -119,6 +119,9 @@ pub(super) async fn set(
     value: &Val,
 ) -> wasmtime::Result<()> {
     let key = read_string_units(caller, name, FIELD_NAME)?;
+    if shape_arrays(caller, object)?.is_none() {
+        return set_builtin_property(caller, object, &key, value);
+    }
     if let Some(property) = find(caller, object, &key, false)? {
         let object = super::super::iterator::as_struct(caller, object, "property receiver")?;
         let values = field_array(caller, &object, 2)?;
@@ -144,6 +147,40 @@ pub(super) async fn set(
         ));
     }
     super::insert_field(caller, object, name, value)
+}
+
+/// A write through a structural view of a built-in value: the properties the
+/// prelude declares writable go to their host setters, and any other write
+/// throws a `TypeError`. JavaScript throws the same for a read-only property
+/// (`size`) but would add a new one; a built-in here has no room for it.
+fn set_builtin_property(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    key: &[u16],
+    value: &Val,
+) -> wasmtime::Result<()> {
+    let name = String::from_utf16_lossy(key);
+    let intr = crate::runtime::intrinsic_types::intrinsic_types(&mut *caller)?;
+    let (array, regex) = (intr.array.clone(), intr.regex.clone());
+    let is_a = |caller: &mut Caller<'_, StoreData>, ty: &wasmtime::StructType| match object {
+        Val::AnyRef(Some(any)) => match any.as_struct(&mut *caller)? {
+            Some(st) => st.matches_ty(&*caller, ty),
+            None => Ok(false),
+        },
+        _ => Ok(false),
+    };
+    let result = if name == "length" && is_a(caller, &array)? {
+        let length = crate::runtime::host::read_boxed_number(caller, value, "Array#length")?;
+        super::super::array::set_length(caller, object, length)
+    } else if name == "lastIndex" && is_a(caller, &regex)? {
+        let index = crate::runtime::host::read_boxed_number(caller, value, "RegExp#lastIndex")?;
+        super::super::regex::set_last_index(caller, object, index)
+    } else {
+        Err(crate::runtime::host::type_error(format!(
+            "Cannot set property '{name}' of a built-in value"
+        )))
+    };
+    result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
 }
 
 pub(super) fn has(

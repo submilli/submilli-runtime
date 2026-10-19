@@ -592,6 +592,9 @@ pub enum ClassMember {
         modifiers: ClassModifiers,
         /// `x?: T`.
         optional: bool,
+        /// `f?(): T;`: an optional method declared without a body, held as a
+        /// field of its function type that a subclass method may fill.
+        method_signature: bool,
         ty: TypeAnnotation,
         /// `= expr`. Semantics owned by the typechecker.
         initializer: Option<ExprId>,

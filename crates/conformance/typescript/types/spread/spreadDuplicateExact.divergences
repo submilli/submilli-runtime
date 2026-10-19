@@ -1,1 +1,25 @@
-types: 48 of 80 tsc entries compared, 0 differ
+types: 48 of 80 tsc entries compared, 6 differ
+
+line 18: d1
+  tsc:  { a: string | number | undefined; }
+  ours: { a: number | string }
+
+line 18: { a: 123, ...d }
+  tsc:  { a: string | number | undefined; }
+  ours: { a: number | string }
+
+line 22: c2
+  tsc:  { a: string | number | undefined; }
+  ours: { a: number | string }
+
+line 22: { a: 123, ...(t ? c : {}) }
+  tsc:  { a: string | number | undefined; }
+  ours: { a: number | string }
+
+line 23: d2
+  tsc:  { a: string | number | undefined; }
+  ours: { a: number | string }
+
+line 23: { a: 123, ...(t ? d : {}) }
+  tsc:  { a: string | number | undefined; }
+  ours: { a: number | string }

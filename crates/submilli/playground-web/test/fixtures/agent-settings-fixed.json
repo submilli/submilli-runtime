@@ -1,0 +1,14 @@
+{
+ "exit": 2,
+ "result": {
+  "error": {
+   "kind": "model-fixed",
+   "message": "session 5e550000-0000-4000-8000-000000000004 answers with anthropic:claude-sonnet-5-5; carry it on without --model, or start a new chat to use anthropic:other"
+  },
+  "next": []
+ },
+ "text": "",
+ "notes": [
+  "session 5e550000-0000-4000-8000-000000000004 answers with anthropic:claude-sonnet-5-5; carry it on without --model, or start a new chat to use anthropic:other"
+ ]
+}

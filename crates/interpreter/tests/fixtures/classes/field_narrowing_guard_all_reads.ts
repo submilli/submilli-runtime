@@ -221,12 +221,12 @@ class StringPopChild extends ErasedParent {
   value: StringPop = ["ok"];
 }
 
-interface DogPusher {
-  push(value: Dog): number;
+interface DogFinder {
+  indexOf(value: Dog): number;
 }
 
-class DogPusherChild extends ErasedParent {
-  value: DogPusher = [new Animal()];
+class DogFinderChild extends ErasedParent {
+  value: DogFinder = [new Animal()];
 }
 
 class PlainArrayChild extends ErasedParent {
@@ -462,9 +462,9 @@ export function main(): void {
   stringPop.reset([1]);
   assert(catchesTypeError(() => { const value = stringPop.value; }), "array carrier preserves constrained element type");
 
-  const dogPusher = new DogPusherChild();
-  dogPusher.reset([new Animal()]);
-  const dogPusherValue = dogPusher.value;
+  const dogFinder = new DogFinderChild();
+  dogFinder.reset([new Animal()]);
+  const dogFinderValue = dogFinder.value;
 
   const plainArray = new PlainArrayChild();
   plainArray.reset([{ wrong: 1 }]);

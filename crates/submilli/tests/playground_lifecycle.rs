@@ -776,6 +776,69 @@ mod unix {
         assert_eq!(status, 200, "{body}");
     }
 
+    const PAGE_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
+                            font-src 'self'; img-src 'self' data:; connect-src 'self'; \
+                            base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn the_page_and_its_hashed_assets_are_served_under_the_content_security_policy() {
+        let project = Project::new();
+        let record = project.start(&[]);
+
+        let (status, headers, page) = request("GET", &control(&record, "/"), None, &[], None);
+        assert_eq!(status, 200);
+        assert_eq!(headers["content-type"], "text/html; charset=utf-8");
+        assert_eq!(headers["cache-control"], "no-store");
+        assert_eq!(headers["content-security-policy"], PAGE_CSP);
+        assert_eq!(headers["x-content-type-options"], "nosniff");
+
+        // The script and the stylesheet the page names, and a font the stylesheet names.
+        let linked = |text: &str, suffix: &str| {
+            text.split(['"', '(', ')'])
+                .find(|part| part.starts_with("/assets/") && part.ends_with(suffix))
+                .unwrap_or_else(|| panic!("no /assets/*{suffix} in {text}"))
+                .to_owned()
+        };
+        let script = linked(&page, ".js");
+        let stylesheet = linked(&page, ".css");
+        let (_, _, css) = request("GET", &control(&record, &stylesheet), None, &[], None);
+        let font = linked(&css, ".woff2");
+        for (path, content_type) in [
+            (script.as_str(), "text/javascript; charset=utf-8"),
+            (stylesheet.as_str(), "text/css; charset=utf-8"),
+            (font.as_str(), "font/woff2"),
+        ] {
+            let (status, headers, _) = request("GET", &control(&record, path), None, &[], None);
+            assert_eq!(status, 200, "{path}");
+            assert_eq!(headers["content-type"], content_type, "{path}");
+            assert_eq!(
+                headers["cache-control"], "public, max-age=31536000, immutable",
+                "{path}"
+            );
+            assert_eq!(headers["content-security-policy"], PAGE_CSP, "{path}");
+        }
+
+        let (status, headers, body) = request(
+            "GET",
+            &control(&record, "/assets/index-missing.js"),
+            None,
+            &[],
+            None,
+        );
+        assert_eq!(status, 404);
+        assert!(
+            headers["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with("application/json")
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap()["error"],
+            "not_found"
+        );
+    }
+
     #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
     #[test]
     fn a_deeply_recursive_program_ends_with_a_resource_error_and_the_playground_stays_up() {
@@ -913,6 +976,27 @@ mod unix {
         assert_eq!(body["result"], "ok", "{body}");
         let status = parse(&project.run(&["status", "--json"]));
         assert_eq!(status["egress_grants"], record["egress_grants"]);
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn open_with_a_run_or_a_decision_signs_in_at_it() {
+        let project = Project::new();
+        project.start(&[]);
+        for (target, end) in [("60", "&run=60"), ("60.2", "&run=60&decision=2")] {
+            let output = project.run(&["open", target, "--json"]);
+            assert!(output.status.success(), "{target}: {}", stderr(&output));
+            let ready: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+            let link = ready["login_url"].as_str().unwrap();
+            assert!(link.contains("#login="), "{link}");
+            assert!(link.ends_with(end), "{link}");
+        }
+        for wrong in ["run", "60.", "60.x", "-1"] {
+            let output = project.run(&["open", wrong, "--json"]);
+            assert!(!output.status.success(), "{wrong}: {}", stdout(&output));
+            assert!(!stdout(&output).contains("#login="), "{wrong}");
+        }
+        assert!(project.stop().status.success());
     }
 
     #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
@@ -1941,5 +2025,66 @@ mod unix {
         let record = parse(&output);
         assert_eq!(record["attached"], true);
         assert_eq!(record["egress_grants"], json!([]));
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn restart_starts_a_new_playground_with_the_settings_of_the_one_it_stopped() {
+        let project = Project::new();
+        let first = project.start(&["--allow-localhost"]);
+
+        let output = project.run(&["restart", "--json"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let record = parse(&output);
+        assert_eq!(record["attached"], false);
+        assert_ne!(record["pid"], first["pid"]);
+        assert_eq!(record["egress_grants"], json!(["allow-localhost"]));
+        assert_eq!(record["blueprint"], first["blueprint"]);
+        let pid = u32::try_from(first["pid"].as_u64().unwrap()).unwrap();
+        wait_until(
+            "the first playground to exit",
+            Duration::from_secs(10),
+            || !pid_alive(pid),
+        );
+
+        // Settings given to the restart replace the stopped playground's.
+        let output = project.run(&["restart", "--json", "--allow-private"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(parse(&output)["egress_grants"], json!(["allow-private"]));
+
+        // With nothing running, a restart is a start. Its output isn't a terminal, so
+        // like every start here it opens no browser, and says the link is to open.
+        assert!(project.stop().status.success());
+        let output = project.run(&["restart"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(
+            stdout(&output).contains("not running"),
+            "{}",
+            stdout(&output)
+        );
+        assert!(
+            stdout(&output).contains("is running"),
+            "{}",
+            stdout(&output)
+        );
+        assert!(
+            stdout(&output).contains("open it within"),
+            "{}",
+            stdout(&output)
+        );
+        assert!(!project.state().join("open.html").exists());
+        for command in [["start", "--no-open"], ["open", "--no-open"]] {
+            let output = project.run(&command);
+            assert!(output.status.success(), "{}", stderr(&output));
+        }
+        let output = project.run(&["open"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(
+            stdout(&output).contains("open it within"),
+            "{}",
+            stdout(&output)
+        );
+        assert!(!project.state().join("open.html").exists());
+        assert!(project.stop().status.success());
     }
 }

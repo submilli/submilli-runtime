@@ -538,6 +538,8 @@ fn map_token_err(err: McpTokenError) -> McpCallError {
         // recorded as local too, a miss on replay (the safe direction).
         local @ (McpTokenError::NotAuthenticated
         | McpTokenError::Store(_)
+        | McpTokenError::InvalidGrant(_)
+        | McpTokenError::GrantChanged
         | McpTokenError::Malformed(_)
         | McpTokenError::Transport(
             HttpError::EgressDenied(_)
@@ -607,7 +609,7 @@ mod tests {
 
     #[tokio::test]
     async fn internal_client_failure_does_not_refresh_oauth_or_retry() {
-        use crate::mcp_auth::{OAuthCredential, write_credential};
+        use crate::mcp_auth::{McpGrantStore, OAuthCredential, SecretStoreGrants};
         use crate::secret_store::PlaintextFileSecretStore;
         let (mut transport, attempts) = failing_transport();
         Arc::make_mut(&mut transport.blueprint)
@@ -623,22 +625,24 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store: Arc<dyn SecretStore> =
             Arc::new(PlaintextFileSecretStore::open(root.path().join("secrets")).unwrap());
-        write_credential(
-            "bp",
-            "local",
-            &OAuthCredential {
-                refresh_token: None,
-                access_token: Some("static".into()),
-                client_id: None,
-                token_endpoint: None,
-                scopes: Vec::new(),
-            },
-            &store,
-        )
-        .await
-        .unwrap();
+        let grants: Arc<dyn McpGrantStore> = Arc::new(SecretStoreGrants::new(store.clone()));
+        grants
+            .deposit(
+                "bp",
+                "local",
+                &OAuthCredential {
+                    refresh_token: None,
+                    access_token: Some("static".into()),
+                    client_id: None,
+                    token_endpoint: None,
+                    scopes: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
         transport.oauth = Some(Arc::new(OAuthTokenManager::new(
-            store,
+            grants,
+            Some(store),
             Arc::new(interpreter::runtime::ReqwestHttpClient::new(
                 transport.policy.clone(),
             )),

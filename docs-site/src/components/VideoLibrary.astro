@@ -1,11 +1,11 @@
 ---
-import { films } from '../lib/videos';
+import { films, videoHeadingId } from '../lib/videos';
 import VideoPlayer from './VideoPlayer.astro';
 import AnchorHeading from '@astrojs/starlight/components/AnchorHeading.astro';
 ---
 <section class="video-library not-content" aria-label="Video series">
-  {films.length ? films.map((film, index) => <article data-video-id={film.id} aria-labelledby={`video-${film.id}-title`}>
-    <AnchorHeading level={2} id={`video-${film.id}-title`}><span class="number">{String(index + 1).padStart(2,'0')}</span> {film.title}</AnchorHeading>
+  {films.length ? films.map((film, index) => <article data-video-id={film.id} aria-labelledby={videoHeadingId(film)}>
+    <AnchorHeading level={2} id={videoHeadingId(film)}><span class="number">{String(index + 1).padStart(2,'0')}</span> {film.title}</AnchorHeading>
     <figure>
       <div class="player"><VideoPlayer film={film} /></div>
       <figcaption>{film.description}</figcaption>

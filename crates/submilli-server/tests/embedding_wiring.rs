@@ -195,7 +195,7 @@ impl Harness {
             blueprints: Some(Arc::new(
                 InMemoryBlueprintStore::seed(vec![blueprint()]).expect("seed blueprints"),
             )),
-            session_storage_root: Some(vfs_root.path().to_path_buf()),
+            volume_root: Some(vfs_root.path().to_path_buf()),
             llm_dispatch: Some(llm_dispatch()),
             embedding_dispatch: Some(dispatch),
             ..ServerConfig::default()
@@ -409,7 +409,7 @@ async fn the_default_provider_is_installed_when_no_dispatch_is_overridden() {
         blueprints: Some(Arc::new(
             InMemoryBlueprintStore::seed(vec![blueprint()]).expect("seed blueprints"),
         )),
-        session_storage_root: Some(vfs_root.path().to_path_buf()),
+        volume_root: Some(vfs_root.path().to_path_buf()),
         ..ServerConfig::default()
     })
     .await

@@ -1,0 +1,2 @@
+nonPrimitiveAccessProperty.ts(4,3): error TS2339: Property 'nonExist' does not exist on type 'object'.
+nonPrimitiveAccessProperty.ts(6,7): error TS2339: Property 'destructuring' does not exist on type '{}'.

@@ -36,16 +36,14 @@ use ipnet::IpNet;
 use serde::Deserialize;
 use submilli_server::config::{
     OAuthProvider, ServerDirectories, VolumeTable, default_blueprint_dir,
-    default_cli_package_store_dir, default_database_path, default_managed_volume_root,
-    default_package_store_dir, default_secret_store_dir, default_session_storage_root,
-    default_session_store_dir, validate_volumes,
+    default_cli_package_store_dir, default_database_path, default_package_store_dir,
+    default_secret_store_dir, default_session_store_dir, default_volume_root, validate_volumes,
 };
 use submilli_server::{
-    ApiToken, AuthConfig, DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, FileSecretStore,
-    KeySource, LlmLimits, NetworkPolicy, Role, RuntimeConfig, ServerConfig,
+    ApiToken, AuthConfig, DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, KeySource,
+    LlmLimits, NetworkPolicy, Role, RuntimeConfig, ServerConfig,
 };
 use submilli_shared::github::GithubToken;
-use submilli_shared::secret_store::SecretStore;
 use submilli_shared::secret_store::check_key;
 
 use crate::Cli;
@@ -76,9 +74,7 @@ pub struct FileConfig {
     pub blueprint_dir: Option<PathBuf>,
     pub session_store_dir: Option<PathBuf>,
     pub database_path: Option<PathBuf>,
-    pub vfs_session_dir: Option<PathBuf>,
-    pub vfs_ephemeral_dir: Option<PathBuf>,
-    /// Root for `managed-local` volumes; see `--volume-dir`.
+    /// Root of the server's VFS directories; see `--volume-dir`.
     pub volume_dir: Option<PathBuf>,
     pub package_store_dir: Option<PathBuf>,
     /// Seconds. `deny_unknown_fields` means omitting this would turn a
@@ -94,10 +90,6 @@ pub struct FileConfig {
     pub max_execution_fuel: Option<u64>,
     /// Kibibytes of Wasm stack one execution may use.
     pub max_execution_stack: Option<u64>,
-    /// Megabytes of `submilli:session` state every live session may hold in
-    /// total. Bounds the process against session count, where
-    /// `max_execution_memory` bounds a single execution.
-    pub max_session_state_memory: Option<u64>,
     /// Tokens every live execution's `submilli:llm` calls may spend in total.
     /// Bounds the process against the operator's provider credential, where
     /// `max_execution_llm_tokens` bounds a single run.
@@ -110,6 +102,12 @@ pub struct FileConfig {
     pub max_llm_concurrency: Option<usize>,
     /// Runs that may wait on the harness at once, server-wide.
     pub max_suspended_runs: Option<usize>,
+    /// Megabytes of JSON the largest last run a session keeps may hold.
+    pub max_last_run_size: Option<u64>,
+    /// Seconds a keyed execute's response is kept for replay after it completes.
+    pub idempotency_retention: Option<u64>,
+    /// A session's newest keyed-execute responses kept whatever their age.
+    pub idempotency_keep_last: Option<usize>,
     /// Tokens every live execution's `submilli:embedding` calls may spend in
     /// total.
     #[serde(default, deserialize_with = "crate::count::deserialize_optional_count")]
@@ -266,11 +264,13 @@ pub(crate) struct EnvConfig {
     max_execution_time: Option<String>,
     max_execution_fuel: Option<String>,
     max_execution_stack: Option<String>,
-    max_session_state_memory: Option<String>,
     max_llm_tokens: Option<String>,
     max_execution_llm_tokens: Option<String>,
     max_llm_concurrency: Option<String>,
     max_suspended_runs: Option<String>,
+    max_last_run_size: Option<String>,
+    idempotency_retention: Option<String>,
+    idempotency_keep_last: Option<String>,
     max_embedding_tokens: Option<String>,
     max_execution_embedding_tokens: Option<String>,
     max_execution_embedding_requests: Option<String>,
@@ -278,8 +278,6 @@ pub(crate) struct EnvConfig {
     blueprint_dir: Option<PathBuf>,
     session_store_dir: Option<PathBuf>,
     database_path: Option<PathBuf>,
-    vfs_session_dir: Option<PathBuf>,
-    vfs_ephemeral_dir: Option<PathBuf>,
     volume_dir: Option<PathBuf>,
     secret_store_dir: Option<PathBuf>,
     package_store_dir: Option<PathBuf>,
@@ -359,11 +357,13 @@ impl EnvConfig {
             max_execution_time: var("SUBMILLI_MAX_EXECUTION_TIME"),
             max_execution_fuel: var("SUBMILLI_MAX_EXECUTION_FUEL"),
             max_execution_stack: var("SUBMILLI_MAX_EXECUTION_STACK"),
-            max_session_state_memory: var("SUBMILLI_MAX_SESSION_STATE_MEMORY"),
             max_llm_tokens: var("SUBMILLI_MAX_LLM_TOKENS"),
             max_execution_llm_tokens: var("SUBMILLI_MAX_EXECUTION_LLM_TOKENS"),
             max_llm_concurrency: var("SUBMILLI_MAX_LLM_CONCURRENCY"),
             max_suspended_runs: var("SUBMILLI_MAX_SUSPENDED_RUNS"),
+            max_last_run_size: var("SUBMILLI_MAX_LAST_RUN_SIZE"),
+            idempotency_retention: var("SUBMILLI_IDEMPOTENCY_RETENTION"),
+            idempotency_keep_last: var("SUBMILLI_IDEMPOTENCY_KEEP_LAST"),
             max_embedding_tokens: var("SUBMILLI_MAX_EMBEDDING_TOKENS"),
             max_execution_embedding_tokens: var("SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS"),
             max_execution_embedding_requests: var("SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS"),
@@ -371,8 +371,6 @@ impl EnvConfig {
             blueprint_dir: path("SUBMILLI_BLUEPRINT_DIR"),
             session_store_dir: path("SUBMILLI_SESSION_STORE_DIR"),
             database_path: path("SUBMILLI_DATABASE_PATH"),
-            vfs_session_dir: path("SUBMILLI_VFS_SESSION_DIR"),
-            vfs_ephemeral_dir: path("SUBMILLI_VFS_EPHEMERAL_DIR"),
             volume_dir: path("SUBMILLI_VOLUME_DIR"),
             secret_store_dir: path("SUBMILLI_SECRET_STORE_DIR"),
             package_store_dir: path("SUBMILLI_PACKAGE_STORE_DIR"),
@@ -499,11 +497,13 @@ fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
     max_execution_time(cli, file, env)?;
     max_execution_fuel(cli, file, env)?;
     max_execution_stack(cli, file, env)?;
-    max_session_state_memory(cli, file, env)?;
     max_llm_tokens(cli, file, env)?;
     max_execution_llm_tokens(cli, file, env)?;
     max_llm_concurrency(cli, file, env)?;
     max_suspended_runs(cli, file, env)?;
+    max_last_run_size(cli, file, env)?;
+    idempotency_retention(cli, file, env)?;
+    idempotency_keep_last(cli, file, env)?;
     max_embedding_tokens(cli, file, env)?;
     max_execution_embedding_tokens(cli, file, env)?;
     max_execution_embedding_requests(cli, file, env)?;
@@ -558,14 +558,6 @@ fn guarded_directories(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> ServerD
             env.tls_key_file.clone(),
             file.tls.key_file.clone(),
         ),
-        session_storage_root: Some(
-            explicit(
-                cli.vfs_session_dir.clone(),
-                env.vfs_session_dir.clone(),
-                file.vfs_session_dir.clone(),
-            )
-            .unwrap_or_else(default_session_storage_root),
-        ),
         session_store_dir: Some(
             explicit(
                 cli.session_store_dir.clone(),
@@ -582,18 +574,13 @@ fn guarded_directories(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> ServerD
             )
             .unwrap_or_else(default_database_path),
         ),
-        ephemeral_storage_root: explicit(
-            cli.vfs_ephemeral_dir.clone(),
-            env.vfs_ephemeral_dir.clone(),
-            file.vfs_ephemeral_dir.clone(),
-        ),
-        managed_volume_root: Some(
+        volume_root: Some(
             explicit(
                 cli.volume_dir.clone(),
                 env.volume_dir.clone(),
                 file.volume_dir.clone(),
             )
-            .unwrap_or_else(default_managed_volume_root),
+            .unwrap_or_else(default_volume_root),
         ),
         // The path the config was read from, so a volume cannot be declared
         // over the file that declares volumes. Resolution consumes the file and
@@ -781,28 +768,6 @@ fn max_execution_stack(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<
         .ok_or_else(|| anyhow::anyhow!("max execution stack of {kib} KiB is too large"))
 }
 
-/// `None` leaves [`ServerConfig::max_session_state_memory`] unset, so the
-/// manager's own default applies — the same shape every other optional path
-/// takes, rather than baking the default in twice.
-fn max_session_state_memory(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Option<u64>> {
-    let env_mb = parse_env(
-        "SUBMILLI_MAX_SESSION_STATE_MEMORY",
-        "a whole number of megabytes",
-        env.max_session_state_memory.as_ref(),
-    )?;
-    let Some(mb) = explicit(
-        cli.max_session_state_memory,
-        env_mb,
-        file.max_session_state_memory,
-    ) else {
-        return Ok(None);
-    };
-    if mb == 0 {
-        anyhow::bail!("max session state memory must be at least 1 MB, got 0");
-    }
-    Ok(Some(mb.saturating_mul(1024 * 1024)))
-}
-
 /// `None` leaves [`ServerConfig::max_llm_tokens`] unset, so the session
 /// manager's own default applies rather than being baked in twice.
 ///
@@ -873,6 +838,56 @@ fn max_suspended_runs(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<O
         cli.max_suspended_runs,
         env_limit,
         file.max_suspended_runs,
+    ))
+}
+
+/// The largest last run a session keeps, in bytes. `0` is rejected: it would
+/// keep no session's last run.
+fn max_last_run_size(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Option<u64>> {
+    let env_mb = parse_env(
+        "SUBMILLI_MAX_LAST_RUN_SIZE",
+        "a whole number of megabytes",
+        env.max_last_run_size.as_ref(),
+    )?;
+    let Some(mb) = explicit(cli.max_last_run_size, env_mb, file.max_last_run_size) else {
+        return Ok(None);
+    };
+    if mb == 0 {
+        anyhow::bail!("max last run size must be at least 1 MB, got 0");
+    }
+    Ok(Some(mb.saturating_mul(1024 * 1024)))
+}
+
+/// How long a keyed execute's response is kept for replay, in whole seconds.
+fn idempotency_retention(
+    cli: &Cli,
+    file: &FileConfig,
+    env: &EnvConfig,
+) -> Result<Option<Duration>> {
+    let env_seconds = parse_env(
+        "SUBMILLI_IDEMPOTENCY_RETENTION",
+        "a whole number of seconds",
+        env.idempotency_retention.as_ref(),
+    )?;
+    Ok(explicit(
+        cli.idempotency_retention,
+        env_seconds,
+        file.idempotency_retention,
+    )
+    .map(Duration::from_secs))
+}
+
+/// How many of a session's newest keyed-execute responses outlive the retention.
+fn idempotency_keep_last(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Option<usize>> {
+    let env_count = parse_env(
+        "SUBMILLI_IDEMPOTENCY_KEEP_LAST",
+        "a whole number of responses",
+        env.idempotency_keep_last.as_ref(),
+    )?;
+    Ok(explicit(
+        cli.idempotency_keep_last,
+        env_count,
+        file.idempotency_keep_last,
     ))
 }
 
@@ -978,8 +993,8 @@ fn combine_telemetry(env_setting: Option<&str>, file_setting: Option<bool>) -> b
 
 /// Merge of the CLI flags, environment, and parsed [`FileConfig`]. Split out
 /// from [`resolve`] so the precedence rules are unit-testable without reading
-/// the process environment — though not entirely without disk I/O, since
-/// [`resolve_secret_store`] opens the store it builds.
+/// the process environment — though not entirely without disk I/O, since the
+/// secret-store key is read to build the cipher.
 fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, ServerConfig)> {
     // Borrow for the address, policy, and store before the `.or()` chains below
     // move fields out.
@@ -990,7 +1005,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
     let tls = tls_files(&cli, &file, &env)?
         .map(|(cert, key)| submilli_server::tls::load(&cert, &key))
         .transpose()?;
-    let secret_store = resolve_secret_store(&cli, &file, &env)?;
+    let secret_store_dir = secret_store_dir(&cli, &file, &env);
     let session_cipher = secret_key_source(&cli, &file, &env)
         .map(|source| submilli_shared::secret_store::SecretCipher::new(&source).map(Arc::new))
         .transpose()?;
@@ -1002,10 +1017,12 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         max_wasm_stack: max_execution_stack(&cli, &file, &env)?,
         ..RuntimeConfig::default()
     };
-    let max_session_state_memory = max_session_state_memory(&cli, &file, &env)?;
     let max_llm_tokens = max_llm_tokens(&cli, &file, &env)?;
     let max_llm_concurrency = max_llm_concurrency(&cli, &file, &env)?;
     let max_suspended_runs = max_suspended_runs(&cli, &file, &env)?;
+    let max_last_run_size = max_last_run_size(&cli, &file, &env)?;
+    let idempotency_retention = idempotency_retention(&cli, &file, &env)?;
+    let idempotency_keep_last = idempotency_keep_last(&cli, &file, &env)?;
     // The other `LlmLimits` fields are embedder-only, the way `session_kv_limits`
     // is: the per-execution ceiling is the one an operator tunes alongside the
     // aggregate, so it is the only one that gets a rung on the ladder.
@@ -1023,12 +1040,6 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
 
     let blueprint_dir = explicit(cli.blueprint_dir, env.blueprint_dir, file.blueprint_dir)
         .unwrap_or_else(default_blueprint_dir);
-    let session_storage_root = explicit(
-        cli.vfs_session_dir,
-        env.vfs_session_dir,
-        file.vfs_session_dir,
-    )
-    .unwrap_or_else(default_session_storage_root);
     let session_store_dir = explicit(
         cli.session_store_dir,
         env.session_store_dir,
@@ -1037,18 +1048,14 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
     .unwrap_or_else(default_session_store_dir);
     let database_path = explicit(cli.database_path, env.database_path, file.database_path)
         .unwrap_or_else(default_database_path);
-    let ephemeral_storage_root = explicit(
-        cli.vfs_ephemeral_dir,
-        env.vfs_ephemeral_dir,
-        file.vfs_ephemeral_dir,
-    );
     let package_store_root = explicit(
         cli.package_store_dir,
         env.package_store_dir,
         file.package_store_dir,
     );
-    let managed_volume_root = explicit(cli.volume_dir, env.volume_dir, file.volume_dir)
-        .unwrap_or_else(default_managed_volume_root);
+    // Left `None` when unset: the default root is created at startup, while
+    // one the operator names must already exist.
+    let volume_root = explicit(cli.volume_dir, env.volume_dir, file.volume_dir);
 
     let mcp_oauth_providers = file
         .mcp_oauth
@@ -1073,28 +1080,29 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         blueprint_dir: Some(blueprint_dir),
         session_store_dir: Some(session_store_dir),
         database_path: Some(database_path),
-        session_storage_root: Some(session_storage_root),
-        ephemeral_storage_root,
         package_store_root,
         // The CLI's store is always readable as a fallback; there is no knob for
         // it because a locally published package resolving on the dev server is
         // the point, and production stores are simply empty there.
         package_fallback_root: Some(default_cli_package_store_dir()),
         network_policy,
-        secret_store,
+        secret_store: None,
+        secret_store_dir: Some(secret_store_dir),
         session_cipher,
         mcp_allowed_hosts,
         mcp_oauth_providers,
-        max_session_state_memory,
         llm_limits,
         max_llm_tokens,
         max_llm_concurrency,
         max_suspended_runs,
+        max_last_run_size,
+        idempotency_retention,
+        idempotency_keep_last,
         embedding_limits,
         max_embedding_tokens,
         max_embedding_concurrency,
         volumes: file.volumes,
-        managed_volume_root: Some(managed_volume_root),
+        volume_root,
         github_token_file: file.github_token_file,
         ..ServerConfig::default()
     };
@@ -1118,26 +1126,8 @@ fn resolve_mcp_allowed_hosts(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> O
     (hosts.len() > MCP_LOOPBACK_HOSTS.len()).then_some(hosts)
 }
 
-/// Build the secret store. The directory and key env var both have defaults, so
-/// the store auto-enables when a key is available: a configured `key_file` (it
-/// wins over `key_env`), or the `key_env` variable actually being set in the
-/// environment. An unset key env var leaves the store disabled (`Ok(None)`)
-/// rather than failing boot; an explicit but unreadable `key_file` is an error.
-/// CLI flags take precedence over the config file.
-fn resolve_secret_store(
-    cli: &Cli,
-    file: &FileConfig,
-    env: &EnvConfig,
-) -> Result<Option<Arc<dyn SecretStore>>> {
-    // No key file and the env var isn't set: leave the store off.
-    let Some(key_source) = secret_key_source(cli, file, env) else {
-        return Ok(None);
-    };
-    let store = FileSecretStore::open(secret_store_dir(cli, file, env), &key_source)
-        .map_err(|e| anyhow::anyhow!("opening secret store: {e}"))?;
-    Ok(Some(Arc::new(store)))
-}
-
+/// The directory of a secret store from before secrets were kept in the
+/// database. The server imports it at boot and archives it.
 fn secret_store_dir(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> PathBuf {
     explicit(
         cli.secret_store_dir.clone(),
@@ -1147,8 +1137,8 @@ fn secret_store_dir(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> PathBuf {
     .unwrap_or_else(default_secret_store_dir)
 }
 
-/// Where the store's key comes from, or `None` when no key is configured and
-/// the store therefore stays off. A configured key file wins over the env var;
+/// Where the secret-store key comes from, or `None` when no key is configured
+/// and secrets therefore stay off. A configured key file wins over the env var;
 /// the env var counts only when it is actually set.
 fn secret_key_source(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Option<KeySource> {
     if let Some(path) = secret_key_file(cli, file, env) {
@@ -1461,11 +1451,7 @@ mod tests {
             let file = serde_yml::from_str(&format!("{field}: 0K")).unwrap();
             assert!(preflight(&empty_cli(), &file, &EnvConfig::default()).is_err());
         }
-        for field in [
-            "max_execution_memory",
-            "max_execution_stack",
-            "max_session_state_memory",
-        ] {
+        for field in ["max_execution_memory", "max_execution_stack"] {
             assert!(serde_yml::from_str::<FileConfig>(&format!("{field}: 1K")).is_err());
         }
     }
@@ -1479,9 +1465,8 @@ mod tests {
             blueprint_dir: None,
             session_store_dir: None,
             database_path: None,
-            vfs_session_dir: None,
-            vfs_ephemeral_dir: None,
             volume_dir: None,
+            create_volume_dir: false,
             secret_store_dir: None,
             package_store_dir: None,
             secret_store_key_env: None,
@@ -1495,11 +1480,13 @@ mod tests {
             max_execution_time: None,
             max_execution_fuel: None,
             max_execution_stack: None,
-            max_session_state_memory: None,
             max_llm_tokens: None,
             max_execution_llm_tokens: None,
             max_llm_concurrency: None,
             max_suspended_runs: None,
+            max_last_run_size: None,
+            idempotency_retention: None,
+            idempotency_keep_last: None,
             max_embedding_tokens: None,
             max_execution_embedding_tokens: None,
             max_execution_embedding_requests: None,
@@ -1563,8 +1550,7 @@ mod tests {
 bind: 0.0.0.0
 port: 9000
 blueprint_dir: /data/blueprints
-vfs_session_dir: /data/sessions
-vfs_ephemeral_dir: /tmp/submilli
+volume_dir: /data/volumes
 network:
   allow_localhost: true
   allow_private: false
@@ -1576,8 +1562,7 @@ network:
         assert_eq!(cfg.bind, Some("0.0.0.0".parse().unwrap()));
         assert_eq!(cfg.port, Some(9000));
         assert_eq!(cfg.blueprint_dir, Some("/data/blueprints".into()));
-        assert_eq!(cfg.vfs_session_dir, Some("/data/sessions".into()));
-        assert_eq!(cfg.vfs_ephemeral_dir, Some("/tmp/submilli".into()));
+        assert_eq!(cfg.volume_dir, Some("/data/volumes".into()));
         assert_eq!(cfg.network.allow_localhost, Some(true));
         assert_eq!(cfg.network.allow_private, Some(false));
         assert_eq!(cfg.network.allow_ip, vec!["10.0.0.0/24", "1.2.3.4"]);
@@ -1652,11 +1637,9 @@ network:
             github_token_file: Some(root.join("github/token")),
             tls_key_file: Some(root.join("tls/key.pem")),
             tls_cert_file: Some(root.join("tls/cert.pem")),
-            session_storage_root: Some(root.join("vfs/sessions")),
             session_store_dir: Some(root.join("sessions")),
             database_path: Some(root.join("db/submilli.db")),
-            ephemeral_storage_root: Some(root.join("scratch")),
-            managed_volume_root: Some(root.join("volumes")),
+            volume_root: Some(root.join("volumes")),
             config_file: Some(root.join("etc/submilli.yaml")),
         }
     }
@@ -1683,11 +1666,9 @@ network:
             secret_store_key_file,
             api_token_files,
             github_token_file,
-            session_storage_root,
             session_store_dir,
             database_path,
-            ephemeral_storage_root,
-            managed_volume_root,
+            volume_root,
             config_file,
             tls_key_file,
             tls_cert_file,
@@ -1701,11 +1682,9 @@ network:
             (github_token_file, "GitHub token file"),
             (tls_key_file, "TLS private key"),
             (tls_cert_file, "TLS certificate file"),
-            (session_storage_root, "per-session VFS root"),
             (session_store_dir, "durable session store"),
             (database_path, "server database"),
-            (ephemeral_storage_root, "ephemeral storage root"),
-            (managed_volume_root, "managed volume root"),
+            (volume_root, "volume root"),
             (config_file, "server config file"),
         ]
         .into_iter()
@@ -1792,27 +1771,24 @@ network:
     }
 
     #[test]
-    fn a_volume_inside_the_per_session_root_is_refused_for_data_loss() {
+    fn a_volume_inside_the_volume_root_is_refused_for_data_loss() {
         let root = tempfile::tempdir().unwrap();
         let msg = refusal(
             "work",
-            root.path().join("vfs/sessions/work"),
+            root.path().join("volumes/sessions/work"),
             &dirs_under(root.path()),
         );
-        assert!(msg.contains("per-session VFS root"), "got {msg}");
+        assert!(msg.contains("volume root"), "got {msg}");
         assert!(msg.contains("is inside"), "got {msg}");
         assert!(msg.contains("orphan reconciliation"), "got {msg}");
     }
 
     #[test]
     fn a_volume_inside_the_os_temp_dir_is_accepted() {
-        // The ephemeral root defaults to the OS temp dir, and containment there
-        // runs the other way — a volume under it is fine.
+        // The OS temp dir holds nothing of the server's, so a volume under it
+        // is fine.
         let inside = tempfile::tempdir().unwrap();
-        let dirs = ServerDirectories {
-            ephemeral_storage_root: None,
-            ..dirs_under(&std::env::temp_dir().join("submilli-volume-test-owned"))
-        };
+        let dirs = dirs_under(&std::env::temp_dir().join("submilli-volume-test-owned"));
         validate_volumes(
             &local_table([("work".to_string(), inside.path().to_path_buf())]),
             &dirs,
@@ -1858,8 +1834,8 @@ network:
     /// A directory that does not exist yet keeps the operator's spelling — there
     /// is nothing on disk to fold its case against. Where the filesystem ignores
     /// case, two spellings then name one directory. The server's own directories
-    /// are created lazily on first use, so the pair being compared at start-up is
-    /// routinely two paths that are not there yet.
+    /// are created at startup or on first use, after this check, so the pair being
+    /// compared is routinely two paths that are not there yet.
     #[test]
     fn a_case_alias_of_a_guarded_dir_is_refused_where_case_is_not_significant() {
         let root = tempfile::tempdir().unwrap();
@@ -1906,9 +1882,8 @@ network:
         let root = tempfile::tempdir().unwrap();
         let config = ServerConfig {
             blueprint_dir: Some(root.path().join("blueprints")),
-            session_storage_root: Some(root.path().join("vfs/sessions")),
+            volume_root: Some(root.path().join("volumes")),
             package_store_root: Some(root.path().join("packages")),
-            ephemeral_storage_root: Some(root.path().join("scratch")),
             volumes: local_table([("work".to_string(), root.path().to_path_buf())]),
             ..ServerConfig::default()
         };
@@ -2048,7 +2023,7 @@ network:
     }
 
     #[test]
-    fn the_managed_volume_root_comes_from_flag_env_or_file() {
+    fn the_volume_root_comes_from_flag_env_or_file() {
         let file = FileConfig {
             volume_dir: Some("/file/volumes".into()),
             ..FileConfig::default()
@@ -2062,7 +2037,7 @@ network:
             ..empty_cli()
         };
         let root = |cli: &Cli, env: &EnvConfig, file: &FileConfig| {
-            guarded_directories(cli, file, env).managed_volume_root
+            guarded_directories(cli, file, env).volume_root
         };
         assert_eq!(root(&cli, &env, &file), Some(PathBuf::from("/cli/volumes")));
         assert_eq!(
@@ -2075,10 +2050,16 @@ network:
         );
         assert_eq!(
             root(&empty_cli(), &EnvConfig::default(), &FileConfig::default()),
-            Some(default_managed_volume_root())
+            Some(default_volume_root())
         );
         let parsed: FileConfig = serde_yml::from_str("volume_dir: /data/volumes\n").unwrap();
         assert_eq!(parsed.volume_dir, Some("/data/volumes".into()));
+        // A root that was set reaches the server as one it must not create; the
+        // default stays unset, to be created at startup.
+        let (_, config) = merge(empty_cli(), file, EnvConfig::default()).unwrap();
+        assert_eq!(config.volume_root, Some(PathBuf::from("/file/volumes")));
+        let (_, config) = merge(empty_cli(), FileConfig::default(), EnvConfig::default()).unwrap();
+        assert_eq!(config.volume_root, None);
     }
 
     #[test]
@@ -2106,40 +2087,37 @@ network:
     }
 
     #[test]
-    fn the_managed_volume_root_must_clear_every_server_owned_directory() {
+    fn the_volume_root_must_clear_every_server_owned_directory() {
         let root = tempfile::tempdir().unwrap();
-        let managed = VolumeTable::from([(
-            "memory".to_string(),
-            VolumeSpec::managed(SizeLimit::Unlimited),
-        )]);
+        // Checked with no volume declared too: sessions and scratch live there.
         for (inside, expected) in [
-            ("vfs/sessions/volumes", "per-session VFS root"),
+            ("sessions/volumes", "durable session store"),
             ("blueprints/volumes", "blueprint store"),
             ("secrets", "secret store"),
+            // The state root itself contains every directory; the first row wins.
+            ("", "secret store"),
         ] {
             let dirs = ServerDirectories {
-                managed_volume_root: Some(root.path().join(inside)),
+                volume_root: Some(root.path().join(inside)),
                 ..dirs_under(root.path())
             };
-            let err = validate_volumes(&managed, &dirs).expect_err(inside);
+            let err = validate_volumes(&VolumeTable::new(), &dirs).expect_err(inside);
             let msg = err.to_string();
-            assert!(msg.contains("managed volume root"), "{inside}: {msg}");
+            assert!(msg.contains("the volume root"), "{inside}: {msg}");
             assert!(msg.contains(expected), "{inside}: {msg}");
         }
-        // Unused, the root is not checked: no managed volume lives there.
-        let dirs = ServerDirectories {
-            managed_volume_root: Some(root.path().join("secrets")),
-            ..dirs_under(root.path())
-        };
-        validate_volumes(&VolumeTable::new(), &dirs).expect("no managed volume declared");
     }
 
     #[test]
-    fn a_local_path_volume_may_not_overlap_the_managed_root() {
+    fn a_local_path_volume_may_not_overlap_the_volume_root() {
         let root = tempfile::tempdir().unwrap();
         let dirs = dirs_under(root.path());
-        let msg = refusal("work", root.path().join("volumes/memory"), &dirs);
-        assert!(msg.contains("managed volume root"), "{msg}");
+        let msg = refusal(
+            "work",
+            root.path().join("volumes/managed-local/memory"),
+            &dirs,
+        );
+        assert!(msg.contains("volume root"), "{msg}");
         assert!(msg.contains("is inside"), "{msg}");
     }
 
@@ -2147,7 +2125,7 @@ network:
     fn a_managed_volume_and_a_local_path_at_its_directory_are_refused() {
         let root = tempfile::tempdir().unwrap();
         let dirs = ServerDirectories {
-            managed_volume_root: Some(root.path().join("managed")),
+            volume_root: Some(root.path().join("volumes")),
             ..ServerDirectories::default()
         };
         let err = validate_volumes(
@@ -2162,7 +2140,7 @@ network:
                 ),
                 (
                     "inner".to_string(),
-                    VolumeSpec::local_path(root.path().join("managed/memory/sub")),
+                    VolumeSpec::local_path(root.path().join("volumes/managed-local/memory/sub")),
                 ),
             ]),
             &dirs,
@@ -2184,12 +2162,9 @@ network:
         assert_eq!(addr, "127.0.0.1:8128".parse().unwrap());
         assert_eq!(config.blueprint_dir.unwrap(), default_blueprint_dir());
         assert_eq!(config.database_path.unwrap(), default_database_path());
-        assert_eq!(
-            config.session_storage_root.unwrap(),
-            default_session_storage_root()
-        );
-        assert!(config.ephemeral_storage_root.is_none());
+        assert!(config.volume_root.is_none());
         assert!(config.secret_store.is_none());
+        assert_eq!(config.secret_store_dir.unwrap(), default_secret_store_dir());
     }
 
     #[test]
@@ -2200,11 +2175,7 @@ network:
             secret_store_key_env: Some("SUB_TEST_SECRET_KEY_UNSET".into()),
             ..empty_cli()
         };
-        assert!(
-            resolve_secret_store(&cli, &FileConfig::default(), &EnvConfig::default())
-                .unwrap()
-                .is_none()
-        );
+        assert!(secret_key_source(&cli, &FileConfig::default(), &EnvConfig::default()).is_none());
     }
 
     fn write_key_file(dir: &std::path::Path, fill: u8) -> PathBuf {
@@ -2226,9 +2197,7 @@ network:
             secret_store_key_file: Some(write_key_file(tmp.path(), 3)),
             ..empty_cli()
         };
-        let store =
-            resolve_secret_store(&cli, &FileConfig::default(), &EnvConfig::default()).unwrap();
-        assert!(store.is_some());
+        assert!(secret_key_source(&cli, &FileConfig::default(), &EnvConfig::default()).is_some());
     }
 
     #[test]
@@ -2242,9 +2211,7 @@ network:
             secret_store_key_file: Some(write_key_file(tmp.path(), 4)),
             ..empty_cli()
         };
-        let store =
-            resolve_secret_store(&cli, &FileConfig::default(), &EnvConfig::default()).unwrap();
-        assert!(store.is_some());
+        assert!(secret_key_source(&cli, &FileConfig::default(), &EnvConfig::default()).is_some());
     }
 
     #[test]
@@ -2264,9 +2231,7 @@ network:
             secret_store_key_env: Some(var.into()),
             ..empty_cli()
         };
-        let store =
-            resolve_secret_store(&cli, &FileConfig::default(), &EnvConfig::default()).unwrap();
-        assert!(store.is_some());
+        assert!(secret_key_source(&cli, &FileConfig::default(), &EnvConfig::default()).is_some());
         unsafe { std::env::remove_var(var) };
     }
 
@@ -2447,8 +2412,7 @@ network:
             ("SUBMILLI_BLUEPRINT_DIR", "/env/bp"),
             ("SUBMILLI_SESSION_STORE_DIR", "/env/sessions"),
             ("SUBMILLI_DATABASE_PATH", "/env/submilli.db"),
-            ("SUBMILLI_VFS_SESSION_DIR", "/env/vfs"),
-            ("SUBMILLI_VFS_EPHEMERAL_DIR", "/env/scratch"),
+            ("SUBMILLI_VOLUME_DIR", "/env/volumes"),
             ("SUBMILLI_PACKAGE_STORE_DIR", "/env/packages"),
         ]);
         let file = FileConfig {
@@ -2457,8 +2421,7 @@ network:
             blueprint_dir: Some("/file/bp".into()),
             session_store_dir: Some("/file/sessions".into()),
             database_path: Some("/file/submilli.db".into()),
-            vfs_session_dir: Some("/file/vfs".into()),
-            vfs_ephemeral_dir: Some("/file/scratch".into()),
+            volume_dir: Some("/file/volumes".into()),
             package_store_dir: Some("/file/packages".into()),
             ..FileConfig::default()
         };
@@ -2473,14 +2436,7 @@ network:
             config.database_path.unwrap(),
             PathBuf::from("/env/submilli.db")
         );
-        assert_eq!(
-            config.session_storage_root.unwrap(),
-            PathBuf::from("/env/vfs")
-        );
-        assert_eq!(
-            config.ephemeral_storage_root.unwrap(),
-            PathBuf::from("/env/scratch")
-        );
+        assert_eq!(config.volume_root.unwrap(), PathBuf::from("/env/volumes"));
         assert_eq!(
             config.package_store_root.unwrap(),
             PathBuf::from("/env/packages")
@@ -2862,44 +2818,6 @@ network:
         assert!(max_execution_stack(&empty_cli(), &huge, &no_env).is_err());
     }
 
-    /// The same ladder, but unset stays `None` so the session manager's own
-    /// default applies rather than being duplicated here.
-    #[test]
-    fn max_session_state_memory_walks_the_ladder() {
-        const MB: u64 = 1024 * 1024;
-        let file = || FileConfig {
-            max_session_state_memory: Some(300),
-            ..FileConfig::default()
-        };
-        let with_flag = Cli {
-            max_session_state_memory: Some(400),
-            ..empty_cli()
-        };
-        let env = || env_from(&[("SUBMILLI_MAX_SESSION_STATE_MEMORY", "200")]);
-
-        for (cli, file, env, expected, tier) in [
-            (with_flag, file(), env(), Some(400 * MB), "the flag"),
-            (empty_cli(), file(), env(), Some(200 * MB), "the env var"),
-            (
-                empty_cli(),
-                file(),
-                EnvConfig::default(),
-                Some(300 * MB),
-                "the config file",
-            ),
-            (
-                empty_cli(),
-                FileConfig::default(),
-                EnvConfig::default(),
-                None,
-                "unset",
-            ),
-        ] {
-            let bytes = max_session_state_memory(&cli, &file, &env).unwrap();
-            assert_eq!(bytes, expected, "{tier} should have won");
-        }
-    }
-
     /// The aggregate LLM ceiling walks the same rungs, in tokens rather than
     /// megabytes — no unit conversion, so the number an operator writes is the
     /// number the refusal names.
@@ -3010,6 +2928,64 @@ network:
             let limit = max_llm_concurrency(&cli, &file, &env).unwrap();
             assert_eq!(limit, expected, "{tier} should have won");
         }
+    }
+
+    #[test]
+    fn idempotency_retention_walks_the_ladder_and_refuses_a_bad_env_value() {
+        let file = FileConfig {
+            idempotency_retention: Some(60),
+            idempotency_keep_last: Some(5),
+            ..FileConfig::default()
+        };
+        let with_flags = Cli {
+            idempotency_retention: Some(10),
+            idempotency_keep_last: Some(1),
+            ..empty_cli()
+        };
+        let env = env_from(&[
+            ("SUBMILLI_IDEMPOTENCY_RETENTION", "30"),
+            ("SUBMILLI_IDEMPOTENCY_KEEP_LAST", "0"),
+        ]);
+        assert_eq!(
+            idempotency_retention(&with_flags, &file, &env).unwrap(),
+            Some(Duration::from_secs(10))
+        );
+        assert_eq!(
+            idempotency_keep_last(&with_flags, &file, &env).unwrap(),
+            Some(1)
+        );
+        assert_eq!(
+            idempotency_retention(&empty_cli(), &file, &env).unwrap(),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(
+            idempotency_keep_last(&empty_cli(), &file, &env).unwrap(),
+            Some(0)
+        );
+        let no_env = EnvConfig::default();
+        assert_eq!(
+            idempotency_retention(&empty_cli(), &file, &no_env).unwrap(),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            idempotency_keep_last(&empty_cli(), &file, &no_env).unwrap(),
+            Some(5)
+        );
+        let defaults = FileConfig::default();
+        assert_eq!(
+            idempotency_retention(&empty_cli(), &defaults, &no_env).unwrap(),
+            None
+        );
+        assert_eq!(
+            idempotency_keep_last(&empty_cli(), &defaults, &no_env).unwrap(),
+            None
+        );
+        let bad = env_from(&[
+            ("SUBMILLI_IDEMPOTENCY_RETENTION", "1d"),
+            ("SUBMILLI_IDEMPOTENCY_KEEP_LAST", "-1"),
+        ]);
+        assert!(idempotency_retention(&empty_cli(), &defaults, &bad).is_err());
+        assert!(idempotency_keep_last(&empty_cli(), &defaults, &bad).is_err());
     }
 
     /// Zero is rejected on all three, rather than meaning "unlimited" (the
@@ -3137,11 +3113,41 @@ network:
     }
 
     #[test]
-    fn zero_session_state_memory_is_rejected() {
-        let env = env_from(&[("SUBMILLI_MAX_SESSION_STATE_MEMORY", "0")]);
+    fn the_last_run_limit_walks_the_ladder_in_megabytes_and_refuses_zero() {
+        let file = FileConfig {
+            max_last_run_size: Some(2),
+            ..FileConfig::default()
+        };
+        let env = env_from(&[("SUBMILLI_MAX_LAST_RUN_SIZE", "3")]);
+        let cli = Cli {
+            max_last_run_size: Some(4),
+            ..empty_cli()
+        };
+        assert_eq!(
+            max_last_run_size(&empty_cli(), &FileConfig::default(), &EnvConfig::default()).unwrap(),
+            None
+        );
+        assert_eq!(
+            max_last_run_size(&empty_cli(), &file, &EnvConfig::default()).unwrap(),
+            Some(2 << 20)
+        );
+        assert_eq!(
+            max_last_run_size(&empty_cli(), &file, &env).unwrap(),
+            Some(3 << 20)
+        );
+        assert_eq!(max_last_run_size(&cli, &file, &env).unwrap(), Some(4 << 20));
+        let zero = Cli {
+            max_last_run_size: Some(0),
+            ..empty_cli()
+        };
+        assert!(max_last_run_size(&zero, &file, &env).is_err());
+        let malformed = env_from(&[("SUBMILLI_MAX_LAST_RUN_SIZE", "64mb")]);
+        let Err(err) = max_last_run_size(&empty_cli(), &file, &malformed) else {
+            panic!("a malformed SUBMILLI_MAX_LAST_RUN_SIZE should have failed boot");
+        };
         assert!(
-            max_session_state_memory(&empty_cli(), &FileConfig::default(), &env).is_err(),
-            "zero would refuse every session write, not mean unlimited"
+            err.to_string().contains("SUBMILLI_MAX_LAST_RUN_SIZE"),
+            "{err}"
         );
     }
 
@@ -3233,21 +3239,16 @@ network:
             },
             ..FileConfig::default()
         };
-        // Env over file: the env dir is the one that gets created.
-        resolve_secret_store(&empty_cli(), &file, &env)
-            .unwrap()
-            .expect("store enabled");
-        assert!(env_dir.exists(), "env dir should have won over the file's");
+        // Env over file.
+        assert_eq!(secret_store_dir(&empty_cli(), &file, &env), env_dir);
 
         // CLI over env.
         let cli = Cli {
             secret_store_dir: Some(cli_dir.clone()),
             ..empty_cli()
         };
-        resolve_secret_store(&cli, &file, &env)
-            .unwrap()
-            .expect("store enabled");
-        assert!(cli_dir.exists(), "cli dir should have won over the env's");
+        assert_eq!(secret_store_dir(&cli, &file, &env), cli_dir);
+        assert!(secret_key_source(&cli, &file, &env).is_some());
     }
 
     #[test]
@@ -3265,9 +3266,11 @@ network:
                 write_key_file(tmp.path(), 7).to_str().unwrap(),
             ),
         ]);
-        let store = resolve_secret_store(&empty_cli(), &FileConfig::default(), &env).unwrap();
         assert!(
-            store.is_some(),
+            matches!(
+                secret_key_source(&empty_cli(), &FileConfig::default(), &env),
+                Some(KeySource::File(_))
+            ),
             "the key file should have enabled the store"
         );
     }

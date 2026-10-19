@@ -1,0 +1,138 @@
+{
+  "module": "FilesystemOperations",
+  "constants": {
+    "Fault": "none",
+    "Witness": "none"
+  },
+  "invariants": [
+    "TypeOK",
+    "ImmutableIdentity",
+    "ImmutablePayload",
+    "ImmutableOutcome",
+    "OnePending",
+    "RefuseBeforePrepare",
+    "ReceiptBeforeReturn",
+    "ProgressNeverResets",
+    "IndexMatchesState",
+    "PrepareBeforeComplete"
+  ],
+  "properties": [],
+  "cases": [
+    {
+      "name": "filesystem-operation-safety",
+      "kind": "safety"
+    },
+    {
+      "name": "negative-identity",
+      "kind": "negative",
+      "invariant": "ImmutableIdentity",
+      "constants": {
+        "Fault": "identity"
+      }
+    },
+    {
+      "name": "negative-payload",
+      "kind": "negative",
+      "invariant": "ImmutablePayload",
+      "constants": {
+        "Fault": "payload"
+      }
+    },
+    {
+      "name": "negative-outcome",
+      "kind": "negative",
+      "invariant": "ImmutableOutcome",
+      "constants": {
+        "Fault": "outcome"
+      }
+    },
+    {
+      "name": "negative-overlap",
+      "kind": "negative",
+      "invariant": "OnePending",
+      "constants": {
+        "Fault": "overlap"
+      }
+    },
+    {
+      "name": "negative-reject-pending",
+      "kind": "negative",
+      "invariant": "RefuseBeforePrepare",
+      "constants": {
+        "Fault": "reject-pending"
+      }
+    },
+    {
+      "name": "witness-conflict",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "conflict"
+      }
+    },
+    {
+      "name": "witness-lost-ack",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "lost-ack"
+      }
+    },
+    {
+      "name": "negative-early-return",
+      "kind": "negative",
+      "invariant": "ReceiptBeforeReturn",
+      "constants": {
+        "Fault": "early-return"
+      }
+    },
+    {
+      "name": "witness-request-conflict",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "request-conflict"
+      }
+    },
+    {
+      "name": "negative-request",
+      "kind": "negative",
+      "invariant": "ImmutableIdentity",
+      "constants": {
+        "Fault": "request"
+      }
+    },
+    {
+      "name": "negative-forget-state",
+      "kind": "negative",
+      "invariant": "ProgressNeverResets",
+      "constants": {
+        "Fault": "forget-state"
+      }
+    },
+    {
+      "name": "negative-wrong-index",
+      "kind": "negative",
+      "invariant": "IndexMatchesState",
+      "constants": {
+        "Fault": "wrong-index"
+      }
+    },
+    {
+      "name": "negative-early-completion",
+      "kind": "negative",
+      "invariant": "PrepareBeforeComplete",
+      "constants": {
+        "Fault": "early-completion"
+      }
+    },
+    {
+      "name": "witness-empty-prepared",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "empty-prepared"
+      }
+    }
+  ]
+}

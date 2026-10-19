@@ -29,8 +29,8 @@ pub fn execute(args: Args) -> Result<ExitCode> {
 
 async fn run(args: &Args) -> Result<()> {
     let blueprint = load_blueprint(&args.blueprint)?;
-    let store = local::open_secret_store()?;
-    let state = blueprint_auth_state(&blueprint, Some(&store)).await;
+    let grants = local::open_grant_store()?;
+    let state = blueprint_auth_state(&blueprint, Some(&grants)).await;
     let overall = if state.is_pending() {
         "PENDING"
     } else {
@@ -41,7 +41,7 @@ async fn run(args: &Args) -> Result<()> {
     for (name, server) in &blueprint.mcp {
         let description = match server_kind(server) {
             ServerKind::OAuth => {
-                if is_authenticated(&blueprint.name, name, Some(&store)).await {
+                if is_authenticated(&blueprint.name, name, Some(&grants)).await {
                     "oauth — authenticated".to_string()
                 } else {
                     "oauth — NOT AUTHENTICATED".to_string()

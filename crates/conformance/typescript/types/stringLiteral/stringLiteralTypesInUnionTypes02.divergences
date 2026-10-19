@@ -1,14 +1,6 @@
-types: 26 of 34 tsc entries compared, 11 differ
+types: 26 of 34 tsc entries compared, 8 differ
 
 line 8: y
-  tsc:  string
-  ours: T
-
-line 14: b
-  tsc:  string
-  ours: T
-
-line 14: x || y
   tsc:  string
   ours: T
 
@@ -21,10 +13,6 @@ line 18: d
   ours: T
 
 line 18: y
-  tsc:  string
-  ours: T
-
-line 19: c || d
   tsc:  string
   ours: T
 

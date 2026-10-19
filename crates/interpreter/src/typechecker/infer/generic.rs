@@ -229,6 +229,7 @@ pub(super) fn erase_generic_params(ty: &Type) -> Type {
         | Type::Void
         | Type::Never
         | Type::Unknown
+        | Type::NonPrimitive
         | Type::Error
         | Type::NumberEnum { .. }
         | Type::StringEnum { .. } => ty.clone(),
@@ -591,6 +592,17 @@ impl Inferer<'_> {
         for (k, v) in interface_bindings {
             sub.insert(k, v);
         }
+        // The receiver instantiates the signature before the call is checked,
+        // so a parameter it makes `void` may go unpassed (`Box<void>.put()`), as
+        // in tsc. Type arguments the call writes or infers come too late for that.
+        let receiver_params: Vec<crate::Param> = sig
+            .params
+            .iter()
+            .map(|param| crate::Param {
+                ty: sub.apply_or_record(&param.ty, &self.type_limits),
+                ..param.clone()
+            })
+            .collect();
 
         if let Some(targs) = &type_args {
             if targs.len() != sig.generics.len() {
@@ -628,7 +640,7 @@ impl Inferer<'_> {
         } else {
             sig.params.len()
         };
-        let min_args = super::expr::required_parameter_count(&sig.params);
+        let min_args = super::expr::required_parameter_count(&receiver_params);
         let arity_ok = args.len() >= min_args && args.len() <= max_args;
         if !arity_ok {
             let help = self.format_signature(SignatureKind::Method {
@@ -713,7 +725,7 @@ impl Inferer<'_> {
                 .record_authored_arguments(span, typed_args.clone());
         }
         if arity_ok {
-            self.fill_omitted_defaults(&sig.params, args.len(), span, &mut typed_args)?;
+            self.fill_omitted_defaults(&receiver_params, args.len(), span, &mut typed_args)?;
         }
         if arity_ok && has_rest {
             self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args)?;
@@ -920,7 +932,7 @@ impl Inferer<'_> {
         errors_before_args: usize,
     ) {
         if let Some(want) = expected.filter(|want| !pins_type_parameters(want)) {
-            let _ = sub.unify(ret, want, self.resolver());
+            let _ = sub.unify(ret, &writable_view_for(ret, want), self.resolver());
         }
         if self.error_count() > errors_before_args
             && let Err(exceeded) = bind_remaining(sub, generics, Type::Error, &self.type_limits)
@@ -957,6 +969,7 @@ impl Inferer<'_> {
     /// A mismatch is reported later, where the call's result is checked
     /// against the expected type.
     fn bind_from_expected_type(&self, sub: &mut TypeParamSubstitution, ret: &Type, want: &Type) {
+        let want = &writable_view_for(ret, want);
         // A result with several bare type parameters (`A | B`) can't say which
         // of them takes which part of `want`: tsc gives each the whole of it,
         // where pairing members would bind `A` to one literal of a `Mode`.
@@ -3168,6 +3181,21 @@ fn admits_undefined(ty: &Type) -> bool {
         Type::Error => true,
         Type::Union(members) => members.iter().any(holds_undefined),
         other => holds_undefined(other),
+    }
+}
+
+/// `want` without a top-level `readonly` when the call returns a fresh
+/// mutable collection (`Array.of()`, `new Set()`), which a `readonly` slot
+/// accepts: unifying the two as they stand fails on the dropped `readonly`.
+/// A bare type parameter result keeps `want` whole, so it binds as readonly.
+fn writable_view_for(ret: &Type, want: &Type) -> Type {
+    match want.peel_preserving_readonly() {
+        Type::Readonly(inner)
+            if !ret.is_readonly_array() && !matches!(ret.peel(), Type::TypeVar(_)) =>
+        {
+            (**inner).clone()
+        }
+        _ => want.clone(),
     }
 }
 

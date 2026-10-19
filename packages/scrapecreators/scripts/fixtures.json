@@ -1,0 +1,1943 @@
+{
+  "youtube.getChannel": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "channelId": "UCxcTeAKWJca6XyJ37_ZoKIQ",
+    "channel": "http://www.youtube.com/@ThePatMcAfeeShow",
+    "name": "The Pat McAfee Show",
+    "avatar": {
+      "image": {
+        "sources": [
+          {
+            "url": "https://yt3.googleusercontent.com/ytc/AIdro_nBgMGIxgHehCAlUUepEhd9Yooi1I55k6IF2WExl-v8Q-c=s72-c-k-c0x00ffffff-no-rj",
+            "width": 72,
+            "height": 72
+          }
+        ],
+        "processor": {
+          "borderImageProcessor": {
+            "circular": true
+          }
+        }
+      },
+      "avatarImageSize": "AVATAR_SIZE_XL",
+      "loggingDirectives": {
+        "trackingParams": "CC0Q6OENIhMIkInyhaSPiwMV9wfWAB3aoR9h",
+        "visibility": {
+          "types": "12"
+        }
+      }
+    },
+    "description": "",
+    "subscriberCount": 2750000,
+    "subscriberCountText": "2.75M subscribers",
+    "videoCountText": "9,221 videos",
+    "viewCountText": "2,170,355,382 views",
+    "joinedDateText": "Joined Aug 23, 2017",
+    "tags": "Synthetic tags",
+    "email": null,
+    "store": "https://store.patmcafeeshow.com",
+    "twitter": "https://twitter.com/PatMcAfeeShow",
+    "instagram": "https://instagram.com/patmcafeeshow",
+    "links": [
+      "https://store.patmcafeeshow.com"
+    ],
+    "country": "United States"
+  },
+  "youtube.listChannelVideos": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "videos": [
+      {
+        "type": "video",
+        "id": "5EWaxmWgQMI",
+        "url": "https://www.youtube.com/watch?v=5EWaxmWgQMI",
+        "title": "Synthetic title",
+        "description": "Synthetic description",
+        "thumbnail": "https://i.ytimg.com/vi/5EWaxmWgQMI/hqdefault.jpg?sqp=-oaymwEnCNACELwBSFryq4qpAxkIARUAAIhCGAHYAQHiAQoIGBACGAY4AUAB&rs=AOn4CLBZIBEJGcYDrduIZJpaSmYHcIHJ6g",
+        "channel": {
+          "title": "",
+          "thumbnail": null
+        },
+        "viewCountText": "110,447 views",
+        "viewCountInt": 110447,
+        "publishedTimeText": "9 days ago",
+        "publishedTime": "2025-01-23T22:48:53.914Z",
+        "lengthText": "37:25",
+        "lengthSeconds": 2245,
+        "badges": []
+      }
+    ],
+    "continuationToken": "4qmFsgLlFhIYV...."
+  },
+  "youtube.listChannelPlaylists": {
+    "success": true,
+    "credits_remaining": 100,
+    "credits_charged": 1,
+    "playlists": [
+      {
+        "type": "playlist",
+        "id": "PLoSWVnSA9vG8hI-SUpAimvYJrPh-PRRvp",
+        "title": "If You Survive, You Win",
+        "thumbnail": "https://i.ytimg.com/vi/tnTPaLOaHz8/hqdefault.jpg",
+        "playlistUrl": "https://www.youtube.com/playlist?list=PLoSWVnSA9vG8hI-SUpAimvYJrPh-PRRvp",
+        "videoId": "tnTPaLOaHz8",
+        "videoUrl": "https://www.youtube.com/watch?v=tnTPaLOaHz8",
+        "videoCount": 4,
+        "channel": {
+          "id": "UCX6OQ3DkcsbYNE6H8uQQuVA",
+          "title": "MrBeast",
+          "handle": "MrBeast",
+          "channelUrl": "https://www.youtube.com/@MrBeast"
+        }
+      }
+    ],
+    "continuationToken": "4qmFsgLlFhIYV...."
+  },
+  "youtube.listChannelLives": {
+    "success": true,
+    "credits_remaining": 100,
+    "credits_charged": 1,
+    "lives": [
+      {
+        "type": "live",
+        "id": "JpVtso3S9rM",
+        "url": "https://www.youtube.com/watch?v=JpVtso3S9rM",
+        "title": "IShowSpeed Live Stream",
+        "thumbnail": "https://i.ytimg.com/vi/JpVtso3S9rM/hqdefault.jpg",
+        "channel": {
+          "id": null,
+          "title": null,
+          "handle": null,
+          "thumbnail": null
+        },
+        "viewCountText": "1.2M views",
+        "viewCountInt": 1200000,
+        "publishedTimeText": "Streamed 2 days ago",
+        "lengthText": "2:14:52",
+        "lengthSeconds": 8092,
+        "badges": []
+      }
+    ],
+    "continuationToken": "4qmFsgLlFhIYV...."
+  },
+  "youtube.listChannelCommunityPosts": {
+    "success": true,
+    "credits_remaining": 100,
+    "credits_charged": 1,
+    "posts": [
+      {
+        "id": "UgkxfMvMnSnV3Ww9HwAY2wFGmVevmhRaYAYO",
+        "url": "https://www.youtube.com/post/UgkxfMvMnSnV3Ww9HwAY2wFGmVevmhRaYAYO",
+        "channel": {
+          "id": "UCX6OQ3DkcsbYNE6H8uQQuVA",
+          "title": "MrBeast",
+          "url": "https://www.youtube.com/@MrBeast",
+          "handle": "MrBeast"
+        },
+        "content": "New video is live",
+        "image": "https://yt3.ggpht.com/example-image=s640-c-fcrop64",
+        "images": [
+          "https://yt3.ggpht.com/example-image=s640-c-fcrop64"
+        ],
+        "likeCountText": "250K",
+        "likeCount": 250000,
+        "publishedTimeText": "2 days ago",
+        "publishedTime": "2026-05-24T12:00:00.000Z",
+        "video": {
+          "id": "tnTPaLOaHz8",
+          "title": "If You Survive, You Win",
+          "thumbnail": "https://i.ytimg.com/vi/tnTPaLOaHz8/hqdefault.jpg",
+          "url": "https://www.youtube.com/watch?v=tnTPaLOaHz8",
+          "viewCountText": "10M views",
+          "viewCountInt": 10000000,
+          "publishedTimeText": "2 days ago",
+          "lengthText": "18:42",
+          "lengthSeconds": 1122
+        }
+      }
+    ],
+    "continuationToken": "4qmFsgLlFhIYV...."
+  },
+  "youtube.listChannelShorts": {
+    "success": true,
+    "credits_remaining": 49998970118,
+    "credits_charged": 1,
+    "videos": [],
+    "channels": [],
+    "playlists": [],
+    "shorts": [
+      {
+        "type": "short",
+        "id": "VREVC0wXPfs",
+        "url": "https://www.youtube.com/watch?v=VREVC0wXPfs",
+        "title": "This idea validation formula has made him $500K from iOS apps",
+        "thumbnail": "https://img.youtube.com/vi/VREVC0wXPfs/maxresdefault.jpg",
+        "viewCountText": "17,066",
+        "viewCountInt": 17066,
+        "description": "Synthetic description",
+        "commentCountText": "2",
+        "commentCountInt": 2,
+        "likeCountInt": 495,
+        "likeCountText": "495",
+        "publishDate": "2026-04-22T10:44:35-07:00",
+        "genre": "People & Blogs",
+        "durationMs": 37000,
+        "durationFormatted": "00:00:37"
+      }
+    ],
+    "shelves": [],
+    "lives": [],
+    "continuationToken": "4qmFsgK7DBIY....."
+  },
+  "youtube.getVideo": {
+    "success": true,
+    "credits_remaining": 33851527,
+    "credits_charged": 1,
+    "id": "Y2Ah_DFr8cw",
+    "thumbnail": "https://img.youtube.com/vi/Y2Ah_DFr8cw/maxresdefault.jpg",
+    "url": "https://www.youtube.com/watch?v=Y2Ah_DFr8cw",
+    "publishDate": "2019-02-22T03:19:54-08:00",
+    "type": "video",
+    "title": "Synthetic title",
+    "description": null,
+    "descriptionLinks": [],
+    "commentCountText": "358",
+    "commentCountInt": 358,
+    "likeCountText": "4043",
+    "likeCountInt": 4043,
+    "viewCountText": "372,864",
+    "viewCountInt": 372864,
+    "publishDateText": "Feb 22, 2019",
+    "collaborators": [],
+    "channel": {
+      "id": "UCWH3hing1Qb4LnkRfQdxsxQ",
+      "url": "https://www.youtube.com/@afroballer8906",
+      "handle": "afroballer8906",
+      "title": "Afroballer"
+    },
+    "chapters": [],
+    "watchNextVideos": [
+      {
+        "id": "lzDTK5kEdkM",
+        "title": "Charles Barkley and Shaq FUNNIEST MOMENTS",
+        "thumbnail": "https://i.ytimg.com/vi/lzDTK5kEdkM/hqdefault.jpg?sqp=-oaymwEmCKgBEF5IWvKriqkDGQgBFQAAiEIYAdgBAeIBCggYEAIYBjgBQAE=&rs=AOn4CLAq_osvQnsGV3A7uz4L1CPTaLqppg",
+        "channel": {
+          "title": "SkyHooked",
+          "url": "https://www.youtube.com/@SkyHooked",
+          "handle": "SkyHooked",
+          "id": "UCrX8GD5f_O-Cu5Y2vQuSSvw"
+        },
+        "publishedTimeText": "11 months ago",
+        "publishedTime": "2025-02-16T19:25:39.493Z",
+        "publishDateText": "11 months ago",
+        "publishDate": "2025-02-16T19:25:39.493Z",
+        "viewCountText": "1.8M views",
+        "viewCountInt": 1800000,
+        "lengthText": "18:01",
+        "lengthInSeconds": 1081,
+        "videoUrl": "https://www.youtube.com/watch?v=lzDTK5kEdkM"
+      }
+    ],
+    "keywords": [],
+    "genre": "People & Blogs",
+    "durationMs": 348000,
+    "durationFormatted": "00:05:48",
+    "isPaidPromotion": false,
+    "most_replayed": null,
+    "captionTracks": [
+      {
+        "baseUrl": "https://www.youtube.com/api/timedtext?v=Y2Ah_DFr8cw&ei=s5Bqab0gu8yS5w_pvOLIDw&caps=asr&opi=112496729&xoaf=5&xowf=1&hl=en&ip=0.0.0.0&ipbits=0&expire=1768616739&sparams=ip,ipbits,expire,v,ei,caps,opi,xoaf&signature=306A57ADE14FECC84B0DB13190761BCCC922AC9B.5C321C4FE7086F7AF851CA8463326E1869EE5255&key=yt8&kind=asr&lang=en",
+        "name": {
+          "simpleText": "English (auto-generated)"
+        },
+        "vssId": "a.en",
+        "languageCode": "en",
+        "kind": "asr",
+        "isTranslatable": true,
+        "trackName": ""
+      }
+    ]
+  },
+  "youtube.getTranscript": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "videoId": "bjVIDXPP7Uk",
+    "type": "video",
+    "url": "https://www.youtube.com/watch?v=bjVIDXPP7Uk",
+    "transcript": [
+      {
+        "text": "welcome back to the hell farm and the",
+        "startMs": "160",
+        "endMs": "1920",
+        "startTimeText": "0:00"
+      }
+    ],
+    "transcript_only_text": "Synthetic transcript_only_text",
+    "language": "English"
+  },
+  "youtube.getSponsors": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "video": {
+      "id": "AVO0ifle-OU",
+      "url": "https://www.youtube.com/watch?v=AVO0ifle-OU",
+      "title": "Why You Should Meal Prep Like A Restaurant",
+      "channel": {
+        "id": "UC3vQEjRhwgH2HAOBKwLjxNA",
+        "url": "https://www.youtube.com/@letsKWOOWK",
+        "handle": "letsKWOOWK",
+        "title": "KWOOWK"
+      },
+      "isPaidPromotion": true
+    },
+    "suspectedSponsors": [
+      {
+        "name": "Betterhelp",
+        "website": "betterhelp.com",
+        "confidence": "medium",
+        "evidence": [
+          {
+            "source": "description_link",
+            "text": "Synthetic text"
+          }
+        ]
+      }
+    ],
+    "sponsorDetection": {
+      "status": "found",
+      "methods": [
+        "paid promotion badge"
+      ],
+      "transcriptAvailable": true,
+      "note": "Synthetic note"
+    }
+  },
+  "youtube.search": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "videos": [
+      {
+        "type": "video",
+        "id": "BzSzwqb-OEE",
+        "url": "https://www.youtube.com/watch?v=BzSzwqb-OEE",
+        "title": "NF - RUNNING (Audio)",
+        "thumbnail": "https://i.ytimg.com/vi/BzSzwqb-OEE/hq720.jpg?sqp=-oaymwEnCNAFEJQDSFryq4qpAxkIARUAAIhCGAHYAQHiAQoIGBACGAY4AUAB&rs=AOn4CLCasEKav1CLqeSSE2IYDqjGiIMBGw",
+        "channel": {
+          "id": "UCoRR6OLuIZ2-5VxtnQIaN2w",
+          "title": "NFrealmusic",
+          "handle": "channel/UCoRR6OLuIZ2-5VxtnQIaN2w",
+          "thumbnail": "https://yt3.ggpht.com/J1_Si0TYNZ-991v09y8RpCh4_Z_ALwKmPgMYnJqjNhoglVtipf3oEN8LpzG1kS0qsv8Jptpmmg=s88-c-k-c0x00ffffff-no-rj"
+        },
+        "viewCountText": "14,860,541 views",
+        "viewCountInt": 14860541,
+        "publishedTimeText": "2 years ago",
+        "publishedTime": "2023-05-28T17:08:46.499Z",
+        "lengthText": "4:14",
+        "lengthSeconds": 254,
+        "badges": []
+      }
+    ],
+    "channels": [],
+    "playlists": [],
+    "shorts": [
+      {
+        "type": "short",
+        "id": "uMNvF-lSCHg",
+        "url": "https://www.youtube.com/watch?v=uMNvF-lSCHg",
+        "title": "LONG RUN ROUTINE #run #runvlog #runner #shorts #morning",
+        "thumbnail": "https://i.ytimg.com/vi/uMNvF-lSCHg/hq720.jpg?sqp=-oaymwFBCNAFEJQDSFryq4qpAzMIARUAAIhCGADYAQHiAQoIGBACGAY4AUAB8AEB-AG2CIACgA-KAgwIABABGFsgXyhlMA8=&rs=AOn4CLA_P-5ExEn9EGLJDNeJedsxb3k1eQ",
+        "channel": {
+          "id": "UCGRdcRxpJWi5Q2oDCrMDUuQ",
+          "title": "Abby and Ryan",
+          "handle": "abbyandryan",
+          "thumbnail": "https://yt3.ggpht.com/8UdUEesepx1Ry_rFUPJOJgndTCKno9VTkSysnuJpFjMj63N6av0pNwnqoiKh_7PN2dw7PGIp=s68-c-k-c0x00ffffff-no-rj"
+        },
+        "viewCountText": "462,705 views",
+        "viewCountInt": 462705,
+        "publishedTimeText": "10 months ago",
+        "publishedTime": "2024-07-28T17:08:46.498Z",
+        "lengthText": "0:44",
+        "lengthSeconds": 44,
+        "badges": []
+      }
+    ],
+    "shelves": [
+      {
+        "type": "shelf",
+        "title": "Shorts",
+        "items": [
+          {
+            "type": "short",
+            "id": "LLBR5nO05tE",
+            "url": "https://www.youtube.com/watch?v=LLBR5nO05tE",
+            "title": "running through walls gone wrong",
+            "thumbnail": "https://i.ytimg.com/vi/LLBR5nO05tE/oardefault.jpg?sqp=-oaymwEoCJUDENAFSFqQAgHyq4qpAxcIARUAAIhC2AEB4gEKCBgQAhgGOAFAAQ==&rs=AOn4CLCYYIIDmBllgkLP68AjVs25UpyevQ",
+            "viewCountText": "750K",
+            "viewCountInt": 750000
+          }
+        ]
+      }
+    ],
+    "lives": [],
+    "continuationToken": "EooDEg..."
+  },
+  "youtube.searchTypeahead": {
+    "success": true,
+    "credits_remaining": 100,
+    "credits_charged": 1,
+    "data": {
+      "query": "mr beast",
+      "suggestions": [
+        {
+          "text": "mrbeast",
+          "type": "channel",
+          "channel": {
+            "id": "UCX6OQ3DkcsbYNE6H8uQQuVA",
+            "handle": "@MrBeast",
+            "name": "MrBeast",
+            "thumbnailUrl": "https://yt3.googleusercontent.com/example=s88-c-k-c0x00ffffff-no-rj"
+          }
+        }
+      ]
+    }
+  },
+  "youtube.searchHashtag": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "videos": [
+      {
+        "type": "video",
+        "id": "jXMISgQq9MM",
+        "url": "https://www.youtube.com/watch?v=jXMISgQq9MM",
+        "title": "Epic fails \ud83e\udd23\ud83e\udd23\ud83e\udd23 #shorts #funny #fails",
+        "description": "",
+        "thumbnail": "https://i.ytimg.com/vi/jXMISgQq9MM/hqdefault.jpg?sqp=-oaymwFBCNACELwBSFryq4qpAzMIARUAAIhCGADYAQHiAQoIGBACGAY4AUAB8AEB-AG2CIACgA-KAgwIABABGGUgXyhVMA8=&rs=AOn4CLC1HXfxzLayoVBdicS5DIUQh9zGcQ",
+        "channel": {
+          "id": "UCvUzWu1Whyw1FWuLl9GOo_g",
+          "title": "ZZang Funny",
+          "thumbnail": "https://yt3.ggpht.com/rcZKcfewHTzkauGknat3NeC53rGBofYDbL8AjFkwvsk2fXzM1clht7OTn9-1IIPnmbeZkrNGdxI=s68-c-k-c0x00ffffff-no-rj"
+        },
+        "viewCountText": "22,668,056 views",
+        "viewCountInt": 22668056,
+        "publishedTimeText": "4 weeks ago",
+        "publishedTime": "2025-01-04T23:12:42.919Z",
+        "lengthText": "1:00",
+        "lengthSeconds": 60,
+        "badges": []
+      }
+    ],
+    "continuationToken": "4qmFsgLtBRIJRkVoYX...."
+  },
+  "youtube.listComments": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "comments": [
+      {
+        "id": "UgwVfRopfS2F-WB3aF14AaABAg",
+        "content": "Synthetic content",
+        "publishedTimeText": "9 days ago",
+        "publishedTime": "2025-01-23T23:14:02.948Z",
+        "replyLevel": 0,
+        "author": {
+          "name": "@SimonT80",
+          "channelId": "UC8JC3uSUmmXTCTKl-bgr1DA",
+          "isVerified": false,
+          "isCreator": false,
+          "avatarUrl": "https://yt3.ggpht.com/ytc/AIdro_lQ_2v9lDqwRrmdvEBfDNyFOvgQICl68X6WFkwZ5KI=s88-c-k-c0x00ffffff-no-rj",
+          "channelUrl": "https://youtube.com/@SimonT80"
+        },
+        "engagement": {
+          "likes": 110,
+          "replies": 5
+        },
+        "repliesContinuationToken": "Eg0SC2RRdzR3OVdnWGNRGAYy1AEK..."
+      }
+    ],
+    "continuationToken": "Eg0SCzVFV2F4bVd...."
+  },
+  "youtube.listCommentReplies": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "comments": [
+      {
+        "id": "UgyfayX-QqgkPGkcKbt4AaABAg.AV5O1akOhw9AV5RdnpN-SY",
+        "content": "Me",
+        "publishedTimeText": "20 hours ago",
+        "publishedTime": "2026-04-03T05:52:36.883Z",
+        "replyLevel": 1,
+        "author": {
+          "name": "@pepisakkout2522",
+          "channelId": "UCjEBcO_VQ32GUzUZGwlxy1w",
+          "isVerified": false,
+          "isCreator": false,
+          "avatarUrl": "https://yt3.ggpht.com/ytc/AIdro_lYQDmh7-5JOb_QcEsPJIp4vmKm5a0uyzAXT-JC0rY=s88-c-k-c0x00ffffff-no-rj",
+          "channelUrl": "https://youtube.com/@pepisakkout2522"
+        },
+        "engagement": {
+          "likes": 2,
+          "replies": 0
+        }
+      }
+    ],
+    "continuationToken": "Eg0SC2RRdzR3OVdnWGNRGAYy1AEK..."
+  },
+  "youtube.listTrendingShorts": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "shorts": [
+      {
+        "id": "ou0nl5ET0HA",
+        "thumbnail": "https://img.youtube.com/vi/ou0nl5ET0HA/maxresdefault.jpg",
+        "url": "https://www.youtube.com/watch?v=ou0nl5ET0HA",
+        "title": "That hooper who says their just shoes",
+        "description": null,
+        "commentCountText": "168",
+        "commentCountInt": 168,
+        "likeCountText": "151957",
+        "likeCountInt": 151957,
+        "viewCountText": "13,798,774",
+        "viewCountInt": 13798774,
+        "publishDateText": "Aug 7, 2025",
+        "publishDate": "2025-08-07T13:00:22-07:00",
+        "channel": {
+          "id": "UC3iObCgKLKr9xquQw7fCang",
+          "url": "https://www.youtube.com/@dameuniverse",
+          "handle": "dameuniverse",
+          "title": "Dame Universe"
+        },
+        "chapters": [],
+        "keywords": [
+          "Kobe"
+        ],
+        "durationMs": 19000,
+        "durationFormatted": "00:00:19"
+      }
+    ]
+  },
+  "youtube.getPlaylist": {
+    "success": true,
+    "credits_remaining": 99404,
+    "credits_charged": 1,
+    "title": "Songs with Lyrics 2025 - New Songs 2025 - Music 2025 New Songs",
+    "owner": {
+      "id": "UC0-wiBH12UgtWqLjo-EvpOw",
+      "name": "Lovely Tunes",
+      "url": "https://www.youtube.com/@lovelytunes7622",
+      "handle": "lovelytunes7622"
+    },
+    "totalVideos": 98,
+    "videos": [
+      {
+        "id": "AdBzzpq3xV4",
+        "title": "Lady Gaga, Bruno Mars - Die With A Smile",
+        "thumbnail": "https://i.ytimg.com/vi/AdBzzpq3xV4/hqdefault.jpg?sqp=-oaymwEnCNACELwBSFryq4qpAxkIARUAAIhCGAHYAQHiAQoIGBACGAY4AUAB&rs=AOn4CLABnTkQJmfW0s1BMl_qa0FGqIGGqw",
+        "url": "https://www.youtube.com/watch?v=AdBzzpq3xV4",
+        "lengthText": "4:15",
+        "lengthSeconds": 255,
+        "channel": {
+          "title": "LatinHype",
+          "url": "https://www.youtube.com/@LatinHype."
+        }
+      }
+    ],
+    "continuationToken": null
+  },
+  "youtube.getCommunityPost": {
+    "success": true,
+    "credits_remaining": 9922899,
+    "credits_charged": 1,
+    "id": "Ugkxvj2KoApYAXoqLWnKVr6zZe5JjeHrQeP8",
+    "channel": {
+      "id": "UChhw6DlKKTQ9mYSpTfXUYqA",
+      "title": "Starter Story",
+      "url": "https://www.youtube.com/@starterstory",
+      "handle": "starterstory"
+    },
+    "content": "Synthetic content",
+    "images": [
+      "https://yt3.ggpht.com/uer4ij-RqnTqudtdT5VZNvEjzVXA3PGLHwNpjMfraB7mfbX_Bm0-fSpaFXkfw3EA4uZ7BY8YPa1gU08=s640-c-fcrop64=1,20000000dfffffff-rw-nd-v1"
+    ],
+    "likeCount": 759,
+    "publishedTimeText": "5 days ago",
+    "publishedTime": "2025-11-07T18:49:57.492Z",
+    "video": null
+  },
+  "linkedin.getProfile": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "name": "Sam Parr",
+    "image": "https://media.licdn.com/dms/image/v2/C4E03AQH3Vz1qV_rNVQ/profile-displayphoto-shrink_200_200/profile-displayphoto-shrink_200_200/0/1633389534107?e=2147483647&v=beta&t=8x4PIfTIYFOvpI1QRCDyAhNprZv0NY9kAp4EOdvUxLQ",
+    "location": "Westport, Connecticut, United States",
+    "followers": 64803,
+    "connections": "",
+    "about": "Synthetic about",
+    "recentPosts": [
+      {
+        "title": "Synthetic title",
+        "activityType": "Posted by Austen Allred",
+        "link": "https://www.linkedin.com/posts/austenallred_super-excited-to-watch-the-success-of-a-company-activity-7333305862695919617-zTPI",
+        "image": "https://static.licdn.com/aero-v1/sc/h/53n89ecoxpr1qrki1do3alazb"
+      }
+    ],
+    "experience": [
+      {
+        "@type": "Organization",
+        "name": "Hampton",
+        "url": "https://www.linkedin.com/company/myhampton",
+        "location": "Austin, Texas Metropolitan Area",
+        "member": {
+          "@type": "OrganizationRole",
+          "description": "Synthetic description"
+        }
+      }
+    ],
+    "articles": [
+      {
+        "headline": "RANT: How to PROPERLY analyze risk",
+        "author": "Sam Parr",
+        "datePublished": "2017-09-17T13:08:55.000+00:00",
+        "image": "https://media.licdn.com/dms/image/v2/C5612AQG9YbLJodxr8g/article-cover_image-shrink_720_1280/article-cover_image-shrink_720_1280/0/1520096757452?e=2147483647&v=beta&t=USPma8tkR65yot8_Ye0zDfH2llLpTrZdZGHtbzmPjQ0",
+        "articleBody": "I've been talking to a few people who want to leave...."
+      }
+    ],
+    "activity": [
+      {
+        "title": "Synthetic title",
+        "activityType": "Shared by Sam Parr",
+        "link": "https://www.linkedin.com/posts/parrsam_exclusive-othership-session-qa-with-founder-activity-7328134812047704064-4NUL",
+        "image": "https://media.licdn.com/dms/image/sync/v2/D4D27AQGJaeiyu-gbrA/articleshare-shrink_1280_800/B4DZbLDrHUHsAU-/0/1747163460743?e=2147483647&v=beta&t=rZtGF2kjhFfLy-TZil0d_bakH4UfHnK-dcxEsrZSl5s"
+      }
+    ],
+    "education": [
+      {
+        "@type": "EducationalOrganization",
+        "name": "Belmont University",
+        "url": "https://www.linkedin.com/school/belmont-university/",
+        "member": {
+          "@type": "OrganizationRole",
+          "startDate": 2008,
+          "endDate": 2012
+        }
+      }
+    ],
+    "publications": [
+      {
+        "name": "How my partner and I created a unique company in tough times",
+        "url": "http://online.wsj.com/article/SB10001424127887324694904578602013087282582.html&urlhash=SvYD"
+      }
+    ],
+    "projects": [
+      {
+        "name": "Hustle Con 2015",
+        "url": "https://www.linkedin.com/in/elizabethyin",
+        "dateRange": "2015",
+        "description": "",
+        "contributors": [
+          {
+            "name": "Elizabeth Yin",
+            "link": "https://www.linkedin.com/in/elizabethyin",
+            "image": "https://media.licdn.com/dms/image/v2/C5603AQFFdhmfyyiZig/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1581292451105?e=2147483647&v=beta&t=IwghMTQZZjJzIGbN6e1IYfWVBDAkgLP_kSJJPOkzQDg"
+          }
+        ]
+      }
+    ],
+    "recommendations": [
+      {
+        "name": "Jackie M.",
+        "link": "https://www.linkedin.com/in/jackiemooney",
+        "image": "https://static.licdn.com/aero-v1/sc/h/9c8pery4andzj6ohjkjp54ma2",
+        "text": "Synthetic text"
+      }
+    ],
+    "similarProfiles": [
+      {
+        "link": "https://ca.linkedin.com/in/stevemcody",
+        "name": "Steve Cody",
+        "image": "https://media.licdn.com/dms/image/v2/D5603AQEl17hna0u1ew/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1673387873184?e=2147483647&v=beta&t=pN-Y2CS1AQ8AOKbTo_2_B0AXjof4nGLKBdhNZTfFYJA"
+      }
+    ]
+  },
+  "linkedin.getCompany": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "id": "784652",
+    "name": "Shopify",
+    "description": "Synthetic description",
+    "location": {
+      "city": "Ottawa",
+      "state": "ON",
+      "country": "CA"
+    },
+    "employeeCount": 23591,
+    "website": "https://www.shopify.com",
+    "logo": "https://media.licdn.com/dms/image/v2/D560BAQG_KjTcNcrLVw/company-logo_200_200/B56ZZolTV.HUAU-/0/1745511331439/shopify_logo?e=2147483647&v=beta&t=D2saVg58cKnwEiDQgFgzvwL24mTRM_cPuU1ndv6kL2U",
+    "coverImage": "https://media.licdn.com/dms/image/v2/D563DAQGruQL8kvBvnw/image-scale_191_1128/B56ZanR4DSGoAs-/0/1746563203576/shopify_cover?e=2147483647&v=beta&t=rHubhVZZZSU_1V8tCeBpwL80OG3bNBjzBNEWFO24qa4",
+    "slogan": "Make commerce better for everyone",
+    "similarPages": [
+      {
+        "link": "https://www.linkedin.com/company/airbnb",
+        "name": "Airbnb",
+        "image": "https://media.licdn.com/dms/image/v2/C560BAQFhfl32crIGIw/company-logo_100_100/company-logo_100_100/0/1630637496980/airbnb_logo?e=2147483647&v=beta&t=idNQqoBZi6dZq6iG78J5GTOsNV_ltJf7ITo7zYZ6VWg"
+      }
+    ],
+    "industry": "Software Development",
+    "size": "10,001+ employees",
+    "founded": 2006,
+    "headquarters": "Ottawa, ON",
+    "type": "Public Company",
+    "specialties": [
+      "ecommerce"
+    ],
+    "funding": {
+      "numberOfRounds": 4,
+      "lastRound": {
+        "type": "Series C",
+        "date": "2014-01-11T00:00:00.000Z",
+        "amount": "US$ 100.0M"
+      },
+      "investors": [
+        {
+          "name": "OMERS Ventures",
+          "crunchbaseUrl": "https://www.crunchbase.com/organization/omers-ventures",
+          "image": "https://media.licdn.com/dms/image/sync/v2/D4E38AQEnDf6SgPOjAQ/crunchbase_investor_logo_100/crunchbase_investor_logo_100/0/1748147400909?e=1749146400&v=beta&t=V974RcVsrtQI1mZcqXPoKT8kutQoYneu8pjbjm5Un8E"
+        }
+      ]
+    },
+    "employees": [
+      {
+        "name": "\ud83c\udde8\ud83c\udde6 Todd Jefferson",
+        "title": "Staff Software Developer at Shopify",
+        "link": "https://ca.linkedin.com/in/toddjefferson",
+        "image": "https://media.licdn.com/dms/image/v2/C4E03AQHg-rFtEf9qpw/profile-displayphoto-shrink_100_100/profile-displayphoto-shrink_100_100/0/1583259322606?e=2147483647&v=beta&t=uBFwlGCBbgFmwrP8f29P4nIDJCgZ1YEyyntBzpR9j30"
+      }
+    ],
+    "posts": [
+      {
+        "url": "https://www.linkedin.com/posts/shopify_shopifys-design-vision-brings-horizon-into-activity-7331699854873620480-R_N8",
+        "datePublished": "2025-05-23T15:17:41.770Z",
+        "text": "Synthetic text"
+      }
+    ]
+  },
+  "linkedin.listCompanyPosts": {
+    "success": true,
+    "credits_remaining": 49999951019,
+    "credits_charged": 1,
+    "posts": [
+      {
+        "url": "https://www.linkedin.com/posts/shopify_merchants-can-now-use-sidekick-voice-mode-activity-7429579034096726016-uX1e",
+        "id": "7429579034096726016",
+        "datePublished": "2026-02-17T17:34:36.617Z",
+        "text": "Synthetic text"
+      }
+    ]
+  },
+  "linkedin.searchPosts": {
+    "success": true,
+    "credits_remaining": 49997307943,
+    "credits_charged": 1,
+    "query": "ai agents",
+    "posts": [
+      {
+        "url": "https://www.linkedin.com/posts/aagupta_what-you-need-to-know-ai-agents-activity-7354600338621906944-RvXR",
+        "datePublished": "2025-07-25T19:56:02.566Z",
+        "description": "Synthetic description",
+        "media": "https://media.licdn.com/dms/image/v2/D4E1FAQHAzpgC7eaKgw/feedshare-document-images_160/B4EZhDHPPEGoAs-/1/1753472629037?e=1780531200&v=beta&t=7UAmCkScn1TSkvHB9HxLTPoBV7wibupD2WlKSec3ork",
+        "images": [
+          "https://media.licdn.com/dms/image/v2/D4E1FAQHAzpgC7eaKgw/feedshare-document-images_160/B4EZhDHPPEGoAs-/1/1753472629037?e=1780531200&v=beta&t=7UAmCkScn1TSkvHB9HxLTPoBV7wibupD2WlKSec3ork"
+        ],
+        "image": "https://media.licdn.com/dms/image/v2/D4E1FAQHAzpgC7eaKgw/feedshare-document-images_160/B4EZhDHPPEGoAs-/1/1753472629037?e=1780531200&v=beta&t=7UAmCkScn1TSkvHB9HxLTPoBV7wibupD2WlKSec3ork",
+        "author": {
+          "name": "Aakash Gupta",
+          "url": "https://www.linkedin.com/in/aagupta",
+          "image": "https://media.licdn.com/dms/image/v2/D5603AQGl7mUqMgCLRQ/profile-displayphoto-scale_200_200/B56Z3V9cKNKgAc-/0/1777411150180?e=2147483647&v=beta&t=oVB3kzDdrFGH-2pOYeziFk3m_B8fTCiH190YbTMrgoY",
+          "followers": 313422
+        },
+        "comments": [
+          {
+            "author": "Lewin Wanzer",
+            "text": "Synthetic text",
+            "linkedinUrl": "https://www.linkedin.com/in/lewinwanzer"
+          }
+        ],
+        "likeCount": 217,
+        "commentCount": 25
+      }
+    ],
+    "cursor": "2"
+  },
+  "linkedin.getPost": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "activityUrn": null,
+    "contentUrn": null,
+    "url": "https://www.linkedin.com/pulse/being-father-has-made-me-better-leader-vice-versa-austen-allred",
+    "name": "Being a Father Has Made me a Better Leader, and Vice Versa",
+    "headline": "Synthetic headline",
+    "commentCount": 17,
+    "likeCount": 210,
+    "datePublished": "2020-06-21T14:35:59.000+00:00",
+    "description": "Synthetic description",
+    "author": {
+      "name": "Austen Allred",
+      "url": "https://www.linkedin.com/in/austenallred",
+      "followers": 30863
+    },
+    "comments": [
+      {
+        "author": "Jeremy M.",
+        "text": "Austen, thanks for sharing!",
+        "linkedinUrl": "https://uk.linkedin.com/in/jeremymurray"
+      }
+    ],
+    "moreArticles": [
+      {
+        "link": "https://www.linkedin.com/pulse/note-outcomes-data-lambda-school-austen-allred",
+        "title": "A Note About Outcomes Data at Lambda School",
+        "datePublished": "Feb 24, 2020",
+        "description": "Synthetic description",
+        "reactionCount": 168,
+        "commentCount": 15
+      }
+    ]
+  },
+  "linkedin.getTranscript": {
+    "success": true,
+    "credits_remaining": 100,
+    "credits_charged": 1,
+    "url": "https://www.linkedin.com/posts/artificial-analysis_gemini-35-flash-is-a-step-forward-for-google-activity-7465082408409870337-4Pm-",
+    "transcript": "Synthetic transcript",
+    "transcriptNotAvailable": false
+  },
+  "github.getUser": {
+    "success": true,
+    "credits_remaining": 49997685116,
+    "credits_charged": 1,
+    "id": 1024025,
+    "node_id": "MDQ6VXNlcjEwMjQwMjU=",
+    "login": "torvalds",
+    "name": "Linus Torvalds",
+    "company": "Linux Foundation",
+    "blog": "",
+    "location": "Portland, OR",
+    "email": null,
+    "bio": null,
+    "twitter_username": null,
+    "avatar_url": "https://avatars.githubusercontent.com/u/1024025?v=4",
+    "url": "https://github.com/torvalds",
+    "type": "User",
+    "site_admin": false,
+    "public_repos": 11,
+    "public_gists": 1,
+    "followers": 303973,
+    "following": 0,
+    "created_at": "2011-09-03T15:26:22Z",
+    "updated_at": "2026-01-13T07:10:05Z"
+  },
+  "github.listUserRepositories": {
+    "success": true,
+    "credits_remaining": 49997684739,
+    "credits_charged": 1,
+    "repositories": [
+      {
+        "id": 320393623,
+        "node_id": "MDEwOlJlcG9zaXRvcnkzMjAzOTM2MjM=",
+        "name": "kentcdodds.com",
+        "full_name": "kentcdodds/kentcdodds.com",
+        "owner": {
+          "id": 1500684,
+          "login": "kentcdodds",
+          "avatar_url": "https://avatars.githubusercontent.com/u/1500684?v=4",
+          "url": "https://github.com/kentcdodds",
+          "type": "User"
+        },
+        "private": false,
+        "url": "https://github.com/kentcdodds/kentcdodds.com",
+        "description": "My personal website",
+        "fork": false,
+        "homepage": "https://kentcdodds.com",
+        "language": "MDX",
+        "forks_count": 654,
+        "stars_count": 2485,
+        "watchers_count": 2485,
+        "size": 53677,
+        "default_branch": "main",
+        "open_issues_count": 4,
+        "topics": [
+          "kentcdodds"
+        ],
+        "license": {
+          "key": "other",
+          "name": "Other",
+          "spdx_id": "NOASSERTION"
+        },
+        "archived": false,
+        "disabled": false,
+        "visibility": "public",
+        "pushed_at": "2026-05-20T20:16:24Z",
+        "created_at": "2020-12-10T21:24:32Z",
+        "updated_at": "2026-05-21T16:43:37Z"
+      }
+    ],
+    "cursor": 2
+  },
+  "github.listUserPullRequests": {
+    "success": true,
+    "credits_remaining": 100,
+    "credits_charged": 1,
+    "pull_requests": [
+      {
+        "title": "Garmin: Report correct local time offset",
+        "repo": "subsurface/libdc",
+        "state": "closed",
+        "created_at": "2024-12-26T20:13:25Z",
+        "url": "https://github.com/subsurface/libdc/pull/69"
+      }
+    ],
+    "cursor": 2,
+    "has_more": false
+  },
+  "github.listUserActivity": {
+    "success": true,
+    "credits_remaining": 49997684632,
+    "credits_charged": 1,
+    "username": "kentcdodds",
+    "year": 2026,
+    "month": "May 2026",
+    "activity": [
+      {
+        "summary": "Created 186 commits in 13 repositories",
+        "details": [
+          {
+            "text": "kentcdodds/kody 144 commits",
+            "repository": {
+              "text": "kentcdodds/kody",
+              "url": "https://github.com/kentcdodds/kody"
+            },
+            "links": [
+              {
+                "text": "kentcdodds/kody",
+                "url": "https://github.com/kentcdodds/kody"
+              }
+            ],
+            "language": null,
+            "date_text": null,
+            "date_description": null
+          }
+        ]
+      }
+    ],
+    "no_activity": false,
+    "message": null,
+    "cursor": 2
+  },
+  "github.listFollowers": {
+    "success": true,
+    "credits_remaining": 49997684592,
+    "credits_charged": 1,
+    "followers": [
+      {
+        "id": 206,
+        "node_id": "MDQ6VXNlcjIwNg==",
+        "login": "sprsquish",
+        "avatar_url": "https://avatars.githubusercontent.com/u/206?v=4",
+        "url": "https://github.com/sprsquish",
+        "type": "User",
+        "site_admin": false
+      }
+    ],
+    "cursor": 2
+  },
+  "github.listFollowing": {
+    "success": true,
+    "credits_remaining": 49997684530,
+    "credits_charged": 1,
+    "following": [
+      {
+        "id": 4303,
+        "node_id": "MDQ6VXNlcjQzMDM=",
+        "login": "jdalton",
+        "avatar_url": "https://avatars.githubusercontent.com/u/4303?v=4",
+        "url": "https://github.com/jdalton",
+        "type": "User",
+        "site_admin": false
+      }
+    ],
+    "cursor": 2
+  },
+  "github.getContributions": {
+    "success": true,
+    "credits_remaining": 49997684481,
+    "credits_charged": 1,
+    "contributions": {
+      "username": "torvalds",
+      "year": 2026,
+      "total_contributions": 1214,
+      "days": [
+        {
+          "date": "2026-01-01",
+          "contribution_count": 4,
+          "color": null,
+          "intensity": 1
+        }
+      ]
+    }
+  },
+  "github.getRepository": {
+    "success": true,
+    "credits_remaining": 49997684249,
+    "credits_charged": 1,
+    "repository": {
+      "id": 2325298,
+      "node_id": "MDEwOlJlcG9zaXRvcnkyMzI1Mjk4",
+      "name": "linux",
+      "full_name": "torvalds/linux",
+      "owner": {
+        "id": 1024025,
+        "login": "torvalds",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1024025?v=4",
+        "url": "https://github.com/torvalds",
+        "type": "User"
+      },
+      "private": false,
+      "url": "https://github.com/torvalds/linux",
+      "description": "Linux kernel source tree",
+      "fork": false,
+      "homepage": "",
+      "language": "C",
+      "forks_count": 62423,
+      "stars_count": 233979,
+      "watchers_count": 233979,
+      "size": 6298741,
+      "default_branch": "master",
+      "open_issues_count": 3,
+      "topics": [],
+      "license": {
+        "key": "other",
+        "name": "Other",
+        "spdx_id": "NOASSERTION"
+      },
+      "archived": false,
+      "disabled": false,
+      "visibility": "public",
+      "pushed_at": "2026-05-21T16:23:10Z",
+      "created_at": "2011-09-04T22:48:12Z",
+      "updated_at": "2026-05-21T19:31:40Z"
+    }
+  },
+  "github.listTrendingRepositories": {
+    "success": true,
+    "credits_remaining": 49997684128,
+    "credits_charged": 1,
+    "since": "daily",
+    "language": null,
+    "spoken_language_code": null,
+    "repositories": [
+      {
+        "rank": 1,
+        "owner": "anthropics",
+        "repo": "claude-plugins-official",
+        "full_name": "anthropics/claude-plugins-official",
+        "url": "https://github.com/anthropics/claude-plugins-official",
+        "description": "Official, Anthropic-managed directory of high quality Claude Code Plugins.",
+        "language": "Python",
+        "language_color": "#3572A5",
+        "stars_count": 22064,
+        "forks_count": 2627,
+        "stars_today": 891,
+        "stars_today_text": "891 stars today",
+        "built_by": [
+          {
+            "username": "bryan-anthropic",
+            "avatar_url": "https://avatars.githubusercontent.com/u/238056179?s=40&v=4"
+          }
+        ]
+      }
+    ]
+  },
+  "github.listTrendingDevelopers": {
+    "success": true,
+    "credits_remaining": 49997683964,
+    "credits_charged": 1,
+    "since": "daily",
+    "language": null,
+    "developers": [
+      {
+        "rank": 1,
+        "username": "koala73",
+        "name": "Elie Habib",
+        "url": "https://github.com/koala73",
+        "avatar_url": "https://avatars.githubusercontent.com/u/996596?s=96&v=4",
+        "popular_repository": {
+          "owner": "koala73",
+          "repo": "worldmonitor",
+          "full_name": "koala73/worldmonitor",
+          "url": "https://github.com/koala73/worldmonitor",
+          "name": "worldmonitor",
+          "description": "Synthetic description"
+        }
+      }
+    ]
+  },
+  "twitter.searchPosts": {
+    "success": true,
+    "credits_remaining": 100,
+    "credits_charged": 1,
+    "query": "ai agents",
+    "posts": [
+      {
+        "rest_id": "2105732089685348719",
+        "url": "https://x.com/code_rams/status/2105732089685348719",
+        "views": {
+          "count": "780",
+          "state": "EnabledWithCount"
+        },
+        "legacy": {
+          "created_at": "Thu Oct 01 18:50:27 +0000 2026",
+          "full_text": "Synthetic full_text",
+          "favorite_count": 11,
+          "retweet_count": 0,
+          "reply_count": 4,
+          "quote_count": 0,
+          "bookmark_count": 7
+        }
+      }
+    ],
+    "cursor": "2"
+  },
+  "twitter.getProfile": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "__typename": "User",
+    "id": "VXNlcjoyMjE4MzgzNDk=",
+    "rest_id": "221838349",
+    "affiliates_highlighted_label": {
+      "label": {
+        "url": {
+          "url": "https://twitter.com/bloomtech",
+          "urlType": "DeepLink"
+        },
+        "badge": {
+          "url": "https://pbs.twimg.com/profile_images/1542996246477938688/PR4UFtE6_bigger.jpg"
+        },
+        "description": "Bloom Institute of Technology",
+        "userLabelType": "BusinessLabel",
+        "userLabelDisplayType": "Badge"
+      }
+    },
+    "is_blue_verified": true,
+    "profile_image_shape": "Circle",
+    "legacy": {
+      "created_at": "Wed Dec 01 19:13:23 +0000 2010",
+      "default_profile": false,
+      "default_profile_image": false,
+      "description": "Synthetic description",
+      "entities": {
+        "description": {
+          "urls": [
+            {
+              "display_url": "GauntletAI.com",
+              "expanded_url": "http://GauntletAI.com",
+              "url": "https://t.co/m6TigM5azr",
+              "indices": [
+                4
+              ]
+            }
+          ]
+        },
+        "url": {
+          "urls": [
+            {
+              "display_url": "gauntletai.com",
+              "expanded_url": "http://gauntletai.com",
+              "url": "https://t.co/nCe0AdT8D4",
+              "indices": [
+                0
+              ]
+            }
+          ]
+        }
+      },
+      "fast_followers_count": 0,
+      "favourites_count": 80812,
+      "followers_count": 377608,
+      "friends_count": 1051,
+      "has_custom_timelines": true,
+      "is_translator": false,
+      "listed_count": 3959,
+      "location": "Austin, TX",
+      "media_count": 3843,
+      "name": "Austen Allred",
+      "normal_followers_count": 377608,
+      "pinned_tweet_ids_str": [
+        "1882816395400073367"
+      ],
+      "possibly_sensitive": false,
+      "profile_banner_url": "https://pbs.twimg.com/profile_banners/221838349/1622098809",
+      "profile_image_url_https": "https://pbs.twimg.com/profile_images/1608281295918096385/D2kh-M28_normal.jpg",
+      "profile_interstitial_type": "",
+      "screen_name": "Austen",
+      "statuses_count": 46114,
+      "translator_type": "regular",
+      "url": "https://t.co/nCe0AdT8D4",
+      "verified": false,
+      "withheld_in_countries": []
+    },
+    "tipjar_settings": {
+      "is_enabled": false,
+      "bandcamp_handle": "",
+      "bitcoin_handle": "",
+      "cash_app_handle": "",
+      "ethereum_handle": "",
+      "gofundme_handle": "",
+      "patreon_handle": "",
+      "pay_pal_handle": "",
+      "venmo_handle": ""
+    },
+    "legacy_extended_profile": {},
+    "is_profile_translatable": false,
+    "has_hidden_subscriptions_on_profile": false,
+    "verification_info": {
+      "is_identity_verified": false,
+      "reason": {
+        "description": {
+          "text": "Synthetic text",
+          "entities": [
+            {
+              "from_index": 54,
+              "to_index": 64,
+              "ref": {
+                "url": "https://twitter.com/bloomtech",
+                "url_type": "ExternalUrl"
+              }
+            }
+          ]
+        },
+        "verified_since_msec": "1473330227634"
+      }
+    },
+    "highlights_info": {
+      "can_highlight_tweets": true,
+      "highlighted_tweets": "482"
+    },
+    "user_seed_tweet_count": 0,
+    "business_account": {},
+    "creator_subscriptions_count": 3
+  },
+  "twitter.listUserTweets": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "tweets": [
+      {
+        "rest_id": "1834021269559501236",
+        "views": {
+          "count": "4710824",
+          "state": "EnabledWithCount"
+        },
+        "source": "Synthetic source",
+        "legacy": {
+          "bookmark_count": 2634,
+          "bookmarked": false,
+          "created_at": "Thu Sep 12 00:08:39 +0000 2024",
+          "conversation_id_str": "1834021269559501236",
+          "display_text_range": [
+            0
+          ],
+          "entities": {
+            "hashtags": [],
+            "symbols": [],
+            "timestamps": [],
+            "urls": [],
+            "user_mentions": []
+          },
+          "favorite_count": 129276,
+          "favorited": false,
+          "full_text": "Synthetic full_text",
+          "is_quote_status": false,
+          "lang": "en",
+          "quote_count": 674,
+          "reply_count": 388,
+          "retweet_count": 2901,
+          "retweeted": false,
+          "user_id_str": "221838349",
+          "id_str": "1834021269559501236"
+        },
+        "url": "https://x.com/Austen/status/1935730646267158797"
+      }
+    ]
+  },
+  "twitter.getTweet": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "rest_id": "1935730646267158797",
+    "views": {
+      "count": "27539",
+      "state": "EnabledWithCount"
+    },
+    "source": "<a href=\"https://mobile.twitter.com\" rel=\"nofollow\">Twitter Web App</a>",
+    "legacy": {
+      "bookmark_count": 95,
+      "bookmarked": false,
+      "created_at": "Thu Jun 19 16:05:24 +0000 2025",
+      "conversation_id_str": "1935730646267158797",
+      "display_text_range": [
+        0
+      ],
+      "entities": {
+        "hashtags": [],
+        "media": [
+          {
+            "display_url": "pic.x.com/YywdjQZde8",
+            "expanded_url": "https://x.com/Austen/status/1935730646267158797/photo/1",
+            "id_str": "1935730260303069184",
+            "indices": [
+              149
+            ],
+            "media_key": "3_1935730260303069184",
+            "media_url_https": "https://pbs.twimg.com/media/Gt0YanJWwAA6B80.jpg",
+            "type": "photo",
+            "url": "https://t.co/YywdjQZde8",
+            "ext_media_availability": {
+              "status": "Available"
+            },
+            "allow_download_status": {
+              "allow_download": true
+            },
+            "media_results": {
+              "result": {
+                "media_key": "3_1935730260303069184"
+              }
+            }
+          }
+        ],
+        "symbols": [],
+        "timestamps": [],
+        "urls": [],
+        "user_mentions": []
+      },
+      "extended_entities": {
+        "media": [
+          {
+            "display_url": "pic.x.com/YywdjQZde8",
+            "expanded_url": "https://x.com/Austen/status/1935730646267158797/photo/1",
+            "id_str": "1935730260303069184",
+            "indices": [
+              149
+            ],
+            "media_key": "3_1935730260303069184",
+            "media_url_https": "https://pbs.twimg.com/media/Gt0YanJWwAA6B80.jpg",
+            "type": "photo",
+            "url": "https://t.co/YywdjQZde8",
+            "ext_media_availability": {
+              "status": "Available"
+            },
+            "allow_download_status": {
+              "allow_download": true
+            },
+            "media_results": {
+              "result": {
+                "media_key": "3_1935730260303069184"
+              }
+            }
+          }
+        ]
+      },
+      "favorite_count": 80,
+      "favorited": false,
+      "full_text": "Synthetic full_text",
+      "is_quote_status": false,
+      "lang": "en",
+      "possibly_sensitive": false,
+      "possibly_sensitive_editable": true,
+      "quote_count": 3,
+      "reply_count": 6,
+      "retweet_count": 5,
+      "retweeted": false,
+      "user_id_str": "221838349",
+      "id_str": "1935730646267158797"
+    }
+  },
+  "twitter.getTranscript": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "transcript": "Synthetic transcript"
+  },
+  "twitter.getCommunity": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "__typename": "Community",
+    "is_member": false,
+    "name": "The First Thousand",
+    "role": "NonMember",
+    "rest_id": "1926186499399139650",
+    "actions": {
+      "join_action_result": {
+        "__typename": "CommunityJoinActionUnavailable"
+      },
+      "id": "Q29tbXVuaXR5QWN0aW9uczoxOTI2MTg2NDk5Mzk5MTM5NjUw"
+    },
+    "description": "Synthetic description",
+    "creator_results": {
+      "result": {
+        "__typename": "User",
+        "id": "VXNlcjoxOTIxMzY4NDU0NDQ5MjAxMTUy",
+        "is_blue_verified": true,
+        "core": {
+          "screen_name": "CanaCarson"
+        },
+        "verification": {
+          "verified": false
+        }
+      },
+      "id": "VXNlclJlc3VsdHM6MTkyMTM2ODQ1NDQ0OTIwMTE1Mg=="
+    },
+    "join_policy": "Open",
+    "created_at": 1748073622931,
+    "rules": [
+      {
+        "rest_id": "1926189963793609186",
+        "description": "This isn\u2019t the space to drop ChatGPT engineered empty platitudes",
+        "name": "No Empty Platitudes",
+        "id": "Q29tbXVuaXR5UnVsZToxOTI2MTg5OTYzNzkzNjA5MTg2"
+      }
+    ],
+    "members_facepile_results": [
+      {
+        "result": {
+          "__typename": "User",
+          "avatar": {
+            "image_url": "https://pbs.twimg.com/profile_images/1944871269775601664/Ho7tiGd2_normal.jpg"
+          },
+          "id": "VXNlcjoxOTIxMzY4NDU0NDQ5MjAxMTUy"
+        },
+        "id": "VXNlclJlc3VsdHM6MTkyMTM2ODQ1NDQ0OTIwMTE1Mg=="
+      }
+    ],
+    "member_count": 1896,
+    "id": "Q29tbXVuaXR5OjE5MjYxODY0OTkzOTkxMzk2NTA="
+  },
+  "twitter.listCommunityTweets": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "tweets": [
+      {
+        "id": "1940874916771123735",
+        "source": "Synthetic source",
+        "view_count": "8660",
+        "bookmark_count": 10,
+        "bookmarked": false,
+        "created_at": "Thu Jul 03 20:46:54 +0000 2025",
+        "conversation_id_str": "1940874916771123735",
+        "display_text_range": [
+          0
+        ],
+        "favorite_count": 173,
+        "favorited": false,
+        "full_text": "You just need 1 viral tweet https://t.co/Z4Q5jtsxAp",
+        "is_quote_status": false,
+        "lang": "en",
+        "possibly_sensitive": false,
+        "possibly_sensitive_editable": true,
+        "quote_count": 2,
+        "reply_count": 55,
+        "retweet_count": 3,
+        "retweeted": false,
+        "user_id_str": "73647967",
+        "id_str": "1940874916771123735",
+        "user": {
+          "__typename": "User",
+          "id": "VXNlcjo3MzY0Nzk2Nw==",
+          "rest_id": "73647967",
+          "affiliates_highlighted_label": {},
+          "avatar": {
+            "image_url": "https://pbs.twimg.com/profile_images/1590652776719286274/eeualJ2p_normal.jpg"
+          },
+          "core": {
+            "created_at": "Sat Sep 12 14:00:05 +0000 2009",
+            "name": "Mike in\u2019 Software",
+            "screen_name": "mikeinsoftware"
+          },
+          "dm_permissions": {},
+          "is_blue_verified": true,
+          "legacy": {
+            "default_profile": true,
+            "default_profile_image": false,
+            "description": "Synthetic description",
+            "entities": {
+              "description": {
+                "urls": []
+              }
+            },
+            "fast_followers_count": 0,
+            "favourites_count": 7532,
+            "followers_count": 1173,
+            "friends_count": 990,
+            "has_custom_timelines": true,
+            "is_translator": false,
+            "listed_count": 8,
+            "media_count": 518,
+            "normal_followers_count": 1173,
+            "pinned_tweet_ids_str": [
+              "1945599110876176561"
+            ],
+            "possibly_sensitive": false,
+            "profile_interstitial_type": "",
+            "statuses_count": 2931,
+            "translator_type": "none",
+            "withheld_in_countries": []
+          },
+          "location": {
+            "location": ""
+          },
+          "media_permissions": {},
+          "parody_commentary_fan_label": "None",
+          "profile_image_shape": "Circle",
+          "professional": {
+            "rest_id": "1928057904189559014",
+            "professional_type": "Creator",
+            "category": [
+              {
+                "id": 1055,
+                "name": "Software developer/Programmer/Software engineer",
+                "icon_name": "IconBriefcaseStroke"
+              }
+            ]
+          },
+          "privacy": {
+            "protected": false
+          },
+          "relationship_perspectives": {},
+          "tipjar_settings": {
+            "is_enabled": false,
+            "bandcamp_handle": "",
+            "bitcoin_handle": "",
+            "cash_app_handle": "",
+            "ethereum_handle": "",
+            "gofundme_handle": "",
+            "patreon_handle": "",
+            "pay_pal_handle": "",
+            "venmo_handle": ""
+          },
+          "verification": {
+            "verified": false
+          }
+        }
+      }
+    ]
+  },
+  "reddit.getSubreddit": {
+    "success": true,
+    "credits_remaining": 33950256,
+    "credits_charged": 1,
+    "subreddit_id": "t5_a7wuv",
+    "display_name": "AbsoluteUnits",
+    "weekly_active_users": 1428398,
+    "weekly_contributions": 8923,
+    "rules": "Synthetic rules",
+    "description": "Synthetic description",
+    "header_img": null,
+    "icon_img": "https://styles.redditmedia.com/t5_a7wuv/styles/communityIcon_t3cspt08bl681.png?width=128&frame=1&auto=webp&s=6f7e59ccf1724bd6c8b3e0d2840c9b21297102c3",
+    "subscribers": 1923642,
+    "advertiser_category": "",
+    "created_at": "2018-01-05T10:35:24.000Z",
+    "submit_text": ""
+  },
+  "reddit.listSubredditPosts": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "posts": [
+      {
+        "id": "1lfbo7u",
+        "author": "Vetro_Nodulare2",
+        "author_fullname": "t2_16syu27ar1",
+        "subreddit": "AskReddit",
+        "title": "What is a thing you love that lots of people hate?",
+        "link_flair_text": null,
+        "selftext": "",
+        "selftext_html": "",
+        "downs": 0,
+        "name": "t3_1lfbo7u",
+        "upvote_ratio": 0.9,
+        "ups": 45,
+        "total_awards_received": 0,
+        "score": 45,
+        "created": 1750341959,
+        "num_comments": 349,
+        "url": "https://www.reddit.com/r/AskReddit/comments/1lfbo7u/what_is_a_thing_you_love_that_lots_of_people_hate/",
+        "subreddit_subscribers": 56146328,
+        "is_video": false,
+        "created_utc": 1750341959
+      }
+    ],
+    "after": "t3_1lfogps"
+  },
+  "reddit.searchSubreddit": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "posts": [
+      {
+        "id": "t3_8gmjrb",
+        "post_id": "t3_8gmjrb",
+        "title": "Is doing 50-100 pushups a day doing anything?",
+        "url": "https://www.reddit.com/r/Fitness/comments/8gmjrb/is_doing_50100_pushups_a_day_doing_anything/",
+        "permalink": "/r/Fitness/comments/8gmjrb/is_doing_50100_pushups_a_day_doing_anything/",
+        "nsfw": false,
+        "spoiler": false,
+        "is_crosspost": false,
+        "subreddit": {
+          "id": "t5_2qhx4",
+          "name": "Fitness",
+          "nsfw": false,
+          "quarantined": false,
+          "icon": "https://b.thumbs.redditmedia.com/Ted4KOMuRbaCYlDS55cTqjpVVZ2ENHKtYFbBFjI1i2o.png",
+          "banner": null,
+          "description": "Synthetic description",
+          "weekly_visitors": 898726,
+          "weekly_contributions": 1827
+        },
+        "votes": 1414,
+        "num_comments": 582,
+        "created_at": "2018-05-03T01:09:17.620000+0000",
+        "created_at_iso": "2018-05-03T01:09:17.620Z",
+        "thumbnail": null,
+        "thumbnail_blurred": false,
+        "position": 0,
+        "relative_position": 0
+      }
+    ],
+    "comments": [
+      {
+        "id": "t1_nxf7p27",
+        "post_id": "t3_1q2p898",
+        "parent_comment_id": null,
+        "is_reply_to_comment": false,
+        "author": "Philser23",
+        "author_avatar": null,
+        "author_nsfw": false,
+        "body": "Synthetic body",
+        "body_html": "Synthetic body_html",
+        "images": [],
+        "votes": 123,
+        "url": "https://www.reddit.com/r/Fitness/comments/1q2p898/gym_story_saturday/nxf7p27/",
+        "permalink": "/r/Fitness/comments/1q2p898/gym_story_saturday/nxf7p27/",
+        "created_at": "2026-01-03T11:26:02.434000+0000",
+        "created_at_iso": "2026-01-03T11:26:02.434Z",
+        "post": {
+          "id": "t3_1q2p898",
+          "title": "Gym Story Saturday",
+          "url": "https://www.reddit.com/r/Fitness/comments/1q2p898/gym_story_saturday/",
+          "permalink": "/r/Fitness/comments/1q2p898/gym_story_saturday/",
+          "nsfw": false,
+          "spoiler": false,
+          "votes": 67,
+          "num_comments": 80,
+          "created_at": "2026-01-03T08:15:49.709000+0000",
+          "created_at_iso": "2026-01-03T08:15:49.709Z"
+        },
+        "subreddit": {
+          "id": "t5_2qhx4",
+          "name": "Fitness",
+          "nsfw": false,
+          "quarantined": false,
+          "icon": "https://b.thumbs.redditmedia.com/Ted4KOMuRbaCYlDS55cTqjpVVZ2ENHKtYFbBFjI1i2o.png"
+        },
+        "position": 0
+      }
+    ],
+    "media": [
+      {
+        "id": "t3_geo4x",
+        "title": "Synthetic title",
+        "url": "https://www.reddit.com/r/Fitness/comments/geo4x/bodyweight_training_for_really_strong_people_see/",
+        "permalink": "/r/Fitness/comments/geo4x/bodyweight_training_for_really_strong_people_see/",
+        "media_type": "image",
+        "video": null,
+        "image": {
+          "src": "https://external-preview.redd.it/X6lz5yGIzqVA5LcI9w-FsQJJHhXoCugDhsXgWW3I404.jpg?format=pjpg&auto=webp&s=46814b0a707a532e39e6c20851ddc1fefb0a111f",
+          "width": 480,
+          "height": 360,
+          "resolutions": [
+            {
+              "url": "https://external-preview.redd.it/X6lz5yGIzqVA5LcI9w-FsQJJHhXoCugDhsXgWW3I404.jpg?width=320&crop=smart&format=pjpg&auto=webp&s=144ac4171a1862e5d91d8dd90d44271e22a8273d",
+              "width": 320
+            }
+          ]
+        },
+        "gallery_count": null,
+        "aspect_ratio": 1.3333333333333333,
+        "nsfw": false,
+        "spoiler": false,
+        "is_blurred": false,
+        "subreddit": {
+          "id": "t5_2qhx4",
+          "name": "Fitness",
+          "nsfw": false,
+          "quarantined": false
+        },
+        "position": 0,
+        "safe_search": "UNAVAILABLE"
+      }
+    ],
+    "cursor": "Synthetic cursor"
+  },
+  "reddit.getPost": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "id": "1q6pxwn",
+    "author": "franik33",
+    "author_fullname": "t2_16xbknfp71",
+    "subreddit": "webscraping",
+    "title": "Just Started Web Scraping \u2014 Is This a Good Start?",
+    "selftext": "Synthetic selftext",
+    "downs": 0,
+    "name": "t3_1q6pxwn",
+    "upvote_ratio": 0.9230769230769231,
+    "ups": 33,
+    "total_awards_received": 0,
+    "score": 33,
+    "created": 1767816090,
+    "created_utc": 1767816090,
+    "created_at_iso": "2026-01-07T20:01:30.000Z",
+    "num_comments": 53,
+    "url": "https://www.reddit.com/r/webscraping/comments/1q6pxwn/just_started_web_scraping_is_this_a_good_start/",
+    "permalink": "/r/webscraping/comments/1q6pxwn/just_started_web_scraping_is_this_a_good_start/",
+    "subreddit_subscribers": null,
+    "is_video": false,
+    "archived": true,
+    "locked": false,
+    "over_18": false,
+    "spoiler": false
+  },
+  "reddit.listComments": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "comments": [
+      {
+        "id": "mymupxb",
+        "author": "Background-Emu-2890",
+        "author_fullname": "t2_efdlposp6",
+        "body": "Black cat i have one and i love her so much !",
+        "name": "t1_mymupxb",
+        "created_utc": 1750342221,
+        "created_at_iso": "2025-06-19T14:10:21.000Z",
+        "parent_id": "t3_1lfbo7u",
+        "url": "https://www.reddit.com/r/AskReddit/comments/1lfbo7u/what_is_a_thing_you_love_that_lots_of_people_hate/mymupxb/",
+        "replies": {
+          "items": [
+            {
+              "url": "https://www.reddit.com/r/AskReddit/comments/1lfbo7u/what_is_a_thing_you_love_that_lots_of_people_hate/mymxwde/",
+              "created_utc": 1750343166,
+              "created_at_iso": "2025-06-19T14:26:06.000Z",
+              "subreddit_id": "t5_2qh1i",
+              "approved_at_utc": null,
+              "author_is_blocked": false,
+              "comment_type": null,
+              "awarders": [],
+              "mod_reason_by": null,
+              "banned_by": null,
+              "author_flair_type": "text",
+              "total_awards_received": 0,
+              "subreddit": "AskReddit",
+              "author_flair_template_id": null,
+              "likes": null,
+              "replies": {
+                "items": [],
+                "more": {
+                  "has_more": false,
+                  "next_cursor": null
+                }
+              },
+              "user_reports": [],
+              "saved": false,
+              "id": "mymxwde",
+              "banned_at_utc": null,
+              "mod_reason_title": null,
+              "gilded": 0,
+              "archived": false,
+              "collapsed_reason_code": null,
+              "no_follow": false,
+              "author": "doublestitch",
+              "can_mod_post": false,
+              "send_replies": true,
+              "parent_id": "t1_mymupxb",
+              "score": 19,
+              "author_fullname": "t2_10py0g",
+              "removal_reason": null,
+              "approved_by": null,
+              "mod_note": null,
+              "all_awardings": [],
+              "body": "House panthers for the win",
+              "edited": false,
+              "top_awarded_type": null,
+              "author_flair_css_class": null,
+              "name": "t1_mymxwde",
+              "is_submitter": false,
+              "downs": 0,
+              "author_flair_richtext": [],
+              "author_patreon_flair": false,
+              "body_html": "Synthetic body_html",
+              "gildings": {},
+              "collapsed_reason": null,
+              "distinguished": null,
+              "associated_award": null,
+              "stickied": false,
+              "author_premium": false,
+              "can_gild": false,
+              "link_id": "t3_1lfbo7u",
+              "unrepliable_reason": null,
+              "author_flair_text_color": null,
+              "score_hidden": false,
+              "permalink": "Synthetic permalink",
+              "subreddit_type": "public",
+              "locked": false,
+              "report_reasons": null,
+              "created": 1750343166,
+              "author_flair_text": null,
+              "treatment_tags": [],
+              "collapsed": false,
+              "subreddit_name_prefixed": "r/AskReddit",
+              "controversiality": 0,
+              "depth": 1,
+              "author_flair_background_color": null,
+              "collapsed_because_crowd_control": null,
+              "mod_reports": [],
+              "num_reports": null,
+              "ups": 19
+            }
+          ],
+          "more": {
+            "has_more": true,
+            "cursor": "myn970w"
+          }
+        },
+        "ups": 75,
+        "downs": 0,
+        "score": 75
+      }
+    ],
+    "post": {
+      "id": "1lfbo7u",
+      "author": "Vetro_Nodulare2",
+      "author_fullname": "t2_16syu27ar1",
+      "subreddit": "AskReddit",
+      "title": "What is a thing you love that lots of people hate?",
+      "downs": 0,
+      "name": "t3_1lfbo7u",
+      "upvote_ratio": 0.91,
+      "ups": 47,
+      "total_awards_received": 0,
+      "score": 47,
+      "created": 1750341959,
+      "num_comments": 353,
+      "url": "https://www.reddit.com/r/AskReddit/comments/1lfbo7u/what_is_a_thing_you_love_that_lots_of_people_hate/",
+      "subreddit_subscribers": 56146601,
+      "is_video": false,
+      "created_utc": 1750341959
+    },
+    "more": {
+      "has_more": true,
+      "cursor": "myoaw2m,myob40l,myoeo9h"
+    }
+  },
+  "reddit.getTranscript": {
+    "success": true,
+    "credits_remaining": 100,
+    "credits_charged": 1,
+    "url": "https://www.reddit.com/r/youseeingthisshit/comments/1oiu9xm/football_nostalgiasaints_punter_head_coach_cant/",
+    "post_id": "1oiu9xm",
+    "video_id": "eflpgc6r0zxf1",
+    "caption_url": "https://v.redd.it/eflpgc6r0zxf1/wh_ben_en.vtt",
+    "language": "en",
+    "raw_vtt": "Synthetic raw_vtt",
+    "transcript": "Synthetic transcript",
+    "transcriptNotAvailable": false
+  },
+  "reddit.search": {
+    "success": true,
+    "credits_remaining": 1000000,
+    "credits_charged": 1,
+    "posts": [
+      {
+        "id": "w63dgy",
+        "author": "Morgentau7",
+        "author_fullname": "t2_2hy2xjit",
+        "subreddit": "MadeMeSmile",
+        "title": "Player realizes that he nearly stole the dogs job",
+        "downs": 0,
+        "name": "t3_w63dgy",
+        "upvote_ratio": 0.97,
+        "ups": 220403,
+        "total_awards_received": 0,
+        "score": 220403,
+        "created": 1658580900,
+        "num_comments": 1246,
+        "url": "https://www.reddit.com/r/MadeMeSmile/comments/w63dgy/player_realizes_that_he_nearly_stole_the_dogs_job/",
+        "subreddit_subscribers": 11605207,
+        "is_video": true,
+        "created_utc": 1658580900
+      }
+    ],
+    "after": "t3_1izmcgx",
+    "comments": [
+      {
+        "id": "t1_nxf7p27",
+        "post_id": "t3_1q2p898",
+        "parent_comment_id": null,
+        "is_reply_to_comment": false,
+        "author": "Philser23",
+        "author_avatar": null,
+        "author_nsfw": false,
+        "body": "Synthetic body",
+        "body_html": "Synthetic body_html",
+        "images": [],
+        "votes": 123,
+        "url": "https://www.reddit.com/r/Fitness/comments/1q2p898/gym_story_saturday/nxf7p27/",
+        "permalink": "/r/Fitness/comments/1q2p898/gym_story_saturday/nxf7p27/",
+        "created_at": "2026-01-03T11:26:02.434000+0000",
+        "created_at_iso": "2026-01-03T11:26:02.434Z",
+        "post": {
+          "id": "t3_1q2p898",
+          "title": "Gym Story Saturday",
+          "url": "https://www.reddit.com/r/Fitness/comments/1q2p898/gym_story_saturday/",
+          "permalink": "/r/Fitness/comments/1q2p898/gym_story_saturday/",
+          "nsfw": false,
+          "spoiler": false,
+          "votes": 67,
+          "num_comments": 80,
+          "created_at": "2026-01-03T08:15:49.709000+0000",
+          "created_at_iso": "2026-01-03T08:15:49.709Z"
+        },
+        "subreddit": {
+          "id": "t5_2qhx4",
+          "name": "Fitness",
+          "nsfw": false,
+          "quarantined": false,
+          "icon": "https://b.thumbs.redditmedia.com/Ted4KOMuRbaCYlDS55cTqjpVVZ2ENHKtYFbBFjI1i2o.png"
+        },
+        "position": 0
+      }
+    ]
+  }
+}
