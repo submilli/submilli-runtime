@@ -903,7 +903,9 @@ fn module_description(name: &str) -> &'static str {
         "submilli:http" => "Outbound HTTP: get/post/put/patch/delete/head.",
         "submilli:llm" => "Gated model calls: call/batch, and models() to discover them.",
         "submilli:secrets" => "Policy-gated access to Blueprint-declared secrets.",
-        "submilli:session" => "Session-scoped key-value state: get/has/set/remove/list.",
+        "submilli:session" => {
+            "Session-scoped key-value state and durable package-owned resource cleanup."
+        }
         "submilli:skills" => "Harness skills: list(), load(name) and readFile(name, path).",
         "submilli:url" => "URL parse/build and query-string handling. Pure compute.",
         "submilli:variables" => "Immutable Blueprint/session configuration for packages.",

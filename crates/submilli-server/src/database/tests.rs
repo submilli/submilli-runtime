@@ -669,11 +669,13 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
                 "_sqlx_migrations",
                 "blueprint_revisions",
                 "blueprints",
+                "finalizer_context",
                 "last_runs",
                 "mcp_grants",
                 "runs",
                 "secrets",
                 "session_cleanup",
+                "session_finalizers",
                 "session_kv",
                 "session_mcp",
                 "session_mcp_icon_sizes",
@@ -694,7 +696,7 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
             })
             .await
             .unwrap();
-        assert_eq!(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         database.close().await.unwrap();
     }
 }

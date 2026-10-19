@@ -14,6 +14,7 @@ pub mod database;
 pub mod domain;
 pub mod error;
 mod execution_timeout;
+mod finalizers;
 mod graceful_shutdown;
 pub mod handlers;
 pub mod idempotency;

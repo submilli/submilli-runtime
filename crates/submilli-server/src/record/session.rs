@@ -204,7 +204,7 @@ fn unknown_when_gone(error: SessionRunError, session_id: &str) -> SessionRunErro
 /// Ends a session as `DELETE /v1/sessions/{id}` does, wiping its `per_session` files
 /// immediately. `false` when no live session has that id.
 pub async fn end_session(state: &AppState, session_id: &str) -> Result<bool, SessionError> {
-    state.session_manager().wipe_now(session_id).await
+    state.session_manager().close_owned(session_id).await
 }
 
 /// The `${vars.NAME}` bindings a live session was started with, defaults filled; `None`
@@ -218,4 +218,35 @@ pub async fn session_variables(
         Err(SessionError::UnknownSession) => Ok(None),
         Err(error) => Err(error),
     }
+}
+
+/// Cleanup status remains inspectable after session termination. Arguments and
+/// credentials are never included.
+pub async fn session_finalizers(
+    state: &AppState,
+    session_id: &str,
+) -> Result<Vec<FinalizerDiagnostic>, SessionError> {
+    state
+        .session_manager()
+        .finalizer_store()
+        .diagnostics(session_id)
+        .await
+        .map_err(Into::into)
+}
+pub use crate::adapters::session::finalizers::FinalizerDiagnostic;
+
+#[derive(Debug, serde::Serialize)]
+pub struct SessionCloseReport {
+    pub closed: bool,
+    pub finalizers: Vec<FinalizerDiagnostic>,
+}
+
+/// Close and wait for cleanup, returning every sanitized finalizer outcome.
+pub async fn end_session_with_finalizers(
+    state: &AppState,
+    session_id: &str,
+) -> Result<SessionCloseReport, SessionError> {
+    let closed = state.session_manager().close_owned(session_id).await?;
+    let finalizers = session_finalizers(state, session_id).await?;
+    Ok(SessionCloseReport { closed, finalizers })
 }

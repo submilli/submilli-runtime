@@ -868,6 +868,48 @@ impl SessionKvStore for ForkedSessionKv {
     }
 }
 
+/// Replay has no durable lifecycle owner and may mix recorded handles with
+/// newly created live resources. Refuse registration so package compensation
+/// can release a newly created resource through the replay's own connectors.
+pub(crate) struct ReplayFinalizers {
+    limits: interpreter::runtime::session_kv::SessionKvLimits,
+}
+impl ReplayFinalizers {
+    pub fn new(limits: interpreter::runtime::session_kv::SessionKvLimits) -> Self {
+        Self { limits }
+    }
+}
+impl interpreter::runtime::session_finalizers::SessionFinalizers for ReplayFinalizers {
+    fn register<'a>(
+        &'a self,
+        _: &'a str,
+        key: &'a [u16],
+        value: &'a [u16],
+    ) -> interpreter::runtime::session_finalizers::FinalizerFuture<'a> {
+        Box::pin(async move {
+            self.limits.check_write(key, value)?;
+            Err(
+                interpreter::runtime::session_kv::SessionKvError::InvalidKey {
+                    operation: "registerFinalizer",
+                    key: String::from_utf16_lossy(key),
+                    reason: "durable finalizer registration is unavailable during test replay; release the resource immediately",
+                },
+            )
+        })
+    }
+    fn unregister<'a>(
+        &'a self,
+        _: &'a str,
+        key: &'a [u16],
+    ) -> interpreter::runtime::session_finalizers::FinalizerFuture<'a> {
+        Box::pin(async move {
+            self.limits.check_key("unregisterFinalizer", key)?;
+            // This replay never owns durable registrations, so every key is absent.
+            Ok(())
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use submilli_blueprint::HarnessSecretBindings;

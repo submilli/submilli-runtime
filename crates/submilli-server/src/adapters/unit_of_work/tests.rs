@@ -96,10 +96,6 @@ async fn removal_closes_all_sessions_after_execution_starts() {
             .all(|r| r.status == SessionStatus::Closed
                 && r.closed_reason == Some(ClosedReason::BlueprintRemoved))
     );
-    assert!(fixture.root.path().join("sessions/one").exists());
-    assert!(fixture.root.path().join("sessions/two").exists());
-    assert_eq!(fixture.sessions.pending_cleanup().await.unwrap().len(), 2);
-    fixture.state.session_manager().reap_now().await.unwrap();
     assert!(!fixture.root.path().join("sessions/one").exists());
     assert!(!fixture.root.path().join("sessions/two").exists());
     assert!(fixture.sessions.pending_cleanup().await.unwrap().is_empty());
@@ -175,7 +171,7 @@ async fn cleanup_failure_keeps_committed_closure_and_retry_obligation() {
     let path = fixture.root.path().join("sessions/one");
     std::fs::remove_dir(&path).unwrap();
     std::fs::write(&path, "blocks folder cleanup").unwrap();
-    assert!(fixture.state.remove_blueprint("test").await.unwrap());
+    assert!(fixture.state.remove_blueprint("test").await.is_err());
     assert!(
         fixture
             .state
