@@ -143,7 +143,6 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: "Harness integrations", slug: "tutorials/connect-a-harness" },
-            { label: "Trace an execution", slug: "tutorials/follow-a-code-execution" },
             {
               label: "How-to",
               collapsed: true,
