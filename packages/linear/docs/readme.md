@@ -64,6 +64,11 @@ function main(): string {
 
 ## Agent sessions
 
+For direct intent helpers such as `thought`, `action`, `ask`, and `respond`, use
+`@submilli/linear-agent`. Its [guide](../../linear-agent/docs/readme.md) covers
+progress, elicitations, account linking, and history. The operations below remain
+available for lower-level control, plans, and proactive session creation.
+
 For an installed Linear agent, bind its app OAuth access token to `LINEAR_API_KEY`.
 OAuth tokens are sent with `Bearer`; personal `lin_api_` keys remain raw. Agent
 session mutations require the app identity that owns the session. Request
