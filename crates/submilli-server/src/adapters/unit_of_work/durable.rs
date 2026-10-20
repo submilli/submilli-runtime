@@ -55,15 +55,13 @@ impl UnitOfWork for SqliteDurableUnitOfWork {
         &mut self,
         run_id: &RunId,
         sequence: u64,
-        memory: interpreter::runtime::limits::HostMemory,
-    ) -> Result<Option<submilli_durable::history::LoadedHistoryEntry>, DurableStoreError> {
+    ) -> Result<Option<submilli_durable::history::HistoryEntry>, DurableStoreError> {
         let run_id = run_id.clone();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::execution_history::get(connection, &sealer, &run_id, sequence, memory)
-                        .await
+                    super::execution_history::get(connection, &sealer, &run_id, sequence).await
                 })
             })
             .await
@@ -73,15 +71,13 @@ impl UnitOfWork for SqliteDurableUnitOfWork {
         &mut self,
         attempt: &submilli_durable::history::ExecutionAttempt,
         entry: Arc<submilli_durable::history::HistoryEntry>,
-        memory: interpreter::runtime::limits::HostMemory,
     ) -> Result<(), DurableStoreError> {
         let attempt = attempt.clone();
         let sealer = self.sealer.clone();
         self.transaction
             .query_recoverable(move |connection| {
                 Box::pin(async move {
-                    super::execution_history::append(connection, &sealer, &attempt, &entry, memory)
-                        .await
+                    super::execution_history::append(connection, &sealer, &attempt, &entry).await
                 })
             })
             .await

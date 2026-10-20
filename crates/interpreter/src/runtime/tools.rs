@@ -125,7 +125,6 @@ pub fn install_tools_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<(
                     Payload::meta(serde_json::json!({ "tool": tool }))
                         .with_body(args_json.as_bytes())
                 });
-                fuel::charge(&mut *caller, fuel::IO, args_json.len() as u64)?;
                 let request = ToolRequest { tool, args_json };
                 let response = super::effects::execute(
                     caller,
@@ -133,6 +132,7 @@ pub fn install_tools_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<(
                     request,
                     move |caller, _, request| {
                         Box::pin(async move {
+                            fuel::charge(&mut *caller, fuel::IO, request.args_json.len() as u64)?;
                             let ToolRequest { tool, args_json } = request;
                             // Looked up after the gate, so a denied caller cannot learn
                             // whether the session offers tools.

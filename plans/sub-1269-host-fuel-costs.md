@@ -1119,12 +1119,12 @@ The Temporal linker functions are synchronous and charge CALL through register_h
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
 | `submilli:prelude#Temporal#Now#instant` | system clock read, allocate Instant (now/install.rs:14) | `CALL` | before |  |
-| `submilli:prelude#Temporal#Now#plainDateISO` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | The absent-zone branch has no name decode or TZ lookup; an explicit requested zone retains TZ.
-| `submilli:prelude#Temporal#Now#plainDateTimeISO` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | The absent-zone branch has no name decode or TZ lookup; an explicit requested zone retains TZ.
-| `submilli:prelude#Temporal#Now#plainTimeISO` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | The absent-zone branch has no name decode or TZ lookup; an explicit requested zone retains TZ.
+| `submilli:prelude#Temporal#Now#plainDateISO` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | Live execution resolves only an explicit requested zone. Replay reconstructs the saved zone with one TZ charge before conversion, including for an originally implicit zone.
+| `submilli:prelude#Temporal#Now#plainDateTimeISO` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | Live execution resolves only an explicit requested zone. Replay reconstructs the saved zone with one TZ charge before conversion, including for an originally implicit zone.
+| `submilli:prelude#Temporal#Now#plainTimeISO` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | Live execution resolves only an explicit requested zone. Replay reconstructs the saved zone with one TZ charge before conversion, including for an originally implicit zone.
 | `submilli:prelude#Temporal#Now#timeZoneId` | Read the initialized system-zone identifier and allocate its guest string | `CALL + SCAN(len(out)) + COPY(len(out))` | before | System detection happens during setup. Actual old code had no TZ charge here; output marshalling stays.
-| `submilli:prelude#Temporal#Now#zonedDateTime` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | The absent-zone branch has no name decode or TZ lookup; an explicit requested zone retains TZ.
-| `submilli:prelude#Temporal#Now#zonedDateTimeISO` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | The absent-zone branch has no name decode or TZ lookup; an explicit requested zone retains TZ.
+| `submilli:prelude#Temporal#Now#zonedDateTime` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | Live execution resolves only an explicit requested zone. Replay reconstructs the saved zone with one TZ charge before conversion, including for an originally implicit zone.
+| `submilli:prelude#Temporal#Now#zonedDateTimeISO` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | Live execution resolves only an explicit requested zone. Replay reconstructs the saved zone with one TZ charge before conversion, including for an originally implicit zone.
 
 ### Temporal.PlainDate
 
@@ -2019,8 +2019,9 @@ execution.
 The following rows extend each affected host's existing formula when an execution
 history is installed. Ordinary mode keeps its existing charges. `HASH(encoded
 arguments)` is charged incrementally before dispatch; `COPY(encoded native outcome)`
-is settled after native work and included in the saved native fuel. Replay charges
-the original native fuel instead of running or charging the provider again.
+is settled after native work. Replay charges `PARSE(encoded native outcome)` for
+decoding; it does not deduct historical native fuel or run the provider again.
+Each attempt receives fresh configured fuel and timeout allowances.
 Guest argument conversion remains before the boundary; guest result conversion
 charges its existing formula normally after the outcome is committed. Insufficient
 fuel stops conversion; a recorded native outcome remains available for replay.
@@ -2029,13 +2030,13 @@ waiting costs no fuel. Backend work keeps its existing IO/SCAN/PARSE/SYSCALL cos
 
 | Hosts | Boundary and charge timing |
 | --- | --- |
-| UUID v4/v7; Math.random; crypto.randomBytes; Temporal.Now.* | Record native observation before guest conversion; random-byte SCAN precedes generation. Replay restores the original timezone lookup cost. |
+| UUID v4/v7; Math.random; crypto.randomBytes; Temporal.Now.* | Record native observation before guest conversion; random-byte SCAN and the original timezone lookup stay inside the action. Replay charges TZ when rebuilding a resolved zone from its saved ID; live conversion reuses the cached zone. |
 | variables.get; secrets.get | Record native optional value after lookup; conversion charges normally. |
-| fs read/write/append/size/exists/stat/mkdir/remove/move/copy; reader/listing/writer open/next/close | Fingerprint native arguments before backend; keep existing filesystem Work costs, settle after mutation. Rebuild resource handles from persistent IDs on replay. |
+| fs read/write/append/size/exists/stat/mkdir/remove/move/copy; reader/listing/writer open/next/close | Fingerprint native arguments before backend; path/SYSCALL/IO admission and Work costs stay inside the action, settle after mutation. Rebuild resource handles from persistent IDs on replay. |
 | HTTP request verbs and download | Input costs before send; response IO/SCAN settles inside the boundary. Native response/metadata is committed before guest allocation. |
 | session get/has/set/remove/list and finalizer registration | Existing KV IO inside the boundary; parsing and guest values charge normally afterward. Guest serialization callbacks precede history allocation. |
 | LLM dispatch/models; embedding embed/models | Existing provider work and token settlement inside boundary; output conversion charges normally. Replay restores per-run spend, without a second shared provider reservation. |
-| MCP, tools, agents, skills | Existing provider charges inside boundary; native outcome then guest conversion. |
+| MCP, tools, agents, skills | Request IO and provider charges inside boundary; native outcome then guest conversion. |
 | security.check | Gate cost inside boundary. |
 | code read/search/glob/tree/diffFiles/edit/insertAt/applyPatch | Existing native scan/parse/walk/write costs inside boundary; diffText stays pure. Mutation validates result size before publication. |
 | Git worker operations | Existing native WorkingBudget/Work settlement inside boundary, guest encoding afterward. Worker ownership/draining is unchanged. |

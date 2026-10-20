@@ -17,7 +17,6 @@ CREATE TABLE recorded_runs (
     recovery_mode TEXT NOT NULL DEFAULT 'unrecorded' CHECK(recovery_mode IN ('unrecorded','recorded')),
     execution_manifest BLOB,
     history_bytes INTEGER NOT NULL DEFAULT 0 CHECK(history_bytes >= 0),
-    history_host_fuel INTEGER NOT NULL DEFAULT 0 CHECK(history_host_fuel >= 0),
     created_at_unix_ms INTEGER NOT NULL CHECK(created_at_unix_ms >= 0),
     state TEXT NOT NULL CHECK(state IN ('reserved','running','blocked','cancelled','aborted','completed','finished','indeterminate','expired')),
     reason TEXT,

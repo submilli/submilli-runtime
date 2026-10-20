@@ -176,9 +176,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         "crypto.randomBytes: length {len} exceeds maximum {MAX_RANDOM_BYTES}"
                     )));
                 }
-                fuel::charge(&mut *caller, fuel::SCAN, len as u64)?;
-                let buf = effects::execute(caller, "crypto.randomBytes", len, |_, _, len| {
+                let buf = effects::execute(caller, "crypto.randomBytes", len, |caller, _, len| {
                     Box::pin(async move {
+                        fuel::charge(&mut *caller, fuel::SCAN, len as u64)?;
                         let mut bytes = vec![0u8; len as usize];
                         getrandom::getrandom(&mut bytes).map_err(|e| {
                             wasmtime::Error::msg(format!("crypto.randomBytes: {e}"))

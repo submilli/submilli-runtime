@@ -29,8 +29,6 @@ async fn fixture(
 fn result(bytes: &[u8]) -> RecordedOutcome {
     RecordedOutcome {
         result: Ok(interpreter::runtime::effects::OutcomeBytes(bytes.into())),
-        host_fuel: 17,
-        execution_time: std::time::Duration::ZERO,
         llm_spend: Default::default(),
         embedding_spend: Default::default(),
     }
@@ -42,14 +40,11 @@ async fn execution_history_reopens_without_dispatching_saved_calls() {
     let path = directory.path().join("history.db");
     let (database, units, attempt) = fixture(&path).await;
     let history = History::new(attempt, units.clone());
-    let call = history
-        .begin("test.native", [3; 32], memory())
-        .await
-        .unwrap();
+    let call = history.begin("test.native", [3; 32]).await.unwrap();
     assert!(call.recorded.is_none());
     let id = call.id.clone();
     history
-        .complete(&call, result(b"secret-native-output"), memory())
+        .complete(&call, result(b"secret-native-output"))
         .await
         .unwrap();
     history.finish().await.unwrap();
@@ -60,12 +55,8 @@ async fn execution_history_reopens_without_dispatching_saved_calls() {
     let (_database, units, attempt) = fixture(&path).await;
     let history = History::new(attempt, units);
     assert!(history.finish().await.is_err());
-    let call = history
-        .begin("test.native", [3; 32], memory())
-        .await
-        .unwrap();
+    let call = history.begin("test.native", [3; 32]).await.unwrap();
     assert_eq!(call.id, id);
-    assert!(call.replay_complete);
     assert_eq!(call.recorded.unwrap(), result(b"secret-native-output"));
     history.finish().await.unwrap();
 }
@@ -75,17 +66,17 @@ async fn execution_history_missing_outcome_reuses_id_and_allows_another_mutation
     let directory = tempfile::tempdir().unwrap();
     let (_database, units, attempt) = fixture(&directory.path().join("db")).await;
     let history = History::new(attempt.clone(), units.clone());
-    let unfinished = history.begin("increment", [0; 32], memory()).await.unwrap();
+    let unfinished = history.begin("increment", [0; 32]).await.unwrap();
     let mut mutations = 1;
-    assert!(history.begin("later", [0; 32], memory()).await.is_err());
+    assert!(history.begin("later", [0; 32]).await.is_err());
     drop(history); // The action completed, but its outcome never committed.
     let history = History::new(attempt, units);
-    let retry = history.begin("increment", [0; 32], memory()).await.unwrap();
+    let retry = history.begin("increment", [0; 32]).await.unwrap();
     assert_eq!(retry.id, unfinished.id);
     assert!(retry.recorded.is_none());
     mutations += 1;
     history
-        .complete(&retry, result(&[mutations]), memory())
+        .complete(&retry, result(&[mutations]))
         .await
         .unwrap();
     assert_eq!(mutations, 2); // Framework retry makes no idempotency promise.
@@ -96,24 +87,21 @@ async fn execution_history_rejects_divergence_and_stale_completion() {
     let directory = tempfile::tempdir().unwrap();
     let (database, units, attempt) = fixture(&directory.path().join("db")).await;
     let history = History::new(attempt.clone(), units.clone());
-    let call = history.begin("original", [1; 32], memory()).await.unwrap();
-    history
-        .complete(&call, result(b"one"), memory())
-        .await
-        .unwrap();
+    let call = history.begin("original", [1; 32]).await.unwrap();
+    history.complete(&call, result(b"one")).await.unwrap();
     assert!(
         History::new(attempt.clone(), units.clone())
-            .begin("different", [1; 32], memory())
+            .begin("different", [1; 32])
             .await
             .is_err()
     );
     assert!(
         History::new(attempt.clone(), units.clone())
-            .begin("original", [2; 32], memory())
+            .begin("original", [2; 32])
             .await
             .is_err()
     );
-    let pending = history.begin("next", [0; 32], memory()).await.unwrap();
+    let pending = history.begin("next", [0; 32]).await.unwrap();
     database
         .transaction(|connection| {
             Box::pin(async move {
@@ -127,15 +115,10 @@ async fn execution_history_rejects_divergence_and_stale_completion() {
         })
         .await
         .unwrap();
-    assert!(
-        history
-            .complete(&pending, result(b"late"), memory())
-            .await
-            .is_err()
-    );
+    assert!(history.complete(&pending, result(b"late")).await.is_err());
     let mut unit = units().await.unwrap();
     assert!(
-        unit.get_history_entry(&attempt.run_id, 1, memory())
+        unit.get_history_entry(&attempt.run_id, 1)
             .await
             .unwrap()
             .is_none()
@@ -154,7 +137,7 @@ async fn execution_history_append_and_accounting_roll_back_together_and_are_seal
         outcome: result(b"plaintext-canary"),
     };
     let mut unit = units().await.unwrap();
-    unit.append_history(&attempt, Arc::new(entry.clone()), memory())
+    unit.append_history(&attempt, Arc::new(entry.clone()))
         .await
         .unwrap();
     assert_eq!(unit.history_progress(&attempt).await.unwrap().position, 1);
@@ -162,15 +145,15 @@ async fn execution_history_append_and_accounting_roll_back_together_and_are_seal
     let mut unit = units().await.unwrap();
     assert_eq!(unit.history_progress(&attempt).await.unwrap().position, 0);
     assert!(
-        unit.get_history_entry(&attempt.run_id, 0, memory())
+        unit.get_history_entry(&attempt.run_id, 0)
             .await
             .unwrap()
             .is_none()
     );
-    unit.append_history(&attempt, Arc::new(entry.clone()), memory())
+    unit.append_history(&attempt, Arc::new(entry.clone()))
         .await
         .unwrap();
-    assert_eq!(unit.history_progress(&attempt).await.unwrap().host_fuel, 17);
+    assert_eq!(unit.history_progress(&attempt).await.unwrap().position, 1);
     unit.commit().await.unwrap();
     let stored: Vec<u8> = database
         .transaction(|connection| {
@@ -191,17 +174,13 @@ async fn execution_history_append_and_accounting_roll_back_together_and_are_seal
     );
     let mut unit = units().await.unwrap();
     assert!(
-        unit.append_history(&attempt, Arc::new(entry.clone()), memory())
+        unit.append_history(&attempt, Arc::new(entry.clone()))
             .await
             .is_err()
     );
 }
 
-async fn run_script(
-    source: &str,
-    history: Arc<History>,
-    root: &std::path::Path,
-) -> (Option<String>, u64) {
+async fn run_script(source: &str, history: Arc<History>, root: &std::path::Path) -> Option<String> {
     run_script_with(source, history, root, |_| {}).await
 }
 
@@ -210,7 +189,7 @@ async fn run_script_with(
     history: Arc<History>,
     root: &std::path::Path,
     configure: impl FnOnce(&mut interpreter::runtime::StoreData),
-) -> (Option<String>, u64) {
+) -> Option<String> {
     use interpreter::runtime::{
         RuntimeConfig, StoreData, Vfs, dispatch_main_async, install_runtime_async,
         instantiate_program_async,
@@ -234,7 +213,7 @@ async fn run_script_with(
     let result = dispatch_main_async(&mut store, &instance).await.unwrap();
     history.finish().await.unwrap();
     store.data_mut().blocking_work.finish().await.unwrap();
-    (result, store.data().host_fuel)
+    result
 }
 
 #[tokio::test]
@@ -266,10 +245,7 @@ async fn execution_history_replays_observations_and_skips_completed_filesystem_w
     assert_eq!(std::fs::read(root.join("file")).unwrap(), b"hello!");
     std::fs::write(root.join("file"), b"unchanged during replay").unwrap();
     let replay = run_script(source, Arc::new(History::new(attempt, units)), &root).await;
-    assert_eq!(
-        first, replay,
-        "results and logical native fuel survive a fresh interpreter"
-    );
+    assert_eq!(first, replay, "saved results survive a fresh interpreter");
     assert_eq!(
         std::fs::read(root.join("file")).unwrap(),
         b"unchanged during replay"
@@ -329,7 +305,7 @@ async fn execution_history_rejects_process_local_resources_with_run_ids() {
         );
         let mut unit = units().await.unwrap();
         assert!(
-            unit.get_history_entry(&attempt.run_id, 0, memory())
+            unit.get_history_entry(&attempt.run_id, 0)
                 .await
                 .unwrap()
                 .is_none()
@@ -347,25 +323,23 @@ impl EffectHistory for InterruptHistory {
         &self,
         operation: &str,
         fingerprint: [u8; 32],
-        memory: interpreter::runtime::limits::HostMemory,
     ) -> Result<
         interpreter::runtime::effects::EffectCall,
         interpreter::runtime::effects::HistoryError,
     > {
-        self.history.begin(operation, fingerprint, memory).await
+        self.history.begin(operation, fingerprint).await
     }
     async fn complete(
         &self,
         call: &interpreter::runtime::effects::EffectCall,
         outcome: RecordedOutcome,
-        memory: interpreter::runtime::limits::HostMemory,
     ) -> Result<(), interpreter::runtime::effects::HistoryError> {
         if call.sequence == self.before_commit {
             return Err(interpreter::runtime::effects::HistoryError(
                 "injected loss before outcome commit".into(),
             ));
         }
-        self.history.complete(call, outcome, memory).await
+        self.history.complete(call, outcome).await
     }
     async fn finish(&self) -> Result<(), interpreter::runtime::effects::HistoryError> {
         self.history.finish().await
@@ -496,6 +470,10 @@ async fn execution_history_replays_after_result_conversion_runs_out_of_fuel() {
                             Box::pin(async move {
                                 calls.fetch_add(1, Ordering::SeqCst);
                                 // Model a completed operation that spent the remaining fuel.
+                                interpreter::runtime::fuel::settle_host_fuel(
+                                    &mut *caller,
+                                    1_000_000,
+                                )?;
                                 caller.set_fuel(0)?;
                                 Ok("saved result".to_owned())
                             })
@@ -528,7 +506,7 @@ async fn execution_history_replays_after_result_conversion_runs_out_of_fuel() {
         history.finish().await.unwrap();
         let mut unit = units().await.unwrap();
         assert!(
-            unit.get_history_entry(&attempt.run_id, 0, memory())
+            unit.get_history_entry(&attempt.run_id, 0)
                 .await
                 .unwrap()
                 .is_some()
@@ -541,55 +519,17 @@ async fn execution_history_replays_after_result_conversion_runs_out_of_fuel() {
     );
 }
 
-fn memory() -> interpreter::runtime::limits::HostMemory {
-    interpreter::runtime::limits::TenantLimits::new(256 * 1024 * 1024).host_memory()
-}
-
 #[tokio::test]
-async fn execution_history_admits_small_rows_without_a_fixed_large_surcharge() {
-    let directory = tempfile::tempdir().unwrap();
-    let (_database, units, attempt) = fixture(&directory.path().join("db")).await;
-    let limits = interpreter::runtime::limits::TenantLimits::new(16 * 1024);
-    let original = History::new(attempt.clone(), units.clone());
-    let call = original
-        .begin("small", [0; 32], limits.host_memory())
-        .await
-        .unwrap();
-    original
-        .complete(&call, result(b"small"), limits.host_memory())
-        .await
-        .unwrap();
-    assert_eq!(limits.host_attached_bytes(), 0);
-    let replay = History::new(attempt, units);
-    let call = replay
-        .begin("small", [0; 32], limits.host_memory())
-        .await
-        .unwrap();
-    assert!(call.recorded.is_some());
-    assert!(limits.host_attached_bytes() > 0);
-    drop(call);
-    assert_eq!(limits.host_attached_bytes(), 0);
-}
-
-#[tokio::test]
-async fn execution_history_refuses_a_blob_before_loading_it_without_memory() {
+async fn execution_history_keeps_large_outcomes_without_a_guest_memory_reservation() {
     let directory = tempfile::tempdir().unwrap();
     let (_database, units, attempt) = fixture(&directory.path().join("db")).await;
     let original = History::new(attempt.clone(), units.clone());
-    let call = original.begin("bytes", [0; 32], memory()).await.unwrap();
-    original
-        .complete(&call, result(&vec![42; 65536]), memory())
-        .await
-        .unwrap();
-    let limits = interpreter::runtime::limits::TenantLimits::new(1024);
+    let call = original.begin("bytes", [0; 32]).await.unwrap();
+    let outcome = result(&vec![42; 65536]);
+    original.complete(&call, outcome.clone()).await.unwrap();
     let replay = History::new(attempt, units);
-    assert!(
-        replay
-            .begin("bytes", [0; 32], limits.host_memory())
-            .await
-            .is_err()
-    );
-    assert_eq!(limits.host_attached_bytes(), 0);
+    let call = replay.begin("bytes", [0; 32]).await.unwrap();
+    assert_eq!(call.recorded, Some(outcome));
 }
 
 struct CountedHttp(std::sync::atomic::AtomicUsize);

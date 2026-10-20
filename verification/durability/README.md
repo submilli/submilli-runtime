@@ -93,12 +93,17 @@ so incorrect replay changes the request. Each distinct call has its own ID.
 Pure computation, codecs, interpreter scheduling and arbitrary guest control
 flow are abstracted.
 
-Each committed observation or external outcome records one logical unit. Replay
-restores that spend; it does not grant a new logical budget. An uncommitted retry
-can incur physical cost again. A short budget
-blocks the run and keeps its resources. Granting more fuel is outside this
-model. Compatible = FALSE represents a run whose pinned artifacts cannot be
-executed, and also blocks it.
+Each attempt starts with a fresh fuel allowance. Preparing an observation or
+starting an external action spends one abstract native-work unit; committing or
+consuming its outcome spends none. A crash clears this attempt-local spend, and
+replay skips native work for saved outcomes. An uncommitted retry spends fuel
+again when it actually runs. Pure Wasm computation, fingerprinting and replay
+decoding still cost fuel in Rust but are outside this abstract native-work model.
+A short budget blocks the run and retains its resources. Explicitly resuming a
+blocked run with extra fuel is future work. Compatible = FALSE also blocks a run.
+`FuelMatchesWork` checks that native spend matches actual work in this attempt.
+The negative replay-fuel check charges saved work again and must fail; the fresh
+attempt witness continues after a crash despite exhausting the first allowance.
 
 One session contains up to two admitted runs in the CI configurations. They
 must execute in admission order, including draining earlier in-flight work.
@@ -133,7 +138,7 @@ backup/restore and storage corruption are outside this model.
 | NoStaleWrites, SessionOrder, ResourcesProtected | Fenced commits, ordered execution and retention of resources needed by recoverable/draining work. |
 | RequestSetsDisjoint | A transport request cannot be both outstanding and completed; retry retires its previous completion. |
 | LegacyNotRecovered | No recovery of a reservation without a replay manifest/history. |
-| Progress | Admitted eligible work advances under the separately declared liveness assumptions. |
+| Progress | Admitted work advances or waits behind an earlier blocked run, under the separately declared liveness assumptions. |
 | CleanupProgress, ReleaseProgress | Terminal work drains, and lifecycle cleanup eventually releases its resource pins. |
 
 The standard safety configuration has one run, three logical calls, two
@@ -160,8 +165,13 @@ permanent outages, revoked authority, incompatible inputs or an expired provider
 deduplication window. Liveness does not assume another client submission.
 Deadlock detection is disabled because completed, blocked and quiescent states
 are valid; the progress properties check the work that should still advance.
-The two-run progress profile supplies enough fuel and compatible artifacts:
-an earlier blocked run intentionally prevents later runs in that session.
+Even an allowance sufficient for one successful pass can run out after an
+uncommitted retry. An earlier blocked run intentionally prevents later accepted
+runs in that session from starting. `Progress` allows this specific wait; it does
+not excuse waiting behind an eligible unfinished run. Once cancellation makes
+the predecessor terminal and it drains, the property requires queued work to
+advance. A witness demonstrates fuel exhaustion after a lost write with a second
+run waiting behind it.
 
 ## Counterexamples and reachability
 
@@ -204,9 +214,9 @@ unit-of-work port.
 | --- | --- | --- |
 | Admit, Duplicate | Existing `PrepareRun` stores the immutable initial program with the optional admission key. | Existing admission/tombstone tests and recorded-run integration. |
 | Claim, Launch, Restart | Internal `runner::durable` and `reopen_run` reconstruct the program under a new attempt. | Explicit reopen tested; autonomous scheduling and transport enablement remain SUB-1842. |
-| Prepare, Commit, ForgetWrite | `append_history` inserts the outcome and advances position, bytes, logical fuel and run revision in one transaction, fenced by owner/attempt/state. | SQL rollback/reopen, stale attempt and mismatch tests. Lost acknowledgement is model-checked; SQL acknowledgement loss is not fault-injected. |
+| Prepare, Commit, ForgetWrite | `append_history` inserts the outcome and advances position, bytes and run revision in one transaction, fenced by owner/attempt/state. | SQL rollback/reopen, stale attempt and mismatch tests. Lost acknowledgement is model-checked; SQL acknowledgement loss is not fault-injected. |
 | Dispatch, RemoteComplete, Receive | `effects::execute` calls the backend only for missing history, passing the stable EffectId. | Missing outcomes retry regardless of adapter idempotency. No persistent intent. |
-| Consume | Operation, codec version and argument fingerprint must match; native outcomes are decoded before guest conversion. | Saved observation and filesystem-resource replay, malformed data and memory bounds. |
+| Consume | Operation, codec version and argument fingerprint must match; native outcomes are decoded before guest conversion. | Saved observation and filesystem-resource replay, malformed data and encoded-size bounds. |
 | PrepareTerminal, Commit, Ack | `publish` verifies all history was consumed and uses `ResolveRun` for atomic terminal response and last-result publication. | Restart before terminal publication and stale-attempt refusal. Public handlers remain unchanged. |
 | Cancel, Drain, Release, ExpireSession | Existing cancellation/drain rules remain; caller must drain an old attempt before reopening its mounts. | Full recovery/cleanup orchestration remains SUB-1842. |
 | ExpireResponse, legacy initialization | Existing response retention preserves keys. Legacy runs without a manifest remain indeterminate. | Migration and legacy admission tests; no invented histories. |
@@ -221,24 +231,26 @@ compiler multiplicity separately; 128 MiB is not a compiled-regex heap claim.
 The normal policy parser retains its per-pattern compilation limits. Other limits and available tenant memory can refuse earlier.
 `execute` returns the native Rust value directly using Serde bounds. It validates
 encoded size, lengths and nesting before decoding, but does not estimate or charge
-the transient decoded value's heap through guest conversion. SQL/envelope buffers,
-encoded payloads, ordinary provider allocations and guest allocations retain their
-existing limits. This deliberately does not claim a total-memory bound for arbitrary
-Serde deserializers. The native codec is version 2 and the runtime compatibility
-marker is version 3. Older internal recordings are refused because resource encoding
-and the set of recorded operations must match; console no longer occupies a history
-position.
+the transient decoded value's heap through guest conversion. Temporary history
+encoding, SQL, encryption and decoding buffers are infrastructure overhead and do
+not consume the run's memory budget. Encoded-size and structural limits remain;
+ordinary provider allocations and guest allocations retain their existing limits.
+This does not claim a total-memory bound for arbitrary Serde deserializers.
+The native codec is version 3 and runtime compatibility marker is version 4;
+older internal recordings are refused after the outcome and budget contract change.
 
 HTTP downloads retain metadata and the destination reference, never the downloaded
 file body. Large-object storage is a later optimization.
 
 The internal path requires a matching runtime compatibility marker, saved limits,
-and unchanged package contents. Package pinning/retention is SUB-1881. Each outcome retains
-logical execution time, excluding paused tool waits. Replay restores this spend
-and has a separate reconstruction allowance equal to the original timeout.
-Downtime does not consume execution time; an uncommitted tail can be retried. Current authority is checked on live calls. Native
-fuel and LLM/embedding spend are restored on replay; guest computation and result
-conversion run again against the original logical budget.
+and unchanged package contents. Package pinning/retention is SUB-1881. Each attempt
+gets the configured timeout and fuel allowance afresh, including time spent replaying.
+Paused tool waits remain excluded from the timeout. Neither elapsed time nor native
+fuel is stored in outcomes or restored on replay. Fuel charges for native work sit
+inside the action, so only dispatched work pays them. Argument conversion, hashing,
+replay decoding and guest result conversion pay for the work actually performed.
+LLM/embedding token spend is still restored; these provider budgets are separate
+from CPU fuel and have not changed.
 
 The native boundary covers UUID, random bytes, Math.random, Temporal.Now,
 variables/secrets, filesystem operations and resources, HTTP/downloads, session

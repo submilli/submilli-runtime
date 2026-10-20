@@ -36,15 +36,13 @@ impl UnitOfWork for MemoryUnit {
         &mut self,
         run_id: &RunId,
         sequence: u64,
-        memory: interpreter::runtime::limits::HostMemory,
-    ) -> Result<Option<crate::history::LoadedHistoryEntry>, StoreError> {
+    ) -> Result<Option<crate::history::HistoryEntry>, StoreError> {
         Err(StoreError::Conflict)
     }
     async fn append_history(
         &mut self,
         attempt: &crate::history::ExecutionAttempt,
         entry: Arc<crate::history::HistoryEntry>,
-        memory: interpreter::runtime::limits::HostMemory,
     ) -> Result<(), StoreError> {
         Err(StoreError::Conflict)
     }

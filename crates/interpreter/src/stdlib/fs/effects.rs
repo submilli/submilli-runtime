@@ -1,5 +1,6 @@
 //! Resource values serialize their persistent state and skip local file handles.
-use super::{backend_error, begin_work};
+use super::{backend_error, begin_work, charge_path_work, require_writable};
+use crate::runtime::decision::CallTicket;
 use crate::runtime::durable::EffectId;
 use crate::runtime::host::fatal_host_error;
 use crate::runtime::{StoreData, effects, filesystem::*};
@@ -23,6 +24,7 @@ pub(super) async fn open_reader(
         OpenReader { path, options },
         move |caller, effect_id, request| {
             Box::pin(async move {
+                charge_path_work(caller, &[&request.path])?;
                 let work = begin_work(caller)?;
                 let result = caller
                     .data()
@@ -67,6 +69,7 @@ pub(super) async fn open_directory(
         OpenDirectory { path, recursive },
         |caller, effect_id, request| {
             Box::pin(async move {
+                charge_path_work(caller, &[&request.path])?;
                 let work = begin_work(caller)?;
                 let result = caller
                     .data()
@@ -98,10 +101,18 @@ pub(super) async fn open_directory(
 
 pub(super) async fn open_writer(
     caller: &mut Caller<'_, StoreData>,
+    ticket: Option<CallTicket>,
     path: String,
 ) -> wasmtime::Result<FileWriter> {
-    effects::execute(caller, "fs.writer", path, |caller, effect_id, path| {
+    effects::execute(caller, "fs.writer", path, move |caller, effect_id, path| {
         Box::pin(async move {
+            charge_path_work(caller, &[&path])?;
+            let placement = caller
+                .data()
+                .filesystem
+                .placement(&path)
+                .map_err(|e| backend_error("fs.writer", &path, e))?;
+            require_writable(&*caller, ticket, &placement, "fs.write", &path)?;
             let work = begin_work(caller)?;
             let result = caller
                 .data()

@@ -101,7 +101,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     serde_json::from_str(&context_json).map_err(|e| {
                         wasmtime::Error::msg(format!("security.check: malformed context JSON: {e}"))
                     })?;
-                fuel::charge_host_fuel(&mut *caller, fuel::GATE)?;
                 let who = consumer_of_running_package(&mut *caller, &capability).inspect_err(
                     |error| {
                         audit_consumer_failure(
@@ -123,6 +122,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     },
                     |caller, _, request| {
                         Box::pin(async move {
+                            fuel::charge_host_fuel(&mut *caller, fuel::GATE)?;
                             let capability = request.capability;
                             let context = request.context;
                             let who = request.who;

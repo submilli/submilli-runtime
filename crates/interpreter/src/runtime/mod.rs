@@ -9,7 +9,6 @@ pub mod default_filesystem;
 pub mod disk_quota;
 pub mod durable;
 pub mod effects;
-pub mod effects_clock;
 mod effects_memory;
 pub mod embedding;
 pub mod exec;
@@ -163,7 +162,6 @@ pub struct StoreData {
     /// that must not count against its time limit (an application tool call).
     /// An embedder's execution timeout subtracts it from the elapsed time.
     pub clock_paused: std::time::Duration,
-    pub execution_clock: Option<effects_clock::ExecutionClock>,
     /// The model provider `submilli:llm` dispatches through, present only when
     /// the embedder wires one. Left `None` the runtime has no model access at
     /// all rather than silently completing against some default — the guest
@@ -322,7 +320,6 @@ impl StoreData {
             mcp_transport: None,
             tool_provider: None,
             clock_paused: std::time::Duration::ZERO,
-            execution_clock: None,
             llm_provider: None,
             llm_budget: None,
             embedding_provider: None,

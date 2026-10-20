@@ -141,7 +141,6 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                     request_payload(&server, &tool, &args_json)
                 });
 
-                fuel::charge(&mut *caller, fuel::IO, args_json.len() as u64)?;
                 let request = ToolRequest {
                     server,
                     tool,
@@ -153,6 +152,7 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                     request,
                     move |caller, _, request| {
                         Box::pin(async move {
+                            fuel::charge(&mut *caller, fuel::IO, request.args_json.len() as u64)?;
                             let ToolRequest {
                                 server,
                                 tool,

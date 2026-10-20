@@ -14,11 +14,10 @@ use super::StoreData;
 use super::durable::EffectId;
 use super::fuel;
 use super::host::{self, fatal_host_error};
-use super::limits::{HostBytes, HostMemory, TenantLimits};
 
 /// Independent of the filesystem journal's much smaller metadata limit.
 pub const MAX_OUTCOME_BYTES: usize = 64 * 1024 * 1024;
-pub const CODEC_VERSION: u32 = 2;
+pub const CODEC_VERSION: u32 = 3;
 
 #[derive(Debug, thiserror::Error)]
 #[error("durable execution: {0}")]
@@ -29,17 +28,11 @@ pub struct EffectCall {
     pub id: EffectId,
     pub sequence: u64,
     pub recorded: Option<RecordedOutcome>,
-    /// This call consumes the last outcome in the committed replay prefix.
-    pub replay_complete: bool,
-    pub memory: Option<HostBytes>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordedOutcome {
     pub result: Result<OutcomeBytes, NativeError>,
-    /// Logical native work, excluding guest argument and result conversion.
-    pub host_fuel: u64,
-    pub execution_time: std::time::Duration,
     pub llm_spend: TokenSpend,
     pub embedding_spend: TokenSpend,
 }
@@ -64,13 +57,11 @@ pub trait EffectHistory: Send + Sync {
         &self,
         operation: &str,
         fingerprint: [u8; 32],
-        memory: HostMemory,
     ) -> Result<EffectCall, HistoryError>;
     async fn complete(
         &self,
         call: &EffectCall,
         outcome: RecordedOutcome,
-        memory: HostMemory,
     ) -> Result<(), HistoryError>;
     /// Refuse an execution which ended before consuming all its recorded calls.
     async fn finish(&self) -> Result<(), HistoryError>;
@@ -105,22 +96,10 @@ where
     };
     let fingerprint = fingerprint(caller, &arguments)?;
     let call = history
-        .begin(
-            operation,
-            fingerprint,
-            caller.data().tenant_limits.host_memory(),
-        )
+        .begin(operation, fingerprint)
         .await
         .map_err(fatal_host_error)?;
     if let Some(recorded) = &call.recorded {
-        let paused = caller.data().clock_paused;
-        if let Some(clock) = &mut caller.data_mut().execution_clock {
-            clock.restore(recorded.execution_time, paused);
-            if call.replay_complete {
-                clock.begin_live();
-            }
-        }
-        fuel::settle_host_fuel(&mut *caller, recorded.host_fuel)?;
         if let Some(budget) = &caller.data().llm_budget {
             budget.restore_spend(recorded.llm_spend.used, recorded.llm_spend.held);
         }
@@ -132,17 +111,16 @@ where
             );
         }
         return match &recorded.result {
-            Ok(bytes) => decode(&bytes.0),
+            Ok(bytes) => {
+                fuel::charge(&mut *caller, fuel::PARSE, bytes.0.len() as u64)?;
+                decode(&bytes.0)
+            }
             Err(error) => fuel::settle_result(caller, |caller| {
                 Err(host::throw_host_error(caller, error.clone().into_error()))
             }),
         };
     }
 
-    if let Some(clock) = &mut caller.data_mut().execution_clock {
-        clock.begin_live();
-    }
-    let fuel_before = caller.data().host_fuel;
     let llm_before = llm_spend(caller.data());
     let embedding_before = embedding_spend(caller.data());
     let result = action(caller, call.id.clone(), arguments).await;
@@ -151,36 +129,25 @@ where
     {
         return result;
     }
-    let mut encoded_memory = None;
     let recorded_result = match &result {
         Ok(value) => {
-            let encoded = encode(&caller.data().tenant_limits, value)?;
+            let encoded = encode(value)?;
             // Do not commit a representation the replay decoder refuses structurally.
-            validate_outcome(&encoded.bytes)?;
-            fuel::settle(&mut *caller, fuel::COPY, encoded.bytes.len() as u64)?;
-            encoded_memory = Some(encoded.memory);
-            Ok(OutcomeBytes(encoded.bytes))
+            validate_outcome(&encoded)?;
+            fuel::settle(&mut *caller, fuel::COPY, encoded.len() as u64)?;
+            Ok(OutcomeBytes(encoded))
         }
         Err(error) => Err(NativeError::capture(error)),
     };
     let outcome = RecordedOutcome {
         result: recorded_result,
-        host_fuel: caller.data().host_fuel.saturating_sub(fuel_before),
-        execution_time: caller
-            .data()
-            .execution_clock
-            .as_ref()
-            .map_or(std::time::Duration::ZERO, |clock| {
-                clock.elapsed(caller.data().clock_paused)
-            }),
         llm_spend: llm_spend(caller.data()).since(&llm_before)?,
         embedding_spend: embedding_spend(caller.data()).since(&embedding_before)?,
     };
     history
-        .complete(&call, outcome, caller.data().tenant_limits.host_memory())
+        .complete(&call, outcome)
         .await
         .map_err(fatal_host_error)?;
-    drop(encoded_memory);
     fuel::settle_result(caller, |caller| {
         result.map_err(|error| host::throw_host_error(caller, error))
     })
@@ -283,30 +250,17 @@ impl Write for FingerprintWriter<'_, '_> {
     }
 }
 
-struct EncodedOutcome {
-    bytes: Vec<u8>,
-    memory: HostBytes,
-}
-fn encode<T: Serialize>(limits: &TenantLimits, value: &T) -> wasmtime::Result<EncodedOutcome> {
-    let mut writer = OutcomeWriter {
-        limits,
-        bytes: Vec::new(),
-        memory: HostBytes::new(limits, 0)?,
-    };
+fn encode<T: Serialize>(value: &T) -> wasmtime::Result<Vec<u8>> {
+    let mut writer = OutcomeWriter { bytes: Vec::new() };
     value
         .serialize(&mut rmp_serde::Serializer::new(&mut writer).with_struct_map())
         .map_err(fatal_host_error)?;
-    Ok(EncodedOutcome {
-        bytes: writer.bytes,
-        memory: writer.memory,
-    })
+    Ok(writer.bytes)
 }
-struct OutcomeWriter<'a> {
-    limits: &'a TenantLimits,
+struct OutcomeWriter {
     bytes: Vec<u8>,
-    memory: HostBytes,
 }
-impl Write for OutcomeWriter<'_> {
+impl Write for OutcomeWriter {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         let length = self
             .bytes
@@ -318,9 +272,6 @@ impl Write for OutcomeWriter<'_> {
             let capacity = length
                 .max(self.bytes.capacity().saturating_mul(2))
                 .min(MAX_OUTCOME_BYTES);
-            self.memory
-                .grow(self.limits, (capacity - self.bytes.capacity()) as u64)
-                .map_err(std::io::Error::other)?;
             self.bytes
                 .try_reserve_exact(capacity - self.bytes.len())
                 .map_err(std::io::Error::other)?;
@@ -405,7 +356,7 @@ impl NativeError {
 }
 
 /// Validate a stored MessagePack envelope before Serde sees allocation hints.
-/// The caller must bound the blob size and reserve the returned heap estimate.
+/// The caller must bound the blob size before validating the encoded structure.
 /// `element_bytes` is the largest sequence element in the persistence schema.
 pub fn stored_heap_bound(
     bytes: &[u8],
@@ -421,36 +372,30 @@ mod tests {
     use super::*;
     #[test]
     fn native_floats_keep_nan_bits_and_signed_zero() {
-        let limits = TenantLimits::new(1024 * 1024);
         for bits in [
             0x8000_0000_0000_0000,
             0x7ff8_0000_0000_1234,
             0x7ff0_0000_0000_0000,
         ] {
-            let encoded = encode(&limits, &f64::from_bits(bits)).unwrap();
-            let restored: f64 = rmp_serde::from_slice(&encoded.bytes).unwrap();
+            let encoded = encode(&f64::from_bits(bits)).unwrap();
+            let restored: f64 = rmp_serde::from_slice(&encoded).unwrap();
             assert_eq!(restored.to_bits(), bits);
         }
-        assert_eq!(limits.host_attached_bytes(), 0);
     }
     #[test]
     fn binary_is_not_expanded_into_integer_elements() {
-        let limits = TenantLimits::new(1024 * 1024);
         let value = OutcomeBytes(vec![255; 4096]);
-        let encoded = encode(&limits, &value).unwrap();
-        assert!(encoded.bytes.len() < 4100);
-        let restored: OutcomeBytes = rmp_serde::from_slice(&encoded.bytes).unwrap();
+        let encoded = encode(&value).unwrap();
+        assert!(encoded.len() < 4100);
+        let restored: OutcomeBytes = rmp_serde::from_slice(&encoded).unwrap();
         assert_eq!(restored, value);
         drop(encoded);
-        assert_eq!(limits.host_attached_bytes(), 0);
-        assert!(encode(&TenantLimits::new(32), &value).is_err());
     }
     #[test]
     fn missing_and_empty_native_strings_remain_distinct() {
-        let limits = TenantLimits::new(1024 * 1024);
         for value in [None, Some(String::new()), Some("text".to_owned())] {
-            let encoded = encode(&limits, &value).unwrap();
-            let restored: Option<String> = rmp_serde::from_slice(&encoded.bytes).unwrap();
+            let encoded = encode(&value).unwrap();
+            let restored: Option<String> = rmp_serde::from_slice(&encoded).unwrap();
             assert_eq!(restored, value);
         }
     }

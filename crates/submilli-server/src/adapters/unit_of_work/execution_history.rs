@@ -15,13 +15,12 @@ pub(super) async fn progress(
     connection: &mut SqliteConnection,
     attempt: &ExecutionAttempt,
 ) -> Result<HistoryProgress, StoreError> {
-    let row = sqlx::query("SELECT history_position,history_bytes,history_host_fuel FROM runs WHERE run_id=? AND owner_generation=? AND attempt=? AND state='running' AND recovery_mode='recorded'")
+    let row = sqlx::query("SELECT history_position,history_bytes FROM runs WHERE run_id=? AND owner_generation=? AND attempt=? AND state='running' AND recovery_mode='recorded'")
         .bind(attempt.run_id.as_str()).bind(&attempt.owner_generation).bind(attempt.attempt)
         .fetch_optional(connection).await.map_err(database)?.ok_or(StoreError::Conflict)?;
     Ok(HistoryProgress {
         position: unsigned(row.try_get("history_position").map_err(database)?)?,
         bytes: unsigned(row.try_get("history_bytes").map_err(database)?)?,
-        host_fuel: unsigned(row.try_get("history_host_fuel").map_err(database)?)?,
     })
 }
 
@@ -30,8 +29,7 @@ pub(super) async fn get(
     sealer: &Sealer,
     run_id: &RunId,
     sequence: u64,
-    memory: interpreter::runtime::limits::HostMemory,
-) -> Result<Option<submilli_durable::history::LoadedHistoryEntry>, StoreError> {
+) -> Result<Option<HistoryEntry>, StoreError> {
     // Bound the SQL value before loading or decrypting it.
     let size: Option<i64> = sqlx::query_scalar(
         "SELECT length(content) FROM durable_outcomes WHERE run_id=? AND sequence=?",
@@ -47,13 +45,6 @@ pub(super) async fn get(
     if unsigned(size)? > MAX_STORED_ENTRY_BYTES as u64 {
         return Err(invalid("oversized outcome row"));
     }
-    // SQL value, ciphertext copy, plaintext, decoder scratch and returned bytes.
-    let reservation = memory
-        .reserve(unsigned(size)?.saturating_add(512))
-        .map_err(invalid)?;
-    let _scratch = memory
-        .reserve(unsigned(size)?.saturating_mul(4))
-        .map_err(invalid)?;
     let content: Vec<u8> =
         sqlx::query_scalar("SELECT content FROM durable_outcomes WHERE run_id=? AND sequence=?")
             .bind(run_id.as_str())
@@ -77,10 +68,7 @@ pub(super) async fn get(
     if entry.sequence != sequence || entry.version != CODEC_VERSION {
         return Err(invalid("native outcome identity mismatch"));
     }
-    Ok(Some(submilli_durable::history::LoadedHistoryEntry {
-        entry,
-        memory: reservation,
-    }))
+    Ok(Some(entry))
 }
 
 pub(super) async fn append(
@@ -88,7 +76,6 @@ pub(super) async fn append(
     sealer: &Sealer,
     attempt: &ExecutionAttempt,
     entry: &HistoryEntry,
-    memory: interpreter::runtime::limits::HostMemory,
 ) -> Result<(), StoreError> {
     let prior = progress(connection, attempt).await?;
     if entry.sequence != prior.position || entry.version != CODEC_VERSION {
@@ -103,15 +90,6 @@ pub(super) async fn append(
     if count.0 > MAX_ENTRY_BYTES {
         return Err(invalid("native outcome exceeds storage limit"));
     }
-    // Serialization, authenticated encryption and SQLite's bound-value copy.
-    let _scratch = memory
-        .reserve(
-            (count.0 as u64)
-                .saturating_add(128)
-                .saturating_mul(5)
-                .saturating_add(512),
-        )
-        .map_err(invalid)?;
     let plain = rmp_serde::to_vec_named(entry).map_err(invalid)?;
     if plain.len() > MAX_ENTRY_BYTES {
         return Err(invalid("native outcome exceeds storage limit"));
@@ -124,16 +102,12 @@ pub(super) async fn append(
         .checked_add(content.len() as u64)
         .filter(|n| *n <= MAX_HISTORY_BYTES)
         .ok_or_else(|| invalid("run history exceeds storage limit"))?;
-    let host_fuel = prior
-        .host_fuel
-        .checked_add(entry.outcome.host_fuel)
-        .ok_or_else(|| invalid("history fuel counter exhausted"))?;
     let position = prior
         .position
         .checked_add(1)
         .ok_or_else(|| invalid("history sequence exhausted"))?;
-    let updated = sqlx::query("UPDATE runs SET history_position=?,history_bytes=?,history_host_fuel=?,revision=revision+1 WHERE run_id=? AND owner_generation=? AND attempt=? AND state='running' AND recovery_mode='recorded' AND history_position=? AND revision<9223372036854775807")
-        .bind(signed(position)?).bind(signed(bytes)?).bind(signed(host_fuel)?)
+    let updated = sqlx::query("UPDATE runs SET history_position=?,history_bytes=?,revision=revision+1 WHERE run_id=? AND owner_generation=? AND attempt=? AND state='running' AND recovery_mode='recorded' AND history_position=? AND revision<9223372036854775807")
+        .bind(signed(position)?).bind(signed(bytes)?)
         .bind(attempt.run_id.as_str()).bind(&attempt.owner_generation).bind(attempt.attempt).bind(signed(entry.sequence)?)
         .execute(&mut *connection).await.map_err(database)?;
     if updated.rows_affected() != 1 {

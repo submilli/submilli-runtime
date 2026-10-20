@@ -59,31 +59,6 @@ pub(crate) fn arm<T: 'static>(
     });
 }
 
-/// Recorded execution restores logical time; replay reconstruction gets a separate
-/// allowance. Check every tick so restoring near the limit takes effect promptly.
-pub(crate) fn arm_recorded(
-    store: &mut Store<interpreter::runtime::StoreData>,
-    timeout: Option<Duration>,
-) {
-    let Some(budget) = timeout.filter(|value| !value.is_zero()) else {
-        store.set_epoch_deadline(u64::MAX);
-        return;
-    };
-    store.set_epoch_deadline(1);
-    store.epoch_deadline_callback(move |store| {
-        let data = store.data();
-        let expired = data
-            .execution_clock
-            .as_ref()
-            .is_none_or(|clock| clock.expired(budget, data.clock_paused));
-        Ok(if expired {
-            UpdateDeadline::Interrupt
-        } else {
-            UpdateDeadline::Continue(1)
-        })
-    });
-}
-
 fn deadline_ticks(timeout: Option<Duration>) -> u64 {
     let Some(timeout) = timeout.filter(|timeout| !timeout.is_zero()) else {
         return u64::MAX;
@@ -304,6 +279,27 @@ mod tests {
         engine.increment_epoch();
         assert!(!can_run(&mut newer));
         assert!(can_run(&mut disabled));
+    }
+
+    #[test]
+    fn a_resumed_attempt_gets_a_fresh_timeout() {
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let timeout = Some(Duration::from_secs(2));
+        let mut first = config.store(&engine, ()).unwrap();
+        arm(&mut first, timeout, |_| Duration::ZERO);
+        for _ in 0..3 {
+            engine.increment_epoch();
+        }
+        assert!(!can_run(&mut first));
+        let mut resumed = config.store(&engine, ()).unwrap();
+        arm(&mut resumed, timeout, |_| Duration::ZERO);
+        for _ in 0..2 {
+            engine.increment_epoch();
+            assert!(can_run(&mut resumed));
+        }
+        engine.increment_epoch();
+        assert!(!can_run(&mut resumed));
     }
 
     #[test]

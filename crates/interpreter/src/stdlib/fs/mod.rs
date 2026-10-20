@@ -247,7 +247,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.exists")?;
-                let ticket = gate(
+                let ticket = check_security_call(
                     &mut *caller,
                     "fs.stat",
                     serde_json::json!({ "path": &path }),
@@ -267,6 +267,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     path,
                     move |caller, effect_id, path| {
                         Box::pin(async move {
+                            charge_path_work(caller, &[&path])?;
                             let work = begin_work(caller)?;
                             let found = match filesystem
                                 .metadata(&effect_id, Some(work.clone()), &path, true)
@@ -303,7 +304,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.size")?;
-                let ticket = gate(
+                let ticket = check_security_call(
                     &mut *caller,
                     "fs.stat",
                     serde_json::json!({ "path": &path }),
@@ -311,6 +312,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let size =
                     runtime_effects::execute(caller, "fs.size", path, |caller, effect_id, path| {
                         Box::pin(async move {
+                            charge_path_work(caller, &[&path])?;
                             let work = begin_work(caller)?;
                             let meta = caller
                                 .data()
@@ -342,7 +344,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.stat")?;
-                gate(
+                check_security_call(
                     &mut *caller,
                     "fs.stat",
                     serde_json::json!({ "path": &path }),
@@ -360,7 +362,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.peek")?;
-                gate(
+                check_security_call(
                     &mut *caller,
                     "fs.stat",
                     serde_json::json!({ "path": &path }),
@@ -429,7 +431,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.readBytes")?;
                 let offset = f64_arg(abi_arg(params, 1)?, "fs.readBytes (offset)")? as i64;
                 let length = f64_arg(abi_arg(params, 2)?, "fs.readBytes (length)")? as i64;
-                let ticket = gate(
+                let ticket = check_security_call(
                     &mut *caller,
                     "fs.read",
                     serde_json::json!({
@@ -474,7 +476,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     } else {
                         read_uint8_array_arg(&mut *caller, abi_arg(params, 1)?, &ctx)?
                     };
-                    let ticket = gate(
+                    let ticket = check_security_call(
                         &mut *caller,
                         "fs.write",
                         serde_json::json!({
@@ -483,11 +485,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         }),
                     )?;
                     let filesystem = caller.data().filesystem.clone();
-                    let placement = filesystem
-                        .placement(&path)
-                        .map_err(|e| backend_error(&ctx, &path, e))?;
-                    require_writable(&*caller, ticket, &placement, "fs.write", &path)?;
-                    fuel::charge(&mut *caller, fuel::IO, bytes.len() as u64)?;
                     let request = FileWrite { path, bytes };
                     if append {
                         runtime_effects::execute(
@@ -496,6 +493,22 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                             request,
                             move |caller, effect_id, request| {
                                 Box::pin(async move {
+                                    charge_path_work(caller, &[&request.path])?;
+                                    let placement = filesystem
+                                        .placement(&request.path)
+                                        .map_err(|e| backend_error(&ctx, &request.path, e))?;
+                                    require_writable(
+                                        &*caller,
+                                        ticket,
+                                        &placement,
+                                        "fs.write",
+                                        &request.path,
+                                    )?;
+                                    fuel::charge(
+                                        &mut *caller,
+                                        fuel::IO,
+                                        request.bytes.len() as u64,
+                                    )?;
                                     let work = begin_work(caller)?;
                                     let result = filesystem
                                         .append(
@@ -519,6 +532,22 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                             request,
                             move |caller, effect_id, request| {
                                 Box::pin(async move {
+                                    charge_path_work(caller, &[&request.path])?;
+                                    let placement = filesystem
+                                        .placement(&request.path)
+                                        .map_err(|e| backend_error(&ctx, &request.path, e))?;
+                                    require_writable(
+                                        &*caller,
+                                        ticket,
+                                        &placement,
+                                        "fs.write",
+                                        &request.path,
+                                    )?;
+                                    fuel::charge(
+                                        &mut *caller,
+                                        fuel::IO,
+                                        request.bytes.len() as u64,
+                                    )?;
                                     let work = begin_work(caller)?;
                                     let result = filesystem
                                         .write(
@@ -551,7 +580,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.mkdir")?;
                 let recursive = i32_flag(abi_arg(params, 1)?, "fs.mkdir (recursive)")?;
-                let ticket = gate(
+                let ticket = check_security_call(
                     &mut *caller,
                     "fs.mkdir",
                     serde_json::json!({ "path": &path, "recursive": recursive }),
@@ -563,6 +592,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     request,
                     move |caller, effect_id, request| {
                         Box::pin(async move {
+                            charge_path_work(caller, &[&request.path])?;
                             let effects::PathMutation { path, recursive } = request;
                             let filesystem = caller.data().filesystem.clone();
                             let work = begin_work(caller)?;
@@ -600,7 +630,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.remove")?;
                 let recursive = i32_flag(abi_arg(params, 1)?, "fs.remove (recursive)")?;
-                let ticket = gate(
+                let ticket = check_security_call(
                     &mut *caller,
                     "fs.remove",
                     serde_json::json!({ "path": &path, "recursive": recursive }),
@@ -612,6 +642,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     request,
                     move |caller, effect_id, request| {
                         Box::pin(async move {
+                            charge_path_work(caller, &[&request.path])?;
                             let effects::PathMutation { path, recursive } = request;
                             let filesystem = caller.data().filesystem.clone();
                             let work = begin_work(caller)?;
@@ -649,7 +680,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Box::pin(async move {
                 let from = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.move (from)")?;
                 let to = read_string_arg(&mut *caller, abi_arg(params, 1)?, "fs.move (to)")?;
-                let ticket = gate(
+                let ticket = check_security_call(
                     &mut *caller,
                     "fs.move",
                     serde_json::json!({ "from": &from, "to": &to }),
@@ -661,6 +692,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     request,
                     move |caller, effect_id, request| {
                         Box::pin(async move {
+                            charge_path_work(caller, &[&request.from, &request.to])?;
                             let effects::MoveEntry { from, to } = request;
                             let filesystem = caller.data().filesystem.clone();
                             let work = begin_work(caller)?;
@@ -697,7 +729,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let from = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.copy (from)")?;
                 let to = read_string_arg(&mut *caller, abi_arg(params, 1)?, "fs.copy (to)")?;
                 let recursive = i32_flag(abi_arg(params, 2)?, "fs.copy (recursive)")?;
-                let ticket = gate(
+                let ticket = check_security_call(
                     &mut *caller,
                     "fs.copy",
                     serde_json::json!({
@@ -717,6 +749,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     request,
                     move |caller, effect_id, request| {
                         Box::pin(async move {
+                            charge_path_work(caller, &[&request.from, &request.to])?;
                             let effects::CopyEntry {
                                 from,
                                 to,
@@ -758,7 +791,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.writer (path)")?;
-                let ticket = gate(
+                let ticket = check_security_call(
                     &mut *caller,
                     "fs.write",
                     serde_json::json!({ "path": &path }),
@@ -776,7 +809,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.lines (path)")?;
-                gate(
+                check_security_call(
                     &mut *caller,
                     "fs.read",
                     serde_json::json!({ "path": &path }),
@@ -812,7 +845,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         "fs.bytes: chunkSize must be > 0, got {chunk_size}"
                     )));
                 }
-                gate(
+                check_security_call(
                     &mut *caller,
                     "fs.read",
                     serde_json::json!({ "path": &path, "chunkSize": chunk_size }),
@@ -843,7 +876,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.list (path)")?;
                 let recursive = i32_flag(abi_arg(params, 1)?, "fs.list (recursive)")?;
-                gate(
+                check_security_call(
                     &mut *caller,
                     "fs.list",
                     serde_json::json!({ "path": &path, "recursive": recursive }),
@@ -958,6 +991,7 @@ async fn stat_entry(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime:
         path.to_owned(),
         |caller, effect_id, path| {
             Box::pin(async move {
+                charge_path_work(caller, &[&path])?;
                 let work = begin_work(caller)?;
                 let meta = match caller
                     .data()
@@ -1014,6 +1048,7 @@ async fn peek_file(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::
         path.to_owned(),
         |caller, effect_id, path| {
             Box::pin(async move {
+                charge_path_work(caller, &[&path])?;
                 let filesystem = caller.data().filesystem.clone();
                 let work = begin_work(caller)?;
                 let meta = filesystem
@@ -1088,7 +1123,7 @@ async fn read_whole_capped(
     op: &'static str,
 ) -> wasmtime::Result<Option<runtime_effects::OutcomeBytes>> {
     let ctx = format!("fs.{op}");
-    let ticket = gate(&mut *caller, "fs.read", serde_json::json!({ "path": path }))?;
+    let ticket = check_security_call(&mut *caller, "fs.read", serde_json::json!({ "path": path }))?;
     let label = if op == "read" {
         "fs.read"
     } else {
@@ -1100,6 +1135,7 @@ async fn read_whole_capped(
         path.to_owned(),
         move |caller, effect_id, path| {
             Box::pin(async move {
+                charge_path_work(caller, &[&path])?;
                 let filesystem = caller.data().filesystem.clone();
                 let work = begin_work(caller)?;
                 let meta = filesystem
@@ -1162,7 +1198,6 @@ async fn read_byte_range(
             "fs.readBytes: length {length} exceeds fs.maxReadSize"
         )));
     }
-    fuel::charge(&mut *caller, fuel::IO, length as u64)?;
     let request = effects::ReadRange {
         path: path.to_owned(),
         offset: offset as u64,
@@ -1174,6 +1209,8 @@ async fn read_byte_range(
         request,
         |caller, effect_id, request| {
             Box::pin(async move {
+                charge_path_work(caller, &[&request.path])?;
+                fuel::charge(&mut *caller, fuel::IO, request.length)?;
                 let work = begin_work(caller)?;
                 let result = caller
                     .data()
@@ -1203,12 +1240,7 @@ async fn open_writer(
     ticket: Option<CallTicket>,
     path: &str,
 ) -> wasmtime::Result<Val> {
-    let filesystem = caller.data().filesystem.clone();
-    let placement = filesystem
-        .placement(path)
-        .map_err(|e| backend_error("fs.writer", path, e))?;
-    require_writable(&*caller, ticket, &placement, "fs.write", path)?;
-    let writer = effects::open_writer(caller, path.to_owned()).await?;
+    let writer = effects::open_writer(caller, ticket, path.to_owned()).await?;
     let writer = BackendFileWriter::new(writer, &caller.data().tenant_limits)
         .map_err(crate::runtime::host::fatal_host_error)?;
     let handle = ExternRef::new(&mut *caller, writer)?;
@@ -1337,7 +1369,6 @@ async fn list_next(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmti
     let Some(handle) = env_handle(caller, abi_arg(params, 0)?)? else {
         return iter_done(caller);
     };
-    fuel::charge(&mut *caller, fuel::SYSCALL, 1)?;
     let descriptor = handle_payload::<Option<ChargedDirIter>>(caller, &handle, "fs.list.next")?
         .as_ref()
         .map(ChargedDirIter::id);
@@ -1347,6 +1378,7 @@ async fn list_next(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmti
         descriptor,
         move |caller, effect_id, _| {
             Box::pin(async move {
+                fuel::charge(&mut *caller, fuel::SYSCALL, 1)?;
                 let work = begin_work(caller)?;
                 let Some(mut directory) =
                     handle_payload::<Option<ChargedDirIter>>(caller, &handle, "fs.list.next")?
@@ -1589,7 +1621,6 @@ fn install_file_writer_methods(
             Box::pin(async move {
                 let line =
                     read_string_arg(&mut *caller, abi_arg(params, 1)?, "fs.writer.writeLine")?;
-                fuel::charge(&mut *caller, fuel::IO, line.len() as u64 + 1)?;
                 let mut bytes = line.into_bytes();
                 bytes.push(b'\n');
                 let receiver = *abi_arg(params, 0)?;
@@ -1604,6 +1635,7 @@ fn install_file_writer_methods(
                     request,
                     move |caller, effect_id, request| {
                         Box::pin(async move {
+                            fuel::charge(&mut *caller, fuel::IO, request.bytes.len() as u64)?;
                             let work = begin_work(caller)?;
                             let filesystem = caller.data().filesystem.clone();
                             let result = writer_payload(caller, &receiver, "fs.writer.writeLine")?
@@ -1637,7 +1669,6 @@ fn install_file_writer_methods(
                     abi_arg(params, 1)?,
                     "fs.writer.writeBytes",
                 )?;
-                fuel::charge(&mut *caller, fuel::IO, bytes.len() as u64)?;
                 let receiver = *abi_arg(params, 0)?;
                 let descriptor = writer_payload(caller, &receiver, "fs.writer.writeBytes")?.id();
                 let request = effects::WriterChunk {
@@ -1650,6 +1681,7 @@ fn install_file_writer_methods(
                     request,
                     move |caller, effect_id, request| {
                         Box::pin(async move {
+                            fuel::charge(&mut *caller, fuel::IO, request.bytes.len() as u64)?;
                             let work = begin_work(caller)?;
                             let filesystem = caller.data().filesystem.clone();
                             let result = writer_payload(caller, &receiver, "fs.writer.writeBytes")?
@@ -1711,32 +1743,13 @@ fn is_absent(err: &std::io::Error) -> bool {
     )
 }
 
-/// The capability check every fs call starts with, and the one metadata
-/// syscall it costs at least (open, stat, readdir, unlink, rename); reads and
-/// writes add their bytes on top.
-fn gate(
-    caller: &mut Caller<'_, StoreData>,
-    capability: &str,
-    context: serde_json::Value,
-) -> wasmtime::Result<Option<CallTicket>> {
-    let path_cost = context
-        .as_object()
-        .into_iter()
-        .flat_map(|object| object.iter())
-        .filter(|(key, _)| {
-            matches!(
-                key.as_str(),
-                "path" | "from" | "to" | "source" | "destination"
-            )
-        })
-        .filter_map(|(_, value)| value.as_str())
-        .fold(0u64, |cost, path| {
-            cost.saturating_add(caller.data().filesystem.path_cost(path))
-        });
-    let ticket = check_security_call(&mut *caller, capability, context)?;
+/// Admit path resolution and the operation's first native filesystem call.
+fn charge_path_work(caller: &mut Caller<'_, StoreData>, paths: &[&str]) -> wasmtime::Result<()> {
+    let path_cost = paths.iter().fold(0u64, |cost, path| {
+        cost.saturating_add(caller.data().filesystem.path_cost(path))
+    });
     fuel::charge(&mut *caller, fuel::SYSCALL, 1)?;
-    fuel::charge_host_fuel(&mut *caller, path_cost)?;
-    Ok(ticket)
+    fuel::charge_host_fuel(&mut *caller, path_cost)
 }
 
 fn f64_arg(val: &Val, ctx: &str) -> wasmtime::Result<f64> {

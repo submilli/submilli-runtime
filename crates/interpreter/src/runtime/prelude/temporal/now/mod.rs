@@ -61,11 +61,51 @@ pub(super) fn zoned_date_time_iso(
 }
 
 impl ZonedObservation {
-    pub fn zoned(&self, _caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Zoned> {
+    pub fn zoned(&self, caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Zoned> {
         let zone = match &self.zone {
             Some(zone) => zone.clone(),
-            None => super::zoned_date_time::restore_time_zone(&self.id, "Temporal.Now")?.0,
+            None => super::zoned_date_time::resolve_time_zone(caller, &self.id, "Temporal.Now")?.0,
         };
         Ok(self.instant.to_zoned(zone))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{RuntimeConfig, Vfs, fuel};
+    use wasmtime::{Func, FuncType};
+
+    #[test]
+    fn recorded_zone_reconstruction_charges_only_the_lookup_it_performs() {
+        super::super::zoned_date_time::prepare_zones().unwrap();
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut store = config
+            .store(&engine, StoreData::with_vfs(Vfs::none()))
+            .unwrap();
+        let probe = Func::new(
+            &mut store,
+            FuncType::new(&engine, [], []),
+            |mut caller, _, _| {
+                for id in ["UTC", "+02:00"] {
+                    let observed = zoned_date_time_iso(&mut caller, Some(id))?;
+                    let before = caller.data().host_fuel;
+                    let live = observed.zoned(&mut caller)?;
+                    assert_eq!(caller.data().host_fuel, before);
+
+                    let bytes = rmp_serde::to_vec_named(&observed).unwrap();
+                    let restored: ZonedObservation = rmp_serde::from_slice(&bytes).unwrap();
+                    assert!(restored.zone.is_none());
+                    let replay = restored.zoned(&mut caller)?;
+                    assert_eq!(caller.data().host_fuel - before, fuel::TZ);
+                    assert_eq!(live.timestamp(), replay.timestamp());
+                    assert_eq!(live.offset(), replay.offset());
+                }
+                Ok(())
+            },
+        );
+        store.set_fuel(1_000_000).unwrap();
+        probe.call(&mut store, &[], &mut []).unwrap();
     }
 }

@@ -448,15 +448,7 @@ async fn run_inner(
         // Installing a package runs its top-level statements, and instantiation
         // runs the program's, so the deadline covers both and their failure is
         // reported as one in `main` is.
-        if store.data().effects.is_some() {
-            store.data_mut().execution_clock =
-                Some(interpreter::runtime::effects_clock::ExecutionClock::start());
-            crate::execution_timeout::arm_recorded(&mut store, runtime.config.timeout);
-        } else {
-            crate::execution_timeout::arm(&mut store, runtime.config.timeout, |data| {
-                data.clock_paused
-            });
-        }
+        crate::execution_timeout::arm(&mut store, runtime.config.timeout, |data| data.clock_paused);
         let phase_start = Instant::now();
         let installed =
             install_package_modules_async(&mut linker, &mut store, &package_modules).await;

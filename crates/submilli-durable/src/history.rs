@@ -6,7 +6,6 @@ use interpreter::runtime::durable::{EffectId, RunId};
 use interpreter::runtime::effects::{
     CODEC_VERSION, EffectCall, EffectHistory, HistoryError, RecordedOutcome,
 };
-use interpreter::runtime::limits::{HostBytes, HostMemory};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -30,7 +29,6 @@ pub struct ExecutionAttempt {
 pub struct HistoryProgress {
     pub position: u64,
     pub bytes: u64,
-    pub host_fuel: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -40,12 +38,6 @@ pub struct HistoryEntry {
     pub version: u32,
     pub arguments_fingerprint: [u8; 32],
     pub outcome: RecordedOutcome,
-}
-
-/// A loaded entry retains its admitted read/decryption allocation until consumed.
-pub struct LoadedHistoryEntry {
-    pub entry: HistoryEntry,
-    pub memory: HostBytes,
 }
 
 pub struct History {
@@ -80,13 +72,9 @@ impl History {
         effect_id(&self.attempt.run_id, sequence)
     }
 
-    async fn save_outcome(
-        &self,
-        entry: Arc<HistoryEntry>,
-        memory: HostMemory,
-    ) -> Result<(), StoreError> {
+    async fn save_outcome(&self, entry: Arc<HistoryEntry>) -> Result<(), StoreError> {
         let mut unit = (self.units)().await?;
-        unit.append_history(&self.attempt, Arc::clone(&entry), memory.clone())
+        unit.append_history(&self.attempt, Arc::clone(&entry))
             .await?;
         match unit.commit().await {
             Ok(()) => Ok(()),
@@ -96,10 +84,9 @@ impl History {
                 let mut check = (self.units)().await?;
                 check.history_progress(&self.attempt).await?;
                 if check
-                    .get_history_entry(&self.attempt.run_id, entry.sequence, memory)
+                    .get_history_entry(&self.attempt.run_id, entry.sequence)
                     .await?
                     .as_ref()
-                    .map(|loaded| &loaded.entry)
                     == Some(entry.as_ref())
                 {
                     Ok(())
@@ -117,7 +104,6 @@ impl EffectHistory for History {
         &self,
         operation: &str,
         fingerprint: [u8; 32],
-        memory: HostMemory,
     ) -> Result<EffectCall, HistoryError> {
         let mut cursor = self.cursor.lock().await;
         if cursor.pending.is_some() {
@@ -137,14 +123,13 @@ impl EffectHistory for History {
         }
         let id = self.effect_id(cursor.sequence);
         if cursor.sequence < progress.position {
-            let loaded = unit
-                .get_history_entry(&self.attempt.run_id, cursor.sequence, memory)
+            let entry = unit
+                .get_history_entry(&self.attempt.run_id, cursor.sequence)
                 .await
                 .map_err(history_error)?
                 .ok_or_else(|| {
                     HistoryError(format!("missing outcome at call {}", cursor.sequence))
                 })?;
-            let entry = loaded.entry;
             if entry.sequence != cursor.sequence
                 || entry.operation != operation
                 || entry.arguments_fingerprint != fingerprint
@@ -159,8 +144,6 @@ impl EffectHistory for History {
                 id,
                 sequence: cursor.sequence,
                 recorded: Some(entry.outcome),
-                replay_complete: cursor.sequence.checked_add(1) == Some(progress.position),
-                memory: Some(loaded.memory),
             };
             cursor.sequence = cursor
                 .sequence
@@ -187,8 +170,6 @@ impl EffectHistory for History {
             id,
             sequence: cursor.sequence,
             recorded: None,
-            replay_complete: true,
-            memory: None,
         })
     }
 
@@ -196,7 +177,6 @@ impl EffectHistory for History {
         &self,
         call: &EffectCall,
         outcome: RecordedOutcome,
-        memory: HostMemory,
     ) -> Result<(), HistoryError> {
         let mut cursor = self.cursor.lock().await;
         if call.recorded.is_some()
@@ -218,7 +198,7 @@ impl EffectHistory for History {
             arguments_fingerprint: pending.arguments_fingerprint,
             outcome,
         };
-        self.save_outcome(Arc::new(entry), memory)
+        self.save_outcome(Arc::new(entry))
             .await
             .map_err(history_error)?;
         cursor.sequence += 1; // begin checked the successor before allowing native work.

@@ -45,13 +45,11 @@ pub trait UnitOfWork: Send {
         &mut self,
         run_id: &RunId,
         sequence: u64,
-        memory: interpreter::runtime::limits::HostMemory,
-    ) -> Result<Option<crate::history::LoadedHistoryEntry>, StoreError>;
+    ) -> Result<Option<crate::history::HistoryEntry>, StoreError>;
     async fn append_history(
         &mut self,
         attempt: &crate::history::ExecutionAttempt,
         entry: Arc<crate::history::HistoryEntry>,
-        memory: interpreter::runtime::limits::HostMemory,
     ) -> Result<(), StoreError>;
 
     async fn get_journal_entry(

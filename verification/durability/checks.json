@@ -32,7 +32,8 @@
     "SessionOrder",
     "ResourcesProtected",
     "TerminalConsistent",
-    "LegacyNotRecovered"
+    "LegacyNotRecovered",
+    "FuelMatchesWork"
   ],
   "properties": [
     "AppendOnly"
@@ -328,6 +329,38 @@
       "invariant": "CommitBarriers",
       "constants": {
         "Fault": "consume-uncommitted",
+        "MaxSteps": 1,
+        "FuelLimit": 1,
+        "MaxCrashes": 0
+      }
+    },
+    {
+      "name": "negative-replay-fuel",
+      "kind": "negative",
+      "invariant": "FuelMatchesWork",
+      "constants": {
+        "Fault": "charge-replay",
+        "MaxSteps": 2,
+        "FuelLimit": 2
+      }
+    },
+    {
+      "name": "witness-fresh-attempt-budget",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "fresh-budget",
+        "MaxSteps": 2,
+        "FuelLimit": 1
+      }
+    },
+    {
+      "name": "witness-blocked-predecessor",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "blocked-predecessor",
+        "MaxRuns": 2,
         "MaxSteps": 1,
         "FuelLimit": 1,
         "MaxCrashes": 0
