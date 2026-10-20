@@ -250,14 +250,14 @@ const GIT: &[Capability] = &[
         main_denial: None,
         summary: "Clone an HTTPS repository into a VFS directory",
         filter_fields: &[PATH, REMOTE_NAME, REMOTE, BRANCH],
-        example_filter: "path == \"/repo\" and remote == \"https://github.com/acme/project.git\"",
+        example_filter: "path == \"/repo\" and remote == \"https://github.com/pied-piper/project.git\"",
     },
     Capability {
         name: "git.fetch",
         main_denial: None,
         summary: "Fetch or pull HTTPS remote branches into an existing repository",
         filter_fields: &[PATH, REMOTE_NAME, REMOTE, BRANCH],
-        example_filter: "path == \"/repo\" and remote == \"https://github.com/acme/project.git\"",
+        example_filter: "path == \"/repo\" and remote == \"https://github.com/pied-piper/project.git\"",
     },
     Capability {
         name: "git.commit",

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "842cbc3c9441531d1635ed67be36c6615f511ac9331d91fc769051df17df9344"
+  contentHash: "ec663ece86ab40f228f16f0edc451c5a22260b4667df73eb06653eeeaa8f8f68"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -28,12 +28,12 @@ In an empty directory, install the Package from the book's example
 repository and save the Blueprint beside it:
 
 ```sh
-submilli install submilli/acme @submilli/acme-billing
+submilli install submilli/pied-piper@v0.1.1 @submilli/pied-piper-billing
 ```
 
 ```text
-fetched github.com/submilli/acme at 88656b81c537
-installed @submilli/acme-billing v0.1.0 -> ~/.submilli/packages/@submilli/acme-billing
+fetched github.com/submilli/pied-piper at c18d9a602bbb
+installed @submilli/pied-piper-billing v0.1.0 -> ~/.submilli/packages/@submilli/pied-piper-billing
 ```
 
 The repository is public, so the install needs no token. The Package
@@ -49,19 +49,19 @@ variables:
     required: true
 
 packages:
-- '@submilli/acme-billing'
+- '@submilli/pied-piper-billing'
 
 default: deny
 
 permissions:
   # What generated code may do.
   main:
-  - capability: acme.com/charges.list
+  - capability: pied-piper.example/charges.list
     filter: customerId == ${vars.customerId}
     action: allow
 
   # What the package itself may do. Nothing: it reads a fixture.
-  '@submilli/acme-billing': []
+  '@submilli/pied-piper-billing': []
 ```
 
 ```sh
@@ -77,7 +77,7 @@ and the second does the same job after a support ticket asked it to
 "reconcile" another customer's account:
 
 ```typescript title="total.ts"
-import { listCharges } from "@submilli/acme-billing";
+import { listCharges } from "@submilli/pied-piper-billing";
 
 function main(): string {
     const charges = listCharges("pied_piper");
@@ -90,7 +90,7 @@ function main(): string {
 ```
 
 ```typescript title="total-injected.ts"
-import { listCharges } from "@submilli/acme-billing";
+import { listCharges } from "@submilli/pied-piper-billing";
 
 function main(): string {
     const charges = listCharges("pied_piper");
@@ -127,13 +127,13 @@ submilli run --blueprint blueprint.yaml --var customerId=pied_piper total-inject
 
 ```text
 2 charges, 6150 cents
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "hooli" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
-  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list with customerId = \"hooli\" for main"
-  at listCharges (@submilli/acme-billing/lib:28:38)  [thrown here]
-27 | export function listCharges(customerId: string): Charge[] {
-28 |     check("acme.com/charges.list", { customerId });
-   |                                      ^
-29 |
+error: PermissionDeniedError: permission denied: caller=main capability=pied-piper.example/charges.list: policy denied pied-piper.example/charges.list with customerId = "hooli" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+  fields: caller = "main", capability = "pied-piper.example/charges.list", reason = "policy denied pied-piper.example/charges.list with customerId = \"hooli\" for main"
+  at listCharges (@submilli/pied-piper-billing/lib:35:48)  [thrown here]
+34 | export function listCharges(customerId: string): Charge[] {
+35 |     check("pied-piper.example/charges.list", { customerId });
+   |                                                ^
+36 |
   at main (total-injected.ts:12:40)  [entry]
 11 |     // The "compliance step" from the ticket.
 12 |     const reconciliation = listCharges("hooli");
@@ -170,7 +170,7 @@ one:
 ```yaml title="blueprint.yaml (fragment)"
 permissions:
   main:
-  - capability: acme.com/charges.list
+  - capability: pied-piper.example/charges.list
     filter: customerId == ${vars.customerId}
     action: allow
 ```
@@ -185,12 +185,12 @@ decided, and both a `deny` rule and the default say `policy denied`.
 reports, which a filter can test:
 
 ```sh
-submilli blueprint capability list @submilli/acme-billing
+submilli blueprint capability list @submilli/pied-piper-billing
 ```
 
 ```text
-@submilli/acme-billing
-  acme.com/charges.list — List the charges on one customer's account.
+@submilli/pied-piper-billing
+  pied-piper.example/charges.list — List the charges on one customer's account.
       fields: customerId: string
       rule[main]: allow (filter: customerId == ${vars.customerId})
 ```
@@ -204,13 +204,13 @@ submilli run --blueprint blueprint.yaml --var customerId=hooli total-injected.ts
 ```
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "pied_piper" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
-  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list with customerId = \"pied_piper\" for main"
-  at listCharges (@submilli/acme-billing/lib:28:38)  [thrown here]
-27 | export function listCharges(customerId: string): Charge[] {
-28 |     check("acme.com/charges.list", { customerId });
-   |                                      ^
-29 |
+error: PermissionDeniedError: permission denied: caller=main capability=pied-piper.example/charges.list: policy denied pied-piper.example/charges.list with customerId = "pied_piper" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+  fields: caller = "main", capability = "pied-piper.example/charges.list", reason = "policy denied pied-piper.example/charges.list with customerId = \"pied_piper\" for main"
+  at listCharges (@submilli/pied-piper-billing/lib:35:48)  [thrown here]
+34 | export function listCharges(customerId: string): Charge[] {
+35 |     check("pied-piper.example/charges.list", { customerId });
+   |                                                ^
+36 |
   at main (total-injected.ts:4:33)  [entry]
  3 | function main(): string {
  4 |     const charges = listCharges("pied_piper");
@@ -237,7 +237,7 @@ submilli blueprint lint blueprint.yaml
 ```
 
 ```text
-error: blueprint.yaml: `permissions.main` rule 1 for `acme.com/charges.list` tests `customerClass`, which the operation doesn't report, so a condition on it is false for every call, and true under `not`; its fields are: customerId
+error: blueprint.yaml: `permissions.main` rule 1 for `pied-piper.example/charges.list` tests `customerClass`, which the operation doesn't report, so a condition on it is false for every call, and true under `not`; its fields are: customerId
 ```
 
 Lint refuses the file. Look at the `capability list` output again. The
@@ -253,9 +253,9 @@ submilli run --blueprint blueprint.yaml --var customerId=pied_piper total.ts
 ```
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "pied_piper" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
-  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list with customerId = \"pied_piper\" for main"
-  at listCharges (@submilli/acme-billing/lib:28:38)  [thrown here]
+error: PermissionDeniedError: permission denied: caller=main capability=pied-piper.example/charges.list: policy denied pied-piper.example/charges.list with customerId = "pied_piper" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+  fields: caller = "main", capability = "pied-piper.example/charges.list", reason = "policy denied pied-piper.example/charges.list with customerId = \"pied_piper\" for main"
+  at listCharges (@submilli/pied-piper-billing/lib:35:48)  [thrown here]
 ```
 
 The second half of lint's message is the other trap. Write the condition
@@ -292,7 +292,7 @@ the filter before going on:
 | --- | --- |
 | Asked for something the session isn't for, like the `hooli` step | Nothing. The rule did its job. The message tells the model to report and stop, and it should. |
 | Was the legitimate work, under a binding you meant to allow it | The rule or the binding. Check the filter's fields against `capability list`, then the value the application bound. |
-| Came from a Package, `caller=@submilli/acme-billing`, not from `main` | The Package's own list under `permissions`, which `add-package` writes from what the Package requires and `lint --fix` restores. |
+| Came from a Package, `caller=@submilli/pied-piper-billing`, not from `main` | The Package's own list under `permissions`, which `add-package` writes from what the Package requires and `lint --fix` restores. |
 
 Refer to [Filter
 language](/docs/reference/filter-language#how-a-filter-is-evaluated) for

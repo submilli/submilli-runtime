@@ -6,7 +6,7 @@ Every artifact the quickstart chapter has the reader author, in runnable form. `
 
 | File | What it is |
 |:-----|:-----------|
-| `package/` | `@acme/billing` — one operation, `listCharges(customerId)`, over a fixture. |
+| `package/` | `@pied-piper/billing` — one operation, `listCharges(customerId)`, over a fixture. |
 | `blueprint.yaml` | The policy: `customerId` as a required session variable, and the operation granted only for it. |
 | `total.ts` | The program the agent writes for the job it was asked to do. |
 | `total-injected.ts` | The program it writes after reading the injected support ticket. |

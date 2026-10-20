@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "61093b91a45b75cc8672e860aead4775f077be4a5dd4d35ba66ea12cdc4a40d5"
+  contentHash: "10f744600feaf13b79109476c6edf487585b67bda0d922ebb03d713e726c432e"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -140,7 +140,7 @@ throws, or is denied, is also an ordinary answer, with `error` set and
   "console": ["2 charges, 6150 cents"],
   "error": {
     "kind": "runtime_error",
-    "message": "error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = \"hooli\" for main. …"
+    "message": "error: PermissionDeniedError: permission denied: caller=main capability=pied-piper.example/charges.list: policy denied pied-piper.example/charges.list with customerId = \"hooli\" for main. …"
   }
 }
 ```

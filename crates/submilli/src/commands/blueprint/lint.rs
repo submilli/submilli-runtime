@@ -457,16 +457,16 @@ mod fix_failure_tests {
         let error = apply_fixes(
             &mut blueprint,
             vec![MissingRequiresRule {
-                caller: "@acme/package".into(),
+                caller: "@pied-piper/package".into(),
                 capability: "fs.read".into(),
                 filter: Some("path ==".into()),
             }],
         )
         .unwrap_err();
         assert!(
-            error
-                .to_string()
-                .contains("invalid capability filter for `fs.read` required by `@acme/package`")
+            error.to_string().contains(
+                "invalid capability filter for `fs.read` required by `@pied-piper/package`"
+            )
         );
         assert_eq!(blueprint.permissions, original);
     }

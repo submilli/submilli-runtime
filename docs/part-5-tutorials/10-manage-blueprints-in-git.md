@@ -9,7 +9,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "45941e9b4b4c02a4485ac5a4aab9c2fa3dca03227af8d2701f8c8c5eae4826e0"
+  contentHash: "47711512524b7a7e217761125118349dd2be143b75dc48fcd970d34dacb329d4"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -59,19 +59,19 @@ variables:
     required: true
 
 packages:
-- '@submilli/acme-billing'
+- '@submilli/pied-piper-billing'
 
 default: deny
 
 permissions:
   # What generated code may do.
   main:
-  - capability: acme.com/charges.list
+  - capability: pied-piper.example/charges.list
     filter: customerId == ${vars.customerId}
     action: allow
 
   # What the package itself may do. Nothing: it reads a fixture.
-  '@submilli/acme-billing': []
+  '@submilli/pied-piper-billing': []
 ```
 
 `packages.txt` names each Package the Blueprints list, one per line, with
@@ -79,7 +79,7 @@ the GitHub repository it is installed from, the Package, and the commit to
 pin:
 
 ```text title="packages.txt"
-submilli/acme @submilli/acme-billing 88656b81c537
+submilli/pied-piper @submilli/pied-piper-billing c18d9a602bbb
 ```
 
 ## Test the policy as two sessions
@@ -89,7 +89,7 @@ refuses what it should, run a program under it, bound to the customer
 the rule should allow and then to one it should refuse:
 
 ```typescript title="blueprints/support/total.ts"
-import { listCharges } from "@submilli/acme-billing";
+import { listCharges } from "@submilli/pied-piper-billing";
 
 function main(): string {
     const charges = listCharges("pied_piper");
@@ -114,7 +114,7 @@ Install the pinned Package, lint, and run the test, as the pull-request
 job will:
 
 ```sh
-submilli install submilli/acme@88656b81c537 @submilli/acme-billing
+submilli install submilli/pied-piper@c18d9a602bbb @submilli/pied-piper-billing
 cd blueprints/support
 submilli blueprint lint blueprint.yaml
 chmod +x test.sh
@@ -122,10 +122,10 @@ chmod +x test.sh
 ```
 
 ```text
-installed @submilli/acme-billing v0.1.0 -> ~/.submilli/packages/@submilli/acme-billing
+installed @submilli/pied-piper-billing v0.1.0 -> ~/.submilli/packages/@submilli/pied-piper-billing
 ✓ blueprint.yaml is valid
 2 charges, 6150 cents
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "pied_piper" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+error: PermissionDeniedError: permission denied: caller=main capability=pied-piper.example/charges.list: policy denied pied-piper.example/charges.list with customerId = "pied_piper" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
 ```
 
 The first line of the test is the program's result for the customer the
@@ -235,7 +235,7 @@ request, and the job's log shows the server taking the Package and the
 Blueprint:
 
 ```text
-installed @submilli/acme-billing @ 88656b81c537
+installed @submilli/pied-piper-billing @ c18d9a602bbb
 Added blueprint 'support'
 ```
 

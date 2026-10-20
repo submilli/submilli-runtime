@@ -33,7 +33,7 @@ impl Fixture {
 
     fn installed_source(&self) -> String {
         let installed =
-            read_installed_sources(self.store.join("@acme/billing")).expect("installed");
+            read_installed_sources(self.store.join("@pied-piper/billing")).expect("installed");
         installed.sources[0].text.clone()
     }
 
@@ -45,7 +45,7 @@ impl Fixture {
 }
 
 fn billing() -> BTreeSet<String> {
-    BTreeSet::from(["@acme/billing".to_owned()])
+    BTreeSet::from(["@pied-piper/billing".to_owned()])
 }
 
 fn edit(path: &Path, from: &str, to: &str) {
@@ -59,7 +59,7 @@ fn a_project_package_is_installed_once_and_reinstalled_only_after_an_edit() {
     let fixture = Fixture::starter();
     let packages = fixture.packages();
     let first = packages.sync(&billing()).unwrap();
-    assert_eq!(first.reinstalled, ["@acme/billing"]);
+    assert_eq!(first.reinstalled, ["@pied-piper/billing"]);
     assert!(first.evict);
 
     let again = packages.sync(&billing()).unwrap();
@@ -71,7 +71,7 @@ fn a_project_package_is_installed_once_and_reinstalled_only_after_an_edit() {
         "found.push(charge); // edited",
     );
     let edited = packages.sync(&billing()).unwrap();
-    assert_eq!(edited.reinstalled, ["@acme/billing"]);
+    assert_eq!(edited.reinstalled, ["@pied-piper/billing"]);
     assert!(fixture.installed_source().contains("// edited"));
 }
 
@@ -83,7 +83,7 @@ fn a_run_that_reaches_no_project_package_checks_nothing() {
         .sync(&BTreeSet::from(["@other/pkg".to_owned()]))
         .unwrap();
     assert_eq!(none, Synced::default());
-    assert!(!fixture.store.join("@acme/billing").exists());
+    assert!(!fixture.store.join("@pied-piper/billing").exists());
 }
 
 #[test]
@@ -103,10 +103,10 @@ fn a_package_that_no_longer_builds_is_reported_and_its_installed_copy_is_kept() 
     else {
         panic!("a build failure: {failure}");
     };
-    assert_eq!(package, "@acme/billing");
+    assert_eq!(package, "@pied-piper/billing");
     assert!(diagnostic.contains("lib.ts"), "{diagnostic}");
     let message = failure.to_string();
-    assert!(message.contains("`@acme/billing`"), "{message}");
+    assert!(message.contains("`@pied-piper/billing`"), "{message}");
     assert!(message.contains("does not build"), "{message}");
     // Only a run refused before it started says so.
     assert!(!message.contains("the run"), "{message}");
@@ -127,7 +127,7 @@ fn a_package_that_no_longer_builds_is_reported_and_its_installed_copy_is_kept() 
     edit(&fixture.lib(), "return found +;", "return found; // fixed");
     assert_eq!(
         packages.sync(&billing()).unwrap().reinstalled,
-        ["@acme/billing"]
+        ["@pied-piper/billing"]
     );
 }
 
@@ -137,7 +137,7 @@ fn an_install_from_outside_is_noticed_by_the_next_check() {
     let packages = fixture.packages();
     packages.sync(&billing()).unwrap();
     // Another install rewrites the artifact; its contents still match the source.
-    let metadata = fixture.store.join("@acme/billing/metadata.json");
+    let metadata = fixture.store.join("@pied-piper/billing/metadata.json");
     let text = std::fs::read(&metadata).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(20));
     std::fs::write(&metadata, text).unwrap();
@@ -157,10 +157,10 @@ fn the_closure_marks_a_dependency_only_package_not_importable() {
         "/** Cents as dollars. */\nexport function dollars(cents: number): number { return cents / 100; }\n",
     )
     .unwrap();
-    std::fs::write(money.join("docs/readme.md"), "# @acme/money\n").unwrap();
+    std::fs::write(money.join("docs/readme.md"), "# @pied-piper/money\n").unwrap();
     let manifest = fixture.package_dir.join("submilli.toml");
     let mut text = std::fs::read_to_string(&manifest).unwrap();
-    text.push_str("dependencies = [\"@acme/money\"]\n\n[[package]]\nname = \"@acme/money\"\nversion = \"0.1.0\"\ndescription = \"Money helpers.\"\npath = \"packages/money\"\n");
+    text.push_str("dependencies = [\"@pied-piper/money\"]\n\n[[package]]\nname = \"@pied-piper/money\"\nversion = \"0.1.0\"\ndescription = \"Money helpers.\"\npath = \"packages/money\"\n");
     std::fs::write(&manifest, text).unwrap();
 
     let (synced, closure) = fixture.packages().prepare(&fixture.blueprint()).unwrap();
@@ -169,7 +169,7 @@ fn the_closure_marks_a_dependency_only_package_not_importable() {
         closure,
         [
             ClosureEntry {
-                name: "@acme/billing".into(),
+                name: "@pied-piper/billing".into(),
                 version: "0.1.0".into(),
                 origin: Origin::Blueprint,
                 importable: true,
@@ -177,12 +177,12 @@ fn the_closure_marks_a_dependency_only_package_not_importable() {
                 required_by: Vec::new(),
             },
             ClosureEntry {
-                name: "@acme/money".into(),
+                name: "@pied-piper/money".into(),
                 version: "0.1.0".into(),
                 origin: Origin::Dependency,
                 importable: false,
                 project: true,
-                required_by: vec!["@acme/billing".into()],
+                required_by: vec!["@pied-piper/billing".into()],
             },
         ]
     );
@@ -192,20 +192,20 @@ fn the_closure_marks_a_dependency_only_package_not_importable() {
 fn a_missing_package_names_itself_and_the_install_command() {
     let fixture = Fixture::starter();
     let mut blueprint = fixture.blueprint();
-    blueprint.packages.insert("@acme/absent".to_owned());
+    blueprint.packages.insert("@pied-piper/absent".to_owned());
     let failure = fixture.packages().prepare(&blueprint).unwrap_err();
     assert!(matches!(
         failure,
         ResolutionFailure::Store(PackageStoreError::MissingPackage { ref name, .. })
-            if name == "@acme/absent"
+            if name == "@pied-piper/absent"
     ));
     let message = failure.to_string();
-    assert!(message.contains("`@acme/absent`"), "{message}");
+    assert!(message.contains("`@pied-piper/absent`"), "{message}");
     assert!(message.contains("submilli install"), "{message}");
     assert!(!message.contains("denied"), "{message}");
 }
 
-/// Builds `@acme/money` in a project of its own and installs it into `store`, as
+/// Builds `@pied-piper/money` in a project of its own and installs it into `store`, as
 /// `submilli build publish-local` there would.
 fn publish_money(store: &Path) {
     let dir = tempfile::tempdir().unwrap();
@@ -217,8 +217,8 @@ fn publish_money(store: &Path) {
         "/** Cents as dollars. */\nexport function dollars(cents: number): number { return cents / 100; }\n",
     )
     .unwrap();
-    std::fs::write(package.join("docs/readme.md"), "# @acme/money\n").unwrap();
-    let text = "[[package]]\nname = \"@acme/money\"\nversion = \"0.1.0\"\ndescription = \"Money helpers.\"\npath = \"packages/money\"\n";
+    std::fs::write(package.join("docs/readme.md"), "# @pied-piper/money\n").unwrap();
+    let text = "[[package]]\nname = \"@pied-piper/money\"\nversion = \"0.1.0\"\ndescription = \"Money helpers.\"\npath = \"packages/money\"\n";
     std::fs::write(dir.path().join("submilli.toml"), text).unwrap();
     let manifest = parse_manifest(text, dir.path()).expect("the money manifest parses");
     let store = PackageStore::new(store);
@@ -227,10 +227,10 @@ fn publish_money(store: &Path) {
     install_packages(&store, &built).expect("money installs");
 }
 
-/// Makes billing's source import `@acme/money` from the store.
+/// Makes billing's source import `@pied-piper/money` from the store.
 fn import_money(fixture: &Fixture) {
     let mut text = std::fs::read_to_string(fixture.lib()).unwrap();
-    text.insert_str(0, "import { dollars } from \"@acme/money\";\n");
+    text.insert_str(0, "import { dollars } from \"@pied-piper/money\";\n");
     text.push_str(
         "\n/** Cents as dollars, through the money package. */\nexport function inDollars(cents: number): number { return dollars(cents); }\n",
     );
@@ -238,7 +238,7 @@ fn import_money(fixture: &Fixture) {
 }
 
 const MONEY_DEPENDENCY: &str =
-    "dependencies = [\"@acme/money\"]\n\n[dependencies]\n\"@acme/money\" = \"0.1.0\"\n";
+    "dependencies = [\"@pied-piper/money\"]\n\n[dependencies]\n\"@pied-piper/money\" = \"0.1.0\"\n";
 
 fn declare_money(fixture: &Fixture) {
     let manifest = fixture.package_dir.join("submilli.toml");
@@ -265,7 +265,7 @@ fn a_build_fixed_in_the_manifest_alone_is_retried() {
     declare_money(&fixture);
     assert_eq!(
         packages.sync(&billing()).unwrap().reinstalled,
-        ["@acme/billing"]
+        ["@pied-piper/billing"]
     );
 }
 
@@ -279,13 +279,13 @@ fn installing_a_missing_dependency_retries_the_failed_build() {
     let ResolutionFailure::Build { diagnostic, .. } = &failure else {
         panic!("a build failure: {failure}");
     };
-    assert!(diagnostic.contains("@acme/money"), "{diagnostic}");
+    assert!(diagnostic.contains("@pied-piper/money"), "{diagnostic}");
     assert!(packages.sync(&billing()).is_err());
 
     publish_money(&fixture.store);
     assert_eq!(
         packages.sync(&billing()).unwrap().reinstalled,
-        ["@acme/billing"]
+        ["@pied-piper/billing"]
     );
 }
 
@@ -300,7 +300,7 @@ fn an_edited_manifest_entry_rebuilds_its_package() {
     edit(&manifest, "\"charges\"]", "\"charges\", \"ledger\"]");
     assert_eq!(
         packages.sync(&billing()).unwrap().reinstalled,
-        ["@acme/billing"]
+        ["@pied-piper/billing"]
     );
     assert_eq!(packages.sync(&billing()).unwrap(), Synced::default());
 
@@ -310,7 +310,7 @@ fn an_edited_manifest_entry_rebuilds_its_package() {
     std::fs::rename(fixture.lib(), &legacy).unwrap();
     assert_eq!(
         packages.sync(&billing()).unwrap().reinstalled,
-        ["@acme/billing"]
+        ["@pied-piper/billing"]
     );
     assert_eq!(packages.sync(&billing()).unwrap(), Synced::default());
 }
@@ -380,17 +380,17 @@ async fn a_reinstall_whose_caller_stops_waiting_still_evicts_the_cached_package(
         "/** The release. */\nexport function release(): string { return \"first\"; }\n",
     )
     .unwrap();
-    std::fs::write(money.join("docs/readme.md"), "# @acme/money\n").unwrap();
+    std::fs::write(money.join("docs/readme.md"), "# @pied-piper/money\n").unwrap();
     let manifest = fixture.package_dir.join("submilli.toml");
     let mut text = std::fs::read_to_string(&manifest).unwrap();
-    text.push_str("\n[[package]]\nname = \"@acme/money\"\nversion = \"0.1.0\"\ndescription = \"Money helpers.\"\npath = \"packages/money\"\n");
+    text.push_str("\n[[package]]\nname = \"@pied-piper/money\"\nversion = \"0.1.0\"\ndescription = \"Money helpers.\"\npath = \"packages/money\"\n");
     std::fs::write(&manifest, text).unwrap();
-    let wanted = BTreeSet::from(["@acme/money".to_owned()]);
+    let wanted = BTreeSet::from(["@pied-piper/money".to_owned()]);
     let packages = Arc::new(fixture.packages());
     assert!(packages.sync(&wanted).unwrap().evict);
 
     let blueprint = submilli_blueprint::parse(
-        "name: demo\ndefault: allow\nvfs:\n  mode: none\npackages:\n- '@acme/money'\n",
+        "name: demo\ndefault: allow\nvfs:\n  mode: none\npackages:\n- '@pied-piper/money'\n",
     )
     .unwrap();
     let volume_root = tempfile::tempdir().unwrap();
@@ -408,7 +408,7 @@ async fn a_reinstall_whose_caller_stops_waiting_still_evicts_the_cached_package(
             ProgramRun {
                 label: "test".into(),
                 blueprint: "demo".into(),
-                code: "import { release } from \"@acme/money\";\nfunction main(): string { return release(); }\n".into(),
+                code: "import { release } from \"@pied-piper/money\";\nfunction main(): string { return release(); }\n".into(),
                 variables: Default::default(),
                 secrets: Default::default(),
             },
@@ -459,7 +459,7 @@ fn automatic_rebuilds_retain_explicit_package_configuration() {
     let text = std::fs::read_to_string(fixture.package_dir.join("submilli.toml")).unwrap();
     let manifest = parse_manifest(&text, &fixture.package_dir).unwrap();
     let store = PackageStore::new(&fixture.store);
-    let selected = PackageName::new("@acme/billing");
+    let selected = PackageName::new("@pied-piper/billing");
     let inputs = submilli_build::ConfigInputs::parse(
         &["serviceUrl=https://internal.test".into()],
         &[],
@@ -483,8 +483,8 @@ fn automatic_rebuilds_retain_explicit_package_configuration() {
     )
     .unwrap();
     let result = packages.sync(&billing()).unwrap();
-    assert_eq!(result.reinstalled, ["@acme/billing"]);
-    let artifact = store.load("@acme/billing").unwrap();
+    assert_eq!(result.reinstalled, ["@pied-piper/billing"]);
+    let artifact = store.load("@pied-piper/billing").unwrap();
     assert_eq!(artifact.metadata.config.overrides, inputs.values);
     assert_eq!(
         serde_json::to_value(&artifact.metadata.config.values).unwrap()["timeoutMs"],
@@ -497,7 +497,7 @@ fn automatic_rebuild_ignores_unrelated_broken_artifacts() {
     let fixture = Fixture::starter();
     let manifest_path = fixture.package_dir.join("submilli.toml");
     let mut manifest = std::fs::read_to_string(&manifest_path).unwrap();
-    manifest.push_str("\n[[package]]\nname = '@acme/unrelated'\nversion = '1.0.0'\ndescription = 'Unrelated.'\npath = 'unrelated'\n");
+    manifest.push_str("\n[[package]]\nname = '@pied-piper/unrelated'\nversion = '1.0.0'\ndescription = 'Unrelated.'\npath = 'unrelated'\n");
     std::fs::write(&manifest_path, manifest).unwrap();
     std::fs::create_dir_all(fixture.package_dir.join("unrelated/src")).unwrap();
     std::fs::write(
@@ -505,12 +505,12 @@ fn automatic_rebuild_ignores_unrelated_broken_artifacts() {
         "export function value(): number { return 1; }",
     )
     .unwrap();
-    std::fs::create_dir_all(fixture.store.join("@acme/unrelated")).unwrap();
+    std::fs::create_dir_all(fixture.store.join("@pied-piper/unrelated")).unwrap();
     std::fs::write(
-        fixture.store.join("@acme/unrelated/metadata.json"),
+        fixture.store.join("@pied-piper/unrelated/metadata.json"),
         "broken",
     )
     .unwrap();
     let result = fixture.packages().sync(&billing()).unwrap();
-    assert_eq!(result.reinstalled, ["@acme/billing"]);
+    assert_eq!(result.reinstalled, ["@pied-piper/billing"]);
 }

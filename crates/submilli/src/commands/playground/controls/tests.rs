@@ -130,18 +130,18 @@ fn either_side_of_an_added_rule(context: &str) -> (Reader, tempfile::TempDir, u6
         .version(v1),
     );
     let widened = format!(
-        "{BLUEPRINT}  - name: parent-account-charges\n    capability: acme.com/charges.list\n    \
+        "{BLUEPRINT}  - name: parent-account-charges\n    capability: pied-piper.example/charges.list\n    \
          filter: customerId == \"cus_parent\"\n    action: allow\n"
     );
     let v2 = fixture.version(
         &widened,
         json!({ "classification": "widening", "changes": [] }),
-        "Widened: `acme.com/charges.list` now also allowed for the parent account.",
+        "Widened: `pied-piper.example/charges.list` now also allowed for the parent account.",
     );
     let mut now = allowed_by(
         1,
         "main",
-        "acme.com/charges.list",
+        "pied-piper.example/charges.list",
         json!({ "customerId": context }),
         1,
         Some("parent-account-charges"),
@@ -386,7 +386,7 @@ permissions:
   main:
   - &charges
     name: charges-for-signed-in-customer
-    capability: acme.com/charges.list
+    capability: pied-piper.example/charges.list
     filter: customerId == ${vars.customerId}
     action: allow
 ";
@@ -417,7 +417,7 @@ fn explain_without_the_version_text_cites_by_index_and_says_why() {
 fn closure() -> Vec<ClosureEntry> {
     vec![
         ClosureEntry {
-            name: "@acme/billing".into(),
+            name: "@pied-piper/billing".into(),
             version: "0.1.0".into(),
             origin: Origin::Blueprint,
             importable: true,
@@ -425,12 +425,12 @@ fn closure() -> Vec<ClosureEntry> {
             required_by: Vec::new(),
         },
         ClosureEntry {
-            name: "@acme/core".into(),
+            name: "@pied-piper/core".into(),
             version: "0.1.0".into(),
             origin: Origin::Dependency,
             importable: false,
             project: false,
-            required_by: vec!["@acme/billing".into()],
+            required_by: vec!["@pied-piper/billing".into()],
         },
     ]
 }
@@ -443,7 +443,7 @@ fn audit_default_only_lists_exactly_the_calls_the_default_allowed_and_their_orig
     let post = |index| {
         allowed_by_default(
             index,
-            "@acme/core",
+            "@pied-piper/core",
             "http.post",
             json!({ "url": "https://x.test" }),
         )
@@ -481,7 +481,7 @@ fn audit_default_only_lists_exactly_the_calls_the_default_allowed_and_their_orig
         listed,
         [
             (
-                "@acme/core http.post".to_owned(),
+                "@pied-piper/core http.post".to_owned(),
                 vec!["1.2".to_owned(), "2.1".to_owned()]
             ),
             ("main fs.read".to_owned(), vec!["1.3".to_owned()]),
@@ -490,15 +490,17 @@ fn audit_default_only_lists_exactly_the_calls_the_default_allowed_and_their_orig
     let core = &audited.groups[0];
     assert_eq!(
         core.origin.as_deref(),
-        Some("Nobody chose `@acme/core`; it arrived as a dependency of `@acme/billing`")
+        Some(
+            "Nobody chose `@pied-piper/core`; it arrived as a dependency of `@pied-piper/billing`"
+        )
     );
     let text = render::audit_text(&audited);
     assert!(
-        text.contains("@acme/core http.post allowed by the default (no rule matched it) ×2"),
+        text.contains("@pied-piper/core http.post allowed by the default (no rule matched it) ×2"),
         "{text}"
     );
     assert!(
-        text.contains("arrived as a dependency of `@acme/billing`"),
+        text.contains("arrived as a dependency of `@pied-piper/billing`"),
         "{text}"
     );
 
@@ -511,7 +513,7 @@ fn audit_default_only_lists_exactly_the_calls_the_default_allowed_and_their_orig
     )
     .unwrap();
     assert_eq!(packages.groups.len(), 1);
-    assert_eq!(packages.groups[0].caller, "@acme/core");
+    assert_eq!(packages.groups[0].caller, "@pied-piper/core");
 }
 
 #[test]
@@ -521,7 +523,7 @@ fn show_on_a_typical_run_stays_under_forty_lines() {
     let mut run = RunSpec::new(vec![
         allowed_by(
             0,
-            "@acme/billing",
+            "@pied-piper/billing",
             "fs.read",
             json!({ "path": "/billing/charges.json" }),
             0,
@@ -676,7 +678,7 @@ fn sessions_list_newest_first_with_variables_run_counts_and_the_denial() {
         .store
         .append_session(SessionEntry::Started {
             session_id: "s-c".into(),
-            variables: vars("cus_acme"),
+            variables: vars("cus_pied-piper"),
             label: "assistant".into(),
             idle_timeout_ms: None,
             model: None,
@@ -700,7 +702,7 @@ fn sessions_list_newest_first_with_variables_run_counts_and_the_denial() {
     assert_eq!(
         rows,
         [
-            ("s-c", "cus_acme", 0, false),
+            ("s-c", "cus_pied-piper", 0, false),
             ("s-b", "hooli", 2, true),
             ("s-a", "pied_piper", 1, false),
         ]
@@ -1054,13 +1056,13 @@ default: deny
 permissions:
   main:
   - name: charges-for-signed-in-customer
-    capability: acme.com/charges.list
+    capability: pied-piper.example/charges.list
     filter: customerId == ${vars.customerId}
     action: allow
-  - capability: acme.com/charges.list
+  - capability: pied-piper.example/charges.list
     filter: customerId == \"cus_parent\"
     action: allow
-  '@acme/billing':
+  '@pied-piper/billing':
   - capability: fs.read
     action: allow
 ";
@@ -1084,7 +1086,7 @@ fn unnamed_rules_are_cited_by_position_from_one_and_near_misses_are_listed_apart
         RunSpec::new(vec![
             allowed_by(
                 0,
-                "@acme/billing",
+                "@pied-piper/billing",
                 "fs.read",
                 json!({ "path": "/billing/charges.json" }),
                 0,
@@ -1098,7 +1100,7 @@ fn unnamed_rules_are_cited_by_position_from_one_and_near_misses_are_listed_apart
     let shown = read::show(&reader, id, read::ShowOptions::default()).unwrap();
     assert_eq!(
         shown.decisions[0].decided_by,
-        "by rule 1 of `@acme/billing`, line 17"
+        "by rule 1 of `@pied-piper/billing`, line 17"
     );
     assert_eq!(
         shown.decisions[1].decided_by,
@@ -1115,7 +1117,7 @@ fn unnamed_rules_are_cited_by_position_from_one_and_near_misses_are_listed_apart
     let explained = read::explain(&reader, DecisionRef { run: id, n: 1 }).unwrap();
     assert_eq!(
         explained.decided_by.text(),
-        "rule 1 of `@acme/billing`, line 17"
+        "rule 1 of `@pied-piper/billing`, line 17"
     );
 }
 
@@ -1446,7 +1448,7 @@ fn audit_default_only_says_no_rule_matched_and_names_the_near_misses() {
     let text = render::audit_text(&audited);
     assert!(
         text.contains(
-            "main acme.com/charges.list allowed by the default (no rule matched it); near miss: \
+            "main pied-piper.example/charges.list allowed by the default (no rule matched it); near miss: \
              `charges-for-signed-in-customer` (rule 1 of `main`) ×1"
         ),
         "{text}"

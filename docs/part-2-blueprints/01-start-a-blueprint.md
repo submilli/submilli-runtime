@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "833a5ab01d74057c3c13f71e8427a114f5685cc2b254a88981abab6e555a655f"
+  contentHash: "361e2038db1904b27dc6781c998e5846c09d7b0af69a2ea55bac15141f57642f"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -25,10 +25,14 @@ block and field.
 
 A Blueprint can only list a Package that is in your local store. If the
 Package is your own, `submilli build publish-local` from its project puts
-it there. If someone else published it, install it from its repository:
+it there. For the locally authored `@pied-piper/billing` example, use that
+local publication path. If someone else published a Package, install it from
+its repository. In this template, replace `OWNER/REPOSITORY` with its GitHub
+repository and `@OWNER/billing` with its declared Package name; the scope must
+match the repository owner:
 
 ```sh
-submilli install acme/billing-package @acme/billing
+submilli install OWNER/REPOSITORY @OWNER/billing
 ```
 
 The first argument is the GitHub repository, `owner/repo`. The second is
@@ -75,14 +79,16 @@ give.
 A server has its own Package store, so a Blueprint that will run there
 needs the Package installed there too. The `submilli server` commands talk
 to a running server, and [Connect the CLI](/docs/server/connect-the-cli)
-shows how they reach it:
+shows how they reach it. The following command and output are templates;
+use your published repository and Package name, and replace the local example
+Package name throughout the Blueprint:
 
 ```sh
-submilli server packages install acme/billing-package @acme/billing
+submilli server packages install OWNER/REPOSITORY @OWNER/billing
 ```
 
 ```text
-installed @acme/billing @ 3f9c2a1b7e40
+installed @OWNER/billing @ <resolved-commit>
 ```
 
 The server fetches, builds, and pins the Package the same way. `--sha <ref>`
@@ -93,16 +99,16 @@ pins a commit, tag, or branch, and `--upgrade` replaces an installed one.
 Before granting anything, read what the Package provides:
 
 ```sh
-submilli blueprint capability list @acme/billing
+submilli blueprint capability list @pied-piper/billing
 ```
 
 ```text
-@acme/billing
-  acme.com/credits.apply — Add a goodwill credit to a customer's account.
+@pied-piper/billing
+  pied-piper.example/credits.apply — Add a goodwill credit to a customer's account.
       fields: amount: number, customerClass: string, customerId: string
 ```
 
-`submilli docs @acme/billing` prints the declarations the model will read.
+`submilli docs @pied-piper/billing` prints the declarations the model will read.
 
 ## Start from nothing allowed
 
@@ -146,23 +152,23 @@ the file still lacks.
 ## Add the Package
 
 ```sh
-submilli blueprint add-package @acme/billing --no-capabilities
+submilli blueprint add-package @pied-piper/billing --no-capabilities
 ```
 
 ```text
-warning: blueprint.yaml: package `@acme/billing` requires secret `BILLING_API_KEY`, but `secrets:` does not declare it
-✓ added @acme/billing to blueprint.yaml
+warning: blueprint.yaml: package `@pied-piper/billing` requires secret `BILLING_API_KEY`, but `secrets:` does not declare it
+✓ added @pied-piper/billing to blueprint.yaml
   1 provided capabilities not selected; `default: deny` denies calls to them
-  added 2 rules to caller `@acme/billing` (default allow):
+  added 2 rules to caller `@pied-piper/billing` (default allow):
     allow http.post (filter: host == "billing.internal.example.com")
     allow secrets.get (filter: name == "BILLING_API_KEY")
 ```
 
 ```yaml title="blueprint.yaml (fragment)"
 packages:
-- '@acme/billing'
+- '@pied-piper/billing'
 permissions:
-  '@acme/billing':
+  '@pied-piper/billing':
   - capability: http.post
     filter: host == "billing.internal.example.com"
     action: allow
@@ -185,17 +191,17 @@ in the same command. The warning is about the key, declared in
 Grant the operation, narrowed by a filter over the fields it reports:
 
 ```sh
-submilli blueprint capability add acme.com/credits.apply --filter 'customerClass == "premium"'
+submilli blueprint capability add pied-piper.example/credits.apply --filter 'customerClass == "premium"'
 ```
 
 ```text
-✓ added allow acme.com/credits.apply (filter: customerClass == "premium") to caller 'main' in blueprint.yaml
+✓ added allow pied-piper.example/credits.apply (filter: customerClass == "premium") to caller 'main' in blueprint.yaml
 ```
 
 ```yaml title="blueprint.yaml (fragment)"
 permissions:
   main:
-  - capability: acme.com/credits.apply
+  - capability: pied-piper.example/credits.apply
     filter: customerClass == "premium"
     action: allow
 ```
@@ -312,20 +318,20 @@ above with one that also requires the customer to be the session's, so one
 Blueprint serves all customers:
 
 ```sh
-submilli blueprint capability remove acme.com/credits.apply
-submilli blueprint capability add acme.com/credits.apply \
+submilli blueprint capability remove pied-piper.example/credits.apply
+submilli blueprint capability add pied-piper.example/credits.apply \
   --filter 'customerId == ${vars.customerId} and customerClass == "premium"'
 ```
 
 ```text
-✓ removed 1 rule(s) for 'acme.com/credits.apply' from caller 'main' in blueprint.yaml
-✓ added allow acme.com/credits.apply (filter: customerId == ${vars.customerId} and customerClass == "premium") to caller 'main' in blueprint.yaml
+✓ removed 1 rule(s) for 'pied-piper.example/credits.apply' from caller 'main' in blueprint.yaml
+✓ added allow pied-piper.example/credits.apply (filter: customerId == ${vars.customerId} and customerClass == "premium") to caller 'main' in blueprint.yaml
 ```
 
 ```yaml title="blueprint.yaml (fragment)"
 permissions:
   main:
-  - capability: acme.com/credits.apply
+  - capability: pied-piper.example/credits.apply
     filter: customerId == ${vars.customerId} and customerClass == "premium"
     action: allow
 ```
@@ -337,7 +343,7 @@ Blueprint. It imports the Package and calls its operation for the premium
 customer:
 
 ```typescript title="credit.ts"
-import { applyCredit } from "@acme/billing";
+import { applyCredit } from "@pied-piper/billing";
 
 function main(): string {
     const credit = applyCredit("pied_piper", 1500);
@@ -363,8 +369,8 @@ submilli run --blueprint blueprint.yaml --var customerId=hooli credit.ts
 ```
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/credits.apply: policy denied acme.com/credits.apply with amount = 1500, customerClass = "premium", customerId = "pied_piper" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
-  fields: caller = "main", capability = "acme.com/credits.apply", reason = "policy denied acme.com/credits.apply with amount = 1500, customerClass = \"premium\", customerId = \"pied_piper\" for mai…"
+error: PermissionDeniedError: permission denied: caller=main capability=pied-piper.example/credits.apply: policy denied pied-piper.example/credits.apply with amount = 1500, customerClass = "premium", customerId = "pied_piper" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+  fields: caller = "main", capability = "pied-piper.example/credits.apply", reason = "policy denied pied-piper.example/credits.apply with amount = 1500, customerClass = \"premium\", customerId = \"pied_piper\" for mai…"
   at applyCredit (lib:28:66)  [thrown here]
 ```
 
@@ -383,10 +389,10 @@ variables:
   customerId:
     required: true
 packages:
-- '@acme/billing'
+- '@pied-piper/billing'
 default: deny
 permissions:
-  '@acme/billing':
+  '@pied-piper/billing':
   - capability: http.post
     filter: host == "billing.internal.example.com"
     action: allow
@@ -394,7 +400,7 @@ permissions:
     filter: name == "BILLING_API_KEY"
     action: allow
   main:
-  - capability: acme.com/credits.apply
+  - capability: pied-piper.example/credits.apply
     filter: customerId == ${vars.customerId} and customerClass == "premium"
     action: allow
 ```

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "3b9c6ac2e2c61980cf96a6eafc11732a13699d9296df4a019f55ac5c5e03301d"
+  contentHash: "31ddc238a2e1ce0646b7073f052b7c927e3aef680b9340ec00b8fdda58a4683a"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -168,11 +168,11 @@ beside `submilli.toml`. A lock that already pins every dependency, with
 the store holding them, skips the fetch. A compile error exits 1.
 
 ```text
-checked @acme/billing v0.1.0
+checked @pied-piper/billing v0.1.0
 ```
 
 ```text
-installed @acme/billing v0.1.0 -> …/packages/@acme/billing
+installed @pied-piper/billing v0.1.0 -> …/packages/@pied-piper/billing
 ```
 
 Tests receive no credentials unless `build test` is given them:
@@ -197,7 +197,7 @@ at one commit, resolve its GitHub dependencies, compile the Packages its
 repository is `org/repo`, `github.com/org/repo`, or a full URL. A second
 argument, `@org/name`, installs only that Package. Without it, every
 Package the repository declares is installed. A Package must be scoped to
-the repository's owner. For example, `submilli/acme` can hold only
+the repository's owner. For example, `submilli/pied-piper` can hold only
 `@submilli/…` Packages.
 
 | | `submilli install` | `submilli server packages install` |
@@ -213,42 +213,43 @@ the repository's owner. For example, `submilli/acme` can hold only
 The first install reports the commit and the Package's location:
 
 ```sh
-submilli install submilli/acme @submilli/acme-billing
+submilli install submilli/pied-piper@v0.1.1 @submilli/pied-piper-billing
 ```
 
 ```text
-fetched github.com/submilli/acme at 88656b81c537
-installed @submilli/acme-billing v0.1.0 -> …/packages/@submilli/acme-billing
+fetched github.com/submilli/pied-piper at c18d9a602bbb
+installed @submilli/pied-piper-billing v0.1.0 -> …/packages/@submilli/pied-piper-billing
 ```
 
 The same command again, with the Package already installed at that
 commit, changes nothing and exits 0:
 
 ```text
-fetched github.com/submilli/acme at 88656b81c537
-up to date @submilli/acme-billing
+fetched github.com/submilli/pied-piper at c18d9a602bbb
+up to date @submilli/pied-piper-billing
 ```
 
 A Package installed at another commit is refused, exit 1, until
-`--upgrade` is given:
+`--upgrade` is given. In this output template, `<installed-commit>` is the
+commit already in the store:
 
 ```text
-fetched github.com/submilli/acme at 88656b81c537
-error: `@submilli/acme-billing` is already installed from github.com/submilli/acme@d7d9fa44e3dc; pass --upgrade to replace it with 88656b81c537
+fetched github.com/submilli/pied-piper at c18d9a602bbb
+error: `@submilli/pied-piper-billing` is already installed from github.com/submilli/pied-piper@<installed-commit>; pass --upgrade to replace it with c18d9a602bbb
 ```
 
 On a server the three outcomes are:
 
 ```text
-installed @submilli/acme-billing @ 88656b81c537
+installed @submilli/pied-piper-billing @ c18d9a602bbb
 ```
 
 ```text
-up to date @submilli/acme-billing
+up to date @submilli/pied-piper-billing
 ```
 
 ```text
-error: @submilli/acme-billing already installed at a different commit; retry with --upgrade to replace with 88656b81c537
+error: @submilli/pied-piper-billing already installed at a different commit; retry with --upgrade to replace with c18d9a602bbb
 ```
 
 `submilli install` writes only to the store. It changes no Blueprint and

@@ -7,7 +7,7 @@ import { INITIAL_UI, type UiState } from "./ui";
 import type { PageData } from "../api/types";
 
 const DENIED_CHECK_REF =
-  "Submilli playground, check 2.1 (details - project: `billing-demo`, blueprint: `billing v1`, outcome: `denied`, call: `main → acme.com/charges.list`, see_with: `submilli playground explain 2.1`, draft_with: `submilli playground draft-rule 2.1`)";
+  "Submilli playground, check 2.1 (details - project: `billing-demo`, blueprint: `billing v1`, outcome: `denied`, call: `main → pied-piper.example/charges.list`, see_with: `submilli playground explain 2.1`, draft_with: `submilli playground draft-rule 2.1`)";
 
 // Every run, check and follow-up open, as the page's Expand all leaves them.
 function allOpen(data: PageData): RunRow[] {
@@ -109,7 +109,7 @@ describe("the log's run rows", () => {
     expect(row(closed, 2)).toMatchObject({
       open: false,
       closedSum: "1 check denied · 2 reruns by you",
-      preview: "error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = \"cus_globex\" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.",
+      preview: "error: PermissionDeniedError: permission denied: caller=main capability=pied-piper.example/charges.list: policy denied pied-piper.example/charges.list with customerId = \"cus_globex\" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.",
       checksLabel: "Permission checks (1)",
       checksSum: "1 denied",
       checksOpen: true,
@@ -151,7 +151,7 @@ describe("the log's decision rows", () => {
     expect(row(rows, 2).decisions[0]).toMatchObject({
       id: "d2.1",
       ref: "2.1",
-      title: " · main → acme.com/charges.list customerId = cus_globex",
+      title: " · main → pied-piper.example/charges.list customerId = cus_globex",
       hint: 'customerId = "cus_globex"',
       status: "Denied",
       tone: "bad",
@@ -166,10 +166,10 @@ describe("the log's decision rows", () => {
           ],
         },
         {
-          text: "Nearest rule: acme-support (rule 3 of main, line 35). Failed: customerId == \"cus_acme\" (the values differ).",
+          text: "Nearest rule: pied-piper-support (rule 3 of main, line 35). Failed: customerId == \"cus_pied-piper\" (the values differ).",
           values: [
             { name: "this call", value: '"cus_globex"' },
-            { name: "the rule wanted", value: '"cus_acme"' },
+            { name: "the rule wanted", value: '"cus_pied-piper"' },
           ],
         },
       ],
@@ -191,12 +191,12 @@ describe("the log's decision rows", () => {
       inspect: { version: 1, line: 27, label: "rule charges-for-signed-in-customer" },
     });
     expect(unnamed).toMatchObject({
-      title: " · @acme/billing → fs.read /billing/charges.json",
+      title: " · @pied-piper/billing → fs.read /billing/charges.json",
       hint: 'path = "/billing/charges.json"',
-      decidedBy: "Allowed by rule 1 of @acme/billing, line 42.",
+      decidedBy: "Allowed by rule 1 of @pied-piper/billing, line 42.",
       meta: "blueprint v1 · program line 4 · 21.5 kB fetched",
       context: 'path = "/billing/charges.json"',
-      inspect: { version: 1, line: 42, label: "rule 1 of @acme/billing" },
+      inspect: { version: 1, line: 42, label: "rule 1 of @pied-piper/billing" },
     });
   });
 
@@ -206,7 +206,7 @@ describe("the log's decision rows", () => {
     const r = allOpen(data);
     expect(row(r, 2).decisions[0]).toMatchObject({
       decidedBy:
-        "Denied by the default; near misses: charges-for-signed-in-customer (rule 1 of main), acme-support (rule 3 of main).",
+        "Denied by the default; near misses: charges-for-signed-in-customer (rule 1 of main), pied-piper-support (rule 3 of main).",
       near: [],
       next: [],
       inspect: null,

@@ -12,7 +12,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "6eb28f0d6d9d6ee4adcb891330e728c9f48bf919a46eeb145135cab249322307"
+  contentHash: "6e89f0b44c5e48060ba1da57599003b382eda647293942516c03206e2db418c8"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -38,7 +38,7 @@ submilli build security-review -a codex -m gpt-6.1-sol -e high --fail-on high --
 `-a` picks the agent, `-m` its model, and `-e` how hard it reasons.
 `--fail-on` is the lowest severity that fails the command, and
 `--output` saves the report to a new file. The command refuses to
-overwrite one. `-p @acme/billing` limits the review to one Package and
+overwrite one. `-p @pied-piper/billing` limits the review to one Package and
 the local Packages it depends on.
 
 | Agent | `-a` | Install | Sign in locally | Model, for example |

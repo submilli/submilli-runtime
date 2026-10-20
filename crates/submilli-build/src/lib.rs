@@ -639,7 +639,7 @@ mod tests {
         let manifest = parse(
             r#"
 [[package]]
-name = "@acme/stripe"
+name = "@pied-piper/stripe"
 version = "0.1.0"
 description = "Stripe helpers."
 keywords = ["payments", "stripe"]
@@ -650,7 +650,7 @@ keywords = ["payments", "stripe"]
 
         assert_eq!(manifest.packages.len(), 1);
         let package = &manifest.packages[0];
-        assert_eq!(package.name.as_str(), "@acme/stripe");
+        assert_eq!(package.name.as_str(), "@pied-piper/stripe");
         assert_eq!(package.version.as_str(), "0.1.0");
         assert_eq!(package.description, "Stripe helpers.");
         assert_eq!(package.keywords, vec!["payments", "stripe"]);
@@ -667,7 +667,7 @@ keywords = ["payments", "stripe"]
         let diags = parse(
             r#"
 [[package]]
-name = "@acme/stripe"
+name = "@pied-piper/stripe"
 version = "0.1.0"
 "#,
             tmp.path(),
@@ -676,7 +676,7 @@ version = "0.1.0"
 
         assert_eq!(
             messages(&diags),
-            vec!["add description = \"...\" for package \"@acme/stripe\""]
+            vec!["add description = \"...\" for package \"@pied-piper/stripe\""]
         );
     }
 
@@ -688,7 +688,7 @@ version = "0.1.0"
         let manifest = parse(
             r#"
 [[package]]
-name = "@acme/stripe"
+name = "@pied-piper/stripe"
 version = "0.1.0"
 description = "Stripe helpers."
 "#,
@@ -756,7 +756,7 @@ dependencies = ["@submilli/json"]
 "@submilli/http" = "1.0.0"
 
 [[package]]
-name = "@acme/stripe"
+name = "@pied-piper/stripe"
 version = "0.1.0"
 description = "Stripe helpers."
 dependencies = ["@submilli/http"]
@@ -786,13 +786,13 @@ dependencies = ["@submilli/http"]
             &format!(
                 r#"
 [dependencies]
-"@acme/slack" = {{ github = "github.com/acme/stripe", rev = "{SAMPLE_SHA}" }}
+"@pied-piper/slack" = {{ github = "github.com/pied-piper/stripe", rev = "{SAMPLE_SHA}" }}
 
 [[package]]
 name = "@me/app"
 version = "0.1.0"
 description = "App."
-dependencies = ["@acme/slack"]
+dependencies = ["@pied-piper/slack"]
 "#
             ),
             tmp.path(),
@@ -800,16 +800,18 @@ dependencies = ["@acme/slack"]
         .expect("manifest parses");
 
         assert_eq!(
-            manifest.dependencies.get(&PackageName::new("@acme/slack")),
+            manifest
+                .dependencies
+                .get(&PackageName::new("@pied-piper/slack")),
             Some(&DependencySource::Github {
-                url: "github.com/acme/stripe".to_string(),
+                url: "github.com/pied-piper/stripe".to_string(),
                 sha: SAMPLE_SHA.to_string(),
             })
         );
         assert_eq!(
             manifest.packages[0].dependencies,
             vec![ResolvedDependency {
-                name: PackageName::new("@acme/slack"),
+                name: PackageName::new("@pied-piper/slack"),
                 version: None,
                 kind: DependencyKind::Github,
             }]
@@ -824,13 +826,13 @@ dependencies = ["@acme/slack"]
         let diags = parse(
             r#"
 [dependencies]
-"@acme/slack" = { github = "github.com/acme/stripe", rev = "main" }
+"@pied-piper/slack" = { github = "github.com/pied-piper/stripe", rev = "main" }
 
 [[package]]
 name = "@me/app"
 version = "0.1.0"
 description = "App."
-dependencies = ["@acme/slack"]
+dependencies = ["@pied-piper/slack"]
 "#,
             tmp.path(),
         )
@@ -854,13 +856,13 @@ dependencies = ["@acme/slack"]
             &format!(
                 r#"
 [dependencies]
-"@acme/slack" = {{ github = "gitlab.com/acme/stripe", rev = "{SAMPLE_SHA}" }}
+"@pied-piper/slack" = {{ github = "gitlab.com/pied-piper/stripe", rev = "{SAMPLE_SHA}" }}
 
 [[package]]
 name = "@me/app"
 version = "0.1.0"
 description = "App."
-dependencies = ["@acme/slack"]
+dependencies = ["@pied-piper/slack"]
 "#
             ),
             tmp.path(),
@@ -917,7 +919,7 @@ path = "packages/http"
         let diags = parse(
             r#"
 [[package]]
-name = "@acme/stripe"
+name = "@pied-piper/stripe"
 version = "0.1.0"
 description = "Stripe helpers."
 dependencies = ["@submilli/json"]
@@ -941,7 +943,7 @@ dependencies = ["@submilli/json"]
         let diags = parse(
             r#"
 [[package]]
-name = "@acme/stripe"
+name = "@pied-piper/stripe"
 version = "0.1.0"
 description = "Stripe helpers."
 "#,
@@ -964,7 +966,7 @@ description = "Stripe helpers."
         let diags = parse(
             r#"
 [[package]]
-name = "@acme/stripe"
+name = "@pied-piper/stripe"
 version = "0.1.0"
 description = "Stripe helpers."
 "#,
@@ -1015,7 +1017,7 @@ path = "b"
         let diags = parse(
             r#"
 [[package]]
-name = "@acme/stripe"
+name = "@pied-piper/stripe"
 version = "0.1.0"
 description = "Stripe helpers."
 path = "../stripe"

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "cf5fddbbbd57cf0faf0d21bff5a20d309bcca350bea970406283bf8274fd2fbe"
+  contentHash: "5016fa74f3471655208cc6e8543b37716798b5fc5097cae9a1c75ed224905212"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -19,7 +19,7 @@ it, a Blueprint mounts it at a path it chooses, read-only or read-write,
 and every session and Blueprint that mounts it sees it.
 
 This guide shows you how to mount a shared volume. The example gives
-Acme's support agent a memory it keeps across conversations and a
+Pied Piper's support agent a memory it keeps across conversations and a
 read-only company handbook. Substitute your volumes.
 
 ## Declare it on the server

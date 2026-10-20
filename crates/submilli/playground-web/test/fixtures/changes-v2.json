@@ -6,7 +6,7 @@
    "at_micros": 1791898017400543,
    "at": "2026-10-13T13:26:57Z",
    "classification": "widening",
-   "summary": "Widened: `main` gained an allow rule `globex-support` for `acme.com/charges.list`.",
+   "summary": "Widened: `main` gained an allow rule `globex-support` for `pied-piper.example/charges.list`.",
    "pin_removals": [],
    "current": true,
    "after_run": 4,
@@ -15,10 +15,10 @@
      "caller": "main",
      "classification": "widening",
      "rule": "`globex-support`",
-     "summary": "Widened: `main` gained an allow rule `globex-support` for `acme.com/charges.list`."
+     "summary": "Widened: `main` gained an allow rule `globex-support` for `pied-piper.example/charges.list`."
     }
    ],
-   "text": "kind: blueprint\nname: billing\n\n# Bound once per request by the application, never by the program.\nvariables:\n  customerId:\n    required: true\n\npackages:\n- '@acme/billing'\n\n# The billing fixture, read-only, from the project's `billing` volume\n# (submilli/volumes/billing/).\nvfs:\n  mode: ephemeral\n  mounts:\n    /billing:\n      mode: named\n      volume: billing\n      access: read_only\n\ndefault: deny\n\npermissions:\n  # What generated code may do.\n  main:\n  - name: charges-for-signed-in-customer\n    capability: acme.com/charges.list\n    filter: customerId == ${vars.customerId}\n    action: allow\n  - name: local-status\n    capability: http.get\n    filter: host == \"127.0.0.1\"\n    action: allow\n  - name: globex-support\n    capability: acme.com/charges.list\n    filter: customerId == \"cus_globex\"\n    action: allow\n  - name: acme-support\n    capability: acme.com/charges.list\n    filter: customerId == \"cus_acme\"\n    action: allow\n\n  # What the package itself may do: read its fixture.\n  '@acme/billing':\n  - capability: fs.read\n    filter: path == \"/billing/charges.json\"\n    action: allow\n  - capability: http.get\n    filter: host == \"127.0.0.1\"\n    action: allow\n"
+   "text": "kind: blueprint\nname: billing\n\n# Bound once per request by the application, never by the program.\nvariables:\n  customerId:\n    required: true\n\npackages:\n- '@pied-piper/billing'\n\n# The billing fixture, read-only, from the project's `billing` volume\n# (submilli/volumes/billing/).\nvfs:\n  mode: ephemeral\n  mounts:\n    /billing:\n      mode: named\n      volume: billing\n      access: read_only\n\ndefault: deny\n\npermissions:\n  # What generated code may do.\n  main:\n  - name: charges-for-signed-in-customer\n    capability: pied-piper.example/charges.list\n    filter: customerId == ${vars.customerId}\n    action: allow\n  - name: local-status\n    capability: http.get\n    filter: host == \"127.0.0.1\"\n    action: allow\n  - name: globex-support\n    capability: pied-piper.example/charges.list\n    filter: customerId == \"cus_globex\"\n    action: allow\n  - name: pied-piper-support\n    capability: pied-piper.example/charges.list\n    filter: customerId == \"cus_pied-piper\"\n    action: allow\n\n  # What the package itself may do: read its fixture.\n  '@pied-piper/billing':\n  - capability: fs.read\n    filter: path == \"/billing/charges.json\"\n    action: allow\n  - capability: http.get\n    filter: host == \"127.0.0.1\"\n    action: allow\n"
   }
  ],
  "voided": [],

@@ -12,7 +12,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "739441563f5eb76993a39703cc56cc35b14923caf008abeef1226cba0b3a0b2e"
+  contentHash: "91b77d7fb8622780c6963213e2dbd549999f8fdb2207168fdf4184ebf4e681a6"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -35,7 +35,7 @@ In an empty repository, scaffold the Package and replace its source and
 its test:
 
 ```sh
-submilli build init @acme/billing packages/billing
+submilli build init @pied-piper/billing packages/billing
 ```
 
 ```typescript title="packages/billing/src/lib.ts"
@@ -63,10 +63,10 @@ const LEDGER: Charge[] = [
  * List the charges on one customer's account.
  * @param customerId Billing customer ID, such as `pied_piper`.
  * @returns The customer's charges; empty when they have none.
- * @capability acme.com/charges.list { customerId: string }
+ * @capability pied-piper.example/charges.list { customerId: string }
  */
 export function listCharges(customerId: string): Charge[] {
-    check("acme.com/charges.list", { customerId });
+    check("pied-piper.example/charges.list", { customerId });
 
     // In Production, this would call an API endpoint.
     const found: Charge[] = [];
@@ -81,7 +81,7 @@ export function listCharges(customerId: string): Charge[] {
 
 ```typescript title="packages/billing/tests/lib.test.ts"
 import { label } from "submilli:test";
-import { listCharges } from "@acme/billing";
+import { listCharges } from "@pied-piper/billing";
 
 function main(): void {
     label("lists a customer's own charges");
@@ -102,9 +102,9 @@ submilli build test
 ```
 
 ```text
-[security] caller=main capability=acme.com/charges.list context={"customerId":"pied_piper"}
-[security] caller=main capability=acme.com/charges.list context={"customerId":"hooli"}
-[security] caller=main capability=acme.com/charges.list context={"customerId":"cus_unknown"}
+[security] caller=main capability=pied-piper.example/charges.list context={"customerId":"pied_piper"}
+[security] caller=main capability=pied-piper.example/charges.list context={"customerId":"hooli"}
+[security] caller=main capability=pied-piper.example/charges.list context={"customerId":"cus_unknown"}
 ok   packages/billing/tests/lib.test.ts :: lists a customer's own charges
 ok   packages/billing/tests/lib.test.ts :: scopes the lookup to the customer asked for
 
@@ -165,7 +165,7 @@ submilli build test
 ```
 
 ```text
-[security] caller=main capability=acme.com/charges.list context={"customerId":"pied_piper"}
+[security] caller=main capability=pied-piper.example/charges.list context={"customerId":"pied_piper"}
 FAIL packages/billing/tests/lib.test.ts :: lists a customer's own charges
 error: Error: pied_piper has two charges in the fixture
   at main (packages/billing/tests/lib.test.ts:7:34)  [thrown here]
@@ -310,10 +310,10 @@ the customer but finds the charge by its ID alone:
  * @param customerId Billing customer ID, such as `pied_piper`.
  * @param chargeId Charge identifier, such as `ch_a1`.
  * @returns The charge, or `null` when there is none.
- * @capability acme.com/charges.get { customerId: string }
+ * @capability pied-piper.example/charges.get { customerId: string }
  */
 export function getCharge(customerId: string, chargeId: string): Charge | null {
-    check("acme.com/charges.get", { customerId });
+    check("pied-piper.example/charges.get", { customerId });
 
     for (const charge of LEDGER) {
         if (charge.id === chargeId) {

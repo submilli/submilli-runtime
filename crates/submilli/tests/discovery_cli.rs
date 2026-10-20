@@ -322,7 +322,7 @@ fn docs_and_search_show_the_whole_library_unless_a_blueprint_is_passed() {
     let with_git = temporary.path().join("with-git.yaml");
     std::fs::write(
         &with_git,
-        "name: coder\ngit:\n  identity:\n    name: Agent\n    email: agent@acme.example\n",
+        "name: coder\ngit:\n  identity:\n    name: Agent\n    email: agent@pied-piper.example\n",
     )
     .unwrap();
     let submilli = |args: &[&str]| {

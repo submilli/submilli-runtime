@@ -8,7 +8,7 @@ const endpoint = base + "/mcp/support-read";
 // serve_fixture.py prints this. It is a `user`-role token, so a pass shows this surface needs no more.
 const token = process.env.SUBMILLI_SERVER_TOKEN;
 assert.ok(token, "SUBMILLI_SERVER_TOKEN is required");
-const code = 'import { readBalance } from "@acme/billing"; function main(): number { return readBalance("pied_piper"); }';
+const code = 'import { readBalance } from "@pied-piper/billing"; function main(): number { return readBalance("pied_piper"); }';
 
 function usage(): object {
   return {

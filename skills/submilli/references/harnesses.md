@@ -33,13 +33,13 @@ For a fresh project, use this offline billing fixture before connecting a real
 service. Install the CLI/server using [setup](setup.md), then:
 
 1. In a new project directory, run
-   `submilli build init @acme/billing packages/billing`.
+   `submilli build init @pied-piper/billing packages/billing`.
 2. Replace `packages/billing/src/lib.ts` with the **smallest slice**
    `readBalance` example in [packages](packages.md). Replace the scaffold's
    `hello` test in `packages/billing/tests/lib.test.ts` with:
 
    ```typescript
-   import { readBalance } from "@acme/billing";
+   import { readBalance } from "@pied-piper/billing";
    function main(): void { assert(readBalance("pied_piper") === 6150); }
    ```
 
@@ -60,7 +60,7 @@ Before involving a model, verify the endpoint:
 curl --fail-with-body http://127.0.0.1:8128/v1/execute \
   -H "Authorization: Bearer $SUBMILLI_SERVER_TOKEN" \
   -H 'content-type: application/json' \
-  -d '{"blueprint":"support-read","variables":{"customerId":"pied_piper"},"code":"import { readBalance } from \"@acme/billing\"; function main(): number { return readBalance(\"pied_piper\"); }"}'
+  -d '{"blueprint":"support-read","variables":{"customerId":"pied_piper"},"code":"import { readBalance } from \"@pied-piper/billing\"; function main(): number { return readBalance(\"pied_piper\"); }"}'
 ```
 
 Expect `result: "6150"`. Change only the program's argument to `hooli`:

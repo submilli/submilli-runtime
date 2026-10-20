@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn only_known_main_capabilities_count() {
         let blueprint = submilli_blueprint::parse(
-            "name: test\npermissions:\n  main:\n    - capability: http.unknown\n      action: allow\n    - capability: code.read\n      action: allow\n  '@acme/tools':\n    - capability: http.get\n      action: allow\n    - capability: fs.read\n      action: allow\n"
+            "name: test\npermissions:\n  main:\n    - capability: http.unknown\n      action: allow\n    - capability: code.read\n      action: allow\n  '@pied-piper/tools':\n    - capability: http.get\n      action: allow\n    - capability: fs.read\n      action: allow\n"
         ).unwrap();
         let visibility = LibraryVisibility::for_blueprint(&blueprint);
         for name in ["submilli:http", "submilli:fs", "submilli:code"] {
@@ -154,7 +154,7 @@ mod tests {
             ("default: allow\n", true),
             ("default: ask-human\n", true),
             (
-                "permissions:\n  '@acme/tools':\n    - capability: llm.call\n      action: allow\n",
+                "permissions:\n  '@pied-piper/tools':\n    - capability: llm.call\n      action: allow\n",
                 false,
             ),
         ] {
@@ -206,7 +206,7 @@ embedding:
             ("default: allow\n", true),
             ("default: ask-human\n", true),
             (
-                "permissions:\n  '@acme/tools':\n    - capability: embedding.embed\n      action: allow\n",
+                "permissions:\n  '@pied-piper/tools':\n    - capability: embedding.embed\n      action: allow\n",
                 false,
             ),
             (
@@ -321,7 +321,7 @@ embedding:
             ),
             (
                 format!(
-                    "permissions:\n  main:\n{}  '@acme/tools':\n{}",
+                    "permissions:\n  main:\n{}  '@pied-piper/tools':\n{}",
                     rule("session.read", "allow"),
                     rule("session.write", "allow")
                 ),
@@ -329,7 +329,7 @@ embedding:
             ),
             (
                 format!(
-                    "permissions:\n  '@acme/tools':\n{}{}",
+                    "permissions:\n  '@pied-piper/tools':\n{}{}",
                     rule("session.read", "allow"),
                     rule("session.write", "allow")
                 ),

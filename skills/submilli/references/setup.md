@@ -184,7 +184,7 @@ Establish the first agent workflow and trusted user identity source using
 requested. Scaffold the first package from its root:
 
 ```sh
-submilli build init @acme/billing packages/billing
+submilli build init @pied-piper/billing packages/billing
 ```
 
 Implement [the package](packages.md), then [its blueprint](blueprints.md),
@@ -197,7 +197,7 @@ Read manifests, agent entrypoints, authentication, service clients, tool
 registrations, and tests first. Explain which existing code remains the host
 application and which operations become Submilli wrappers. Preserve layout,
 lockfiles, and framework choices. If `submilli.toml` exists, work at its root
-and add a package with `submilli build new @acme/billing packages/billing`;
+and add a package with `submilli build new @pied-piper/billing packages/billing`;
 do not overwrite it with `build init`. Port only the wrapper's required logic;
 ordinary Node/Python SDKs cannot be imported into Submilli.
 

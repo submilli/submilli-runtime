@@ -1,6 +1,6 @@
 # Orders API (internal) — summary
 
-Base URL: https://api.acme.com/v1. Auth: `Authorization: Bearer <token>`.
+Base URL: https://api.pied-piper.example/v1. Auth: `Authorization: Bearer <token>`.
 All responses are JSON. 404 for a missing resource; errors carry `{ "error": { "code", "message", "field" } }`.
 
 | Method | Path | Notes |

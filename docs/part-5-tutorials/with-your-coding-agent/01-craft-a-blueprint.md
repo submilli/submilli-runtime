@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1611f0bd14ad229abda51c8ecf36eddf72ed96ec5296f438e1a5cee121e9501a"
+  contentHash: "e44487fac9ee961fc668e3402c1ea3aaaae7cec21eefc064d3515faed2becd8e"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -179,7 +179,7 @@ minutes. Most of that time goes to testing the rule and reviewing it.
 ## Call an API without handing over its token
 
 ```text
-The agent also needs to read our status API at status.acme.com. The token is in STATUS_TOKEN, and the program must never see it.
+The agent also needs to read our status API at status.pied-piper.example. The token is in STATUS_TOKEN, and the program must never see it.
 ```
 
 The assistant chooses the authorization proxy over a Package, and runs
@@ -193,17 +193,17 @@ secrets:
   STATUS_TOKEN:
     store: status_token
 auth_proxy:
-- host: status.acme.com
+- host: status.pied-piper.example
   auth:
     bearer: STATUS_TOKEN
 permissions:
   main:
   - capability: http.get
-    filter: host == "status.acme.com"
+    filter: host == "status.pied-piper.example"
     action: allow
 ```
 
-Its tests show a GET to status.acme.com passing the policy, and a GET to
+Its tests show a GET to status.pied-piper.example passing the policy, and a GET to
 another host, a POST, and a program calling `secrets.get` each refused.
 
 Notice that it doesn't ask for the token. It gives you the `submilli

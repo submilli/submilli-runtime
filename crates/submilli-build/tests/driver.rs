@@ -61,14 +61,14 @@ const GRAPH_MANIFEST: &str = r#"
 "@ext/dep" = "1.0.0"
 
 [[package]]
-name = "@acme/app"
+name = "@pied-piper/app"
 version = "0.1.0"
 description = "App package."
 path = "app"
-dependencies = ["@acme/util"]
+dependencies = ["@pied-piper/util"]
 
 [[package]]
-name = "@acme/util"
+name = "@pied-piper/util"
 version = "0.2.0"
 description = "Utility package."
 path = "util"
@@ -90,7 +90,7 @@ fn write_graph_project(project: &Path) {
         project,
         "app/src/wrap.subm",
         r#"
-            import { answer } from "@acme/util";
+            import { answer } from "@pied-piper/util";
             export function fortyTwo(): number { return answer(); }
         "#,
     );
@@ -112,27 +112,27 @@ fn graph_compiles_in_dependency_order_and_artifacts_reload() {
     // The manifest lists app before util; the driver must reorder.
     let built = build(project.path(), &externals, GRAPH_MANIFEST, None).expect("build succeeds");
     let names: Vec<&str> = built.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(names, vec!["@acme/util", "@acme/app"]);
+    assert_eq!(names, vec!["@pied-piper/util", "@pied-piper/app"]);
 
     let target_dir = TempDir::new().expect("target tempdir");
     let target = PackageStore::new(target_dir.path());
     let dirs = install_packages(&target, &built).expect("install succeeds");
     assert_eq!(dirs.len(), 2);
 
-    let util = target.load("@acme/util").expect("util reloads");
+    let util = target.load("@pied-piper/util").expect("util reloads");
     assert_eq!(util.metadata.package_version, "0.2.0");
     assert_eq!(
         util.metadata.dependencies,
         vec![ArtifactDependency::new("@ext/dep", "1.0.0")]
     );
-    let app = target.load("@acme/app").expect("app reloads");
+    let app = target.load("@pied-piper/app").expect("app reloads");
     assert_eq!(
         app.metadata.dependencies,
-        vec![ArtifactDependency::new("@acme/util", "0.2.0")]
+        vec![ArtifactDependency::new("@pied-piper/util", "0.2.0")]
     );
 
     let script = r#"
-        import { fortyTwo } from "@acme/app";
+        import { fortyTwo } from "@pied-piper/app";
         function main(): number { return fortyTwo(); }
     "#;
     compile_script(
@@ -156,10 +156,10 @@ fn artifact_includes_capabilities_schema_with_literal_requires() {
             /**
              * Charge a customer.
              * @param customer Stripe customer id.
-             * @capability acme.com/charge { customer }
+             * @capability pied-piper.example/charge { customer }
              */
             export function charge(customer: string): void {
-                check("acme.com/charge", { customer });
+                check("pied-piper.example/charge", { customer });
             }
         "#,
     );
@@ -167,7 +167,7 @@ fn artifact_includes_capabilities_schema_with_literal_requires() {
         project.path(),
         "app/src/lib.subm",
         r#"
-            import { charge } from "@acme/sdk";
+            import { charge } from "@pied-piper/sdk";
             export function run(): void { charge("cus_123"); }
         "#,
     );
@@ -175,14 +175,14 @@ fn artifact_includes_capabilities_schema_with_literal_requires() {
     write_docs(project.path(), "sdk", "# SDK\n");
     let manifest = r#"
 [[package]]
-name = "@acme/app"
+name = "@pied-piper/app"
 version = "0.1.0"
 description = "App package."
 path = "app"
-dependencies = ["@acme/sdk"]
+dependencies = ["@pied-piper/sdk"]
 
 [[package]]
-name = "@acme/sdk"
+name = "@pied-piper/sdk"
 version = "0.1.0"
 description = "SDK package."
 path = "sdk"
@@ -192,11 +192,14 @@ path = "sdk"
     let built = build(project.path(), &externals, manifest, None).expect("build succeeds");
     let sdk = built
         .iter()
-        .find(|package| package.name.as_str() == "@acme/sdk")
+        .find(|package| package.name.as_str() == "@pied-piper/sdk")
         .expect("sdk package built");
-    assert_eq!(sdk.capabilities.namespace, "acme");
+    assert_eq!(sdk.capabilities.namespace, "pied-piper");
     assert_eq!(sdk.capabilities.provides.len(), 1);
-    assert_eq!(sdk.capabilities.provides[0].name, "acme.com/charge");
+    assert_eq!(
+        sdk.capabilities.provides[0].name,
+        "pied-piper.example/charge"
+    );
     assert_eq!(
         sdk.capabilities.provides[0].fields["customer"]
             .description
@@ -206,10 +209,13 @@ path = "sdk"
 
     let app = built
         .iter()
-        .find(|package| package.name.as_str() == "@acme/app")
+        .find(|package| package.name.as_str() == "@pied-piper/app")
         .expect("app package built");
     assert_eq!(app.capabilities.requires.len(), 1);
-    assert_eq!(app.capabilities.requires[0].capability, "acme.com/charge");
+    assert_eq!(
+        app.capabilities.requires[0].capability,
+        "pied-piper.example/charge"
+    );
     assert_eq!(
         app.capabilities.requires[0].filter.as_deref(),
         Some("customer == \"cus_123\"")
@@ -218,7 +224,7 @@ path = "sdk"
     let target_dir = TempDir::new().expect("target tempdir");
     let target = PackageStore::new(target_dir.path());
     install_packages(&target, &built).expect("install succeeds");
-    let reloaded = target.load("@acme/app").expect("app reloads");
+    let reloaded = target.load("@pied-piper/app").expect("app reloads");
     assert_eq!(reloaded.capabilities, app.capabilities);
 }
 
@@ -240,9 +246,9 @@ fn class_members_provide_and_require_capabilities() {
                 /**
                  * Read an item.
                  * @param id Item id.
-                 * @capability acme.com/read { id }
+                 * @capability pied-piper.example/read { id }
                  */
-                read(id: string): void { check("acme.com/read", { id }); }
+                read(id: string): void { check("pied-piper.example/read", { id }); }
             }
         "#,
     );
@@ -251,46 +257,46 @@ fn class_members_provide_and_require_capabilities() {
         "sdk/src/lib.ts",
         r#"
             import { check } from "submilli:security";
-            import { Base, Owner } from "@acme/types";
+            import { Base, Owner } from "@pied-piper/types";
             /** A client. */
             export class Client extends Base {
                 /**
                  * Open a client.
                  * @param host Target host.
-                 * @capability acme.com/open { host }
+                 * @capability pied-piper.example/open { host }
                  */
                 static open(host: string): Client {
-                    check("acme.com/open", { host });
+                    check("pied-piper.example/open", { host });
                     return new Client();
                 }
                 /**
                  * Open a client holding a value.
-                 * @capability acme.com/wrap { id }
+                 * @capability pied-piper.example/wrap { id }
                  */
                 static wrap<T>(id: string, value: T): Box<T> {
-                    check("acme.com/wrap", { id });
+                    check("pied-piper.example/wrap", { id });
                     return new Box<T>(value);
                 }
                 /**
                  * Delete an item.
-                 * @capability acme.com/delete { owner: $owner.teamId }
+                 * @capability pied-piper.example/delete { owner: $owner.teamId }
                  */
-                remove(owner: Owner): void { check("acme.com/delete", { owner: owner.teamId }); }
+                remove(owner: Owner): void { check("pied-piper.example/delete", { owner: owner.teamId }); }
                 /**
                  * Copy from another client.
-                 * @capability acme.com/copy { id: $other.id }
+                 * @capability pied-piper.example/copy { id: $other.id }
                  */
-                copy(other: Client): void { check("acme.com/copy", { id: "" }); }
+                copy(other: Client): void { check("pied-piper.example/copy", { id: "" }); }
                 /**
                  * Never reaches the schema.
-                 * @capability acme.com/hidden { id }
+                 * @capability pied-piper.example/hidden { id }
                  */
-                private hidden(id: string): void { check("acme.com/hidden", { id }); }
+                private hidden(id: string): void { check("pied-piper.example/hidden", { id }); }
                 /**
                  * Never reaches the schema.
-                 * @capability acme.com/secret { id }
+                 * @capability pied-piper.example/secret { id }
                  */
-                private static secret(id: string): void { check("acme.com/secret", { id }); }
+                private static secret(id: string): void { check("pied-piper.example/secret", { id }); }
             }
             /** Holds a value. */
             export class Box<T> {
@@ -298,9 +304,9 @@ fn class_members_provide_and_require_capabilities() {
                 constructor(value: T) { this.value = value; }
                 /**
                  * Replace the value.
-                 * @capability acme.com/put { id }
+                 * @capability pied-piper.example/put { id }
                  */
-                put(id: string, value: T): void { check("acme.com/put", { id }); this.value = value; }
+                put(id: string, value: T): void { check("pied-piper.example/put", { id }); this.value = value; }
             }
         "#,
     );
@@ -309,7 +315,7 @@ fn class_members_provide_and_require_capabilities() {
         "app/src/lib.ts",
         r#"
             import { check } from "submilli:security";
-            import { Client } from "@acme/sdk";
+            import { Client } from "@pied-piper/sdk";
             import { Repository } from "submilli:git";
             // A consumer could not use `Audited` (SUB-1169), so only the
             // package without consumers declares a hidden ancestor.
@@ -317,9 +323,9 @@ fn class_members_provide_and_require_capabilities() {
                 /**
                  * Audit an item.
                  * @param id Item id.
-                 * @capability acme.com/audit { id }
+                 * @capability pied-piper.example/audit { id }
                  */
-                audit(id: string): void { check("acme.com/audit", { id }); }
+                audit(id: string): void { check("pied-piper.example/audit", { id }); }
             }
             /** Audits through its ancestor. */
             export class Audited extends Hidden {}
@@ -350,21 +356,21 @@ fn class_members_provide_and_require_capabilities() {
     }
     let manifest = r#"
 [[package]]
-name = "@acme/app"
+name = "@pied-piper/app"
 version = "0.1.0"
 description = "App package."
 path = "app"
-dependencies = ["@acme/sdk"]
+dependencies = ["@pied-piper/sdk"]
 
 [[package]]
-name = "@acme/sdk"
+name = "@pied-piper/sdk"
 version = "0.1.0"
 description = "SDK package."
 path = "sdk"
-dependencies = ["@acme/types"]
+dependencies = ["@pied-piper/types"]
 
 [[package]]
-name = "@acme/types"
+name = "@pied-piper/types"
 version = "0.1.0"
 description = "Types package."
 path = "types"
@@ -408,26 +414,26 @@ path = "types"
     // A method a same-package ancestor declares is provided; one from another
     // package's class is that package's to provide.
     assert_eq!(
-        provides("@acme/app"),
-        owned(&[("acme.com/audit", &[("id", "string")])])
+        provides("@pied-piper/app"),
+        owned(&[("pied-piper.example/audit", &[("id", "string")])])
     );
     assert_eq!(
-        provides("@acme/types"),
-        owned(&[("acme.com/read", &[("id", "string")])])
+        provides("@pied-piper/types"),
+        owned(&[("pied-piper.example/read", &[("id", "string")])])
     );
     // A path through a class does not resolve, so its type is unknown.
     assert_eq!(
-        provides("@acme/sdk"),
+        provides("@pied-piper/sdk"),
         owned(&[
-            ("acme.com/copy", &[("id", "unknown")]),
-            ("acme.com/delete", &[("owner", "string")]),
-            ("acme.com/open", &[("host", "string")]),
-            ("acme.com/put", &[("id", "string")]),
-            ("acme.com/wrap", &[("id", "string")]),
+            ("pied-piper.example/copy", &[("id", "unknown")]),
+            ("pied-piper.example/delete", &[("owner", "string")]),
+            ("pied-piper.example/open", &[("host", "string")]),
+            ("pied-piper.example/put", &[("id", "string")]),
+            ("pied-piper.example/wrap", &[("id", "string")]),
         ])
     );
 
-    let requires: Vec<(&str, Option<&str>)> = package("@acme/app")
+    let requires: Vec<(&str, Option<&str>)> = package("@pied-piper/app")
         .capabilities
         .requires
         .iter()
@@ -436,14 +442,17 @@ path = "types"
     assert_eq!(
         requires,
         [
-            ("acme.com/delete", Some("owner == \"via-super\"")),
-            ("acme.com/open", Some("host == \"example.com\"")),
-            ("acme.com/open", Some("host == \"inherited.example.com\"")),
-            ("acme.com/put", Some("id == \"generic-method\"")),
-            ("acme.com/read", Some("id == \"chained\"")),
-            ("acme.com/read", Some("id == \"direct\"")),
-            ("acme.com/read", Some("id == \"inherited\"")),
-            ("acme.com/wrap", Some("id == \"generic-static\"")),
+            ("pied-piper.example/delete", Some("owner == \"via-super\"")),
+            ("pied-piper.example/open", Some("host == \"example.com\"")),
+            (
+                "pied-piper.example/open",
+                Some("host == \"inherited.example.com\"")
+            ),
+            ("pied-piper.example/put", Some("id == \"generic-method\"")),
+            ("pied-piper.example/read", Some("id == \"chained\"")),
+            ("pied-piper.example/read", Some("id == \"direct\"")),
+            ("pied-piper.example/read", Some("id == \"inherited\"")),
+            ("pied-piper.example/wrap", Some("id == \"generic-static\"")),
             (
                 "git.clone",
                 Some(
@@ -465,9 +474,9 @@ fn non_literal_requirement_is_preserved_without_warning() {
         "sdk/src/lib.subm",
         r#"
             import { check } from "submilli:security";
-            /** @capability acme.com/charge { customer } */
+            /** @capability pied-piper.example/charge { customer } */
             export function charge(customer: string): void {
-                check("acme.com/charge", { customer });
+                check("pied-piper.example/charge", { customer });
             }
         "#,
     );
@@ -475,7 +484,7 @@ fn non_literal_requirement_is_preserved_without_warning() {
         project.path(),
         "app/src/lib.subm",
         r#"
-            import { charge } from "@acme/sdk";
+            import { charge } from "@pied-piper/sdk";
             /** Charge a customer.
              * @param customer Customer ID.
              */
@@ -486,14 +495,14 @@ fn non_literal_requirement_is_preserved_without_warning() {
     write_docs(project.path(), "sdk", "# SDK\n");
     let manifest = r#"
 [[package]]
-name = "@acme/app"
+name = "@pied-piper/app"
 version = "0.1.0"
 description = "App package."
 path = "app"
-dependencies = ["@acme/sdk"]
+dependencies = ["@pied-piper/sdk"]
 
 [[package]]
-name = "@acme/sdk"
+name = "@pied-piper/sdk"
 version = "0.1.0"
 description = "SDK package."
 path = "sdk"
@@ -503,7 +512,7 @@ path = "sdk"
     let built = build(project.path(), &externals, manifest, None).expect("build succeeds");
     let app = built
         .iter()
-        .find(|package| package.name.as_str() == "@acme/app")
+        .find(|package| package.name.as_str() == "@pied-piper/app")
         .expect("app package built");
 
     assert_eq!(app.capabilities.requires.len(), 1);
@@ -528,7 +537,7 @@ fn unresolved_http_host_warning_is_exposed_by_package_build() {
     write_docs(project.path(), "app", "# App\n");
     let manifest = r#"
 [[package]]
-name = "@acme/app"
+name = "@pied-piper/app"
 version = "0.1.0"
 description = "App package."
 path = "app"
@@ -555,18 +564,18 @@ fn sibling_dependency_cycle_is_fatal() {
     write_module(project.path(), "b/src/lib.subm", "export const y = 1;\n");
     let manifest = r#"
 [[package]]
-name = "@acme/a"
+name = "@pied-piper/a"
 version = "0.1.0"
 description = "Package A."
 path = "a"
-dependencies = ["@acme/b"]
+dependencies = ["@pied-piper/b"]
 
 [[package]]
-name = "@acme/b"
+name = "@pied-piper/b"
 version = "0.1.0"
 description = "Package B."
 path = "b"
-dependencies = ["@acme/a"]
+dependencies = ["@pied-piper/a"]
 "#;
     let externals = PackageStore::new(project.path().join("store"));
 
@@ -576,8 +585,8 @@ dependencies = ["@acme/a"]
     let text = err.to_string();
     assert!(text.contains("circular package dependency"), "got: {text}");
     assert!(
-        text.contains("@acme/a -> @acme/b -> @acme/a")
-            || text.contains("@acme/b -> @acme/a -> @acme/b"),
+        text.contains("@pied-piper/a -> @pied-piper/b -> @pied-piper/a")
+            || text.contains("@pied-piper/b -> @pied-piper/a -> @pied-piper/b"),
         "got: {text}"
     );
 }
@@ -587,12 +596,12 @@ fn constructed_manifest_with_missing_sibling_returns_an_error() {
     let project = TempDir::new().expect("project tempdir");
     write_module(project.path(), "src/lib.ts", "");
     let mut manifest = parse_manifest(
-        "[[package]]\nname = \"@acme/app\"\nversion = \"0.1.0\"\ndescription = \"App.\"\n",
+        "[[package]]\nname = \"@pied-piper/app\"\nversion = \"0.1.0\"\ndescription = \"App.\"\n",
         project.path(),
     )
     .expect("manifest parses");
     manifest.packages[0].dependencies.push(ResolvedDependency {
-        name: PackageName::new("@acme/missing"),
+        name: PackageName::new("@pied-piper/missing"),
         version: None,
         kind: DependencyKind::Sibling,
     });
@@ -603,7 +612,7 @@ fn constructed_manifest_with_missing_sibling_returns_an_error() {
     assert!(matches!(error, DriverError::MissingSibling { .. }));
     assert_eq!(
         error.to_string(),
-        "package `@acme/app` depends on missing sibling package `@acme/missing`; add its [[package]] declaration or remove the dependency"
+        "package `@pied-piper/app` depends on missing sibling package `@pied-piper/missing`; add its [[package]] declaration or remove the dependency"
     );
 }
 
@@ -619,7 +628,7 @@ fn missing_external_dependency_lists_available_packages() {
 "@ext/missing" = "1.0.0"
 
 [[package]]
-name = "@acme/app"
+name = "@pied-piper/app"
 version = "0.1.0"
 description = "App package."
 dependencies = ["@ext/missing"]
@@ -645,7 +654,7 @@ fn external_version_mismatch_is_fatal() {
 "@ext/dep" = "2.0.0"
 
 [[package]]
-name = "@acme/app"
+name = "@pied-piper/app"
 version = "0.1.0"
 description = "App package."
 dependencies = ["@ext/dep"]
@@ -668,7 +677,7 @@ fn only_builds_the_sibling_dependency_closure() {
     write_module(
         project.path(),
         "app/src/lib.subm",
-        "import { u } from \"@acme/util\";\nexport const a = u;\n",
+        "import { u } from \"@pied-piper/util\";\nexport const a = u;\n",
     );
     write_module(
         project.path(),
@@ -679,31 +688,36 @@ fn only_builds_the_sibling_dependency_closure() {
     write_docs(project.path(), "util", "# Util\n");
     let manifest = r#"
 [[package]]
-name = "@acme/app"
+name = "@pied-piper/app"
 version = "0.1.0"
 description = "App package."
 path = "app"
-dependencies = ["@acme/util"]
+dependencies = ["@pied-piper/util"]
 
 [[package]]
-name = "@acme/util"
+name = "@pied-piper/util"
 version = "0.1.0"
 description = "Utility package."
 path = "util"
 
 [[package]]
-name = "@acme/other"
+name = "@pied-piper/other"
 version = "0.1.0"
 description = "Other package."
 path = "other"
 "#;
     let externals = PackageStore::new(project.path().join("store"));
 
-    let built = build(project.path(), &externals, manifest, Some("@acme/app"))
-        .expect("scoped build succeeds");
+    let built = build(
+        project.path(),
+        &externals,
+        manifest,
+        Some("@pied-piper/app"),
+    )
+    .expect("scoped build succeeds");
 
     let names: Vec<&str> = built.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(names, vec!["@acme/util", "@acme/app"]);
+    assert_eq!(names, vec!["@pied-piper/util", "@pied-piper/app"]);
 }
 
 #[test]
@@ -712,19 +726,24 @@ fn unknown_only_package_lists_declared_packages() {
     write_module(project.path(), "src/lib.subm", "export const x = 1;\n");
     let manifest = r#"
 [[package]]
-name = "@acme/app"
+name = "@pied-piper/app"
 version = "0.1.0"
 description = "App package."
 "#;
     let externals = PackageStore::new(project.path().join("store"));
 
-    let err = build(project.path(), &externals, manifest, Some("@acme/nope"))
-        .expect_err("unknown package");
+    let err = build(
+        project.path(),
+        &externals,
+        manifest,
+        Some("@pied-piper/nope"),
+    )
+    .expect_err("unknown package");
 
     assert!(matches!(err, DriverError::UnknownPackage { .. }));
     let text = err.to_string();
     assert!(
-        text.contains("@acme/nope") && text.contains("@acme/app"),
+        text.contains("@pied-piper/nope") && text.contains("@pied-piper/app"),
         "got: {text}"
     );
 }
@@ -741,7 +760,7 @@ fn compile_errors_render_with_source_path_and_caret() {
     write_docs(project.path(), ".", "# App\n");
     let manifest = r#"
 [[package]]
-name = "@acme/app"
+name = "@pied-piper/app"
 version = "0.1.0"
 description = "App package."
 "#;
@@ -752,7 +771,7 @@ description = "App package."
     let DriverError::Compile { package, rendered } = err else {
         panic!("expected Compile error, got: {err}");
     };
-    assert_eq!(package.as_str(), "@acme/app");
+    assert_eq!(package.as_str(), "@pied-piper/app");
     assert!(rendered.contains("error:"), "got: {rendered}");
     assert!(
         rendered.contains("--> src/extra.subm:"),
@@ -767,7 +786,7 @@ fn capability_payload_fields_are_checked_before_building_artifacts() {
     write_docs(project.path(), "sdk", "# SDK\n");
     let manifest = r#"
 [[package]]
-name = "@acme/sdk"
+name = "@pied-piper/sdk"
 version = "0.1.0"
 description = "SDK package."
 path = "sdk"
@@ -782,11 +801,11 @@ interface Context {{ customer: string; total?: number }}
  * Checks a purchase.
  * @param customer Customer identifier.
  * @param total Purchase total.
- * @capability acme.com/v {{ customer }}
+ * @capability pied-piper.example/v {{ customer }}
  */
 export function v(customer: string, total: number): void {{
     const context: Context = {{ customer, total }};
-    check("acme.com/v", {payload});
+    check("pied-piper.example/v", {payload});
 }}
 "#
         );
@@ -830,7 +849,7 @@ fn variables_requirements_include_literal_names_and_keep_dynamic_names_unfiltere
         "#
         );
         let package = compile_package(
-            "@acme/browser",
+            "@pied-piper/browser",
             ModulePath::from("lib"),
             &[PackageSourceModule {
                 path: ModulePath::from("lib"),

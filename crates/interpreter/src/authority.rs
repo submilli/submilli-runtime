@@ -2568,10 +2568,10 @@ mod tests {
         let source = r#"
 import { get } from "submilli:http";
 import { check as authorize } from "submilli:security";
-/** Read. @capability acme.read {} */
-export function checked(): void { authorize("acme.read", {}); get("https://example.com"); }
-/** Read. @capability acme.read {} */
-export function swallowed(): void { try { authorize("acme.read", {}); } catch {} get("https://example.com"); }
+/** Read. @capability pied-piper.read {} */
+export function checked(): void { authorize("pied-piper.read", {}); get("https://example.com"); }
+/** Read. @capability pied-piper.read {} */
+export function swallowed(): void { try { authorize("pied-piper.read", {}); } catch {} get("https://example.com"); }
 export function unchecked(): void { get("https://example.com"); }
 "#;
         let compiled = compile_package(
@@ -2600,7 +2600,10 @@ export function unchecked(): void { get("https://example.com"); }
                 .find(|c| c.name == name)
                 .unwrap();
             assert_eq!(callable.checks.len(), 1);
-            assert_eq!(callable.checks[0].capability.as_deref(), Some("acme.read"));
+            assert_eq!(
+                callable.checks[0].capability.as_deref(),
+                Some("pied-piper.read")
+            );
             assert_eq!(callable.checks[0].span.path, "lib");
         }
         let json = serde_json::to_value(&compiled.authority_map).unwrap();

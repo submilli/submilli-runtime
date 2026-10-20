@@ -29,7 +29,7 @@ default: deny
 permissions:
   main:
   - name: charges-for-signed-in-customer
-    capability: acme.com/charges.list
+    capability: pied-piper.example/charges.list
     filter: customerId == ${vars.customerId}
     action: allow
 ";
@@ -250,7 +250,7 @@ pub(crate) fn charges_allowed(call_index: u64, customer: &str) -> DecisionRecord
     allowed_by(
         call_index,
         "main",
-        "acme.com/charges.list",
+        "pied-piper.example/charges.list",
         json!({ "customerId": customer }),
         0,
         Some("charges-for-signed-in-customer"),
@@ -263,7 +263,7 @@ pub(crate) fn charges_denied(call_index: u64, customer: &str) -> DecisionRecord 
     let mut decision = record(
         call_index,
         "main",
-        "acme.com/charges.list",
+        "pied-piper.example/charges.list",
         json!({ "customerId": customer }),
     );
     decision.allowed = false;

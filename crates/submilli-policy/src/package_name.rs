@@ -64,23 +64,23 @@ mod tests {
     #[test]
     fn scoped_names_need_a_github_org_and_a_plain_leaf() {
         assert_eq!(
-            validate_scoped_name("@acme/sdk.v2_x-y"),
-            Ok(("acme", "sdk.v2_x-y"))
+            validate_scoped_name("@pied-piper/sdk.v2_x-y"),
+            Ok(("pied-piper", "sdk.v2_x-y"))
         );
         assert!(validate_scoped_name(&format!("@{}/x", "a".repeat(39))).is_ok());
         for name in [
-            "acme/sdk",
-            "@acme",
-            "@acme/",
+            "pied-piper/sdk",
+            "@pied-piper",
+            "@pied-piper/",
             "@/sdk",
-            "@acme/sdk/extra",
-            "@-acme/sdk",
-            "@acme-/sdk",
+            "@pied-piper/sdk/extra",
+            "@-pied-piper/sdk",
+            "@pied-piper-/sdk",
             "@ac--me/sdk",
             "@ac.me/sdk",
-            "@acme/.",
-            "@acme/..",
-            "@acme/s dk",
+            "@pied-piper/.",
+            "@pied-piper/..",
+            "@pied-piper/s dk",
         ] {
             assert!(validate_scoped_name(name).is_err(), "{name}");
         }

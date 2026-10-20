@@ -15,7 +15,7 @@ const token = process.env.SUBMILLI_SERVER_TOKEN;
 assert.ok(token, 'SUBMILLI_SERVER_TOKEN is required');
 
 function program(customerId) {
-  return `import { readBalance } from "@acme/billing"; function main(): number { return readBalance("${customerId}"); }`;
+  return `import { readBalance } from "@pied-piper/billing"; function main(): number { return readBalance("${customerId}"); }`;
 }
 
 // The token admits the application; the binding says which customer.
@@ -60,7 +60,7 @@ assert.equal(allowed.result, '6150', JSON.stringify(allowed));
 const denied = await execute('pied_piper', 'hooli');
 assert.equal(denied.result, null, JSON.stringify(denied));
 assert.match(denied.error?.message ?? '', /PermissionDeniedError/);
-assert.match(denied.error?.message ?? '', /acme\.com\/balance\.read/);
+assert.match(denied.error?.message ?? '', /pied-piper\.example\/balance\.read/);
 
 await assert.rejects(
   () => execute(null, 'pied_piper'),

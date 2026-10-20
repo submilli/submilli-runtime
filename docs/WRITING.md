@@ -17,10 +17,10 @@ types, and the type decides how it is written. The parts are a single reading
 line: each page assumes only what earlier pages established. Blueprints come
 before Packages everywhere, the policy first and then the operation it governs.
 One scenario runs through the book: the Pied Piper support agent, its
-`@acme/billing` Package, the customer `pied_piper`, the denied customer
+`@pied-piper/billing` Package, the customer `pied_piper`, the denied customer
 `hooli`, and the injected ticket. Keep the Silicon Valley references subtle;
-descriptive API identifiers such as `customerId`, `@acme/billing`, and
-`acme.com/*` remain stable contracts.
+descriptive API identifiers such as `customerId`, `@pied-piper/billing`, and
+`pied-piper.example/*` remain stable contracts.
 
 | Part | Folder | Type | Read |
 | --- | --- | --- | --- |
@@ -63,7 +63,7 @@ reader completes with you, where every step produces a result they can see.
   prerequisites, set up in the page itself.
 - Each tutorial stands alone. Build everything from scratch in the page, or
   install it from a public repository (the book's examples live in
-  `submilli/acme`); never ask the reader to clone this repository or to have
+  `submilli/pied-piper`); never ask the reader to clone this repository or to have
   done another tutorial.
 - Give one path. No options, alternatives, or "you could also"; those are
   how-tos.

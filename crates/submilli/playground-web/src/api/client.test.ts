@@ -68,7 +68,7 @@ test("an action answered with no JSON is an outcome, not an error", async () => 
 test("a read that isn't found carries the route's code and message", async () => {
   const { client } = signedIn();
   const error = await client
-    .read("/api/packages/source?package=%40acme%2Fbilling&module=nope")
+    .read("/api/packages/source?package=%40pied-piper%2Fbilling&module=nope")
     .catch((e: unknown) => e);
   expect(error).toBeInstanceOf(ReadError);
   expect(error).toMatchObject({ status: 404, code: "unknown_module" });

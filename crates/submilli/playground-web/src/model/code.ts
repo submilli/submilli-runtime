@@ -52,7 +52,7 @@ function checkName(f: Frame, run: number, ref: string): string {
   return group && group.refs[0] !== ref ? "check " + ref + "; the log lists it under check " + group.refs[0] + ", ×" + group.refs.length : "check " + ref;
 }
 
-// "main → acme.com/charges.list, allowed by the blueprint (check 1.1)", or just who called what.
+// "main → pied-piper.example/charges.list, allowed by the blueprint (check 1.1)", or just who called what.
 function callWhat(f: Frame, c: Call): string {
   const k = c.check;
   return k ? k.caller + " → " + k.capability + ", " + (k.allowed ? "allowed" : "denied") + " by the blueprint (" + checkName(f, c.run, k.ref) + ")" : c.caller + " → " + c.capability;

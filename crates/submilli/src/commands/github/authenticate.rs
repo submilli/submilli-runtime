@@ -72,8 +72,8 @@ mod tests {
 
     #[test]
     fn instructions_name_the_exact_permission() {
-        let text = instructions(Some("acme"));
+        let text = instructions(Some("pied-piper"));
         assert!(text.contains("Contents → Read-only"), "{text}");
-        assert!(text.contains("target_name=acme"), "{text}");
+        assert!(text.contains("target_name=pied-piper"), "{text}");
     }
 }

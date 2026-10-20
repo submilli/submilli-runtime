@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "ba86201a1f6fff77bc3af3061570ed39b022d6f546a2a40dd26162d1d4cb11d8"
+  contentHash: "f8779b40361cd49f9e0e8e4f6ffda48073c6d21053b435bcac7560589e43c380"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -15,17 +15,17 @@ The Package compiles and its tests pass, but nothing can import it yet.
 Programs import from a Package store, yours or a server's, and you test
 the policy by running a program under a Blueprint.
 
-This guide shows you how to publish a Package. The example is Acme's
+This guide shows you how to publish a Package. The example is Pied Piper's
 billing Package on Stripe. Substitute your Package.
 
 ## Install it locally
 
 ```sh
-submilli build publish-local -p @acme/billing
+submilli build publish-local -p @pied-piper/billing
 ```
 
 ```text
-installed @acme/billing v0.1.0 -> ~/.submilli/packages/@acme/billing
+installed @pied-piper/billing v0.1.0 -> ~/.submilli/packages/@pied-piper/billing
 ```
 
 `publish-local` compiles and installs into the local store, where
@@ -42,10 +42,10 @@ submilli search billing
 ```
 
 ```text
-@acme/billing — Goodwill credits for one customer of Acme's billing service.
+@pied-piper/billing — Goodwill credits for one customer of Pied Piper's billing service.
 ```
 
-`submilli docs @acme/billing` prints the declarations and doc comments,
+`submilli docs @pied-piper/billing` prints the declarations and doc comments,
 as [Document the Package](/docs/packages/document-the-package)
 shows. The description in `submilli.toml` and the doc comments are all the
 model knows about the Package.
@@ -58,15 +58,15 @@ Blueprint commands read the `capabilities.yaml` the build derived on
 
 ```sh
 submilli blueprint init support
-submilli blueprint add-package @acme/billing --no-capabilities
+submilli blueprint add-package @pied-piper/billing --no-capabilities
 ```
 
 ```text
 ✓ created blueprint.yaml (name: support)
-warning: blueprint.yaml: package `@acme/billing` requires secret `BILLING_API_KEY`, but `secrets:` does not declare it
-✓ added @acme/billing to blueprint.yaml
+warning: blueprint.yaml: package `@pied-piper/billing` requires secret `BILLING_API_KEY`, but `secrets:` does not declare it
+✓ added @pied-piper/billing to blueprint.yaml
   1 provided capabilities not selected; `default: deny` denies calls to them
-  added 3 rules to caller `@acme/billing` (default allow):
+  added 3 rules to caller `@pied-piper/billing` (default allow):
     allow http.get (filter: host == "api.stripe.com")
     allow http.post (filter: host == "api.stripe.com")
     allow secrets.get (filter: name == "BILLING_API_KEY")
@@ -79,12 +79,12 @@ declare. The capability not selected comes from `provides`, with the
 fields the payload reports:
 
 ```sh
-submilli blueprint capability list @acme/billing
+submilli blueprint capability list @pied-piper/billing
 ```
 
 ```text
-@acme/billing
-  acme.com/credits.apply — Add a goodwill credit to a customer's account.
+@pied-piper/billing
+  pied-piper.example/credits.apply — Add a goodwill credit to a customer's account.
       fields: amount: number, customerClass: string, customerId: string
 ```
 
@@ -98,7 +98,7 @@ the customer the session is for, and one rule over the payload's fields:
 submilli blueprint secret add BILLING_API_KEY --store billing_api_key
 submilli secret put billing_api_key
 submilli blueprint variable add customerId --required
-submilli blueprint capability add acme.com/credits.apply \
+submilli blueprint capability add pied-piper.example/credits.apply \
   --filter 'customerId == ${vars.customerId} and customerClass == "premium"'
 ```
 
@@ -107,14 +107,14 @@ submilli blueprint capability add acme.com/credits.apply \
 Value for 'billing_api_key': [hidden]
 Stored secret 'billing_api_key'
 ✓ declared variable 'customerId' (required) in blueprint.yaml
-✓ added allow acme.com/credits.apply (filter: customerId == ${vars.customerId} and customerClass == "premium") to caller 'main' in blueprint.yaml
+✓ added allow pied-piper.example/credits.apply (filter: customerId == ${vars.customerId} and customerClass == "premium") to caller 'main' in blueprint.yaml
 ```
 
 Create `credit.ts`, a program like one the model would write. It credits
 Pied Piper, a premium customer in Stripe's test mode:
 
 ```typescript title="credit.ts"
-import { applyCredit } from "@acme/billing";
+import { applyCredit } from "@pied-piper/billing";
 
 function main(): string {
     const credit = applyCredit("cus_VMQR3azuTWVAWs", 1500);
@@ -141,10 +141,13 @@ Blueprint](/docs/blueprints/start-a-blueprint) shows.
 
 Other machines install from source. Push the project to GitHub, and a
 developer installs the Package from the repository, built there and
-pinned to the commit it resolved:
+pinned to the commit it resolved. The following commands are templates:
+replace `OWNER/REPOSITORY` with your repository and rename the Package scope
+from the local example `@pied-piper` to your GitHub owner throughout the
+manifest, imports, tests, and Blueprints:
 
 ```sh
-submilli install acme/billing-package @acme/billing
+submilli install OWNER/REPOSITORY @OWNER/billing
 ```
 
 The first argument is the repository, `owner/repo`, with `@<ref>` to pin
@@ -155,7 +158,7 @@ Blueprint](/docs/blueprints/start-a-blueprint) shows:
 
 ```sh
 submilli github authenticate
-submilli install acme/billing-package @acme/billing
+submilli install OWNER/REPOSITORY @OWNER/billing
 ```
 
 ## Put it on a server

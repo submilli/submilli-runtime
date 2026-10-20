@@ -113,8 +113,8 @@ mod tests {
             "mod:main#util#foo"
         );
         assert_eq!(
-            package_module_symbol("@acme/stripe", "internal/math", "helper").as_str(),
-            "mod:@acme/stripe#internal/math#helper",
+            package_module_symbol("@pied-piper/stripe", "internal/math", "helper").as_str(),
+            "mod:@pied-piper/stripe#internal/math#helper",
         );
     }
 

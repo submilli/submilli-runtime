@@ -137,7 +137,7 @@ mod unix {
 
         fn reinstalls(&self) -> usize {
             self.log()
-                .matches("reinstalled @acme/billing: its source changed")
+                .matches("reinstalled @pied-piper/billing: its source changed")
                 .count()
         }
 
@@ -199,18 +199,18 @@ mod unix {
                 .collect()
         }
 
-        /// A new project package `@acme/rates` under `packages/rates`, with `lib` as its
+        /// A new project package `@pied-piper/rates` under `packages/rates`, with `lib` as its
         /// source, listed in the project's `submilli.toml`.
         fn add_rates_package(&self, lib: &str) -> PathBuf {
             let rates = self.submilli().join("packages/rates");
             std::fs::create_dir_all(rates.join("src")).unwrap();
             std::fs::create_dir_all(rates.join("docs")).unwrap();
-            std::fs::write(rates.join("docs/readme.md"), "# @acme/rates\n").unwrap();
+            std::fs::write(rates.join("docs/readme.md"), "# @pied-piper/rates\n").unwrap();
             std::fs::write(rates.join("src/lib.ts"), lib).unwrap();
             let manifest = self.submilli().join("submilli.toml");
             let mut text = std::fs::read_to_string(&manifest).unwrap();
             text.push_str(
-                "\n[[package]]\nname = \"@acme/rates\"\nversion = \"0.1.0\"\n\
+                "\n[[package]]\nname = \"@pied-piper/rates\"\nversion = \"0.1.0\"\n\
                  description = \"Rates.\"\npath = \"packages/rates\"\n",
             );
             std::fs::write(&manifest, text).unwrap();
@@ -457,7 +457,7 @@ mod unix {
         assert_eq!(record["project"], json!(workspace.root));
         assert_eq!(record["blueprint"]["name"], "billing");
         let billing = json!([{
-            "name": "@acme/billing", "version": "0.1.0",
+            "name": "@pied-piper/billing", "version": "0.1.0",
             "origin": "blueprint", "importable": true, "project": true,
         }]);
         assert_eq!(record["packages"], billing);
@@ -474,7 +474,7 @@ mod unix {
             .iter()
             .find(|call| call["capability"] == "fs.read")
             .unwrap_or_else(|| panic!("the fixture read is recorded: {calls:#?}"));
-        assert_eq!(read["caller"], "@acme/billing");
+        assert_eq!(read["caller"], "@pied-piper/billing");
         // What the data summary's "Fetched" counts: the full size of what came back.
         let fetched = read["response"]["bytes"]
             .as_u64()
@@ -496,32 +496,32 @@ mod unix {
             "/** Cents as dollars. */\nexport function dollars(cents: number): number { return cents / 100; }\n",
         )
         .unwrap();
-        std::fs::write(money.join("docs/readme.md"), "# @acme/money\n").unwrap();
+        std::fs::write(money.join("docs/readme.md"), "# @pied-piper/money\n").unwrap();
         let manifest = workspace.submilli().join("submilli.toml");
         let mut text = std::fs::read_to_string(&manifest).unwrap();
         text.push_str(
-            "dependencies = [\"@acme/money\"]\n\n[[package]]\nname = \"@acme/money\"\n\
+            "dependencies = [\"@pied-piper/money\"]\n\n[[package]]\nname = \"@pied-piper/money\"\n\
              version = \"0.1.0\"\ndescription = \"Money helpers.\"\npath = \"packages/money\"\n",
         );
         std::fs::write(&manifest, text).unwrap();
 
         let record = workspace.start();
         let expected = json!([
-            { "name": "@acme/billing", "version": "0.1.0", "origin": "blueprint",
+            { "name": "@pied-piper/billing", "version": "0.1.0", "origin": "blueprint",
               "importable": true, "project": true },
-            { "name": "@acme/money", "version": "0.1.0", "origin": "dependency",
-              "importable": false, "project": true, "required_by": ["@acme/billing"] },
+            { "name": "@pied-piper/money", "version": "0.1.0", "origin": "dependency",
+              "importable": false, "project": true, "required_by": ["@pied-piper/billing"] },
         ]);
         assert_eq!(record["packages"], expected);
         assert_eq!(workspace.status()["packages"], expected);
         let text = workspace.playground(&workspace.root, &["status"]);
         let text = stdout(&text);
         assert!(
-            text.contains("@acme/money 0.1.0 (dependency, not importable, project)"),
+            text.contains("@pied-piper/money 0.1.0 (dependency, not importable, project)"),
             "{text}"
         );
         assert!(
-            text.contains("@acme/billing 0.1.0 (blueprint, importable, project)"),
+            text.contains("@pied-piper/billing 0.1.0 (blueprint, importable, project)"),
             "{text}"
         );
     }
@@ -575,7 +575,7 @@ mod unix {
         let message = failed["error"]["message"]
             .as_str()
             .unwrap_or_else(|| panic!("a JSON-RPC error: {failed}"));
-        assert!(message.contains("`@acme/billing`"), "{message}");
+        assert!(message.contains("`@pied-piper/billing`"), "{message}");
         assert!(message.contains("no longer builds"), "{message}");
         assert!(
             message.contains("lib.ts"),
@@ -608,7 +608,7 @@ mod unix {
             bridge["error"]["message"]
                 .as_str()
                 .unwrap()
-                .contains("`@acme/billing`")
+                .contains("`@pied-piper/billing`")
         );
         assert!(
             bridge["recording"]["calls"]
@@ -653,10 +653,10 @@ mod unix {
         std::fs::create_dir_all(other.join("docs")).unwrap();
         std::fs::write(
             other.join("submilli.toml"),
-            "[[package]]\nname = \"@acme/rates\"\nversion = \"0.1.0\"\ndescription = \"Rates.\"\npath = \".\"\n",
+            "[[package]]\nname = \"@pied-piper/rates\"\nversion = \"0.1.0\"\ndescription = \"Rates.\"\npath = \".\"\n",
         )
         .unwrap();
-        std::fs::write(other.join("docs/readme.md"), "# @acme/rates\n").unwrap();
+        std::fs::write(other.join("docs/readme.md"), "# @pied-piper/rates\n").unwrap();
         let lib = other.join("src/lib.ts");
         std::fs::write(
             &lib,
@@ -670,12 +670,12 @@ mod unix {
         publish();
         edit(
             &workspace.blueprint(),
-            "- '@acme/billing'",
-            "- '@acme/billing'\n- '@acme/rates'",
+            "- '@pied-piper/billing'",
+            "- '@pied-piper/billing'\n- '@pied-piper/rates'",
         );
 
         let record = workspace.start();
-        let code = "import { rate } from \"@acme/rates\";\nfunction main(): string { return `rate ${rate()}`; }\n";
+        let code = "import { rate } from \"@pied-piper/rates\";\nfunction main(): string { return `rate ${rate()}`; }\n";
         let token = workspace.token("app");
         assert_eq!(execute(&record, &token, code)["result"], "rate 1");
 
@@ -696,7 +696,7 @@ mod unix {
         }
     }
 
-    const RATES_PROGRAM: &str = "import { rate } from \"@acme/rates\";\nfunction main(): string { return `rate ${rate()}`; }\n";
+    const RATES_PROGRAM: &str = "import { rate } from \"@pied-piper/rates\";\nfunction main(): string { return `rate ${rate()}`; }\n";
 
     #[test]
     fn a_blueprint_edit_naming_a_new_project_package_builds_it_and_applies() {
@@ -708,8 +708,8 @@ mod unix {
             .add_rates_package("/** The rate. */\nexport function rate(): number { return 1; }\n");
         edit(
             &workspace.blueprint(),
-            "- '@acme/billing'",
-            "- '@acme/billing'\n- '@acme/rates'",
+            "- '@pied-piper/billing'",
+            "- '@pied-piper/billing'\n- '@pied-piper/rates'",
         );
         let status = workspace.wait_for_blueprint("version 2", |status| {
             status["version"] == 2 || status["refused"].is_object()
@@ -724,14 +724,14 @@ mod unix {
         // A package that is neither the project's nor installed is still missing.
         edit(
             &workspace.blueprint(),
-            "- '@acme/rates'",
-            "- '@acme/rates'\n- '@acme/absent'",
+            "- '@pied-piper/rates'",
+            "- '@pied-piper/rates'\n- '@pied-piper/absent'",
         );
         let status =
             workspace.wait_for_blueprint("the refusal", |status| status["refused"].is_object());
         assert_eq!(status["refused"]["code"], "package_missing", "{status}");
         let message = status["refused"]["message"].as_str().unwrap();
-        assert!(message.contains("`@acme/absent`"), "{message}");
+        assert!(message.contains("`@pied-piper/absent`"), "{message}");
         assert!(message.contains("install it with"), "{message}");
         assert_eq!(status["version"], 2, "{status}");
         assert_eq!(workspace.versions(), [1, 2]);
@@ -748,13 +748,13 @@ mod unix {
         );
         edit(
             &workspace.blueprint(),
-            "- '@acme/billing'",
-            "- '@acme/billing'\n- '@acme/rates'",
+            "- '@pied-piper/billing'",
+            "- '@pied-piper/billing'\n- '@pied-piper/rates'",
         );
         let status =
             workspace.wait_for_blueprint("the refusal", |status| status["refused"].is_object());
         let message = status["refused"]["message"].as_str().unwrap();
-        assert!(message.contains("`@acme/rates`"), "{message}");
+        assert!(message.contains("`@pied-piper/rates`"), "{message}");
         assert!(
             message.contains("lib.ts"),
             "the build diagnostic: {message}"
@@ -763,7 +763,7 @@ mod unix {
         assert_eq!(status["version"], 1, "{status}");
         assert_eq!(workspace.versions(), [1], "no version was logged");
         assert!(
-            workspace.log().contains("`@acme/rates`"),
+            workspace.log().contains("`@pied-piper/rates`"),
             "{}",
             workspace.log()
         );
@@ -778,13 +778,13 @@ mod unix {
         let workspace = Workspace::starter();
         edit(
             &workspace.blueprint(),
-            "- '@acme/billing'",
-            "- '@acme/billing'\n- '@acme/absent'",
+            "- '@pied-piper/billing'",
+            "- '@pied-piper/billing'\n- '@pied-piper/absent'",
         );
         let output = workspace.playground(&workspace.root, &["start", "--json"]);
         assert_eq!(output.status.code(), Some(5), "{}", stderr(&output));
         let message = stderr(&output);
-        assert!(message.contains("`@acme/absent`"), "{message}");
+        assert!(message.contains("`@pied-piper/absent`"), "{message}");
         assert!(message.contains("submilli install"), "{message}");
         assert!(!message.to_lowercase().contains("denied"), "{message}");
         assert!(!workspace.state().join("lock").exists());

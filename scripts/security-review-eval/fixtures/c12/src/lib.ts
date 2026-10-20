@@ -1,11 +1,11 @@
 import { check } from "submilli:security";
 import { writeText } from "submilli:fs";
 /** Save a record.
- * @capability acme.write { path: string }
+ * @capability pied-piper.write { path: string }
  */
 export function save(path: string): void {
     const destination = canonical(path);
-    check("acme.write", { path: destination });
+    check("pied-piper.write", { path: destination });
     writeText(destination, "record");
 }
 function canonical(path: string): string {

@@ -113,16 +113,16 @@ permissions:
     assert_eq!(stdout(&out), "CLI Author <cli@example.com>\n");
 }
 
-fn write_acme_util_package(home: &Path) {
-    write_acme_util_package_with_source(
+fn write_pied_piper_util_package(home: &Path) {
+    write_pied_piper_util_package_with_source(
         home,
         "export function answer(): number { return 41; }\nexport function plusOne(n: number): number { return n + 1; }\nexport function explode(): void { assert(false, \"pkg boom\"); }",
     );
 }
 
-fn write_acme_util_package_with_source(home: &Path, source: &str) {
+fn write_pied_piper_util_package_with_source(home: &Path, source: &str) {
     let package = compile_package(
-        "@acme/util",
+        "@pied-piper/util",
         ModulePath::from("lib"),
         &[PackageSourceModule {
             path: ModulePath::from("lib"),
@@ -131,14 +131,14 @@ fn write_acme_util_package_with_source(home: &Path, source: &str) {
         &[],
     )
     .expect("compile synthetic package");
-    let dir = home.join("packages").join("@acme").join("util");
+    let dir = home.join("packages").join("@pied-piper").join("util");
     write_package_artifact_with_docs_and_sources(
         &dir,
         &package.wasm,
         &package.type_info,
         &derive_capability_schema(&package.declaration, &[], &package.required_capabilities),
         &package.declaration,
-        &ArtifactMetadata::new("@acme/util", "0.0.0-test", Vec::new()),
+        &ArtifactMetadata::new("@pied-piper/util", "0.0.0-test", Vec::new()),
         "",
         &[ArtifactSource {
             path: ModulePath::from("lib"),
@@ -176,12 +176,12 @@ fn number_return() {
 #[test]
 fn blueprint_package_dependency_runs() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    write_acme_util_package(tmp.path());
+    write_pied_piper_util_package(tmp.path());
     let script = tmp.path().join("consumer.subm");
     fs::write(
         &script,
         r#"
-            import { answer, plusOne } from "@acme/util";
+            import { answer, plusOne } from "@pied-piper/util";
             function main(): number { return plusOne(answer()); }
         "#,
     )
@@ -189,7 +189,7 @@ fn blueprint_package_dependency_runs() {
     let blueprint = tmp.path().join("blueprint.yaml");
     write_blueprint(
         &blueprint,
-        "name: package-test\npackages:\n  - \"@acme/util\"\n",
+        "name: package-test\npackages:\n  - \"@pied-piper/util\"\n",
     );
 
     let out = run_with_submilli_home(
@@ -210,16 +210,16 @@ fn blueprint_package_dependency_runs() {
 fn blueprint_transitive_ancestor_is_available_but_not_importable() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let base = compile_package(
-        "@acme/base", ModulePath::from("lib"),
+        "@pied-piper/base", ModulePath::from("lib"),
         &[PackageSourceModule { path: ModulePath::from("lib"), source:
             "export class Top { static readonly F: (n: number) => number = (n: number): number => n + 1; }" }], &[],
     ).expect("compile base");
     let mid = compile_package(
-        "@acme/mid",
+        "@pied-piper/mid",
         ModulePath::from("lib"),
         &[PackageSourceModule {
             path: ModulePath::from("lib"),
-            source: "import { Top } from \"@acme/base\"; export class Mid extends Top {}",
+            source: "import { Top } from \"@pied-piper/base\"; export class Mid extends Top {}",
         }],
         &[&base.declaration],
     )
@@ -230,18 +230,18 @@ fn blueprint_transitive_ancestor_is_available_but_not_importable() {
             "mid",
             &mid,
             vec![submilli_build::ArtifactDependency::new(
-                "@acme/base",
+                "@pied-piper/base",
                 "0.0.0-test",
             )],
         ),
     ] {
         write_package_artifact_with_docs_and_sources(
-            tmp.path().join("packages/@acme").join(name),
+            tmp.path().join("packages/@pied-piper").join(name),
             &package.wasm,
             &package.type_info,
             &derive_capability_schema(&package.declaration, &[], &package.required_capabilities),
             &package.declaration,
-            &ArtifactMetadata::new(format!("@acme/{name}"), "0.0.0-test", dependencies),
+            &ArtifactMetadata::new(format!("@pied-piper/{name}"), "0.0.0-test", dependencies),
             "",
             &[],
         )
@@ -250,13 +250,13 @@ fn blueprint_transitive_ancestor_is_available_but_not_importable() {
     let blueprint = tmp.path().join("blueprint.yaml");
     write_blueprint(
         &blueprint,
-        "name: transitive-test\npackages:\n  - \"@acme/mid\"\n",
+        "name: transitive-test\npackages:\n  - \"@pied-piper/mid\"\n",
     );
     let script = tmp.path().join("consumer.ts");
     fs::write(
         &script,
         r#"
-        import { Mid } from "@acme/mid";
+        import { Mid } from "@pied-piper/mid";
         class Local extends Mid {}
         function main(): number {
             assert(new Local() instanceof Mid, "subclass");
@@ -277,7 +277,7 @@ fn blueprint_transitive_ancestor_is_available_but_not_importable() {
     fs::write(
         &script,
         r#"
-        import { Top } from "@acme/base";
+        import { Top } from "@pied-piper/base";
         function main(): number { return Top.F(1); }
     "#,
     )
@@ -285,7 +285,7 @@ fn blueprint_transitive_ancestor_is_available_but_not_importable() {
     let out = run_with_submilli_home(&args, tmp.path());
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("package `@acme/base` is not a dependency"),
+        stderr(&out).contains("package `@pied-piper/base` is not a dependency"),
         "{}",
         stderr(&out)
     );
@@ -294,12 +294,12 @@ fn blueprint_transitive_ancestor_is_available_but_not_importable() {
 #[test]
 fn package_error_renders_package_source_context() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    write_acme_util_package(tmp.path());
+    write_pied_piper_util_package(tmp.path());
     let script = tmp.path().join("package-error.subm");
     fs::write(
         &script,
         r#"
-            import { explode } from "@acme/util";
+            import { explode } from "@pied-piper/util";
             function main(): void { explode(); }
         "#,
     )
@@ -307,7 +307,7 @@ fn package_error_renders_package_source_context() {
     let blueprint = tmp.path().join("blueprint.yaml");
     write_blueprint(
         &blueprint,
-        "name: package-test\npackages:\n  - \"@acme/util\"\n",
+        "name: package-test\npackages:\n  - \"@pied-piper/util\"\n",
     );
 
     let out = run_with_submilli_home(
@@ -324,7 +324,7 @@ fn package_error_renders_package_source_context() {
     let err = stderr(&out);
     assert!(err.contains("error: Error: pkg boom"), "stderr: {err}");
     assert!(
-        err.contains("(@acme/util/lib:"),
+        err.contains("(@pied-piper/util/lib:"),
         "missing package frame in {err}"
     );
     assert!(
@@ -337,12 +337,12 @@ fn package_error_renders_package_source_context() {
 #[test]
 fn package_in_store_but_omitted_from_blueprint_is_not_importable() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    write_acme_util_package(tmp.path());
+    write_pied_piper_util_package(tmp.path());
     let script = tmp.path().join("consumer-missing-blueprint.subm");
     fs::write(
         &script,
         r#"
-            import { answer } from "@acme/util";
+            import { answer } from "@pied-piper/util";
             function main(): number { return answer(); }
         "#,
     )
@@ -362,7 +362,7 @@ fn package_in_store_but_omitted_from_blueprint_is_not_importable() {
 
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("package `@acme/util` not found"),
+        stderr(&out).contains("package `@pied-piper/util` not found"),
         "stderr: {}",
         stderr(&out)
     );
@@ -571,29 +571,29 @@ fn a_package_top_level_failure_renders_the_packages_statement() {
         (
             "const table: number[] = [1];\nconst picked: number = table[7];\nexport function answer(): number { return picked; }",
             &[],
-            "error: package `@acme/util` failed to initialize: RangeError: index out of range\n  at <top level> (@acme/util/lib:2:",
+            "error: package `@pied-piper/util` failed to initialize: RangeError: index out of range\n  at <top level> (@pied-piper/util/lib:2:",
             "2 | const picked: number = table[7];\n  |",
         ),
         (
             "let spins = 0;\nwhile (true) { spins = spins + 1; }\nexport function answer(): number { return spins; }",
             &["--timeout", "200", "--fuel", fuel_past_the_deadline],
-            "error: timeout exceeded\n  at <top level> (@acme/util/lib:2:",
+            "error: timeout exceeded\n  at <top level> (@pied-piper/util/lib:2:",
             "2 | while (true) { spins = spins + 1; }\n  |",
         ),
     ];
     for (package_source, flags, header, context) in cases {
         let tmp = tempfile::tempdir().expect("tempdir");
-        write_acme_util_package_with_source(tmp.path(), package_source);
+        write_pied_piper_util_package_with_source(tmp.path(), package_source);
         let script = tmp.path().join("consumer.subm");
         fs::write(
             &script,
-            "import { answer } from \"@acme/util\";\nfunction main(): number { return answer(); }",
+            "import { answer } from \"@pied-piper/util\";\nfunction main(): number { return answer(); }",
         )
         .expect("write script");
         let blueprint = tmp.path().join("blueprint.yaml");
         write_blueprint(
             &blueprint,
-            "name: package-test\npackages:\n  - \"@acme/util\"\n",
+            "name: package-test\npackages:\n  - \"@pied-piper/util\"\n",
         );
         let mut args: Vec<&std::ffi::OsStr> = vec!["run".as_ref()];
         args.extend(flags.iter().map(std::ffi::OsStr::new));
@@ -1820,7 +1820,7 @@ fn nightly_only_requested() -> bool {
 #[test]
 fn package_variables_use_cli_bindings_and_lint_warns_for_missing_declarations() {
     let tmp = tempfile::tempdir().unwrap();
-    write_acme_util_package_with_source(
+    write_pied_piper_util_package_with_source(
         tmp.path(),
         r#"
         import { get } from "submilli:variables";
@@ -1829,9 +1829,9 @@ fn package_variables_use_cli_bindings_and_lint_warns_for_missing_declarations() 
     "#,
     );
     let policy = r#"name: variable-test
-packages: ["@acme/util"]
+packages: ["@pied-piper/util"]
 permissions:
-  '@acme/util':
+  '@pied-piper/util':
     - capability: variables.get
       filter: name == "BROWSER_STORE_NAME"
       action: allow
@@ -1863,7 +1863,7 @@ permissions:
     let script = tmp.path().join("variables.ts");
     fs::write(
         &script,
-        r#"import { store } from "@acme/util";
+        r#"import { store } from "@pied-piper/util";
         function main(): string | undefined { return store(); }"#,
     )
     .unwrap();

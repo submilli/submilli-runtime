@@ -171,7 +171,7 @@ Follow [installation and projects](setup.md), [packages](packages.md), and
 contains the tested package, blueprint, server, and MCP discovery commands;
 reuse it when validating this recipe rather than copying a partial scaffold.
 The blueprint must declare required `customerId`, allow
-`acme.com/balance.read` only when `customerId == ${vars.customerId}`, and use
+`pied-piper.example/balance.read` only when `customerId == ${vars.customerId}`, and use
 `default: deny`. The MCP URL is
 `http://127.0.0.1:8128/mcp/support-read`; send `SUBMILLI_SERVER_TOKEN` as
 `Authorization: Bearer …` and bind the trusted value with
@@ -191,7 +191,7 @@ Run these deterministic checks before a live model task:
 1. `pied_piper` discovers the expected tool and reads `6150`.
 2. The same binding passing `hooli` is denied by the package capability
    filter: `tool.execute` resolves with `result: null` and an `error.message`
-   naming `PermissionDeniedError` and `acme.com/balance.read`.
+   naming `PermissionDeniedError` and `pied-piper.example/balance.read`.
 3. Omitting `submilli-variables` is rejected at connect: the server answers
    `initialize` with HTTP 400, `@mastra/mcp` then tries its SSE fallback, and
    `listToolsets()` logs the failure and returns no `submilli` toolset. Treat

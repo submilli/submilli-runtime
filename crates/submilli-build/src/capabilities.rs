@@ -346,16 +346,16 @@ mod tests {
         let id_alias = Type::alias_ty(
             Package::user(),
             "IssueId",
-            mangle::package_symbol("@acme/sdk", "IssueId"),
+            mangle::package_symbol("@pied-piper/sdk", "IssueId"),
             Vec::new(),
             Box::new(Type::String),
         );
-        let mut declaration = PackageDeclaration::with_package("@acme/sdk");
+        let mut declaration = PackageDeclaration::with_package("@pied-piper/sdk");
         declaration.values.insert(
             "getIssue".to_string(),
             ValueSymbol {
                 name: "getIssue".to_string(),
-                mangled_name: mangle::package_symbol("@acme/sdk", "getIssue"),
+                mangled_name: mangle::package_symbol("@pied-piper/sdk", "getIssue"),
                 declaration_span: Span::new(FileId(0), 0, 1).unwrap(),
                 kind: ValueKind::Function {
                     generics: Vec::new(),
@@ -364,7 +364,7 @@ mod tests {
                     type_predicate: None,
                     doc: doc(
                         FileId(0),
-                        "/** Get an issue.\n * @capability acme.com/getIssue { id }\n */",
+                        "/** Get an issue.\n * @capability pied-piper.example/getIssue { id }\n */",
                     ),
                 },
             },
@@ -376,12 +376,12 @@ mod tests {
 
     #[test]
     fn provides_preserves_explicit_array_type() {
-        let mut declaration = PackageDeclaration::with_package("@acme/mail");
+        let mut declaration = PackageDeclaration::with_package("@pied-piper/mail");
         declaration.values.insert(
             "send".to_string(),
             ValueSymbol {
                 name: "send".to_string(),
-                mangled_name: mangle::package_symbol("@acme/mail", "send"),
+                mangled_name: mangle::package_symbol("@pied-piper/mail", "send"),
                 declaration_span: Span::new(FileId(0), 0, 1).unwrap(),
                 kind: ValueKind::Function {
                     generics: Vec::new(),
@@ -390,7 +390,7 @@ mod tests {
                     type_predicate: None,
                     doc: doc(
                         FileId(0),
-                        "/** Send mail.\n * @capability acme.com/send { recipients: string[] }\n */",
+                        "/** Send mail.\n * @capability pied-piper.example/send { recipients: string[] }\n */",
                     ),
                 },
             },

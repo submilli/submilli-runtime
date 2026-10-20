@@ -1217,7 +1217,7 @@ mod tests {
     fn the_history_alternates_starts_with_the_user_and_takes_the_next_message() {
         let turns = history([
             Logged::Said(ChatRole::Assistant, "stray"),
-            Logged::Said(ChatRole::User, "Total cus_acme's charges."),
+            Logged::Said(ChatRole::User, "Total cus_pied-piper's charges."),
             Logged::Said(ChatRole::Assistant, "Running it."),
             Logged::Said(ChatRole::Assistant, "That was refused."),
             Logged::Said(ChatRole::User, "Why?"),
@@ -1225,7 +1225,7 @@ mod tests {
         assert_eq!(
             turns,
             [
-                Turn::User("Total cus_acme's charges.".into()),
+                Turn::User("Total cus_pied-piper's charges.".into()),
                 Turn::Assistant {
                     text: Some("Running it.\n\nThat was refused.".into()),
                     calls: Vec::new(),

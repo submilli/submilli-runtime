@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "0c4c411fad1721bd805a8cf0216d0834573b9af3e9862ccdb2d4d75d60d48693"
+  contentHash: "f8de6d1e49ae2b0117f748b5d0be73eb18af581075abc1a2cf88b3a13232ea04"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -672,7 +672,7 @@ Parsed URL parts — the return type of `parse`.
 | Member | Description |
 | --- | --- |
 | `readonly fragment: string \| undefined` | Fragment string (without the `#` prefix), or `undefined` when the URL has no `#` segment. |
-| `readonly host: string` | Host name, e.g. `"api.acme.com"`. |
+| `readonly host: string` | Host name, e.g. `"api.pied-piper.example"`. |
 | `readonly path: string` | Path component, including the leading `/`. |
 | `readonly port: number \| undefined` | Port number, or `undefined` when the URL omits one. |
 | `readonly protocol: string` | Scheme, e.g. `"https"`. |

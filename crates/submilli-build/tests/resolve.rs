@@ -122,34 +122,34 @@ fn resolve(
 
 #[test]
 fn installs_chain_deps_before_dependents() {
-    // root -> @acme/a -> @acme/c
+    // root -> @pied-piper/a -> @pied-piper/c
     let repo_a = format!(
         "[dependencies]\n{}\n{}",
-        dep("@acme/c", "github.com/acme/c", SHA_C),
-        package("@acme/a", "1.0.0", &["@acme/c"])
+        dep("@pied-piper/c", "github.com/pied-piper/c", SHA_C),
+        package("@pied-piper/a", "1.0.0", &["@pied-piper/c"])
     );
-    let repo_c = package("@acme/c", "2.0.0", &[]);
+    let repo_c = package("@pied-piper/c", "2.0.0", &[]);
     let root = format!(
         "[dependencies]\n{}\n{}",
-        dep("@acme/a", "github.com/acme/a", SHA_A),
-        package("@me/app", "0.1.0", &["@acme/a"])
+        dep("@pied-piper/a", "github.com/pied-piper/a", SHA_A),
+        package("@me/app", "0.1.0", &["@pied-piper/a"])
     );
     let world = world(
         &[
-            ("github.com/acme/a", "acme", "a", &repo_a),
-            ("github.com/acme/c", "acme", "c", &repo_c),
+            ("github.com/pied-piper/a", "pied-piper", "a", &repo_a),
+            ("github.com/pied-piper/c", "pied-piper", "c", &repo_c),
         ],
         &root,
     );
 
     let closure = resolve(&world, None).expect("resolves");
-    assert_eq!(names(&closure), vec!["@acme/c", "@acme/a"]);
-    assert!(world.store.load("@acme/a").is_ok());
-    assert!(world.store.load("@acme/c").is_ok());
-    // @acme/a records @acme/c's fetched version, not a declared one.
-    let a = closure.iter().find(|p| p.name == "@acme/a").unwrap();
+    assert_eq!(names(&closure), vec!["@pied-piper/c", "@pied-piper/a"]);
+    assert!(world.store.load("@pied-piper/a").is_ok());
+    assert!(world.store.load("@pied-piper/c").is_ok());
+    // @pied-piper/a records @pied-piper/c's fetched version, not a declared one.
+    let a = closure.iter().find(|p| p.name == "@pied-piper/a").unwrap();
     assert_eq!(a.version, "1.0.0");
-    let c = closure.iter().find(|p| p.name == "@acme/c").unwrap();
+    let c = closure.iter().find(|p| p.name == "@pied-piper/c").unwrap();
     assert_eq!(c.version, "2.0.0");
 }
 
@@ -158,32 +158,32 @@ fn diamond_installs_shared_dep_once() {
     // root -> a, b ; a -> c, b -> c (same sha)
     let repo_a = format!(
         "[dependencies]\n{}\n{}",
-        dep("@acme/c", "github.com/acme/c", SHA_C),
-        package("@acme/a", "1.0.0", &["@acme/c"])
+        dep("@pied-piper/c", "github.com/pied-piper/c", SHA_C),
+        package("@pied-piper/a", "1.0.0", &["@pied-piper/c"])
     );
     let repo_b = format!(
         "[dependencies]\n{}\n{}",
-        dep("@acme/c", "github.com/acme/c", SHA_C),
-        package("@acme/b", "1.0.0", &["@acme/c"])
+        dep("@pied-piper/c", "github.com/pied-piper/c", SHA_C),
+        package("@pied-piper/b", "1.0.0", &["@pied-piper/c"])
     );
-    let repo_c = package("@acme/c", "2.0.0", &[]);
+    let repo_c = package("@pied-piper/c", "2.0.0", &[]);
     let root = format!(
         "[dependencies]\n{}{}\n{}",
-        dep("@acme/a", "github.com/acme/a", SHA_A),
-        dep("@acme/b", "github.com/acme/b", SHA_B),
-        package("@me/app", "0.1.0", &["@acme/a", "@acme/b"])
+        dep("@pied-piper/a", "github.com/pied-piper/a", SHA_A),
+        dep("@pied-piper/b", "github.com/pied-piper/b", SHA_B),
+        package("@me/app", "0.1.0", &["@pied-piper/a", "@pied-piper/b"])
     );
     let world = world(
         &[
-            ("github.com/acme/a", "acme", "a", &repo_a),
-            ("github.com/acme/b", "acme", "b", &repo_b),
-            ("github.com/acme/c", "acme", "c", &repo_c),
+            ("github.com/pied-piper/a", "pied-piper", "a", &repo_a),
+            ("github.com/pied-piper/b", "pied-piper", "b", &repo_b),
+            ("github.com/pied-piper/c", "pied-piper", "c", &repo_c),
         ],
         &root,
     );
 
     let closure = resolve(&world, None).expect("resolves");
-    let c_count = closure.iter().filter(|p| p.name == "@acme/c").count();
+    let c_count = closure.iter().filter(|p| p.name == "@pied-piper/c").count();
     assert_eq!(c_count, 1, "shared dep installed once");
     assert_eq!(closure.len(), 3);
     // c fetched exactly once despite two requirers.
@@ -195,26 +195,26 @@ fn divergent_sha_is_a_conflict() {
     // a -> c@SHA_C, b -> c@SHA_C2
     let repo_a = format!(
         "[dependencies]\n{}\n{}",
-        dep("@acme/c", "github.com/acme/c", SHA_C),
-        package("@acme/a", "1.0.0", &["@acme/c"])
+        dep("@pied-piper/c", "github.com/pied-piper/c", SHA_C),
+        package("@pied-piper/a", "1.0.0", &["@pied-piper/c"])
     );
     let repo_b = format!(
         "[dependencies]\n{}\n{}",
-        dep("@acme/c", "github.com/acme/c", SHA_C2),
-        package("@acme/b", "1.0.0", &["@acme/c"])
+        dep("@pied-piper/c", "github.com/pied-piper/c", SHA_C2),
+        package("@pied-piper/b", "1.0.0", &["@pied-piper/c"])
     );
-    let repo_c = package("@acme/c", "2.0.0", &[]);
+    let repo_c = package("@pied-piper/c", "2.0.0", &[]);
     let root = format!(
         "[dependencies]\n{}{}\n{}",
-        dep("@acme/a", "github.com/acme/a", SHA_A),
-        dep("@acme/b", "github.com/acme/b", SHA_B),
-        package("@me/app", "0.1.0", &["@acme/a", "@acme/b"])
+        dep("@pied-piper/a", "github.com/pied-piper/a", SHA_A),
+        dep("@pied-piper/b", "github.com/pied-piper/b", SHA_B),
+        package("@me/app", "0.1.0", &["@pied-piper/a", "@pied-piper/b"])
     );
     let world = world(
         &[
-            ("github.com/acme/a", "acme", "a", &repo_a),
-            ("github.com/acme/b", "acme", "b", &repo_b),
-            ("github.com/acme/c", "acme", "c", &repo_c),
+            ("github.com/pied-piper/a", "pied-piper", "a", &repo_a),
+            ("github.com/pied-piper/b", "pied-piper", "b", &repo_b),
+            ("github.com/pied-piper/c", "pied-piper", "c", &repo_c),
         ],
         &root,
     );
@@ -223,14 +223,14 @@ fn divergent_sha_is_a_conflict() {
     let ResolveError::ShaConflict { name, .. } = &err else {
         panic!("expected ShaConflict, got {err:?}");
     };
-    assert_eq!(name.as_str(), "@acme/c");
+    assert_eq!(name.as_str(), "@pied-piper/c");
     let message = err.to_string();
     assert!(
-        message.contains("@acme/a"),
+        message.contains("@pied-piper/a"),
         "names first requirer: {message}"
     );
     assert!(
-        message.contains("@acme/b"),
+        message.contains("@pied-piper/b"),
         "names second requirer: {message}"
     );
 }
@@ -238,37 +238,37 @@ fn divergent_sha_is_a_conflict() {
 #[test]
 fn public_resolve_errors_format_arbitrary_utf8_shas() {
     let fetch = ResolveError::Fetch {
-        name: PackageName::new("@acme/fetch"),
-        url: "github.com/acme/fetch".into(),
+        name: PackageName::new("@pied-piper/fetch"),
+        url: "github.com/pied-piper/fetch".into(),
         sha: "aaaaaaaaaaaérest".into(),
         source: FetchError::new("offline"),
     };
     assert_eq!(
         fetch.to_string(),
-        "fetch dependency @acme/fetch from github.com/acme/fetch@aaaaaaaaaaa: offline"
+        "fetch dependency @pied-piper/fetch from github.com/pied-piper/fetch@aaaaaaaaaaa: offline"
     );
 
     let missing = ResolveError::MissingPackageInRepo {
-        name: PackageName::new("@acme/requested"),
-        url: "github.com/acme/repo".into(),
+        name: PackageName::new("@pied-piper/requested"),
+        url: "github.com/pied-piper/repo".into(),
         sha: "éééééérest".into(),
-        available: vec![PackageName::new("@acme/available")],
+        available: vec![PackageName::new("@pied-piper/available")],
     };
     assert_eq!(
         missing.to_string(),
-        "github.com/acme/repo@éééééé does not declare package @acme/requested; it declares: @acme/available"
+        "github.com/pied-piper/repo@éééééé does not declare package @pied-piper/requested; it declares: @pied-piper/available"
     );
 
     let conflict = ResolveError::ShaConflict {
-        name: PackageName::new("@acme/shared"),
-        first_requirer: PackageName::new("@acme/first"),
+        name: PackageName::new("@pied-piper/shared"),
+        first_requirer: PackageName::new("@pied-piper/first"),
         first_sha: "short-é".into(),
-        second_requirer: PackageName::new("@acme/second"),
+        second_requirer: PackageName::new("@pied-piper/second"),
         second_sha: SHA_A.into(),
     };
     assert_eq!(
         conflict.to_string(),
-        "conflicting versions of @acme/shared: @acme/first requires short-é, @acme/second requires aaaaaaaaaaaa; pin both to the same commit"
+        "conflicting versions of @pied-piper/shared: @pied-piper/first requires short-é, @pied-piper/second requires aaaaaaaaaaaa; pin both to the same commit"
     );
 }
 
@@ -277,23 +277,23 @@ fn cycle_is_rejected() {
     // a -> b -> a
     let repo_a = format!(
         "[dependencies]\n{}\n{}",
-        dep("@acme/b", "github.com/acme/b", SHA_B),
-        package("@acme/a", "1.0.0", &["@acme/b"])
+        dep("@pied-piper/b", "github.com/pied-piper/b", SHA_B),
+        package("@pied-piper/a", "1.0.0", &["@pied-piper/b"])
     );
     let repo_b = format!(
         "[dependencies]\n{}\n{}",
-        dep("@acme/a", "github.com/acme/a", SHA_A),
-        package("@acme/b", "1.0.0", &["@acme/a"])
+        dep("@pied-piper/a", "github.com/pied-piper/a", SHA_A),
+        package("@pied-piper/b", "1.0.0", &["@pied-piper/a"])
     );
     let root = format!(
         "[dependencies]\n{}\n{}",
-        dep("@acme/a", "github.com/acme/a", SHA_A),
-        package("@me/app", "0.1.0", &["@acme/a"])
+        dep("@pied-piper/a", "github.com/pied-piper/a", SHA_A),
+        package("@me/app", "0.1.0", &["@pied-piper/a"])
     );
     let world = world(
         &[
-            ("github.com/acme/a", "acme", "a", &repo_a),
-            ("github.com/acme/b", "acme", "b", &repo_b),
+            ("github.com/pied-piper/a", "pied-piper", "a", &repo_a),
+            ("github.com/pied-piper/b", "pied-piper", "b", &repo_b),
         ],
         &root,
     );
@@ -304,7 +304,7 @@ fn cycle_is_rejected() {
 
 #[test]
 fn dependent_compiles_against_imported_transitive_package() {
-    // @acme/a imports @acme/c across repos; it only compiles if C's declaration
+    // @pied-piper/a imports @pied-piper/c across repos; it only compiles if C's declaration
     // is installed in the store first.
     let root_tmp = tempfile::tempdir().expect("tempdir");
     let a_dir = root_tmp.path().join("a");
@@ -313,35 +313,35 @@ fn dependent_compiles_against_imported_transitive_package() {
 
     write_repo_with_lib(
         &c_dir,
-        &package("@acme/c", "2.0.0", &[]),
+        &package("@pied-piper/c", "2.0.0", &[]),
         "export function base(): number { return 41; }\n",
     );
     write_repo_with_lib(
         &a_dir,
         &format!(
             "[dependencies]\n{}\n{}",
-            dep("@acme/c", "github.com/acme/c", SHA_C),
-            package("@acme/a", "1.0.0", &["@acme/c"])
+            dep("@pied-piper/c", "github.com/pied-piper/c", SHA_C),
+            package("@pied-piper/a", "1.0.0", &["@pied-piper/c"])
         ),
-        "import { base } from \"@acme/c\";\nexport function value(): number { return base() + 1; }\n",
+        "import { base } from \"@pied-piper/c\";\nexport function value(): number { return base() + 1; }\n",
     );
     write_repo(
         &project_dir,
         &format!(
             "[dependencies]\n{}\n{}",
-            dep("@acme/a", "github.com/acme/a", SHA_A),
-            package("@me/app", "0.1.0", &["@acme/a"])
+            dep("@pied-piper/a", "github.com/pied-piper/a", SHA_A),
+            package("@me/app", "0.1.0", &["@pied-piper/a"])
         ),
     );
 
     let mut repos = BTreeMap::new();
     repos.insert(
-        "github.com/acme/a".to_string(),
-        ("acme".to_string(), "a".to_string(), a_dir),
+        "github.com/pied-piper/a".to_string(),
+        ("pied-piper".to_string(), "a".to_string(), a_dir),
     );
     repos.insert(
-        "github.com/acme/c".to_string(),
-        ("acme".to_string(), "c".to_string(), c_dir),
+        "github.com/pied-piper/c".to_string(),
+        ("pied-piper".to_string(), "c".to_string(), c_dir),
     );
     let fetcher = FakeFetcher {
         repos,
@@ -354,19 +354,25 @@ fn dependent_compiles_against_imported_transitive_package() {
     let closure = resolve_github_closure(&store, &manifest, &fetcher, None).expect("resolves");
     install_plan(&store, &closure.plan, true).expect("install plan");
 
-    assert_eq!(names(&closure.locked), vec!["@acme/c", "@acme/a"]);
-    assert!(store.load("@acme/a").is_ok(), "dependent installed");
+    assert_eq!(
+        names(&closure.locked),
+        vec!["@pied-piper/c", "@pied-piper/a"]
+    );
+    assert!(store.load("@pied-piper/a").is_ok(), "dependent installed");
 }
 
 #[test]
 fn satisfied_lock_skips_fetching() {
-    let repo_a = package("@acme/a", "1.0.0", &[]);
+    let repo_a = package("@pied-piper/a", "1.0.0", &[]);
     let root = format!(
         "[dependencies]\n{}\n{}",
-        dep("@acme/a", "github.com/acme/a", SHA_A),
-        package("@me/app", "0.1.0", &["@acme/a"])
+        dep("@pied-piper/a", "github.com/pied-piper/a", SHA_A),
+        package("@me/app", "0.1.0", &["@pied-piper/a"])
     );
-    let world = world(&[("github.com/acme/a", "acme", "a", &repo_a)], &root);
+    let world = world(
+        &[("github.com/pied-piper/a", "pied-piper", "a", &repo_a)],
+        &root,
+    );
 
     let closure = resolve(&world, None).expect("first resolve");
     assert_eq!(world.fetcher.fetches.load(Ordering::SeqCst), 1);
@@ -375,7 +381,7 @@ fn satisfied_lock_skips_fetching() {
     // fetched again.
     let lock = Lockfile::new(closure);
     let again = resolve(&world, Some(&lock)).expect("second resolve");
-    assert_eq!(names(&again), vec!["@acme/a"]);
+    assert_eq!(names(&again), vec!["@pied-piper/a"]);
     assert_eq!(
         world.fetcher.fetches.load(Ordering::SeqCst),
         1,
@@ -385,13 +391,16 @@ fn satisfied_lock_skips_fetching() {
 
 #[test]
 fn a_lock_is_not_satisfied_by_a_fallback_copy() {
-    let repo_a = package("@acme/a", "1.0.0", &[]);
+    let repo_a = package("@pied-piper/a", "1.0.0", &[]);
     let root = format!(
         "[dependencies]\n{}\n{}",
-        dep("@acme/a", "github.com/acme/a", SHA_A),
-        package("@me/app", "0.1.0", &["@acme/a"])
+        dep("@pied-piper/a", "github.com/pied-piper/a", SHA_A),
+        package("@me/app", "0.1.0", &["@pied-piper/a"])
     );
-    let world = world(&[("github.com/acme/a", "acme", "a", &repo_a)], &root);
+    let world = world(
+        &[("github.com/pied-piper/a", "pied-piper", "a", &repo_a)],
+        &root,
+    );
     let closure = resolve(&world, None).expect("first resolve");
     let lock = Lockfile::new(closure);
 
@@ -403,7 +412,7 @@ fn a_lock_is_not_satisfied_by_a_fallback_copy() {
     let again = resolve_github_closure(&layered, &manifest, &world.fetcher, Some(&lock))
         .expect("second resolve");
 
-    assert_eq!(names(&again.locked), vec!["@acme/a"]);
+    assert_eq!(names(&again.locked), vec!["@pied-piper/a"]);
     assert_eq!(
         world.fetcher.fetches.load(Ordering::SeqCst),
         2,

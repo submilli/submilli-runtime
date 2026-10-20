@@ -22,7 +22,7 @@ EXECUTE = "submilli__typescript__execute"
 
 
 def program(customer: str) -> str:
-    return ('import { readBalance } from "@acme/billing"; '
+    return ('import { readBalance } from "@pied-piper/billing"; '
             f'function main(): number {{ return readBalance("{customer}"); }}')
 
 
