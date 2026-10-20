@@ -202,10 +202,14 @@ headers/bodies and error capture remain disabled. Preview origins and marked
 
 Internal browsers must open `https://submilli.ai/docs/?analytics=off` once per
 browser/profile. The query applies before SDK initialization and saves the shared
-website/docs opt-out; a denial in another tab also stops recording. A browser
-whose identity has never been supplied cannot be matched to a team member.
-The internal cohort is a reporting filter, not a browser recording gate. Verify
-the three team members' browser opt-outs separately before claiming exclusion.
+website/docs opt-out in localStorage plus the first-party
+`submilli_analytics_consent=denied` cookie (`Path=/`, host-only); either denial
+blocks startup, and a denial in another tab also stops recording. Each profile
+and fresh agent context must be enrolled separately; this repository cannot
+enforce opt-out in unmanaged profiles or claim that an anonymous browser belongs
+to a team member. The internal cohort is a reporting filter, not a browser
+recording gate. Preview/Render origins and marked verification sessions do not
+initialize analytics or capture events.
 
 The event inventory is `$pageview` (`page_path`, `$current_url`),
 `link_clicked` (`destination`, `external`), and `docs_cta_clicked`
@@ -214,9 +218,11 @@ The event inventory is `$pageview` (`page_path`, `$current_url`),
 `booking_provider: google_calendar`, `destination`, `external`) so website
 funnels can include docs traffic. CTA IDs cover `meeting`, `website`, `github`,
 `discord`, `agent_setup`, `view_markdown`, and `agent_docs`.
-Synthetic verification can add `?analytics_test=1`; every captured event then
-has `is_test: true` for the rest of the browser tab session so it can be excluded
-from reporting, including after navigating to another docs page.
+Synthetic verification can add `?analytics_test=1` (or a verification UTM). The
+marker is sticky for the browser tab session, but marked sessions are suppressed:
+the SDK does not initialize and no events are captured, including after navigating
+to another docs page. Use a fresh profile or clear the marker before testing
+normal production capture.
 
 At `https://submilli.ai/docs/`, the same capture key and `localStorage` persistence
 reuse marketing’s PostHog identity and `submilli.attribution.v1` first/latest touch.
