@@ -8,7 +8,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "dc9ba8c7209c691492e3123afbbbcac1a0d8dac86eb90b18e540c944562ffa09"
+  contentHash: "94e9317c3e3af5462cdac0a8eac4cbc84678132d1f9531f0cf5e858c5b3c80c9"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -128,4 +128,4 @@ You now have an OpenAI Agents SDK application connected to a registered
 Blueprint over MCP, with the session closed by the connection context. For
 the shared application-tool lifecycle and the LangChain-specific `ptc`
 contract, read the [harness tools overview](/docs/tutorials/connect-a-harness#call-harness-tools-from-programs)
-and the [`langchain-submilli` reference](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#application-tools).
+and the [`langchain-submilli` reference](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#your-tools-in-programs).

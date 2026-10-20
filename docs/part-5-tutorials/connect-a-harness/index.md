@@ -8,7 +8,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "5500fdf6b0dcf0f010dc95899231ca20489c43dcd1ff5c830885973493d182cc"
+  contentHash: "6a5c00d79e1201f794b592d1f24ec0fbfbead9d99e1e96693c9ae899e90cb8d4"
   confirmedAt: "2026-10-20T09:39:00Z"
 ---
 
@@ -21,6 +21,8 @@ authorship:
 | [OpenAI Agents SDK](/docs/tutorials/connect-openai-agents) | Python | MCP |
 | [Claude Agent SDK](/docs/tutorials/connect-claude-agent-sdk) | TypeScript | MCP |
 | [Vercel AI SDK](/docs/tutorials/use-the-http-api) | TypeScript | The HTTP API |
+
+<div id="what-every-harness-does"></div>
 
 ## Tool access
 
@@ -99,6 +101,6 @@ Submilli’s MCP connections do not support tools passed in by the harness. The
 Vercel AI SDK example uses HTTP, but does not implement this feature.
 
 See the [HTTP API reference](/docs/reference/http-api#application-tools) for the
-protocol, the [LangChain middleware reference](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#application-tools)
+protocol, the [LangChain middleware reference](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#your-tools-in-programs)
 for `ptc` and approvals, and the [Python SDK reference](https://github.com/submilli/submilli-python/tree/main/packages/submilli#your-tools-in-programs)
 for implementing the harness side.
