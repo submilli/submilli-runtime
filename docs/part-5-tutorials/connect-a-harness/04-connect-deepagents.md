@@ -8,7 +8,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "5a9b2fd3b2ba4f4a0ca0b44050f70745d4b9389faec122ffffba9a38e2b07726"
+  contentHash: "bae87bc92a5fd2d669b283e1ba1b6c9707d747152b1ce381de853885dcf868fc"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -206,6 +206,8 @@ its tool result on standard error. The final answer should contain:
 The model passed the supplied program to Submilli, which compiled and ran it in the
 registered Blueprint's session. Check the printed execute-tool result as well
 as the final answer to confirm that the connection completed.
+
+<a id="your-tools-in-programs"></a>
 
 To reuse application tools under Blueprint permissions, pass your LangChain
 tools to `SubmilliMiddleware`'s `ptc` parameter. They become callable from
