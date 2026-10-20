@@ -442,6 +442,15 @@ path = "types"
     assert_eq!(
         requires,
         [
+            (
+                "git.clone",
+                Some(
+                    "remote == \"https://github.com/\" \
+                     and remoteName == \"origin\""
+                )
+            ),
+            ("git.fetch", Some("remoteName == \"origin\"")),
+            ("git.init", Some("path == \"/repo\"")),
             ("pied-piper.example/delete", Some("owner == \"via-super\"")),
             ("pied-piper.example/open", Some("host == \"example.com\"")),
             (
@@ -453,15 +462,6 @@ path = "types"
             ("pied-piper.example/read", Some("id == \"direct\"")),
             ("pied-piper.example/read", Some("id == \"inherited\"")),
             ("pied-piper.example/wrap", Some("id == \"generic-static\"")),
-            (
-                "git.clone",
-                Some(
-                    "remote == \"https://github.com/\" \
-                     and remoteName == \"origin\""
-                )
-            ),
-            ("git.fetch", Some("remoteName == \"origin\"")),
-            ("git.init", Some("path == \"/repo\"")),
         ]
     );
 }
