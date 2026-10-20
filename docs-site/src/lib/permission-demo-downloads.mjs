@@ -17,6 +17,7 @@ export async function permissionDemoDownloads() {
       { cwd: fileURLToPath(new URL('../../../examples/quickstart/', import.meta.url)) });
     return new Map([
       [permissionDemoPath + 'billing-source.zip', await readFile(archive)],
+      [permissionDemoPath + 'basic-blueprint.yaml', await readFile(new URL('../../../examples/harnesses/permission-demo/basic-blueprint.yaml', import.meta.url))],
       [permissionDemoPath + 'blueprint.yaml', await readFile(new URL('../../../examples/harnesses/permission-demo/blueprint.yaml', import.meta.url))],
     ]);
   } finally {

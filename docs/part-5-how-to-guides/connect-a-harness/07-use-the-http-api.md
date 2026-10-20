@@ -9,13 +9,13 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "31dd7a2403a759d8427c67afcf47405d3371263ea38d14d6ab3320beb9cbc527"
+  contentHash: "fa22b6e274496eb4078c5c97ca720ceada06c0c2c7c66ec61d2059728b9f54d9"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
 
-Create a fresh Vercel AI SDK agent whose execution tools run through Submilli,
-then try an allowed operation and a denied operation with the same Blueprint.
+Create a fresh Vercel AI SDK agent with only Submilli execution tools, then
+run a small program and see its result in your terminal.
 
 ## Use your coding agent
 
@@ -24,26 +24,25 @@ Open a project directory in your coding agent.
 the coding agent to load it. Give it this prompt:
 
 ```text agent-prompt
-Use the Submilli skill to create a fresh Vercel AI SDK demo agent connected
-to Submilli through the HTTP API. Write dedicated demo files without replacing
-an existing agent or its configuration. Inspect the project and help me choose
-and configure a model if needed. Keep credentials local and out of responses.
-Download https://submilli.ai/docs/examples/permission-demo/blueprint.yaml
-and https://submilli.ai/docs/examples/permission-demo/billing-source.zip
-into a new demo directory. Prepare the billing Package with submilli build
-publish-local and register the Blueprint with submilli server blueprint apply.
-Find a local Submilli server and token, or help me prepare them. Publish the
-Package under the same user and SUBMILLI_HOME as that server. Use the
-permission-demo Blueprint. Give the new agent only Submilli execution tools.
-Disable built-in execution tools, other tool providers, and delegation routes
-that could act outside Submilli. Follow this guide's framework-specific setup.
-Verify connection and the allowed cus_northwind and denied cus_initech
-listCharges calls without a model request. Tell me how to start the agent
-and where to inspect tool results, plus any remaining setup I must complete.
+Use the Submilli skill and this guide to create a fresh Vercel AI SDK demo
+in a new submilli-demo directory. Preserve my existing agent configuration.
+Create the complete submilli-agent.mjs file shown in this guide, including its
+command-line prompt and tool-result logging. Give it only Submilli execution
+tools and apply this guide’s framework-specific exclusions.
+Inspect my project’s provider/model setup. Help me choose any missing model
+configuration and credentials without guessing values or revealing secrets.
+Find a local Submilli server and token, or help me prepare them.
+Download https://submilli.ai/docs/examples/permission-demo/basic-blueprint.yaml and
+register it using submilli server blueprint apply. Use harness-demo as
+SUBMILLI_BLUEPRINT. This first example requires no Package.
+Install the dependencies shown here. Verify the server and basic program
+without making a model request. Leave the runnable file ready for the exact
+Try it out command, and tell me the directory to open and any remaining
+human setup. Do not run the optional billing scenario yet.
 ```
 
-After setup, [try it out](#try-it-out). To configure the connection yourself,
-follow the manual steps below.
+After setup, [try it out](#try-it-out). To set up the same file yourself,
+follow the manual path.
 
 <details>
 <summary>Connecting an existing agent</summary>
@@ -60,175 +59,166 @@ Remove provider tools, `prepareStep` tool overrides, and tools that delegate to 
 
 ## Set up manually
 
-Use the HTTP API to send code from a Vercel AI SDK
-[tool](https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling) to the Submilli runtime.
-A tool describes a function the model can call and the inputs it accepts.
+You need the [Submilli CLI](/docs/install), a running
+[local server](/docs/server/run-the-server), and a token it accepts.
+You also need Node.js 22 or later and model access for Vercel AI SDK.
 
-:::note[Before you start]
-You’ll need:
+### Prepare a demo directory
 
-- A Vercel AI SDK project with a configured model.
-- The [Submilli CLI](/docs/install) and a [local server](/docs/server/run-the-server)
-  running under the same user and `SUBMILLI_HOME`, with a token it accepts.
-:::
-
-### Set connection variables
-
-Set these environment variables in your shell and the process that runs your agent:
-
-| Environment variable | Value |
-| --- | --- |
-| `SUBMILLI_SERVER` | Server address, such as `http://127.0.0.1:8128`, without a trailing slash |
-| `SUBMILLI_SERVER_TOKEN` | Server token |
-| `SUBMILLI_BLUEPRINT` | `permission-demo` |
-
-### Prepare the permission demo
-
-Download the [demo Blueprint](/docs/examples/permission-demo/blueprint.yaml)
-and [billing Package source](/docs/examples/permission-demo/billing-source.zip).
-The Package uses local sample charges and needs no billing credentials.
-Save both downloads in a new `permission-demo` directory, then prepare and
-register the demo with your running server:
+Run these commands from the directory where you keep your projects:
 
 ```sh
-cd permission-demo
-unzip billing-source.zip
-submilli build publish-local
+mkdir submilli-demo
+cd submilli-demo
+npm init -y
+npm install ai@^7.0.0 zod@^4.1.8 @ai-sdk/openai
+curl -fsSLo blueprint.yaml https://submilli.ai/docs/examples/permission-demo/basic-blueprint.yaml
+```
+
+Keep this terminal in `submilli-demo` for the rest of the guide.
+Set these environment variables in this terminal using your own configuration:
+
+| Variable | Value |
+| --- | --- |
+| `SUBMILLI_SERVER` | Your server URL, such as `http://127.0.0.1:8128` |
+| `SUBMILLI_SERVER_TOKEN` | A token accepted by that server |
+| `SUBMILLI_BLUEPRINT` | `harness-demo` |
+| `AI_MODEL` | An OpenAI model ID available to your account. Export your existing `OPENAI_API_KEY` in this terminal. This complete example uses the [OpenAI adapter](https://ai-sdk.dev/providers/ai-sdk-providers/openai). |
+
+The model credentials are separate from the Submilli server token. Reuse your
+chosen provider’s setup. Do not put credentials in the file you save next.
+Register the downloaded Blueprint:
+
+```sh
+export SUBMILLI_BLUEPRINT=harness-demo
 SUBMILLI_SERVER_URL="$SUBMILLI_SERVER" submilli server blueprint apply blueprint.yaml
 ```
 
-The Blueprint permits
-listing charges for `cus_northwind` and denies that operation for other customers.
+### Save the runnable agent
 
-### Install the tool dependencies
+Save this complete file as `submilli-demo/submilli-agent.mjs`. If you are already
+inside `submilli-demo`, save it as `submilli-agent.mjs`.
 
-In your TypeScript project:
-
-```sh
-npm install ai@^7.0.0 zod@^4.1.8
-```
-
-### Define the Submilli tool
-
-Add this to a module in your project. It fetches the tool description from
-Submilli, then creates a tool that sends code to `POST /v1/execute`.
-
-```typescript title="submilli.ts"
-import { tool } from "ai";
+```javascript title="submilli-agent.mjs"
+import { generateText, stepCountIs, tool } from "ai";
 import { z } from "zod";
+import { openai } from "@ai-sdk/openai";
 
-const server = process.env.SUBMILLI_SERVER;
-const blueprint = process.env.SUBMILLI_BLUEPRINT;
+function required(name) {
+  const value = process.env[name];
+  if (!value) throw new Error(`Set ${name} in this terminal before running this file.`);
+  return value;
+}
+const server = required("SUBMILLI_SERVER").replace(/\/$/, "");
+const blueprint = required("SUBMILLI_BLUEPRINT");
+const token = required("SUBMILLI_SERVER_TOKEN");
+const model = required("AI_MODEL");
+required("OPENAI_API_KEY");
 const headers = {
-  Authorization: `Bearer ${process.env.SUBMILLI_SERVER_TOKEN}`,
-  "Content-Type": "application/json",
+  Authorization: `Bearer ${token}`, "Content-Type": "application/json",
 };
-
 const response = await fetch(`${server}/v1/blueprints/${blueprint}/prompt`, { headers });
 if (!response.ok) throw new Error(`Cannot read the tool description: ${response.status}`);
 const description = await response.json();
-
-export const submilli = tool({
+async function execute(code) {
+  const response = await fetch(`${server}/v1/execute`, {
+    method: "POST", headers, body: JSON.stringify({ blueprint, code }),
+  });
+  if (!response.ok) throw new Error(`Submilli request failed: ${response.status}`);
+  const run = await response.json();
+  console.dir({ submilliResult: run }, { depth: null });
+  if (run.error) throw new Error(JSON.stringify(run.error));
+  return JSON.parse(run.result);
+}
+const submilli = tool({
   description: description.prompt,
   inputSchema: z.object({ code: z.string() }),
-  execute: async ({ code }) => {
-    const response = await fetch(`${server}/v1/execute`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ blueprint, code }),
-    });
-    if (!response.ok) throw new Error(`Submilli request failed: ${response.status}`);
-    const run = await response.json();
-    if (run.error) throw new Error(JSON.stringify(run.error));
-    return run.result;
-  },
+  execute: ({ code }) => execute(code),
 });
-```
-
-<details>
-<summary>Using a different Blueprint with variables or secrets</summary>
-
-If your Blueprint requires variables, include them as `variables` in the
-request body. For secrets supplied by your application (the `harness`
-source), include a mapping of names to values as `secrets`.
-See [Blueprint secrets](/docs/reference/blueprint-file#secrets) and
-[the execute request](/docs/reference/http-api#one-off-runs) for the fields.
-
-</details>
-
-### Create the demo call
-
-Use your configured `model` and the message under **Try it out** as `prompt`.
-This fresh call gives the model only the Submilli tool.
-
-```typescript title="Fresh demo call"
-import { generateText, stepCountIs } from "ai";
-import { submilli } from "./submilli";
-
-const result = await generateText({
-  model,
-  prompt,
-  tools: { submilli__typescript__execute: submilli },
-  stopWhen: stepCountIs(10),
-});
-```
-
-Each call runs in a new Submilli session that ends when the program returns.
-For a connection that keeps state across calls, see
-[HTTP sessions](/docs/reference/http-api#sessions).
-
-### Verify the connection
-
-Call the tool directly before making a model request:
-
-```typescript
-const connectionResult = await submilli.execute!(
-  { code: 'function main(): string { return "connected"; }' },
-  { toolCallId: "connection-check", messages: [], context: {} },
-);
-if (connectionResult !== "connected") throw new Error(`Unexpected result: ${connectionResult}`);
-console.log("Connected to Submilli.");
-```
-
-`Connected to Submilli.` confirms that the SDK tool sent code to the
-server and received the expected result. This request does not call a model.
-
-## Try it out
-
-1. Open your application's chat or test input with the fresh demo agent.
-2. Ask it to perform the allowed operation:
-
-   > Use the billing Package to list charges for customer `cus_northwind`.
-
-   Check the Submilli tool result for `ch_a1` (4900) and `ch_a2` (1250).
-3. Ask it to attempt the denied operation:
-
-   > Use the billing Package to list charges for customer `cus_initech`.
-   > Attempt the operation through Submilli and report the runtime result.
-   > Keep the customer ID and Blueprint permissions unchanged.
-
-   Check for a Submilli call returning `permission_denied` for
-   `acme.com/charges.list`, with no charges.
-
-An agent's answer or refusal alone does not demonstrate the permission check.
-Look for both runtime results in tool activity. Expand the inspection steps
-below if your app hides them.
-
-<details>
-<summary>If the agent declines to attempt the denied operation</summary>
-
-Ask it to run this exact program through Submilli and report the tool result:
-
-```typescript
-import { listCharges, Charge } from "@acme/billing";
-
-function main(): Charge[] {
-  return listCharges("cus_initech");
+if (process.argv[2] === "--check") {
+  const result = await execute('export function main(): number { return 2 + 2; }');
+  if (result !== 4) throw new Error(`Expected 4, received ${JSON.stringify(result)}`);
+  console.log("Connected to Submilli.");
+} else {
+  const prompt = process.argv.slice(2).join(" ") || 'Run this program through Submilli and report its result: export function main(): number { return 2 + 2; }';
+  const result = await generateText({
+    model: openai(model), prompt, tools: { submilli__typescript__execute: submilli },
+    stopWhen: stepCountIs(10),
+  });
+  for (const step of result.steps) {
+    console.dir({ calls: step.toolCalls, results: step.toolResults }, { depth: null });
+  }
+  console.log("Agent answer:", result.text);
 }
 ```
 
-If it still declines without making a tool call, the runtime denial has not
-been tested. Use the direct demo check below to verify the Blueprint independently.
+Check the connection without a model request:
+
+```sh
+node submilli-agent.mjs --check
+```
+
+Look for `Connected to Submilli.`. This confirms the server and Blueprint are reachable.
+
+## Try it out
+
+1. Open a terminal in the `submilli-demo` directory created during setup. Use the same environment variables as during setup.
+2. Run the saved agent. Its default request asks Submilli to execute `export function main(): number { return 2 + 2; }`:
+
+   ```sh
+   node submilli-agent.mjs
+   ```
+
+3. Read the printed tool call and its matching result, then the agent’s answer. Look for the Submilli execution tool, the program containing `2 + 2`, and a returned value of `4`. An answer of `4` without an execution call does not verify the connection.
+
+The file prints tool calls and results automatically. Match a call’s ID to
+its result’s ID. MCP results may contain the value inside a text block.
+If no execution call appears, run this explicit request:
+
+```sh
+node submilli-agent.mjs 'Use the Submilli execution tool now. Run export function main(): number { return 2 + 2; } and report the tool result. Do not calculate the answer without a tool call.'
+```
+
+<details>
+<summary>Optional scenario 2: allow one customer and reject another</summary>
+
+Keep the same agent file. This scenario adds a billing Package containing
+local sample charges and a Blueprint permitting `cus_northwind` only.
+No billing credentials are needed. Run the Package commands under the same
+user and `SUBMILLI_HOME` as your local server.
+
+From `submilli-demo`, prepare the optional demo:
+
+```sh
+mkdir permission-demo
+cd permission-demo
+curl -fsSLo blueprint.yaml https://submilli.ai/docs/examples/permission-demo/blueprint.yaml
+curl -fsSLo billing-source.zip https://submilli.ai/docs/examples/permission-demo/billing-source.zip
+unzip billing-source.zip
+submilli build publish-local
+SUBMILLI_SERVER_URL="$SUBMILLI_SERVER" submilli server blueprint apply blueprint.yaml
+cd ..
+export SUBMILLI_BLUEPRINT=permission-demo
+```
+
+Run the allowed request:
+
+```sh
+node submilli-agent.mjs 'Use the Submilli execution tool to run this exact program and report the runtime result: import { listCharges, Charge } from "@acme/billing"; export function main(): Charge[] { return listCharges("cus_northwind"); }'
+```
+
+Look for `ch_a1` (4900) and `ch_a2` (1250) in the printed Submilli tool result.
+Then run the denied request:
+
+```sh
+node submilli-agent.mjs 'Use the Submilli execution tool to run this exact program and report the runtime result. Keep the customer ID and Blueprint permissions unchanged: import { listCharges, Charge } from "@acme/billing"; export function main(): Charge[] { return listCharges("cus_initech"); }'
+```
+
+Look for a tool result with `permission_denied` for `acme.com/charges.list`
+and no charges. A model refusal without a tool call does not test the runtime.
+
+To test the rejection directly, including when the model refuses to call the
+tool, run this complete request from the same terminal:
 
 ```sh
 curl -fsS "$SUBMILLI_SERVER/v1/execute" \
@@ -239,40 +229,10 @@ curl -fsS "$SUBMILLI_SERVER/v1/execute" \
 
 Check for `error.kind` equal to `"permission_denied"`, Capability
 `acme.com/charges.list`, and `result: null`. Older runtimes may return
-`runtime_error` with a `PermissionDeniedError` message instead.
+`runtime_error` with a `PermissionDeniedError` message instead. This direct
+request verifies the runtime’s rejection independently of the model.
 
-</details>
-
-<details>
-<summary>Inspect the Submilli call</summary>
-
-To inspect a run in code, put the test message in your `generateText`
-input, either as its `prompt` or as a user entry in its `messages`. Keep the
-demo model and Submilli tool. After `await generateText(...)`, print
-the [completed steps](https://ai-sdk.dev/docs/reference/ai-sdk-core/generate-text)
-in your application's terminal:
-
-```typescript
-for (const step of result.steps) {
-  console.dir({ calls: step.toolCalls, results: step.toolResults }, { depth: null });
-}
-console.log(result.text);
-```
-
-For an existing `streamText` call, inspect `await result.steps` after consuming
-the stream. Find `submilli__typescript__execute` in `toolName`, inspect its
-`input.code`, and match its `toolCallId` to the result's `toolCallId`. The
-successful tool result's `output` should contain the Northwind charges. If setup connected through
-MCP, inspect the execution tool supplied by that connection; its output may
-wrap the value in MCP text content.
-
-Match the tool call and result by their call ID and check for an error.
-
-If there is no execution call, check that this run uses the agent configuration
-with Submilli attached and that its tool settings allow the call. If the call
-fails, read the tool error and [check the connection settings](#troubleshooting).
-If the tool returns charges but the agent gives no final answer, check your agent's
-step or turn limit so it can continue after the tool result.
+Return to the basic example with `export SUBMILLI_BLUEPRINT=harness-demo`.
 
 </details>
 
@@ -280,7 +240,8 @@ step or turn limit so it can continue after the tool result.
 
 - Connection refused: check `SUBMILLI_SERVER` and whether the server is running.
 - `401`: use a token accepted by that server.
-- Blueprint not found: check `SUBMILLI_BLUEPRINT` against the name registered
-  on that server.
+- Blueprint not found: check `SUBMILLI_BLUEPRINT` against the registered name.
+- Model authentication error: check the model provider’s credentials in this terminal.
+- Tool result but no final answer: read the SDK error or turn-limit result printed by the file.
 
 See [server settings](/docs/reference/server-settings) for server configuration.

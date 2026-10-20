@@ -9,13 +9,13 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "715cb3484cd7fe9ee1df63a9946e27e9fb2101cce434bec54db42fe3313781a0"
+  contentHash: "7f385ee7b3cb61db7b1840561dea75dbc66b5371411bb90fd08d33f29f6a6a3f"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
 
-Create a fresh Claude Agent SDK agent whose execution tools run through Submilli,
-then try an allowed operation and a denied operation with the same Blueprint.
+Create a fresh Claude Agent SDK agent with only Submilli execution tools, then
+run a small program and see its result in your terminal.
 
 ## Use your coding agent
 
@@ -24,26 +24,25 @@ Open a project directory in your coding agent.
 the coding agent to load it. Give it this prompt:
 
 ```text agent-prompt
-Use the Submilli skill to create a fresh Claude Agent SDK demo agent connected
-to Submilli through MCP. Write dedicated demo files without replacing
-an existing agent or its configuration. Inspect the project and help me choose
-and configure a model if needed. Keep credentials local and out of responses.
-Download https://submilli.ai/docs/examples/permission-demo/blueprint.yaml
-and https://submilli.ai/docs/examples/permission-demo/billing-source.zip
-into a new demo directory. Prepare the billing Package with submilli build
-publish-local and register the Blueprint with submilli server blueprint apply.
-Find a local Submilli server and token, or help me prepare them. Publish the
-Package under the same user and SUBMILLI_HOME as that server. Use the
-permission-demo Blueprint. Give the new agent only Submilli execution tools.
-Disable built-in execution tools, other tool providers, and delegation routes
-that could act outside Submilli. Follow this guide's framework-specific setup.
-Verify connection and the allowed cus_northwind and denied cus_initech
-listCharges calls without a model request. Tell me how to start the agent
-and where to inspect tool results, plus any remaining setup I must complete.
+Use the Submilli skill and this guide to create a fresh Claude Agent SDK demo
+in a new submilli-demo directory. Preserve my existing agent configuration.
+Create the complete submilli-agent.mjs file shown in this guide, including its
+command-line prompt and tool-result logging. Give it only Submilli execution
+tools and apply this guide’s framework-specific exclusions.
+Inspect my project’s provider/model setup. Help me choose any missing model
+configuration and credentials without guessing values or revealing secrets.
+Find a local Submilli server and token, or help me prepare them.
+Download https://submilli.ai/docs/examples/permission-demo/basic-blueprint.yaml and
+register it using submilli server blueprint apply. Use harness-demo as
+SUBMILLI_BLUEPRINT. This first example requires no Package.
+Install the dependencies shown here. Verify the server and basic program
+without making a model request. Leave the runnable file ready for the exact
+Try it out command, and tell me the directory to open and any remaining
+human setup. Do not run the optional billing scenario yet.
 ```
 
-After setup, [try it out](#try-it-out). To configure the connection yourself,
-follow the manual steps below.
+After setup, [try it out](#try-it-out). To set up the same file yourself,
+follow the manual path.
 
 <details>
 <summary>Connecting an existing agent</summary>
@@ -61,150 +60,162 @@ and plugin or hook configurations that add another execution route.
 
 ## Set up manually
 
-Connect through [MCP](https://code.claude.com/docs/en/agent-sdk/mcp) with a fresh query configured
-to use only Submilli tools. MCP lets an agent discover and call
-tools on a server.
+You need the [Submilli CLI](/docs/install), a running
+[local server](/docs/server/run-the-server), and a token it accepts.
+You also need Node.js 22 or later and model access for Claude Agent SDK.
 
-:::note[Before you start]
-You’ll need:
+### Prepare a demo directory
 
-- A Claude Agent SDK project with a configured model.
-- The [Submilli CLI](/docs/install) and a [local server](/docs/server/run-the-server)
-  running under the same user and `SUBMILLI_HOME`, with a token it accepts.
-:::
-
-### Set connection variables
-
-Set these environment variables in your shell and the process that runs your agent:
-
-| Environment variable | Value |
-| --- | --- |
-| `SUBMILLI_SERVER` | Server address, such as `http://127.0.0.1:8128`, without a trailing slash |
-| `SUBMILLI_SERVER_TOKEN` | Server token |
-| `SUBMILLI_BLUEPRINT` | `permission-demo` |
-
-### Prepare the permission demo
-
-Download the [demo Blueprint](/docs/examples/permission-demo/blueprint.yaml)
-and [billing Package source](/docs/examples/permission-demo/billing-source.zip).
-The Package uses local sample charges and needs no billing credentials.
-Save both downloads in a new `permission-demo` directory, then prepare and
-register the demo with your running server:
+Run these commands from the directory where you keep your projects:
 
 ```sh
-cd permission-demo
-unzip billing-source.zip
-submilli build publish-local
+mkdir submilli-demo
+cd submilli-demo
+npm init -y
+npm install @anthropic-ai/claude-agent-sdk
+curl -fsSLo blueprint.yaml https://submilli.ai/docs/examples/permission-demo/basic-blueprint.yaml
+```
+
+Keep this terminal in `submilli-demo` for the rest of the guide.
+Set these environment variables in this terminal using your own configuration:
+
+| Variable | Value |
+| --- | --- |
+| `SUBMILLI_SERVER` | Your server URL, such as `http://127.0.0.1:8128` |
+| `SUBMILLI_SERVER_TOKEN` | A token accepted by that server |
+| `SUBMILLI_BLUEPRINT` | `harness-demo` |
+| `CLAUDE_MODEL` | A Claude model ID supported by your configured [Agent SDK authentication](https://platform.claude.com/docs/en/agent-sdk/overview). Configure that authentication in this terminal before running the file. |
+
+The model credentials are separate from the Submilli server token. Reuse your
+chosen provider’s setup. Do not put credentials in the file you save next.
+Register the downloaded Blueprint:
+
+```sh
+export SUBMILLI_BLUEPRINT=harness-demo
 SUBMILLI_SERVER_URL="$SUBMILLI_SERVER" submilli server blueprint apply blueprint.yaml
 ```
 
-The Blueprint permits
-listing charges for `cus_northwind` and denies that operation for other customers.
+### Save the runnable agent
 
-### Install Claude Agent SDK
+Save this complete file as `submilli-demo/submilli-agent.mjs`. If you are already
+inside `submilli-demo`, save it as `submilli-agent.mjs`.
 
-If it is not already installed in your TypeScript project:
+The query disables built-in tools and project settings, and restricts MCP to the configured Submilli server.
 
-```sh
-npm install @anthropic-ai/claude-agent-sdk
-```
-
-### Create the demo query
-
-Create a dedicated query with only Submilli's tools. Use the message under
-**Try it out** as `prompt`. `tools: []` disables built-in tools, and
-`strictMcpConfig` restricts MCP to the server configured here.
-
-```typescript title="Query configuration (fragment)"
+```javascript title="submilli-agent.mjs"
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
+function required(name) {
+  const value = process.env[name];
+  if (!value) throw new Error(`Set ${name} in this terminal before running this file.`);
+  return value;
+}
+const server = required("SUBMILLI_SERVER").replace(/\/$/, "");
+const blueprint = required("SUBMILLI_BLUEPRINT");
+const token = required("SUBMILLI_SERVER_TOKEN");
+const model = required("CLAUDE_MODEL");
+const prompt = process.argv.slice(2).join(" ") || 'Run this program through Submilli and report its result: export function main(): number { return 2 + 2; }';
 const agent = query({
   prompt,
   options: {
+    model,
     mcpServers: {
       submilli: {
-        type: "http",
-        url: `${process.env.SUBMILLI_SERVER}/mcp/${process.env.SUBMILLI_BLUEPRINT}`,
-        headers: {
-          Authorization: `Bearer ${process.env.SUBMILLI_SERVER_TOKEN}`,
-        },
+        type: "http", url: `${server}/mcp/${blueprint}`,
+        headers: { Authorization: `Bearer ${token}` },
       },
     },
     allowedTools: ["mcp__submilli__*"],
-    tools: [],
-    strictMcpConfig: true,
-    settingSources: [],
-    maxTurns: 10,
+    tools: [], strictMcpConfig: true, settingSources: [], maxTurns: 10,
   },
 });
-```
-
-Process `agent` messages in one loop, as shown under **Try it out**.
-Keep the query open while it uses Submilli, and call `agent.close()` when
-you finish or stop consuming the messages.
-
-<details>
-<summary>Using a different Blueprint with variables or secrets</summary>
-
-If your Blueprint requires variables, add a `submilli-variables` header.
-See [MCP variable bindings](/docs/application#three-decisions-the-model-has-no-part-in).
-If your Blueprint requires secrets from your application (the `harness`
-source), add `submilli-secrets` containing a base64url-encoded JSON object
-of their names and values. See
-[Blueprint secrets](/docs/reference/blueprint-file#secrets).
-
-</details>
-
-### Verify the connection
-
-While the query is open, inspect its MCP connections:
-
-```typescript
-const servers = await agent.mcpServerStatus();
-const submilli = servers.find((server) => server.name === "submilli");
-console.log(submilli?.status);
-```
-
-The status should become `connected`, and `submilli.tools` should include
-`submilli__typescript__execute`. A `pending` status means the SDK is still
-connecting. Inspect `submilli.error` if the status becomes `failed`.
-
-## Try it out
-
-1. Open your application's chat or test input with the fresh demo agent.
-2. Ask it to perform the allowed operation:
-
-   > Use the billing Package to list charges for customer `cus_northwind`.
-
-   Check the Submilli tool result for `ch_a1` (4900) and `ch_a2` (1250).
-3. Ask it to attempt the denied operation:
-
-   > Use the billing Package to list charges for customer `cus_initech`.
-   > Attempt the operation through Submilli and report the runtime result.
-   > Keep the customer ID and Blueprint permissions unchanged.
-
-   Check for a Submilli call returning `permission_denied` for
-   `acme.com/charges.list`, with no charges.
-
-An agent's answer or refusal alone does not demonstrate the permission check.
-Look for both runtime results in tool activity. Expand the inspection steps
-below if your app hides them.
-
-<details>
-<summary>If the agent declines to attempt the denied operation</summary>
-
-Ask it to run this exact program through Submilli and report the tool result:
-
-```typescript
-import { listCharges, Charge } from "@acme/billing";
-
-function main(): Charge[] {
-  return listCharges("cus_initech");
+try {
+  for await (const message of agent) {
+    if (message.type === "assistant" || message.type === "user") {
+      const content = message.message.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block.type === "tool_use" || block.type === "tool_result") {
+            console.dir(block, { depth: null });
+          }
+        }
+      }
+    }
+    if (message.type === "result") console.dir(message, { depth: null });
+  }
+} finally {
+  agent.close();
 }
 ```
 
-If it still declines without making a tool call, the runtime denial has not
-been tested. Use the direct demo check below to verify the Blueprint independently.
+Check the server and Blueprint without a model request:
+
+```sh
+curl -fsS "$SUBMILLI_SERVER/v1/blueprints/$SUBMILLI_BLUEPRINT/prompt" \
+  -H "Authorization: Bearer $SUBMILLI_SERVER_TOKEN"
+```
+
+This returns the Blueprint’s execution instructions. The agent run checks the SDK connection when it calls a tool.
+
+## Try it out
+
+1. Open a terminal in the `submilli-demo` directory created during setup. Use the same environment variables as during setup.
+2. Run the saved agent. Its default request asks Submilli to execute `export function main(): number { return 2 + 2; }`:
+
+   ```sh
+   node submilli-agent.mjs
+   ```
+
+3. Read the printed tool call and its matching result, then the agent’s answer. Look for the Submilli execution tool, the program containing `2 + 2`, and a returned value of `4`. An answer of `4` without an execution call does not verify the connection.
+
+The file prints tool calls and results automatically. Match a call’s ID to
+its result’s ID. MCP results may contain the value inside a text block.
+If no execution call appears, run this explicit request:
+
+```sh
+node submilli-agent.mjs 'Use the Submilli execution tool now. Run export function main(): number { return 2 + 2; } and report the tool result. Do not calculate the answer without a tool call.'
+```
+
+<details>
+<summary>Optional scenario 2: allow one customer and reject another</summary>
+
+Keep the same agent file. This scenario adds a billing Package containing
+local sample charges and a Blueprint permitting `cus_northwind` only.
+No billing credentials are needed. Run the Package commands under the same
+user and `SUBMILLI_HOME` as your local server.
+
+From `submilli-demo`, prepare the optional demo:
+
+```sh
+mkdir permission-demo
+cd permission-demo
+curl -fsSLo blueprint.yaml https://submilli.ai/docs/examples/permission-demo/blueprint.yaml
+curl -fsSLo billing-source.zip https://submilli.ai/docs/examples/permission-demo/billing-source.zip
+unzip billing-source.zip
+submilli build publish-local
+SUBMILLI_SERVER_URL="$SUBMILLI_SERVER" submilli server blueprint apply blueprint.yaml
+cd ..
+export SUBMILLI_BLUEPRINT=permission-demo
+```
+
+Run the allowed request:
+
+```sh
+node submilli-agent.mjs 'Use the billing Package through Submilli to list charges for customer cus_northwind. Report the runtime result.'
+```
+
+Look for `ch_a1` (4900) and `ch_a2` (1250) in the printed Submilli tool result.
+Then run the denied request:
+
+```sh
+node submilli-agent.mjs 'Use the billing Package through Submilli to list charges for customer cus_initech. Attempt the operation and report the runtime result. Keep the customer ID and Blueprint permissions unchanged.'
+```
+
+Look for a tool result with `permission_denied` for `acme.com/charges.list`
+and no charges. A model refusal without a tool call does not test the runtime.
+
+To test the rejection directly, including when the model refuses to call the
+tool, run this complete request from the same terminal:
 
 ```sh
 curl -fsS "$SUBMILLI_SERVER/v1/execute" \
@@ -215,48 +226,10 @@ curl -fsS "$SUBMILLI_SERVER/v1/execute" \
 
 Check for `error.kind` equal to `"permission_denied"`, Capability
 `acme.com/charges.list`, and `result: null`. Older runtimes may return
-`runtime_error` with a `PermissionDeniedError` message instead.
+`runtime_error` with a `PermissionDeniedError` message instead. This direct
+request verifies the runtime’s rejection independently of the model.
 
-</details>
-
-<details>
-<summary>Inspect the Submilli call</summary>
-
-To inspect a run in code, set `prompt` to the test message in your
-`query({ prompt, options: ... })` call. Keep the configured MCP server and
-allowed tools. In the loop that already consumes `agent`, add this logging
-alongside your application's existing message handling:
-
-```typescript
-for await (const message of agent) {
-  if (message.type === "assistant" || message.type === "user") {
-    const content = message.message.content;
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        if (block.type === "tool_use" || block.type === "tool_result") {
-          console.dir(block, { depth: null });
-        }
-      }
-    }
-  }
-  if (message.type === "result") console.dir(message, { depth: null });
-}
-```
-
-Use one message loop, not two competing consumers, and close the query when
-it finishes. In your application's terminal, find the `tool_use` block whose
-name ends in `submilli__typescript__execute`. With the `submilli` server name
-used here, Claude prefixes MCP tool names with `mcp__submilli__`. Its `input`
-contains the program. The `tool_result` block refers to the call's `id` as
-`tool_use_id`; inspect its content for the allowed charges or the permission error.
-
-Match the tool call and result by their call ID and check for an error.
-
-If there is no execution call, check that this run uses the agent configuration
-with Submilli attached and that its tool settings allow the call. If the call
-fails, read the tool error and [check the connection settings](#troubleshooting).
-If the tool returns charges but the agent gives no final answer, check your agent's
-step or turn limit so it can continue after the tool result.
+Return to the basic example with `export SUBMILLI_BLUEPRINT=harness-demo`.
 
 </details>
 
@@ -264,7 +237,8 @@ step or turn limit so it can continue after the tool result.
 
 - Connection refused: check `SUBMILLI_SERVER` and whether the server is running.
 - `401`: use a token accepted by that server.
-- Blueprint not found: check `SUBMILLI_BLUEPRINT` against the name registered
-  on that server.
+- Blueprint not found: check `SUBMILLI_BLUEPRINT` against the registered name.
+- Model authentication error: check the model provider’s credentials in this terminal.
+- Tool result but no final answer: read the SDK error or turn-limit result printed by the file.
 
 See [server settings](/docs/reference/server-settings) for server configuration.

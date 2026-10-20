@@ -1,4 +1,15 @@
-# Permission demo
+# Harness demos
+
+`basic-blueprint.yaml` registers `harness-demo` with a deny-by-default policy
+and no Packages. Apply it with
+`submilli server blueprint apply basic-blueprint.yaml`. The basic harness check
+executes `export function main(): number { return 2 + 2; }` and returns `4`.
+It needs no billing setup or model call.
+
+The docs build publishes this basic Blueprint at
+`/docs/examples/permission-demo/basic-blueprint.yaml`.
+
+## Optional billing permission demo
 
 `blueprint.yaml` grants `acme.com/charges.list` only for `cus_northwind`.
 It needs the existing Quickstart `@acme/billing` Package, version 0.1.0, which
@@ -12,9 +23,10 @@ The docs build publishes this Blueprint and `billing-source.zip` at
 `submilli server blueprint apply blueprint.yaml` against your local server.
 There is no separate registry or precompiled runtime-dependent artifact.
 
-The shared test runs the download builder, extracts and installs its Package in
-a temporary `SUBMILLI_HOME`, starts a loopback server, and executes the same
-operation for Northwind (allowed) and Initech (denied). It checks structured
+The shared test runs the download builder and starts a loopback server with a
+temporary `SUBMILLI_HOME`. It verifies basic arithmetic before installing any
+Package, then installs the billing Package and executes the same operation for
+Northwind (allowed) and Initech (denied). It checks structured
 runtime denial fields and an unfiltered control that can read Initech. No model
 calls or external services are used.
 

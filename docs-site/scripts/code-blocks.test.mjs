@@ -77,11 +77,12 @@ test('ordinary text is not offered to agents and oversized prompts remain copyab
 test('demo asset URLs use the page origin without carrying page queries or changing other URLs', async () => {
   const { contextualizePrompt, agents, promptLink } = await import('../src/lib/agent-prompt-context.mjs');
   const base = 'https://submilli.ai/docs/examples/permission-demo/';
-  const prompt = `Download ${base}blueprint.yaml\nand ${base}billing-source.zip\n\n- Keep https://submilli.ai/docs/install\n- Keep ${base}blueprint.yaml.backup\n- Keep ${base}blueprint.yaml?token=original\n- Keep café & <script> as text`;
+  const prompt = `Download ${base}basic-blueprint.yaml\nand ${base}blueprint.yaml\nand ${base}billing-source.zip\n\n- Keep https://submilli.ai/docs/install\n- Keep ${base}blueprint.yaml.backup\n- Keep ${base}blueprint.yaml?token=original\n- Keep café & <script> as text`;
   assert.equal(contextualizePrompt(prompt, 'https://submilli.ai/docs/how-to/x?private=value#secret'), prompt);
   assert.equal(contextualizePrompt(prompt, 'file:///tmp/docs/index.html'), prompt);
   for (const origin of ['http://127.0.0.1:4321', 'https://preview.example.test']) {
-    const expected = prompt.replace(`${base}blueprint.yaml\n`, `${origin}/docs/examples/permission-demo/blueprint.yaml\n`)
+    const expected = prompt.replace(`${base}basic-blueprint.yaml\n`, `${origin}/docs/examples/permission-demo/basic-blueprint.yaml\n`)
+      .replace(`${base}blueprint.yaml\n`, `${origin}/docs/examples/permission-demo/blueprint.yaml\n`)
       .replace(`${base}billing-source.zip\n`, `${origin}/docs/examples/permission-demo/billing-source.zip\n`);
     const actual = contextualizePrompt(prompt, `${origin}/docs/how-to/x?private=value#secret`);
     assert.equal(actual, expected);

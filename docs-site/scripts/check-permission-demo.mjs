@@ -33,11 +33,7 @@ try {
     }
   }
   for (const [path, bytes] of downloads) await writeFile(join(work, path.slice(permissionDemoPath.length)), bytes);
-  await run('unzip', ['-q', 'billing-source.zip']);
-  assert.equal(await readFile(join(work, 'package/src/lib.ts'), 'utf8'),
-    await readFile(new URL('../../examples/quickstart/package/src/lib.ts', import.meta.url), 'utf8'));
-  await run(cli, ['build', 'publish-local', '--deny-warnings']);
-  await run(cli, ['blueprint', 'lint', '--deny-warnings', 'blueprint.yaml']);
+  await run(cli, ['blueprint', 'lint', '--deny-warnings', 'basic-blueprint.yaml']);
   server = spawn(serverBin, ['--bind', '127.0.0.1', '--port', String(port)], { cwd: work, env, stdio: 'ignore' });
   let serverError;
   server.on('error', error => { serverError = error; });
@@ -50,11 +46,26 @@ try {
   }
   if (serverError) throw serverError;
   assert.ok(ready, 'server became ready');
+  await run(cli, ['server', 'blueprint', 'apply', 'basic-blueprint.yaml']);
+  const basicResponse = await fetch(`${base}/v1/execute`, {
+    method: 'POST', headers: { authorization: `Bearer ${env.SUBMILLI_SERVER_TOKEN}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ blueprint: 'harness-demo', code: 'export function main(): number { return 2 + 2; }' }),
+  });
+  assert.equal(basicResponse.status, 200);
+  const basic = await basicResponse.json();
+  assert.ok(basic.error == null);
+  assert.equal(JSON.parse(basic.result), 4);
+  console.log('BASIC: exported main returns 4 with no installed Packages.');
+  await run('unzip', ['-q', 'billing-source.zip']);
+  assert.equal(await readFile(join(work, 'package/src/lib.ts'), 'utf8'),
+    await readFile(new URL('../../examples/quickstart/package/src/lib.ts', import.meta.url), 'utf8'));
+  await run(cli, ['build', 'publish-local', '--deny-warnings']);
+  await run(cli, ['blueprint', 'lint', '--deny-warnings', 'blueprint.yaml']);
   await run(cli, ['server', 'blueprint', 'apply', 'blueprint.yaml']);
   async function execute(customerId, blueprint = 'permission-demo') {
     const response = await fetch(`${base}/v1/execute`, {
       method: 'POST', headers: { authorization: `Bearer ${env.SUBMILLI_SERVER_TOKEN}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ blueprint, code: `import { listCharges, Charge } from "@acme/billing"; function main(): Charge[] { return listCharges("${customerId}"); }` }),
+      body: JSON.stringify({ blueprint, code: `import { listCharges, Charge } from "@acme/billing"; export function main(): Charge[] { return listCharges("${customerId}"); }` }),
     });
     assert.equal(response.status, 200);
     return response.json();
