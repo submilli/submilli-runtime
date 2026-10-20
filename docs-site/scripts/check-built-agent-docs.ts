@@ -123,16 +123,3 @@ for (const file of ['agent.py', 'requirements.txt']) {
 		`Quickstart download matches the verified example: ${file}`,
 	);
 }
-
-// The downloadable Blueprint is a native YAML file, not an HTML fallback.
-const blueprintPath = 'docs/examples/permission-demo/basic-blueprint.yaml';
-assert.equal(
-  await readFile(new URL(blueprintPath, directory), 'utf8'),
-  await readFile(new URL('../public/examples/permission-demo/basic-blueprint.yaml', import.meta.url), 'utf8'),
-);
-for (const slug of ['connect-mastra', 'connect-deepagents', 'connect-openai-agents', 'connect-claude-agent-sdk', 'use-the-http-api']) {
-  for (const suffix of ['/index.html', '.md']) {
-    const content = await readFile(new URL(`docs/how-to/${slug}${suffix}`, directory), 'utf8');
-    assert.ok(content.includes(`/${blueprintPath}`), `${slug}${suffix} links to the Blueprint`);
-  }
-}

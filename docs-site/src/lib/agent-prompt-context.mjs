@@ -11,13 +11,3 @@ export function promptLink(agent, prompt) {
   // Keep the same conservative limit for every destination, with Copy available.
   return href.length <= 10000 ? href : undefined;
 }
-
-// Only these downloadable demo assets follow the page's hosting origin.
-export function contextualizePrompt(prompt, pageUrl) {
-  const page = new URL(pageUrl);
-  if (page.protocol !== 'https:' && page.protocol !== 'http:') return prompt;
-  return prompt.replace(
-    /https:\/\/submilli\.ai(\/docs\/examples\/permission-demo\/basic-blueprint\.yaml)(?=$|[\s)\]>,;])/g,
-    (_, path) => page.origin + path,
-  );
-}

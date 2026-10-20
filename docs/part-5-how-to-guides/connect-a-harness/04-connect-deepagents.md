@@ -9,13 +9,13 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "62a5dd4d02edde789680bc5cd875187281162b39767e5257962b7c2befb01107"
+  contentHash: "0f245308cb6b8b4ac5cdef98ee8cf3128dfcdeac7929c2ba8acd1f9a9b2582aa"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
 
-Create a fresh deepagents agent with only Submilli execution tools, then
-run a small program and see its result in your terminal.
+Create a fresh deepagents agent with Submilli's tools, then run a small
+program and see its result in your terminal.
 
 ## Use your coding agent
 
@@ -24,84 +24,90 @@ Open a project directory in your coding agent.
 the coding agent to load it. Give it this prompt:
 
 ```text agent-prompt
-Use the Submilli skill and this guide to create a fresh deepagents demo
-in a new submilli-demo directory. Preserve my existing agent configuration.
-Create the complete submilli-agent.py file shown in this guide, including its
-command-line prompt and tool-result logging. Give it only Submilli execution
-tools and apply this guide’s framework-specific exclusions.
-Inspect my project’s provider/model setup. Help me choose any missing model
-configuration and credentials without guessing values or revealing secrets.
-Find a local Submilli server and token, or help me prepare them.
-Download https://submilli.ai/docs/examples/permission-demo/basic-blueprint.yaml and
-register it using submilli server blueprint apply. Use harness-demo as
-SUBMILLI_BLUEPRINT. This first example requires no Package.
-Install the dependencies shown here. Verify the server and basic program
-without making a model request. Leave the runnable file ready for the exact
-Try it out command, and tell me the directory to open and any remaining
-human setup.
+Use the Submilli skill and this guide to create a fresh deepagents agent in
+the current project. Create the complete submilli-agent.py file shown in this
+guide, including its command-line prompt and tool-result logging. Pass it no
+application tools, extra middleware, custom backend, or subagents; use the
+DeepAgents harness profile and exclusions shown here so the model reaches
+Submilli only.
+Use the existing local configuration for SUBMILLI_SERVER,
+SUBMILLI_SERVER_TOKEN, and SUBMILLI_BLUEPRINT. Do not invent values, expose
+secrets, create a Blueprint, or change the server. If any of those three
+connection values is unavailable, ask me for that specific value or its local
+configuration source. Inspect the project's provider/model setup and ask me
+only for an essential missing model identifier, provider package, or
+credential. Install the dependencies shown here if they are absent. Verify
+the server and Blueprint with the file's --check mode without making a model
+request, then leave the file ready for the exact Try it out command.
 ```
 
-After setup, [try it out](#try-it-out). To set up the same file yourself,
-follow the manual path.
+After the coding agent finishes, [try it out](#try-it-out).
 
 <details>
 <summary>Connecting an existing agent</summary>
 
-Replace its execution tools with Submilli. Remove other tool providers,
-file and shell tools, network tools, and delegation routes that can perform
-operations outside Submilli. Blueprint permissions apply to code run by
-Submilli; leaving another execution route available bypasses that boundary.
-
-Apply the exclusions below in a dedicated process. Remove extra tools,
-middleware that adds tools, custom backends, and subagents. The registered profile applies
-to other agents using the same model in that process.
+In `create_deep_agent`, set `tools=[]`, `subagents=[]`, and
+`middleware=[submilli]`. Remove any custom backend. Register the
+`HarnessProfile.excluded_tools` list shown in the runnable file and set
+`GeneralPurposeSubagentProfile(enabled=False)` to remove DeepAgents' built-in
+tools and general-purpose subagent. Profiles apply to the model in the current
+process, so use a separate process if other agents need that model's default
+tools. A Blueprint governs programs run through Submilli; another execution
+route would bypass that boundary.
 
 </details>
 
-## Set up manually
+## Prerequisites
 
-You need the [Submilli CLI](/docs/install), a running
-[local server](/docs/server/run-the-server), and a token it accepts.
-You also need Python 3.11 or later and model access for deepagents.
+Use the [Submilli install guide](/docs/install), [server guide](/docs/server/run-the-server),
+and [Blueprint registration guide](/docs/server/register-a-blueprint) if you still
+need to prepare the service. This page assumes that preparation is complete:
+you have a running Submilli server, a token it accepts, and a registered
+Blueprint. You also need Python 3.11 or later and model access for deepagents.
 
-### Prepare a demo directory
-
-Run these commands from the directory where you keep your projects:
-
-```sh
-mkdir submilli-demo
-cd submilli-demo
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install "langchain-submilli[deepagents]>=0.1" "deepagents==0.7.28"
-curl -fsSLo blueprint.yaml https://submilli.ai/docs/examples/permission-demo/basic-blueprint.yaml
-```
-
-Keep this terminal in `submilli-demo` for the rest of the guide.
-Set these environment variables in this terminal using your own configuration:
+Configure these values in the project environment or its existing local
+configuration:
 
 | Variable | Value |
 | --- | --- |
-| `SUBMILLI_SERVER` | Your server URL, such as `http://127.0.0.1:8128` |
+| `SUBMILLI_SERVER` | The URL of your running Submilli server |
 | `SUBMILLI_SERVER_TOKEN` | A token accepted by that server |
-| `SUBMILLI_BLUEPRINT` | `harness-demo` |
+| `SUBMILLI_BLUEPRINT` | The name of your registered Blueprint |
 | `DEEPAGENTS_MODEL` | A provider-qualified LangChain model identifier supported by your installed provider integration. Install that provider’s LangChain package and configure its credentials using the [LangChain model setup](https://docs.langchain.com/oss/python/langchain/models). |
 
 The model credentials are separate from the Submilli server token. Reuse your
-chosen provider’s setup. Do not put credentials in the file you save next.
-Register the downloaded Blueprint:
+chosen provider's setup. Do not put credentials in the file.
+
+## Set up manually
+
+In the current project environment, install the integration packages if they
+are not already installed:
 
 ```sh
-export SUBMILLI_BLUEPRINT=harness-demo
-SUBMILLI_SERVER_URL="$SUBMILLI_SERVER" submilli server blueprint apply blueprint.yaml
+python -m pip install "langchain-submilli[deepagents]>=0.1" "deepagents==0.7.28"
 ```
+
+Set `SUBMILLI_SERVER`, `SUBMILLI_SERVER_TOKEN`, `SUBMILLI_BLUEPRINT`, and
+`DEEPAGENTS_MODEL` from your existing local configuration. If a connection
+value is missing, use the [server guide](/docs/server/run-the-server) or
+[Blueprint registration guide](/docs/server/register-a-blueprint) to identify
+the value, then continue with the file below.
 
 ### Save the runnable agent
 
-Save this complete file as `submilli-demo/submilli-agent.py`. If you are already
-inside `submilli-demo`, save it as `submilli-agent.py`.
+Save this complete file as `submilli-agent.py` in the current project directory.
 
-The profile disables deepagents’ ten built-in tools and its default subagent. Run this file in its own process because the profile applies to agents using the same model in that process. The middleware requires asynchronous calls.
+This file uses DeepAgents' public harness settings. `HarnessProfile.excluded_tools`
+removes the ten built-in tools: `ls`, `read_file`, `write_file`, `edit_file`,
+`delete`, `glob`, `grep`, `execute`, `task`, and `write_todos`.
+`GeneralPurposeSubagentProfile(enabled=False)` separately disables the built-in
+general-purpose subagent. The first setting is a model-keyed profile and the
+second is the general-purpose-subagent setting; neither grants tools. The
+profile is registered for this model in the current process, so run this file
+in its own process when other agents use the same model. The middleware requires
+asynchronous calls. The `tools=[]`, `subagents=[]`, and `middleware=[submilli]`
+arguments below must remain as shown: do not add application tools, middleware
+that adds tools, a custom backend, or subagents.
 
 ```python title="submilli-agent.py"
 import asyncio
@@ -127,6 +133,7 @@ from langchain_submilli import SubmilliMiddleware
 async def main():
     required("SUBMILLI_SERVER")
     required("SUBMILLI_SERVER_TOKEN")
+    required("SUBMILLI_BLUEPRINT")
     model_name = required("DEEPAGENTS_MODEL")
     register_harness_profile(
         model_name,
@@ -138,9 +145,7 @@ async def main():
             general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
         ),
     )
-    submilli = SubmilliMiddleware(
-        blueprint=required("SUBMILLI_BLUEPRINT"), variables={},
-    )
+    submilli = SubmilliMiddleware(blueprint=required("SUBMILLI_BLUEPRINT"), variables={})
     try:
         await submilli.client.blueprints.prompt(submilli.blueprint)
         print("Connected to Submilli.")
@@ -174,8 +179,8 @@ Look for `Connected to Submilli.`. This confirms the server and Blueprint are re
 
 ## Try it out
 
-Open a terminal in `submilli-demo` with the environment variables from setup. Activate its Python environment with `. .venv/bin/activate`.
-Run the saved file:
+From the project directory with the existing environment and dependencies active,
+run the saved file:
 
 ```sh
 python submilli-agent.py

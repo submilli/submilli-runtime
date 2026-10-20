@@ -9,13 +9,13 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "b5f0c96e8a46a944b79f2bbea1ee59aee708f91f9d064c15c6b56adcfa7a504c"
+  contentHash: "a89c0576994775be5b46df304f844e3a3dcd41764fee8dc28975e52326fbbbc9"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
 
-Create a fresh Mastra agent with only Submilli execution tools, then
-run a small program and see its result in your terminal.
+Create a fresh Mastra agent that exposes only the Submilli MCP tools, then run
+a small program and see the tool result in your terminal.
 
 ## Use your coding agent
 
@@ -24,20 +24,22 @@ Open a project directory in your coding agent.
 the coding agent to load it. Give it this prompt:
 
 ```text agent-prompt
-Use the Submilli skill and this guide to create a fresh Mastra demo
-in a new submilli-demo directory. Preserve my existing agent configuration.
-Create the complete submilli-agent.mjs file shown in this guide, including its
-command-line prompt and tool-result logging. Give it only Submilli execution
-tools and apply this guide’s framework-specific exclusions.
-Inspect my project’s provider/model setup. Help me choose any missing model
-configuration and credentials without guessing values or revealing secrets.
-Find a local Submilli server and token, or help me prepare them.
-Download https://submilli.ai/docs/examples/permission-demo/basic-blueprint.yaml and
-register it using submilli server blueprint apply. Use harness-demo as
-SUBMILLI_BLUEPRINT. This first example requires no Package.
-Install the dependencies shown here. Verify the server and basic program
-without making a model request. Leave the runnable file ready for the exact
-Try it out command, and tell me the directory to open and any remaining
+Use the Submilli skill and this guide to create a fresh Mastra agent in the
+current project (or an empty neutral directory if I ask for one). Preserve my
+existing agent configuration. Create the complete `submilli-agent.mjs` file
+shown in this guide, including its command-line prompt and tool-result
+logging. Configure the fresh agent with only the Submilli MCP toolset.
+Inspect the installed Mastra source and this project’s configuration to verify
+the MCP client, toolset, agent, workflow, and delegation APIs before claiming
+that another route is excluded. Remove other provider tools, workspace or file
+tools, workflow tools, and delegation or subagent routes from this fresh agent.
+Keep my existing provider/model setup; ask only for missing model configuration,
+credentials, server URL, server token, or registered Blueprint name, without
+guessing values or revealing secrets. Reuse the running Submilli server, token,
+and registered Blueprint I provide; do not download or register a Blueprint.
+Install only the dependencies shown here. Verify the server and Blueprint connection with `--check`
+without making a model request. Leave the runnable file ready
+for the exact Try it out command and report the file path and any remaining
 human setup.
 ```
 
@@ -47,57 +49,49 @@ follow the manual path.
 <details>
 <summary>Connecting an existing agent</summary>
 
-Replace its execution tools with Submilli. Remove other tool providers,
-file and shell tools, network tools, and delegation routes that can perform
-operations outside Submilli. Blueprint permissions apply to code run by
-Submilli; leaving another execution route available bypasses that boundary.
-
-Remove constructor tools, workspace tools, agents and workflows, and other
-per-call tools or toolsets. Supply only the Submilli toolset shown here.
+In the existing Mastra `Agent` configuration, clear `tools`, `workflows`,
+`agents`, and `workspace`. Remove `clientTools` from `generate` or `stream`
+options and replace other `toolsets` with the `submilli` toolset returned by
+`submilli.listToolsets()`. Check those settings in the installed Mastra version
+before running the agent. A Blueprint governs programs run through Submilli;
+another execution route would bypass that boundary.
 
 </details>
 
 ## Set up manually
 
-You need the [Submilli CLI](/docs/install), a running
-[local server](/docs/server/run-the-server), and a token it accepts.
-You also need Node.js 22 or later and model access for Mastra.
+Before this guide, install the [Submilli CLI](/docs/install), start a
+[server](/docs/server/run-the-server), and register a Blueprint using the
+[server registration guide](/docs/server/register-a-blueprint). Keep the server
+running and have its token and the registered Blueprint name available. You
+also need Node.js 22 or later and model access for Mastra.
 
-### Prepare a demo directory
+### Install the Mastra dependencies
 
-Run these commands from the directory where you keep your projects:
+Run these commands from the directory containing the agent file:
 
 ```sh
-mkdir submilli-demo
-cd submilli-demo
 npm init -y
 npm install @mastra/core @mastra/mcp@^1.18.0
-curl -fsSLo blueprint.yaml https://submilli.ai/docs/examples/permission-demo/basic-blueprint.yaml
 ```
 
-Keep this terminal in `submilli-demo` for the rest of the guide.
-Set these environment variables in this terminal using your own configuration:
+Set these environment variables in the terminal where you will run the file,
+using the existing server and registered Blueprint:
 
 | Variable | Value |
 | --- | --- |
-| `SUBMILLI_SERVER` | Your server URL, such as `http://127.0.0.1:8128` |
+| `SUBMILLI_SERVER` | The running server URL, such as `http://127.0.0.1:8128` |
 | `SUBMILLI_SERVER_TOKEN` | A token accepted by that server |
-| `SUBMILLI_BLUEPRINT` | `harness-demo` |
+| `SUBMILLI_BLUEPRINT` | The name of your registered Blueprint |
 | `MASTRA_MODEL` | A `provider/model` ID from [Mastra’s model router](https://mastra.ai/models). Configure the credential environment variable documented for that provider in this terminal. |
 
 The model credentials are separate from the Submilli server token. Reuse your
 chosen provider’s setup. Do not put credentials in the file you save next.
-Register the downloaded Blueprint:
-
-```sh
-export SUBMILLI_BLUEPRINT=harness-demo
-SUBMILLI_SERVER_URL="$SUBMILLI_SERVER" submilli server blueprint apply blueprint.yaml
-```
 
 ### Save the runnable agent
 
-Save this complete file as `submilli-demo/submilli-agent.mjs`. If you are already
-inside `submilli-demo`, save it as `submilli-agent.mjs`.
+Save this complete file as `submilli-agent.mjs` in the directory where you ran
+the install command.
 
 ```javascript title="submilli-agent.mjs"
 import { Agent } from "@mastra/core/agent";
@@ -129,11 +123,14 @@ try {
   console.log("Connected to Submilli.");
   if (process.argv[2] !== "--check") {
     const agent = new Agent({
-      id: "submilli-demo", name: "Submilli demo", model, tools: {},
+      id: "submilli-agent", name: "Submilli agent", model, tools: {},
       instructions: "Run requested programs through Submilli and report tool results.",
     });
     const toolsets = await submilli.listToolsets();
     if (!toolsets.submilli) throw new Error("Submilli did not return its tools");
+    if (Object.keys(toolsets).some(name => name !== "submilli")) {
+      throw new Error("The fresh agent has a non-Submilli toolset");
+    }
     const prompt = process.argv.slice(2).join(" ") || 'Run this program through Submilli and report its result: export function main(): number { return 2 + 2; }';
     const result = await agent.generate(prompt, { toolsets, maxSteps: 10 });
     for (const step of result.steps) {
@@ -156,16 +153,16 @@ Look for `Connected to Submilli.`. This confirms the server and Blueprint are re
 
 ## Try it out
 
-Open a terminal in `submilli-demo` with the environment variables from setup.
-Run the saved file:
+Run the saved file from its directory with the environment variables from setup:
 
 ```sh
 node submilli-agent.mjs
 ```
 
-Look for a Submilli execution tool call containing `2 + 2` and its returned
-value of `4`. This verifies that the agent ran the program through Submilli.
-An answer of `4` without a tool call does not verify the connection.
+Look for one `submilli__typescript__execute` call containing `2 + 2` and its
+returned value of `4`. This verifies that the agent ran the program through
+Submilli. An answer of `4` without that tool result does not verify the
+connection.
 
 ## Troubleshooting
 

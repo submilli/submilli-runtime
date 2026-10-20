@@ -1,5 +1,4 @@
 <script>
-  import { agents, promptLink, contextualizePrompt } from '../lib/agent-prompt-context.mjs';
   function bindPrompts() {
     for (const block of document.querySelectorAll<HTMLElement>('[data-agent-prompt]')) {
       if (block.dataset.bound) continue;
@@ -9,33 +8,6 @@
       const status = block.querySelector<HTMLElement>('[role="status"]');
       const label = block.querySelector<HTMLElement>('[data-copy-label]');
       if (!button || !prompt || !fallback || !status || !label) continue;
-      const contextualPrompt = contextualizePrompt(prompt.value, window.location.origin);
-      if (contextualPrompt !== prompt.value) {
-        prompt.value = contextualPrompt;
-        // Update text nodes in place to retain the paragraph/list structure.
-        const readable = block.querySelector('.agent-prompt-readable');
-        if (readable) {
-          const walker = document.createTreeWalker(readable, NodeFilter.SHOW_TEXT);
-          while (walker.nextNode()) {
-            walker.currentNode.textContent = contextualizePrompt(walker.currentNode.textContent ?? '', window.location.origin);
-          }
-        }
-        for (const launcher of block.querySelectorAll<HTMLElement>('[data-agent-launch]')) {
-          const agent = agents.find(agent => agent.id === launcher.dataset.agentLaunch);
-          if (!agent) continue;
-          const href = promptLink(agent, contextualPrompt);
-          const replacement = document.createElement(href ? 'a' : 'span');
-          replacement.className = launcher.className;
-          replacement.dataset.agentLaunch = agent.id;
-          const launchLabel = href ? `Open in ${agent.name}` : `${agent.name}: use Copy prompt for this long prompt`;
-          replacement.setAttribute('aria-label', launchLabel);
-          replacement.title = href ? `${launchLabel}. Choose your project, review, then send.` : launchLabel;
-          if (href) replacement.setAttribute('href', href);
-          else replacement.setAttribute('aria-disabled', 'true');
-          replacement.append(...launcher.childNodes);
-          launcher.replaceWith(replacement);
-        }
-      }
       block.dataset.bound = 'true';
       button.disabled = false;
       button.addEventListener('click', async () => {

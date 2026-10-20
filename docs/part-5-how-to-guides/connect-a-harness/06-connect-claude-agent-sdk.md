@@ -9,13 +9,14 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "b3b62ddfc9344eda3cbaf9d1ddf2eec490f8ad03d4ef278feaa38987f996ce84"
+  contentHash: "7ca865b2def63de090f815ba8e146a965a35c5105f9a1ebf4948f6473766b8bb"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
 
-Create a fresh Claude Agent SDK agent with only Submilli execution tools, then
-run a small program and see its result in your terminal.
+Create a fresh Claude Agent SDK agent that sends its execution requests to your
+existing Submilli server and registered Blueprint, then run a small program and
+see its result in your terminal.
 
 ## Use your coding agent
 
@@ -24,21 +25,17 @@ Open a project directory in your coding agent.
 the coding agent to load it. Give it this prompt:
 
 ```text agent-prompt
-Use the Submilli skill and this guide to create a fresh Claude Agent SDK demo
-in a new submilli-demo directory. Preserve my existing agent configuration.
-Create the complete submilli-agent.mjs file shown in this guide, including its
-command-line prompt and tool-result logging. Give it only Submilli execution
-tools and apply this guide’s framework-specific exclusions.
-Inspect my project’s provider/model setup. Help me choose any missing model
-configuration and credentials without guessing values or revealing secrets.
-Find a local Submilli server and token, or help me prepare them.
-Download https://submilli.ai/docs/examples/permission-demo/basic-blueprint.yaml and
-register it using submilli server blueprint apply. Use harness-demo as
-SUBMILLI_BLUEPRINT. This first example requires no Package.
-Install the dependencies shown here. Verify the server and basic program
-without making a model request. Leave the runnable file ready for the exact
-Try it out command, and tell me the directory to open and any remaining
-human setup.
+Use the Submilli skill and this guide to create a fresh Claude Agent SDK
+agent in a new or existing project folder. Preserve my existing agent
+configuration. Create the complete submilli-agent.mjs file shown in this guide,
+including its command-line prompt and tool-result logging. Connect it to my
+existing Submilli server URL, server token, and registered Blueprint. Configure
+the query with `tools: []`, `allowedTools: ["mcp__submilli__*"]`,
+`strictMcpConfig: true`, and `settingSources: []`, so Submilli is its only
+execution route. Inspect my provider/model setup and ask only for essential
+missing choices; do not guess values or reveal secrets. Install the dependencies
+shown here and prepare the file without making a model request. Leave it ready
+for the exact Try it out command. Tell me any remaining human setup.
 ```
 
 After setup, [try it out](#try-it-out). To set up the same file yourself,
@@ -47,58 +44,51 @@ follow the manual path.
 <details>
 <summary>Connecting an existing agent</summary>
 
-Replace its execution tools with Submilli. Remove other tool providers,
-file and shell tools, network tools, and delegation routes that can perform
-operations outside Submilli. Blueprint permissions apply to code run by
-Submilli; leaving another execution route available bypasses that boundary.
-
-Use `tools: []`, `strictMcpConfig: true`, and `settingSources: []`.
-Keep only Submilli in `mcpServers` and `allowedTools`, and remove subagent
-and plugin or hook configurations that add another execution route.
+Configure the query's `mcpServers.submilli` entry with the server URL and
+Blueprint path `SUBMILLI_SERVER/mcp/SUBMILLI_BLUEPRINT`, plus the bearer token
+in `SUBMILLI_SERVER_TOKEN`. Set `tools: []`, `strictMcpConfig: true`, and
+`settingSources: []`; keep `allowedTools: ["mcp__submilli__*"]` and the
+Submilli entry in `mcpServers`. Remove other MCP servers and any subagent,
+plugin, or hook configuration that adds another execution route. These are
+Claude Agent SDK options; the Blueprint still governs what the server can
+execute.
 
 </details>
 
 ## Set up manually
 
-You need the [Submilli CLI](/docs/install), a running
-[local server](/docs/server/run-the-server), and a token it accepts.
+Before this guide, use the [Submilli install guide](/docs/install), [server
+guide](/docs/server/run-the-server), and [Blueprint registration
+guide](/docs/server/register-a-blueprint) if you still need to prepare the
+service. This page assumes you have a running server, a token it accepts, and a
+Blueprint already registered on it.
 You also need Node.js 22 or later and model access for Claude Agent SDK.
 
-### Prepare a demo directory
+### Prepare the agent folder
 
-Run these commands from the directory where you keep your projects:
+Open the folder where you want to save the agent and install its dependencies:
 
 ```sh
-mkdir submilli-demo
-cd submilli-demo
 npm init -y
 npm install @anthropic-ai/claude-agent-sdk
-curl -fsSLo blueprint.yaml https://submilli.ai/docs/examples/permission-demo/basic-blueprint.yaml
 ```
 
-Keep this terminal in `submilli-demo` for the rest of the guide.
-Set these environment variables in this terminal using your own configuration:
+Set these environment variables in this terminal using your existing server,
+token, Blueprint, and model configuration:
 
 | Variable | Value |
 | --- | --- |
-| `SUBMILLI_SERVER` | Your server URL, such as `http://127.0.0.1:8128` |
+| `SUBMILLI_SERVER` | The server URL where your Blueprint is registered |
 | `SUBMILLI_SERVER_TOKEN` | A token accepted by that server |
-| `SUBMILLI_BLUEPRINT` | `harness-demo` |
+| `SUBMILLI_BLUEPRINT` | The name of your registered Blueprint |
 | `CLAUDE_MODEL` | A Claude model ID supported by your configured [Agent SDK authentication](https://platform.claude.com/docs/en/agent-sdk/overview). Configure that authentication in this terminal before running the file. |
 
 The model credentials are separate from the Submilli server token. Reuse your
 chosen provider’s setup. Do not put credentials in the file you save next.
-Register the downloaded Blueprint:
-
-```sh
-export SUBMILLI_BLUEPRINT=harness-demo
-SUBMILLI_SERVER_URL="$SUBMILLI_SERVER" submilli server blueprint apply blueprint.yaml
-```
 
 ### Save the runnable agent
 
-Save this complete file as `submilli-demo/submilli-agent.mjs`. If you are already
-inside `submilli-demo`, save it as `submilli-agent.mjs`.
+Save this complete file as `submilli-agent.mjs` in the folder you opened.
 
 The query disables built-in tools and project settings, and restricts MCP to the configured Submilli server.
 
@@ -148,27 +138,18 @@ try {
 }
 ```
 
-Check the server and Blueprint without a model request:
-
-```sh
-curl -fsS "$SUBMILLI_SERVER/v1/blueprints/$SUBMILLI_BLUEPRINT/prompt" \
-  -H "Authorization: Bearer $SUBMILLI_SERVER_TOKEN"
-```
-
-This returns the Blueprint’s execution instructions. The agent run checks the SDK connection when it calls a tool.
-
 ## Try it out
 
-Open a terminal in `submilli-demo` with the environment variables from setup.
-Run the saved file:
+With the environment variables from setup, run the saved file with its
+built-in 2 + 2 prompt:
 
 ```sh
 node submilli-agent.mjs
 ```
 
 Look for a Submilli execution tool call containing `2 + 2` and its returned
-value of `4`. This verifies that the agent ran the program through Submilli.
-An answer of `4` without a tool call does not verify the connection.
+value of `4`. The tool call and returned value prove that the program ran
+through the configured server and Blueprint.
 
 ## Troubleshooting
 
