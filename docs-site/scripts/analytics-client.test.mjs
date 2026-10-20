@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { attributionFor, mergeAttribution, safeUrl } from '../src/lib/analytics-utils.ts';
 
-function browser({ consent, optedOut = false, search = '', session = new Map(), hostname = 'submilli.ai', storageFailure = false, attribution, cookieStore = { value: '' } } = {}) {
+function browser({ apiHost = 'https://test.invalid', consent, optedOut = false, search = '', session = new Map(), hostname = 'submilli.ai', storageFailure = false, attribution, cookieStore = { value: '' } } = {}) {
   const storage = new Map(consent ? [['submilli.analytics-consent.v1', consent]] : []);
   if (attribution) storage.set('submilli.attribution.v1', JSON.stringify(attribution));
   const events = [], listeners = {}, buttons = {};
@@ -31,7 +31,7 @@ function browser({ consent, optedOut = false, search = '', session = new Map(), 
     set cookie(value) { cookieStore.value = value.split(';', 1)[0]; },
   };
   const source = readFileSync(new URL('../src/lib/analytics-client.ts', import.meta.url), 'utf8')
-    .replace(/^import .*;\n/gm, '').replaceAll('import.meta.env.PUBLIC_POSTHOG_KEY', "'test-key'").replaceAll('import.meta.env.PUBLIC_POSTHOG_HOST', "'https://test.invalid'");
+    .replace(/^import .*;\n/gm, '').replaceAll('import.meta.env.PUBLIC_POSTHOG_KEY', "'test-key'").replaceAll('import.meta.env.PUBLIC_POSTHOG_HOST', JSON.stringify(apiHost));
   const js = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const window = { addEventListener(name, fn) { listeners[name] = fn; } };
   vm.runInNewContext(js, { posthog, attributionFor, mergeAttribution, safeUrl, location, document, window, localStorage: storageApi(storage), sessionStorage: storageApi(session), URL, URLSearchParams, Element });
@@ -39,13 +39,15 @@ function browser({ consent, optedOut = false, search = '', session = new Map(), 
 }
 
 test('default tracking deduplicates route notification and emits next route', () => {
-  const b = browser();
+  const b = browser({ apiHost: 'https://analytics.submilli.ai' });
   b.listeners['astro:page-load']();
   assert.equal(b.events.length, 1);
   b.location.href = 'https://submilli.ai/docs/quickstart?private=value'; b.location.pathname = '/docs/quickstart';
   b.listeners['astro:page-load']();
   assert.equal(b.events.length, 2);
   assert.equal(b.events[1].properties.$current_url, 'https://submilli.ai/docs/quickstart');
+  assert.equal(b.options.api_host, 'https://analytics.submilli.ai');
+  assert.equal(b.options.ui_host, 'https://us.posthog.com');
   assert.equal(b.options.disable_session_recording, false);
   assert.equal(b.options.session_recording.maskAllInputs, false);
   assert.equal(b.options.session_recording.maskInputOptions.password, false);

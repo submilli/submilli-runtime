@@ -136,6 +136,7 @@ function start(explicitConsent = false) {
 	if (!initialized) {
 		posthog.init(key, {
 			api_host: host,
+			ui_host: 'https://us.posthog.com',
 			autocapture: false,
 			save_referrer: false,
 			save_campaign_params: false,
