@@ -132,11 +132,28 @@ export default defineConfig({
           // name, so the two folders are named here.
           items: [
             { label: "With your coding agent", collapsed: true, items: [{ autogenerate: { directory: "../docs/part-5-tutorials/with-your-coding-agent" } }] },
-            { label: "Connect a harness", collapsed: true, items: [{ autogenerate: { directory: "../docs/part-5-tutorials/connect-a-harness" } }] },
             "tutorials/diagnose-a-denial",
             "tutorials/verify-a-package-in-ci",
             "tutorials/manage-blueprints-in-git",
             "tutorials/add-the-github-mcp-server",
+          ],
+        },
+        {
+          label: "Harnesses",
+          collapsed: true,
+          items: [
+            { label: "Harness integrations", slug: "tutorials/connect-a-harness" },
+            {
+              label: "How-to",
+              collapsed: true,
+              items: [
+                { label: "Deep Agents", slug: "tutorials/connect-deepagents" },
+                { label: "Mastra", slug: "tutorials/connect-mastra" },
+                { label: "OpenAI Agents", slug: "tutorials/connect-openai-agents" },
+                { label: "Claude Agent SDK", slug: "tutorials/connect-claude-agent-sdk" },
+                { label: "Vercel AI SDK", slug: "tutorials/use-the-http-api" },
+              ],
+            },
           ],
         },
         { label: "Reference", collapsed: true, items: [{ autogenerate: { directory: "../docs/part-6-reference" } }] },
