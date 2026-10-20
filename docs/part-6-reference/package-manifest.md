@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "93e51d653ef3387f715702be604e062b6badc147a4bbd09a773f5a50538efb1a"
+  contentHash: "97f6a85783fc4bf3489e94d2236fc31117b0542b29c20a743bb9b79d7705a366"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -281,7 +281,7 @@ provides:
       type: string
     customerId:
       type: string
-      description: The customer's id in the billing system, such as `cus_northwind`.
+      description: The customer's id in the billing system, such as `pied_piper`.
     kind:
       type: string
 - name: acme.com/invoices.list
@@ -302,7 +302,7 @@ The tags that produced it:
 ```typescript title="packages/billing/src/lib.ts (fragment)"
 /**
  * Add a goodwill credit to a customer's account.
- * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param customerId The customer's id in the billing system, such as `pied_piper`.
  * @param amount The credit, in cents; must be positive.
  * @returns The credit as recorded.
  * @capability acme.com/credits.apply { customerId, customerClass: string, amount, kind: "goodwill" }
@@ -404,16 +404,16 @@ aren't counted. An error in a Package's or the file's top-level statements
 fails the first segment.
 
 ```text
-[security] caller=main capability=acme.com/credits.apply context={"amount":5,"customerClass":"standard","customerId":"cus_northwind","kind":"goodwill"}
+[security] caller=main capability=acme.com/credits.apply context={"amount":5,"customerClass":"standard","customerId":"pied_piper","kind":"goodwill"}
 ok   packages/billing/tests/fail.test.ts :: credits
 FAIL packages/billing/tests/fail.test.ts :: refuses a negative amount with a TypeError
 error: Error: expectException: expected a TypeError error, but caught RangeError
   at main (packages/billing/tests/fail.test.ts:8:66)  [thrown here]
  7 |     label("refuses a negative amount with a TypeError");
- 8 |     expectException(() => { applyCredit("cus_northwind", -1); }, "TypeError");
+ 8 |     expectException(() => { applyCredit("pied_piper", -1); }, "TypeError");
    |                                                                  ^
  9 |     label("never runs");
-[security] caller=main capability=acme.com/credits.apply context={"amount":1500,"customerClass":"standard","customerId":"cus_northwind","kind":"goodwill"}
+[security] caller=main capability=acme.com/credits.apply context={"amount":1500,"customerClass":"standard","customerId":"pied_piper","kind":"goodwill"}
 ok   packages/billing/tests/lib.test.ts :: credits the customer named
 ok   packages/billing/tests/lib.test.ts :: refuses a zero amount
 skip packages/billing/tests/network.test.ts (--skip-network)

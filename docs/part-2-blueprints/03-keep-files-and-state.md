@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "70be5582ead46b73b55d6a0aca59324ae34a66c902c09202c8d295f2bafbd020"
+  contentHash: "e24696526d13f6c4ae70b86452222ff1a849761108ab14bdee20c81a23a16362"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -164,7 +164,7 @@ function main(): string {
     if (!fs.exists("/notes")) {
         fs.mkdir("/notes", false);
     }
-    fs.appendText("/notes/today.md", "- call Northwind about the credit\n");
+    fs.appendText("/notes/today.md", "- call Pied Piper about the credit\n");
     return fs.readText("/notes/today.md") ?? "";
 }
 ```
@@ -174,7 +174,7 @@ submilli run --blueprint blueprint.yaml note.ts
 ```
 
 ```text
-- call Northwind about the credit
+- call Pied Piper about the credit
 ```
 
 Run it again and the file still has one line. `submilli run` has no
@@ -197,8 +197,8 @@ submilli run --blueprint blueprint.yaml --vfs ./workspace note.ts
 The second run returns both lines:
 
 ```text
-- call Northwind about the credit
-- call Northwind about the credit
+- call Pied Piper about the credit
+- call Pied Piper about the credit
 ```
 
 A program that writes `/notes/../secrets.md` under this Blueprint gets a
@@ -291,7 +291,7 @@ Create two programs. `remember.ts` saves where the agent got to, and
 import * as session from "submilli:session";
 
 function main(): string {
-    session.set("progress", { reviewed: 3, next: "cus_initech" });
+    session.set("progress", { reviewed: 3, next: "hooli" });
     return "saved";
 }
 ```
@@ -353,7 +353,7 @@ submilli server run-code --session "$SESSION" recall.ts
 ```
 
 ```text
-reviewed 3, next up cus_initech
+reviewed 3, next up hooli
 ```
 
 The second program found what the first saved. Files behave the same

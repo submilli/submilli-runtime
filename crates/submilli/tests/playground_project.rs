@@ -314,7 +314,7 @@ mod unix {
         let body = json!({
             "code": code,
             "blueprint": "billing",
-            "variables": { "customerId": "cus_northwind" },
+            "variables": { "customerId": "pied_piper" },
         });
         let (status, _, text) = post(&url, token, &[], &body);
         assert_eq!(status, 200, "execute: {text}");
@@ -329,7 +329,7 @@ mod unix {
             "params": {
                 "protocolVersion": "2025-06-18", "capabilities": {},
                 "clientInfo": { "name": "submilli-bridge", "version": "0" },
-                "_meta": { "variables": { "customerId": "cus_northwind" } }
+                "_meta": { "variables": { "customerId": "pied_piper" } }
             }
         });
         let (status, session, text) = post(&url, token, &[], &initialize);

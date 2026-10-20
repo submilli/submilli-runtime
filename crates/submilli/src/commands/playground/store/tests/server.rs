@@ -131,7 +131,7 @@ impl Playground {
                 label: labels::ASSISTANT.into(),
                 blueprint: "demo".into(),
                 code: code.into(),
-                variables: [("customerId".to_owned(), "cus_northwind".to_owned())].into(),
+                variables: [("customerId".to_owned(), "pied_piper".to_owned())].into(),
                 secrets,
             },
         )
@@ -210,7 +210,7 @@ async fn a_stored_run_loaded_after_a_restart_tests_as_the_in_memory_recording_do
     assert_eq!(id, 1);
     let stored = second.store.load_run(id).unwrap().unwrap();
     assert_eq!(stored.label, labels::ASSISTANT);
-    assert_eq!(stored.recording.variables["customerId"], "cus_northwind");
+    assert_eq!(stored.recording.variables["customerId"], "pied_piper");
     let after = second.test(stored.recording).await;
 
     let comparable = |report: &TestReport| {

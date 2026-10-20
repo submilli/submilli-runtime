@@ -28,7 +28,7 @@ permissions:
 
     const CHECK: &str = r#"import { check } from "submilli:security";
 function main(): string {
-  try { check("test.com/charges", { customerId: "cus_initech" }); return "allowed"; }
+  try { check("test.com/charges", { customerId: "hooli" }); return "allowed"; }
   catch (e: PermissionDeniedError) { return "denied"; }
 }"#;
 
@@ -217,7 +217,7 @@ function main(): string {
         let app = project.token("app");
 
         // Under version 1 the pin holds: another customer's charges are denied.
-        let denied = execute(&record, &app, "cus_northwind");
+        let denied = execute(&record, &app, "pied_piper");
         assert_eq!(denied["result"], "denied", "{denied}");
         assert_eq!(
             stored_run(&project, 1)["recording"]["blueprint_version"],
@@ -241,7 +241,7 @@ function main(): string {
             version["classification"]["changes"][0]["pin"]["kind"], "removed",
             "{version}"
         );
-        let allowed = execute(&record, &app, "cus_northwind");
+        let allowed = execute(&record, &app, "pied_piper");
         assert_eq!(allowed["result"], "allowed", "{allowed}");
         assert_eq!(
             stored_run(&project, 2)["recording"]["blueprint_version"],
@@ -276,7 +276,7 @@ function main(): string {
         assert_eq!(status["refused"]["code"], "parse_error", "{status}");
         assert!(status["refused"]["line"].as_u64().is_some(), "{status}");
         assert_eq!(status["version"], 2);
-        let still = execute(&record, &app, "cus_northwind");
+        let still = execute(&record, &app, "pied_piper");
         assert_eq!(still["result"], "allowed", "{still}");
         assert_eq!(
             stored_run(&project, 3)["recording"]["blueprint_version"],
@@ -305,7 +305,7 @@ function main(): string {
         let versions = project.versions();
         assert_eq!(versions.len(), 3);
         assert_eq!(versions[0]["hash"], versions[2]["hash"]);
-        let denied = execute(&record, &app, "cus_northwind");
+        let denied = execute(&record, &app, "pied_piper");
         assert_eq!(denied["result"], "denied", "{denied}");
         assert_eq!(
             stored_run(&project, 4)["recording"]["blueprint_version"],
@@ -319,7 +319,7 @@ function main(): string {
         let record = project.start();
         project.wait_for_version(3);
         assert_eq!(project.versions().len(), 3);
-        execute(&record, &app, "cus_northwind");
+        execute(&record, &app, "pied_piper");
         assert_eq!(
             stored_run(&project, 5)["recording"]["blueprint_version"],
             "3"
@@ -340,13 +340,7 @@ function main(): string {
         project.save_by_rename(
             &PINNED.replace("      filter: customerId == ${vars.customerId}\n", ""),
         );
-        let output = project.run(&[
-            "exec",
-            &program,
-            "--var",
-            "customerId=cus_northwind",
-            "--json",
-        ]);
+        let output = project.run(&["exec", &program, "--var", "customerId=pied_piper", "--json"]);
         let ran: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(ran["untrusted"]["result"], "allowed", "{ran}");
         assert_eq!(ran["blueprint_version"], "2", "{ran}");

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "eb2dc8c8c69140a6e0b9b9252ab84ecc0c62e3ab90d468436b95ba9ba92cc015"
+  contentHash: "ba86201a1f6fff77bc3af3061570ed39b022d6f546a2a40dd26162d1d4cb11d8"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -111,7 +111,7 @@ Stored secret 'billing_api_key'
 ```
 
 Create `credit.ts`, a program like one the model would write. It credits
-Northwind, a premium customer in Stripe's test mode:
+Pied Piper, a premium customer in Stripe's test mode:
 
 ```typescript title="credit.ts"
 import { applyCredit } from "@acme/billing";
@@ -122,7 +122,7 @@ function main(): string {
 }
 ```
 
-Run it bound to Northwind:
+Run it bound to Pied Piper:
 
 ```sh
 submilli run --blueprint blueprint.yaml --var customerId=cus_VMQR3azuTWVAWs credit.ts

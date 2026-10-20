@@ -115,7 +115,7 @@ import { mastra } from './mastra.js';
 const serverUrl = process.env.SUBMILLI_SERVER_URL ?? 'http://127.0.0.1:8128';
 const token = process.env.SUBMILLI_SERVER_TOKEN;
 if (!token) throw new Error('SUBMILLI_SERVER_TOKEN is not set');
-const customerId = process.env.DEMO_CUSTOMER_ID ?? 'cus_northwind';
+const customerId = process.env.DEMO_CUSTOMER_ID ?? 'pied_piper';
 if (!/^cus_[a-z0-9_]+$/.test(customerId) || /[;\r\n]/.test(customerId)) {
   throw new Error('invalid DEMO_CUSTOMER_ID');
 }
@@ -175,7 +175,7 @@ The blueprint must declare required `customerId`, allow
 `default: deny`. The MCP URL is
 `http://127.0.0.1:8128/mcp/support-read`; send `SUBMILLI_SERVER_TOKEN` as
 `Authorization: Bearer …` and bind the trusted value with
-`submilli-variables: customerId=cus_northwind`.
+`submilli-variables: customerId=pied_piper`.
 Variables constrain generated code; they are not authentication. Put the
 server behind trusted ingress before exposing it outside the host application.
 
@@ -188,8 +188,8 @@ accept a customer ID from the prompt as authority.
 
 Run these deterministic checks before a live model task:
 
-1. `cus_northwind` discovers the expected tool and reads `6150`.
-2. The same binding passing `cus_initech` is denied by the package capability
+1. `pied_piper` discovers the expected tool and reads `6150`.
+2. The same binding passing `hooli` is denied by the package capability
    filter: `tool.execute` resolves with `result: null` and an `error.message`
    naming `PermissionDeniedError` and `acme.com/balance.read`.
 3. Omitting `submilli-variables` is rejected at connect: the server answers

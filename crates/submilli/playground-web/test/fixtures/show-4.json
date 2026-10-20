@@ -19,7 +19,7 @@
  "denied": [],
  "session": "5e550000-0000-4000-8000-000000000004",
  "variables": {
-  "customerId": "cus_northwind"
+  "customerId": "pied_piper"
  },
  "reruns": [],
  "decision_count": 2,
@@ -64,13 +64,13 @@
  "untrusted": {
   "contexts": {
    "4.1": {
-    "customerId": "cus_northwind"
+    "customerId": "pied_piper"
    },
    "4.2": {
     "path": "/billing/charges.json"
    }
   },
   "result": "ch_0153 <b>12997</b>, ch_0308 <b>12997</b>, ch_0096 <b>12995</b>",
-  "program": "import { listCharges } from \"@acme/billing\";\n\nfunction main(): string {\n    const charges = listCharges(\"cus_northwind\");\n    charges.sort((a, b) => b.amount - a.amount);\n    return charges.slice(0, 3).map((c) => `${c.id} <b>${c.amount}</b>`).join(\", \");\n}\n"
+  "program": "import { listCharges } from \"@acme/billing\";\n\nfunction main(): string {\n    const charges = listCharges(\"pied_piper\");\n    charges.sort((a, b) => b.amount - a.amount);\n    return charges.slice(0, 3).map((c) => `${c.id} <b>${c.amount}</b>`).join(\", \");\n}\n"
  }
 }

@@ -45,7 +45,7 @@ describe("the variables a new session asks for", () => {
 });
 
 describe("the agent and its settings", () => {
-  const ok = { customerId: "cus_northwind" };
+  const ok = { customerId: "pied_piper" };
 
   it("start when everything checks out, with the CLI command that does the same", () => {
     const check = checkSetup(status, form({ fields: ok, max: "2000", providerJson: '{"temperature": 0.2}' }));
@@ -148,7 +148,7 @@ describe("fixes found trying the form", () => {
   const decls: Status = { ...status, declared_variables: [{ name: "note", required: false }, { name: "customerId", required: true }] };
 
   it("trims values typed as JSON, as the fields do", () => {
-    expect(parseVars('{"customerId": " cus_northwind "}', declaredVariables(status), "billing v2")).toEqual({ vals: { customerId: "cus_northwind" } });
+    expect(parseVars('{"customerId": " pied_piper "}', declaredVariables(status), "billing v2")).toEqual({ vals: { customerId: "pied_piper" } });
   });
 
   it("puts the required variables first", () => {
@@ -156,7 +156,7 @@ describe("fixes found trying the form", () => {
   });
 
   it("refuses a max output past what the playground takes", () => {
-    expect(checkSetup(status, form({ fields: { customerId: "cus_northwind" }, max: "99999999999999999999" })).hint).toBe("Max output is at most 1,000,000 tokens.");
+    expect(checkSetup(status, form({ fields: { customerId: "pied_piper" }, max: "99999999999999999999" })).hint).toBe("Max output is at most 1,000,000 tokens.");
   });
 
   it("binds variables that differ from the binding before the CLI's chat, which uses the binding", () => {

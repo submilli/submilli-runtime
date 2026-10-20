@@ -51,7 +51,7 @@ def call(url, token=None, payload=None):
 
 
 def verify_auth(url, user_token):
-    payload = {"blueprint": "support-read", "variables": {"customerId": "cus_northwind"},
+    payload = {"blueprint": "support-read", "variables": {"customerId": "pied_piper"},
                "code": "function main(): number { return 1; }"}
     status, body = call(url + "/v1/execute", None, payload)
     assert status == 401 and body.get("error") == "unauthorized", (status, body)
@@ -64,10 +64,10 @@ def verify_auth(url, user_token):
 
 def verify_policy(url, user_token):
     code = ('import { readBalance } from "@acme/billing"; '
-            'function main(): number { return readBalance("cus_northwind"); }')
+            'function main(): number { return readBalance("pied_piper"); }')
     for label, program, variables in [
-        ("allowed", code, {"customerId": "cus_northwind"}),
-        ("denied", code.replace("cus_northwind", "cus_initech"), {"customerId": "cus_northwind"}),
+        ("allowed", code, {"customerId": "pied_piper"}),
+        ("denied", code.replace("pied_piper", "hooli"), {"customerId": "pied_piper"}),
         ("missing", code, {}),
     ]:
         payload = {"blueprint": "support-read", "variables": variables, "code": program}
@@ -107,7 +107,7 @@ def main():
         (root / "package/src/lib.ts").write_text(first_block(references / "packages.md", "typescript"))
         (root / "package/tests/lib.test.ts").write_text(
             'import { readBalance } from "@acme/billing";\n'
-            'function main(): void { assert(readBalance("cus_northwind") === 6150); }\n')
+            'function main(): void { assert(readBalance("pied_piper") === 6150); }\n')
         run("build", "check")
         run("build", "test")
         run("build", "publish-local")

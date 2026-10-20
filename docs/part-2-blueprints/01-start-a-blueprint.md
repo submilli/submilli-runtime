@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "70e8b03ae628d1ec453bf8f317f9dd7cd27930352453e92f573d05c0183e0b0a"
+  contentHash: "833a5ab01d74057c3c13f71e8427a114f5685cc2b254a88981abab6e555a655f"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -340,7 +340,7 @@ customer:
 import { applyCredit } from "@acme/billing";
 
 function main(): string {
-    const credit = applyCredit("cus_northwind", 1500);
+    const credit = applyCredit("pied_piper", 1500);
     return `credited ${credit.amount} cents`;
 }
 ```
@@ -351,7 +351,7 @@ customer lets the call through, and binding another customer produces the
 denial a session would see:
 
 ```sh
-submilli run --blueprint blueprint.yaml --var customerId=cus_northwind credit.ts
+submilli run --blueprint blueprint.yaml --var customerId=pied_piper credit.ts
 ```
 
 ```text
@@ -359,12 +359,12 @@ credited 1500 cents
 ```
 
 ```sh
-submilli run --blueprint blueprint.yaml --var customerId=cus_initech credit.ts
+submilli run --blueprint blueprint.yaml --var customerId=hooli credit.ts
 ```
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/credits.apply: policy denied acme.com/credits.apply with amount = 1500, customerClass = "premium", customerId = "cus_northwind" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
-  fields: caller = "main", capability = "acme.com/credits.apply", reason = "policy denied acme.com/credits.apply with amount = 1500, customerClass = \"premium\", customerId = \"cus_northwind\" for mai…"
+error: PermissionDeniedError: permission denied: caller=main capability=acme.com/credits.apply: policy denied acme.com/credits.apply with amount = 1500, customerClass = "premium", customerId = "pied_piper" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+  fields: caller = "main", capability = "acme.com/credits.apply", reason = "policy denied acme.com/credits.apply with amount = 1500, customerClass = \"premium\", customerId = \"pied_piper\" for mai…"
   at applyCredit (lib:28:66)  [thrown here]
 ```
 
@@ -448,7 +448,7 @@ Run `apply` again after an edit, and the answer is `Updated blueprint
 Blueprint by its name:
 
 ```sh
-submilli server run-code credit.ts --blueprint support --var customerId=cus_northwind
+submilli server run-code credit.ts --blueprint support --var customerId=pied_piper
 ```
 
 ```text

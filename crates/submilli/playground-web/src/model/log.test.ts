@@ -162,7 +162,7 @@ describe("the log's decision rows", () => {
           text: "Nearest rule: charges-for-signed-in-customer (rule 1 of main, line 27). Failed: customerId == ${vars.customerId} (the values differ).",
           values: [
             { name: "this call", value: '"cus_globex"' },
-            { name: "the rule wanted", value: '"cus_northwind"' },
+            { name: "the rule wanted", value: '"pied_piper"' },
           ],
         },
         {
@@ -252,7 +252,7 @@ describe("the log's follow-up rows", () => {
     expect(f7.verdict).toBe("Check 2.1 is now allowed (rule globex-support, line 35).");
     expect(f7.values).toEqual({
       lead: "This rerun used other values than run 1: ",
-      changes: [{ name: "customerId", was: "cus_northwind", now: "cus_globex" }],
+      changes: [{ name: "customerId", was: "pied_piper", now: "cus_globex" }],
       tail: ".",
     });
   });
@@ -264,7 +264,7 @@ describe("the log's follow-up rows", () => {
     expect(f5.values).toEqual({
       lead: "This test kept run 2’s values; the ones bound now differ: ",
       changes: [
-        { name: "customerId", was: "cus_northwind", now: "cus_globex" },
+        { name: "customerId", was: "pied_piper", now: "cus_globex" },
         { name: "region", was: "not set", now: "us" },
         { name: "tier", was: "not set", now: "gold" },
       ],
@@ -282,7 +282,7 @@ describe("the log's follow-up rows", () => {
       status: "Completed",
       verdict: "Same result as run 1.",
       further: "",
-      what: "Run 1’s program, run for real with the variables set at the time: customerId=cus_northwind.",
+      what: "Run 1’s program, run for real with the variables set at the time: customerId=pied_piper.",
     });
   });
 
@@ -391,7 +391,7 @@ describe("a run that was one of the agent's file tools", () => {
     const data = chatSession();
     data.runs[1] = { ...data.runs[1], entry: "mcp:list_files" };
     const rows = logPane(frame(data, INITIAL_UI)).rows;
-    expect(row(rows, 1).title).toBe("Run 1 · the agent’s list_files call customerId = cus_northwind");
+    expect(row(rows, 1).title).toBe("Run 1 · the agent’s list_files call customerId = pied_piper");
     expect(row(rows, 2).title).toBe("Run 2 · the agent’s 1st program");
   });
 

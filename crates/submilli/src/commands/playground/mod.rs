@@ -1491,7 +1491,7 @@ mod unix {
     }
 
     /// The variable the starter's example runs under, and a customer in its data.
-    const STARTER_VARIABLE: (&str, &str) = ("customerId", "cus_northwind");
+    const STARTER_VARIABLE: (&str, &str) = ("customerId", "pied_piper");
 
     pub(super) fn claude_code(args: &super::ClaudeCodeArgs) -> Result<ExitCode> {
         use super::claude_code::{Outcome, set_up};
@@ -1627,7 +1627,7 @@ mod unix {
                     "blueprint": scaffold::BLUEPRINT_NAME,
                     "package": scaffold::PACKAGE_NAME,
                     "example": scaffolded.root.join(scaffold::FOLDER).join(scaffold::EXAMPLE),
-                    "variables": { "customerId": "cus_northwind" },
+                    "variables": { "customerId": "pied_piper" },
                 })
             ),
             Output::Text => {
@@ -1637,7 +1637,7 @@ mod unix {
                 eprintln!(
                     "Start the playground with `submilli playground`; it builds {} and serves \
                      blueprint `{}`. Then run the example: `submilli playground bind \
-                     customerId=cus_northwind`, then `submilli playground exec --example`.",
+                     customerId=pied_piper`, then `submilli playground exec --example`.",
                     scaffold::PACKAGE_NAME,
                     scaffold::BLUEPRINT_NAME,
                 );

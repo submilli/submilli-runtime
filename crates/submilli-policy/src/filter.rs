@@ -1830,12 +1830,12 @@ mod tests {
     fn explain_reports_bound_variable_value_and_negation() {
         let f = filter("customerId == ${vars.customerId}");
         let explained = f.explain_with(
-            &json!({ "customerId": "cus_initech" }),
-            &vars(&[("customerId", "cus_northwind")]),
+            &json!({ "customerId": "hooli" }),
+            &vars(&[("customerId", "pied_piper")]),
         );
         assert_eq!(
             explained.failures[0].expected.as_deref(),
-            Some("cus_northwind")
+            Some("pied_piper")
         );
         assert!(!explained.failures[0].negated);
 

@@ -511,8 +511,8 @@ mod tests {
             )],
             DefaultAction::Deny,
             "acme.com/charges.list",
-            json!({ "customerId": "cus_initech" }),
-            &vars(&[("customerId", "cus_northwind")]),
+            json!({ "customerId": "hooli" }),
+            &vars(&[("customerId", "pied_piper")]),
         );
         assert_eq!(resolution.action, Action::Deny);
         assert_eq!(
@@ -529,8 +529,8 @@ mod tests {
             panic!("expected one failure: {miss:?}");
         };
         assert_eq!(failure.comparison, "customerId == ${vars.customerId}");
-        assert_eq!(failure.actual, Some(json!("cus_initech")));
-        assert_eq!(failure.expected.as_deref(), Some("cus_northwind"));
+        assert_eq!(failure.actual, Some(json!("hooli")));
+        assert_eq!(failure.expected.as_deref(), Some("pied_piper"));
     }
 
     #[test]

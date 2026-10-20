@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "f14b4e6514a0f86e2dac9ad0fa6a6972d35838a0ec6fb728791459a135f76910"
+  contentHash: "4896f049dbefeb75d37efb77ad532728400b53321ab90a2b0ba55517744c4f92"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -51,7 +51,7 @@ submilli docs @acme/billing
 
 /**
  * Add a goodwill credit to a customer's account.
- * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param customerId The customer's id in the billing system, such as `pied_piper`.
  * @param amount The credit, in cents; must be positive.
  * @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number }
  * @returns The credit as recorded, with the customer's balance after it.
@@ -110,7 +110,7 @@ allows. Do not retry with another customer or amount; report it and stop.
 import { applyCredit } from "@acme/billing";
 
 function main(): string {
-    const credit = applyCredit("cus_northwind", 1500);
+    const credit = applyCredit("pied_piper", 1500);
     return `credited ${credit.amount} cents, balance ${credit.balance}`;
 }
 ```

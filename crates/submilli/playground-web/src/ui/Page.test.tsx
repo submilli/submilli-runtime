@@ -351,7 +351,7 @@ test("a test that kept the run's values names the first one bound differently, a
   await user.click(within(row("r2")).getByText(/by you \(/));
   await user.click(rowHead("f5"));
   const f5 = row("f5");
-  expect(within(f5).getByText(/This test kept run 2’s values; the ones bound now differ: customerId cus_northwind → cus_globex/)).toBeInTheDocument();
+  expect(within(f5).getByText(/This test kept run 2’s values; the ones bound now differ: customerId pied_piper → cus_globex/)).toBeInTheDocument();
   expect(within(f5).queryByText("region not set → us")).not.toBeInTheDocument();
   await user.click(within(f5).getByRole("button", { name: "(+2 more)" }));
   expect(within(f5).getByText("region not set → us")).toBeInTheDocument();
@@ -366,7 +366,7 @@ test("an open session that keeps values the binding has since changed says so, a
   server.handle = (call) => (call.method === "GET" && call.url.split("?")[0] === "/api/status" ? json(bound) : undefined);
   const { user } = await openPage(server);
   await runsLoaded();
-  const note = await screen.findByText(/This session keeps the values it started with; the ones bound now differ: customerId cus_northwind → cus_globex\. Its messages still use its own\./);
+  const note = await screen.findByText(/This session keeps the values it started with; the ones bound now differ: customerId pied_piper → cus_globex\. Its messages still use its own\./);
   await user.click(within(note.closest(".pg-callout") as HTMLElement).getByRole("button", { name: "Start a new session to use them" }));
   expect(await screen.findByRole("button", { name: "Start session" })).toBeInTheDocument();
   // The form is for a new session, which takes the bound values: the note was about the old one.

@@ -15,7 +15,7 @@ fn denied_run(customer: &str) -> (Fixture, tempfile::TempDir, PathBuf, u64) {
     fixture.version(BLUEPRINT, json!("initial"), "The first version.");
     let run = fixture.run(
         RunSpec::new(vec![
-            charges_allowed(0, "cus_northwind"),
+            charges_allowed(0, "pied_piper"),
             charges_denied(1, customer),
         ])
         .version(1),
@@ -42,7 +42,7 @@ fn assert_next_is_safe(next: &[String]) {
 
 #[test]
 fn a_draft_prints_the_rule_as_run_data_and_leaves_the_file_alone() {
-    let (fixture, _dir, file, run) = denied_run("cus_initech");
+    let (fixture, _dir, file, run) = denied_run("hooli");
     let decision = DecisionRef { run, n: 2 };
     let drafted = draft_rule(
         &fixture.store,
@@ -56,10 +56,7 @@ fn a_draft_prints_the_rule_as_run_data_and_leaves_the_file_alone() {
     .unwrap();
     assert_eq!(std::fs::read_to_string(&file).unwrap(), BLUEPRINT);
     assert!(!drafted.written);
-    assert!(
-        drafted.untrusted.rule.contains("cus_initech"),
-        "{drafted:?}"
-    );
+    assert!(drafted.untrusted.rule.contains("hooli"), "{drafted:?}");
     assert!(drafted.overrides.is_none());
     assert_next_is_safe(&drafted.next);
     let text = render::draft_text(&drafted);
@@ -68,8 +65,8 @@ fn a_draft_prints_the_rule_as_run_data_and_leaves_the_file_alone() {
         .nth(1)
         .and_then(|rest| rest.split("\n~~~\n").next())
         .unwrap();
-    assert!(fenced.contains("cus_initech"), "{text}");
-    assert_eq!(text.matches("cus_initech").count(), 1, "{text}");
+    assert!(fenced.contains("hooli"), "{text}");
+    assert_eq!(text.matches("hooli").count(), 1, "{text}");
     assert!(
         text.contains("--write"),
         "the opt-in is named in prose: {text}"
@@ -84,7 +81,7 @@ fn a_draft_prints_the_rule_as_run_data_and_leaves_the_file_alone() {
 
 #[test]
 fn writing_a_draft_inserts_it_keeps_every_line_and_the_files_mode() {
-    let (fixture, _dir, file, run) = denied_run("cus_initech");
+    let (fixture, _dir, file, run) = denied_run("hooli");
     let decision = DecisionRef { run, n: 2 };
     let written = draft_rule(
         &fixture.store,
@@ -108,7 +105,7 @@ fn writing_a_draft_inserts_it_keeps_every_line_and_the_files_mode() {
     for line in BLUEPRINT.lines() {
         assert!(text.contains(line), "kept {line}");
     }
-    assert!(text.contains("customerId == \"cus_initech\""), "{text}");
+    assert!(text.contains("customerId == \"hooli\""), "{text}");
     let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o640);
 
@@ -130,7 +127,7 @@ fn writing_a_draft_inserts_it_keeps_every_line_and_the_files_mode() {
 
 #[test]
 fn a_draft_names_its_file_from_the_project_and_offers_a_name_in_prose() {
-    let (fixture, dir, _file, run) = denied_run("cus_initech");
+    let (fixture, dir, _file, run) = denied_run("hooli");
     let blueprints = dir.path().join("submilli/blueprints");
     std::fs::create_dir_all(&blueprints).unwrap();
     let file = blueprints.join("billing.yaml");
@@ -180,7 +177,7 @@ fn a_draft_names_its_file_from_the_project_and_offers_a_name_in_prose() {
         dir.path(),
         decision,
         true,
-        Some("initech-charges"),
+        Some("hooli-charges"),
         &page,
     )
     .unwrap();
@@ -188,7 +185,7 @@ fn a_draft_names_its_file_from_the_project_and_offers_a_name_in_prose() {
         named
             .untrusted
             .rule
-            .starts_with("  - name: initech-charges\n"),
+            .starts_with("  - name: hooli-charges\n"),
         "{}",
         named.untrusted.rule
     );
@@ -196,13 +193,13 @@ fn a_draft_names_its_file_from_the_project_and_offers_a_name_in_prose() {
     let written = submilli_blueprint::parse(&std::fs::read_to_string(&file).unwrap()).unwrap();
     assert_eq!(
         written.permissions["main"][1].name.as_deref(),
-        Some("initech-charges")
+        Some("hooli-charges")
     );
 }
 
 #[test]
 fn a_name_already_in_the_callers_block_is_refused_and_the_file_left_alone() {
-    let (fixture, _dir, file, run) = denied_run("cus_initech");
+    let (fixture, _dir, file, run) = denied_run("hooli");
     let refused = draft_rule(
         &fixture.store,
         &file,
@@ -239,7 +236,7 @@ fn a_write_is_refused_when_the_file_changed_since_the_draft() {
 
 #[test]
 fn only_a_policy_refusal_with_a_whole_context_is_drafted_from() {
-    let (fixture, _dir, file, run) = denied_run("cus_initech");
+    let (fixture, _dir, file, run) = denied_run("hooli");
     let page = Page::default();
     let allowed = draft_rule(
         &fixture.store,
@@ -327,7 +324,7 @@ fn an_error_answers_with_its_kind_message_next_and_exit() {
 #[test]
 fn a_runs_outcome_sets_the_exit_status() {
     let mut fixture = Fixture::new();
-    let denied = fixture.run(RunSpec::new(vec![charges_denied(0, "cus_initech")]));
+    let denied = fixture.run(RunSpec::new(vec![charges_denied(0, "hooli")]));
     let mut run = fixture.store.load_run(denied).unwrap().unwrap();
     assert_eq!(exit_of(&run), EXIT_SUCCESS);
     let error = |kind| crate::commands::playground::store::run::StoredError {
@@ -510,12 +507,12 @@ fn a_missing_variable_refusal_names_it_with_its_last_value_when_there_is_one() {
         "{}",
         fresh.message
     );
-    let last = BTreeMap::from([("customerId".to_owned(), "cus_northwind".to_owned())]);
+    let last = BTreeMap::from([("customerId".to_owned(), "pied_piper".to_owned())]);
     let known = bind_suggestion(message, &names, &last);
     assert!(
         known
             .message
-            .ends_with("`submilli playground bind customerId=cus_northwind`"),
+            .ends_with("`submilli playground bind customerId=pied_piper`"),
         "{}",
         known.message
     );
@@ -538,12 +535,12 @@ fn a_missing_variable_refusal_names_it_with_its_last_value_when_there_is_one() {
 fn the_saved_binding_keeps_variables_and_secret_names_but_never_a_secret_value() {
     let mut binding = Binding::default();
     binding.apply(BindRequest {
-        variables: BTreeMap::from([("customerId".into(), "cus_northwind".into())]),
+        variables: BTreeMap::from([("customerId".into(), "pied_piper".into())]),
         secrets: BTreeMap::from([("API_KEY".into(), "dev_secret_value".into())]),
         ..BindRequest::default()
     });
     let saved = binding.to_remember();
-    assert_eq!(saved.variables["customerId"], "cus_northwind");
+    assert_eq!(saved.variables["customerId"], "pied_piper");
     assert!(saved.secret_names.contains("API_KEY"));
     assert!(
         !serde_json::to_string(&saved)
@@ -568,7 +565,7 @@ fn the_saved_binding_keeps_variables_and_secret_names_but_never_a_secret_value()
         ..BindRequest::default()
     });
     assert!(restarted.variables.is_empty());
-    assert_eq!(restarted.last["customerId"], "cus_northwind");
+    assert_eq!(restarted.last["customerId"], "pied_piper");
     restarted.apply(BindRequest {
         clear: true,
         ..BindRequest::default()
@@ -708,9 +705,9 @@ fn a_context_holding_a_redacted_secret_is_not_drafted_from() {
 fn a_redaction_marker_in_a_field_the_draft_does_not_compare_is_drafted_from() {
     let mut fixture = Fixture::new();
     fixture.version(BLUEPRINT, json!("initial"), "The first version.");
-    let mut denied = charges_denied(0, "cus_initech");
+    let mut denied = charges_denied(0, "hooli");
     denied.context = json!({
-        "customerId": "cus_initech",
+        "customerId": "hooli",
         "meta": { "token": "[redacted]", "[redacted]": 1 },
         "tags": ["[redacted]"],
     });
@@ -730,7 +727,7 @@ fn a_redaction_marker_in_a_field_the_draft_does_not_compare_is_drafted_from() {
     .unwrap();
     let rule = &drafted.untrusted.rule;
     assert!(
-        rule.contains("customerId == ") && rule.contains("cus_initech"),
+        rule.contains("customerId == ") && rule.contains("hooli"),
         "{rule}"
     );
     assert!(!rule.contains("redacted"), "{rule}");
@@ -738,7 +735,7 @@ fn a_redaction_marker_in_a_field_the_draft_does_not_compare_is_drafted_from() {
 
 #[test]
 fn a_change_log_that_cannot_be_read_stops_the_draft() {
-    let (fixture, _dir, file, run) = denied_run("cus_initech");
+    let (fixture, _dir, file, run) = denied_run("hooli");
     let mut log = std::fs::OpenOptions::new()
         .append(true)
         .open(fixture.store.root().join("changes.jsonl"))
@@ -783,7 +780,7 @@ fn writing_through_a_symlinked_blueprint_changes_the_file_it_points_to() {
 fn clearing_the_binding_also_forgets_the_values_it_would_suggest() {
     let mut binding = Binding::default();
     binding.apply(BindRequest {
-        variables: BTreeMap::from([("customerId".into(), "cus_northwind".into())]),
+        variables: BTreeMap::from([("customerId".into(), "pied_piper".into())]),
         ..BindRequest::default()
     });
     binding.apply(BindRequest {

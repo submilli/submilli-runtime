@@ -37,8 +37,8 @@ describe("the sessions dialog", () => {
       source: "Chat",
       agent: "Claude · claude-sonnet-5-5",
       agentSettings: "",
-      vars: ["customerId=cus_northwind"],
-      allVars: ["customerId=cus_northwind"],
+      vars: ["customerId=pied_piper"],
+      allVars: ["customerId=pied_piper"],
       moreVars: "",
       runs: "4 runs",
       ends: [{ text: "denied", tone: "bad" }],
@@ -69,9 +69,9 @@ describe("the session bar", () => {
       short: "5e550000",
       copyText:
         "Submilli playground, session 5e550000 (details - project: `billing-demo`, see_with: `submilli playground runs --session 5e550000-0000-4000-8000-000000000004`)",
-      vars: [{ name: "customerId", value: "cus_northwind", full: "customerId=cus_northwind" }],
+      vars: [{ name: "customerId", value: "pied_piper", full: "customerId=pied_piper" }],
       moreVars: "",
-      allVars: [{ name: "customerId", value: "cus_northwind", full: "customerId=cus_northwind" }],
+      allVars: [{ name: "customerId", value: "pied_piper", full: "customerId=pied_piper" }],
       settings: [],
       moreSettings: "",
       source: "Chat",
@@ -146,7 +146,7 @@ describe("an open session whose values differ from the ones bound now", () => {
     expect(keptValues(frame(bound({ customerId: "cus_globex", region: "us" }), INITIAL_UI))).toEqual({
       lead: "This session keeps the values it started with; the ones bound now differ: ",
       changes: [
-        { name: "customerId", was: "cus_northwind", now: "cus_globex" },
+        { name: "customerId", was: "pied_piper", now: "cus_globex" },
         { name: "region", was: "not set", now: "us" },
       ],
       tail: ". Its messages still use its own.",
@@ -154,7 +154,7 @@ describe("an open session whose values differ from the ones bound now", () => {
   });
 
   it("says nothing when they match, or for a session that takes no more messages", () => {
-    expect(keptValues(frame(bound({ customerId: "cus_northwind" }), INITIAL_UI))).toBeNull();
+    expect(keptValues(frame(bound({ customerId: "pied_piper" }), INITIAL_UI))).toBeNull();
     const ended = bound({ customerId: "cus_globex" });
     ended.sessions = ended.sessions.map((s) => (s.session === ended.sessionId ? { ...s, open: false } : s));
     expect(keptValues(frame(ended, INITIAL_UI))).toBeNull();
