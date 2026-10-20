@@ -9,7 +9,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "2b5572bf6834c31c00c05f59562f451e4123f0d5ff8248c187a2eed76c21a66c"
+  contentHash: "6edbce5f3b8ff3b7f53e4cd50e1ad9763c2a2157a7d60c8663632612ae1591a0"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
@@ -19,14 +19,12 @@ a small program and see the tool result in your terminal.
 
 ## Use your coding agent
 
-Open a project directory in your coding agent.
-[Install the Submilli skill](/docs/install#the-skill) if needed, then restart
-the coding agent to load it. Give it this prompt:
+Choose an icon to open a prefilled prompt. Select your project, review, and send.
 
 ```text agent-prompt
 Read https://submilli.ai/docs/how-to/use-the-http-api/ as the source for this setup.
 
-Use the Submilli skill and this guide to create a fresh Vercel AI SDK agent in
+Inspect my project and use this guide to create a fresh Vercel AI SDK agent in
 the current project (or an empty neutral directory if I ask for one). Preserve
 my existing agent configuration. Create the complete `submilli-agent.mjs` file
 shown in this guide, including its command-line prompt and tool-result logging.
@@ -35,8 +33,8 @@ installed AI SDK source and this project’s configuration to verify
 `generateText`/`streamText` options, `tools`, `prepareStep`, provider options,
 and delegation tools before claiming that another route is excluded. Remove
 other provider, workspace, file, network, and delegation tools and options from
-this fresh agent. Keep my existing provider/model setup; ask only for missing
-model configuration, credentials, server URL, server token, or registered
+this fresh agent. Use the model shown here unless my project already has a valid model setup.
+Ask only for missing credentials, server URL, server token, or registered
 Blueprint name, without guessing values or revealing secrets. Reuse the
 running Submilli server, token, and registered Blueprint I provide; do not
 download or register a Blueprint. Install only the dependencies shown here.
@@ -85,16 +83,15 @@ npm install ai@^7.0.0 zod@^4.1.8 @ai-sdk/openai
 
 Replace the example values, then run these commands in bash or zsh. The file
 reads this terminal's environment and does not automatically load `.env` files.
+Use your running server's base URL for `SUBMILLI_SERVER`. For example, use
+`http://127.0.0.1:8128` only when that server runs on this machine at port 8128.
 
 ```sh
-export SUBMILLI_SERVER='http://127.0.0.1:8128'
+export SUBMILLI_SERVER='your-server-base-url'
 export SUBMILLI_SERVER_TOKEN='your-server-token'
 export SUBMILLI_BLUEPRINT='your-registered-blueprint'
 export OPENAI_API_KEY='your-openai-api-key'
 ```
-
-This example uses OpenAI's `gpt-5-mini`. To choose another model, edit the
-argument to `openai()` in the file.
 
 ### Create the agent file
 
@@ -105,6 +102,14 @@ and paste the code below.
 import { generateText, stepCountIs, tool } from "ai";
 import { z } from "zod";
 import { openai } from "@ai-sdk/openai";
+
+const args = process.argv.slice(2);
+const checking = args.length === 1 && args[0] === "--check";
+const prompt = args.join(" ");
+if (!checking && !prompt.trim()) {
+  console.error("Usage: node submilli-agent.mjs '<message>' (or --check)");
+  process.exit(1);
+}
 
 function required(name) {
   const value = process.env[name];
@@ -136,13 +141,14 @@ const submilli = tool({
   inputSchema: z.object({ code: z.string() }),
   execute: ({ code }) => execute(code),
 });
-if (process.argv[2] === "--check") {
+if (checking) {
   const result = await execute('export function main(): number { return 2 + 2; }');
   if (result !== 4) throw new Error(`Expected 4, received ${JSON.stringify(result)}`);
   console.log("Connected to Submilli.");
 } else {
-  const prompt = process.argv.slice(2).join(" ") || 'Run this program through Submilli and report its result: export function main(): number { return 2 + 2; }';
+
   const result = await generateText({
+    // Change this model ID to use another OpenAI model.
     model: openai("gpt-5-mini"), prompt, tools: { submilli__typescript__execute: submilli },
     stopWhen: stepCountIs(10),
   });
@@ -166,7 +172,9 @@ Look for `Connected to Submilli.`. This confirms the server and Blueprint are re
 Run the saved file from its directory with the environment variables from setup:
 
 ```sh
-node submilli-agent.mjs
+node submilli-agent.mjs \
+  'Run this program through Submilli and report its result:
+export function main(): number { return 2 + 2; }'
 ```
 
 Look for one `submilli__typescript__execute` call containing `2 + 2` and its

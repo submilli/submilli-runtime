@@ -9,7 +9,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "8ca71e16ad2dd6cd67c993a8c1b305f82272d8daf7de5d7034979ac7eb84b9b2"
+  contentHash: "3db7d492d0881ecf7251b2ded5a78baf6c82f91cbf1cc877207c0ad8d6e80058"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
@@ -19,14 +19,12 @@ a small program and see the tool result in your terminal.
 
 ## Use your coding agent
 
-Open a project directory in your coding agent.
-[Install the Submilli skill](/docs/install#the-skill) if needed, then restart
-the coding agent to load it. Give it this prompt:
+Choose an icon to open a prefilled prompt. Select your project, review, and send.
 
 ```text agent-prompt
 Read https://submilli.ai/docs/how-to/connect-mastra/ as the source for this setup.
 
-Use the Submilli skill and this guide to create a fresh Mastra agent in the
+Inspect my project and use this guide to create a fresh Mastra agent in the
 current project (or an empty neutral directory if I ask for one). Preserve my
 existing agent configuration. Create the complete `submilli-agent.mjs` file
 shown in this guide, including its command-line prompt and tool-result
@@ -35,8 +33,9 @@ Inspect the installed Mastra source and this project’s configuration to verify
 the MCP client, toolset, agent, workflow, and delegation APIs before claiming
 that another route is excluded. Remove other provider tools, workspace or file
 tools, workflow tools, and delegation or subagent routes from this fresh agent.
-Keep my existing provider/model setup; ask only for missing model configuration,
-credentials, server URL, server token, or registered Blueprint name, without
+Use the model shown here unless my project already has a valid model setup.
+Ask only for missing credentials, server URL, server token, or registered
+Blueprint name, without
 guessing values or revealing secrets. Reuse the running Submilli server, token,
 and registered Blueprint I provide; do not download or register a Blueprint.
 Install only the dependencies shown here. Verify the server and Blueprint connection with `--check`
@@ -85,16 +84,15 @@ npm install @mastra/core @mastra/mcp@^1.18.0
 
 Replace the example values, then run these commands in bash or zsh. The file
 reads this terminal's environment and does not automatically load `.env` files.
+Use your running server's base URL for `SUBMILLI_SERVER`. For example, use
+`http://127.0.0.1:8128` only when that server runs on this machine at port 8128.
 
 ```sh
-export SUBMILLI_SERVER='http://127.0.0.1:8128'
+export SUBMILLI_SERVER='your-server-base-url'
 export SUBMILLI_SERVER_TOKEN='your-server-token'
 export SUBMILLI_BLUEPRINT='your-registered-blueprint'
 export OPENAI_API_KEY='your-openai-api-key'
 ```
-
-This example uses OpenAI's `gpt-5-mini`. To choose another model, edit `model`
-in the file.
 
 ### Create the agent file
 
@@ -104,6 +102,14 @@ and paste the code below.
 ```javascript title="submilli-agent.mjs"
 import { Agent } from "@mastra/core/agent";
 import { MCPClient } from "@mastra/mcp";
+
+const args = process.argv.slice(2);
+const checking = args.length === 1 && args[0] === "--check";
+const prompt = args.join(" ");
+if (!checking && !prompt.trim()) {
+  console.error("Usage: node submilli-agent.mjs '<message>' (or --check)");
+  process.exit(1);
+}
 
 function required(name) {
   const value = process.env[name];
@@ -128,8 +134,9 @@ try {
     throw new Error("Submilli's execute tool was not found");
   }
   console.log("Connected to Submilli.");
-  if (process.argv[2] !== "--check") {
+  if (!checking) {
     const agent = new Agent({
+      // Change the provider/model ID here to use another model.
       id: "submilli-agent", name: "Submilli agent", model: "openai/gpt-5-mini", tools: {},
       instructions: "Run requested programs through Submilli and report tool results.",
     });
@@ -138,7 +145,7 @@ try {
     if (Object.keys(toolsets).some(name => name !== "submilli")) {
       throw new Error("The fresh agent has a non-Submilli toolset");
     }
-    const prompt = process.argv.slice(2).join(" ") || 'Run this program through Submilli and report its result: export function main(): number { return 2 + 2; }';
+
     const result = await agent.generate(prompt, { toolsets, maxSteps: 10 });
     for (const step of result.steps) {
       console.dir({ calls: step.toolCalls, results: step.toolResults }, { depth: null });
@@ -163,7 +170,9 @@ Look for `Connected to Submilli.`. This confirms the server and Blueprint are re
 Run the saved file from its directory with the environment variables from setup:
 
 ```sh
-node submilli-agent.mjs
+node submilli-agent.mjs \
+  'Run this program through Submilli and report its result:
+export function main(): number { return 2 + 2; }'
 ```
 
 Look for one `submilli__typescript__execute` call containing `2 + 2` and its

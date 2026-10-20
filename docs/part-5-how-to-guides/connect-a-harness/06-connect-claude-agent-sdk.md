@@ -9,7 +9,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "49424af215b79d4893e6bcc7c0a0ae28d717baa8e14e445cd308f3900bd3b97c"
+  contentHash: "e40a02bcac3e1921d6b0b9d583d5fe4470bedf13eb7e2f2cef2ab7fca28dd5db"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
@@ -20,22 +20,21 @@ see its result in your terminal.
 
 ## Use your coding agent
 
-Open a project directory in your coding agent.
-[Install the Submilli skill](/docs/install#the-skill) if needed, then restart
-the coding agent to load it. Give it this prompt:
+Choose an icon to open a prefilled prompt. Select your project, review, and send.
 
 ```text agent-prompt
 Read https://submilli.ai/docs/how-to/connect-claude-agent-sdk/ as the source for this setup.
 
-Use the Submilli skill and this guide to create a fresh Claude Agent SDK
+Inspect my project and use this guide to create a fresh Claude Agent SDK
 agent in a new or existing project folder. Preserve my existing agent
 configuration. Create the complete submilli-agent.mjs file shown in this guide,
 including its command-line prompt and tool-result logging. Connect it to my
 existing Submilli server URL, server token, and registered Blueprint. Configure
 the query with `tools: []`, `allowedTools: ["mcp__submilli__*"]`,
 `strictMcpConfig: true`, and `settingSources: []`, so Submilli is its only
-execution route. Inspect my provider/model setup and ask only for essential
-missing choices; do not guess values or reveal secrets. Install the dependencies
+execution route. Use the model shown here unless my project already has a valid model setup.
+Ask only for missing credentials or Submilli connection values; do not guess
+values or reveal secrets. Install the dependencies
 shown here and prepare the file without making a model request. Leave it ready
 for the exact Try it out command. Tell me any remaining human setup.
 ```
@@ -82,17 +81,17 @@ npm install @anthropic-ai/claude-agent-sdk
 
 Replace the example values, then run these commands in bash or zsh. The file
 reads this terminal's environment and does not automatically load `.env` files.
+Use your running server's base URL for `SUBMILLI_SERVER`. For example, use
+`http://127.0.0.1:8128` only when that server runs on this machine at port 8128.
 
 ```sh
-export SUBMILLI_SERVER='http://127.0.0.1:8128'
+export SUBMILLI_SERVER='your-server-base-url'
 export SUBMILLI_SERVER_TOKEN='your-server-token'
 export SUBMILLI_BLUEPRINT='your-registered-blueprint'
 ```
 
-This example uses `claude-sonnet-5`. Configure
-[Claude Agent SDK authentication](https://platform.claude.com/docs/en/agent-sdk/overview)
-in this terminal. To choose another supported Claude model, edit `model` in
-the file. Keep credentials out of the file.
+Configure [Claude Agent SDK authentication](https://platform.claude.com/docs/en/agent-sdk/overview)
+in this terminal before running the file. Keep credentials out of the file.
 
 ### Create the agent file
 
@@ -105,6 +104,13 @@ and paste the code below.
 ```javascript title="submilli-agent.mjs"
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
+const args = process.argv.slice(2);
+const prompt = args.join(" ");
+if (!prompt.trim()) {
+  console.error("Usage: node submilli-agent.mjs '<message>'");
+  process.exit(1);
+}
+
 function required(name) {
   const value = process.env[name];
   if (!value) throw new Error(`Set ${name} in this terminal before running this file.`);
@@ -113,10 +119,11 @@ function required(name) {
 const server = required("SUBMILLI_SERVER").replace(/\/$/, "");
 const blueprint = required("SUBMILLI_BLUEPRINT");
 const token = required("SUBMILLI_SERVER_TOKEN");
-const prompt = process.argv.slice(2).join(" ") || 'Run this program through Submilli and report its result: export function main(): number { return 2 + 2; }';
+
 const agent = query({
   prompt,
   options: {
+    // Change this model ID to use another supported Claude model.
     model: "claude-sonnet-5",
     mcpServers: {
       submilli: {
@@ -149,11 +156,13 @@ try {
 
 ## Try it out
 
-With the environment variables from setup, run the saved file with its
-built-in 2 + 2 prompt:
+With the environment variables from setup, run the saved file with this
+message:
 
 ```sh
-node submilli-agent.mjs
+node submilli-agent.mjs \
+  'Run this program through Submilli and report its result:
+export function main(): number { return 2 + 2; }'
 ```
 
 Look for a Submilli execution tool call containing `2 + 2` and its returned
