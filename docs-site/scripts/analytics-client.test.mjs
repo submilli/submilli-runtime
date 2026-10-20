@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { attributionFor, mergeAttribution, safeUrl } from '../src/lib/analytics-utils.ts';
 
-function browser({ consent, optedOut = false, search = '', session = new Map(), hostname = 'submilli.ai', storageFailure = false, attribution } = {}) {
+function browser({ consent, optedOut = false, search = '', session = new Map(), hostname = 'submilli.ai', storageFailure = false, attribution, cookieStore = { value: '' } } = {}) {
   const storage = new Map(consent ? [['submilli.analytics-consent.v1', consent]] : []);
   if (attribution) storage.set('submilli.attribution.v1', JSON.stringify(attribution));
   const events = [], listeners = {}, buttons = {};
@@ -27,6 +27,8 @@ function browser({ consent, optedOut = false, search = '', session = new Map(), 
     getElementById: () => ({ hidden: true, addEventListener() {} }),
     querySelectorAll: () => ['granted', 'denied'].map(consent => ({ dataset: { consent }, addEventListener(_event, fn) { buttons[consent] = fn; } })),
     addEventListener(name, fn) { listeners[name] = fn; },
+    get cookie() { return cookieStore.value; },
+    set cookie(value) { cookieStore.value = value.split(';', 1)[0]; },
   };
   const source = readFileSync(new URL('../src/lib/analytics-client.ts', import.meta.url), 'utf8')
     .replace(/^import .*;\n/gm, '').replaceAll('import.meta.env.PUBLIC_POSTHOG_KEY', "'test-key'").replaceAll('import.meta.env.PUBLIC_POSTHOG_HOST', "'https://test.invalid'");
@@ -87,6 +89,38 @@ test('team opt-out link stops initialization even when storage is unavailable', 
   assert.equal(b.storage.get('submilli.analytics-consent.v1'), 'denied');
   assert.equal(b.events.length, 0);
   assert.equal(browser({ search: '?analytics=off', storageFailure: true }).initCount, 0);
+});
+
+test('inline query opt-out writes before analytics dependencies load', () => {
+	const source = readFileSync(new URL('../src/components/Analytics.astro', import.meta.url), 'utf8');
+	const inline = source.match(/<script is:inline>([\s\S]*?)<\/script>/)?.[1];
+	const store = new Map();
+	const cookies = { value: '' };
+	vm.runInNewContext(inline, {
+		URL,
+		location: new URL('https://submilli.ai/docs/?analytics=off'),
+		localStorage: { setItem: (key, value) => store.set(key, value) },
+		document: { get cookie() { return cookies.value; }, set cookie(value) { cookies.value = value.split(';', 1)[0]; } },
+	});
+	assert.equal(store.get('submilli.analytics-consent.v1'), 'denied');
+	assert.equal(cookies.value, 'submilli_analytics_consent=denied');
+});
+
+test('cookie denial survives a fresh context when localStorage is unavailable', () => {
+	const cookieStore = { value: '' };
+	const first = browser({ search: '?analytics=off', storageFailure: true, cookieStore });
+	assert.equal(first.initCount, 0);
+	assert.equal(cookieStore.value, 'submilli_analytics_consent=denied');
+	const restarted = browser({ storageFailure: true, cookieStore });
+	assert.equal(restarted.initCount, 0);
+});
+
+test('explicit docs opt-in clears cookie denial', () => {
+	const cookieStore = { value: 'submilli_analytics_consent=denied' };
+	const b = browser({ consent: 'denied', cookieStore });
+	b.buttons.granted();
+	assert.equal(cookieStore.value, 'submilli_analytics_consent=');
+	assert.equal(b.initCount, 1);
 });
 
 test('recordings are disabled on previews and marked verification sessions', () => {

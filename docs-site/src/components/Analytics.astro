@@ -11,6 +11,15 @@ const enabled = Boolean(import.meta.env.PUBLIC_POSTHOG_KEY && import.meta.env.PU
 	<button id="analytics-settings" type="button" hidden>Analytics preferences</button>
  </>}
 
+<script is:inline>
+	try {
+		if (new URL(location.href).searchParams.get('analytics') === 'off') {
+			localStorage.setItem('submilli.analytics-consent.v1', 'denied');
+			document.cookie = 'submilli_analytics_consent=denied; Max-Age=31536000; Path=/; SameSite=Lax; Secure';
+		}
+	} catch {}
+</script>
+
 <script>
 	import '../lib/analytics-client';
 </script>
