@@ -138,14 +138,13 @@ test('explicit docs opt-in clears cookie denial', () => {
 
 test('recordings are disabled on previews and marked verification sessions', () => {
   for (const options of [{hostname:'localhost'}, {hostname:'preview.onrender.com'}, {search:'?analytics_test=1'}, {search:'?utm_source=verification'}, {attribution:{first:{utm_campaign:'deployment_verification'}}}, {attribution:{latest:{utm_content:'utm_e2e'}}}]) {
-		assert.equal(browser(options).initCount, 0);
+		const b = browser(options);
+		assert.equal(b.initCount, 0);
+		assert.equal(b.events.length, 0);
+		b.buttons.granted();
+		assert.equal(b.initCount, 0);
+		assert.equal(b.events.length, 0);
   }
-});
-
-test('preview and marked verification sessions never initialize analytics', () => {
-	for (const options of [{ hostname: 'localhost' }, { search: '?analytics_test=1' }, { search: '?utm_source=verification' }]) {
-		assert.equal(browser(options).initCount, 0);
-	}
 });
 
 test('shared opt-out immediately stops recording and event capture', () => {
@@ -158,7 +157,10 @@ test('shared opt-out immediately stops recording and event capture', () => {
 
 test('test marker survives full page navigation in the same tab', () => {
   const session = new Map(); browser({ search: '?analytics_test=1', session });
-  const next = browser({ session }); next.click('github');
-  assert.ok(next.events.every(event => event.properties.is_test === true));
+  const next = browser({ session });
+  assert.equal(next.initCount, 0);
+  assert.equal(next.events.length, 0);
+  next.click('github');
+  assert.equal(next.events.length, 0);
   assert.equal(browser().events[0].properties.is_test, false);
 });
