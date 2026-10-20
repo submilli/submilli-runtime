@@ -78,9 +78,7 @@ where
 {
     let Some(history) = caller.data().effects.clone() else {
         let result = action(caller, EffectId::stub()?, arguments).await;
-        return fuel::settle_result(caller, |caller| {
-            result.map_err(|error| host::throw_host_error(caller, error))
-        });
+        return result.map_err(|error| host::throw_host_error(caller, error));
     };
     let fingerprint = fingerprint(caller, &arguments)?;
     let call = history
@@ -93,9 +91,7 @@ where
                 fuel::charge(&mut *caller, fuel::PARSE, bytes.0.len() as u64)?;
                 decode(&bytes.0)
             }
-            Err(error) => fuel::settle_result(caller, |caller| {
-                Err(host::throw_host_error(caller, error.clone().into_error()))
-            }),
+            Err(error) => Err(host::throw_host_error(caller, error.clone().into_error())),
         };
     }
 
@@ -119,9 +115,7 @@ where
         .complete(&call, recorded_result)
         .await
         .map_err(fatal_host_error)?;
-    fuel::settle_result(caller, |caller| {
-        result.map_err(|error| host::throw_host_error(caller, error))
-    })
+    result.map_err(|error| host::throw_host_error(caller, error))
 }
 
 pub(crate) mod binary {

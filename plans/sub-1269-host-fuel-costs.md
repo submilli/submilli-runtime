@@ -2024,7 +2024,8 @@ decoding; it does not deduct historical native fuel or run the provider again.
 Each attempt receives fresh configured fuel and timeout allowances.
 Guest argument conversion remains before the boundary; guest result conversion
 charges its existing formula normally after the outcome is committed. Insufficient
-fuel stops conversion; a recorded native outcome remains available for replay.
+fuel stops conversion, including construction of a guest exception for a native
+error; a recorded native outcome remains available for replay.
 Ordinary mode also uses normal conversion checks, without a replay guarantee. Database/network
 waiting costs no fuel. Backend work keeps its existing IO/SCAN/PARSE/SYSCALL costs.
 

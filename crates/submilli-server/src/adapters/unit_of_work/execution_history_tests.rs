@@ -1008,3 +1008,103 @@ async fn execution_history_embedding_charges_success_and_failure_after_commit() 
         }
     }
 }
+
+#[tokio::test]
+async fn execution_history_error_conversion_can_stop_for_fuel_without_losing_the_error() {
+    use interpreter::runtime::{
+        RuntimeConfig, StoreData, Vfs, effects, fuel, install_runtime_async,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum Attempt {
+        Direct,
+        Record,
+        ReplayEmpty,
+        ReplayFunded,
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let (_database, units, attempt) = fixture(&directory.path().join("db")).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    for mode in [
+        Attempt::Direct,
+        Attempt::Record,
+        Attempt::ReplayEmpty,
+        Attempt::ReplayFunded,
+    ] {
+        let history = Arc::new(History::new(attempt.clone(), units.clone()));
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::none());
+        if mode != Attempt::Direct {
+            data.effects = Some(history.clone());
+        }
+        let mut store = config.store_async(&engine, data).unwrap();
+        let mut linker = wasmtime::Linker::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let action_calls = calls.clone();
+        let probe = wasmtime::Func::new_async(
+            &mut store,
+            wasmtime::FuncType::new(&engine, [], []),
+            move |mut caller, _, _| {
+                let action_calls = action_calls.clone();
+                Box::new(async move {
+                    if mode == Attempt::ReplayEmpty {
+                        // Enough for the one-byte () fingerprint, but not a guest error.
+                        let pending = caller.data().host_fuel_pending;
+                        caller.set_fuel(pending + fuel::HASH.cost(1))?;
+                    }
+                    effects::execute(
+                        &mut caller,
+                        "test.error_conversion",
+                        (),
+                        move |caller, _, ()| {
+                            Box::pin(async move {
+                                action_calls.fetch_add(1, Ordering::SeqCst);
+                                caller.set_fuel(0)?;
+                                Err::<(), _>(wasmtime::Error::msg("saved native failure"))
+                            })
+                        },
+                    )
+                    .await
+                })
+            },
+        );
+        store.set_fuel(1_000_000).unwrap();
+        let error = probe
+            .call_async(&mut store, &[], &mut [])
+            .await
+            .unwrap_err();
+        if mode == Attempt::ReplayFunded {
+            assert!(error.is::<wasmtime::ThrownException>(), "{error:#}");
+        } else {
+            assert_eq!(
+                error.downcast_ref::<wasmtime::Trap>(),
+                Some(&wasmtime::Trap::OutOfFuel),
+                "{mode:?}: {error:#}"
+            );
+        }
+        if mode != Attempt::Direct {
+            // This also proves the low-fuel replay consumed its history entry.
+            history.finish().await.unwrap();
+            let mut unit = units().await.unwrap();
+            let entry = unit
+                .get_history_entry(&attempt.run_id, 0)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                entry.outcome,
+                Err(effects::NativeError::Error("saved native failure".into()))
+            );
+        }
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "one direct call and one recorded call; neither replay dispatches"
+    );
+}

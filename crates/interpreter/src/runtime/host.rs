@@ -1621,9 +1621,9 @@ fn throw_error_with(
 ) -> wasmtime::Error {
     match throw_error_inner(caller, class, message, own_fields, denial) {
         Ok(err) => err,
-        // The error could not be built because the run is out of memory, which
-        // ends the run as such rather than as a host failure.
-        Err(cause) if super::limits::is_memory_exhausted(&cause) => cause,
+        // Building a guest error can itself hit fuel or memory limits. Preserve
+        // the run-ending cause instead of relabeling it as a host failure.
+        Err(cause) if ends_the_run(&cause) => cause,
         Err(cause) => fatal_host_error(format!("{message}; error construction failed: {cause:#}")),
     }
 }
