@@ -367,3 +367,302 @@ fn deny_warnings_preparation_checks_overlapping_sibling_commits() {
         }
     }
 }
+
+#[test]
+fn configuration_is_compiled_persisted_and_reconfigured_at_the_same_commit() {
+    use submilli_build::{ConfigInputs, InstallPreparation, PackageName};
+    let repo = write_repo("@acme/search");
+    write(
+        repo.path(),
+        "src/config.ts",
+        "export declare const baseUrl: string;\nexport const timeoutMs = 5000;\n",
+    );
+    write(
+        repo.path(),
+        "src/lib.ts",
+        "import { baseUrl, timeoutMs } from './config';\n/** Read the endpoint.\n * @returns The configured endpoint.\n */\nexport function endpoint(): string { return baseUrl; }\n/** Read the timeout.\n * @returns Timeout.\n */\nexport function timeout(): number { return timeoutMs; }",
+    );
+    let root = TempDir::new().unwrap();
+    let store = PackageStore::new(root.path());
+    let source = github("acme", "search", "aaaaaaaa");
+    let only = PackageName::new("@acme/search");
+    let missing = install_from_dir(&store, repo.path(), Some(&only), &source, false).unwrap_err();
+    assert!(matches!(
+        missing,
+        InstallError::ConfigurationRequired { .. }
+    ));
+    assert!(
+        missing
+            .configuration_command(false)
+            .unwrap()
+            .contains("--config 'baseUrl=<string>'")
+    );
+    assert!(
+        missing
+            .configuration_command(true)
+            .unwrap()
+            .starts_with("submilli server packages install")
+    );
+    assert!(store.load("@acme/search").is_err());
+    let inputs =
+        ConfigInputs::parse(&["baseUrl=https://first.example/a?x=y".into()], &[], true).unwrap();
+    let mut preparation = InstallPreparation::new(&store).unwrap();
+    preparation
+        .prepare_repo_configured(repo.path(), Some(&only), &source, false, &inputs)
+        .unwrap();
+    preparation.publish(false).unwrap();
+    let first = store.load("@acme/search").unwrap();
+    assert_eq!(first.metadata.config.overrides, inputs.values);
+    assert_eq!(
+        first
+            .sources
+            .iter()
+            .find(|module| module.path.as_str() == "config")
+            .unwrap()
+            .text,
+        fs::read_to_string(repo.path().join("src/config.ts")).unwrap()
+    );
+    let unchanged = install_from_dir(&store, repo.path(), Some(&only), &source, false).unwrap();
+    assert_eq!(unchanged.up_to_date, vec![only.clone()]);
+    let inputs =
+        ConfigInputs::parse(&["baseUrl=https://second.example".into()], &[], true).unwrap();
+    let mut preparation = InstallPreparation::new(&store).unwrap();
+    assert!(matches!(
+        preparation.prepare_repo_configured(repo.path(), Some(&only), &source, false, &inputs),
+        Err(InstallError::Conflict { .. })
+    ));
+    let mut preparation = InstallPreparation::new(&store).unwrap();
+    preparation
+        .prepare_repo_configured(repo.path(), Some(&only), &source, true, &inputs)
+        .unwrap();
+    preparation.publish(false).unwrap();
+    let second = store.load("@acme/search").unwrap();
+    assert_ne!(first.wasm, second.wasm);
+    assert_eq!(second.metadata.config.overrides, inputs.values);
+    write(
+        repo.path(),
+        "src/config.ts",
+        "export declare const baseUrl: string;\nexport const timeoutMs = 6000;\n",
+    );
+    install_from_dir(
+        &store,
+        repo.path(),
+        Some(&only),
+        &github("acme", "search", "bbbbbbbb"),
+        true,
+    )
+    .unwrap();
+    let upgraded = store.load("@acme/search").unwrap();
+    assert_eq!(upgraded.metadata.config.overrides, inputs.values);
+    assert_eq!(
+        serde_json::to_value(&upgraded.metadata.config.values).unwrap()["timeoutMs"],
+        6000.0
+    );
+}
+
+#[test]
+fn sibling_dependency_configuration_must_be_installed_separately() {
+    use submilli_build::{ConfigInputs, InstallPreparation, PackageName};
+    let repo = TempDir::new().unwrap();
+    write(
+        repo.path(),
+        "submilli.toml",
+        "[[package]]\nname = '@acme/app'\nversion = '0.1.0'\ndescription = 'App.'\npath = 'app'\ndependencies = ['@acme/service']\n[[package]]\nname = '@acme/service'\nversion = '0.1.0'\ndescription = 'Service.'\npath = 'service'\n",
+    );
+    write(
+        repo.path(),
+        "app/src/lib.ts",
+        "import { endpoint } from '@acme/service';\n/** Endpoint.\n * @returns Endpoint.\n */\nexport function url(): string { return endpoint(); }",
+    );
+    write(
+        repo.path(),
+        "service/src/lib.ts",
+        "import { baseUrl } from './config';\n/** Endpoint.\n * @returns Endpoint.\n */\nexport function endpoint(): string { return baseUrl; }",
+    );
+    write(
+        repo.path(),
+        "service/src/config.ts",
+        "export declare const baseUrl: string;",
+    );
+    write(repo.path(), "app/docs/readme.md", "# App\n");
+    write(repo.path(), "service/docs/readme.md", "# Service\n");
+    let root = TempDir::new().unwrap();
+    let store = PackageStore::new(root.path());
+    let source = github("acme", "both", SHA_A);
+    let app = PackageName::new("@acme/app");
+    let dependency = PackageName::new("@acme/service");
+    let missing = install_from_dir(&store, repo.path(), Some(&app), &source, false).unwrap_err();
+    assert!(
+        matches!(&missing, InstallError::ConfigurationRequired { package, .. } if package == &dependency)
+    );
+    assert!(
+        missing
+            .configuration_command(false)
+            .unwrap()
+            .contains("@acme/service --config")
+    );
+    assert!(
+        store.locate_all().is_empty(),
+        "failed preparation publishes nothing"
+    );
+    let inputs = ConfigInputs::parse(&["baseUrl=https://service.test".into()], &[], true).unwrap();
+    let mut preparation = InstallPreparation::new(&store).unwrap();
+    preparation
+        .prepare_repo_configured(repo.path(), Some(&dependency), &source, false, &inputs)
+        .unwrap();
+    preparation.publish(false).unwrap();
+    install_from_dir(&store, repo.path(), Some(&app), &source, false).unwrap();
+    assert!(store.load("@acme/app").is_ok());
+    let manifest = submilli_build::load_manifest(&repo.path().join("submilli.toml")).unwrap();
+    assert!(submilli_build::build_packages(&manifest, repo.path(), &store, Some(&app)).is_ok());
+    assert!(
+        matches!(
+            submilli_build::build_packages(&manifest, repo.path(), &store, Some(&dependency)),
+            Err(submilli_build::DriverError::MissingConfiguration { .. })
+        ),
+        "explicit local builds do not inherit the selected package's overrides"
+    );
+}
+
+#[test]
+fn configuration_resets_restore_defaults_and_reject_missing_required_values() {
+    use submilli_build::{ConfigInputs, InstallPreparation, PackageName};
+    let repo = write_repo("@acme/search");
+    write(
+        repo.path(),
+        "src/config.ts",
+        "export const baseUrl = 'https://default.test'; export declare const tenant: string;",
+    );
+    let root = TempDir::new().unwrap();
+    let store = PackageStore::new(root.path());
+    let source = github("acme", "search", SHA_A);
+    let only = PackageName::new("@acme/search");
+    let inputs = ConfigInputs::parse(
+        &["baseUrl=https://override.test".into(), "tenant=acme".into()],
+        &[],
+        true,
+    )
+    .unwrap();
+    let mut preparation = InstallPreparation::new(&store).unwrap();
+    preparation
+        .prepare_repo_configured(repo.path(), Some(&only), &source, false, &inputs)
+        .unwrap();
+    preparation.publish(false).unwrap();
+    let reset = ConfigInputs::parse(&[], &["baseUrl".into()], true).unwrap();
+    let mut preparation = InstallPreparation::new(&store).unwrap();
+    preparation
+        .prepare_repo_configured(repo.path(), Some(&only), &source, true, &reset)
+        .unwrap();
+    preparation.publish(false).unwrap();
+    let artifact = store.load("@acme/search").unwrap();
+    assert!(!artifact.metadata.config.overrides.contains_key("baseUrl"));
+    assert_eq!(
+        serde_json::to_value(&artifact.metadata.config.values).unwrap()["baseUrl"],
+        "https://default.test"
+    );
+    let reset = ConfigInputs::parse(&[], &["tenant".into()], true).unwrap();
+    let mut preparation = InstallPreparation::new(&store).unwrap();
+    assert!(matches!(
+        preparation.prepare_repo_configured(repo.path(), Some(&only), &source, true, &reset),
+        Err(InstallError::ConfigurationRequired { .. })
+    ));
+    assert_eq!(
+        store.load("@acme/search").unwrap().metadata.config,
+        artifact.metadata.config
+    );
+}
+
+#[test]
+fn selected_install_ignores_unrelated_broken_artifacts() {
+    let repo = write_repo("@acme/a");
+    let mut manifest = fs::read_to_string(repo.path().join("submilli.toml")).unwrap();
+    manifest.push_str("path = '.'\n");
+    manifest.push_str("\n[[package]]\nname = '@acme/b'\nversion = '0.1.0'\ndescription = 'Unrelated.'\npath = 'b'\n");
+    write(repo.path(), "submilli.toml", &manifest);
+    write(
+        repo.path(),
+        "b/src/lib.ts",
+        "export function b(): number { return 1; }",
+    );
+    write(repo.path(), "b/docs/readme.md", "# B\n");
+    let root = TempDir::new().unwrap();
+    let store = PackageStore::new(root.path());
+    write(root.path(), "@acme/b/metadata.json", "broken metadata");
+    install_from_dir(
+        &store,
+        repo.path(),
+        Some(&submilli_build::PackageName::new("@acme/a")),
+        &github("acme", "both", SHA_A),
+        false,
+    )
+    .unwrap();
+    assert!(store.load("@acme/a").is_ok());
+}
+
+#[test]
+fn configuration_remediation_includes_upgrade_for_an_existing_installation() {
+    let repo = write_repo("@acme/service");
+    let root = TempDir::new().unwrap();
+    let store = PackageStore::new(root.path());
+    install_from_dir(
+        &store,
+        repo.path(),
+        None,
+        &github("acme", "service", SHA_A),
+        false,
+    )
+    .unwrap();
+    write(
+        repo.path(),
+        "src/config.ts",
+        "export declare const endpoint: string;",
+    );
+    let error = install_from_dir(
+        &store,
+        repo.path(),
+        Some(&submilli_build::PackageName::new("@acme/service")),
+        &github("acme", "service", SHA_B),
+        false,
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .configuration_command(false)
+            .unwrap()
+            .contains("--upgrade --config")
+    );
+    assert!(
+        error
+            .configuration_command(true)
+            .unwrap()
+            .contains("--upgrade --config")
+    );
+}
+
+#[test]
+fn existing_artifacts_without_configuration_metadata_remain_compatible() {
+    let repo = write_repo("@acme/service");
+    let root = TempDir::new().unwrap();
+    let store = PackageStore::new(root.path());
+    let source = github("acme", "service", SHA_A);
+    install_from_dir(&store, repo.path(), None, &source, false).unwrap();
+    let path = store
+        .package_dir("@acme/service")
+        .unwrap()
+        .join("metadata.json");
+    let mut metadata: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    metadata.as_object_mut().unwrap().remove("config");
+    fs::write(path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+    let artifact = store.load("@acme/service").unwrap();
+    assert_eq!(
+        artifact.metadata.config,
+        submilli_build::PackageConfig::default()
+    );
+    assert_eq!(artifact.metadata.schema_version, 11);
+    let report = install_from_dir(&store, repo.path(), None, &source, false).unwrap();
+    assert_eq!(
+        report.up_to_date,
+        [submilli_build::PackageName::new("@acme/service")]
+    );
+}

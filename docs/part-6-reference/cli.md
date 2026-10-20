@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a2fcd38184825452797d9f5c42ae67de734e0a53cbc4d7a7d79f91d3823f6513"
+  contentHash: "3b9c6ac2e2c61980cf96a6eafc11732a13699d9296df4a019f55ac5c5e03301d"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -203,9 +203,12 @@ the repository's owner. For example, `submilli/acme` can hold only
 | | `submilli install` | `submilli server packages install` |
 | --- | --- | --- |
 | Pin to a branch, tag, or commit | `org/repo@<ref>` | `--sha <ref>` |
+| Configuration | `--config NAME=VALUE` (selected Package only) | `--config NAME=VALUE` (selected Package only) |
+| Clear a saved override | `--reset-config NAME` | `--reset-config NAME` |
+| Configuration contract | [Package configuration](/docs/reference/package-configuration) | [Package configuration](/docs/reference/package-configuration) |
 | Without a pin | The default branch's head | The default branch's head |
 | GitHub token | Yours (see [GitHub token](#github-token)) | The server's `github_token_file`. The CLI sends none |
-| Replace a Package installed at another commit | `--upgrade` | `--upgrade` |
+| Replace a Package with changed source or configuration | `--upgrade` | `--upgrade` |
 
 The first install reports the commit and the Package's location:
 
@@ -503,9 +506,10 @@ Compile the project's packages in dependency order without installing
 Usage: submilli build check [OPTIONS]
 
 Options:
-  -p, --package <PACKAGE>  Compile only this package and its sibling dependencies
-      --deny-warnings      Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
-  -h, --help               Print help
+      --config <NAME=VALUE>  Set a src/config.ts parameter of the explicitly selected package
+  -p, --package <PACKAGE>    Compile only this package and its sibling dependencies
+      --deny-warnings        Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
+  -h, --help                 Print help
 ```
 
 ### `submilli build publish-local`
@@ -516,9 +520,10 @@ Compile the project's packages and install them into the local store
 Usage: submilli build publish-local [OPTIONS]
 
 Options:
-  -p, --package <PACKAGE>  Compile only this package and its sibling dependencies
-      --deny-warnings      Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
-  -h, --help               Print help
+      --config <NAME=VALUE>  Set a src/config.ts parameter of the explicitly selected package
+  -p, --package <PACKAGE>    Compile only this package and its sibling dependencies
+      --deny-warnings        Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
+  -h, --help                 Print help
 ```
 
 ### `submilli build test`
@@ -529,13 +534,14 @@ Compile and run the project's `tests/**/*.test.{ts,subm}` files
 Usage: submilli build test [OPTIONS]
 
 Options:
-  -p, --package <PACKAGE>  Compile only this package and its sibling dependencies
-      --deny-warnings      Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
-      --all-env            Supply all Unicode process environment variables as test credentials
-      --env-var <NAME>     Supply a process variable (repeatable or comma-separated); fail if unset or non-Unicode
-      --env-file <PATH>    Read credentials from a file; relative paths use the current directory. Fail if unreadable
-      --skip-network       Skip network.test.{ts,subm} and network_*.test.{ts,subm} anywhere under tests/
-  -h, --help               Print help
+      --config <NAME=VALUE>  Set a src/config.ts parameter of the explicitly selected package
+  -p, --package <PACKAGE>    Compile only this package and its sibling dependencies
+      --deny-warnings        Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
+      --all-env              Supply all Unicode process environment variables as test credentials
+      --env-var <NAME>       Supply a process variable (repeatable or comma-separated); fail if unset or non-Unicode
+      --env-file <PATH>      Read credentials from a file; relative paths use the current directory. Fail if unreadable
+      --skip-network         Skip network.test.{ts,subm} and network_*.test.{ts,subm} anywhere under tests/
+  -h, --help                 Print help
 
 Tests receive no credentials by default. Credential precedence (highest first): --env-var > --env-file > --all-env, regardless of argument order.
 ```
@@ -548,9 +554,10 @@ Compile packages and print their full authority call graph as JSON
 Usage: submilli build authority-map [OPTIONS]
 
 Options:
-  -p, --package <PACKAGE>  Compile only this package and its sibling dependencies
-      --deny-warnings      Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
-  -h, --help               Print help
+      --config <NAME=VALUE>  Set a src/config.ts parameter of the explicitly selected package
+  -p, --package <PACKAGE>    Compile only this package and its sibling dependencies
+      --deny-warnings        Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
+  -h, --help                 Print help
 ```
 
 ### `submilli build security-review`
@@ -561,14 +568,15 @@ Review package authorization with Codex, Claude Code, or Copilot CLI
 Usage: submilli build security-review [OPTIONS] --agent <AGENT> --model <MODEL>
 
 Options:
-  -a, --agent <AGENT>      Installed coding agent to invoke; uses its existing authentication [possible values: codex, claude, copilot]
-  -m, --model <MODEL>      Provider model ID; "astra" resolves to gpt-6-astra for Codex/Copilot
-  -e, --effort <EFFORT>    Reasoning effort; the selected CLI/model must support it [possible values: low, medium, high]
-  -p, --package <PACKAGE>  Review this package and its local dependency closure; default: all packages
-      --fail-on <FAIL_ON>  Fail on findings at this severity or higher. Incomplete reviews always fail [default: high] [possible values: low, medium, high, critical]
-      --output <FILE>      Write a JSON report, including failures. Refuses to replace an existing file
-      --timeout <TIMEOUT>  Maximum time for the agent, in seconds (1–3600) [default: 600]
-  -h, --help               Print help
+      --config <NAME=VALUE>  Set a src/config.ts parameter of the explicitly selected package
+  -a, --agent <AGENT>        Installed coding agent to invoke; uses its existing authentication [possible values: codex, claude, copilot]
+  -m, --model <MODEL>        Provider model ID; "astra" resolves to gpt-6-astra for Codex/Copilot
+  -e, --effort <EFFORT>      Reasoning effort; the selected CLI/model must support it [possible values: low, medium, high]
+  -p, --package <PACKAGE>    Review this package and its local dependency closure; default: all packages
+      --fail-on <FAIL_ON>    Fail on findings at this severity or higher. Incomplete reviews always fail [default: high] [possible values: low, medium, high, critical]
+      --output <FILE>        Write a JSON report, including failures. Refuses to replace an existing file
+      --timeout <TIMEOUT>    Maximum time for the agent, in seconds (1–3600) [default: 600]
+  -h, --help                 Print help
 ```
 
 ## `submilli install`
@@ -583,9 +591,11 @@ Arguments:
   [PACKAGE]  Install only this package (`@org/name`). Omit to install every package the repo declares
 
 Options:
-      --upgrade        Re-install over a package already in the store at a different commit
-      --deny-warnings  Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
-  -h, --help           Print help
+      --config <NAME=VALUE>  Set a src/config.ts parameter of the selected package
+      --reset-config <NAME>  Remove a saved override and use the source default
+      --upgrade              Replace an installed package when its source or configuration changes
+      --deny-warnings        Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
+  -h, --help                 Print help
 ```
 
 ## `submilli docs`
@@ -1533,12 +1543,14 @@ Arguments:
   [PACKAGE]  Install only this package (`@org/name`). Omit to install every package the repo declares
 
 Options:
-      --sha <SHA>          Pin to this commit SHA (or ref). Resolved from the default branch when omitted
-      --upgrade            Re-install over a package already present at a different commit
-      --deny-warnings      Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
-  -h, --help               Print help
+      --config <NAME=VALUE>  Set a src/config.ts parameter of the selected package
+      --reset-config <NAME>  Remove a saved override and use the source default
+      --sha <SHA>            Pin to this commit SHA (or ref). Resolved from the default branch when omitted
+      --upgrade              Replace an installed package when its source or configuration changes
+      --deny-warnings        Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
+      --server <URL>         Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
+      --token-file <PATH>    File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help                 Print help
 ```
 
 #### `submilli server packages list`

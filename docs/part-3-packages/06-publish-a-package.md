@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "99a2b84231ebe268cf02ae72e602ff8e005e655a54a43cd1b27f43f60310a70b"
+  contentHash: "eb2dc8c8c69140a6e0b9b9252ab84ecc0c62e3ab90d468436b95ba9ba92cc015"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -180,3 +180,9 @@ Stored secret 'billing_api_key'
 Added blueprint 'support'
 credited 1500 cents, balance -6100
 ```
+
+## Configuration reference
+
+| Task | Reference |
+| --- | --- |
+| Supply required Package values, override defaults, or configure a dependency | [Package configuration](/docs/reference/package-configuration) |

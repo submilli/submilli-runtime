@@ -86,3 +86,79 @@ fn deny_warnings_remote_install_forwards_policy_and_renders_response() {
         }
     }
 }
+
+#[test]
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+fn package_config_remote_install_preserves_inputs_and_dependency_target() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let count = socket.read(&mut buffer).unwrap();
+            assert!(count > 0);
+            request.extend_from_slice(&buffer[..count]);
+            let text = String::from_utf8_lossy(&request);
+            let Some((headers, body)) = text.split_once("\r\n\r\n") else {
+                continue;
+            };
+            let length: usize = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .map(|length| length.trim().parse().unwrap())
+                })
+                .unwrap();
+            if body.len() < length {
+                continue;
+            }
+            let value: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert_eq!(value["package"], "@acme/app");
+            assert_eq!(value["config"]["baseUrl"], "https://app.test/?a=b");
+            assert_eq!(value["reset_config"], serde_json::json!(["timeoutMs"]));
+            break;
+        }
+        let body = serde_json::json!({
+            "error": "configuration_required", "message": "install the dependency first", "warnings": [],
+            "configuration": { "package": "@acme/service", "parameters": {"baseUrl":"string"}, "command": "submilli server packages install acme/service@aaaaaaaa @acme/service --config 'baseUrl=<string>'" }
+        }).to_string();
+        write!(socket, "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+    });
+    let home = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_submilli"))
+        .args([
+            "server",
+            "packages",
+            "install",
+            "acme/app",
+            "@acme/app",
+            "--config",
+            "baseUrl=https://app.test/?a=b",
+            "--reset-config",
+            "timeoutMs",
+            "--server",
+            &format!("http://{address}"),
+        ])
+        .env("SUBMILLI_HOME", home.path())
+        .env_remove("SUBMILLI_SERVER_TOKEN")
+        .env_remove("SUBMILLI_SERVER_TOKEN_FILE")
+        .output()
+        .unwrap();
+    server.join().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("@acme/service --config 'baseUrl=<string>'"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("--server 'http://{address}'")),
+        "{stderr}"
+    );
+}

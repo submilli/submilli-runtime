@@ -188,6 +188,14 @@ fn code_block<'a>(text: &'a str, language: &str) -> &'a str {
     code_blocks(text, language)[0]
 }
 
+fn section_code_block<'a>(text: &'a str, heading: &str, language: &str) -> &'a str {
+    let (_, rest) = text
+        .split_once(&format!("\n## {heading}\n"))
+        .unwrap_or_else(|| panic!("missing example section: {heading}"));
+    let section = rest.split("\n## ").next().unwrap();
+    code_block(section, language)
+}
+
 /// Every fenced block tagged exactly `language`, in document order.
 fn code_blocks<'a>(text: &'a str, language: &str) -> Vec<&'a str> {
     text.split(&format!("```{language}\n"))
@@ -220,10 +228,10 @@ fn documented_real_service_package_and_blueprint_agree() {
     let references = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills/submilli/references");
     let package_doc = read_markdown(references.join("packages.md"));
     let blueprint_doc = read_markdown(references.join("blueprints.md"));
-    let source = code_blocks(&package_doc, "typescript")[1];
+    let source = section_code_block(&package_doc, "A real service", "typescript");
     assert!(
         source.contains("acme.com/orders.cancel"),
-        "second package example moved"
+        "real service package example changed"
     );
     ok(cli(&["build", "init", "@acme/orders", "package"]));
     fs::write(root.path().join("package/src/lib.ts"), source).unwrap();
@@ -365,7 +373,7 @@ async fn documented_package_and_blueprint_enforce_the_bound_customer() {
     ok(cli(&["build", "init", "@acme/billing", "package"]));
     fs::write(
         root.path().join("package/src/lib.ts"),
-        code_block(&package_doc, "typescript"),
+        section_code_block(&package_doc, "The smallest slice", "typescript"),
     )
     .unwrap();
     fs::write(root.path().join("package/tests/lib.test.ts"),
