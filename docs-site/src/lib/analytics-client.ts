@@ -4,6 +4,7 @@ import { attributionFor, mergeAttribution, safeUrl } from './analytics-utils';
 const key = import.meta.env.PUBLIC_POSTHOG_KEY;
 const host = import.meta.env.PUBLIC_POSTHOG_HOST;
 const consentKey = 'submilli.analytics-consent.v1';
+const consentCookie = 'submilli_analytics_consent';
 const attributionKey = 'submilli.attribution.v1';
 let active = false;
 let initialized = false;
@@ -31,6 +32,25 @@ function writeStorage(storageKey: string, value: string) {
 	}
 }
 
+function readConsentCookie() {
+	try {
+		const entry = document.cookie.split('; ').find(value => value.startsWith(`${consentCookie}=`));
+		return entry ? decodeURIComponent(entry.slice(consentCookie.length + 1)) : null;
+	} catch {
+		return null;
+	}
+}
+
+function writeConsentCookie(value: 'denied' | 'granted') {
+	try {
+		document.cookie = `${consentCookie}=${value}; Max-Age=31536000; Path=/; SameSite=Lax; Secure`;
+	} catch {}
+}
+
+function clearConsentCookie() {
+	try { document.cookie = `${consentCookie}=; Max-Age=0; Path=/; SameSite=Lax; Secure`; } catch {}
+}
+
 function hasVerificationAttribution() {
 	const markers = new Set(['e2e', 'deployment_verification', 'verification', 'funnel_test', 'utm_e2e']);
 	const marked = (touch: unknown) => touch && typeof touch === 'object'
@@ -44,10 +64,15 @@ function hasVerificationAttribution() {
 	}
 }
 
+function isProductionAnalyticsHost() {
+	return location.hostname === 'submilli.ai';
+}
+
 function applyQueryOptOut() {
 	try {
 		if (new URL(location.href).searchParams.get('analytics') !== 'off') return false;
 		writeStorage(consentKey, 'denied');
+		writeConsentCookie('denied');
 		return true;
 	} catch {}
 	return false;
@@ -107,7 +132,7 @@ function instrumentClicks() {
 }
 
 function start(explicitConsent = false) {
-	if (active || !key || !host) return;
+	if (active || !key || !host || isTest || !isProductionAnalyticsHost()) return;
 	if (!initialized) {
 		posthog.init(key, {
 			api_host: host,
@@ -165,7 +190,8 @@ if (key && host) {
 	const choice = document.getElementById('analytics-choice');
 	const settings = document.getElementById('analytics-settings');
 	if (settings) settings.hidden = false;
-	if (!queryOptOut && readStorage(consentKey) !== 'denied') start();
+	const consentDenied = readStorage(consentKey) === 'denied' || readConsentCookie() === 'denied';
+	if (!queryOptOut && !consentDenied) start();
 	settings?.addEventListener('click', () => { if (choice) choice.hidden = false; });
 	document.querySelectorAll<HTMLButtonElement>('[data-consent]').forEach(button => {
 		button.addEventListener('click', () => {
@@ -173,9 +199,11 @@ if (key && host) {
 			if (!consent) return;
 			writeStorage(consentKey, consent);
 			if (consent === 'granted') {
+				clearConsentCookie();
 				start(true);
 			}
 			else {
+				writeConsentCookie('denied');
 				active = false;
 				if (initialized) {
 					posthog.stopSessionRecording();
