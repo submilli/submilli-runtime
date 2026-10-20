@@ -136,8 +136,6 @@ pub struct StoreData {
     pub git: Option<crate::stdlib::git::GitConfig>,
     pub(crate) git_history: Option<Arc<crate::stdlib::git::log_cache::Cache>>,
     pub console: Box<dyn Write + Send>,
-    /// Rebuild retained console output during replay without publishing it again.
-    pub replay_console: Option<Box<dyn Write + Send>>,
     pub vfs: Vfs,
     pub filesystem: Arc<dyn filesystem::Filesystem>,
     /// Native outcome history, installed before any guest initializer runs.
@@ -303,7 +301,6 @@ impl StoreData {
             #[cfg(test)]
             array_growth: array_storage::GrowthStats::default(),
             console: Box::new(std::io::stderr()),
-            replay_console: None,
             filesystem: Arc::new(default_filesystem::DefaultFilesystem::new(vfs.clone())),
             effects: None,
             vfs,

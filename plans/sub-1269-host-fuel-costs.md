@@ -2036,9 +2036,13 @@ waiting costs no fuel. Backend work keeps its existing IO/SCAN/PARSE/SYSCALL cos
 | session get/has/set/remove/list and finalizer registration | Existing KV IO inside the boundary; parsing and guest values charge normally afterward. Guest serialization callbacks precede history allocation. |
 | LLM dispatch/models; embedding embed/models | Existing provider work and token settlement inside boundary; output conversion charges normally. Replay restores per-run spend, without a second shared provider reservation. |
 | MCP, tools, agents, skills | Existing provider charges inside boundary; native outcome then guest conversion. |
-| security.check; console output | Gate/write cost inside boundary; replay skips external output but reconstructs retained console text. |
+| security.check | Gate cost inside boundary. |
 | code read/search/glob/tree/diffFiles/edit/insertAt/applyPatch | Existing native scan/parse/walk/write costs inside boundary; diffText stays pure. Mutation validates result size before publication. |
 | Git worker operations | Existing native WorkingBudget/Work settlement inside boundary, guest encoding afterward. Worker ownership/draining is unchanged. |
+
+Console logging stays outside the native boundary and writes again on replay,
+paying its usual SCAN and IO costs on each attempt. Incremental console persistence
+is deferred to SUB-1885.
 
 Host registration no longer carries an unused determinism flag. Value-returning
 host adapters own ABI result slots; native outcome recording returns the Rust value

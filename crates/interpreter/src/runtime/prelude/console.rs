@@ -5,7 +5,6 @@
 //! through its vtable `toString` slot; the pieces are space-joined and written
 //! to the store's console stream with a trailing newline.
 
-use crate::runtime::effects;
 use std::io::Write;
 
 use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
@@ -51,53 +50,23 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 fuel::charge(&mut *caller, fuel::SCAN, units.len() as u64)?;
                 let mut line = String::from_utf16_lossy(&units);
                 line.push('\n');
-                let _request = crate::runtime::limits::HostBytes::new(
-                    &caller.data().tenant_limits,
-                    line.len() as u64,
-                )?;
-                let mut emitted = false;
-                let outcome =
-                    effects::execute(caller, "console.log", line.clone(), |caller, _, line| {
-                        emitted = true;
-                        Box::pin(async move {
-                            let mut output = CountedWriter {
-                                sink: &mut caller.data_mut().console,
-                                written: 0,
-                            };
-                            let result = output.write_all(line.as_bytes());
-                            let written = output.written;
-                            fuel::settle(&mut *caller, fuel::IO, written)?;
-                            let error = match result {
-                                Ok(()) => None,
-                                Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
-                                    Some(error.to_string())
-                                }
-                                Err(error) => return Err(fatal_host_error(error)),
-                            };
-                            Ok(ConsoleOutcome { written, error })
-                        })
-                    })
-                    .await?;
-                if !emitted && let Some(output) = &mut caller.data_mut().replay_console {
-                    let length = usize::try_from(outcome.written).map_err(fatal_host_error)?;
-                    let bytes = line.as_bytes().get(..length).ok_or_else(|| {
-                        fatal_host_error("console history exceeds reconstructed line")
-                    })?;
-                    output.write_all(bytes).map_err(fatal_host_error)?;
-                }
-                match &outcome.error {
-                    Some(error) => Err(crate::runtime::host::range_error(error)),
-                    None => Ok(()),
+                let mut output = CountedWriter {
+                    sink: &mut caller.data_mut().console,
+                    written: 0,
+                };
+                let result = output.write_all(line.as_bytes());
+                let written = output.written;
+                fuel::settle(&mut *caller, fuel::IO, written)?;
+                match result {
+                    Ok(()) => Ok(()),
+                    Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
+                        Err(crate::runtime::host::range_error(error.to_string()))
+                    }
+                    Err(error) => Err(fatal_host_error(error)),
                 }
             })
         },
     )
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ConsoleOutcome {
-    written: u64,
-    error: Option<String>,
 }
 
 struct CountedWriter<'a> {

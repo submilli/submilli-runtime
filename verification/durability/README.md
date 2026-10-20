@@ -224,8 +224,10 @@ encoded size, lengths and nesting before decoding, but does not estimate or char
 the transient decoded value's heap through guest conversion. SQL/envelope buffers,
 encoded payloads, ordinary provider allocations and guest allocations retain their
 existing limits. This deliberately does not claim a total-memory bound for arbitrary
-Serde deserializers. The native codec and runtime compatibility marker are version 2;
-old internal recordings are refused rather than decoded as the new resource types.
+Serde deserializers. The native codec is version 2 and the runtime compatibility
+marker is version 3. Older internal recordings are refused because resource encoding
+and the set of recorded operations must match; console no longer occupies a history
+position.
 
 HTTP downloads retain metadata and the destination reference, never the downloaded
 file body. Large-object storage is a later optimization.
@@ -241,10 +243,11 @@ conversion run again against the original logical budget.
 The native boundary covers UUID, random bytes, Math.random, Temporal.Now,
 variables/secrets, filesystem operations and resources, HTTP/downloads, session
 KV/finalizers, LLM/embedding, MCP/tools/agents/skills, explicit security checks,
-console output, and code/Git operations. Argument conversion and guest callbacks
-precede the boundary; pure operations have no history row. Console replay rebuilds
-retained output without publishing duplicate console events. Console tracks whether
-its own write ran; the generic execution result carries no replay flag.
+and code/Git operations. Argument conversion and guest callbacks precede the
+boundary; pure operations have no history row. Console logging also stays outside
+the boundary: it writes normally on every attempt, including replay, and can
+publish duplicate console events. Output is retained with the finished run;
+incremental console persistence is deferred to SUB-1885.
 
 Reader, writer and listing values serialize persistent identity/options directly.
 Process-local handles are skipped. Resources hold no filesystem or unit-of-work

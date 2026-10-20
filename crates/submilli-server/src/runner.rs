@@ -400,10 +400,6 @@ async fn run_inner(
         output: buf.clone(),
         lines: log.clone().map(ConsoleLines::new),
     });
-    data.replay_console = Some(Box::new(Sink {
-        output: buf.clone(),
-        lines: None,
-    }));
     data.install_type_info(compiled.type_info.clone());
 
     let mut rt = crate::metrics::RuntimePhaseTimings::default();

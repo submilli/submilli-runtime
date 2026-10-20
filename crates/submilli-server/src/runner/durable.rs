@@ -14,7 +14,7 @@ use submilli_durable::history::{ExecutionAttempt, History};
 /// Bump this contract when compiler, host ABI, codecs or deterministic semantics
 /// change incompatibly. Package content retention is a separate prerequisite for
 /// replay across package changes; this version assumes unchanged package contents.
-pub(crate) const COMPATIBILITY: &str = concat!("durable-v2/wasmgc/", env!("CARGO_PKG_VERSION"));
+pub(crate) const COMPATIBILITY: &str = concat!("durable-v3/wasmgc/", env!("CARGO_PKG_VERSION"));
 
 pub(crate) fn capture_program(
     source: String,

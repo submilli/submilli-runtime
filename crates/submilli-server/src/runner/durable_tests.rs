@@ -232,6 +232,8 @@ async fn recorded_run_reopens_original_program_and_publishes_terminal_response()
     .await
     .unwrap();
     assert_eq!(resumed.program(), Some(&program));
+    // UUID, write and read are recorded; console writes again without a history row.
+    assert_eq!(resumed.history_position(), 3);
     assert_eq!(resumed.attempt(), first.attempt() + 1);
     let replay = history(&resumed, fs_units.clone());
     let outcome = execute(&resumed, replay.clone(), fs_units, &files)
