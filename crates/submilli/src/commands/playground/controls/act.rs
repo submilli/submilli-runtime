@@ -8,7 +8,7 @@
 //! file, so it works with the playground stopped too, and the page reaches the same
 //! function through the API.
 //!
-//! Every run an action starts goes through the server's embedder entry points
+//! Every run an action starts goes through the host's entry points
 //! (`run_program`, `run_in_session`, `test_program`) under the playground's own label,
 //! so the recorder stores it like any other run, and its result is what `show` says of
 //! the stored run.
@@ -28,15 +28,13 @@ use submilli_blueprint::{
     Blueprint, DraftCall, DraftError, ResolutionCause, draft_allow, required_harness_secrets,
     resolve_variables,
 };
-use submilli_server::AppState;
-use submilli_server::error::ErrorKind;
-use submilli_server::handlers::execute::ExecuteResponse;
-use submilli_server::record::recheck::Verdict;
-use submilli_server::record::{
-    ProgramRun, SessionProgram, SessionRunError, SessionStart, SessionStartError, TestError,
-    TestMode, TestRun, end_session, recheck, run_in_session, run_program, session_variables,
-    start_session, test_program,
+
+use super::super::host::app::{
+    App, ProgramRun, SessionProgram, SessionRunError, SessionStart, SessionStartError,
 };
+use super::super::host::record::recheck::{Verdict, recheck};
+use super::super::host::record::test_run::{TestError, TestMode, TestReport, TestRun};
+use super::super::host::run::{ErrorKind, ExecuteResponse};
 
 use super::super::Output;
 use super::super::agent;
@@ -139,7 +137,7 @@ pub(crate) enum Mode {
 }
 
 impl Mode {
-    fn server(self) -> TestMode {
+    fn host(self) -> TestMode {
         match self {
             Self::Recorded => TestMode::Recorded,
             Self::ReadsLive => TestMode::ReadsLive,
@@ -401,7 +399,7 @@ pub(crate) struct BindingResult {
 
 /// What the running playground acts with.
 pub(crate) struct Actions {
-    pub(crate) app: AppState,
+    pub(crate) app: Arc<App>,
     pub(crate) store: Arc<Store>,
     pub(crate) recorder: Recorder,
     /// Secret values the recorder cuts out of what it stores; `bind` adds to it.
@@ -409,7 +407,6 @@ pub(crate) struct Actions {
     pub(crate) binding: Mutex<Binding>,
     /// Where `bind` saves the binding's variables for the next start.
     pub(crate) binding_file: PathBuf,
-    pub(crate) blueprints: Arc<dyn submilli_server::blueprint::BlueprintStore>,
     /// Applies the blueprint file; a run first catches up on a save the watcher has
     /// not applied yet.
     pub(crate) applier: Arc<super::super::watch::Applier>,
@@ -447,9 +444,9 @@ impl Actions {
     /// applied.
     async fn blueprint(&self, name: &str) -> Result<Blueprint, ActError> {
         self.applier.catch_up().await;
-        match self.blueprints.get(name).await {
-            Ok(Some(blueprint)) => Ok(blueprint),
-            Ok(None) => Err(ActError::usage(
+        match self.app.blueprint(name).await {
+            Some(blueprint) => Ok(blueprint),
+            None => Err(ActError::usage(
                 "blueprint-gone",
                 format!(
                     "blueprint `{name}` is not registered: the playground serves `{}`, and a \
@@ -457,9 +454,6 @@ impl Actions {
                     self.blueprint_name
                 ),
             )),
-            Err(error) => Err(ActError::failure(format!(
-                "reading blueprint `{name}` failed: {error}"
-            ))),
         }
     }
 
@@ -553,23 +547,22 @@ impl Actions {
                 session_id: session.clone(),
                 code: request.code,
             };
-            run_in_session(&self.app, program)
+            self.app
+                .run_in_session(program)
                 .await
                 .map_err(|error| session_run_error(&error, &session))?
         } else {
             let blueprint = self.blueprint(&self.blueprint_name).await?;
             let (variables, secrets) = self.for_new_run(&blueprint, &request.variables)?;
-            run_program(
-                &self.app,
-                ProgramRun {
+            self.app
+                .run_program(ProgramRun {
                     label: label.to_owned(),
                     blueprint: self.blueprint_name.clone(),
                     code: request.code,
                     variables,
                     secrets,
-                },
-            )
-            .await
+                })
+                .await
         };
         self.ran(&response, "exec", None)
     }
@@ -580,7 +573,7 @@ impl Actions {
         session: &str,
         asked: &BTreeMap<String, String>,
     ) -> Result<(), ActError> {
-        let fixed = match session_variables(&self.app, session).await {
+        let fixed = match self.app.session_variables(session).await {
             Ok(Some(fixed)) => fixed,
             Ok(None) => return Err(unknown_session(session)),
             Err(error) => {
@@ -758,7 +751,7 @@ impl Actions {
         };
         let mut keeping: Vec<(String, String)> = Vec::new();
         for session in open {
-            let Ok(Some(fixed)) = session_variables(&self.app, &session).await else {
+            let Ok(Some(fixed)) = self.app.session_variables(&session).await else {
                 continue;
             };
             let differ: Vec<String> = binding
@@ -1014,7 +1007,7 @@ impl Actions {
                 ),
             ));
         };
-        let fixed_variables = match session_variables(&self.app, session).await {
+        let fixed_variables = match self.app.session_variables(session).await {
             Ok(fixed) => fixed,
             Err(error) => {
                 return Err(ActError::failure(format!(
@@ -1109,7 +1102,7 @@ impl Actions {
         model: &str,
         settings: &agent::Settings,
     ) {
-        let variables = match session_variables(&self.app, session).await {
+        let variables = match self.app.session_variables(session).await {
             Ok(Some(fixed)) => fixed,
             _ => variables,
         };
@@ -1143,7 +1136,9 @@ impl Actions {
         if listed {
             return;
         }
-        let variables = session_variables(&self.app, session)
+        let variables = self
+            .app
+            .session_variables(session)
             .await
             .ok()
             .flatten()
@@ -1170,20 +1165,19 @@ impl Actions {
     async fn try_session_start(&self, request: SessionStartRequest) -> Result<Answer, ActError> {
         let blueprint = self.blueprint(&self.blueprint_name).await?;
         let (variables, secrets) = self.for_new_run(&blueprint, &request.variables)?;
-        let session = start_session(
-            &self.app,
-            SessionStart {
+        let session = self
+            .app
+            .start_session(SessionStart {
                 blueprint: self.blueprint_name.clone(),
                 variables: variables.clone(),
                 secrets,
-            },
-        )
-        .await
-        .map_err(|error| {
-            session_start_error(&error, |message| {
-                self.missing_variables(message, Some(&blueprint), &variables)
             })
-        })?;
+            .await
+            .map_err(|error| {
+                session_start_error(&error, |message| {
+                    self.missing_variables(message, Some(&blueprint), &variables)
+                })
+            })?;
         // A session the log does not list could never be listed or ended, so it is ended
         // here when it cannot be logged.
         let logged = self.fixed_variables(&session).await.and_then(|variables| {
@@ -1204,7 +1198,7 @@ impl Actions {
         let variables = match logged {
             Ok(variables) => variables,
             Err(error) => {
-                let _ = end_session(&self.app, &session).await;
+                let _ = self.app.end_session(&session).await;
                 return Err(error);
             }
         };
@@ -1221,7 +1215,7 @@ impl Actions {
 
     /// The variables a session just started holds, the server's defaults filled in.
     async fn fixed_variables(&self, session: &str) -> Result<Values, ActError> {
-        match session_variables(&self.app, session).await {
+        match self.app.session_variables(session).await {
             Ok(Some(fixed)) => Ok(fixed),
             Ok(None) => Err(ActError::failure(format!(
                 "session {} ended as it started",
@@ -1241,7 +1235,7 @@ impl Actions {
     }
 
     async fn try_session_end(&self, session: String) -> Result<Answer, ActError> {
-        let ended = end_session(&self.app, &session).await.map_err(|error| {
+        let ended = self.app.end_session(&session).await.map_err(|error| {
             ActError::failure(format!(
                 "ending session {} failed: {error}",
                 clean(&session)
@@ -1406,22 +1400,21 @@ impl Actions {
         let mut supplied = binding.variables.clone();
         supplied.extend(stored.recording.variables.clone());
         let forgotten = binding.forgotten_secrets;
-        let outcome = test_program(
-            &self.app,
-            TestRun {
+        let outcome = self
+            .app
+            .test_program(TestRun {
                 label: labels::TEST.to_owned(),
                 recorded: stored.recording,
                 bindings: binding.variables,
-                mode: request.mode.server(),
+                mode: request.mode.host(),
                 secrets: Some(secrets),
-            },
-        )
-        .await
-        .map_err(|error| {
-            test_error(&error, source, &forgotten, |message| {
-                self.missing_variables(message, Some(&blueprint), &supplied)
             })
-        })?;
+            .await
+            .map_err(|error| {
+                test_error(&error, source, &forgotten, |message| {
+                    self.missing_variables(message, Some(&blueprint), &supplied)
+                })
+            })?;
         let id = match self.store.run_id_of(&outcome.response.execution_id) {
             Ok(Some(id)) => id,
             Ok(None) => return Err(self.not_recorded(&outcome.response)),
@@ -1432,11 +1425,7 @@ impl Actions {
     }
 
     /// Keeps a test run's report with the run, redacted like the run itself.
-    fn keep_report(
-        &self,
-        id: u64,
-        report: &submilli_server::record::TestReport,
-    ) -> Result<(), ActError> {
+    fn keep_report(&self, id: u64, report: &TestReport) -> Result<(), ActError> {
         let mut run = self.load(id)?;
         run.test_report = StoredTestReport::of(report);
         let redacted = self
@@ -1461,17 +1450,16 @@ impl Actions {
         };
         let blueprint = self.blueprint(&stored.recording.blueprint_name).await?;
         let (variables, secrets) = self.for_new_run(&blueprint, &BTreeMap::new())?;
-        let response = run_program(
-            &self.app,
-            ProgramRun {
+        let response = self
+            .app
+            .run_program(ProgramRun {
                 label: labels::RERUN.to_owned(),
                 blueprint: stored.recording.blueprint_name.clone(),
                 code,
                 variables,
                 secrets,
-            },
-        )
-        .await;
+            })
+            .await;
         self.ran(&response, "rerun", Some(source))
     }
 
@@ -1791,11 +1779,11 @@ fn unknown_session(session: &str) -> ActError {
 
 fn session_run_error(error: &SessionRunError, session: &str) -> ActError {
     match error {
-        SessionRunError::UnknownSession { .. } => unknown_session(session),
-        SessionRunError::BlueprintMissing { .. } => {
+        SessionRunError::UnknownSession => unknown_session(session),
+        SessionRunError::BlueprintMissing(_) => {
             ActError::usage("blueprint-gone", error.to_string())
         }
-        SessionRunError::SecretsRequired { required, .. } => ActError::usage(
+        SessionRunError::SecretsRequired { required } => ActError::usage(
             "missing-secrets",
             format!(
                 "session {} no longer holds harness secret{} {} (secret values are not kept \
@@ -1807,9 +1795,7 @@ fn session_run_error(error: &SessionRunError, session: &str) -> ActError {
                 if required.len() == 1 { "it" } else { "them" }
             ),
         ),
-        SessionRunError::Store(_) | SessionRunError::Session(_) => {
-            ActError::failure(error.to_string())
-        }
+        SessionRunError::Session(_) => ActError::failure(error.to_string()),
     }
 }
 
@@ -1827,13 +1813,10 @@ fn session_start_error(
                 "{message}; set development values with `submilli playground bind --secret NAME`"
             ),
         ),
-        SessionStartError::UnknownBlueprint { .. } | SessionStartError::InvalidFilesystem(_) => {
+        SessionStartError::UnknownBlueprint(_) | SessionStartError::InvalidFilesystem(_) => {
             ActError::usage("blueprint-gone", error.to_string())
         }
-        // The playground declares no application tools, so their refusal is a failure.
-        SessionStartError::Store(_)
-        | SessionStartError::Session(_)
-        | SessionStartError::InvalidTools(_) => ActError::failure(error.to_string()),
+        SessionStartError::Session(_) => ActError::failure(error.to_string()),
     }
 }
 
@@ -1873,7 +1856,7 @@ fn test_error(
                 ),
             )
         }
-        TestError::Store(_) | TestError::NoRecorder | TestError::LocalState(_) => {
+        TestError::Session(_) | TestError::NoRecorder | TestError::LocalState(_) => {
             ActError::failure(error.to_string())
         }
     }

@@ -1,5 +1,5 @@
-//! The store on its own, fed the server's callbacks directly; `server` below runs real
-//! programs through an in-process server.
+//! The store on its own, fed the host's callbacks directly, with events sent by hand;
+//! `server` below runs real programs through the host.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -13,11 +13,14 @@ use interpreter::runtime::{
     DecisionRecord, EntryPath, ModelUsage, PackageLine, PayloadRecord, RuleCitation, SourceLine,
 };
 use serde_json::{Value, json};
-use submilli_blueprint::{Blueprint, VarBindings};
-use submilli_server::error::{ErrorKind, ExecuteError};
-use submilli_server::record::{
-    EVENT_SCHEMA, EventKind, FinishedRun, McpCatalog, RecordedRun, RunEntry, RunRecorder,
-    RunRecorderFactory, RunStart, SessionEvent,
+use submilli_blueprint::VarBindings;
+use submilli_shared::mcp::McpCatalog;
+
+use super::super::host::record::RecordedRun;
+use super::super::host::record::events::{EVENT_SCHEMA, EventKind, SessionEvent};
+use super::super::host::run::{
+    DenialDetails, ErrorKind, ExecuteError, FinishedRun, RecordedRun as RunRecording, RunEntry,
+    RunRecorder, RunStart,
 };
 
 use super::changes::{NewVersion, WindowStart};
@@ -42,7 +45,7 @@ impl World {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(Store::open(&dir.path().join("store")).unwrap());
         let secrets = KnownSecrets::default();
-        let recorder = Recorder::new(Arc::clone(&store), secrets.clone());
+        let recorder = by_hand(Arc::clone(&store), secrets.clone());
         Self {
             dir,
             store,
@@ -60,7 +63,7 @@ impl World {
         Store::open(self.root()).unwrap()
     }
 
-    fn start(&self, start: RunStart) -> Arc<dyn RunRecorder> {
+    fn start(&self, start: RunStart) -> Arc<dyn RunRecording> {
         self.recorder
             .start(start)
             .expect("the store records every run")
@@ -74,6 +77,11 @@ impl World {
         });
         files
     }
+}
+
+/// A recorder whose runs' events the test sends itself.
+fn by_hand(store: Arc<Store>, secrets: KnownSecrets) -> Recorder {
+    Recorder::new(store, secrets).with_events_sent_by_hand()
 }
 
 fn walk(dir: &Path, visit: &mut dyn FnMut(&Path)) {
@@ -95,12 +103,9 @@ fn run_start(execution_id: &str, session: Option<&str>) -> RunStart {
         test_of: None,
         client: Some("langchain-mcp-adapters".into()),
         tool_call_id: Some("toolu_1".into()),
-        session_id: session.map(str::to_owned),
-        idempotency_key: Some("idem-1".into()),
+        session_id: session.unwrap_or_default().to_owned(),
         blueprint_name: "demo".into(),
-        blueprint: Arc::new(Blueprint::default()),
-        blueprint_hash: Some("bphash".into()),
-        blueprint_version: None,
+        blueprint_version: "v1".into(),
         variables: Arc::new(VarBindings::from([(
             "customerId".to_owned(),
             "pied_piper".to_owned(),
@@ -307,7 +312,7 @@ fn a_recorded_run_round_trips_with_every_field() {
         kind: ErrorKind::PermissionDenied,
         message: "denied".into(),
         diagnostics: Vec::new(),
-        denial: Some(submilli_server::error::DenialDetails {
+        denial: Some(DenialDetails {
             caller: "main".into(),
             capability: "http.post".into(),
             source: "policy",
@@ -655,7 +660,7 @@ fn clear_removes_the_event_logs_and_their_numbering_carries_on() {
     assert_eq!(seqs, [4, 5, 6]);
     // So does a new process, which numbers on from what is left.
     let reopened = Arc::new(world.reopen());
-    let recorder = Recorder::new(Arc::clone(&reopened), KnownSecrets::default());
+    let recorder = by_hand(Arc::clone(&reopened), KnownSecrets::default());
     recorder.start(run_start("exec-2", Some("sess")));
     recorder.event(event(1, "sess", "exec-2", run_started()));
     let last = reopened
@@ -900,7 +905,7 @@ fn a_test_run_is_stored_like_any_run_with_its_link_to_the_source() {
         .finish(finished(Vec::new(), Vec::new()));
     // The source run was stored before a restart.
     let world = World {
-        recorder: Recorder::new(Arc::new(world.reopen()), KnownSecrets::default()),
+        recorder: by_hand(Arc::new(world.reopen()), KnownSecrets::default()),
         ..world
     };
     let mut start = run_start("test-exec", None);
@@ -918,22 +923,6 @@ fn a_test_run_is_stored_like_any_run_with_its_link_to_the_source() {
         (Some(1), "source-exec")
     );
     assert_eq!(store.list_runs().unwrap()[1].test_of, Some(link));
-}
-
-#[test]
-fn an_idempotent_retry_is_kept_as_a_link_not_a_run() {
-    let world = World::new();
-    world
-        .start(run_start("exec-1", Some("s")))
-        .finish(finished(Vec::new(), Vec::new()));
-    world.recorder.retried(submilli_server::record::RetryLink {
-        session_id: "s".into(),
-        idempotency_key: "idem-1".into(),
-        original_execution_id: Some("exec-1".into()),
-    });
-    assert_eq!(world.store.list_runs().unwrap().len(), 1);
-    let retries = world.store.retries().unwrap();
-    assert_eq!(retries[0].original.as_ref().unwrap().run, Some(1));
 }
 
 // ---- events ----------------------------------------------------------------------------
@@ -1014,7 +1003,7 @@ fn numbering_continues_after_a_restart() {
         .recorder
         .event(event(2, "sess", "exec-1", call_started(0)));
     let reopened = Arc::new(world.reopen());
-    let recorder = Recorder::new(Arc::clone(&reopened), KnownSecrets::default());
+    let recorder = by_hand(Arc::clone(&reopened), KnownSecrets::default());
     recorder.start(run_start("exec-2", Some("sess")));
     recorder.event(event(1, "sess", "exec-2", run_started()));
     let seqs: Vec<u64> = reopened
@@ -1146,7 +1135,7 @@ fn a_dropped_console_line_leaves_a_gap_and_the_run_keeps_its_console() {
 
 /// A run with three calls whose second call's events the server dropped: its call
 /// start, decision, and end.
-fn run_with_a_gap(world: &World) -> (Arc<dyn RunRecorder>, FinishedRun) {
+fn run_with_a_gap(world: &World) -> (Arc<dyn RunRecording>, FinishedRun) {
     let recorder = world.start(run_start("exec-1", Some("sess")));
     let calls: Vec<CallRecord> = (0..3).map(|n| call(n, "http.get", Some("ok"))).collect();
     let decisions: Vec<DecisionRecord> = (0..3)
@@ -1331,9 +1320,9 @@ fn session_ids_that_are_not_plain_never_name_a_path() {
 }
 
 #[test]
-fn recorded_runs_also_load_back_through_the_server_type() {
-    // The stored recording is the server's own `RecordedRun`, serialized as the server
-    // serializes it.
+fn recorded_runs_also_load_back_through_the_recording_type() {
+    // The stored recording is the host's own `RecordedRun`, serialized as it
+    // serializes itself.
     let world = World::new();
     let start = run_start("exec-1", None);
     let run = finished(
@@ -1443,27 +1432,10 @@ fn a_torn_event_line_does_not_stop_the_session_numbering() {
     assert_eq!(seqs(&world.store), [1, 2]);
     // A restart reads the numbering back past the bad line.
     let reopened = Arc::new(world.reopen());
-    let recorder = Recorder::new(Arc::clone(&reopened), KnownSecrets::default());
+    let recorder = by_hand(Arc::clone(&reopened), KnownSecrets::default());
     recorder.start(run_start("exec-2", Some("sess")));
     recorder.event(event(3, "sess", "exec-2", run_started()));
     assert_eq!(seqs(&reopened), [1, 2, 3]);
-}
-
-#[test]
-fn a_torn_retry_line_is_skipped() {
-    let world = World::new();
-    let retry = |key: &str| super::run::RetryRecord {
-        format: FORMAT,
-        at_micros: 1,
-        session_id: "s".into(),
-        idempotency_key: key.into(),
-        original: None,
-    };
-    world.store.record_retry(&retry("a")).unwrap();
-    tear(&world.root().join("retries.jsonl"));
-    world.store.record_retry(&retry("b")).unwrap();
-    assert_eq!(world.store.retries().unwrap().len(), 2);
-    assert_eq!(world.reopen().retries().unwrap().len(), 2);
 }
 
 // ---- redaction of records ---------------------------------------------------------------
@@ -1598,7 +1570,7 @@ fn the_audit_window_holds_the_runs_decided_under_the_current_version() {
     let world = World::new();
     let run_under = |execution_id: &str, version: Option<&str>| {
         let mut start = run_start(execution_id, None);
-        start.blueprint_version = version.map(str::to_owned);
+        start.blueprint_version = version.unwrap_or_default().to_owned();
         world.start(start).finish(finished(Vec::new(), Vec::new()));
     };
     let in_window = || -> Vec<u64> {
@@ -1675,12 +1647,9 @@ fn no_user_data_shares_a_place_with_a_value_the_format_owns() {
         test_of: Some(t("tested")),
         client: Some(t("client")),
         tool_call_id: Some(t("tool-call-id")),
-        session_id: Some(session.clone()),
-        idempotency_key: Some(t("idem")),
+        session_id: session.clone(),
         blueprint_name: t("blueprint"),
-        blueprint: Arc::new(Blueprint::default()),
-        blueprint_hash: Some(t("hash")),
-        blueprint_version: Some(t("version")),
+        blueprint_version: t("version"),
         variables: Arc::new(VarBindings::from([("customerId".to_owned(), t("var"))])),
         harness_secrets: Arc::default(),
         code: Some(Arc::from(t("code").as_str())),
@@ -1730,7 +1699,7 @@ fn no_user_data_shares_a_place_with_a_value_the_format_owns() {
         kind: ErrorKind::PermissionDenied,
         message: t("message"),
         diagnostics: Vec::new(),
-        denial: Some(submilli_server::error::DenialDetails {
+        denial: Some(DenialDetails {
             caller: t("denied caller"),
             capability: t("denied capability"),
             source: "policy",
@@ -1897,8 +1866,78 @@ fn a_write_cut_before_its_newline_does_not_reuse_its_number() {
     };
     assert_eq!(seqs(&world.store), [1, 2, 3]);
     let reopened = Arc::new(world.reopen());
-    let recorder = Recorder::new(Arc::clone(&reopened), KnownSecrets::default());
+    let recorder = by_hand(Arc::clone(&reopened), KnownSecrets::default());
     recorder.start(run_start("exec-2", Some("sess")));
     recorder.event(event(3, "sess", "exec-2", run_started()));
     assert_eq!(seqs(&reopened), [1, 2, 3, 4]);
+}
+
+// ---- host runs ---------------------------------------------------------------------
+
+#[test]
+fn a_host_run_is_stored_with_its_events() {
+    use super::super::host::run as host;
+
+    let mut world = World::new();
+    world.recorder = Recorder::new(Arc::clone(&world.store), world.secrets.clone());
+    let start = host::RunStart {
+        execution_id: "exec-h".into(),
+        label: "app".into(),
+        entry: host::RunEntry::Mcp,
+        test_of: None,
+        client: Some("claude-code".into()),
+        tool_call_id: Some("toolu_1".into()),
+        session_id: "sess-h".into(),
+        blueprint_name: "demo".into(),
+        blueprint_version: "v7".into(),
+        variables: Arc::new(VarBindings::new()),
+        harness_secrets: Arc::new(
+            [("token".to_owned(), SECRET.to_owned())]
+                .into_iter()
+                .collect(),
+        ),
+        code: Some(Arc::from("function main(): string { return \"x\"; }")),
+    };
+    let run = host::RunRecorder::start(&world.recorder, start).expect("recorded");
+    let decided = decision(
+        0,
+        "http.get",
+        json!({ "host": "api.test", "q": SECRET }),
+        true,
+    );
+    run.event(host::RunEvent::Decision(&decided));
+    run.finish(host::FinishedRun {
+        dispatched: true,
+        error: None,
+        result: Some("x".into()),
+        console: String::new(),
+        usage: ExecutionUsage::default(),
+        log: DecisionLogOutput {
+            records: vec![decided.clone()],
+            ..DecisionLogOutput::default()
+        },
+        mcp_catalog: None,
+        wall: Duration::from_millis(3),
+    });
+    run.returned(9);
+    drop(run);
+
+    let loaded = world.store.load_run(1).unwrap().expect("run 1 is stored");
+    assert_eq!(loaded.entry, "mcp");
+    assert_eq!(loaded.recording.session_id.as_deref(), Some("sess-h"));
+    assert_eq!(loaded.recording.blueprint_version.as_deref(), Some("v7"));
+    assert_eq!(loaded.recording.decisions.len(), 1);
+    assert!(world.store.running().unwrap().is_empty());
+
+    let log = world.store.read_events(Some("sess-h")).unwrap();
+    let events: Vec<&StoredEvent> = log.events.iter().collect();
+    assert_eq!(kinds(&events), ["started", "decision 0", "end", "returned"]);
+    assert!(events.iter().all(|event| event.run == Some(1)));
+    assert!(!log.incomplete());
+    for (path, bytes) in world.files() {
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(SECRET),
+            "{path:?} holds the secret"
+        );
+    }
 }

@@ -1,11 +1,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use submilli_server::ServerConfig;
-use submilli_server::blueprint::{
-    BlueprintStore, SqliteBlueprintStore, StoreError, StoredBlueprint,
-};
+use submilli_build::PackageStore;
 
 use super::*;
+use crate::commands::playground::host::run::RunHostConfig;
 use crate::commands::playground::store::changes::WindowStart;
 
 const PINNED: &str = "\
@@ -21,38 +19,46 @@ permissions:
       action: allow
 ";
 
-/// An in-memory store whose writes can be made to fail, for an apply that fails
+/// The host's blueprints, whose applies can be made to fail, for an apply that fails
 /// after its version was logged, or held, for an apply still in flight.
 struct Flaky {
-    inner: SqliteBlueprintStore,
+    app: App,
+    /// The host's own state, apart from the project's.
+    _state: tempfile::TempDir,
     fail: AtomicBool,
-    /// The next write announces itself on `entered` and waits for a `release` permit.
+    /// The next apply announces itself on `entered` and waits for a `release` permit.
     hold_next: AtomicBool,
     entered: tokio::sync::Notify,
     release: tokio::sync::Semaphore,
 }
 
 impl Flaky {
-    fn new(database: Arc<submilli_server::database::ServerDatabase>) -> Self {
+    async fn new(packages: &Path) -> Self {
+        let state = tempfile::tempdir().unwrap();
+        let config = RunHostConfig::new(PackageStore::new(packages.to_path_buf()));
         Self {
-            inner: SqliteBlueprintStore::new(database, None),
+            app: App::for_tests(state.path(), "demo", config).await,
+            _state: state,
             fail: AtomicBool::new(false),
             hold_next: AtomicBool::new(false),
             entered: tokio::sync::Notify::new(),
             release: tokio::sync::Semaphore::new(0),
         }
     }
+
+    /// The blueprint in force, when it is named `name`.
+    async fn get(&self, name: &str) -> Option<Blueprint> {
+        self.app.blueprint(name).await
+    }
 }
 
 #[async_trait::async_trait]
-impl BlueprintStore for Flaky {
-    fn database(&self) -> Option<Arc<submilli_server::database::ServerDatabase>> {
-        self.inner.database()
+impl LocalBlueprints for Flaky {
+    async fn check(&self, yaml: &str) -> Result<Blueprint, LocalApplyError> {
+        self.app.check_local_blueprint(yaml).await
     }
-    async fn add_yaml(&self, stored: StoredBlueprint) -> Result<(), StoreError> {
-        self.inner.add_yaml(stored).await
-    }
-    async fn upsert_yaml(&self, stored: StoredBlueprint) -> Result<bool, StoreError> {
+
+    async fn apply(&self, yaml: &str, version_tag: &str) -> Result<LocalApplied, LocalApplyError> {
         if self.hold_next.swap(false, Ordering::SeqCst) {
             self.entered.notify_one();
             if let Ok(permit) = self.release.acquire().await {
@@ -60,24 +66,17 @@ impl BlueprintStore for Flaky {
             }
         }
         if self.fail.load(Ordering::SeqCst) {
-            return Err(StoreError::Io("disk full".into()));
+            return Err(LocalApplyError {
+                code: "apply_failed",
+                message: "disk full".into(),
+                diagnostics: Vec::new(),
+            });
         }
-        self.inner.upsert_yaml(stored).await
+        self.app.apply_local_blueprint(yaml, version_tag).await
     }
-    async fn list(&self) -> Result<Vec<String>, StoreError> {
-        self.inner.list().await
-    }
-    async fn list_blueprints(&self) -> Result<Vec<Blueprint>, StoreError> {
-        self.inner.list_blueprints().await
-    }
-    async fn get(&self, name: &str) -> Result<Option<Blueprint>, StoreError> {
-        self.inner.get(name).await
-    }
-    async fn get_yaml(&self, name: &str) -> Result<Option<String>, StoreError> {
-        self.inner.get_yaml(name).await
-    }
-    async fn remove(&self, name: &str) -> Result<bool, StoreError> {
-        self.inner.remove(name).await
+
+    fn evict_prepared_packages(&self) {
+        self.app.evict_all_prepared_packages();
     }
 }
 
@@ -103,24 +102,11 @@ impl Fixture {
         }
     }
 
-    /// A fresh server over the same project, as after a restart.
+    /// A fresh host over the same project, as after a restart.
     async fn serve(dir: &Path, store: &Arc<Store>) -> (Arc<Flaky>, Applier) {
-        let database = Arc::new(
-            submilli_server::database::ServerDatabase::open_ephemeral()
-                .await
-                .unwrap(),
-        );
-        let blueprints = Arc::new(Flaky::new(database));
-        let state = AppState::new(ServerConfig {
-            blueprints: Some(blueprints.clone()),
-            volume_root: Some(dir.to_path_buf()),
-            package_store_root: Some(dir.join("packages")),
-            ..ServerConfig::default()
-        })
-        .await
-        .unwrap();
+        let blueprints = Arc::new(Flaky::new(&dir.join("packages")).await);
         let applier = Applier::new(
-            state,
+            Arc::clone(&blueprints) as Arc<dyn LocalBlueprints>,
             Arc::clone(store),
             dir.join("demo.yaml"),
             "demo".into(),
@@ -148,7 +134,7 @@ impl Fixture {
     }
 
     async fn registered(&self) -> Blueprint {
-        self.blueprints.get("demo").await.unwrap().unwrap()
+        self.blueprints.get("demo").await.unwrap()
     }
 
     fn status(&self) -> BlueprintStatus {
@@ -319,7 +305,7 @@ async fn changing_the_name_is_refused_and_the_last_good_version_stays() {
     assert_eq!(refusal.code, "name_changed");
     assert!(refusal.message.contains("`demo` to `other`"), "{refusal:?}");
     assert_eq!(fixture.versions(), [1]);
-    assert!(fixture.blueprints.get("other").await.unwrap().is_none());
+    assert!(fixture.blueprints.get("other").await.is_none());
 }
 
 #[tokio::test]
@@ -400,7 +386,7 @@ async fn a_restart_with_the_file_unchanged_logs_no_new_version() {
     assert_eq!(fixture.versions(), [1, 2]);
     assert_eq!(applier.status().lock().unwrap().version, Some(2));
     assert_eq!(
-        blueprints.get("demo").await.unwrap(),
+        blueprints.get("demo").await,
         Some(submilli_blueprint::parse(&edited).unwrap())
     );
 }

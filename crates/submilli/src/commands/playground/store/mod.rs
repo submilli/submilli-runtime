@@ -9,7 +9,6 @@
 //!   runs/<id>.json      one file per run, written to a temporary file and renamed
 //!   events/<session>.jsonl  each session's events, appended as they arrive
 //!   changes.jsonl       the change log: blueprint versions and clear markers
-//!   retries.jsonl       idempotent retries answered without running
 //!   sessions.jsonl      sessions the playground started, and when each ended
 //!   links.jsonl         runs the playground ran again live, linked to their source
 //!   running/<id>.json   runs in flight, removed as each finishes
@@ -280,10 +279,6 @@ impl Store {
         self.root.join("changes.jsonl")
     }
 
-    fn retries_path(&self) -> PathBuf {
-        self.root.join("retries.jsonl")
-    }
-
     /// The last run id handed out: the highest of the persisted sequence, any run file,
     /// and the latest clear marker's high-water mark, so an id is never reused after a
     /// clear, a restart, or a lost sequence file.
@@ -470,19 +465,6 @@ impl Store {
         Ok(ids.len())
     }
 
-    /// An idempotent retry answered from the ledger: kept as a link to the run it
-    /// repeated, not as a run.
-    pub(crate) fn record_retry(&self, retry: &run::RetryRecord) -> Result<()> {
-        self.writer()?;
-        let _inner = self.lock();
-        append_line(&self.retries_path(), &json_line(retry))
-    }
-
-    /// The retries recorded, without any line that does not parse.
-    pub(crate) fn retries(&self) -> Result<Vec<run::RetryRecord>> {
-        read_lines(&self.retries_path()).map(|lines| lines.records)
-    }
-
     /// Temporary files a crash left behind: a run's in `runs/`, and the sequence's,
     /// index's, or marker's in the store's root.
     fn remove_staged(&self) -> Result<()> {
@@ -506,7 +488,6 @@ impl Store {
         let mut files = vec![
             self.index_path(),
             self.changes_path(),
-            self.retries_path(),
             self.sessions_path(),
             self.links_path(),
         ];

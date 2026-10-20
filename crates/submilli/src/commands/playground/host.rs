@@ -1,9 +1,9 @@
-//! The running playground: the embedded server and the control listener, both on
-//! loopback, in this process.
+//! The running playground: the host's server listener and the control listener,
+//! both on loopback, in this process.
 //!
-//! The server listener is `submilli-server` itself under the playground's tokens.
-//! The control listener serves the page and the control API; the routes later
-//! steps add go into [`ControlRoutes`].
+//! The server listener serves the host's MCP endpoint under the playground's
+//! tokens, and a health check. The control listener serves the page and the
+//! control API, whose routes are [`ControlRoutes`].
 
 use std::fs::File;
 use std::mem::ManuallyDrop;
@@ -25,8 +25,8 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use submilli_server::audit::AuditConfig;
-use submilli_server::{AppState, AuthConfig, RunTelemetry, ServerConfig};
+use submilli_build::PackageStore;
+use submilli_shared::secret_store::SecretStore;
 use tokio::sync::Notify;
 
 use super::api::{self, Group};
@@ -42,6 +42,20 @@ use super::store::redact::WatchedSecretStore;
 use super::store::{KnownSecrets, Recorder, Store};
 use super::watch::{self, Applier, BlueprintStatus};
 use super::{Egress, ReadyRecord};
+use app::App;
+use auth::ApiToken;
+use run::{RunHost, RunHostConfig};
+
+pub(super) mod app;
+pub(super) mod auth;
+pub(super) mod blueprints;
+pub(super) mod finalizers;
+pub(super) mod mcp;
+pub(super) mod record;
+pub(super) mod run;
+pub(super) mod serve;
+pub(super) mod sessions;
+pub(super) mod volumes;
 
 /// How long in-flight requests may finish after a stop before they are dropped.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
@@ -163,8 +177,8 @@ pub(crate) enum Served {
     StoppedWhileStarting { signal: Option<libc::c_int> },
 }
 
-/// Serve until a stop, a signal, or `POST /v1/shutdown`, then drain and remove
-/// the instance record and the ready file. Refused while another process serves the project.
+/// Serve until a stop or a signal, then drain and remove the instance record and the
+/// ready file. Refused while another process serves the project.
 pub(crate) fn serve(options: HostOptions) -> Result<Served> {
     restrict_new_files();
     let state_dir = StateDir::for_project(&options.project.root);
@@ -184,74 +198,91 @@ pub(crate) fn serve(options: HostOptions) -> Result<Served> {
     {
         std::thread::sleep(Duration::from_millis(delay).min(START_DELAY_CAP));
     }
-    let tokens = state_dir.tokens()?;
-    let blueprint_yaml = std::fs::read_to_string(&options.project.blueprint)
-        .with_context(|| format!("reading {}", options.project.blueprint.display()))?;
-    let blueprint = submilli_blueprint::parse(&blueprint_yaml)
-        .with_context(|| format!("parsing {}", options.project.blueprint.display()))?;
-    // Project packages are built and installed before the blueprint is registered,
-    // which requires them in the store.
-    let packages = Arc::new(ProjectPackages::new(
-        &options.project.package_dir,
-        submilli_build::default_package_store_dir(),
-    ));
-    let (_, closure) = packages
-        .prepare(&blueprint)
-        .map_err(|failure| anyhow::anyhow!("{failure}"))?;
-    let secrets = KnownSecrets::default();
-    let store = Arc::new(Store::open(&state_dir.store_dir()).context("opening the run store")?);
-    let secret_store = Arc::new(WatchedSecretStore::new(
-        crate::commands::local::open_secret_store()?,
-        secrets.clone(),
-    ));
-    let recorder = Recorder::new(Arc::clone(&store), secrets.clone());
-    let mut config = server_config(
-        &state_dir,
-        &options.egress,
-        tokens.clone(),
-        Some(secret_store),
-        Some(Arc::new(recorder.clone())),
-    );
-    config.volumes = super::project::volumes(&options.project);
-    config.session_cipher = Some(Arc::new(state_dir.session_cipher()?));
-    let freshness = Arc::new(Freshness::new(Arc::clone(&packages)));
-    config.pre_execute = Some(Arc::clone(&freshness) as _);
-    let runtime = submilli_server::runtime(&config).context("starting the async runtime")?;
+    let serving = Serving::prepare(&options, &state_dir)?;
+    let runtime = serve::runtime(serving.config.runtime.native_stack_size())
+        .context("starting the async runtime")?;
     let result = runtime.block_on(run(
         options,
         state_dir,
         Arc::new(HeldInstance::new(instance)),
-        config,
-        tokens,
-        Serving {
-            name: blueprint.name.clone(),
-            store,
-            recorder,
-            secrets,
-            packages,
-            freshness,
-            closure,
-        },
+        serving,
     ));
     // Teardown is bounded: a stray connection task must not keep the process up.
     runtime.shutdown_timeout(Duration::from_millis(250));
     result
 }
 
-/// The blueprint the playground serves, by the name it had at start, and the store
-/// its versions are logged in.
+/// What the playground serves, made before the async runtime starts: the blueprint
+/// by the name it had at start, and the store its versions are logged in.
 struct Serving {
     name: String,
     store: Arc<Store>,
-    /// The server's run recorder, which knows the runs in flight.
+    /// The host's run recorder, which knows the runs in flight.
     recorder: Recorder,
     /// Secret values the recorder cuts out; `bind` adds the development values it holds.
     secrets: KnownSecrets,
+    secret_store: Arc<dyn SecretStore>,
+    package_store: PackageStore,
+    /// How the host runs programs; its finalizers are added once the sessions boot.
+    config: RunHostConfig,
     packages: Arc<ProjectPackages>,
     /// The package check runs get, which the blueprint watcher shares.
     freshness: Arc<Freshness>,
     /// The closure as it was at start, for the ready record.
     closure: Vec<ClosureEntry>,
+    /// The API tokens the control and MCP routes accept.
+    tokens: Vec<ApiToken>,
+}
+
+impl Serving {
+    /// Read the blueprint, build and install its project packages, and open the
+    /// stores the host records into.
+    fn prepare(options: &HostOptions, state_dir: &StateDir) -> Result<Self> {
+        let tokens = state_dir.tokens()?;
+        let blueprint_yaml = std::fs::read_to_string(&options.project.blueprint)
+            .with_context(|| format!("reading {}", options.project.blueprint.display()))?;
+        let blueprint = submilli_blueprint::parse(&blueprint_yaml)
+            .with_context(|| format!("parsing {}", options.project.blueprint.display()))?;
+        // Project packages are built and installed before the blueprint is applied,
+        // which requires them in the store.
+        let packages = Arc::new(ProjectPackages::new(
+            &options.project.package_dir,
+            submilli_build::default_package_store_dir(),
+        ));
+        let (_, closure) = packages
+            .prepare(&blueprint)
+            .map_err(|failure| anyhow::anyhow!("{failure}"))?;
+        let secrets = KnownSecrets::default();
+        let store = Arc::new(Store::open(&state_dir.store_dir()).context("opening the run store")?);
+        let secret_store: Arc<dyn SecretStore> = Arc::new(WatchedSecretStore::new(
+            crate::commands::local::open_secret_store()?,
+            secrets.clone(),
+        ));
+        let recorder = Recorder::new(Arc::clone(&store), secrets.clone());
+        let freshness = Arc::new(Freshness::new(Arc::clone(&packages)));
+        // The developer's own package store, so `build publish-local` keeps working.
+        let package_store = PackageStore::new(submilli_build::default_package_store_dir());
+        let mut config = RunHostConfig::new(package_store.clone());
+        config.network_policy = options.egress.policy();
+        config.secret_store = Some(Arc::clone(&secret_store));
+        config.session_cipher = Some(Arc::new(state_dir.session_cipher()?));
+        // Every run the host executes, whoever sent it, goes to the playground's store.
+        config.recorder = Some(Arc::new(recorder.clone()));
+        config.freshness = Some(Arc::clone(&freshness));
+        Ok(Self {
+            name: blueprint.name.clone(),
+            store,
+            recorder,
+            secrets,
+            secret_store,
+            package_store,
+            config,
+            packages,
+            freshness,
+            closure,
+            tokens,
+        })
+    }
 }
 
 /// The instance lock this process holds for its whole life, and whether the
@@ -307,41 +338,47 @@ async fn run(
     options: HostOptions,
     state_dir: StateDir,
     held: Arc<HeldInstance>,
-    mut config: ServerConfig,
-    tokens: Vec<submilli_server::ApiToken>,
     serving: Serving,
 ) -> Result<Served> {
+    let server_shutdown = Arc::new(Notify::new());
     // Before anything announces this instance: a signal from then on drains it
     // rather than killing it with its record on disk.
-    let signals = submilli_server::EmbeddedSignals::install()?;
-    // The server drains on the same signals; this notes that it has begun.
+    let stops = serve::Stops::install(Arc::clone(&server_shutdown))?;
+    // The listener drains on the same signals; this notes that it has begun.
     let _signal_watch = tokio::spawn(note_signals(Arc::clone(&held))?);
-    config.database = Some(Arc::new(
-        submilli_server::database::ServerDatabase::open(&state_dir.database_path()).await?,
-    ));
-    let blueprints = submilli_server::prepare_blueprint_store(&config).await?;
-    config.blueprints = Some(Arc::clone(&blueprints));
-    let state = AppState::new(config).await?;
-    state.boot().await?;
-    let _store_watch = packages::watch_store(state.clone(), serving.packages.store_root())?;
-    // Every save, then the file as it is now, through the trusted local path. The
-    // watch comes first so a save during the first apply is seen, not missed.
-    let applier = Arc::new(
-        Applier::new(
-            state.clone(),
-            Arc::clone(&serving.store),
-            options.project.blueprint.clone(),
-            serving.name.clone(),
-        )
-        .with_packages(serving.freshness),
-    );
-    let _watch = watch::watch(Arc::clone(&applier), watch::DEBOUNCE)?;
-    applier.start().await?;
-    let blueprint_status = applier.status();
+    let sessions = Arc::new(sessions::Sessions::boot(&state_dir).await?);
+    let served = serve_sessions(
+        options,
+        &state_dir,
+        &held,
+        serving,
+        Arc::clone(&sessions),
+        server_shutdown,
+        stops,
+    )
+    .await;
+    // Its native cleanup can outlive the runtime; the instance lock outlives both.
+    if let Err(error) = sessions.close_database().await {
+        warn(&format!("closing the session database failed: {error:#}"));
+    }
+    served
+}
 
-    let server = tokio::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
-        .await
-        .context("binding the server listener")?;
+/// Start the host on the booted sessions, bind its listeners, announce it, and
+/// serve until it drains; then close the control listener and remove the records.
+async fn serve_sessions(
+    options: HostOptions,
+    state_dir: &StateDir,
+    held: &Arc<HeldInstance>,
+    mut serving: Serving,
+    sessions: Arc<sessions::Sessions>,
+    server_shutdown: Arc<Notify>,
+    stops: serve::Stops,
+) -> Result<Served> {
+    let closure = std::mem::take(&mut serving.closure);
+    let auth = Arc::new(ControlAuth::new(serving.tokens.clone()));
+    let host = start_host(&options, state_dir, serving, sessions).await?;
+    let server = serve::bind().await?;
     let control = tokio::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
         .await
         .context("binding the control listener")?;
@@ -350,14 +387,194 @@ async fn run(
 
     let description = describe(
         &options,
-        &state_dir,
-        &serving.name,
+        state_dir,
+        &host.name,
         control_port,
         server_port,
-        serving.closure,
+        closure,
     );
-    let auth = Arc::new(ControlAuth::new(tokens));
-    // The variables the last `bind` saved; secret values were never saved.
+    let actions = Arc::new(actions(
+        &options,
+        state_dir,
+        &host,
+        description.url.clone(),
+        server_port,
+    ));
+    // Flipped once the server has drained, so the event feeds end and the control
+    // listener can close.
+    let (stopped, stopping) = tokio::sync::watch::channel(false);
+    let shared = ControlState(Arc::new(ControlInner {
+        auth: Arc::clone(&auth),
+        port: control_port,
+        nonce: options.nonce.clone(),
+        server_shutdown,
+        description: description.clone(),
+        blueprint_status: host.applier.status(),
+        app: Arc::clone(&host.app),
+        blueprint_name: host.name.clone(),
+        packages: Arc::clone(&host.packages),
+        held: Arc::clone(held),
+        actions,
+        stopping,
+    }));
+    let control = ControlListener::spawn(control, ControlRoutes::new().router(shared));
+
+    let record = InstanceRecord {
+        pid: std::process::id(),
+        control_port,
+        server_port,
+        nonce: options.nonce.clone(),
+    };
+    // Held past the cleanup below whenever the instance does not announce itself,
+    // so a concurrent start waits for the records to go rather than finding them.
+    let mut announcing = Announce {
+        start_lock: options.start_lock,
+        print: options.print,
+        open: options.open,
+    };
+    let served = async {
+        if let Some(stopped) = announce(
+            &mut announcing,
+            state_dir,
+            held,
+            &record,
+            &auth,
+            &description,
+        )
+        .await?
+        {
+            return Ok(stopped);
+        }
+        serve::serve(
+            server,
+            serve::router_with_mcp(host.mcp),
+            stops,
+            SHUTDOWN_GRACE,
+        )
+        .await
+        .map(|_| Served::Drained)
+    }
+    .await;
+
+    // Also after a drain no signal or stop route began.
+    held.begin_stopping();
+    auth.drop_sessions();
+    stopped.send_replace(true);
+    control.close().await;
+    state_dir.remove_if_ours(&options.nonce);
+    drop(announcing);
+    served
+}
+
+/// The host once its blueprint is applied: what the listeners serve, and the
+/// watches and reaper that run until serving ends.
+struct Started {
+    name: String,
+    store: Arc<Store>,
+    recorder: Recorder,
+    secrets: KnownSecrets,
+    packages: Arc<ProjectPackages>,
+    app: Arc<App>,
+    applier: Arc<Applier>,
+    mcp: Arc<mcp::McpHost>,
+    _reaper: ReaperTask,
+    _watch: watch::Watch,
+    _store_watch: packages::StoreWatch,
+}
+
+/// Build the run host on `sessions`, apply the blueprint as it is now while
+/// watching it for saves, and finish the closes a stop cut short.
+async fn start_host(
+    options: &HostOptions,
+    state_dir: &StateDir,
+    serving: Serving,
+    sessions: Arc<sessions::Sessions>,
+) -> Result<Started> {
+    let mut config = serving.config;
+    let volumes = Arc::new(volumes::Volumes::boot(
+        state_dir,
+        super::project::volumes(&options.project),
+    ));
+    let blueprints = Arc::new(blueprints::Blueprints::new(
+        serving.name.clone(),
+        Arc::clone(&volumes) as Arc<dyn blueprints::LocalVolumes>,
+        Some(serving.secret_store),
+        serving.package_store.clone(),
+    ));
+    config.finalizers = Some(Arc::new(sessions.finalizers().clone()));
+    let run_host = Arc::new(RunHost::new(
+        config,
+        Arc::clone(&sessions),
+        Arc::clone(&volumes),
+    )?);
+    finalizers::HostFinalizers::install(&run_host, Arc::clone(&blueprints) as _);
+    let app = Arc::new(App {
+        run: Arc::clone(&run_host),
+        sessions: Arc::clone(&sessions),
+        blueprints: Arc::clone(&blueprints),
+        volumes: Arc::clone(&volumes),
+    });
+    let store_watch = packages::watch_store(
+        {
+            let run = Arc::clone(&run_host);
+            move || run.clear_prepared_packages()
+        },
+        serving.packages.store_root(),
+    )?;
+    // Every save, then the file as it is now, through the trusted local path. The
+    // watch comes first so a save during the first apply is seen, not missed.
+    let applier = Arc::new(
+        Applier::new(
+            Arc::clone(&app) as Arc<dyn watch::LocalBlueprints>,
+            Arc::clone(&serving.store),
+            options.project.blueprint.clone(),
+            serving.name.clone(),
+        )
+        .with_packages(serving.freshness),
+    );
+    let watch = watch::watch(Arc::clone(&applier), watch::DEBOUNCE)?;
+    applier.start().await?;
+    // A close a stop cut short finishes now, under the blueprint just applied.
+    sessions.finish_closing().await?;
+    let reaper = ReaperTask(sessions.spawn_reaper(REAP_INTERVAL));
+
+    let mcp = Arc::new(mcp::McpHost::new(
+        mcp::Shared {
+            run: Arc::clone(&run_host),
+            sessions: Arc::clone(&sessions),
+            blueprints: Arc::clone(&blueprints),
+            volumes,
+            package_store: serving.package_store,
+            events: Some(Arc::clone(serving.recorder.events())),
+        },
+        Arc::from(serving.tokens),
+        &serving.name,
+    ));
+    let started = Started {
+        name: serving.name,
+        store: serving.store,
+        recorder: serving.recorder,
+        secrets: serving.secrets,
+        packages: serving.packages,
+        app,
+        applier,
+        mcp,
+        _reaper: reaper,
+        _watch: watch,
+        _store_watch: store_watch,
+    };
+    Ok(started)
+}
+
+/// What the control routes act through, starting from the variables the last
+/// `bind` saved; secret values were never saved.
+fn actions(
+    options: &HostOptions,
+    state_dir: &StateDir,
+    host: &Started,
+    url: String,
+    server_port: u16,
+) -> Actions {
     let binding = match state_dir.read_binding() {
         Ok(saved) => Binding::remembered(saved.unwrap_or_default()),
         Err(error) => {
@@ -367,108 +584,121 @@ async fn run(
             Binding::default()
         }
     };
-    let actions = Arc::new(Actions {
-        app: state.clone(),
-        store: Arc::clone(&serving.store),
-        recorder: serving.recorder,
-        secrets: serving.secrets,
+    Actions {
+        app: Arc::clone(&host.app),
+        store: Arc::clone(&host.store),
+        recorder: host.recorder.clone(),
+        secrets: host.secrets.clone(),
         binding: std::sync::Mutex::new(binding),
         binding_file: state_dir.binding_path(),
-        blueprints: Arc::clone(&blueprints),
-        applier: Arc::clone(&applier),
-        blueprint_name: serving.name.clone(),
+        applier: Arc::clone(&host.applier),
+        blueprint_name: host.name.clone(),
         blueprint_path: options.project.blueprint.clone(),
         project_root: options.project.root.clone(),
-        page: Page {
-            base: Some(description.url.clone()),
-        },
+        page: Page { base: Some(url) },
         cancelling: std::sync::Mutex::default(),
         chatting: Arc::default(),
         chat: super::chat::ChatIntake::default(),
         server_port,
-    });
-    // Flipped once the server has drained, so the event feeds end and the control
-    // listener can close.
-    let (stopped, stopping) = tokio::sync::watch::channel(false);
-    let shared = ControlState(Arc::new(ControlInner {
-        auth: Arc::clone(&auth),
-        port: control_port,
-        nonce: options.nonce.clone(),
-        server_shutdown: state.shutdown_signal(),
-        description: description.clone(),
-        blueprint_status,
-        blueprints,
-        blueprint_name: serving.name.clone(),
-        packages: Arc::clone(&serving.packages),
-        held: Arc::clone(&held),
-        actions,
-        stopping,
-    }));
-    let control_stop = Arc::new(Notify::new());
-    let control_task = tokio::spawn({
-        let control_stop = Arc::clone(&control_stop);
-        let router = ControlRoutes::new().router(shared);
-        async move {
-            axum::serve(control, router)
-                .with_graceful_shutdown(async move { control_stop.notified().await })
-                .await
-        }
-    });
+    }
+}
 
-    let record = InstanceRecord {
-        pid: std::process::id(),
-        control_port,
-        server_port,
-        nonce: options.nonce.clone(),
+/// How the instance announces itself once it serves.
+struct Announce {
+    /// Released once the ready file is written; until then a concurrent start waits.
+    start_lock: Option<File>,
+    /// Where to print the ready record, when the caller waits for it.
+    print: Option<super::Output>,
+    /// Whether to open the page once announced.
+    open: bool,
+}
+
+/// Write the instance record and the ready file, release the start lock, and print
+/// the ready record when asked. Returns how serving ended instead when the
+/// instance was told to stop while it started; the start lock is then still held.
+async fn announce(
+    announcing: &mut Announce,
+    state_dir: &StateDir,
+    held: &HeldInstance,
+    record: &InstanceRecord,
+    auth: &ControlAuth,
+    description: &Description,
+) -> Result<Option<Served>> {
+    test_announce_delay(held).await;
+    // Told to stop while it started: it never announces itself, so no command
+    // finds a record of, or a link to, an instance that is already going.
+    if held.is_stopping() {
+        super::log::note("the playground was stopped while it was starting");
+        return Ok(Some(Served::StoppedWhileStarting {
+            signal: held.stopped_by(),
+        }));
+    }
+    // The record first, so the ready file never names an instance without one.
+    state_dir.write_record(record)?;
+    state_dir.write_ready(record)?;
+    let print = match announcing.print.take() {
+        Some(output) => Some((output, auth.mint_login_code(Now::current())?)),
+        None => None,
     };
-    let served = async {
-        test_announce_delay(&held).await;
-        // Told to stop while it started: it never announces itself, so no command
-        // finds a record of, or a link to, an instance that is already going.
-        if held.is_stopping() {
-            super::log::note("the playground was stopped while it was starting");
-            return Ok(Served::StoppedWhileStarting {
-                signal: held.stopped_by(),
-            });
-        }
-        // The record first, so the ready file never names an instance without one.
-        state_dir.write_record(&record)?;
-        state_dir.write_ready(&record)?;
-        drop(options.start_lock);
-        if let Some(output) = options.print {
-            let code = auth.mint_login_code(Now::current())?;
-            ReadyRecord::new(&description, None, &code, false).announce(
-                output,
-                options.open,
-                &state_dir,
-            );
-        }
-        submilli_server::serve_embedded(server, state, SHUTDOWN_GRACE, signals)
-            .await
-            .map(|()| Served::Drained)
+    drop(announcing.start_lock.take());
+    if let Some((output, code)) = print {
+        ReadyRecord::new(description, None, &code, false).announce(
+            output,
+            announcing.open,
+            state_dir,
+        );
     }
-    .await;
+    Ok(None)
+}
 
-    // Also after a drain no signal or stop route began (`POST /v1/shutdown`).
-    held.begin_stopping();
-    auth.drop_sessions();
-    stopped.send_replace(true);
-    control_stop.notify_one();
-    if tokio::time::timeout(CONTROL_CLOSE_BUDGET, control_task)
-        .await
-        .is_err()
-    {
-        warn("the control listener did not close in time");
+/// The control listener, served on a task of its own until closed.
+struct ControlListener {
+    stop: Arc<Notify>,
+    task: tokio::task::JoinHandle<std::io::Result<()>>,
+}
+
+impl ControlListener {
+    fn spawn(listener: tokio::net::TcpListener, router: Router) -> Self {
+        let stop = Arc::new(Notify::new());
+        let task = tokio::spawn({
+            let stop = Arc::clone(&stop);
+            async move {
+                axum::serve(listener, router)
+                    .with_graceful_shutdown(async move { stop.notified().await })
+                    .await
+            }
+        });
+        Self { stop, task }
     }
-    state_dir.remove_if_ours(&options.nonce);
-    served
+
+    /// Stop accepting and wait, within a budget, for the open requests to end.
+    async fn close(self) {
+        self.stop.notify_one();
+        if tokio::time::timeout(CONTROL_CLOSE_BUDGET, self.task)
+            .await
+            .is_err()
+        {
+            warn("the control listener did not close in time");
+        }
+    }
+}
+
+/// How often idle sessions are closed, as the server reaps them.
+const REAP_INTERVAL: Duration = Duration::from_secs(30);
+
+/// The idle-session reaper, stopped when serving ends.
+struct ReaperTask(tokio::task::JoinHandle<()>);
+
+impl Drop for ReaperTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// A future that marks `held` stopping on SIGTERM or SIGINT, registered now. A
-/// signal this process ignores is left ignored, as [`submilli_server::EmbeddedSignals`]
-/// leaves it.
+/// signal this process ignores is left ignored, as [`serve::Stops`] leaves it.
 fn note_signals(held: Arc<HeldInstance>) -> Result<impl Future<Output = ()>> {
-    use submilli_server::WatchedSignal;
+    use serve::WatchedSignal;
     use tokio::signal::unix::SignalKind;
     let mut terminate =
         WatchedSignal::unless_ignored(SignalKind::terminate()).context("watching for SIGTERM")?;
@@ -501,38 +731,6 @@ async fn test_announce_delay(held: &HeldInstance) {
     let started = tokio::time::Instant::now();
     while started.elapsed() < delay && !held.is_stopping() {
         tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-}
-
-fn server_config(
-    state_dir: &StateDir,
-    egress: &Egress,
-    tokens: Vec<submilli_server::ApiToken>,
-    secret_store: Option<Arc<dyn submilli_server::SecretStore>>,
-    run_recorder: Option<Arc<dyn submilli_server::record::RunRecorderFactory>>,
-) -> ServerConfig {
-    ServerConfig {
-        // Main's audit writes whole permission-check contexts, unredacted, to the
-        // log: a second copy of run data outside the playground's own store.
-        audit: AuditConfig {
-            enabled: false,
-            ..AuditConfig::default()
-        },
-        auth: AuthConfig::Tokens(tokens),
-        network_policy: egress.policy(),
-        blueprint_dir: Some(state_dir.blueprints_dir()),
-        session_store_dir: Some(state_dir.sessions_dir()),
-        // Created with the state directory, so the server can require it.
-        volume_root: Some(state_dir.volume_root()),
-        // The developer's own stores, so `build publish-local` and `secret put`
-        // keep working.
-        package_store_root: Some(submilli_build::default_package_store_dir()),
-        secret_store,
-        // Every run the server executes, whoever sent it, goes to the playground's store.
-        run_recorder,
-        // No run content leaves the machine, whatever the CLI's telemetry setting.
-        run_telemetry: RunTelemetry::Off,
-        ..ServerConfig::default()
     }
 }
 
@@ -627,8 +825,8 @@ pub(crate) struct ControlInner {
     description: Description,
     /// The version in force and the last refused save.
     blueprint_status: Arc<std::sync::Mutex<BlueprintStatus>>,
-    /// The server's blueprint store, for the blueprint in force.
-    blueprints: Arc<dyn submilli_server::blueprint::BlueprintStore>,
+    /// The host, for the blueprint in force.
+    app: Arc<App>,
     blueprint_name: String,
     packages: Arc<ProjectPackages>,
     held: Arc<HeldInstance>,
@@ -922,12 +1120,7 @@ pub(crate) async fn current_closure(
 async fn blueprint_in_force(
     state: &ControlState,
 ) -> Result<Option<submilli_blueprint::Blueprint>, String> {
-    state
-        .0
-        .blueprints
-        .get(&state.0.blueprint_name)
-        .await
-        .map_err(|error| error.to_string())
+    Ok(state.0.app.blueprint(&state.0.blueprint_name).await)
 }
 
 async fn closure_of(
@@ -1087,18 +1280,6 @@ mod tests {
     }
 
     #[test]
-    fn the_playground_turns_off_run_telemetry_and_the_audit_trail() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = StateDir::for_project(dir.path());
-        state.create().unwrap();
-        let tokens = state.tokens().unwrap();
-        let config = server_config(&state, &Egress::default(), tokens, None, None);
-        assert_eq!(config.run_telemetry, RunTelemetry::Off);
-        assert!(!config.audit.enabled);
-        assert!(matches!(config.auth, AuthConfig::Tokens(ref tokens) if tokens.len() == 5));
-    }
-
-    #[test]
     fn egress_denies_loopback_unless_granted() {
         let denied = Egress::default();
         assert!(denied.grants().is_empty());
@@ -1111,7 +1292,7 @@ mod tests {
             granted.grants(),
             ["allow-localhost", "allow-ip 10.1.0.0/16"]
         );
-        let _: submilli_server::NetworkPolicy = granted.policy();
+        let _: interpreter::runtime::NetworkPolicy = granted.policy();
     }
 
     /// Text React carries that names a URL without ever requesting it: the XML

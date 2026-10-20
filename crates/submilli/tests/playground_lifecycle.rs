@@ -259,16 +259,41 @@ mod unix {
         )
     }
 
+    /// The JSON-RPC message in an MCP reply, which may come as server-sent events.
+    fn mcp_message(text: &str) -> Value {
+        let data = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .next_back()
+            .map_or(text, str::trim);
+        serde_json::from_str(data).unwrap_or(Value::Null)
+    }
+
+    /// The MCP execute tool on a fresh MCP session: its structured result.
     fn execute(record: &Value, token: &str, code: &str) -> Value {
-        let (status, _, body) = request(
-            "POST",
-            &server(record, "/v1/execute"),
-            Some(token),
-            &[],
-            Some(json!({ "code": code, "blueprint": "demo" })),
-        );
+        let url = server(record, "/mcp/demo");
+        let accept = [("accept", "application/json, text/event-stream")];
+        let initialize = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18", "capabilities": {},
+                "clientInfo": { "name": "test", "version": "0" }
+            }
+        });
+        let (status, headers, body) = request("POST", &url, Some(token), &accept, Some(initialize));
+        assert_eq!(status, 200, "initialize: {body}");
+        let session = headers["mcp-session-id"].to_str().unwrap().to_owned();
+        let with_session = [accept[0], ("mcp-session-id", session.as_str())];
+        let initialized = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+        request("POST", &url, Some(token), &with_session, Some(initialized));
+        let call = json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": { "name": "submilli__typescript__execute", "arguments": { "code": code } }
+        });
+        let (status, _, body) = request("POST", &url, Some(token), &with_session, Some(call));
         assert_eq!(status, 200, "execute: {body}");
-        serde_json::from_str(&body).unwrap()
+        let message = mcp_message(&body);
+        message["result"]["structuredContent"].clone()
     }
 
     fn pid_alive(pid: u32) -> bool {
@@ -726,18 +751,13 @@ mod unix {
         let record = project.start(&[]);
         let stand_in = project.token("stand-in");
 
+        let (status, _, _) = request("POST", &server(&record, "/mcp/demo"), None, &[], None);
+        assert_eq!(status, 401, "POST /mcp/demo");
         for (method, path) in [("GET", "/v1/status"), ("POST", "/v1/execute")] {
-            let (status, _, _) = request(method, &server(&record, path), None, &[], None);
-            assert_eq!(status, 401, "{method} {path}");
+            let (status, _, _) =
+                request(method, &server(&record, path), Some(&stand_in), &[], None);
+            assert_eq!(status, 404, "{method} {path} is no longer served");
         }
-        let (status, _, _) = request(
-            "GET",
-            &server(&record, "/v1/status"),
-            Some(&stand_in),
-            &[],
-            None,
-        );
-        assert_eq!(status, 403);
 
         for (method, path) in [
             ("GET", "/api/status"),
@@ -841,6 +861,28 @@ mod unix {
 
     #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
     #[test]
+    fn a_write_past_the_size_limit_fails_as_the_server_fails_it() {
+        let project = Project::with_blueprint(
+            "name: demo\ndefault: allow\nvfs:\n  mode: per_session\n  size_limit: 100\n",
+        );
+        let record = project.start(&[]);
+        let body = execute(
+            &record,
+            &project.token("app"),
+            r#"import { writeText } from "submilli:fs"; function main(): void { writeText("/a.txt", "x".repeat(160)); }"#,
+        );
+        assert_eq!(body["error"]["kind"], "runtime_error", "{body}");
+        let message = body["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("QuotaExceededError") && message.contains("size limit of 100 bytes"),
+            "{body}"
+        );
+        let status = project.run(&["status", "--json"]);
+        assert!(status.status.success(), "{}", stderr(&status));
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
     fn a_deeply_recursive_program_ends_with_a_resource_error_and_the_playground_stays_up() {
         let project = Project::new();
         let record = project.start(&[]);
@@ -886,19 +928,17 @@ mod unix {
         );
         assert_eq!(status, 200, "{body}");
         let (status, _, _) = request(
-            "GET",
-            &server(&record, "/v1/status"),
-            Some(&session),
-            &[],
-            None,
-        );
-        assert_eq!(status, 401);
-        let (status, _, _) = request(
             "POST",
-            &server(&record, "/v1/execute"),
+            &server(&record, "/mcp/demo"),
             Some(&session),
-            &[],
-            Some(json!({ "code": "function main(): number { return 1; }", "blueprint": "demo" })),
+            &[("accept", "application/json, text/event-stream")],
+            Some(json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18", "capabilities": {},
+                    "clientInfo": { "name": "test", "version": "0" }
+                }
+            })),
         );
         assert_eq!(status, 401);
     }
@@ -1925,16 +1965,10 @@ mod unix {
         let program = format!(
             "import {{ get, Response }} from \"submilli:http\";\nfunction main(): string {{ const r: Response = get(\"http://127.0.0.1:{port}/\"); return r.body; }}"
         );
-        let url = server(&record, "/v1/execute");
         let app = project.token("app");
+        let in_flight = record.clone();
         std::thread::spawn(move || {
-            let _ = request(
-                "POST",
-                &url,
-                Some(&app),
-                &[],
-                Some(json!({ "code": program, "blueprint": "demo" })),
-            );
+            let _ = std::panic::catch_unwind(|| execute(&in_flight, &app, &program));
         });
         // The run is in flight once it has reached the listener.
         accepted

@@ -1,23 +1,26 @@
-//! The server's run recorder: every run the playground's server executes, whoever sent
-//! it, is stored as it finishes, and its session's events as they arrive.
+//! The run recorder: every run the playground's host executes, whoever sent it, is
+//! stored as it finishes, and its session's events as they arrive.
+//!
+//! [`Recorder`] is the host's [`RunRecorder`](host::RunRecorder). A run's events come
+//! through a hub of the recorder's own.
 //!
 //! Redaction happens here, on the way to disk: a run and each event are serialized,
 //! every known secret is cut out of the serialized form, and only that is written.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use interpreter::runtime::{CallRecord, DecisionLogConfig, DecisionRecord};
-use submilli_server::record::{
-    EVENT_SCHEMA, EventKind, FinishedRun, RetryLink, RunRecorder, RunRecorderFactory, RunStart,
-    SessionEvent,
-};
 
+use super::super::host::record::events::{
+    EVENT_SCHEMA, EventHub, EventKind, EventSink, RunEvents, SessionEvent,
+};
+use super::super::host::run as host;
 use super::super::log::warn;
 use super::events::{EventBody, Gap, Position, StoredEvent};
-use super::run::{RetryRecord, RunLink, StoredRun};
+use super::run::{RunLink, StoredRun};
 use super::{FORMAT, KnownSecrets, Store, json_line, now_micros};
 
 /// The recording caps for every run the playground serves, raised from the server's
@@ -60,17 +63,19 @@ pub(crate) struct Recorder {
 struct Shared {
     store: Arc<Store>,
     secrets: KnownSecrets,
-    /// Runs in progress or recently finished, by the server's execution id.
+    /// Runs in progress or recently finished, by the host's execution id.
     tracks: Mutex<HashMap<String, Track>>,
-    /// Runs the store could not take, by the server's execution id, with when their end
+    /// Runs the store could not take, by the host's execution id, with when their end
     /// event arrived: they run unrecorded, and their events are logged without a run id.
     untracked: Mutex<HashMap<String, Option<Instant>>>,
-    /// The server-wide sequence number of the last event delivered; a jump past the next
-    /// one means the server dropped events in between.
+    /// The host-wide sequence number of the last event delivered; a jump past the next
+    /// one means the host dropped events in between.
     last_seq: AtomicU64,
     /// The session of each recent MCP tool call its client named, by that name: how chat
     /// from a coding assistant finds the session its tool calls ran in.
     calls: Mutex<RecentCalls>,
+    /// Delivers the host's run events, made on its first run.
+    host_events: OnceLock<Arc<EventHub>>,
 }
 
 /// The most recent tool calls' sessions, by the call's id, oldest forgotten first.
@@ -107,13 +112,13 @@ struct Track {
     started_at_micros: u64,
     /// Decisions and finished calls whose events are in the log.
     seen: HashSet<EventKey>,
-    /// The run's end event arrived, with the count of its events the server dropped.
+    /// The run's end event arrived, with the count of its events the host dropped.
     end_event: Option<u64>,
     /// Decision events delivered for the run: the last one's number in the run, while
     /// none was dropped before it.
     decisions_delivered: u64,
-    /// The server dropped an event while the run's events were still coming, so a
-    /// decision's number can no longer be told from the count. The server's sequence
+    /// The host dropped an event while the run's events were still coming, so a
+    /// decision's number can no longer be told from the count. The host's sequence
     /// shows that an event was dropped, not whose, so a drop marks every run whose end
     /// has not arrived, including runs that lost nothing: their later decisions go
     /// unnumbered. Numbers are never wrong, only missing.
@@ -173,8 +178,14 @@ impl Recorder {
                 untracked: Mutex::new(HashMap::new()),
                 last_seq: AtomicU64::new(0),
                 calls: Mutex::new(RecentCalls::default()),
+                host_events: OnceLock::new(),
             }),
         }
+    }
+
+    /// The hub the host's events go through, for the MCP endpoint's tool calls.
+    pub(crate) fn events(&self) -> &Arc<EventHub> {
+        self.shared.host_events()
     }
 
     pub(crate) fn store(&self) -> &Arc<Store> {
@@ -237,9 +248,9 @@ impl Recorder {
         );
     }
 
-    /// The server's execution id of run `id` while it is in flight: started, and not yet
+    /// The host's execution id of run `id` while it is in flight: started, and not yet
     /// finished. A run's id is handed out when it starts, so this is how a playground run
-    /// id reaches the server's cancellation.
+    /// id reaches the host's cancellation.
     pub(crate) fn in_flight(&self, id: u64) -> Option<String> {
         self.shared
             .tracks()
@@ -248,7 +259,7 @@ impl Recorder {
             .map(|track| track.execution_id.clone())
     }
 
-    /// Whether the run with server execution id `execution_id` started under this
+    /// Whether the run with host execution id `execution_id` started under this
     /// recorder (recorded, or left unrecorded when the store could not take it) and is
     /// still followed: in flight, or finished less than [`FINISHED_RUN_MEMORY`] ago. A
     /// run a previous playground started is never followed.
@@ -269,34 +280,91 @@ impl Recorder {
     }
 }
 
-impl RunRecorderFactory for Recorder {
-    fn start(&self, run: RunStart) -> Option<Arc<dyn RunRecorder>> {
-        let shared = &self.shared;
-        shared.secrets.add_all(run.harness_secrets.values());
-        let id = match shared.store.next_run_id() {
+impl host::RunRecorder for Recorder {
+    fn start(&self, run: host::RunStart) -> Option<Arc<dyn host::RecordedRun>> {
+        let core = self.shared.begin(Begin {
+            execution_id: &run.execution_id,
+            label: &run.label,
+            session: Some(&run.session_id),
+            tool_call_id: run.tool_call_id.as_deref(),
+            test_of: run.test_of.as_deref(),
+            code: run.code.as_deref(),
+            harness_secrets: run.harness_secrets.values(),
+        })?;
+        let events = RunEvents::start(self.shared.host_events(), &run);
+        Some(Arc::new(HostRunRecording {
+            core,
+            start: run,
+            events,
+        }))
+    }
+}
+
+#[cfg(test)]
+impl Recorder {
+    /// This recorder with its runs' own events left out: a test sends events with
+    /// [`Self::event`], numbered as it chooses.
+    pub(crate) fn with_events_sent_by_hand(self) -> Self {
+        struct Ignored;
+        impl EventSink for Ignored {
+            fn event(&self, _event: SessionEvent) {}
+        }
+        let _ = self
+            .shared
+            .host_events
+            .set(EventHub::new(Arc::new(Ignored) as Arc<dyn EventSink>));
+        self
+    }
+
+    /// Takes `event` as if the host's hub delivered it.
+    pub(crate) fn event(&self, event: SessionEvent) {
+        self.shared.event(event);
+    }
+}
+
+/// What the recorder takes from a run as it starts.
+struct Begin<'a, S> {
+    execution_id: &'a str,
+    label: &'a str,
+    session: Option<&'a str>,
+    tool_call_id: Option<&'a str>,
+    test_of: Option<&'a str>,
+    code: Option<&'a str>,
+    harness_secrets: S,
+}
+
+impl Shared {
+    /// Follows a run that is starting, and lists it as running. `None`, with a
+    /// warning, when the store cannot take it: it runs unrecorded.
+    fn begin<'a, S: IntoIterator<Item = &'a String>>(
+        self: &Arc<Self>,
+        run: Begin<'a, S>,
+    ) -> Option<Core> {
+        self.secrets.add_all(run.harness_secrets);
+        let id = match self.store.next_run_id() {
             Ok(id) => id,
             Err(error) => {
                 warn(&format!("run not recorded: {error}"));
-                let mut untracked = shared.untracked();
+                let mut untracked = self.untracked();
                 untracked.retain(|_, finished_at| still_followed(*finished_at, Instant::now()));
-                untracked.insert(run.execution_id.clone(), None);
+                untracked.insert(run.execution_id.to_owned(), None);
                 return None;
             }
         };
         let started_at_micros = now_micros();
-        let test_of = run.test_of.as_ref().map(|execution_id| RunLink {
-            run: shared.run_id_of(execution_id),
-            execution_id: execution_id.clone(),
+        let test_of = run.test_of.map(|execution_id| RunLink {
+            run: self.run_id_of(execution_id),
+            execution_id: execution_id.to_owned(),
         });
-        let mut tracks = shared.tracks();
+        let mut tracks = self.tracks();
         prune(&mut tracks);
         tracks.insert(
-            run.execution_id.clone(),
+            run.execution_id.to_owned(),
             Track {
                 id,
-                execution_id: run.execution_id.clone(),
-                session: run.session_id.clone(),
-                tool_call_id: run.tool_call_id.clone(),
+                execution_id: run.execution_id.to_owned(),
+                session: run.session.map(str::to_owned),
+                tool_call_id: run.tool_call_id.map(str::to_owned),
                 started_at_micros,
                 seen: HashSet::new(),
                 end_event: None,
@@ -308,51 +376,28 @@ impl RunRecorderFactory for Recorder {
             },
         );
         drop(tracks);
-        if let Err(error) = shared.store.mark_running(
-            id,
-            &run.label,
-            run.session_id.as_deref(),
-            started_at_micros,
-            run.code.as_deref(),
-        ) {
+        if let Err(error) =
+            self.store
+                .mark_running(id, run.label, run.session, started_at_micros, run.code)
+        {
             warn(&format!("run {id} not listed as running: {error}"));
         }
-        Some(Arc::new(RunRecording {
-            shared: Arc::clone(shared),
-            start: run,
+        Some(Core {
+            shared: Arc::clone(self),
+            execution_id: run.execution_id.to_owned(),
             id,
             test_of,
             started_at_micros,
-        }))
+        })
     }
 
-    fn retried(&self, retry: RetryLink) {
-        let original = retry.original_execution_id.map(|execution_id| RunLink {
-            run: self.shared.run_id_of(&execution_id),
-            execution_id,
-        });
-        let record = RetryRecord {
-            format: FORMAT,
-            at_micros: now_micros(),
-            session_id: retry.session_id,
-            idempotency_key: retry.idempotency_key,
-            original,
-        };
-        if let Err(error) = self.shared.store.record_retry(&record) {
-            warn(&format!("retry not recorded: {error}"));
-        }
+    /// The hub the host's run events go through, to [`Self::event`].
+    fn host_events(self: &Arc<Self>) -> &Arc<EventHub> {
+        self.host_events.get_or_init(|| {
+            EventHub::new(Arc::new(HostEvents(Arc::downgrade(self))) as Arc<dyn EventSink>)
+        })
     }
 
-    fn wants_events(&self) -> bool {
-        true
-    }
-
-    fn event(&self, event: SessionEvent) {
-        self.shared.event(event);
-    }
-}
-
-impl Shared {
     fn tracks(&self) -> MutexGuard<'_, HashMap<String, Track>> {
         self.tracks.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -364,7 +409,7 @@ impl Shared {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The store's id for a server execution id: a run in memory, or one stored earlier.
+    /// The store's id for a host execution id: a run in memory, or one stored earlier.
     fn run_id_of(&self, execution_id: &str) -> Option<u64> {
         if let Some(track) = self.tracks().get(execution_id) {
             return Some(track.id);
@@ -503,7 +548,7 @@ impl Shared {
                     check();
                 });
             }
-            // Finished outside the server's runtime (a run dropped while unwinding):
+            // Finished outside the host's runtime (a run dropped while unwinding):
             // nothing will deliver its end now.
             Err(_) => check(),
         }
@@ -621,7 +666,7 @@ impl Shared {
     }
 }
 
-/// Where a server event goes in its session's log, and what the log says of it.
+/// Where an event goes in its session's log, and what the log says of it.
 struct Placement {
     position: Position,
     /// The store's id of its run, when the recorder follows the run.
@@ -709,29 +754,20 @@ fn call_finished(call: &CallRecord) -> EventKind {
     }
 }
 
-/// Records one run.
-struct RunRecording {
+/// One run the recorder follows: stores it as it finishes, and however it ended,
+/// finished or dropped, it is no longer in flight once this drops.
+struct Core {
     shared: Arc<Shared>,
-    start: RunStart,
+    execution_id: String,
     id: u64,
     test_of: Option<RunLink>,
     started_at_micros: u64,
 }
 
-impl RunRecorder for RunRecording {
-    fn log_config(&self) -> DecisionLogConfig {
-        PLAYGROUND_LOG_CONFIG
-    }
-
-    fn finish(&self, run: FinishedRun) {
-        let stored = StoredRun::from_parts(
-            self.id,
-            &self.start,
-            &run,
-            self.test_of.clone(),
-            self.started_at_micros,
-        );
-        let Some(stored) = self.redacted(&stored) else {
+impl Core {
+    /// Stores the finished run, redacted, and hands its record to the event log.
+    fn store(&self, stored: &StoredRun, console_bytes: u64) {
+        let Some(stored) = self.redacted(stored) else {
             return;
         };
         if let Err(error) = self.shared.store.write_run(&stored) {
@@ -752,26 +788,14 @@ impl RunRecorder for RunRecording {
                 dispatched: stored.dispatched,
                 error: stored.error.as_ref().map(|error| error.kind),
                 wall_ms: stored.wall_ms,
-                console_bytes: run.console.len() as u64,
+                console_bytes,
                 events_dropped: 0,
             },
             truncated: stored.recording.log_truncated,
         };
-        self.shared.finished(&self.start.execution_id, backfill);
+        self.shared.finished(&self.execution_id, backfill);
     }
-}
 
-impl Drop for RunRecording {
-    /// However the run ended, finished or dropped, it is no longer in flight.
-    fn drop(&mut self) {
-        if let Err(error) = self.shared.store.unmark_running(self.id) {
-            warn(&format!("run {} still listed as running: {error}", self.id));
-        }
-        self.shared.dropped(&self.start.execution_id);
-    }
-}
-
-impl RunRecording {
     /// The run with every known secret cut out. `None`, with a warning, when the
     /// redacted form does not read back: the run is not stored rather than stored
     /// unredacted.
@@ -782,6 +806,67 @@ impl RunRecording {
                 warn(&format!("run {} not stored: {error}", self.id));
                 None
             }
+        }
+    }
+}
+
+impl Drop for Core {
+    /// However the run ended, finished or dropped, it is no longer in flight.
+    fn drop(&mut self) {
+        if let Err(error) = self.shared.store.unmark_running(self.id) {
+            warn(&format!("run {} still listed as running: {error}", self.id));
+        }
+        self.shared.dropped(&self.execution_id);
+    }
+}
+
+/// Records one host run, with its events.
+struct HostRunRecording {
+    core: Core,
+    start: host::RunStart,
+    events: Arc<RunEvents>,
+}
+
+impl host::RecordedRun for HostRunRecording {
+    fn log_config(&self) -> DecisionLogConfig {
+        PLAYGROUND_LOG_CONFIG
+    }
+
+    fn event(&self, event: host::RunEvent<'_>) {
+        self.events.observe(event);
+    }
+
+    fn finish(&self, run: host::FinishedRun) {
+        let console_bytes = run.console.len() as u64;
+        self.events.finished(
+            run.dispatched,
+            run.error.as_ref().map(|error| error.kind),
+            run.wall,
+            console_bytes,
+        );
+        let core = &self.core;
+        let stored = StoredRun::from_parts(
+            core.id,
+            &self.start,
+            &run,
+            core.test_of.clone(),
+            core.started_at_micros,
+        );
+        core.store(&stored, console_bytes);
+    }
+
+    fn returned(&self, bytes: u64) {
+        self.events.returned(bytes);
+    }
+}
+
+/// Takes the host's events into the recorder.
+struct HostEvents(Weak<Shared>);
+
+impl EventSink for HostEvents {
+    fn event(&self, event: SessionEvent) {
+        if let Some(shared) = self.0.upgrade() {
+            shared.event(event);
         }
     }
 }

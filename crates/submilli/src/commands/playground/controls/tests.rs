@@ -10,6 +10,7 @@ use super::fixtures::{
 use super::read::{self, AuditQuery, RunsQuery};
 use super::render::{self, BANNED_IN_NEXT, FENCE_CLOSE, FENCE_OPEN, Page};
 use super::{ReadError, Reader};
+use crate::commands::playground::host::run::ErrorKind;
 use crate::commands::playground::packages::{ClosureEntry, Origin};
 use crate::commands::playground::store::run::DecisionRef;
 use crate::commands::playground::store::sessions::SessionEntry;
@@ -791,7 +792,7 @@ fn runs_filter_by_recency_and_run_id() {
 /// The error a cancelled run is stored with: the runtime's own note.
 fn cancelled() -> crate::commands::playground::store::run::StoredError {
     crate::commands::playground::store::run::StoredError {
-        kind: submilli_server::error::ErrorKind::Cancelled,
+        kind: ErrorKind::Cancelled,
         message: "internal: execution cancelled".into(),
         diagnostics: Vec::new(),
         caller: None,
@@ -841,14 +842,14 @@ fn sessions_list_each_sessions_first_message_and_its_tests_and_reruns() {
     fixture.run(stopped);
     let mut broken = RunSpec::new(Vec::new()).session("s-b");
     broken.error = Some(crate::commands::playground::store::run::StoredError {
-        kind: submilli_server::error::ErrorKind::CompileError,
+        kind: ErrorKind::CompileError,
         message: "error: unresolved identifier".into(),
         ..cancelled()
     });
     fixture.run(broken);
     let mut crashed = RunSpec::new(Vec::new()).session("s-b");
     crashed.error = Some(crate::commands::playground::store::run::StoredError {
-        kind: submilli_server::error::ErrorKind::RuntimeError,
+        kind: ErrorKind::RuntimeError,
         message: "error: index out of range".into(),
         ..cancelled()
     });
@@ -1126,7 +1127,7 @@ fn a_cancelled_run_reads_cancelled_without_the_runtimes_error() {
     let mut fixture = Fixture::new();
     let mut cancelled = RunSpec::new(vec![charges_allowed(0, "pied_piper")]);
     cancelled.error = Some(crate::commands::playground::store::run::StoredError {
-        kind: submilli_server::error::ErrorKind::Cancelled,
+        kind: ErrorKind::Cancelled,
         message: "internal: execution cancelled".into(),
         diagnostics: Vec::new(),
         caller: None,
@@ -1385,7 +1386,6 @@ fn a_run_whose_program_caught_a_denial_says_so_in_its_outcome_and_lists_it() {
 #[test]
 fn a_failed_run_reads_in_plain_words_and_its_json_keeps_the_kind() {
     use crate::commands::playground::store::run::StoredError;
-    use submilli_server::error::ErrorKind;
 
     let mut fixture = Fixture::new();
     let failed = |kind| {

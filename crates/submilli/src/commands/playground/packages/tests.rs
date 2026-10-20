@@ -367,9 +367,9 @@ async fn a_check_whose_caller_stops_waiting_still_finishes_before_the_next_start
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reinstall_whose_caller_stops_waiting_still_evicts_the_cached_package() {
     use std::time::Duration;
-    use submilli_server::ServerConfig;
-    use submilli_server::blueprint::InMemoryBlueprintStore;
-    use submilli_server::record::{ProgramRun, run_program};
+
+    use crate::commands::playground::host::app::{App, ProgramRun};
+    use crate::commands::playground::host::run::RunHostConfig;
 
     let fixture = Fixture::starter();
     let money = fixture.package_dir.join("packages/money");
@@ -389,31 +389,27 @@ async fn a_reinstall_whose_caller_stops_waiting_still_evicts_the_cached_package(
     let packages = Arc::new(fixture.packages());
     assert!(packages.sync(&wanted).unwrap().evict);
 
-    let blueprint = submilli_blueprint::parse(
-        "name: demo\ndefault: allow\nvfs:\n  mode: none\npackages:\n- '@pied-piper/money'\n",
-    )
-    .unwrap();
-    let volume_root = tempfile::tempdir().unwrap();
-    let state = AppState::new(ServerConfig {
-        blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]).unwrap())),
-        volume_root: Some(volume_root.path().to_path_buf()),
-        package_store_root: Some(fixture.store.clone()),
-        ..ServerConfig::default()
-    })
-    .await
-    .unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let config = RunHostConfig::new(submilli_build::PackageStore::new(fixture.store.clone()));
+    let state = App::for_tests(project.path(), "demo", config).await;
+    state
+        .blueprints
+        .apply(
+            "name: demo\ndefault: allow\nvfs:\n  mode: none\npackages:\n- '@pied-piper/money'\n",
+            "1",
+        )
+        .await
+        .unwrap();
     let release = || async {
-        let response = run_program(
-            &state,
-            ProgramRun {
+        let response = state
+            .run_program(ProgramRun {
                 label: "test".into(),
                 blueprint: "demo".into(),
                 code: "import { release } from \"@pied-piper/money\";\nfunction main(): string { return release(); }\n".into(),
                 variables: Default::default(),
                 secrets: Default::default(),
-            },
-        )
-        .await;
+            })
+            .await;
         assert!(response.error.is_none(), "{:?}", response.error);
         response.result.expect("main returned")
     };
@@ -422,7 +418,8 @@ async fn a_reinstall_whose_caller_stops_waiting_still_evicts_the_cached_package(
     edit(&money.join("src/lib.ts"), "\"first\"", "\"second\"");
     let freshness = Freshness::new(Arc::clone(&packages));
     let (started, started_rx) = tokio::sync::oneshot::channel();
-    let check = freshness.check(&state, {
+    let run = Arc::clone(&state.run);
+    let check = freshness.check_evicting(move || run.clear_prepared_packages(), {
         let wanted = wanted.clone();
         move |packages| {
             let _ = started.send(());
