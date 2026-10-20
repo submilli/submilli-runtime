@@ -36,7 +36,7 @@ Unresolved issues for an organization, newest first.
 import sentry from "@submilli/sentry";
 
 function main(): string {
-    const issues = sentry.listIssues("acme", { query: "is:unresolved", limit: 5 });
+    const issues = sentry.listIssues("pied-piper", { query: "is:unresolved", limit: 5 });
     if (issues.items.length === 0) return "No unresolved issues.";
     const lines: string[] = [];
     for (const issue of issues.items) {

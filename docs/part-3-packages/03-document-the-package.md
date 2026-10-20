@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "4896f049dbefeb75d37efb77ad532728400b53321ab90a2b0ba55517744c4f92"
+  contentHash: "bf5100ea40db4f6cbfbc1d91ae78673278dfcae12367d6a8cc232daefdf141dd"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -18,7 +18,7 @@ reads the Package's readme. The model reads the declarations and
 a program nobody reviews. What each file leaves out, that reader guesses.
 
 This guide shows you how to document a Package for both readers. The
-example is Acme's billing Package. Substitute your operations and your
+example is Pied Piper's billing Package. Substitute your operations and your
 service.
 
 ## Doc comments are the API
@@ -43,17 +43,17 @@ warning: parameter `customerId` is undocumented (missing `@param customerId`)
 returns them:
 
 ```sh
-submilli docs @acme/billing
+submilli docs @pied-piper/billing
 ```
 
 ```typescript
-@acme/billing — Goodwill credits for one customer of Acme's billing service.
+@pied-piper/billing — Goodwill credits for one customer of Pied Piper's billing service.
 
 /**
  * Add a goodwill credit to a customer's account.
  * @param customerId The customer's id in the billing system, such as `pied_piper`.
  * @param amount The credit, in cents; must be positive.
- * @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number }
+ * @capability pied-piper.example/credits.apply { customerId: string, customerClass: string, amount: number }
  * @returns The credit as recorded, with the customer's balance after it.
  */
 function applyCredit(customerId: string, amount: number): Credit;
@@ -67,7 +67,7 @@ interface Credit {
    */
   amount: number;
   /**
-   * The customer's balance after the credit, in cents. Negative means Acme owes the customer.
+   * The customer's balance after the credit, in cents. Negative means Pied Piper owes the customer.
    */
   balance: number;
   /**
@@ -89,9 +89,9 @@ throws, what a denial means and that the program should stop, and end
 with one complete `main`:
 
 ````markdown title="packages/billing/docs/readme.md"
-# @acme/billing
+# @pied-piper/billing
 
-Credits for one customer of Acme's billing service. The customer is the
+Credits for one customer of Pied Piper's billing service. The customer is the
 one the session was opened for; a credit for any other customer is
 refused.
 
@@ -107,7 +107,7 @@ the customer is not the session's, or the amount is more than the policy
 allows. Do not retry with another customer or amount; report it and stop.
 
 ```ts
-import { applyCredit } from "@acme/billing";
+import { applyCredit } from "@pied-piper/billing";
 
 function main(): string {
     const credit = applyCredit("pied_piper", 1500);
@@ -123,7 +123,7 @@ against the Package by `submilli build test` and counted as a test, so
 an example can't drift from the API it shows:
 
 ```sh
-submilli build test -p @acme/billing
+submilli build test -p @pied-piper/billing
 ```
 
 ```text
@@ -137,10 +137,10 @@ An example that names a function the Package doesn't have fails the run,
 with the line in the readme:
 
 ```text
-error: package `@acme/billing` does not export `refund`
+error: package `@pied-piper/billing` does not export `refund`
   --> packages/billing/docs/readme.md:28:10
    |
-28 | import { refund } from "@acme/billing";
+28 | import { refund } from "@pied-piper/billing";
    |          ^^^^^^
 help: exports: `Credit`, `applyCredit`
 FAIL packages/billing/docs/readme.md :: example 2 (compile)
@@ -161,9 +161,9 @@ service's side, which operations to grant and the fields their filters
 can test, and give the install and grant commands:
 
 ````markdown title="packages/billing/README.md"
-# @acme/billing
+# @pied-piper/billing
 
-Goodwill credits for Acme's customers, on Stripe. Programs call
+Goodwill credits for Pied Piper's customers, on Stripe. Programs call
 `applyCredit(customerId, amount)`; the package reads the customer's class
 from the account and asks the blueprint before it credits anything.
 
@@ -183,12 +183,16 @@ submilli secret put billing_api_key
 
 | Capability | Fields | Grant it for |
 | --- | --- | --- |
-| `acme.com/credits.apply` | `customerId`, `customerClass`, `amount` | Credits to the session's customer |
+| `pied-piper.example/credits.apply` | `customerId`, `customerClass`, `amount` | Credits to the session's customer |
+
+Replace `OWNER/REPOSITORY` and `@OWNER/billing` with this Package's published
+repository and name. Its scope must match the GitHub owner; use the same name
+in the commands below.
 
 ```sh
-submilli install acme/billing-package @acme/billing
-submilli blueprint add-package @acme/billing --no-capabilities
-submilli blueprint capability add acme.com/credits.apply \
+submilli install OWNER/REPOSITORY @OWNER/billing
+submilli blueprint add-package @OWNER/billing --no-capabilities
+submilli blueprint capability add pied-piper.example/credits.apply \
   --filter 'customerId == ${vars.customerId} and amount <= 5000'
 ```
 ````

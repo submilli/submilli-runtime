@@ -6,7 +6,7 @@ In Python, connect with `langchain-submilli`: its `SubmilliMiddleware` adds Subm
 
 ## Before writing the harness
 
-For a new project, follow [setup](setup.md), then [packages](packages.md), then [blueprints](blueprints.md). The [shared harness setup](harnesses.md) builds the `@acme/billing` / `support-read` fixture these examples use. A useful first slice is a fixture package whose exported function has a `@capability` annotation and calls `check(...)`. Run `submilli build check`, `submilli build test`, and `submilli blueprint lint` before involving a model.
+For a new project, follow [setup](setup.md), then [packages](packages.md), then [blueprints](blueprints.md). The [shared harness setup](harnesses.md) builds the `@pied-piper/billing` / `support-read` fixture these examples use. A useful first slice is a fixture package whose exported function has a `@capability` annotation and calls `check(...)`. Run `submilli build check`, `submilli build test`, and `submilli blueprint lint` before involving a model.
 
 The middleware needs submilli-server 0.4.1 or later and Python 3.11 or later. It is async only: call the agent with `ainvoke` or `astream`. Use the versions the application already has; for a new project install the current releases. These examples were verified on 2026-10-15 with `langchain-submilli 0.1.0`, `deepagents 0.7.25`, `langchain 1.4.6` and submilli-server 0.4.1; if an import or signature differs, the installed version's official API wins over this text. The package README is the API reference: [langchain-submilli](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#readme). Deep Agents requires a tool-calling model.
 
@@ -85,7 +85,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-The model should call `submilli__typescript__execute` with a program that imports `@acme/billing`, and report `6150` (or the service's formatted equivalent). That is evidence of a live model run only when `OPENAI_API_KEY` is configured; a scripted model proves wiring only.
+The model should call `submilli__typescript__execute` with a program that imports `@pied-piper/billing`, and report `6150` (or the service's formatted equivalent). That is evidence of a live model run only when `OPENAI_API_KEY` is configured; a scripted model proves wiring only.
 
 What the middleware does, and the rules that follow from it:
 
@@ -124,7 +124,7 @@ def scripted(code: str) -> Scripted:
 Build a graph per case with `model = scripted(code)` and `create_deep_agent(model=model, middleware=[submilli], checkpointer=InMemorySaver(), context_schema=Context)`, `ainvoke` it with a `context` and a fresh `thread_id`, end the case with `await submilli.aclose_thread(graph, config)` so no session is left open, and assert on the tool message (`next(m.text for m in result["messages"] if m.type == "tool")`):
 
 1. Bound to `pied_piper`, a program reading `pied_piper` returns a result of `6150`.
-2. The same binding reading `hooli` returns a tool result containing `permission_denied` and `acme.com/balance.read`, with `"denied": true`; the agent does not raise.
+2. The same binding reading `hooli` returns a tool result containing `permission_denied` and `pied-piper.example/balance.read`, with `"denied": true`; the agent does not raise.
 3. A context without `customer_id` raises `ValueError` from `customer_binding` before any session opens. To prove the server's own check, build a middleware with `variables={}`: the server refuses the session and `ainvoke` raises `submilli.BadRequestError`. A middleware built with a `token` the server does not know raises `submilli.AuthenticationError` (HTTP 401). Assert on the raised errors.
 4. `model.offered` records the model's real tool surface: the six Submilli tools and Deep Agents' `task`, and no `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep` or `execute`.
 

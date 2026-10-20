@@ -1,5 +1,5 @@
 import { label } from "submilli:test";
-import { listCharges } from "@acme/billing";
+import { listCharges } from "@pied-piper/billing";
 
 function main(): void {
     label("lists a customer's own charges");

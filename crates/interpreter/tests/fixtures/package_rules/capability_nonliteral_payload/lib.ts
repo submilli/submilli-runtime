@@ -4,9 +4,9 @@ import { check } from "submilli:security";
  * Validates a purchase.
  * @param customer Customer identifier.
  * @param total Purchase total.
- * @capability acme.com/v { customer }
+ * @capability pied-piper.example/v { customer }
  */
 export function v(customer: string, total: number): void {
   const context = { customer, total };
-  check("acme.com/v", context);
+  check("pied-piper.example/v", context);
 }

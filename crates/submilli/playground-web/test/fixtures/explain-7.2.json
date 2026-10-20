@@ -9,12 +9,12 @@
  ],
  "decision": "7.2",
  "outcome": "allow",
- "caller": "@acme/billing",
+ "caller": "@pied-piper/billing",
  "capability": "fs.read",
  "decided_by": {
   "kind": "rule",
   "rule": {
-   "caller": "@acme/billing",
+   "caller": "@pied-piper/billing",
    "index": 0,
    "position": 1,
    "name": null,

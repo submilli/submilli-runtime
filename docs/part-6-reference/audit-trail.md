@@ -10,7 +10,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "96b9866f408ac940457601180b2bf6fa6518188cc8808520a26932bf8959eb19"
+  contentHash: "cf0d3fb040a9552d2ad7ee224c8238be8638b4621386669ff317453b15dd7f05"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -61,7 +61,7 @@ ts=2026-10-04T05:44:32.121Z level=info stream=audit target=submilli_server::audi
 | `blueprint`, `blueprint_hash` | The Blueprint, and a SHA-256 of the version in force |
 | `principal` | The name of the API token the request carried |
 | `caller` | `main`, or the Package that made the call |
-| `capability` | The operation, such as `fs.write` or `acme.com/credits.apply` |
+| `capability` | The operation, such as `fs.write` or `pied-piper.example/credits.apply` |
 | `context.*` | The operation's fields, as below, including `payload_json` |
 | `decision` | `allow` or `deny` |
 | `source` | What decided: `policy`, the Blueprint's rules; `invariant`, a refusal no rule can change, such as `secrets.get` from `main`; `read_only`, a write into a read-only volume; `egress_guard`, the block on private addresses; `quota`, a model-token or session-state budget |
@@ -84,12 +84,12 @@ and only when their value is text, a number, or a boolean: `host`, `path`, `url_
 `max_bytes`, `overwrite`, `decompress`, `prompt_count`, `op`, `length`,
 `recursive`, `remote`, `remoteName`, `branch`, and `transport`.
 
-This refused `acme.com/credits.apply` call came from a Package run with
-`check("acme.com/credits.apply", { customerId: "pied_piper", amount: 42,
+This refused `pied-piper.example/credits.apply` call came from a Package run with
+`check("pied-piper.example/credits.apply", { customerId: "pied_piper", amount: 42,
 customerClass: "business" })`:
 
 ```text
-ts=2026-10-04T05:37:48.530Z level=info stream=audit target=submilli_server::audit msg=decision blueprint=test blueprint_hash=35d4367e3fb94fcad8d47c0af8c7f2a054a229a69f069928dfcca5f53d835ac5 caller=main capability=acme.com/credits.apply context.payload_json="{\"amount\":42,\"customerClass\":\"business\",\"customerId\":\"pied_piper\"}" decision=deny event_id=0991217e-e863-4f0d-b4f5-cd85e61aea85 execution_id=3506cc41-9d9d-4c2e-b76a-2f11d6fb433e principal=unauthenticated reason="policy denied the capability" rule=default schema=submilli.audit/1 source=policy type=decision
+ts=2026-10-04T05:37:48.530Z level=info stream=audit target=submilli_server::audit msg=decision blueprint=test blueprint_hash=35d4367e3fb94fcad8d47c0af8c7f2a054a229a69f069928dfcca5f53d835ac5 caller=main capability=pied-piper.example/credits.apply context.payload_json="{\"amount\":42,\"customerClass\":\"business\",\"customerId\":\"pied_piper\"}" decision=deny event_id=0991217e-e863-4f0d-b4f5-cd85e61aea85 execution_id=3506cc41-9d9d-4c2e-b76a-2f11d6fb433e principal=unauthenticated reason="policy denied the capability" rule=default schema=submilli.audit/1 source=policy type=decision
 ```
 
 Under `allows: summary`, a run's allowed operations are written when the
@@ -97,7 +97,7 @@ run finishes, one record for each caller, capability, and rule, with the
 number of operations and up to ten distinct contexts:
 
 ```text
-ts=2026-10-04T05:44:32.155Z level=info stream=audit target=submilli_server::audit msg=decision blueprint=test blueprint_hash=587d2f32ff8c32f8808d17e4ff4a41b3250b70628c067500c527b726a193e6a9 caller=main capability=acme.com/credits.apply contexts.0.payload_json="{\"amount\":42,\"customerClass\":\"business\",\"customerId\":\"pied_piper\"}" count=1 decision=allow event_id=555cbab7-33e1-4c34-9d9b-bcbe23b5b5a6 execution_id=7adecd7f-273e-41a7-ad4d-8e606315b102 principal=unauthenticated rule=0 schema=submilli.audit/1 source=policy type=decision
+ts=2026-10-04T05:44:32.155Z level=info stream=audit target=submilli_server::audit msg=decision blueprint=test blueprint_hash=587d2f32ff8c32f8808d17e4ff4a41b3250b70628c067500c527b726a193e6a9 caller=main capability=pied-piper.example/credits.apply contexts.0.payload_json="{\"amount\":42,\"customerClass\":\"business\",\"customerId\":\"pied_piper\"}" count=1 decision=allow event_id=555cbab7-33e1-4c34-9d9b-bcbe23b5b5a6 execution_id=7adecd7f-273e-41a7-ad4d-8e606315b102 principal=unauthenticated rule=0 schema=submilli.audit/1 source=policy type=decision
 ```
 
 | Field | Value |

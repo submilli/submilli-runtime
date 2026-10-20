@@ -279,15 +279,15 @@ async fn time_in_package_top_level_code_counts_against_the_timeout() {
     let host = host_with(with_timeout).await;
     packages::tests::install(
         &host.store_root,
-        "@acme/util",
+        "@pied-piper/util",
         "let spins = 0;\nwhile (true) { spins = spins + 1; }\nexport function answer(): number { return spins; }",
         &[],
     );
     let output = tokio::time::timeout(
         Duration::from_secs(15),
         host.run(
-            "name: demo\nvfs:\n  mode: none\npackages: ['@acme/util']\n",
-            "import { answer } from \"@acme/util\";\nfunction main(): number { return answer(); }",
+            "name: demo\nvfs:\n  mode: none\npackages: ['@pied-piper/util']\n",
+            "import { answer } from \"@pied-piper/util\";\nfunction main(): number { return answer(); }",
         ),
     )
     .await
@@ -298,7 +298,7 @@ async fn time_in_package_top_level_code_counts_against_the_timeout() {
         error["message"]
             .as_str()
             .unwrap()
-            .contains("at <top level> (@acme/util/lib:2:"),
+            .contains("at <top level> (@pied-piper/util/lib:2:"),
         "{error}"
     );
 }
@@ -337,14 +337,14 @@ async fn importing_a_package_the_blueprint_does_not_list_does_not_compile() {
     let host = host().await;
     packages::tests::install(
         &host.store_root,
-        "@acme/util",
+        "@pied-piper/util",
         "export function answer(): number { return 41; }",
         &[],
     );
     let output = host
         .run(
             "name: demo\nvfs:\n  mode: none\n",
-            "import { answer } from \"@acme/util\";\nfunction main(): number { return answer(); }",
+            "import { answer } from \"@pied-piper/util\";\nfunction main(): number { return answer(); }",
         )
         .await;
     // As on the server: an unlisted package is not offered to the compiler.
@@ -354,7 +354,7 @@ async fn importing_a_package_the_blueprint_does_not_list_does_not_compile() {
         error["message"]
             .as_str()
             .unwrap()
-            .contains("package `@acme/util` not found"),
+            .contains("package `@pied-piper/util` not found"),
         "{error}"
     );
 }
@@ -364,15 +364,18 @@ async fn a_listed_package_missing_from_the_store_is_a_package_resolution_error()
     let host = host().await;
     let output = host
         .run(
-            "name: demo\nvfs:\n  mode: none\npackages: ['@acme/util']\n",
-            "import { answer } from \"@acme/util\";\nfunction main(): number { return answer(); }",
+            "name: demo\nvfs:\n  mode: none\npackages: ['@pied-piper/util']\n",
+            "import { answer } from \"@pied-piper/util\";\nfunction main(): number { return answer(); }",
         )
         .await;
     assert!(!output.dispatched);
     let error = error_json(&output);
     assert_eq!(error["kind"], "package_resolution", "{error}");
     assert!(
-        error["message"].as_str().unwrap().contains("@acme/util"),
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("@pied-piper/util"),
         "{error}"
     );
 }
@@ -695,10 +698,10 @@ fn money_project(dir: &Path) -> (PathBuf, PathBuf) {
         "/** The release. */\nexport function release(): string { return \"first\"; }\n",
     )
     .unwrap();
-    std::fs::write(money.join("docs/readme.md"), "# @acme/money\n").unwrap();
+    std::fs::write(money.join("docs/readme.md"), "# @pied-piper/money\n").unwrap();
     let manifest = package_dir.join("submilli.toml");
     let mut text = std::fs::read_to_string(&manifest).unwrap();
-    text.push_str("\n[[package]]\nname = \"@acme/money\"\nversion = \"0.1.0\"\ndescription = \"Money helpers.\"\npath = \"packages/money\"\n");
+    text.push_str("\n[[package]]\nname = \"@pied-piper/money\"\nversion = \"0.1.0\"\ndescription = \"Money helpers.\"\npath = \"packages/money\"\n");
     std::fs::write(&manifest, text).unwrap();
     (package_dir, money.join("src/lib.ts"))
 }
@@ -710,9 +713,8 @@ fn edit(path: &Path, from: &str, to: &str) {
 }
 
 const MONEY_YAML: &str =
-    "name: demo\ndefault: allow\nvfs:\n  mode: none\npackages:\n- '@acme/money'\n";
-const MONEY_CODE: &str =
-    "import { release } from \"@acme/money\";\nfunction main(): string { return release(); }\n";
+    "name: demo\ndefault: allow\nvfs:\n  mode: none\npackages:\n- '@pied-piper/money'\n";
+const MONEY_CODE: &str = "import { release } from \"@pied-piper/money\";\nfunction main(): string { return release(); }\n";
 
 #[tokio::test]
 async fn a_stale_package_is_rebuilt_before_the_run_and_a_failed_rebuild_refuses_it() {

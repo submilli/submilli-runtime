@@ -1181,7 +1181,8 @@ mod tests {
         let installer_owner = request_owner.clone();
         drop(request_owner);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
-        installer_owner.annotate(json!({"packages": [{"name": "@acme/pkg", "version": "1.0.0"}]}));
+        installer_owner
+            .annotate(json!({"packages": [{"name": "@pied-piper/pkg", "version": "1.0.0"}]}));
         installer_owner.finish(axum::http::StatusCode::OK);
         drop(installer_owner);
         let text = std::fs::read_to_string(path).unwrap();

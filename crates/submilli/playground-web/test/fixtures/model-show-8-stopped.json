@@ -48,7 +48,7 @@
    ],
    "outcome": "allow",
    "caller": "main",
-   "capability": "acme.com/charges.list",
+   "capability": "pied-piper.example/charges.list",
    "decided_by": "by `globex-support`",
    "filtered": false
   }
@@ -81,6 +81,6 @@
    "stop_detail": "the recorded run never made this call",
    "went_live_keys": []
   },
-  "program": "import { listCharges } from \"@acme/billing\";\n\nfunction main(): number {\n    return listCharges(\"cus_globex\").length;\n}\n"
+  "program": "import { listCharges } from \"@pied-piper/billing\";\n\nfunction main(): number {\n    return listCharges(\"cus_globex\").length;\n}\n"
  }
 }

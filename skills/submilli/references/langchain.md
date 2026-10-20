@@ -211,7 +211,7 @@ def build_graph(tools: list[Any], checkpointer: InMemorySaver):
             tool_calls=[{
                 "name": tools[0].name,
                 "args": {
-                    "code": 'import { readBalance } from "@acme/billing"; '
+                    "code": 'import { readBalance } from "@pied-piper/billing"; '
                             'function main(): number { return readBalance("pied_piper"); }',
                 },
                 "id": "balance-call",
@@ -290,7 +290,7 @@ node that returns an `AIMessage` with one `tool_calls` entry for
 1. Discovery returns `submilli__typescript__execute` (plus Submilli's docs,
    search, files and last-run tools) and the allowed program returns `6150`.
 2. The same session requesting `hooli` gets a tool result containing
-   `permission denied` and `acme.com/balance.read`. With the adapter default
+   `permission denied` and `pied-piper.example/balance.read`. With the adapter default
    `handle_tool_errors=True` this is returned content, not an exception.
    `handle_tool_errors` is an argument of `MultiServerMCPClient(...)` and
    `load_mcp_tools(...)`, not a key of the connection dict.

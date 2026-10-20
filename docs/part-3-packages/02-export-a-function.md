@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c30e9c2714f73a02b6b8827220ba4a818a312dc406465ccf334ece41f66f1dd8"
+  contentHash: "ab3235d74b3618543a87433656a55784cb5e95286e52aa79fd7f398b17d970f8"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -18,10 +18,10 @@ rule can test, such as which customer, how much, and what kind of
 account. In the Package, that is two lines:
 
 ```typescript
-/** @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number } */
+/** @capability pied-piper.example/credits.apply { customerId: string, customerClass: string, amount: number } */
 export function applyCredit(customerId: string, amount: number): Credit {
     …
-    check("acme.com/credits.apply", { customerId: id, customerClass, amount });
+    check("pied-piper.example/credits.apply", { customerId: id, customerClass, amount });
 ```
 
 The first, in the doc comment, names the capability a Blueprint rule
@@ -31,7 +31,7 @@ policy can ever be precise about.
 
 This guide shows you how to export a function that a Blueprint can
 allow, filter, or deny, called an **operation**. The example is
-`applyCredit` in Acme's billing Package, which runs on Stripe in test
+`applyCredit` in Pied Piper's billing Package, which runs on Stripe in test
 mode. Substitute your operation and your service.
 
 ## Declare and enforce it
@@ -59,13 +59,13 @@ export interface Credit {
  * @param customerId The customer's id in the billing system, such as `pied_piper`.
  * @param amount The credit, in cents; must be positive.
  * @returns The credit as recorded.
- * @capability acme.com/credits.apply { customerId: string, amount: number }
+ * @capability pied-piper.example/credits.apply { customerId: string, amount: number }
  */
 export function applyCredit(customerId: string, amount: number): Credit {
     if (amount <= 0) {
         throw new RangeError("amount must be positive");
     }
-    check("acme.com/credits.apply", { customerId, amount });
+    check("pied-piper.example/credits.apply", { customerId, amount });
 
     // The call to the billing service comes later on this page.
     return { customerId, amount };
@@ -77,7 +77,7 @@ submilli build check
 ```
 
 ```text
-checked @acme/billing v0.1.0
+checked @pied-piper/billing v0.1.0
 ```
 
 :::tip[The compiler checks the tag against the check]
@@ -91,7 +91,7 @@ error: payload key `amount` missing from `@capability` binding
   --> packages/billing/src/lib.ts:22:37
    |
 21 |     }
-22 |     check("acme.com/credits.apply", { customerId, amount });
+22 |     check("pied-piper.example/credits.apply", { customerId, amount });
    |                                     ^^^^^^^^^^^^^^^^^^^^^^
 23 | 
    |
@@ -129,7 +129,7 @@ warning: `check()` is called inside a nested function in `applyCredit`
   --> packages/billing/src/lib.ts:22:33
    |
 21 |     }
-22 |     const guard = () => { check("acme.com/credits.apply", { customerId, amount }); };
+22 |     const guard = () => { check("pied-piper.example/credits.apply", { customerId, amount }); };
    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^
 23 |     guard();
    |
@@ -139,13 +139,13 @@ note: the nested function starts here
   --> packages/billing/src/lib.ts:22:19
    |
 21 |     }
-22 |     const guard = () => { check("acme.com/credits.apply", { customerId, amount }); };
+22 |     const guard = () => { check("pied-piper.example/credits.apply", { customerId, amount }); };
    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 23 |     guard();
 ```
 
 A warning doesn't stop the build. After it, `submilli build check` still
-prints `checked @acme/billing v0.1.0`. Each of these warnings is a gap in
+prints `checked @pied-piper/billing v0.1.0`. Each of these warnings is a gap in
 what a Blueprint can enforce, so make them fail in CI or before you
 publish, with `--deny-warnings`, or set `SUBMILLI_DENY_WARNINGS=1` for a
 CI job:
@@ -203,7 +203,7 @@ now:
  * @param customerId The customer's id in the billing system, such as `pied_piper`.
  * @param amount The credit, in cents; must be positive.
  * @returns The credit as recorded.
- * @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number }
+ * @capability pied-piper.example/credits.apply { customerId: string, customerClass: string, amount: number }
  */
 export function applyCredit(customerId: string, amount: number): Credit {
     if (amount <= 0) {
@@ -211,7 +211,7 @@ export function applyCredit(customerId: string, amount: number): Credit {
     }
     const id = customerId.trim();
     const customerClass = lookUpClass(id);
-    check("acme.com/credits.apply", { customerId: id, customerClass, amount });
+    check("pied-piper.example/credits.apply", { customerId: id, customerClass, amount });
 
     // The call to the billing service comes later on this page.
     return { customerId: id, amount };
@@ -244,7 +244,7 @@ const BASE = "https://api.stripe.com/v1";
 
 export function applyCredit(customerId: string, amount: number): Credit {
     …
-    check("acme.com/credits.apply", { customerId: id, customerClass, amount });
+    check("pied-piper.example/credits.apply", { customerId: id, customerClass, amount });
 
     const form = new Map<string, string>();
     form.set("amount", (-amount).toString());
@@ -328,7 +328,7 @@ export interface Credit {
     customerId: string;
     /** Amount in cents. */
     amount: number;
-    /** The customer's balance after the credit, in cents. Negative means Acme owes the customer. */
+    /** The customer's balance after the credit, in cents. Negative means Pied Piper owes the customer. */
     balance: number;
 }
 
@@ -358,7 +358,7 @@ submilli build check
 ```
 
 ```text
-checked @acme/billing v0.1.0
+checked @pied-piper/billing v0.1.0
 ```
 
 There is no warning, because the tag and the `check` agree, the `check`
@@ -367,9 +367,9 @@ beside the source. It is derived from the tags and the calls, and
 rewritten on every build, so don't edit it:
 
 ```yaml title="packages/billing/capabilities.yaml"
-namespace: acme
+namespace: pied-piper
 provides:
-- name: acme.com/credits.apply
+- name: pied-piper.example/credits.apply
   description: Add a goodwill credit to a customer's account.
   fields:
     amount:
@@ -409,7 +409,7 @@ export interface Credit {
     customerId: string;
     /** Amount in cents. */
     amount: number;
-    /** The customer's balance after the credit, in cents. Negative means Acme owes the customer. */
+    /** The customer's balance after the credit, in cents. Negative means Pied Piper owes the customer. */
     balance: number;
 }
 
@@ -418,7 +418,7 @@ export interface Credit {
  * @param customerId The customer's id in the billing system, such as `pied_piper`.
  * @param amount The credit, in cents; must be positive.
  * @returns The credit as recorded, with the customer's balance after it.
- * @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number }
+ * @capability pied-piper.example/credits.apply { customerId: string, customerClass: string, amount: number }
  */
 export function applyCredit(customerId: string, amount: number): Credit {
     if (amount <= 0) {
@@ -426,7 +426,7 @@ export function applyCredit(customerId: string, amount: number): Credit {
     }
     const id = customerId.trim();
     const customerClass = lookUpClass(id);
-    check("acme.com/credits.apply", { customerId: id, customerClass, amount });
+    check("pied-piper.example/credits.apply", { customerId: id, customerClass, amount });
 
     const form = new Map<string, string>();
     form.set("amount", (-amount).toString());

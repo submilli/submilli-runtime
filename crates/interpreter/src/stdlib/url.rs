@@ -127,7 +127,7 @@ pub fn package_declaration() -> PackageDeclaration {
         &mut properties,
         "host",
         Type::String,
-        "/** Host name, e.g. `\"api.acme.com\"`. Lower-case, without the port or a trailing dot: `\"https://api.acme.com./\"` gives `\"api.acme.com\"`. A host that would be empty or invalid without its trailing dots, such as `\".\"`, keeps them. */",
+        "/** Host name, e.g. `\"api.pied-piper.example\"`. Lower-case, without the port or a trailing dot: `\"https://api.pied-piper.example./\"` gives `\"api.pied-piper.example\"`. A host that would be empty or invalid without its trailing dots, such as `\".\"`, keeps them. */",
     );
     insert_url_property(
         &mut properties,
@@ -181,7 +181,7 @@ pub fn package_declaration() -> PackageDeclaration {
                 ret: url_ref,
                 type_predicate: None,
                 doc: url_doc(
-                    "/**\n * Parse an absolute URL string into its parts. Throws a catchable `TypeError` on malformed input (matches Rust's `url::Url::parse`).\n * @param url Absolute URL (e.g. `\"https://api.acme.com:8443/v1/orders?status=paid#section\"`).\n */",
+                    "/**\n * Parse an absolute URL string into its parts. Throws a catchable `TypeError` on malformed input (matches Rust's `url::Url::parse`).\n * @param url Absolute URL (e.g. `\"https://api.pied-piper.example:8443/v1/orders?status=paid#section\"`).\n */",
                 ),
             },
         },
@@ -213,7 +213,7 @@ pub fn package_declaration() -> PackageDeclaration {
                 ret: Type::String,
                 type_predicate: None,
                 doc: url_doc(
-                    "/**\n * Serialise URL parts to an absolute URL string. Inverse of `parse`.\n * @param protocol Scheme (e.g. `\"https\"`), without `:`.\n * @param host Host name (e.g. `\"api.acme.com\"`), optionally with userinfo or a port. A `/`, `\\`, `?` or `#` in it throws `TypeError`; pass those parts as their own arguments.\n * @param port Port number, or `undefined` to omit the `:port` segment.\n * @param path Path component (typically starts with `/`). A `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError`.\n * @param query Query parameters as a `Query` (`Map<string, string>`). Empty map omits the `?` segment.\n * @param fragment Fragment string (without `#`); omit it or pass `undefined` for none.\n */",
+                    "/**\n * Serialise URL parts to an absolute URL string. Inverse of `parse`.\n * @param protocol Scheme (e.g. `\"https\"`), without `:`.\n * @param host Host name (e.g. `\"api.pied-piper.example\"`), optionally with userinfo or a port. A `/`, `\\`, `?` or `#` in it throws `TypeError`; pass those parts as their own arguments.\n * @param port Port number, or `undefined` to omit the `:port` segment.\n * @param path Path component (typically starts with `/`). A `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError`.\n * @param query Query parameters as a `Query` (`Map<string, string>`). Empty map omits the `?` segment.\n * @param fragment Fragment string (without `#`); omit it or pass `undefined` for none.\n */",
                 ),
             },
         },

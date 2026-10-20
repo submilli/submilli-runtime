@@ -121,16 +121,16 @@ mod tests {
     fn sample() -> Vec<LockedPackage> {
         vec![
             LockedPackage {
-                name: "@acme/http".to_string(),
+                name: "@pied-piper/http".to_string(),
                 version: "1.0.0".to_string(),
-                github: "github.com/acme/http".to_string(),
+                github: "github.com/pied-piper/http".to_string(),
                 sha: "1111111111111111111111111111111111111111".to_string(),
                 source_hash: "sha256:bbbb".to_string(),
             },
             LockedPackage {
-                name: "@acme/slack".to_string(),
+                name: "@pied-piper/slack".to_string(),
                 version: "0.3.1".to_string(),
-                github: "github.com/acme/slack".to_string(),
+                github: "github.com/pied-piper/slack".to_string(),
                 sha: "0000000000000000000000000000000000000000".to_string(),
                 source_hash: "sha256:aaaa".to_string(),
             },

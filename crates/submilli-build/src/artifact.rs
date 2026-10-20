@@ -710,12 +710,12 @@ mod tests {
 
     fn sample_declaration() -> PackageDeclaration {
         let file = FileId(7);
-        let mut defs = PackageDeclaration::with_package("@acme/util");
+        let mut defs = PackageDeclaration::with_package("@pied-piper/util");
         defs.values.insert(
             "greet".to_string(),
             ValueSymbol {
                 name: "greet".to_string(),
-                mangled_name: mangle::package_symbol("@acme/util", "greet"),
+                mangled_name: mangle::package_symbol("@pied-piper/util", "greet"),
                 declaration_span: Span::new(file, 0, 12).unwrap(),
                 kind: ValueKind::Function {
                     generics: vec!["T".to_string()],
@@ -764,7 +764,7 @@ mod tests {
             "Thing".to_string(),
             TypeSymbol {
                 name: "Thing".to_string(),
-                mangled_name: mangle::package_symbol("@acme/util", "Thing"),
+                mangled_name: mangle::package_symbol("@pied-piper/util", "Thing"),
                 declaration_span: Span::new(file, 20, 40).unwrap(),
                 kind: TypeKind::Interface {
                     index: None,
@@ -782,7 +782,7 @@ mod tests {
             "version".to_string(),
             ValueSymbol {
                 name: "version".to_string(),
-                mangled_name: mangle::package_symbol("@acme/util", "Meta#version"),
+                mangled_name: mangle::package_symbol("@pied-piper/util", "Meta#version"),
                 declaration_span: Span::new(file, 45, 60).unwrap(),
                 kind: ValueKind::Const {
                     ty: Type::StringLiteral("1.0.0".to_string()),
@@ -794,7 +794,7 @@ mod tests {
             "Meta".to_string(),
             NamespaceSymbol {
                 name: "Meta".to_string(),
-                mangled_prefix: mangle::package_symbol("@acme/util", "Meta"),
+                mangled_prefix: mangle::package_symbol("@pied-piper/util", "Meta"),
                 declaration_span: Span::new(file, 40, 44).unwrap(),
                 values: ns_values,
                 types: BTreeMap::new(),
@@ -815,7 +815,7 @@ mod tests {
 
     fn sample_capabilities() -> CapabilitySchema {
         CapabilitySchema {
-            namespace: "acme".to_string(),
+            namespace: "pied-piper".to_string(),
             provides: Vec::new(),
             requires: Vec::new(),
         }
@@ -823,7 +823,7 @@ mod tests {
 
     fn sample_type_info() -> TypeInfoTable {
         TypeInfoTable {
-            package_name: "@acme/util".to_string(),
+            package_name: "@pied-piper/util".to_string(),
             types: Vec::new(),
         }
     }
@@ -842,7 +842,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let defs = sample_declaration();
         let metadata = ArtifactMetadata::with_description(
-            "@acme/util",
+            "@pied-piper/util",
             "1.2.3",
             "Utility helpers.",
             vec!["zeta".to_string(), "alpha".to_string(), "alpha".to_string()],
@@ -924,7 +924,7 @@ mod tests {
             &sample_type_info(),
             &sample_capabilities(),
             &defs,
-            &ArtifactMetadata::new("@acme/util", "1.0.0", Vec::new()),
+            &ArtifactMetadata::new("@pied-piper/util", "1.0.0", Vec::new()),
         )
         .expect("write artifact");
         fs::write(dir.path().join(WASM_FILE), vec![0_u8; 1_025]).expect("replace wasm");
@@ -990,7 +990,7 @@ mod tests {
     fn artifact_rejects_unsupported_schema() {
         let dir = tempdir().expect("tempdir");
         let defs = sample_declaration();
-        let mut metadata = ArtifactMetadata::new("@acme/util", "1.2.3", Vec::new());
+        let mut metadata = ArtifactMetadata::new("@pied-piper/util", "1.2.3", Vec::new());
         metadata.schema_version = ARTIFACT_SCHEMA_VERSION + 1;
 
         let capabilities = sample_capabilities();
@@ -1014,7 +1014,7 @@ mod tests {
         let reloaded: PackageDeclaration =
             serde_json::from_slice(&bytes).expect("deserialize package declaration");
         let source = r#"
-            import { greet } from "@acme/util";
+            import { greet } from "@pied-piper/util";
 
             function main(): string {
                 return greet<string>("Ada");

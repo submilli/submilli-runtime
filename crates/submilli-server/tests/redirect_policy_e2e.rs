@@ -243,7 +243,7 @@ export function fetchBody(url: string): string {
 
 fn write_fetcher_package(store_root: &Path) {
     let package = compile_package(
-        "@acme/fetcher",
+        "@pied-piper/fetcher",
         ModulePath::from("lib"),
         &[PackageSourceModule {
             path: ModulePath::from("lib"),
@@ -251,9 +251,9 @@ fn write_fetcher_package(store_root: &Path) {
         }],
         &[],
     )
-    .expect("compile @acme/fetcher");
+    .expect("compile @pied-piper/fetcher");
     write_package_artifact(
-        store_root.join("@acme").join("fetcher"),
+        store_root.join("@pied-piper").join("fetcher"),
         &package.wasm,
         &package.type_info,
         &submilli_build::derive_capability_schema(
@@ -262,9 +262,9 @@ fn write_fetcher_package(store_root: &Path) {
             &package.required_capabilities,
         ),
         &package.declaration,
-        &ArtifactMetadata::new("@acme/fetcher", "0.0.0-test", Vec::new()),
+        &ArtifactMetadata::new("@pied-piper/fetcher", "0.0.0-test", Vec::new()),
     )
-    .expect("write @acme/fetcher artifact");
+    .expect("write @pied-piper/fetcher artifact");
 }
 
 /// Hops are checked for the caller that made the request, and one caller's
@@ -291,12 +291,12 @@ async fn package_rules_apply_to_their_own_redirect_hops() {
     let restricted = "    filter: host == \"127.0.0.1\"\n    action: allow\n";
     let run = |package_rule: String, main_rule: String| {
         let yaml = format!(
-            "name: redirects\nallow_insecure_http: true\npackages:\n  - \"@acme/fetcher\"\npermissions:\n  \"@acme/fetcher\":\n  - capability: http.get\n{package_rule}  main:\n  - capability: http.get\n{main_rule}"
+            "name: redirects\nallow_insecure_http: true\npackages:\n  - \"@pied-piper/fetcher\"\npermissions:\n  \"@pied-piper/fetcher\":\n  - capability: http.get\n{package_rule}  main:\n  - capability: http.get\n{main_rule}"
         );
         let code = format!(
             r#"
 import {{ get }} from "submilli:http";
-import {{ fetchBody }} from "@acme/fetcher";
+import {{ fetchBody }} from "@pied-piper/fetcher";
 function main(): string {{
     let out = "";
     try {{
@@ -320,7 +320,7 @@ function main(): string {{
     let body = run(restricted.to_string(), "    action: allow\n".to_string()).await;
     assert_eq!(
         body["result"],
-        json!("denied @acme/fetcher / elsewhere"),
+        json!("denied @pied-piper/fetcher / elsewhere"),
         "{body}"
     );
     let body = run("    action: allow\n".to_string(), restricted.to_string()).await;

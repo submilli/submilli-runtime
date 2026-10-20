@@ -31,7 +31,7 @@
    ],
    "outcome": "allow",
    "caller": "main",
-   "capability": "acme.com/charges.list",
+   "capability": "pied-piper.example/charges.list",
    "decided_by": "by `charges-for-signed-in-customer`",
    "filtered": false
   },
@@ -40,9 +40,9 @@
     "7.2"
    ],
    "outcome": "allow",
-   "caller": "@acme/billing",
+   "caller": "@pied-piper/billing",
    "capability": "fs.read",
-   "decided_by": "by rule 1 of `@acme/billing`, line 46",
+   "decided_by": "by rule 1 of `@pied-piper/billing`, line 46",
    "filtered": false
   }
  ],
@@ -72,6 +72,6 @@
    }
   },
   "result": "209 charges, 822571 cents",
-  "program": "import { listCharges } from \"@acme/billing\";\n\nfunction main(): string {\n    const charges = listCharges(\"pied_piper\");\n    let total = 0;\n    for (const charge of charges) {\n        total += charge.amount;\n    }\n    return `${charges.length} charges, ${total} cents`;\n}\n"
+  "program": "import { listCharges } from \"@pied-piper/billing\";\n\nfunction main(): string {\n    const charges = listCharges(\"pied_piper\");\n    let total = 0;\n    for (const charge of charges) {\n        total += charge.amount;\n    }\n    return `${charges.length} charges, ${total} cents`;\n}\n"
  }
 }

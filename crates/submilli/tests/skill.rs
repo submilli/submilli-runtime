@@ -230,14 +230,14 @@ fn documented_real_service_package_and_blueprint_agree() {
     let blueprint_doc = read_markdown(references.join("blueprints.md"));
     let source = section_code_block(&package_doc, "A real service", "typescript");
     assert!(
-        source.contains("acme.com/orders.cancel"),
+        source.contains("pied-piper.example/orders.cancel"),
         "real service package example changed"
     );
-    ok(cli(&["build", "init", "@acme/orders", "package"]));
+    ok(cli(&["build", "init", "@pied-piper/orders", "package"]));
     fs::write(root.path().join("package/src/lib.ts"), source).unwrap();
     fs::write(
         root.path().join("package/tests/lib.test.ts"),
-        "import { buildPageQuery } from \"@acme/orders\";\nfunction main(): void { assert(buildPageQuery() === \"?limit=50\"); }\n",
+        "import { buildPageQuery } from \"@pied-piper/orders\";\nfunction main(): void { assert(buildPageQuery() === \"?limit=50\"); }\n",
     )
     .unwrap();
     let check = cli(&["build", "check"]);
@@ -253,7 +253,7 @@ fn documented_real_service_package_and_blueprint_agree() {
     );
     let schema = fs::read_to_string(root.path().join("package/capabilities.yaml")).unwrap();
     for expected in [
-        "host == \"api.acme.com\"",
+        "host == \"api.pied-piper.example\"",
         "capability: http.get",
         "capability: http.post",
         "name == \"ORDERS_API_TOKEN\"",
@@ -265,11 +265,13 @@ fn documented_real_service_package_and_blueprint_agree() {
     ok(cli(&["build", "publish-local"]));
     // Every complete blueprint in the reference must lint clean against this
     // CLI, so a schema or catalog change that outdates the skill fails here.
-    // The `@acme/billing` fixture blueprint is exercised end to end by
+    // The `@pied-piper/billing` fixture blueprint is exercised end to end by
     // `documented_package_and_blueprint_enforce_the_bound_customer` instead.
     let blueprints: Vec<&str> = code_blocks(&blueprint_doc, "yaml")
         .into_iter()
-        .filter(|block| block.starts_with("kind: blueprint") && !block.contains("@acme/billing"))
+        .filter(|block| {
+            block.starts_with("kind: blueprint") && !block.contains("@pied-piper/billing")
+        })
         .collect();
     assert!(
         blueprints
@@ -370,14 +372,14 @@ async fn documented_package_and_blueprint_enforce_the_bound_customer() {
     let references = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills/submilli/references");
     let package_doc = read_markdown(references.join("packages.md"));
     let blueprint_doc = read_markdown(references.join("blueprints.md"));
-    ok(cli(&["build", "init", "@acme/billing", "package"]));
+    ok(cli(&["build", "init", "@pied-piper/billing", "package"]));
     fs::write(
         root.path().join("package/src/lib.ts"),
         section_code_block(&package_doc, "The smallest slice", "typescript"),
     )
     .unwrap();
     fs::write(root.path().join("package/tests/lib.test.ts"),
-        "import { readBalance } from \"@acme/billing\";\nfunction main(): void { assert(readBalance(\"pied_piper\") === 6150); }\n").unwrap();
+        "import { readBalance } from \"@pied-piper/billing\";\nfunction main(): void { assert(readBalance(\"pied_piper\") === 6150); }\n").unwrap();
     ok(cli(&["build", "check"]));
     ok(cli(&["build", "test"]));
     ok(cli(&["build", "publish-local"]));
@@ -427,7 +429,10 @@ async fn documented_package_and_blueprint_enforce_the_bound_customer() {
             }
             "denied" => {
                 assert!(body.to_string().contains("permission denied"), "{body}");
-                assert!(body.to_string().contains("acme.com/balance.read"), "{body}");
+                assert!(
+                    body.to_string().contains("pied-piper.example/balance.read"),
+                    "{body}"
+                );
             }
             _ => {
                 assert_eq!(body["error"]["kind"], "invalid_request", "{body}");
@@ -646,7 +651,7 @@ fn update_refreshes_an_unmodified_verifier_and_preserves_an_edited_one() {
 fn build_init_suggests_the_skill_for_detected_assistants() {
     let init = |project: &Path, home: &Path| {
         let output = Command::new(env!("CARGO_BIN_EXE_submilli"))
-            .args(["build", "init", "@acme/demo", "packages/demo"])
+            .args(["build", "init", "@pied-piper/demo", "packages/demo"])
             .current_dir(project)
             .env(if cfg!(windows) { "USERPROFILE" } else { "HOME" }, home)
             .env("SUBMILLI_HOME", home.join(".submilli"))

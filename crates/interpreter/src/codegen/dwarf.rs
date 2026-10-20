@@ -412,7 +412,7 @@ mod tests {
             index: source.line_index(),
             package: Some(super::PackageSources {
                 sources: &registry,
-                name: "@acme/util",
+                name: "@pied-piper/util",
             }),
         };
         let span = crate::Span::new(dependency, 7, 15).unwrap();
@@ -447,7 +447,7 @@ mod tests {
                 .attr_string(&unit, row.file(header).unwrap().path_name())
                 .unwrap()
                 .slice(),
-            b"@acme/util/util.ts"
+            b"@pied-piper/util/util.ts"
         );
         let mut entries = unit.entries();
         entries.next_dfs().unwrap().unwrap();
@@ -476,7 +476,7 @@ mod tests {
                 .attr_string(&unit, declaration.path_name())
                 .unwrap()
                 .slice(),
-            b"@acme/util/util.ts"
+            b"@pied-piper/util/util.ts"
         );
     }
 

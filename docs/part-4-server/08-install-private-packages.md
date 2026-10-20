@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "4b60d92851321611396cd72518877a5d15517c8f063decdfc1fcb0004172860b"
+  contentHash: "701498d9c504c718dde2efb281af9dbc292b4d6439d3f5b9a88217f7a395c9fe"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -18,8 +18,10 @@ can read it. On your own machine the CLI uses your token instead, as
 [Start a Blueprint](/docs/blueprints/start-a-blueprint) shows.
 
 This guide shows you how to let a server install private Packages.
-The example is Acme's billing Package in `acme/billing-package`.
-Substitute your repository.
+The commands and outputs below use placeholders: replace `OWNER/REPOSITORY`
+with your private GitHub repository and `@OWNER/billing` with its Package
+name. The Package scope must match the repository owner; `<resolved-commit>`
+stands for the commit the server actually fetched.
 
 ## Create the token
 
@@ -47,7 +49,7 @@ Without one, an install from a private repository is refused with the
 remedy:
 
 ```text
-error: GitHub has no public repository `acme/billing-package`; if the repository is private, give the server a fine-grained personal access token with Repository permissions → Contents: Read-only on the package repositories (GitHub adds Metadata: Read-only), or a classic token with the `repo` scope, in the file named by `github_token_file` in its config file (create one at https://github.com/settings/personal-access-tokens/new?name=submilli&contents=read&expires_in=90&target_name=acme)
+error: GitHub has no public repository `OWNER/REPOSITORY`; if the repository is private, give the server a fine-grained personal access token with Repository permissions → Contents: Read-only on the package repositories (GitHub adds Metadata: Read-only), or a classic token with the `repo` scope, in the file named by `github_token_file` in its config file (create one at https://github.com/settings/personal-access-tokens/new?name=submilli&contents=read&expires_in=90&target_name=OWNER)
 ```
 
 Put the token in a file only the server's user can read, and name it in
@@ -73,11 +75,11 @@ rotates the token without a restart. Then install as for a public
 repository:
 
 ```sh
-submilli server packages install acme/billing-package @acme/billing
+submilli server packages install OWNER/REPOSITORY @OWNER/billing
 ```
 
 ```text
-installed @acme/billing @ 990fa925b823
+installed @OWNER/billing @ <resolved-commit>
 ```
 
 A repository the token can't read fails with the code `github_access`,

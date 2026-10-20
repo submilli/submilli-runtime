@@ -1,12 +1,12 @@
 import { check } from "submilli:security";
 import { readText, writeText } from "submilli:fs";
 /** Deliver a record to an outbox.
- * @capability acme.deliver { source: string, destination: string }
+ * @capability pied-piper.deliver { source: string, destination: string }
  */
 export function deliver(source: string, destination: string): void {
     const input = canonical(source);
     const output = canonical(destination);
-    check("acme.deliver", { source: input, destination: "/trusted" });
+    check("pied-piper.deliver", { source: input, destination: "/trusted" });
     const content = readText(input);
     if (content === null) throw new Error("record missing");
     writeText(output, content);

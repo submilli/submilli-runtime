@@ -601,13 +601,13 @@ async fn an_explicit_default_deny_is_a_version_with_no_change_to_access() {
 const WITH_PACKAGE: &str = "\
 name: demo
 packages:
-- '@acme/billing'
+- '@pied-piper/billing'
 permissions:
   main:
-    - capability: acme.com/charges.list
+    - capability: pied-piper.example/charges.list
       filter: customerId == \"cus_a\"
       action: allow
-  '@acme/billing':
+  '@pied-piper/billing':
     - capability: fs.read
       filter: path == \"/billing/charges.json\"
       action: allow

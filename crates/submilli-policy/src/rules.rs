@@ -505,12 +505,12 @@ mod tests {
         let resolution = explain_main(
             vec![rule(
                 Some("own-customer"),
-                "acme.com/charges.list",
+                "pied-piper.example/charges.list",
                 Some("customerId == ${vars.customerId}"),
                 Action::Allow,
             )],
             DefaultAction::Deny,
-            "acme.com/charges.list",
+            "pied-piper.example/charges.list",
             json!({ "customerId": "hooli" }),
             &vars(&[("customerId", "pied_piper")]),
         );

@@ -336,7 +336,7 @@ async fn a_read_only_volume_asked_for_read_write_is_refused() {
 async fn an_uninstalled_package_is_refused() {
     let host = Host::new();
     let error = host
-        .refused(&format!("{V1}packages:\n  - '@acme/tools'\n"), "v1")
+        .refused(&format!("{V1}packages:\n  - '@pied-piper/tools'\n"), "v1")
         .await;
     assert_eq!(error.code, "package_missing", "{error:?}");
 }

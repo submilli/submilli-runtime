@@ -108,9 +108,9 @@ export class FakeServer {
       if ((m = path.match(/^\/api\/compare\/(\d+)\/(\d+)$/))) return recorded(`compare-${m[1]}-${m[2]}.json`);
       if (path === "/api/changes") return recorded(query.has("version") ? `changes-v${query.get("version")}.json` : "changes.json");
       if (path === "/api/packages/source") {
-        if (query.get("package") === "@acme/billing" && query.get("module") === "lib") {
+        if (query.get("package") === "@pied-piper/billing" && query.get("module") === "lib") {
           return Response.json({
-            package: "@acme/billing",
+            package: "@pied-piper/billing",
             module: "lib",
             bytes: 30,
             truncated: false,
@@ -119,7 +119,7 @@ export class FakeServer {
           });
         }
         return Response.json(
-          { error: "unknown_module", message: "package `@acme/billing` has no module `nope`" },
+          { error: "unknown_module", message: "package `@pied-piper/billing` has no module `nope`" },
           { status: 404 },
         );
       }

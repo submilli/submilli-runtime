@@ -111,7 +111,7 @@ private installs ran for real against the runtime repository.
   failed … is not installed` line is now real and identical to the
   predicted one, and a second real error was added for a package rule
   missing from the package's list (`requires `secrets.get` with filter
-  …, but `permissions.@acme/billing` has no matching rule`). The secret
+  …, but `permissions.@pied-piper/billing` has no matching rule`). The secret
   check runs before the package check. The frontmatter note and the
   index flag are gone.
 
@@ -251,7 +251,7 @@ private installs ran for real against the runtime repository.
   to date`, the missing-file start-up error, the wrong-ref and
   no-access errors. The runs used the runtime repository and the
   `@submilli/jina` package with Doron's GitHub CLI token; the page shows
-  them as `acme/billing-package`, `@acme/billing`, and the login
+  them as `pied-piper/billing-package`, `@pied-piper/billing`, and the login
   `octocat`, with the commit as printed. Not run: Compose and the chart.
 
 ## Mount a shared volume

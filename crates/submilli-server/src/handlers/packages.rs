@@ -801,7 +801,7 @@ mod tests {
     #[test]
     fn a_dependency_depth_limit_is_a_bad_request() {
         let error = map_resolve_error(ResolveError::DependencyDepth {
-            name: PackageName::new("@acme/deep"),
+            name: PackageName::new("@pied-piper/deep"),
         });
         assert_eq!(error.0, StatusCode::BAD_REQUEST);
         assert_eq!(error.1.0.error, "invalid_dependency");
@@ -810,8 +810,8 @@ mod tests {
     #[test]
     fn a_dependency_fetch_keeps_its_kind() {
         let fetch = |kind| ResolveError::Fetch {
-            name: PackageName::new("@acme/crm"),
-            url: "github.com/acme/crm".into(),
+            name: PackageName::new("@pied-piper/crm"),
+            url: "github.com/pied-piper/crm".into(),
             sha: "0".repeat(40),
             source: submilli_build::FetchError::with_kind(kind, "message"),
         };
@@ -849,10 +849,11 @@ mod warning_policy_tests {
 
     #[test]
     fn deny_warnings_request_defaults_to_false_and_response_preserves_diagnostics() {
-        let request: InstallRequest = serde_json::from_str(r#"{"url":"acme/billing"}"#).unwrap();
+        let request: InstallRequest =
+            serde_json::from_str(r#"{"url":"pied-piper/billing"}"#).unwrap();
         assert!(!request.deny_warnings);
         let request: InstallRequest =
-            serde_json::from_str(r#"{"url":"acme/billing","deny_warnings":true}"#).unwrap();
+            serde_json::from_str(r#"{"url":"pied-piper/billing","deny_warnings":true}"#).unwrap();
         assert!(request.deny_warnings);
         let warnings = vec!["warning: capability mismatch\n  --> src/lib.ts:1:1\n".to_string()];
         let (status, Json(body)) = map_install_error(InstallError::WarningsDenied {
@@ -901,7 +902,7 @@ mod strict_install_tests {
         let repo = directory.path().join("repo");
         std::fs::create_dir_all(repo.join("src")).unwrap();
         std::fs::create_dir_all(repo.join("docs")).unwrap();
-        std::fs::write(repo.join("submilli.toml"), "[[package]]\nname = \"@acme/warned\"\nversion = \"0.1.0\"\ndescription = \"Warnings fixture.\"\n").unwrap();
+        std::fs::write(repo.join("submilli.toml"), "[[package]]\nname = \"@pied-piper/warned\"\nversion = \"0.1.0\"\ndescription = \"Warnings fixture.\"\n").unwrap();
         std::fs::write(
             repo.join("src/lib.ts"),
             "export function hello(): number { return 1; }\n",
@@ -911,7 +912,7 @@ mod strict_install_tests {
         let store = submilli_build::PackageStore::new(directory.path().join("store"));
         let mut preparation = InstallPreparation::new(&store).unwrap();
         let source = PackageSource::Github(GithubSource {
-            org: "acme".into(),
+            org: "pied-piper".into(),
             repo: "warned".into(),
             sha: "0".repeat(40),
             source_hash: None,
@@ -920,7 +921,7 @@ mod strict_install_tests {
             .prepare_repo(&repo, None, &source, false)
             .unwrap();
         let request: InstallRequest =
-            serde_json::from_str(r#"{"url":"acme/warned","deny_warnings":false}"#).unwrap();
+            serde_json::from_str(r#"{"url":"pied-piper/warned","deny_warnings":false}"#).unwrap();
         let (status, Json(body)) =
             publish_install(preparation, report, "0".repeat(40), request.deny_warnings)
                 .unwrap_err();
@@ -938,10 +939,10 @@ mod configuration_tests {
     #[test]
     fn configuration_errors_describe_the_dependency_and_server_install_command() {
         let error = InstallError::ConfigurationRequired {
-            package: PackageName::new("@acme/service"),
+            package: PackageName::new("@pied-piper/service"),
             parameters: vec![("baseUrl".into(), "string".into())],
             source: Box::new(PackageSource::Github(GithubSource {
-                org: "acme".into(),
+                org: "pied-piper".into(),
                 repo: "services".into(),
                 sha: "a".repeat(40),
                 source_hash: None,
@@ -952,30 +953,31 @@ mod configuration_tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body.error, "configuration_required");
         let requirement = body.configuration.unwrap();
-        assert_eq!(requirement.package, "@acme/service");
+        assert_eq!(requirement.package, "@pied-piper/service");
         assert_eq!(requirement.parameters["baseUrl"], "string");
         assert!(
             requirement
                 .command
-                .starts_with("submilli server packages install acme/services@")
+                .starts_with("submilli server packages install pied-piper/services@")
         );
         assert!(
             requirement
                 .command
-                .contains("@acme/service --upgrade --config 'baseUrl=<string>'")
+                .contains("@pied-piper/service --upgrade --config 'baseUrl=<string>'")
         );
     }
 
     #[test]
     fn install_request_config_is_optional_and_validated_before_fetching() {
-        let request: InstallRequest = serde_json::from_str(r#"{"url":"acme/service"}"#).unwrap();
+        let request: InstallRequest =
+            serde_json::from_str(r#"{"url":"pied-piper/service"}"#).unwrap();
         assert!(request.config.is_empty());
         let root = tempfile::tempdir().unwrap();
         let store = submilli_build::PackageStore::new(root.path());
         let auth = GithubAuth::new(None, TokenSource::ServerUnconfigured);
         for body in [
             r#"{"url":"invalid url","config":{"baseUrl":"https://service.test"}}"#,
-            r#"{"url":"invalid url","package":"@acme/service","config":{"baseUrl":"x"},"reset_config":["baseUrl"]}"#,
+            r#"{"url":"invalid url","package":"@pied-piper/service","config":{"baseUrl":"x"},"reset_config":["baseUrl"]}"#,
         ] {
             let request = serde_json::from_str(body).unwrap();
             let (status, Json(error)) = install_blocking(&store, request, &auth).unwrap_err();

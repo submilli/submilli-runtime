@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "9f62bbd390990fcb8bfa7ccb22ba7c278034836021b20fc52dcbdb573dd323b6"
+  contentHash: "291f7b8c6726c72b90e1330927d3c566886dfad490c4027b026e7e3586e931aa"
   confirmedAt: "2026-10-17T11:43:08.504042+00:00"
 ---
 
@@ -53,12 +53,16 @@ A required declaration has a Submilli build-time meaning. In ordinary TypeScript
 
 ## Command inputs
 
+Build commands use the local example Package. Install commands are templates:
+replace `OWNER/REPOSITORY` and `@OWNER/search` with your published repository
+and Package, whose scope must match its GitHub owner.
+
 ```sh
-submilli build check -p @acme/search --config baseUrl=https://search.test
-submilli build test -p @acme/search --config baseUrl=https://search.test
-submilli build publish-local -p @acme/search --config baseUrl=https://search.test
-submilli install acme/search @acme/search --config baseUrl=https://search.internal
-submilli server packages install acme/search @acme/search --config baseUrl=https://search.internal
+submilli build check -p @pied-piper/search --config baseUrl=https://search.test
+submilli build test -p @pied-piper/search --config baseUrl=https://search.test
+submilli build publish-local -p @pied-piper/search --config baseUrl=https://search.test
+submilli install OWNER/REPOSITORY @OWNER/search --config baseUrl=https://search.internal
+submilli server packages install OWNER/REPOSITORY @OWNER/search --config baseUrl=https://search.internal
 ```
 
 | Input | Contract |

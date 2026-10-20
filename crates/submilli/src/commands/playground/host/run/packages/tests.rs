@@ -70,14 +70,14 @@ fn imports(code: &str) -> ScriptImports {
 }
 
 const USES_UTIL: &str =
-    "import { answer } from \"@acme/util\";\nfunction main(): number { return answer(); }";
+    "import { answer } from \"@pied-piper/util\";\nfunction main(): number { return answer(); }";
 
 #[test]
 fn a_prepared_set_survives_the_store_losing_its_files_until_the_cache_is_cleared() {
     let dir = tempfile::tempdir().unwrap();
     install(
         dir.path(),
-        "@acme/util",
+        "@pied-piper/util",
         "export function answer(): number { return 41; }",
         &[],
     );
@@ -86,21 +86,33 @@ fn a_prepared_set_survives_the_store_losing_its_files_until_the_cache_is_cleared
         .engine()
         .unwrap();
     let first = cache
-        .prepare_for_imports(&engine, &blueprint(&["@acme/util"]), &imports(USES_UTIL))
+        .prepare_for_imports(
+            &engine,
+            &blueprint(&["@pied-piper/util"]),
+            &imports(USES_UTIL),
+        )
         .unwrap();
     assert_eq!(first.modules.len(), 1);
 
-    std::fs::remove_file(dir.path().join("@acme/util/pkg.wasm")).unwrap();
+    std::fs::remove_file(dir.path().join("@pied-piper/util/pkg.wasm")).unwrap();
     let cached = cache
-        .prepare_for_imports(&engine, &blueprint(&["@acme/util"]), &imports(USES_UTIL))
+        .prepare_for_imports(
+            &engine,
+            &blueprint(&["@pied-piper/util"]),
+            &imports(USES_UTIL),
+        )
         .unwrap();
     assert!(Arc::ptr_eq(&first, &cached));
 
     cache.clear();
     let error = cache
-        .prepare_for_imports(&engine, &blueprint(&["@acme/util"]), &imports(USES_UTIL))
+        .prepare_for_imports(
+            &engine,
+            &blueprint(&["@pied-piper/util"]),
+            &imports(USES_UTIL),
+        )
         .unwrap_err();
-    assert!(error.to_string().contains("@acme/util"), "{error}");
+    assert!(error.to_string().contains("@pied-piper/util"), "{error}");
 }
 
 #[test]
@@ -108,7 +120,7 @@ fn only_blueprint_listed_imports_are_prepared() {
     let dir = tempfile::tempdir().unwrap();
     install(
         dir.path(),
-        "@acme/util",
+        "@pied-piper/util",
         "export function answer(): number { return 41; }",
         &[],
     );

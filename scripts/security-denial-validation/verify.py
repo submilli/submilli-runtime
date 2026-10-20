@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 
 HERE = Path(__file__).resolve().parent
-PACKAGE = '@acme/denial-validation'
+PACKAGE = '@pied-piper/denial-validation'
 
 
 def main():
@@ -40,20 +40,20 @@ def scenarios(name):
     denied = {
         'unsafe': ('handled', {'record': 'record'}),
         'optional': ('handled', {'record': 'record'}),
-        'rethrow': ('denied:acme.write', {}),
+        'rethrow': ('denied:pied-piper.write', {}),
         'return': ('handled', {}),
-        'fallback': ('denied:acme.fallback', {}),
-        'logging': ('denied:acme.write', {'audit': 'denied'}),
+        'fallback': ('denied:pied-piper.fallback', {}),
+        'logging': ('denied:pied-piper.write', {'audit': 'denied'}),
     }
     outcome, effects = denied[name]
     yield 'denied', [], True, outcome, effects
-    yield 'allowed', ['acme.write'], True, 'allowed', {'record': 'record'}
-    yield 'host-denied', ['acme.write'], False, 'denied:fs.write', {}
+    yield 'allowed', ['pied-piper.write'], True, 'allowed', {'record': 'record'}
+    yield 'host-denied', ['pied-piper.write'], False, 'denied:fs.write', {}
     if name in ('unsafe', 'optional', 'logging'):
         yield 'both-denied', [], False, 'denied:fs.write', {}
     if name == 'fallback':
-        yield 'fallback-allowed', ['acme.fallback'], True, 'handled', {'record': 'record'}
-        yield 'fallback-host-denied', ['acme.fallback'], False, 'denied:fs.write', {}
+        yield 'fallback-allowed', ['pied-piper.fallback'], True, 'handled', {'record': 'record'}
+        yield 'fallback-host-denied', ['pied-piper.fallback'], False, 'denied:fs.write', {}
 
 
 def verify(binary, package, root, label, caller_caps, host_write, outcome, effects):

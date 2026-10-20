@@ -384,7 +384,7 @@ fn a_watched_event_keeps_its_kind_and_ids_trusted_and_the_runs_values_apart() {
                 "kind": "decision",
                 "record": {
                     "seq": 1, "at_micros": 5,
-                    "caller": "main", "capability": "acme.com/charges.list",
+                    "caller": "main", "capability": "pied-piper.example/charges.list",
                     "allowed": false, "context": { "customerId": HOSTILE },
                     "reason": HOSTILE, "near_misses": [], "call_index": 3,
                 },
@@ -400,7 +400,7 @@ fn a_watched_event_keeps_its_kind_and_ids_trusted_and_the_runs_values_apart() {
     assert_eq!(first["session"], "s-1");
     assert_eq!(first["decision"], "7.1");
     assert_eq!(first["at"], "2026-10-08T14:03:12Z");
-    assert_eq!(first["capability"], "acme.com/charges.list");
+    assert_eq!(first["capability"], "pied-piper.example/charges.list");
     assert_eq!(first["untrusted"]["context"]["customerId"], HOSTILE);
     let mut outside = first.clone();
     outside.as_object_mut().unwrap().remove("untrusted");

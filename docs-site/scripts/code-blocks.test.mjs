@@ -9,7 +9,7 @@ function metadata(source = '') {
 }
 
 test('recognizes conservative bare command and output blocks', () => {
-	assert.equal(classifyCodeBlock('submilli build init @acme/billing package', 'plaintext', metadata()), 'input');
+	assert.equal(classifyCodeBlock('submilli build init @pied-piper/billing package', 'plaintext', metadata()), 'input');
 	assert.equal(classifyCodeBlock('created .../quickstart/submilli.toml\ncreated .../quickstart/package/src/lib.ts', 'plaintext', metadata()), 'output');
 });
 
@@ -23,14 +23,14 @@ test('honors explicit metadata and leaves unknown code neutral', () => {
 test('keeps roles accessible without adding headers or changing the copy payload', async () => {
 	const engine = new ExpressiveCode({ plugins: [codeBlocks()] });
 	const { renderedGroupAst } = await engine.render({
-		code: 'submilli build init @acme/billing package',
+		code: 'submilli build init @pied-piper/billing package',
 		language: 'plaintext',
 	});
 	const html = toHtml(renderedGroupAst);
 	assert.match(html, /class="frame sub-code-input/);
 	assert.match(html, /<span class="sub-code-role">Command<\/span>/);
 	assert.match(html, /<figcaption class="header"><\/figcaption><span class="sub-code-role">Command<\/span><pre/);
-	assert.match(html, /data-code="submilli build init @acme\/billing package"/);
+	assert.match(html, /data-code="submilli build init @pied-piper\/billing package"/);
 
 	const titled = await engine.render({
 		code: 'created ...\/quickstart\/submilli.toml',

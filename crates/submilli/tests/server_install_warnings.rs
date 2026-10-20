@@ -9,7 +9,7 @@ fn deny_warnings_remote_install_forwards_policy_and_renders_response() {
     for (status, body, denied) in [
         (
             "200 OK",
-            r#"{"sha":"0000000000000000000000000000000000000000","installed":["@acme/pkg"],"up_to_date":[],"warnings":["warning: capability mismatch\n"]}"#,
+            r#"{"sha":"0000000000000000000000000000000000000000","installed":["@pied-piper/pkg"],"up_to_date":[],"warnings":["warning: capability mismatch\n"]}"#,
             false,
         ),
         (
@@ -58,7 +58,7 @@ fn deny_warnings_remote_install_forwards_policy_and_renders_response() {
                     "server",
                     "packages",
                     "install",
-                    "acme/pkg",
+                    "pied-piper/pkg",
                     "--server",
                     &format!("http://{address}"),
                 ])
@@ -119,14 +119,14 @@ fn package_config_remote_install_preserves_inputs_and_dependency_target() {
                 continue;
             }
             let value: serde_json::Value = serde_json::from_str(body).unwrap();
-            assert_eq!(value["package"], "@acme/app");
+            assert_eq!(value["package"], "@pied-piper/app");
             assert_eq!(value["config"]["baseUrl"], "https://app.test/?a=b");
             assert_eq!(value["reset_config"], serde_json::json!(["timeoutMs"]));
             break;
         }
         let body = serde_json::json!({
             "error": "configuration_required", "message": "install the dependency first", "warnings": [],
-            "configuration": { "package": "@acme/service", "parameters": {"baseUrl":"string"}, "command": "submilli server packages install acme/service@aaaaaaaa @acme/service --config 'baseUrl=<string>'" }
+            "configuration": { "package": "@pied-piper/service", "parameters": {"baseUrl":"string"}, "command": "submilli server packages install pied-piper/service@aaaaaaaa @pied-piper/service --config 'baseUrl=<string>'" }
         }).to_string();
         write!(socket, "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
     });
@@ -136,8 +136,8 @@ fn package_config_remote_install_preserves_inputs_and_dependency_target() {
             "server",
             "packages",
             "install",
-            "acme/app",
-            "@acme/app",
+            "pied-piper/app",
+            "@pied-piper/app",
             "--config",
             "baseUrl=https://app.test/?a=b",
             "--reset-config",
@@ -154,7 +154,7 @@ fn package_config_remote_install_preserves_inputs_and_dependency_target() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("@acme/service --config 'baseUrl=<string>'"),
+        stderr.contains("@pied-piper/service --config 'baseUrl=<string>'"),
         "{stderr}"
     );
     assert!(

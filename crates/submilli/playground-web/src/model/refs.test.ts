@@ -19,7 +19,7 @@ describe("copy-for-assistant lines", () => {
       "Submilli playground, run 3 (details - project: `billing-demo`, blueprint: `billing v1`, outcome: `rejected: its program didn’t compile`, see_with: `submilli playground show 3`)",
     );
     expect(decisionRef(names, data.runs[1], data.runs[1].decisions[1])).toBe(
-      "Submilli playground, check 1.2 (details - project: `billing-demo`, blueprint: `billing v1`, outcome: `allowed`, call: `@acme/billing → fs.read`, see_with: `submilli playground explain 1.2`)",
+      "Submilli playground, check 1.2 (details - project: `billing-demo`, blueprint: `billing v1`, outcome: `allowed`, call: `@pied-piper/billing → fs.read`, see_with: `submilli playground explain 1.2`)",
     );
     expect(programRef(names, 4)).toBe(
       "Submilli playground, the program of run 4 (details - project: `billing-demo`, see_with: `submilli playground show 4 --program`)",
@@ -65,7 +65,7 @@ describe("formatting", () => {
   it("names the agent and its settings as people say them", () => {
     expect(agentLabel("anthropic:claude-sonnet-5-5")).toBe("Claude · claude-sonnet-5-5");
     expect(agentLabel("openai:gpt-5")).toBe("OpenAI · gpt-5");
-    expect(agentLabel("acme:m1")).toBe("acme · m1");
+    expect(agentLabel("pied-piper:m1")).toBe("pied-piper · m1");
     expect(agentLabel(undefined)).toBe("");
     expect(settingsLabel({ effort: "low", max_output: 2000, provider: { temperature: 0.2, top_p: 1 } })).toBe(
       "effort low, max output 2000, provider settings temperature=0.2 (+1 more)",

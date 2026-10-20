@@ -65,10 +65,10 @@ variables:
 
 permissions:
   main:
-  - capability: acme.com/charges.list
+  - capability: pied-piper.example/charges.list
     filter: customerId == ${vars.customerId}
     action: allow
-  - capability: acme.com/credits.apply
+  - capability: pied-piper.example/credits.apply
     filter: customerId == ${vars.customerId} and amount <= 50000  # cents
     action: allow
 ```

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a3d1afad4e99dc493b63b22b4f28e1af3072715efdb4b6949fa1bb5b3c25d22e"
+  contentHash: "168e99629ac91ceae1d8573fbb3b0c9efa8865bc9ce4db35bdce55c6100c2387"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -281,7 +281,7 @@ error: PermissionDeniedError: permission denied: caller=main capability=http.get
 For a capability on files, `<capability>` is followed by the path, after
 `.` and `..` are resolved, as in `policy denied fs.write on /big.txt for main`.
 For a capability a Package declares, it is followed by the values the call
-asked with, as in `policy denied acme.com/charges.list with customerId =
+asked with, as in `policy denied pied-piper.example/charges.list with customerId =
 "hooli" for main`, so the model can tell which request was refused.
 The [Permissions](/docs/reference/permissions) reference describes how a
 call is decided.

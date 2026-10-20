@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "ca2eb863a534e067a342a8bb413e7f49c38e7d7f01086c981c4e6ff95b2de05a"
+  contentHash: "9aa57135b9b515a42f06f565dd6f7a9d648c690aeba576748ed3d25efd9092d2"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -85,7 +85,7 @@ operation reports; and `action`, `allow` or `deny`.
 ```yaml
 permissions:
   main:
-  - capability: acme.com/credits.apply
+  - capability: pied-piper.example/credits.apply
     filter: customerId == ${vars.customerId} and customerClass == "premium"
     action: allow
 ```
@@ -109,7 +109,7 @@ the rules for the generated code, and each Package has a list under its name. Pe
 caller, not per program.
 
 A Package declares its **capabilities**. It *provides* operations a
-program can be granted, such as `acme.com/credits.apply`. It *requires*
+program can be granted, such as `pied-piper.example/credits.apply`. It *requires*
 what its own code needs to do its job, such as an HTTP request to the
 billing host and the secret that authenticates it.
 
@@ -117,12 +117,12 @@ billing host and the secret that authenticates it.
 permissions:
   # What generated code may do.
   main:
-  - capability: acme.com/credits.apply
+  - capability: pied-piper.example/credits.apply
     filter: customerId == ${vars.customerId} and customerClass == "premium"
     action: allow
 
   # What the package itself may do.
-  '@acme/billing':
+  '@pied-piper/billing':
   - capability: http.post
     filter: host == "billing.internal.example.com"
     action: allow
@@ -162,7 +162,7 @@ request at all.
 Submilli's runtime and native Package ecosystem were built together for
 agents. Packages describe operations and supply typed fields to runtime
 permission checks, so you can write rules in terms of business operations.
-For example, `acme.com/credits.apply` means applying a credit, and the Package
+For example, `pied-piper.example/credits.apply` means applying a credit, and the Package
 hands the runtime the customer, the amount, and the customer's class, typed,
 before anything is sent. The rule is written against those fields, never
 against a raw payload. Nobody guesses what a request does, and the model is never asked
@@ -187,7 +187,7 @@ default: deny
 
 permissions:
   main:
-  - capability: acme.com/credits.apply
+  - capability: pied-piper.example/credits.apply
     filter: customerId == ${vars.customerId}
     action: allow
 ```

@@ -300,7 +300,7 @@ mod blueprint_scoped {
     fn write_package(store_root: &Path) {
         const SOURCE: &str = "export function ping(): number { return 1; }";
         let package = compile_package(
-            "@acme/tools",
+            "@pied-piper/tools",
             ModulePath::from("lib"),
             &[PackageSourceModule {
                 path: ModulePath::from("lib"),
@@ -310,7 +310,7 @@ mod blueprint_scoped {
         )
         .expect("compile synthetic package");
         write_package_artifact_with_docs_and_sources(
-            store_root.join("@acme").join("tools"),
+            store_root.join("@pied-piper").join("tools"),
             &package.wasm,
             &package.type_info,
             &submilli_build::derive_capability_schema(
@@ -319,8 +319,8 @@ mod blueprint_scoped {
                 &package.required_capabilities,
             ),
             &package.declaration,
-            &ArtifactMetadata::new("@acme/tools", "0.0.0-test", Vec::new()),
-            "Acme tooling for tests.",
+            &ArtifactMetadata::new("@pied-piper/tools", "0.0.0-test", Vec::new()),
+            "Pied Piper tooling for tests.",
             &[ArtifactSource {
                 path: ModulePath::from("lib"),
                 text: SOURCE.to_string(),
@@ -330,11 +330,11 @@ mod blueprint_scoped {
     }
 
     fn router(store_root: &Path) -> Router {
-        router_declaring(store_root, ["@acme/tools".to_string()])
+        router_declaring(store_root, ["@pied-piper/tools".to_string()])
     }
 
     /// A router whose blueprint declares `packages`, of which only
-    /// `@acme/tools` has an artifact on disk.
+    /// `@pied-piper/tools` has an artifact on disk.
     fn router_declaring(store_root: &Path, packages: impl IntoIterator<Item = String>) -> Router {
         write_package(store_root);
         let blueprints = Arc::new(
@@ -409,11 +409,11 @@ mod blueprint_scoped {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(names(&body), ["@acme/tools"], "got: {body}");
+        assert_eq!(names(&body), ["@pied-piper/tools"], "got: {body}");
 
         let (status, markdown, content_type) = get_text_from(
             router(store.path()),
-            "/v1/blueprints/scoped/packages/docs?name=@acme/tools",
+            "/v1/blueprints/scoped/packages/docs?name=@pied-piper/tools",
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -634,7 +634,7 @@ mod blueprint_scoped {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert!(
-            names(&scoped).contains(&"@acme/tools".to_string()),
+            names(&scoped).contains(&"@pied-piper/tools".to_string()),
             "search must list the blueprint's packages, got: {scoped}"
         );
     }
@@ -662,7 +662,7 @@ mod blueprint_scoped {
         );
         let registry = listed
             .iter()
-            .find(|e| e["name"] == "@acme/tools")
+            .find(|e| e["name"] == "@pied-piper/tools")
             .unwrap_or_else(|| panic!("registry package missing from listing: {body}"));
         assert_eq!(registry["source"], "registry", "got: {registry}");
         assert!(body["builtins"].is_string(), "got: {body}");
@@ -681,7 +681,11 @@ mod blueprint_scoped {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(names(&body), vec!["@acme/tools".to_string()], "got: {body}");
+        assert_eq!(
+            names(&body),
+            vec!["@pied-piper/tools".to_string()],
+            "got: {body}"
+        );
         assert!(body["available_packages"].is_null(), "got: {body}");
         assert!(body["builtins"].is_null(), "got: {body}");
     }
@@ -694,7 +698,7 @@ mod blueprint_scoped {
         // they come back as markdown text, not JSON with escaped newlines.
         let (status, body, content_type) = get_text_from(
             router(store.path()),
-            "/v1/blueprints/scoped/packages/docs?name=@acme/tools",
+            "/v1/blueprints/scoped/packages/docs?name=@pied-piper/tools",
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -702,7 +706,10 @@ mod blueprint_scoped {
             content_type.starts_with("text/markdown"),
             "got: {content_type}"
         );
-        assert!(body.contains("Acme tooling for tests."), "got: {body}");
+        assert!(
+            body.contains("Pied Piper tooling for tests."),
+            "got: {body}"
+        );
         assert!(body.contains("function ping("), "got: {body}");
     }
 
@@ -714,11 +721,11 @@ mod blueprint_scoped {
         // on one is recoverable.
         let (status, body) = get_from(
             router(store.path()),
-            "/v1/blueprints/scoped/packages/docs?name=@acme/tool",
+            "/v1/blueprints/scoped/packages/docs?name=@pied-piper/tool",
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(body["did_you_mean"], "@acme/tools", "got: {body}");
+        assert_eq!(body["did_you_mean"], "@pied-piper/tools", "got: {body}");
     }
 
     #[tokio::test]
@@ -727,9 +734,12 @@ mod blueprint_scoped {
         let (status, body) = get_from(
             router_declaring(
                 store.path(),
-                ["@acme/tools".to_string(), "@acme/absent".to_string()],
+                [
+                    "@pied-piper/tools".to_string(),
+                    "@pied-piper/absent".to_string(),
+                ],
             ),
-            "/v1/blueprints/scoped/packages/docs?name=@acme/absent",
+            "/v1/blueprints/scoped/packages/docs?name=@pied-piper/absent",
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
@@ -747,7 +757,7 @@ mod blueprint_scoped {
         // on every namespace stay exactly as they were.
         let (status, body, _) = get_text_from(
             router(store.path()),
-            "/v1/blueprints/scoped/packages/docs?name=@acme/tools",
+            "/v1/blueprints/scoped/packages/docs?name=@pied-piper/tools",
         )
         .await;
         assert_eq!(status, StatusCode::OK);

@@ -16,7 +16,7 @@ fn write(project: &Path, relative: &str, text: &str) {
 
 const MANIFEST: &str = r#"
 [[package]]
-name = "@acme/sdk"
+name = "@pied-piper/sdk"
 version = "0.1.0"
 description = "SDK package."
 path = "sdk"
@@ -28,10 +28,10 @@ import { check } from "submilli:security";
  * Checks a purchase.
  * @param customer Customer identifier.
  * @param total Purchase total.
- * @capability acme.com/v { customer, total }
+ * @capability pied-piper.example/v { customer, total }
  */
 export function v(customer: string, total: number): void {
-    check("acme.com/v", { customer, total });
+    check("pied-piper.example/v", { customer, total });
 }
 "#;
 
@@ -42,11 +42,11 @@ fn rule_filters_may_test_only_reported_capability_fields() {
     write(project.path(), "sdk/src/lib.ts", SOURCE);
     let store = PackageStore::new(project.path().join("store"));
     let manifest = parse_manifest(MANIFEST, project.path()).expect("manifest parses");
-    let only = Some(PackageName::new("@acme/sdk"));
+    let only = Some(PackageName::new("@pied-piper/sdk"));
     let built = build_packages(&manifest, project.path(), &store, only.as_ref()).unwrap();
     install_packages(&store, &built).unwrap();
 
-    let yaml = "name: fields\npackages: ['@acme/sdk']\npermissions:\n  main:\n    - capability: acme.com/v\n      filter: total < 100\n      action: allow\n";
+    let yaml = "name: fields\npackages: ['@pied-piper/sdk']\npermissions:\n  main:\n    - capability: pied-piper.example/v\n      filter: total < 100\n      action: allow\n";
     let blueprint = submilli_blueprint::parse(yaml).unwrap();
     validate_packages(&blueprint, &store).unwrap();
     let invalid = submilli_blueprint::parse(&yaml.replace("total <", "typo <")).unwrap();

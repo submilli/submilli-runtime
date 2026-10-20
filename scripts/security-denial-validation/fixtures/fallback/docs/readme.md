@@ -1,3 +1,3 @@
 # Validation contract
 
-Writing /record requires either caller permission acme.write or independently checked acme.fallback. Denying both must prevent the write.
+Writing /record requires either caller permission pied-piper.write or independently checked pied-piper.fallback. Denying both must prevent the write.

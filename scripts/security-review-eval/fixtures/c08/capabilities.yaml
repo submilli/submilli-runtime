@@ -1,11 +1,11 @@
-namespace: acme
+namespace: pied-piper
 provides:
-- name: acme.fallback
+- name: pied-piper.fallback
   description: Save through primary or fallback authority.
   fields:
     path:
       type: string
-- name: acme.primary
+- name: pied-piper.primary
   description: Save through primary or fallback authority.
   fields:
     path:

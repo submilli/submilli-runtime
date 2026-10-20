@@ -59,15 +59,15 @@ fn configured_with_package(
 
 fn install_credits_package(store_root: &std::path::Path) {
     let package = compile_package(
-        "@acme/credits",
+        "@pied-piper/credits",
         ModulePath::from("lib"),
         &[PackageSourceModule {
             path: ModulePath::from("lib"),
             source: r#"
 import { check } from "submilli:security";
-/** @capability acme.com/credits.apply { customerId: string, amount: number, customerClass: string } */
+/** @capability pied-piper.example/credits.apply { customerId: string, amount: number, customerClass: string } */
 export function applyCredits(): void {
-    check("acme.com/credits.apply", {
+    check("pied-piper.example/credits.apply", {
         customerId: "pied_piper", amount: 42, customerClass: "business"
     });
 }
@@ -77,7 +77,7 @@ export function applyCredits(): void {
     )
     .unwrap();
     write_package_artifact(
-        store_root.join("@acme").join("credits"),
+        store_root.join("@pied-piper").join("credits"),
         &package.wasm,
         &package.type_info,
         &submilli_build::derive_capability_schema(
@@ -86,7 +86,7 @@ export function applyCredits(): void {
             &package.required_capabilities,
         ),
         &package.declaration,
-        &ArtifactMetadata::new("@acme/credits", "0.0.0-test", Vec::new()),
+        &ArtifactMetadata::new("@pied-piper/credits", "0.0.0-test", Vec::new()),
     )
     .unwrap();
 }
@@ -147,7 +147,7 @@ async fn package_and_stdlib_decisions_record_complete_json_payloads() {
     let store = dir.path().join("packages");
     install_credits_package(&store);
     let code = r#"
-import { applyCredits } from "@acme/credits";
+import { applyCredits } from "@pied-piper/credits";
 import { writeText } from "submilli:fs";
 function main(): void {
     try { applyCredits(); } catch (e: PermissionDeniedError) {}
@@ -158,7 +158,7 @@ function main(): void {
     let denied = app(configured_with_package(
         denied_path.clone(),
         Allows::Summary,
-        "name: test\ndefault: deny\npackages:\n  - \"@acme/credits\"\n",
+        "name: test\ndefault: deny\npackages:\n  - \"@pied-piper/credits\"\n",
         store.clone(),
     ));
     let (_, response) = request(
@@ -172,7 +172,7 @@ function main(): void {
     let rows = records(&denied_path);
     let package = rows
         .iter()
-        .find(|row| row.get("capability") == Some(&"acme.com/credits.apply".to_string()))
+        .find(|row| row.get("capability") == Some(&"pied-piper.example/credits.apply".to_string()))
         .unwrap();
     let package_payload: Value = serde_json::from_str(&package["context.payload_json"]).unwrap();
     assert_eq!(
@@ -194,7 +194,7 @@ function main(): void {
     let allowed = app(configured_with_package(
         allowed_path.clone(),
         Allows::Summary,
-        "name: test\ndefault: deny\npackages:\n  - \"@acme/credits\"\npermissions:\n  main:\n    - capability: acme.com/credits.apply\n      action: allow\n    - capability: fs.write\n      action: allow\n",
+        "name: test\ndefault: deny\npackages:\n  - \"@pied-piper/credits\"\npermissions:\n  main:\n    - capability: pied-piper.example/credits.apply\n      action: allow\n    - capability: fs.write\n      action: allow\n",
         store,
     ));
     let (_, response) = request(
@@ -208,7 +208,7 @@ function main(): void {
     let rows = records(&allowed_path);
     let package = rows
         .iter()
-        .find(|row| row.get("capability") == Some(&"acme.com/credits.apply".to_string()))
+        .find(|row| row.get("capability") == Some(&"pied-piper.example/credits.apply".to_string()))
         .unwrap();
     assert_eq!(package["decision"], "allow");
     let package_payload: Value = serde_json::from_str(&package["contexts.0.payload_json"]).unwrap();

@@ -22,7 +22,7 @@ use super::log::warn;
 pub(crate) const FOLDER: &str = "submilli";
 /// The starter's blueprint, its package, and the binding its example runs under.
 pub(crate) const BLUEPRINT_NAME: &str = "billing";
-pub(crate) const PACKAGE_NAME: &str = "@acme/billing";
+pub(crate) const PACKAGE_NAME: &str = "@pied-piper/billing";
 pub(crate) const EXAMPLE: &str = "examples/total.ts";
 
 /// The starter files, relative to `submilli/`.
@@ -192,7 +192,7 @@ fn is_staging_name(name: &str) -> bool {
 }
 
 const MANIFEST: &str = r#"[[package]]
-name = "@acme/billing"
+name = "@pied-piper/billing"
 version = "0.1.0"
 description = "Starter billing package: a charge lookup keyed by customer, read from a fixture file."
 keywords = ["starter", "example", "billing", "charges"]
@@ -223,10 +223,10 @@ export interface Charge {
  * List the charges on one customer's account.
  * @param customerId Billing customer ID, such as `pied_piper`.
  * @returns The customer's charges; empty when they have none.
- * @capability acme.com/charges.list { customerId: string }
+ * @capability pied-piper.example/charges.list { customerId: string }
  */
 export function listCharges(customerId: string): Charge[] {
-    check("acme.com/charges.list", { customerId });
+    check("pied-piper.example/charges.list", { customerId });
 
     // In production, this would call the billing service.
     const text = readText(LEDGER_PATH);
@@ -244,20 +244,20 @@ export function listCharges(customerId: string): Charge[] {
 }
 "#;
 
-const README: &str = r#"# @acme/billing
+const README: &str = r#"# @pied-piper/billing
 
 The playground's starter package. `listCharges(customerId)` returns the charges on one
 customer's account, read from `charges.json` on the project's `billing` volume
 (`submilli/volumes/billing/`). There is no network call and no configuration.
 
-The operation declares the capability `acme.com/charges.list` with a `customerId` field, so a
+The operation declares the capability `pied-piper.example/charges.list` with a `customerId` field, so a
 blueprint can grant it under a filter that pins the customer to a value the calling application
 binds per request.
 "#;
 
 const TEST: &str = r#"import { mkdir, writeText } from "submilli:fs";
 import { label } from "submilli:test";
-import { listCharges } from "@acme/billing";
+import { listCharges } from "@pied-piper/billing";
 
 function main(): void {
     // The playground mounts the project's `billing` volume here; a test writes its own.
@@ -296,7 +296,7 @@ variables:
     required: true
 
 packages:
-- '@acme/billing'
+- '@pied-piper/billing'
 
 # The billing fixture, read-only, from the project's `billing` volume
 # (submilli/volumes/billing/).
@@ -314,12 +314,12 @@ permissions:
   # What generated code may do.
   main:
   - name: charges-for-signed-in-customer
-    capability: acme.com/charges.list
+    capability: pied-piper.example/charges.list
     filter: customerId == ${vars.customerId}
     action: allow
 
   # What the package itself may do: read its fixture.
-  '@acme/billing':
+  '@pied-piper/billing':
   - capability: fs.read
     filter: path == "/billing/charges.json"
     action: allow
@@ -327,7 +327,7 @@ permissions:
 
 const EXAMPLE_PROGRAM: &str = r#"// Total up the signed-in customer's charges. Run it with `customerId` bound to
 // `pied_piper`; asking for another customer's charges is denied.
-import { listCharges } from "@acme/billing";
+import { listCharges } from "@pied-piper/billing";
 
 function main(): string {
     const charges = listCharges("pied_piper");

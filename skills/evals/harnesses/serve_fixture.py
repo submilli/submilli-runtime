@@ -63,7 +63,7 @@ def verify_auth(url, user_token):
 
 
 def verify_policy(url, user_token):
-    code = ('import { readBalance } from "@acme/billing"; '
+    code = ('import { readBalance } from "@pied-piper/billing"; '
             'function main(): number { return readBalance("pied_piper"); }')
     for label, program, variables in [
         ("allowed", code, {"customerId": "pied_piper"}),
@@ -76,7 +76,7 @@ def verify_policy(url, user_token):
             assert body.get("result") == "6150", body
         elif label == "denied":
             assert "permission denied" in json.dumps(body), body
-            assert "acme.com/balance.read" in json.dumps(body), body
+            assert "pied-piper.example/balance.read" in json.dumps(body), body
         else:
             assert body.get("error", {}).get("kind") == "invalid_request", body
 
@@ -103,10 +103,10 @@ def main():
             subprocess.run([str(cli), *arguments], cwd=root, env=env,
                            check=True, stdout=subprocess.DEVNULL)
 
-        run("build", "init", "@acme/billing", "package")
+        run("build", "init", "@pied-piper/billing", "package")
         (root / "package/src/lib.ts").write_text(first_block(references / "packages.md", "typescript"))
         (root / "package/tests/lib.test.ts").write_text(
-            'import { readBalance } from "@acme/billing";\n'
+            'import { readBalance } from "@pied-piper/billing";\n'
             'function main(): void { assert(readBalance("pied_piper") === 6150); }\n')
         run("build", "check")
         run("build", "test")

@@ -124,17 +124,17 @@ test("stepping into a package call shows the package's source with the active li
   await user.click(screen.getByRole("button", { name: "From the start" }));
   // The program's line that calls into the package, then the package's own line.
   await user.keyboard("{ArrowRight}{ArrowRight}{ArrowRight}");
-  expect(within(codeRegion()).getByText("Line 4 calls into @acme/billing (listCharges). Step → to follow it into the package’s code.")).toBeInTheDocument();
+  expect(within(codeRegion()).getByText("Line 4 calls into @pied-piper/billing (listCharges). Step → to follow it into the package’s code.")).toBeInTheDocument();
   await user.keyboard("{ArrowRight}");
 
   const code = codeRegion();
-  await within(code).findAllByText('check("acme.com/charges.list", { customerId });');
+  await within(code).findAllByText('check("pied-piper.example/charges.list", { customerId });');
   const active = code.querySelector(".pg-line.active") as HTMLElement;
   expect(active.querySelector(".num")?.textContent).toBe("28");
-  expect(active.querySelector(".txt")?.textContent).toBe('    check("acme.com/charges.list", { customerId });');
-  expect(within(code).getByText("@acme/billing · lib · called from program 1, line 4")).toBeInTheDocument();
+  expect(active.querySelector(".txt")?.textContent).toBe('    check("pied-piper.example/charges.list", { customerId });');
+  expect(within(code).getByText("@pied-piper/billing · lib · called from program 1, line 4")).toBeInTheDocument();
   expect(within(code).getByText(/as installed now/)).toBeInTheDocument();
-  expect(server.requests()).toContain("GET /api/packages/source?package=%40acme%2Fbilling&module=lib");
+  expect(server.requests()).toContain("GET /api/packages/source?package=%40pied-piper%2Fbilling&module=lib");
   const centred = scrolled.filter((s) => s.el === active);
   expect(centred.at(-1)?.options).toEqual({ block: "center" });
 });
@@ -143,14 +143,14 @@ test("a missing package source says so in the code pane, in the server's words",
   const server = new FakeServer();
   server.handle = (call) =>
     call.url.startsWith("/api/packages/source")
-      ? Response.json({ error: "unknown_module", message: "package `@acme/billing` has no module `lib`" }, { status: 404 })
+      ? Response.json({ error: "unknown_module", message: "package `@pied-piper/billing` has no module `lib`" }, { status: 404 })
       : undefined;
   const { user } = await openPage(server);
   await runsLoaded();
   await user.click(screen.getByRole("button", { name: "From the start" }));
   await user.keyboard("{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}");
-  expect(await within(codeRegion()).findByText("@acme/billing · lib: its source isn’t available.")).toBeInTheDocument();
-  expect(within(codeRegion()).getByText("package @acme/billing has no module lib")).toBeInTheDocument();
+  expect(await within(codeRegion()).findByText("@pied-piper/billing · lib: its source isn’t available.")).toBeInTheDocument();
+  expect(within(codeRegion()).getByText("package @pied-piper/billing has no module lib")).toBeInTheDocument();
 });
 
 test("while stepped back, test, rerun, draft and chat say why they're off, and Cancel still cancels", async () => {
@@ -641,7 +641,7 @@ test("recorded text with HTML markup shows as literal text", async () => {
   server.feed = () => ({ text: fixture("feed-session-4.sse").replace("Let me total your charges.", markup + " Let me total"), close: false });
   server.handle = (call) =>
     call.url.startsWith("/api/packages/source")
-      ? json({ package: "@acme/billing", module: "lib", bytes: 40, truncated: false, note: null, untrusted: { text: "<script>alert(1)</script>" } })
+      ? json({ package: "@pied-piper/billing", module: "lib", bytes: 40, truncated: false, note: null, untrusted: { text: "<script>alert(1)</script>" } })
       : undefined;
   const { user } = await openPage(server);
   await runsLoaded();

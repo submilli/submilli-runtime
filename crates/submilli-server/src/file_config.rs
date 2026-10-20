@@ -1921,7 +1921,7 @@ network:
         let root = tempfile::tempdir().unwrap();
         let err = merge_err(FileConfig {
             package_store_dir: Some(root.path().join("packages")),
-            volumes: local_table([("work".to_string(), root.path().join("packages/@acme"))]),
+            volumes: local_table([("work".to_string(), root.path().join("packages/@pied-piper"))]),
             ..FileConfig::default()
         });
         assert!(err.contains("package store"), "got: {err}");

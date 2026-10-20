@@ -37,8 +37,8 @@ mod unix {
             Self { dir, root }
         }
 
-        /// The starter project, with `@acme/core` added as a dependency of
-        /// `@acme/billing` that the blueprint does not list.
+        /// The starter project, with `@pied-piper/core` added as a dependency of
+        /// `@pied-piper/billing` that the blueprint does not list.
         fn starter_with_a_dependency() -> Self {
             let dir = tempfile::tempdir().expect("tempdir");
             let root = dir.path().join("project");
@@ -54,11 +54,11 @@ mod unix {
                 "/** Cents as dollars. */\nexport function dollars(cents: number): number { return cents / 100; }\n",
             )
             .unwrap();
-            std::fs::write(core.join("docs/readme.md"), "# @acme/core\n").unwrap();
+            std::fs::write(core.join("docs/readme.md"), "# @pied-piper/core\n").unwrap();
             let manifest = project.root.join("submilli/submilli.toml");
             let mut text = std::fs::read_to_string(&manifest).unwrap();
             text.push_str(
-                "dependencies = [\"@acme/core\"]\n\n[[package]]\nname = \"@acme/core\"\nversion = \
+                "dependencies = [\"@pied-piper/core\"]\n\n[[package]]\nname = \"@pied-piper/core\"\nversion = \
                  \"0.1.0\"\ndescription = \"Money helpers.\"\npath = \"packages/core\"\n",
             );
             std::fs::write(&manifest, text).unwrap();
@@ -201,7 +201,7 @@ mod unix {
         let mut denied = decision(
             call_index,
             "main",
-            "acme.com/charges.list",
+            "pied-piper.example/charges.list",
             json!({ "customerId": customer }),
             false,
             by_default(),
@@ -224,7 +224,7 @@ mod unix {
         decision(
             call_index,
             "main",
-            "acme.com/charges.list",
+            "pied-piper.example/charges.list",
             json!({ "customerId": "pied_piper" }),
             true,
             rule("main", 0, "charges-for-signed-in-customer"),
@@ -550,7 +550,7 @@ mod unix {
         let post = |index| {
             decision(
                 index,
-                "@acme/core",
+                "@pied-piper/core",
                 "http.post",
                 json!({ "url": format!("https://hooks.test/{HOSTILE}") }),
                 true,
@@ -578,16 +578,16 @@ mod unix {
         let audited = project.json(&["audit", "--default-only"]);
         let groups = audited["groups"].as_array().unwrap();
         assert_eq!(groups.len(), 1, "{audited}");
-        assert_eq!(groups[0]["caller"], "@acme/core");
+        assert_eq!(groups[0]["caller"], "@pied-piper/core");
         assert_eq!(groups[0]["refs"], json!(["1.2", "2.1"]));
         assert_eq!(
             groups[0]["origin"],
-            "Nobody chose `@acme/core`; it arrived as a dependency of `@acme/billing`"
+            "Nobody chose `@pied-piper/core`; it arrived as a dependency of `@pied-piper/billing`"
         );
         assert_only_untrusted(&audited, HOSTILE);
         let text = project.text(&["audit", "--default-only", "--packages-only"]);
         assert!(
-            text.contains("arrived as a dependency of `@acme/billing`"),
+            text.contains("arrived as a dependency of `@pied-piper/billing`"),
             "{text}"
         );
         assert!(text.contains("allowed by the default"), "{text}");
@@ -655,7 +655,7 @@ variables:
     required: true
 
 packages:
-- '@acme/billing'
+- '@pied-piper/billing'
 
 default: deny
 
@@ -663,7 +663,7 @@ permissions:
   # What generated code may do.
   main:
   - name: charges-for-signed-in-customer
-    capability: acme.com/charges.list
+    capability: pied-piper.example/charges.list
     filter: customerId == ${vars.customerId}
     action: allow
 "#;
@@ -1064,7 +1064,7 @@ function main(): string {{
             playground.start();
             let program = playground.write(
                 "other.ts",
-                "import { listCharges } from \"@acme/billing\";\nfunction main(): number {\n  return listCharges(\"hooli\").length;\n}\n",
+                "import { listCharges } from \"@pied-piper/billing\";\nfunction main(): number {\n  return listCharges(\"hooli\").length;\n}\n",
             );
             playground.expect(0, &["bind", "customerId=pied_piper"]);
             let ran = playground.expect(3, &["exec", &program]);
@@ -2705,7 +2705,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             let session = started["session"].as_str().unwrap().to_owned();
             let program = playground.write(
                 "many.ts",
-                "import { listCharges } from \"@acme/billing\";\nfunction main(): number {\n  let total = 0;\n  for (let i = 0; i < 400; i++) { total += listCharges(\"pied_piper\").length; console.log(`${i}`); }\n  return total;\n}\n",
+                "import { listCharges } from \"@pied-piper/billing\";\nfunction main(): number {\n  let total = 0;\n  for (let i = 0; i < 400; i++) { total += listCharges(\"pied_piper\").length; console.log(`${i}`); }\n  return total;\n}\n",
             );
             let watch = playground
                 .command(&["watch", &session])
@@ -2766,7 +2766,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                 .unwrap();
             let run = decision["run"].as_u64().unwrap();
             assert_eq!(decision["decision"], format!("{run}.1"));
-            assert_eq!(decision["capability"], "acme.com/charges.list");
+            assert_eq!(decision["capability"], "pied-piper.example/charges.list");
             assert_eq!(decision["untrusted"]["context"]["customerId"], "pied_piper");
             assert!(decision.get("context").is_none(), "{decision}");
             assert_eq!(lines.len() as u64, logged + 1);
@@ -2830,7 +2830,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
         }
 
         /// Lists charges for another customer and catches the denial.
-        const CAUGHT: &str = "import { listCharges } from \"@acme/billing\";\nfunction main(): string {\n  const own = listCharges(\"pied_piper\").length;\n  try { listCharges(\"hooli\"); return \"listed\"; }\n  catch (e: PermissionDeniedError) { return `denied after ${own}`; }\n}\n";
+        const CAUGHT: &str = "import { listCharges } from \"@pied-piper/billing\";\nfunction main(): string {\n  const own = listCharges(\"pied_piper\").length;\n  try { listCharges(\"hooli\"); return \"listed\"; }\n  catch (e: PermissionDeniedError) { return `denied after ${own}`; }\n}\n";
 
         #[test]
         fn a_caught_denial_reads_in_the_outcome_and_every_run_result_lists_it() {
@@ -2964,7 +2964,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             let session = started["session"].as_str().unwrap().to_owned();
             let program = playground.write(
                 "three.ts",
-                "import { listCharges } from \"@acme/billing\";\nfunction main(): number {\n  let n = 0;\n  for (let i = 0; i < 3; i++) { n += listCharges(\"pied_piper\").length; }\n  return n;\n}\n",
+                "import { listCharges } from \"@pied-piper/billing\";\nfunction main(): number {\n  let n = 0;\n  for (let i = 0; i < 3; i++) { n += listCharges(\"pied_piper\").length; }\n  return n;\n}\n",
             );
             playground.expect(0, &["exec", &program, "--session", &session]);
 
@@ -3286,7 +3286,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                 stderr(&bound)
             );
             // Kept by a later bind of another value, and still said.
-            let again = playground.run(&["bind", "customerId=cus_acme"]);
+            let again = playground.run(&["bind", "customerId=cus_pied-piper"]);
             assert!(again.status.success(), "{}", stderr(&again));
             assert!(
                 stderr(&again).contains("TYPO is not declared by the blueprint"),
@@ -3760,11 +3760,11 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                 "/** One. */\nexport function one(): number { return 1; }\n",
             )
             .unwrap();
-            std::fs::write(extra.join("docs/readme.md"), "# @acme/extra\n").unwrap();
+            std::fs::write(extra.join("docs/readme.md"), "# @pied-piper/extra\n").unwrap();
             let manifest = submilli.join("submilli.toml");
             let mut text = std::fs::read_to_string(&manifest).unwrap();
             text.push_str(
-                "\n[[package]]\nname = \"@acme/extra\"\nversion = \"0.1.0\"\ndescription = \
+                "\n[[package]]\nname = \"@pied-piper/extra\"\nversion = \"0.1.0\"\ndescription = \
                  \"Extra.\"\npath = \"packages/extra\"\n",
             );
             std::fs::write(&manifest, text).unwrap();
@@ -3789,9 +3789,9 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                 )
             };
 
-            let (status, body) = source("%40acme%2Fbilling", "lib");
+            let (status, body) = source("%40pied-piper%2Fbilling", "lib");
             assert_eq!(status, 200, "{body}");
-            assert_eq!(body["package"], "@acme/billing", "{body}");
+            assert_eq!(body["package"], "@pied-piper/billing", "{body}");
             assert_eq!(body["module"], "lib", "{body}");
             assert_eq!(body["truncated"], false, "{body}");
             assert_eq!(
@@ -3800,7 +3800,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                 "{body}"
             );
 
-            let (status, body) = source("%40acme%2Fbilling", "big");
+            let (status, body) = source("%40pied-piper%2Fbilling", "big");
             assert_eq!(status, 200, "{body}");
             assert_eq!(body["truncated"], true, "{body}");
             assert_eq!(body["bytes"], big.len(), "{body}");
@@ -3812,12 +3812,12 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             );
             assert!(body["note"].as_str().unwrap().contains("first"), "{body}");
 
-            let (status, body) = source("%40acme%2Fextra", "lib");
+            let (status, body) = source("%40pied-piper%2Fextra", "lib");
             assert_eq!(status, 404, "{body}");
             assert_eq!(body["error"], "unknown_package", "{body}");
             assert!(body.get("untrusted").is_none(), "{body}");
 
-            let (status, body) = source("%40acme%2Fbilling", "nope");
+            let (status, body) = source("%40pied-piper%2Fbilling", "nope");
             assert_eq!(status, 404, "{body}");
             assert_eq!(body["error"], "unknown_module", "{body}");
 
@@ -3825,10 +3825,10 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             let sources = playground
                 .dir
                 .path()
-                .join("home/packages/@acme/billing/sources.json");
+                .join("home/packages/@pied-piper/billing/sources.json");
             assert!(sources.exists(), "{}", sources.display());
             std::fs::remove_file(&sources).unwrap();
-            let (status, body) = source("%40acme%2Fbilling", "lib");
+            let (status, body) = source("%40pied-piper%2Fbilling", "lib");
             assert_eq!(status, 404, "{body}");
             assert_eq!(body["error"], "no_sources", "{body}");
             assert!(

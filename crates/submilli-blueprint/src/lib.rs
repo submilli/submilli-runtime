@@ -1836,21 +1836,21 @@ permissions:
 
     #[test]
     fn parses_packages_list_form() {
-        let b =
-            parse("name: x\npackages:\n  - \"@submilli/http\"\n  - \"@acme/stripe\"\n").unwrap();
+        let b = parse("name: x\npackages:\n  - \"@submilli/http\"\n  - \"@pied-piper/stripe\"\n")
+            .unwrap();
         assert!(b.packages.contains("@submilli/http"));
-        assert!(b.packages.contains("@acme/stripe"));
+        assert!(b.packages.contains("@pied-piper/stripe"));
     }
 
     #[test]
     fn parses_packages_map_form_and_ignores_versions() {
         let b = parse(
-            "name: x\npackages:\n  \"@submilli/http\": \"1.0.0\"\n  \"@acme/stripe\": \"2.0.0\"\n",
+            "name: x\npackages:\n  \"@submilli/http\": \"1.0.0\"\n  \"@pied-piper/stripe\": \"2.0.0\"\n",
         )
         .unwrap();
         assert_eq!(b.packages.len(), 2);
         assert!(b.packages.contains("@submilli/http"));
-        assert!(b.packages.contains("@acme/stripe"));
+        assert!(b.packages.contains("@pied-piper/stripe"));
     }
 
     #[test]

@@ -373,7 +373,7 @@ function main(): string { return `${readText("/a.txt")} ${session.get("k") as st
         (
             "execute: refused by the blueprint",
             r#"import { check } from "submilli:security";
-function main(): number { check("test.com/op", { userId: "acme" }); return 1; }"#,
+function main(): number { check("test.com/op", { userId: "pied_piper" }); return 1; }"#,
         ),
     ];
 
@@ -699,7 +699,7 @@ function main(): string { try { session.registerFinalizer("k", "v"); } catch (er
                 "protocolVersion": "2025-06-18",
                 "capabilities": {},
                 "clientInfo": { "name": "parity", "version": "0" },
-                "_meta": { "variables": { "tenant": "acme" } }
+                "_meta": { "variables": { "tenant": "pied_piper" } }
             }),
         )
     }

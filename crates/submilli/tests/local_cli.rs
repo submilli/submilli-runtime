@@ -179,13 +179,16 @@ fn lint_undeclared_secret_reference_fails() {
 fn lint_warns_when_package_permission_caller_is_absent_from_packages() {
     let file = write_temp(
         "submilli-lint-package-caller-warning.yaml",
-        "name: x\npermissions:\n  \"@acme/util\":\n    - capability: acme/do\n      action: allow\n",
+        "name: x\npermissions:\n  \"@pied-piper/util\":\n    - capability: pied-piper/do\n      action: allow\n",
     );
     let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let err = stderr(&out);
     assert!(err.contains("warning:"), "missing warning in {err}");
-    assert!(err.contains("@acme/util"), "missing package name in {err}");
+    assert!(
+        err.contains("@pied-piper/util"),
+        "missing package name in {err}"
+    );
 }
 
 #[test]
@@ -195,7 +198,7 @@ fn lint_warns_when_package_has_no_permission_block() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: deny\npackages:\n  - \"@acme/sdk\"\n",
+        "name: x\ndefault: deny\npackages:\n  - \"@pied-piper/sdk\"\n",
     );
     let out = run_with_home(
         &[os("blueprint"), os("lint"), file.as_os_str()],
@@ -204,7 +207,10 @@ fn lint_warns_when_package_has_no_permission_block() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let err = stderr(&out);
     assert!(err.contains("warning:"), "missing warning in {err}");
-    assert!(err.contains("@acme/sdk"), "missing package name in {err}");
+    assert!(
+        err.contains("@pied-piper/sdk"),
+        "missing package name in {err}"
+    );
 }
 
 fn publish_capability_packages(home: &std::path::Path) -> tempfile::TempDir {
@@ -213,14 +219,14 @@ fn publish_capability_packages(home: &std::path::Path) -> tempfile::TempDir {
         &project.path().join("submilli.toml"),
         r#"
 [[package]]
-name = "@acme/app"
+name = "@pied-piper/app"
 version = "0.1.0"
 description = "App package."
 path = "app"
-dependencies = ["@acme/sdk"]
+dependencies = ["@pied-piper/sdk"]
 
 [[package]]
-name = "@acme/sdk"
+name = "@pied-piper/sdk"
 version = "0.1.0"
 description = "SDK package."
 path = "sdk"
@@ -230,24 +236,24 @@ path = "sdk"
         &project.path().join("sdk/src/lib.ts"),
         r#"
             import { check } from "submilli:security";
-            /** @capability acme.com/charge { customer } */
+            /** @capability pied-piper.example/charge { customer } */
             export function charge(customer: string): void {
-                check("acme.com/charge", { customer });
+                check("pied-piper.example/charge", { customer });
             }
-            /** @capability acme.com/refund { customer } */
+            /** @capability pied-piper.example/refund { customer } */
             export function refund(customer: string): void {
-                check("acme.com/refund", { customer });
+                check("pied-piper.example/refund", { customer });
             }
         "#,
     );
     write_file(
         &project.path().join("app/src/lib.ts"),
         r#"
-            import { charge } from "@acme/sdk";
+            import { charge } from "@pied-piper/sdk";
             import { check } from "submilli:security";
-            /** @capability acme.com/run { customer } */
+            /** @capability pied-piper.example/run { customer } */
             export function run(customer: string): void {
-                check("acme.com/run", { customer });
+                check("pied-piper.example/run", { customer });
                 charge("cus_123");
             }
         "#,
@@ -263,7 +269,7 @@ fn publish_secret_package(home: &std::path::Path) -> tempfile::TempDir {
         &project.path().join("submilli.toml"),
         r#"
 [[package]]
-name = "@acme/secrets"
+name = "@pied-piper/secrets"
 version = "0.1.0"
 description = "Secrets package."
 path = "secrets"
@@ -293,8 +299,11 @@ fn lint_ignores_omitted_provided_capabilities() {
     let file = home.path().join("blueprint.yaml");
     write_file(&file, "name: x\n");
     for (package, selection) in [
-        ("@acme/app", "--no-capabilities"),
-        ("@acme/sdk", "--capabilities=acme.com/charge"),
+        ("@pied-piper/app", "--no-capabilities"),
+        (
+            "@pied-piper/sdk",
+            "--capabilities=pied-piper.example/charge",
+        ),
     ] {
         let out = run_with_home(
             &[
@@ -336,7 +345,7 @@ fn lint_warns_for_missing_package_secret() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\npackages:\n  - \"@acme/secrets\"\npermissions:\n  \"@acme/secrets\":\n    - capability: secrets.get\n      filter: name == \"STRIPE_API_KEY\"\n      action: allow\n",
+        "name: x\npackages:\n  - \"@pied-piper/secrets\"\npermissions:\n  \"@pied-piper/secrets\":\n    - capability: secrets.get\n      filter: name == \"STRIPE_API_KEY\"\n      action: allow\n",
     );
 
     let out = run_with_home(
@@ -360,7 +369,7 @@ fn lint_accepts_declared_package_secret() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\nsecrets:\n  STRIPE_API_KEY: { store: STRIPE_API_KEY }\npackages:\n  - \"@acme/secrets\"\npermissions:\n  \"@acme/secrets\":\n    - capability: secrets.get\n      filter: name == \"STRIPE_API_KEY\"\n      action: allow\n",
+        "name: x\nsecrets:\n  STRIPE_API_KEY: { store: STRIPE_API_KEY }\npackages:\n  - \"@pied-piper/secrets\"\npermissions:\n  \"@pied-piper/secrets\":\n    - capability: secrets.get\n      filter: name == \"STRIPE_API_KEY\"\n      action: allow\n",
     );
 
     let out = run_with_home(
@@ -383,7 +392,7 @@ fn lint_errors_for_missing_requires_rule() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\npackages:\n  - \"@acme/app\"\npermissions:\n  \"@acme/app\": []\n",
+        "name: x\npackages:\n  - \"@pied-piper/app\"\npermissions:\n  \"@pied-piper/app\": []\n",
     );
 
     let out = run_with_home(
@@ -394,7 +403,10 @@ fn lint_errors_for_missing_requires_rule() {
     assert!(!out.status.success());
     let err = stderr(&out);
     assert!(err.contains("error:"), "missing error in {err}");
-    assert!(err.contains("requires `acme.com/charge`"), "got: {err}");
+    assert!(
+        err.contains("requires `pied-piper.example/charge`"),
+        "got: {err}"
+    );
     assert!(err.contains("customer == \"cus_123\""), "got: {err}");
 }
 
@@ -403,7 +415,7 @@ fn lint_keeps_a_narrowed_requires_rule() {
     let home = tempfile::tempdir().expect("home tempdir");
     let _project = publish_capability_packages(home.path());
     let file = home.path().join("blueprint.yaml");
-    let blueprint = "name: x\npackages:\n  - \"@acme/app\"\npermissions:\n  \"@acme/app\":\n    - capability: acme.com/charge\n      filter: customer glob \"cus_1*\"\n      action: allow\n";
+    let blueprint = "name: x\npackages:\n  - \"@pied-piper/app\"\npermissions:\n  \"@pied-piper/app\":\n    - capability: pied-piper.example/charge\n      filter: customer glob \"cus_1*\"\n      action: allow\n";
     write_file(&file, blueprint);
 
     let out = run_with_home(
@@ -417,7 +429,7 @@ fn lint_keeps_a_narrowed_requires_rule() {
     assert!(err.contains("grants it differently"), "got: {err}");
     let updated = fs::read_to_string(&file).expect("read blueprint");
     let parsed = submilli_blueprint::parse(&updated).expect("blueprint parses");
-    assert_eq!(parsed.permissions["@acme/app"].len(), 1, "{updated}");
+    assert_eq!(parsed.permissions["@pied-piper/app"].len(), 1, "{updated}");
 }
 
 #[test]
@@ -427,7 +439,7 @@ fn lint_fix_adds_missing_requires_rules_only() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\npackages:\n  - \"@acme/app\"\n  - \"@acme/sdk\"\npermissions: {}\n",
+        "name: x\npackages:\n  - \"@pied-piper/app\"\n  - \"@pied-piper/sdk\"\npermissions: {}\n",
     );
 
     let out = run_with_home(
@@ -442,9 +454,9 @@ fn lint_fix_adds_missing_requires_rules_only() {
         !blueprint.permissions.contains_key("main"),
         "--fix must not grant or rule on provided capabilities: {updated}"
     );
-    let app_rules = &blueprint.permissions["@acme/app"];
+    let app_rules = &blueprint.permissions["@pied-piper/app"];
     assert!(app_rules.iter().any(|rule| {
-        rule.capability == "acme.com/charge"
+        rule.capability == "pied-piper.example/charge"
             && rule
                 .filter
                 .as_ref()
@@ -464,7 +476,7 @@ fn add_package_warns_for_missing_package_secret() {
         &[
             os("blueprint"),
             os("add-package"),
-            os("@acme/secrets"),
+            os("@pied-piper/secrets"),
             os("--blueprint"),
             file.as_os_str(),
         ],
@@ -491,9 +503,9 @@ fn add_package_adds_dependency_and_capability_rules() {
         &[
             os("blueprint"),
             os("add-package"),
-            os("@acme/app"),
+            os("@pied-piper/app"),
             os("--capabilities"),
-            os("acme.com/run"),
+            os("pied-piper.example/run"),
             os("--blueprint"),
             file.as_os_str(),
         ],
@@ -502,22 +514,34 @@ fn add_package_adds_dependency_and_capability_rules() {
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let out_text = stdout(&out);
-    assert!(out_text.contains("added @acme/app"), "got: {out_text}");
-    assert!(out_text.contains("allow acme.com/run"), "got: {out_text}");
     assert!(
-        out_text.contains("allow acme.com/charge"),
+        out_text.contains("added @pied-piper/app"),
+        "got: {out_text}"
+    );
+    assert!(
+        out_text.contains("allow pied-piper.example/run"),
+        "got: {out_text}"
+    );
+    assert!(
+        out_text.contains("allow pied-piper.example/charge"),
         "got: {out_text}"
     );
 
     let updated = fs::read_to_string(&file).expect("read updated blueprint");
-    assert!(updated.contains("# @acme/app provides:"), "got: {updated}");
-    assert!(updated.contains("# acme.com/run"), "got: {updated}");
+    assert!(
+        updated.contains("# @pied-piper/app provides:"),
+        "got: {updated}"
+    );
+    assert!(
+        updated.contains("# pied-piper.example/run"),
+        "got: {updated}"
+    );
     assert!(
         updated.contains("#   { customer: string }"),
         "got: {updated}"
     );
     let blueprint = submilli_blueprint::parse(&updated).expect("updated blueprint parses");
-    assert!(blueprint.packages.contains("@acme/app"));
+    assert!(blueprint.packages.contains("@pied-piper/app"));
     assert_eq!(
         blueprint.default_action,
         Some(submilli_blueprint::DefaultAction::Deny)
@@ -525,11 +549,11 @@ fn add_package_adds_dependency_and_capability_rules() {
     assert!(
         blueprint.permissions["main"]
             .iter()
-            .any(|rule| rule.capability == "acme.com/run"
+            .any(|rule| rule.capability == "pied-piper.example/run"
                 && rule.action == submilli_blueprint::Action::Allow)
     );
-    assert!(blueprint.permissions["@acme/app"].iter().any(|rule| {
-        rule.capability == "acme.com/charge"
+    assert!(blueprint.permissions["@pied-piper/app"].iter().any(|rule| {
+        rule.capability == "pied-piper.example/charge"
             && rule.action == submilli_blueprint::Action::Allow
             && rule
                 .filter
@@ -557,7 +581,7 @@ fn add_package_without_selection_adds_no_main_rules() {
         &[
             os("blueprint"),
             os("add-package"),
-            os("@acme/app"),
+            os("@pied-piper/app"),
             os("--blueprint"),
             file.as_os_str(),
         ],
@@ -583,9 +607,9 @@ fn add_package_without_selection_adds_no_main_rules() {
         "got: {updated}"
     );
     assert!(
-        blueprint.permissions["@acme/app"]
+        blueprint.permissions["@pied-piper/app"]
             .iter()
-            .any(|rule| rule.capability == "acme.com/charge")
+            .any(|rule| rule.capability == "pied-piper.example/charge")
     );
 }
 
@@ -607,15 +631,15 @@ fn capability_list_unconfigured_shows_provided_capabilities_without_a_main_rule(
     let home = tempfile::tempdir().expect("home tempdir");
     let _project = publish_capability_packages(home.path());
     let file = home.path().join("blueprint.yaml");
-    let blueprint = "name: x\ndefault: deny\npackages:\n  - \"@acme/app\"\n  - \"@acme/sdk\"\npermissions:\n  main:\n    - capability: acme.com/run\n      action: allow\n";
+    let blueprint = "name: x\ndefault: deny\npackages:\n  - \"@pied-piper/app\"\n  - \"@pied-piper/sdk\"\npermissions:\n  main:\n    - capability: pied-piper.example/run\n      action: allow\n";
     write_file(&file, blueprint);
 
     // The filtered view speaks for the named package, not the blueprint.
-    let out = capability_list_unconfigured(home.path(), &file, Some("@acme/app"));
+    let out = capability_list_unconfigured(home.path(), &file, Some("@pied-piper/app"));
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let text = stdout(&out);
     assert!(
-        text.contains("none: `@acme/app` provides no capability"),
+        text.contains("none: `@pied-piper/app` provides no capability"),
         "got: {text}"
     );
 
@@ -625,12 +649,14 @@ fn capability_list_unconfigured_shows_provided_capabilities_without_a_main_rule(
     let text = stdout(&out);
     assert!(text.contains("`default: deny` denies"), "got: {text}");
     assert!(
-        text.contains("@acme/sdk\n  acme.com/charge\n      fields: customer: string\n"),
+        text.contains(
+            "@pied-piper/sdk\n  pied-piper.example/charge\n      fields: customer: string\n"
+        ),
         "got: {text}"
     );
-    assert!(text.contains("acme.com/refund"), "got: {text}");
-    assert!(!text.contains("acme.com/run"), "got: {text}");
-    assert!(!text.contains("@acme/app"), "got: {text}");
+    assert!(text.contains("pied-piper.example/refund"), "got: {text}");
+    assert!(!text.contains("pied-piper.example/run"), "got: {text}");
+    assert!(!text.contains("@pied-piper/app"), "got: {text}");
     assert_eq!(
         fs::read_to_string(&file).expect("read blueprint"),
         blueprint
@@ -644,23 +670,29 @@ fn capability_list_unconfigured_filters_to_one_declared_package() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\npackages:\n  - \"@acme/app\"\n  - \"@acme/sdk\"\n",
+        "name: x\npackages:\n  - \"@pied-piper/app\"\n  - \"@pied-piper/sdk\"\n",
     );
 
-    let out = capability_list_unconfigured(home.path(), &file, Some("@acme/app"));
+    let out = capability_list_unconfigured(home.path(), &file, Some("@pied-piper/app"));
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let text = stdout(&out);
     assert!(text.contains("`default:` is unset"), "got: {text}");
-    assert!(text.contains("@acme/app\n  acme.com/run"), "got: {text}");
-    assert!(!text.contains("acme.com/charge"), "got: {text}");
-    assert!(!text.contains("@acme/sdk"), "got: {text}");
+    assert!(
+        text.contains("@pied-piper/app\n  pied-piper.example/run"),
+        "got: {text}"
+    );
+    assert!(!text.contains("pied-piper.example/charge"), "got: {text}");
+    assert!(!text.contains("@pied-piper/sdk"), "got: {text}");
 
     let out = capability_list_unconfigured(home.path(), &file, Some("submilli:fs"));
     assert!(!out.status.success());
     let err = stderr(&out);
     assert!(err.contains("not a package"), "got: {err}");
-    assert!(err.contains("@acme/app, @acme/sdk"), "got: {err}");
+    assert!(
+        err.contains("@pied-piper/app, @pied-piper/sdk"),
+        "got: {err}"
+    );
 }
 
 /// An explicit `deny` is a rule, not an omission; under `default: allow` an
@@ -672,7 +704,7 @@ fn capability_list_unconfigured_distinguishes_deny_rules_and_names_the_default()
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: allow\npackages:\n  - \"@acme/app\"\n  - \"@acme/sdk\"\npermissions:\n  main:\n    - capability: acme.com/charge\n      action: deny\n",
+        "name: x\ndefault: allow\npackages:\n  - \"@pied-piper/app\"\n  - \"@pied-piper/sdk\"\npermissions:\n  main:\n    - capability: pied-piper.example/charge\n      action: deny\n",
     );
 
     let out = capability_list_unconfigured(home.path(), &file, None);
@@ -680,8 +712,8 @@ fn capability_list_unconfigured_distinguishes_deny_rules_and_names_the_default()
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let text = stdout(&out);
     assert!(text.contains("`default: allow` allows"), "got: {text}");
-    assert!(text.contains("acme.com/run"), "got: {text}");
-    assert!(!text.contains("acme.com/charge"), "got: {text}");
+    assert!(text.contains("pied-piper.example/run"), "got: {text}");
+    assert!(!text.contains("pied-piper.example/charge"), "got: {text}");
 }
 
 #[test]
@@ -691,7 +723,7 @@ fn capability_list_unconfigured_reports_when_nothing_is_omitted() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\npackages:\n  - \"@acme/sdk\"\npermissions:\n  main:\n    - capability: acme.com/charge\n      filter: customer == \"cus_1\"\n      action: allow\n    - capability: acme.com/refund\n      action: ask-human\n",
+        "name: x\npackages:\n  - \"@pied-piper/sdk\"\npermissions:\n  main:\n    - capability: pied-piper.example/charge\n      filter: customer == \"cus_1\"\n      action: allow\n    - capability: pied-piper.example/refund\n      action: ask-human\n",
     );
 
     let out = capability_list_unconfigured(home.path(), &file, None);
@@ -722,7 +754,7 @@ fn capability_list_unconfigured_under_ask_human_hides_other_callers_rules() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: ask-human\npackages:\n  - \"@acme/app\"\n  - \"@acme/sdk\"\npermissions:\n  \"@acme/app\":\n    - capability: acme.com/charge\n      action: allow\n",
+        "name: x\ndefault: ask-human\npackages:\n  - \"@pied-piper/app\"\n  - \"@pied-piper/sdk\"\npermissions:\n  \"@pied-piper/app\":\n    - capability: pied-piper.example/charge\n      action: allow\n",
     );
 
     let out = capability_list_unconfigured(home.path(), &file, None);
@@ -731,7 +763,7 @@ fn capability_list_unconfigured_under_ask_human_hides_other_callers_rules() {
     let text = stdout(&out);
     assert!(text.contains("`default: ask-human`"), "got: {text}");
     assert!(text.contains("currently denies"), "got: {text}");
-    assert!(text.contains("acme.com/charge"), "got: {text}");
+    assert!(text.contains("pied-piper.example/charge"), "got: {text}");
     assert!(!text.contains("rule["), "got: {text}");
 }
 
@@ -740,14 +772,14 @@ fn capability_list_unconfigured_with_a_package_that_provides_nothing() {
     let home = tempfile::tempdir().expect("home tempdir");
     let _project = publish_secret_package(home.path());
     let file = home.path().join("blueprint.yaml");
-    write_file(&file, "name: x\npackages:\n  - \"@acme/secrets\"\n");
+    write_file(&file, "name: x\npackages:\n  - \"@pied-piper/secrets\"\n");
 
-    let out = capability_list_unconfigured(home.path(), &file, Some("@acme/secrets"));
+    let out = capability_list_unconfigured(home.path(), &file, Some("@pied-piper/secrets"));
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let text = stdout(&out);
     assert!(
-        text.contains("none: `@acme/secrets` provides no capability"),
+        text.contains("none: `@pied-piper/secrets` provides no capability"),
         "got: {text}"
     );
 }
@@ -756,13 +788,13 @@ fn capability_list_unconfigured_with_a_package_that_provides_nothing() {
 fn capability_list_unconfigured_fails_on_a_package_it_cannot_load() {
     let home = tempfile::tempdir().expect("home tempdir");
     let file = home.path().join("blueprint.yaml");
-    write_file(&file, "name: x\npackages:\n  - \"@acme/missing\"\n");
+    write_file(&file, "name: x\npackages:\n  - \"@pied-piper/missing\"\n");
 
     let out = capability_list_unconfigured(home.path(), &file, None);
 
     assert!(!out.status.success(), "stdout: {}", stdout(&out));
     assert!(
-        stderr(&out).contains("@acme/missing"),
+        stderr(&out).contains("@pied-piper/missing"),
         "got: {}",
         stderr(&out)
     );
@@ -775,9 +807,9 @@ fn add_sdk_with_charge_selected(home: &std::path::Path, blueprint: &str) -> Outp
         &[
             os("blueprint"),
             os("add-package"),
-            os("@acme/sdk"),
+            os("@pied-piper/sdk"),
             os("--capabilities"),
-            os("acme.com/charge"),
+            os("pied-piper.example/charge"),
             os("--blueprint"),
             file.as_os_str(),
         ],
@@ -819,7 +851,7 @@ fn add_package_keeps_an_existing_main_rule_for_an_unselected_capability() {
         let out = add_sdk_with_charge_selected(
             home.path(),
             &format!(
-                "name: x\ndefault: {default}\npermissions:\n  main:\n    - capability: acme.com/refund\n      action: allow\n"
+                "name: x\ndefault: {default}\npermissions:\n  main:\n    - capability: pied-piper.example/refund\n      action: allow\n"
             ),
         );
 
@@ -833,7 +865,7 @@ fn add_package_keeps_an_existing_main_rule_for_an_unselected_capability() {
         let blueprint = submilli_blueprint::parse(&updated).expect("parses");
         let refund: Vec<_> = blueprint.permissions["main"]
             .iter()
-            .filter(|rule| rule.capability == "acme.com/refund")
+            .filter(|rule| rule.capability == "pied-piper.example/refund")
             .collect();
         assert_eq!(refund.len(), 1, "default {default}: {updated}");
         assert_eq!(refund[0].action, submilli_blueprint::Action::Allow);
@@ -848,7 +880,7 @@ fn add_package_denies_behind_a_filtered_main_rule_under_default_allow() {
     let _project = publish_capability_packages(home.path());
     let out = add_sdk_with_charge_selected(
         home.path(),
-        "name: x\ndefault: allow\npermissions:\n  main:\n    - capability: acme.com/refund\n      filter: customer == \"vip\"\n      action: deny\n",
+        "name: x\ndefault: allow\npermissions:\n  main:\n    - capability: pied-piper.example/refund\n      filter: customer == \"vip\"\n      action: deny\n",
     );
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
@@ -856,7 +888,7 @@ fn add_package_denies_behind_a_filtered_main_rule_under_default_allow() {
     let blueprint = submilli_blueprint::parse(&updated).expect("parses");
     let refund: Vec<_> = blueprint.permissions["main"]
         .iter()
-        .filter(|rule| rule.capability == "acme.com/refund")
+        .filter(|rule| rule.capability == "pied-piper.example/refund")
         .collect();
     assert_eq!(refund.len(), 2, "{updated}");
     assert!(refund[1].filter.is_none(), "{updated}");
@@ -871,7 +903,7 @@ fn add_package_denies_despite_another_callers_rule_under_default_allow() {
     let _project = publish_capability_packages(home.path());
     let out = add_sdk_with_charge_selected(
         home.path(),
-        "name: x\ndefault: allow\npermissions:\n  \"@acme/app\":\n    - capability: acme.com/refund\n      action: allow\n",
+        "name: x\ndefault: allow\npermissions:\n  \"@pied-piper/app\":\n    - capability: pied-piper.example/refund\n      action: allow\n",
     );
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
@@ -879,7 +911,7 @@ fn add_package_denies_despite_another_callers_rule_under_default_allow() {
     let blueprint = submilli_blueprint::parse(&updated).expect("parses");
     assert!(
         blueprint.permissions["main"].iter().any(|rule| {
-            rule.capability == "acme.com/refund"
+            rule.capability == "pied-piper.example/refund"
                 && rule.filter.is_none()
                 && rule.action == submilli_blueprint::Action::Deny
         }),
@@ -895,18 +927,18 @@ fn add_package_summary_agrees_with_unconfigured_on_filtered_rules() {
     let _project = publish_capability_packages(home.path());
     let out = add_sdk_with_charge_selected(
         home.path(),
-        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: acme.com/refund\n      filter: customer == \"vip\"\n      action: allow\n",
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: pied-piper.example/refund\n      filter: customer == \"vip\"\n      action: allow\n",
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let text = stdout(&out);
     assert!(!text.contains("not selected"), "got: {text}");
 
     let file = home.path().join("blueprint.yaml");
-    let out = capability_list_unconfigured(home.path(), &file, Some("@acme/sdk"));
+    let out = capability_list_unconfigured(home.path(), &file, Some("@pied-piper/sdk"));
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let text = stdout(&out);
     assert!(
-        text.contains("none: `@acme/sdk` provides no capability"),
+        text.contains("none: `@pied-piper/sdk` provides no capability"),
         "got: {text}"
     );
 }
@@ -918,14 +950,14 @@ fn add_package_rejects_duplicate_package() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\npackages:\n  - \"@acme/app\"\npermissions: {}\n",
+        "name: x\npackages:\n  - \"@pied-piper/app\"\npermissions: {}\n",
     );
 
     let out = run_with_home(
         &[
             os("blueprint"),
             os("add-package"),
-            os("@acme/app"),
+            os("@pied-piper/app"),
             os("--blueprint"),
             file.as_os_str(),
         ],
@@ -946,7 +978,7 @@ fn add_package_rejects_versioned_package_spec_for_now() {
         &[
             os("blueprint"),
             os("add-package"),
-            os("@acme/app@1.0.0"),
+            os("@pied-piper/app@1.0.0"),
             os("--blueprint"),
             file.as_os_str(),
         ],
@@ -967,7 +999,7 @@ fn add_package_reports_missing_package() {
         &[
             os("blueprint"),
             os("add-package"),
-            os("@acme/missing"),
+            os("@pied-piper/missing"),
             os("--blueprint"),
             file.as_os_str(),
         ],
@@ -975,10 +1007,10 @@ fn add_package_reports_missing_package() {
     );
 
     assert!(!out.status.success());
-    assert!(stderr(&out).contains("package `@acme/missing` was not found"));
+    assert!(stderr(&out).contains("package `@pied-piper/missing` was not found"));
 }
 
-/// `@acme/desk` imports `@acme/support`, which imports `@acme/billing`;
+/// `@pied-piper/desk` imports `@pied-piper/support`, which imports `@pied-piper/billing`;
 /// billing reads a secret and provides the capability support requires.
 fn publish_dependency_chain(home: &std::path::Path) -> tempfile::TempDir {
     let project = tempfile::tempdir().expect("project tempdir");
@@ -986,21 +1018,21 @@ fn publish_dependency_chain(home: &std::path::Path) -> tempfile::TempDir {
         &project.path().join("submilli.toml"),
         r#"
 [[package]]
-name = "@acme/desk"
+name = "@pied-piper/desk"
 version = "0.1.0"
 description = "Desk package."
 path = "desk"
-dependencies = ["@acme/support"]
+dependencies = ["@pied-piper/support"]
 
 [[package]]
-name = "@acme/support"
+name = "@pied-piper/support"
 version = "0.1.0"
 description = "Support package."
 path = "support"
-dependencies = ["@acme/billing"]
+dependencies = ["@pied-piper/billing"]
 
 [[package]]
-name = "@acme/billing"
+name = "@pied-piper/billing"
 version = "0.1.0"
 description = "Billing package."
 path = "billing"
@@ -1012,9 +1044,9 @@ path = "billing"
             import { check } from "submilli:security";
             import secrets from "submilli:secrets";
             import { get } from "submilli:http";
-            /** @capability acme.com/credits.apply { customer } */
+            /** @capability pied-piper.example/credits.apply { customer } */
             export function applyCredit(customer: string): string {
-                check("acme.com/credits.apply", { customer });
+                check("pied-piper.example/credits.apply", { customer });
                 return secrets.get("BILLING_API_KEY") ?? "no key";
             }
             /** Never called by the tests: it adds an `http.get` requirement. */
@@ -1026,7 +1058,7 @@ path = "billing"
     write_file(
         &project.path().join("desk/src/lib.ts"),
         r#"
-            import { apologize } from "@acme/support";
+            import { apologize } from "@pied-piper/support";
             export function escalate(customer: string): string {
                 return apologize(customer);
             }
@@ -1035,7 +1067,7 @@ path = "billing"
     write_file(
         &project.path().join("support/src/lib.ts"),
         r#"
-            import { applyCredit } from "@acme/billing";
+            import { applyCredit } from "@pied-piper/billing";
             export function apologize(customer: string): string {
                 return applyCredit(customer);
             }
@@ -1093,27 +1125,33 @@ fn add_package_adds_caller_rules_for_the_dependency_chain() {
     let file = home.path().join("blueprint.yaml");
     write_file(&file, "name: x\n");
 
-    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+    let out = add_package(
+        home.path(),
+        &file,
+        &["@pied-piper/support", "--no-capabilities"],
+    );
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let text = stdout(&out);
     assert!(
-        text.contains("✓ added caller rules for @acme/billing, a dependency of @acme/support"),
+        text.contains(
+            "✓ added caller rules for @pied-piper/billing, a dependency of @pied-piper/support"
+        ),
         "got: {text}"
     );
     assert!(
-        stderr(&out).contains("package `@acme/billing` requires secret `BILLING_API_KEY`"),
+        stderr(&out).contains("package `@pied-piper/billing` requires secret `BILLING_API_KEY`"),
         "got: {}",
         stderr(&out)
     );
     let updated = fs::read_to_string(&file).expect("read blueprint");
     let blueprint = submilli_blueprint::parse(&updated).expect("parses");
     assert!(
-        !blueprint.packages.contains("@acme/billing"),
+        !blueprint.packages.contains("@pied-piper/billing"),
         "only the named package is importable: {updated}"
     );
     assert!(
-        blueprint.permissions["@acme/billing"]
+        blueprint.permissions["@pied-piper/billing"]
             .iter()
             .any(|rule| rule.capability == "secrets.get"),
         "{updated}"
@@ -1137,7 +1175,7 @@ fn add_package_adds_caller_rules_for_the_dependency_chain() {
     let run = run_script(
         home.path(),
         &file,
-        r#"import { apologize } from "@acme/support"; function main(): string { return apologize("cus_1"); }"#,
+        r#"import { apologize } from "@pied-piper/support"; function main(): string { return apologize("cus_1"); }"#,
     );
     assert!(run.status.success(), "stderr: {}", stderr(&run));
     assert!(stdout(&run).contains("sk_test"), "got: {}", stdout(&run));
@@ -1152,7 +1190,11 @@ fn add_package_keeps_dependencies_out_of_main_imports() {
     let file = home.path().join("blueprint.yaml");
     write_file(&file, "name: x\ndefault: allow\n");
 
-    let out = add_package(home.path(), &file, &["@acme/support", "--all-capabilities"]);
+    let out = add_package(
+        home.path(),
+        &file,
+        &["@pied-piper/support", "--all-capabilities"],
+    );
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let updated = fs::read_to_string(&file).expect("read blueprint");
@@ -1162,11 +1204,11 @@ fn add_package_keeps_dependencies_out_of_main_imports() {
     let run = run_script(
         home.path(),
         &file,
-        r#"import { applyCredit } from "@acme/billing"; function main(): string { return applyCredit("cus_1"); }"#,
+        r#"import { applyCredit } from "@pied-piper/billing"; function main(): string { return applyCredit("cus_1"); }"#,
     );
     assert!(!run.status.success(), "stdout: {}", stdout(&run));
     assert!(
-        stderr(&run).contains("package `@acme/billing` is not a dependency of `main`"),
+        stderr(&run).contains("package `@pied-piper/billing` is not a dependency of `main`"),
         "got: {}",
         stderr(&run)
     );
@@ -1180,20 +1222,24 @@ fn add_package_leaves_an_already_declared_dependency_alone() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: deny\npackages:\n  - \"@acme/billing\"\npermissions:\n  \"@acme/billing\":\n    - capability: secrets.get\n      action: deny\n",
+        "name: x\ndefault: deny\npackages:\n  - \"@pied-piper/billing\"\npermissions:\n  \"@pied-piper/billing\":\n    - capability: secrets.get\n      action: deny\n",
     );
 
-    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+    let out = add_package(
+        home.path(),
+        &file,
+        &["@pied-piper/support", "--no-capabilities"],
+    );
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(
-        !stdout(&out).contains("@acme/billing,"),
+        !stdout(&out).contains("@pied-piper/billing,"),
         "got: {}",
         stdout(&out)
     );
     let blueprint =
         submilli_blueprint::parse(&fs::read_to_string(&file).expect("read")).expect("parses");
-    let billing = &blueprint.permissions["@acme/billing"];
+    let billing = &blueprint.permissions["@pied-piper/billing"];
     assert_eq!(billing.len(), 1);
     assert_eq!(billing[0].action, submilli_blueprint::Action::Deny);
 }
@@ -1207,27 +1253,31 @@ fn add_package_keeps_a_dependencys_existing_caller_rules() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: deny\npermissions:\n  \"@acme/billing\":\n    - capability: http.get\n      action: deny\n",
+        "name: x\ndefault: deny\npermissions:\n  \"@pied-piper/billing\":\n    - capability: http.get\n      action: deny\n",
     );
 
-    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+    let out = add_package(
+        home.path(),
+        &file,
+        &["@pied-piper/support", "--no-capabilities"],
+    );
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(
         stdout(&out).contains(
-            "✓ kept the existing caller rules for @acme/billing, a dependency of @acme/support\n  they don't cover 1 capabilities it requires; `submilli blueprint lint` reports them:\n    secrets.get"
+            "✓ kept the existing caller rules for @pied-piper/billing, a dependency of @pied-piper/support\n  they don't cover 1 capabilities it requires; `submilli blueprint lint` reports them:\n    secrets.get"
         ),
         "got: {}",
         stdout(&out)
     );
     assert!(
-        stderr(&out).contains("package `@acme/billing` requires secret `BILLING_API_KEY`"),
+        stderr(&out).contains("package `@pied-piper/billing` requires secret `BILLING_API_KEY`"),
         "got: {}",
         stderr(&out)
     );
     let blueprint =
         submilli_blueprint::parse(&fs::read_to_string(&file).expect("read")).expect("parses");
-    assert_eq!(blueprint.permissions["@acme/billing"].len(), 1);
+    assert_eq!(blueprint.permissions["@pied-piper/billing"].len(), 1);
 }
 
 /// A rule with another filter leaves the dependency's own calls outside it
@@ -1239,10 +1289,14 @@ fn add_package_reports_a_dependencys_differently_filtered_rule() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: deny\npermissions:\n  \"@acme/billing\":\n    - capability: http.get\n      action: allow\n    - capability: secrets.get\n      filter: name == \"OTHER\"\n      action: allow\n",
+        "name: x\ndefault: deny\npermissions:\n  \"@pied-piper/billing\":\n    - capability: http.get\n      action: allow\n    - capability: secrets.get\n      filter: name == \"OTHER\"\n      action: allow\n",
     );
 
-    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+    let out = add_package(
+        home.path(),
+        &file,
+        &["@pied-piper/support", "--no-capabilities"],
+    );
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(
@@ -1260,19 +1314,27 @@ fn add_package_is_silent_about_a_dependencys_complete_caller_rules() {
     let _project = publish_dependency_chain(home.path());
     let file = home.path().join("blueprint.yaml");
     write_file(&file, "name: x\n");
-    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+    let out = add_package(
+        home.path(),
+        &file,
+        &["@pied-piper/support", "--no-capabilities"],
+    );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
 
-    let out = add_package(home.path(), &file, &["@acme/desk", "--no-capabilities"]);
+    let out = add_package(
+        home.path(),
+        &file,
+        &["@pied-piper/desk", "--no-capabilities"],
+    );
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(
-        !stdout(&out).contains("@acme/billing"),
+        !stdout(&out).contains("@pied-piper/billing"),
         "got: {}",
         stdout(&out)
     );
     assert!(
-        !stderr(&out).contains("@acme/billing"),
+        !stderr(&out).contains("@pied-piper/billing"),
         "got: {}",
         stderr(&out)
     );
@@ -1287,26 +1349,30 @@ fn add_package_keeps_a_callers_existing_rule_for_a_required_capability() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: deny\npermissions:\n  \"@acme/billing\":\n    - capability: secrets.get\n      filter: name == \"OTHER\"\n      action: allow\n",
+        "name: x\ndefault: deny\npermissions:\n  \"@pied-piper/billing\":\n    - capability: secrets.get\n      filter: name == \"OTHER\"\n      action: allow\n",
     );
 
-    let out = add_package(home.path(), &file, &["@acme/billing", "--no-capabilities"]);
+    let out = add_package(
+        home.path(),
+        &file,
+        &["@pied-piper/billing", "--no-capabilities"],
+    );
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let text = stdout(&out);
     assert!(
         text.contains(
-            "added 1 rules to caller `@acme/billing` (default allow):\n    allow http.get"
+            "added 1 rules to caller `@pied-piper/billing` (default allow):\n    allow http.get"
         ),
         "got: {text}"
     );
     assert!(
-        text.contains("`@acme/billing` already has rules for 1 required capabilities; kept them:\n    secrets.get"),
+        text.contains("`@pied-piper/billing` already has rules for 1 required capabilities; kept them:\n    secrets.get"),
         "got: {text}"
     );
     let blueprint =
         submilli_blueprint::parse(&fs::read_to_string(&file).expect("read")).expect("parses");
-    assert_eq!(blueprint.permissions["@acme/billing"].len(), 2);
+    assert_eq!(blueprint.permissions["@pied-piper/billing"].len(), 2);
 }
 
 /// The whole closure must load before anything is written.
@@ -1314,15 +1380,19 @@ fn add_package_keeps_a_callers_existing_rule_for_a_required_capability() {
 fn add_package_writes_nothing_when_a_dependency_is_missing() {
     let home = tempfile::tempdir().expect("home tempdir");
     let _project = publish_dependency_chain(home.path());
-    fs::remove_dir_all(home.path().join("packages/@acme/billing")).expect("remove billing");
+    fs::remove_dir_all(home.path().join("packages/@pied-piper/billing")).expect("remove billing");
     let file = home.path().join("blueprint.yaml");
     write_file(&file, "name: x\n");
 
-    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+    let out = add_package(
+        home.path(),
+        &file,
+        &["@pied-piper/support", "--no-capabilities"],
+    );
 
     assert!(!out.status.success(), "stdout: {}", stdout(&out));
     assert!(
-        stderr(&out).contains("`@acme/billing` (required by `@acme/support`)"),
+        stderr(&out).contains("`@pied-piper/billing` (required by `@pied-piper/support`)"),
         "got: {}",
         stderr(&out)
     );
@@ -1335,9 +1405,13 @@ fn add_package_rejection_of_a_declared_package_points_to_capability_add() {
     let home = tempfile::tempdir().expect("home tempdir");
     let _project = publish_dependency_chain(home.path());
     let file = home.path().join("blueprint.yaml");
-    write_file(&file, "name: x\npackages:\n  - \"@acme/billing\"\n");
+    write_file(&file, "name: x\npackages:\n  - \"@pied-piper/billing\"\n");
 
-    let out = add_package(home.path(), &file, &["@acme/billing", "--all-capabilities"]);
+    let out = add_package(
+        home.path(),
+        &file,
+        &["@pied-piper/billing", "--all-capabilities"],
+    );
 
     assert!(!out.status.success());
     assert!(
@@ -1355,7 +1429,7 @@ fn add_package_allows_behind_a_filtered_main_rule() {
     let _project = publish_capability_packages(home.path());
     let out = add_sdk_with_charge_selected(
         home.path(),
-        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: acme.com/charge\n      filter: customer == \"vip\"\n      action: deny\n",
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: pied-piper.example/charge\n      filter: customer == \"vip\"\n      action: deny\n",
     );
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
@@ -1375,14 +1449,17 @@ fn add_package_keeps_an_existing_main_rule_for_a_selected_capability() {
     let _project = publish_capability_packages(home.path());
     let out = add_sdk_with_charge_selected(
         home.path(),
-        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: acme.com/charge\n      action: deny\n",
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: pied-piper.example/charge\n      action: deny\n",
     );
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let text = stdout(&out);
-    assert!(!text.contains("allow acme.com/charge"), "got: {text}");
     assert!(
-        text.contains("`main` already has rules for 1 selected capabilities; kept them, since the first matching rule wins:\n    acme.com/charge"),
+        !text.contains("allow pied-piper.example/charge"),
+        "got: {text}"
+    );
+    assert!(
+        text.contains("`main` already has rules for 1 selected capabilities; kept them, since the first matching rule wins:\n    pied-piper.example/charge"),
         "got: {text}"
     );
     let updated = fs::read_to_string(home.path().join("blueprint.yaml")).expect("read");
@@ -1403,18 +1480,21 @@ fn add_package_annotates_only_the_rules_it_adds() {
     let _project = publish_capability_packages(home.path());
     let out = add_sdk_with_charge_selected(
         home.path(),
-        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: acme.com/refund\n      action: deny\n",
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: pied-piper.example/refund\n      action: deny\n",
     );
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let updated = fs::read_to_string(home.path().join("blueprint.yaml")).expect("read");
     assert!(
         updated.contains(
-            "  main:\n  - capability: acme.com/refund\n    action: deny\n    # @acme/sdk provides:\n    # acme.com/charge\n"
+            "  main:\n  - capability: pied-piper.example/refund\n    action: deny\n    # @pied-piper/sdk provides:\n    # pied-piper.example/charge\n"
         ),
         "{updated}"
     );
-    assert!(!updated.contains("# acme.com/refund"), "{updated}");
+    assert!(
+        !updated.contains("# pied-piper.example/refund"),
+        "{updated}"
+    );
 }
 
 /// A dependency's calls run as its own caller: lint checks its `requires`
@@ -1427,7 +1507,7 @@ fn lint_checks_and_fixes_a_dependencys_rules() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: deny\nsecrets:\n  BILLING_API_KEY:\n    store: BILLING_API_KEY\npackages:\n  - \"@acme/support\"\npermissions:\n  \"@acme/support\":\n    - capability: acme.com/credits.apply\n      action: allow\n",
+        "name: x\ndefault: deny\nsecrets:\n  BILLING_API_KEY:\n    store: BILLING_API_KEY\npackages:\n  - \"@pied-piper/support\"\npermissions:\n  \"@pied-piper/support\":\n    - capability: pied-piper.example/credits.apply\n      action: allow\n",
     );
 
     let out = run_with_home(
@@ -1438,7 +1518,7 @@ fn lint_checks_and_fixes_a_dependencys_rules() {
     assert!(!out.status.success(), "stdout: {}", stdout(&out));
     assert!(
         stderr(&out).contains(
-            "package `@acme/billing` requires `secrets.get` with filter `name == \"BILLING_API_KEY\"`, but `permissions.@acme/billing` has no matching rule"
+            "package `@pied-piper/billing` requires `secrets.get` with filter `name == \"BILLING_API_KEY\"`, but `permissions.@pied-piper/billing` has no matching rule"
         ),
         "got: {}",
         stderr(&out)
@@ -1465,7 +1545,7 @@ fn lint_warns_for_a_caller_block_outside_every_closure() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: deny\npermissions:\n  \"@acme/billing\":\n    - capability: secrets.get\n      action: allow\n",
+        "name: x\ndefault: deny\npermissions:\n  \"@pied-piper/billing\":\n    - capability: secrets.get\n      action: allow\n",
     );
 
     let out = run_with_home(
@@ -1475,7 +1555,7 @@ fn lint_warns_for_a_caller_block_outside_every_closure() {
 
     assert!(
         stderr(&out).contains(
-            "caller block for `@acme/billing`, but `@acme/billing` is neither in `packages:` nor a dependency of a package there"
+            "caller block for `@pied-piper/billing`, but `@pied-piper/billing` is neither in `packages:` nor a dependency of a package there"
         ),
         "got: {}",
         stderr(&out)
@@ -1489,11 +1569,11 @@ fn lint_warns_for_a_caller_block_outside_every_closure() {
 fn lint_checks_what_loads_when_a_dependency_is_missing() {
     let home = tempfile::tempdir().expect("home tempdir");
     let _project = publish_dependency_chain(home.path());
-    fs::remove_dir_all(home.path().join("packages/@acme/billing")).expect("remove billing");
+    fs::remove_dir_all(home.path().join("packages/@pied-piper/billing")).expect("remove billing");
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: deny\npackages:\n  - \"@acme/desk\"\npermissions:\n  \"@acme/desk\": []\n  \"@acme/billing\":\n    - capability: secrets.get\n      action: allow\n",
+        "name: x\ndefault: deny\npackages:\n  - \"@pied-piper/desk\"\npermissions:\n  \"@pied-piper/desk\": []\n  \"@pied-piper/billing\":\n    - capability: secrets.get\n      action: allow\n",
     );
 
     let out = run_with_home(
@@ -1504,11 +1584,11 @@ fn lint_checks_what_loads_when_a_dependency_is_missing() {
     assert!(!out.status.success(), "stdout: {}", stdout(&out));
     let err = stderr(&out);
     assert!(
-        err.contains("cannot validate package `@acme/desk` capabilities"),
+        err.contains("cannot validate package `@pied-piper/desk` capabilities"),
         "got: {err}"
     );
     assert!(
-        err.contains("package `@acme/support` requires `acme.com/credits.apply`"),
+        err.contains("package `@pied-piper/support` requires `pied-piper.example/credits.apply`"),
         "got: {err}"
     );
     assert!(!err.contains("neither in `packages:`"), "got: {err}");
@@ -1520,11 +1600,11 @@ fn lint_checks_what_loads_when_a_dependency_is_missing() {
 fn lint_does_not_call_blocks_stale_past_a_missing_dependency() {
     let home = tempfile::tempdir().expect("home tempdir");
     let _project = publish_dependency_chain(home.path());
-    fs::remove_dir_all(home.path().join("packages/@acme/support")).expect("remove support");
+    fs::remove_dir_all(home.path().join("packages/@pied-piper/support")).expect("remove support");
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: deny\npackages:\n  - \"@acme/desk\"\npermissions:\n  \"@acme/desk\": []\n  \"@acme/billing\":\n    - capability: secrets.get\n      action: allow\n",
+        "name: x\ndefault: deny\npackages:\n  - \"@pied-piper/desk\"\npermissions:\n  \"@pied-piper/desk\": []\n  \"@pied-piper/billing\":\n    - capability: secrets.get\n      action: allow\n",
     );
 
     let out = run_with_home(
@@ -1535,7 +1615,7 @@ fn lint_does_not_call_blocks_stale_past_a_missing_dependency() {
     assert!(!out.status.success(), "stdout: {}", stdout(&out));
     let err = stderr(&out);
     assert!(
-        err.contains("cannot validate package `@acme/desk` capabilities"),
+        err.contains("cannot validate package `@pied-piper/desk` capabilities"),
         "got: {err}"
     );
     assert!(!err.contains("neither in `packages:`"), "got: {err}");
@@ -1549,22 +1629,30 @@ fn add_package_lists_a_dependency_added_after_its_dependent() {
     let _project = publish_dependency_chain(home.path());
     let file = home.path().join("blueprint.yaml");
     write_file(&file, "name: x\n");
-    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+    let out = add_package(
+        home.path(),
+        &file,
+        &["@pied-piper/support", "--no-capabilities"],
+    );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
 
-    let out = add_package(home.path(), &file, &["@acme/billing", "--all-capabilities"]);
+    let out = add_package(
+        home.path(),
+        &file,
+        &["@pied-piper/billing", "--all-capabilities"],
+    );
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let text = stdout(&out);
     assert!(
-        text.contains("`@acme/billing` already has rules for every capability it requires; kept them:\n    http.get\n    secrets.get"),
+        text.contains("`@pied-piper/billing` already has rules for every capability it requires; kept them:\n    http.get\n    secrets.get"),
         "got: {text}"
     );
     assert!(!text.contains("added 0 rules"), "got: {text}");
     let blueprint =
         submilli_blueprint::parse(&fs::read_to_string(&file).expect("read")).expect("parses");
-    assert!(blueprint.packages.contains("@acme/billing"));
-    assert_eq!(blueprint.permissions["@acme/billing"].len(), 2);
+    assert!(blueprint.packages.contains("@pied-piper/billing"));
+    assert_eq!(blueprint.permissions["@pied-piper/billing"].len(), 2);
     assert_eq!(blueprint.permissions["main"].len(), 1);
 }
 
@@ -1608,7 +1696,11 @@ fn capability_add_knows_a_dependencys_provided_capabilities() {
     let _project = publish_dependency_chain(home.path());
     let file = home.path().join("blueprint.yaml");
     write_file(&file, "name: x\n");
-    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+    let out = add_package(
+        home.path(),
+        &file,
+        &["@pied-piper/support", "--no-capabilities"],
+    );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
 
     let out = run_with_home(
@@ -1616,9 +1708,9 @@ fn capability_add_knows_a_dependencys_provided_capabilities() {
             os("blueprint"),
             os("capability"),
             os("add"),
-            os("acme.com/credits.apply"),
+            os("pied-piper.example/credits.apply"),
             os("--caller"),
-            os("@acme/support"),
+            os("@pied-piper/support"),
             os("--filter"),
             os("customer == \"cus_1\""),
             os("--blueprint"),
@@ -1633,7 +1725,7 @@ fn capability_add_knows_a_dependencys_provided_capabilities() {
             os("blueprint"),
             os("capability"),
             os("list"),
-            os("@acme/billing"),
+            os("@pied-piper/billing"),
             os("--blueprint"),
             file.as_os_str(),
         ],
@@ -1641,7 +1733,7 @@ fn capability_add_knows_a_dependencys_provided_capabilities() {
     );
     assert!(list.status.success(), "stderr: {}", stderr(&list));
     assert!(
-        stdout(&list).contains("acme.com/credits.apply"),
+        stdout(&list).contains("pied-piper.example/credits.apply"),
         "got: {}",
         stdout(&list)
     );
@@ -1655,7 +1747,11 @@ fn capability_add_refuses_a_dependencys_capability_for_main() {
     let _project = publish_dependency_chain(home.path());
     let file = home.path().join("blueprint.yaml");
     write_file(&file, "name: x\n");
-    let out = add_package(home.path(), &file, &["@acme/support", "--no-capabilities"]);
+    let out = add_package(
+        home.path(),
+        &file,
+        &["@pied-piper/support", "--no-capabilities"],
+    );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
 
     let out = run_with_home(
@@ -1663,7 +1759,7 @@ fn capability_add_refuses_a_dependencys_capability_for_main() {
             os("blueprint"),
             os("capability"),
             os("add"),
-            os("acme.com/credits.apply"),
+            os("pied-piper.example/credits.apply"),
             os("--blueprint"),
             file.as_os_str(),
         ],
@@ -1673,7 +1769,7 @@ fn capability_add_refuses_a_dependencys_capability_for_main() {
     assert!(!out.status.success(), "stdout: {}", stdout(&out));
     assert!(
         stderr(&out).contains(
-            "'acme.com/credits.apply' is provided by `@acme/billing`, which only the packages that depend on it can call; `main` cannot import it\n  grant it to one of them with `--caller @acme/support`"
+            "'pied-piper.example/credits.apply' is provided by `@pied-piper/billing`, which only the packages that depend on it can call; `main` cannot import it\n  grant it to one of them with `--caller @pied-piper/support`"
         ),
         "got: {}",
         stderr(&out)
@@ -1686,7 +1782,7 @@ fn capability_add_refuses_a_dependencys_capability_for_main() {
 fn lint_warns_on_a_rule_behind_an_unfiltered_rule() {
     let file = write_temp(
         "submilli-lint-shadowed.yaml",
-        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: fs.read\n      filter: path == \"/a\"\n      action: allow\n    - capability: fs.read\n      action: deny\n    - capability: fs.write\n      action: allow\n    - capability: fs.read\n      filter: path == \"/x\"\n      action: allow\n  \"@acme/util\":\n    - capability: fs.read\n      action: allow\n    - capability: http.get\n      action: allow\n    - capability: http.get\n      action: deny\n",
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: fs.read\n      filter: path == \"/a\"\n      action: allow\n    - capability: fs.read\n      action: deny\n    - capability: fs.write\n      action: allow\n    - capability: fs.read\n      filter: path == \"/x\"\n      action: allow\n  \"@pied-piper/util\":\n    - capability: fs.read\n      action: allow\n    - capability: http.get\n      action: allow\n    - capability: http.get\n      action: deny\n",
     );
 
     let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
@@ -1702,7 +1798,7 @@ fn lint_warns_on_a_rule_behind_an_unfiltered_rule() {
         "got: {err}"
     );
     assert!(
-        err.contains("`permissions.@acme/util` rule 3 for `http.get` (`deny`, no filter) never matches: rule 2 (`allow`, no filter) decides every call to it first"),
+        err.contains("`permissions.@pied-piper/util` rule 3 for `http.get` (`deny`, no filter) never matches: rule 2 (`allow`, no filter) decides every call to it first"),
         "got: {err}"
     );
     assert_eq!(err.matches("never matches").count(), 2, "got: {err}");
@@ -1753,7 +1849,7 @@ fn lint_rejects_a_package_filter_on_a_field_the_operation_does_not_report() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: deny\npackages:\n  - '@acme/sdk'\npermissions:\n  main:\n    - capability: acme.com/charge\n      filter: customer == \"cus_1\" and customerClass == \"premium\"\n      action: allow\n    - capability: acme.com/refund\n      filter: customer == \"cus_1\" and not (customerClass == \"standard\")\n      action: allow\n  '@acme/sdk': []\n",
+        "name: x\ndefault: deny\npackages:\n  - '@pied-piper/sdk'\npermissions:\n  main:\n    - capability: pied-piper.example/charge\n      filter: customer == \"cus_1\" and customerClass == \"premium\"\n      action: allow\n    - capability: pied-piper.example/refund\n      filter: customer == \"cus_1\" and not (customerClass == \"standard\")\n      action: allow\n  '@pied-piper/sdk': []\n",
     );
 
     let out = run_with_home(
@@ -1763,7 +1859,10 @@ fn lint_rejects_a_package_filter_on_a_field_the_operation_does_not_report() {
 
     assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
     let err = stderr(&out);
-    for (position, capability) in [(1, "acme.com/charge"), (2, "acme.com/refund")] {
+    for (position, capability) in [
+        (1, "pied-piper.example/charge"),
+        (2, "pied-piper.example/refund"),
+    ] {
         assert!(
             err.contains(&format!("error: {}: `permissions.main` rule {position} for `{capability}` tests `customerClass`, which the operation doesn't report, so a condition on it is false for every call, and true under `not`; its fields are: customer", file.display())),
             "got: {err}"
@@ -1822,7 +1921,7 @@ fn lint_accepts_a_field_a_package_reports_for_a_stdlib_capability() {
     let project = tempfile::tempdir().expect("project tempdir");
     write_file(
         &project.path().join("submilli.toml"),
-        "[[package]]\nname = \"@acme/saver\"\nversion = \"0.1.0\"\ndescription = \"Saver package.\"\npath = \"saver\"\n",
+        "[[package]]\nname = \"@pied-piper/saver\"\nversion = \"0.1.0\"\ndescription = \"Saver package.\"\npath = \"saver\"\n",
     );
     write_file(
         &project.path().join("saver/src/lib.ts"),
@@ -1843,7 +1942,7 @@ fn lint_accepts_a_field_a_package_reports_for_a_stdlib_capability() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: deny\npackages:\n  - '@acme/saver'\npermissions:\n  main:\n    - capability: fs.write\n      filter: purpose == \"notes\" and path glob \"/out/*\"\n      action: allow\n    - capability: fs.write\n      filter: owner == \"ops\"\n      action: allow\n  '@acme/saver': []\n",
+        "name: x\ndefault: deny\npackages:\n  - '@pied-piper/saver'\npermissions:\n  main:\n    - capability: fs.write\n      filter: purpose == \"notes\" and path glob \"/out/*\"\n      action: allow\n    - capability: fs.write\n      filter: owner == \"ops\"\n      action: allow\n  '@pied-piper/saver': []\n",
     );
 
     let out = run_with_home(
@@ -1867,7 +1966,7 @@ fn lint_skips_field_checks_when_a_package_fails_to_load() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: deny\npackages:\n  - '@acme/missing'\npermissions:\n  main:\n    - capability: fs.write\n      filter: purpose == \"notes\"\n      action: allow\n  '@acme/missing': []\n",
+        "name: x\ndefault: deny\npackages:\n  - '@pied-piper/missing'\npermissions:\n  main:\n    - capability: fs.write\n      filter: purpose == \"notes\"\n      action: allow\n  '@pied-piper/missing': []\n",
     );
 
     let out = run_with_home(
@@ -1877,7 +1976,7 @@ fn lint_skips_field_checks_when_a_package_fails_to_load() {
 
     assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
     let err = stderr(&out);
-    assert!(err.contains("@acme/missing"), "got: {err}");
+    assert!(err.contains("@pied-piper/missing"), "got: {err}");
     assert!(!err.contains("doesn't report"), "got: {err}");
 }
 
@@ -1889,7 +1988,7 @@ fn lint_skips_field_checks_when_a_package_fails_to_load() {
 fn lint_accepts_filters_on_reported_fields() {
     let file = write_temp(
         "submilli-lint-reported-fields.yaml",
-        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: fs.write\n      filter: path glob \"/out/*\" and length < 1000\n      action: allow\n    - capability: fs.read\n      filter: path.length == 3\n      action: allow\n    - capability: acme.com/unknown\n      filter: anything == 1\n      action: allow\n",
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: fs.write\n      filter: path glob \"/out/*\" and length < 1000\n      action: allow\n    - capability: fs.read\n      filter: path.length == 3\n      action: allow\n    - capability: pied-piper.example/unknown\n      filter: anything == 1\n      action: allow\n",
     );
 
     let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
@@ -1898,7 +1997,7 @@ fn lint_accepts_filters_on_reported_fields() {
     let err = stderr(&out);
     assert!(!err.contains("doesn't report"), "got: {err}");
     assert!(
-        err.contains("rule 3 for `acme.com/unknown` never matches"),
+        err.contains("rule 3 for `pied-piper.example/unknown` never matches"),
         "got: {err}"
     );
 }
@@ -1911,7 +2010,7 @@ fn lint_accepts_filters_on_reported_fields() {
 fn lint_warns_on_a_capability_name_nothing_lists() {
     let file = write_temp(
         "submilli-lint-unknown-capability.yaml",
-        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: fs.wrte\n      action: allow\n    - capability: mcp.linear\n      action: deny\n    - capability: http.trace\n      action: deny\n    - capability: http.request\n      action: deny\n    - capability: http.dlete\n      action: deny\n  '@acme/util':\n    - capability: acme.com/charge\n      action: allow\nmcp:\n  linear:\n    url: https://example.com/mcp\n",
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: fs.wrte\n      action: allow\n    - capability: mcp.linear\n      action: deny\n    - capability: http.trace\n      action: deny\n    - capability: http.request\n      action: deny\n    - capability: http.dlete\n      action: deny\n  '@pied-piper/util':\n    - capability: pied-piper.example/charge\n      action: allow\nmcp:\n  linear:\n    url: https://example.com/mcp\n",
     );
 
     let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
@@ -1939,7 +2038,10 @@ fn lint_warns_on_a_capability_name_nothing_lists() {
         "got: {err}"
     );
     // A stale caller block's own warning covers its rules.
-    assert!(err.contains("caller block for `@acme/util`"), "got: {err}");
+    assert!(
+        err.contains("caller block for `@pied-piper/util`"),
+        "got: {err}"
+    );
     assert_eq!(err.matches("never matches").count(), 1, "got: {err}");
 }
 
@@ -1952,7 +2054,7 @@ fn lint_accepts_capability_names_something_provides() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: deny\nmcp:\n  linear:\n    url: https://example.com/mcp\npackages:\n  - \"@acme/support\"\npermissions:\n  main:\n    - capability: llm.call\n      action: allow\n    - capability: mcp.linear\n      action: allow\n  \"@acme/support\":\n    - capability: acme.com/credits.apply\n      action: allow\n",
+        "name: x\ndefault: deny\nmcp:\n  linear:\n    url: https://example.com/mcp\npackages:\n  - \"@pied-piper/support\"\npermissions:\n  main:\n    - capability: llm.call\n      action: allow\n    - capability: mcp.linear\n      action: allow\n  \"@pied-piper/support\":\n    - capability: pied-piper.example/credits.apply\n      action: allow\n",
     );
 
     let out = run_with_home(
@@ -1969,7 +2071,7 @@ fn lint_accepts_capability_names_something_provides() {
     let _sdk = publish_capability_packages(home.path());
     write_file(
         &file,
-        "name: x\ndefault: deny\npackages:\n  - \"@acme/sdk\"\npermissions:\n  main:\n    - capability: acme.com/charge\n      action: allow\n  \"@acme/sdk\":\n    - capability: acme.com/chrage\n      action: allow\n",
+        "name: x\ndefault: deny\npackages:\n  - \"@pied-piper/sdk\"\npermissions:\n  main:\n    - capability: pied-piper.example/charge\n      action: allow\n  \"@pied-piper/sdk\":\n    - capability: pied-piper.example/chrage\n      action: allow\n",
     );
 
     let out = run_with_home(
@@ -1979,11 +2081,13 @@ fn lint_accepts_capability_names_something_provides() {
 
     let err = stderr(&out);
     assert!(
-        !err.contains("`acme.com/charge` never matches"),
+        !err.contains("`pied-piper.example/charge` never matches"),
         "got: {err}"
     );
     assert!(
-        err.contains("`permissions.@acme/sdk` rule 1 for `acme.com/chrage` never matches"),
+        err.contains(
+            "`permissions.@pied-piper/sdk` rule 1 for `pied-piper.example/chrage` never matches"
+        ),
         "got: {err}"
     );
 }
@@ -1998,7 +2102,7 @@ fn lint_warns_on_a_main_rule_for_a_dependency_only_capability() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: deny\npackages:\n  - \"@acme/desk\"\npermissions:\n  main:\n    - capability: acme.com/credits.apply\n      action: allow\n",
+        "name: x\ndefault: deny\npackages:\n  - \"@pied-piper/desk\"\npermissions:\n  main:\n    - capability: pied-piper.example/credits.apply\n      action: allow\n",
     );
 
     let out = run_with_home(
@@ -2008,7 +2112,7 @@ fn lint_warns_on_a_main_rule_for_a_dependency_only_capability() {
 
     let err = stderr(&out);
     assert!(
-        err.contains("`permissions.main` rule 1 for `acme.com/credits.apply` never matches: `@acme/billing` provides it, and only the packages that depend on it can call it; move the rule under `permissions.@acme/support`, or add `@acme/billing` to `packages:`"),
+        err.contains("`permissions.main` rule 1 for `pied-piper.example/credits.apply` never matches: `@pied-piper/billing` provides it, and only the packages that depend on it can call it; move the rule under `permissions.@pied-piper/support`, or add `@pied-piper/billing` to `packages:`"),
         "got: {err}"
     );
 }
@@ -2021,7 +2125,7 @@ fn lint_skips_name_checks_when_a_package_fails_to_load() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\ndefault: deny\npackages:\n  - '@acme/missing'\npermissions:\n  main:\n    - capability: acme.com/charge\n      action: allow\n  '@acme/missing': []\n",
+        "name: x\ndefault: deny\npackages:\n  - '@pied-piper/missing'\npermissions:\n  main:\n    - capability: pied-piper.example/charge\n      action: allow\n  '@pied-piper/missing': []\n",
     );
 
     let out = run_with_home(
@@ -2030,7 +2134,7 @@ fn lint_skips_name_checks_when_a_package_fails_to_load() {
     );
 
     let err = stderr(&out);
-    assert!(err.contains("@acme/missing"), "got: {err}");
+    assert!(err.contains("@pied-piper/missing"), "got: {err}");
     assert!(!err.contains("never matches"), "got: {err}");
 }
 
@@ -2112,17 +2216,17 @@ const SECRET_PACKAGE_SOURCE: &str = r#"
     }
 "#;
 
-const SECRET_SCRIPT: &str = r#"import { tokenProbe } from "@acme/secrets";
+const SECRET_SCRIPT: &str = r#"import { tokenProbe } from "@pied-piper/secrets";
 function main(): string {
   return tokenProbe("sekret");
 }"#;
 
 const SECRET_BLUEPRINT: &str = "name: t\n\
-packages:\n  - \"@acme/secrets\"\n\
+packages:\n  - \"@pied-piper/secrets\"\n\
 secrets:\n  MY_TOKEN: { store: MY_TOKEN }\n\
-permissions:\n  \"@acme/secrets\":\n    - capability: secrets.get\n      action: allow\n";
+permissions:\n  \"@pied-piper/secrets\":\n    - capability: secrets.get\n      action: allow\n";
 
-/// Publishes `@acme/secrets` into the store under `home`. Returned so the
+/// Publishes `@pied-piper/secrets` into the store under `home`. Returned so the
 /// project tempdir outlives the run.
 fn publish_token_probe_package(home: &std::path::Path) -> tempfile::TempDir {
     let project = tempfile::tempdir().expect("project tempdir");
@@ -2130,7 +2234,7 @@ fn publish_token_probe_package(home: &std::path::Path) -> tempfile::TempDir {
         &project.path().join("submilli.toml"),
         r#"
 [[package]]
-name = "@acme/secrets"
+name = "@pied-piper/secrets"
 version = "0.1.0"
 description = "Secrets probe package."
 path = "secrets"
@@ -2255,7 +2359,7 @@ fn attribution_test_project(test_file: &str) -> tempfile::TempDir {
         &project.path().join("submilli.toml"),
         r#"
 [[package]]
-name = "@acme/probe"
+name = "@pied-piper/probe"
 version = "0.1.0"
 description = "Probe package."
 path = "probe"
@@ -2287,7 +2391,7 @@ fn build_test_attributes_a_package_test_file_to_the_package() {
     let project = attribution_test_project(
         r#"
             import { exists } from "submilli:fs";
-            import { probe } from "@acme/probe";
+            import { probe } from "@pied-piper/probe";
 
             function main(): void {
                 const _direct = exists("/from-test-file");
@@ -2301,7 +2405,8 @@ fn build_test_attributes_a_package_test_file_to_the_package() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let log = stderr(&out);
     assert_eq!(
-        log.matches("caller=@acme/probe capability=fs.stat").count(),
+        log.matches("caller=@pied-piper/probe capability=fs.stat")
+            .count(),
         2,
         "the test file's own call and the one inside the export are both the \
          package's; got: {log}",
@@ -2318,7 +2423,7 @@ fn build_test_keeps_package_attribution_after_a_caught_throw() {
     let project = attribution_test_project(
         r#"
             import { exists } from "submilli:fs";
-            import { boom } from "@acme/probe";
+            import { boom } from "@pied-piper/probe";
 
             function main(): void {
                 try {
@@ -2336,7 +2441,8 @@ fn build_test_keeps_package_attribution_after_a_caught_throw() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let log = stderr(&out);
     assert_eq!(
-        log.matches("caller=@acme/probe capability=fs.stat").count(),
+        log.matches("caller=@pied-piper/probe capability=fs.stat")
+            .count(),
         1,
         "the post-catch call stays the package's; got: {log}",
     );
@@ -2372,7 +2478,7 @@ fn lint_warns_on_a_main_rule_the_runtime_never_consults() {
 fn lint_does_not_warn_on_the_same_rule_under_a_package() {
     let file = write_temp(
         "submilli-lint-package-secret-rule.yaml",
-        "name: x\ndefault: deny\npermissions:\n  \"@acme/sdk\":\n    - capability: secrets.get\n      action: allow\n",
+        "name: x\ndefault: deny\npermissions:\n  \"@pied-piper/sdk\":\n    - capability: secrets.get\n      action: allow\n",
     );
 
     let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
@@ -2569,7 +2675,7 @@ fn deny_warnings_lint_fix_uses_remaining_findings() {
     let file = home.path().join("blueprint.yaml");
     write_file(
         &file,
-        "name: x\npackages:\n  - \"@acme/app\"\n  - \"@acme/sdk\"\npermissions: { \"@acme/sdk\": [] }\n",
+        "name: x\npackages:\n  - \"@pied-piper/app\"\n  - \"@pied-piper/sdk\"\npermissions: { \"@pied-piper/sdk\": [] }\n",
     );
     let out = run_with_home(
         &[
@@ -2584,7 +2690,7 @@ fn deny_warnings_lint_fix_uses_remaining_findings() {
     assert!(out.status.success(), "{}", stderr(&out));
     write_file(
         &file,
-        "name: x\ndefault: allow\npackages:\n  - \"@acme/app\"\n  - \"@acme/sdk\"\npermissions: { \"@acme/sdk\": [] }\n",
+        "name: x\ndefault: allow\npackages:\n  - \"@pied-piper/app\"\n  - \"@pied-piper/sdk\"\npermissions: { \"@pied-piper/sdk\": [] }\n",
     );
     let out = run_with_home(
         &[

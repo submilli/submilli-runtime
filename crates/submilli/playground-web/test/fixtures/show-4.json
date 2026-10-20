@@ -30,7 +30,7 @@
    ],
    "outcome": "allow",
    "caller": "main",
-   "capability": "acme.com/charges.list",
+   "capability": "pied-piper.example/charges.list",
    "decided_by": "by `charges-for-signed-in-customer`",
    "filtered": false
   },
@@ -39,9 +39,9 @@
     "4.2"
    ],
    "outcome": "allow",
-   "caller": "@acme/billing",
+   "caller": "@pied-piper/billing",
    "capability": "fs.read",
-   "decided_by": "by rule 1 of `@acme/billing`, line 42",
+   "decided_by": "by rule 1 of `@pied-piper/billing`, line 42",
    "filtered": false
   }
  ],
@@ -71,6 +71,6 @@
    }
   },
   "result": "ch_0153 <b>12997</b>, ch_0308 <b>12997</b>, ch_0096 <b>12995</b>",
-  "program": "import { listCharges } from \"@acme/billing\";\n\nfunction main(): string {\n    const charges = listCharges(\"pied_piper\");\n    charges.sort((a, b) => b.amount - a.amount);\n    return charges.slice(0, 3).map((c) => `${c.id} <b>${c.amount}</b>`).join(\", \");\n}\n"
+  "program": "import { listCharges } from \"@pied-piper/billing\";\n\nfunction main(): string {\n    const charges = listCharges(\"pied_piper\");\n    charges.sort((a, b) => b.amount - a.amount);\n    return charges.slice(0, 3).map((c) => `${c.id} <b>${c.amount}</b>`).join(\", \");\n}\n"
  }
 }

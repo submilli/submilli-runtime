@@ -37,7 +37,7 @@
  "groups": [
   {
    "caller": "main",
-   "capability": "acme.com/charges.list",
+   "capability": "pied-piper.example/charges.list",
    "outcome": "allow",
    "decided_by": "allowed by `globex-support`",
    "refs": [
@@ -46,20 +46,20 @@
    ]
   },
   {
-   "caller": "@acme/billing",
+   "caller": "@pied-piper/billing",
    "capability": "fs.read",
    "outcome": "allow",
-   "decided_by": "allowed by rule 1 of `@acme/billing`, line 46",
+   "decided_by": "allowed by rule 1 of `@pied-piper/billing`, line 46",
    "refs": [
     "5.2",
     "6.2",
     "7.2"
    ],
-   "origin": "`@acme/billing` is listed in the blueprint's packages"
+   "origin": "`@pied-piper/billing` is listed in the blueprint's packages"
   },
   {
    "caller": "main",
-   "capability": "acme.com/charges.list",
+   "capability": "pied-piper.example/charges.list",
    "outcome": "allow",
    "decided_by": "allowed by `charges-for-signed-in-customer`",
    "refs": [

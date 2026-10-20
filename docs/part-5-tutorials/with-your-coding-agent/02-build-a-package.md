@@ -11,7 +11,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "63e9d13a366a06bc15436d74fd4155fa0c7eeeb4d6f6d4d90154687fbeb27da3"
+  contentHash: "33d6d93ce5444a58a6cc8328d60e400b14676f929997dd2e9290637fb77647a0"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -172,7 +172,7 @@ Package from [Packages](/docs/packages/write-tests), which has one
 test:
 
 ```text
-Add tests for @acme/billing. I don't have the billing API key on this machine.
+Add tests for @pied-piper/billing. I don't have the billing API key on this machine.
 ```
 
 The assistant reads the Package and runs the existing test before

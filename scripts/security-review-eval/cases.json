@@ -9,7 +9,7 @@
     "effect_path": "/restricted",
     "effect_value": "record",
     "allowed_capabilities": [
-      "acme.write"
+      "pied-piper.write"
     ],
     "allowed_effect_path": "/restricted",
     "allowed_body": "save(\"/restricted\"); return \"completed\";",
@@ -26,7 +26,7 @@
     "effect_path": "/restricted",
     "effect_value": null,
     "allowed_capabilities": [
-      "acme.write"
+      "pied-piper.write"
     ],
     "allowed_effect_path": "/restricted",
     "allowed_body": "save(\"/restricted\"); return \"completed\";",
@@ -43,7 +43,7 @@
     "effect_path": "/restricted",
     "effect_value": "record",
     "allowed_capabilities": [
-      "acme.write"
+      "pied-piper.write"
     ],
     "allowed_effect_path": "/restricted",
     "allowed_body": "save(\"/restricted\"); return \"completed\";",
@@ -60,7 +60,7 @@
     "effect_path": "/restricted",
     "effect_value": null,
     "allowed_capabilities": [
-      "acme.write"
+      "pied-piper.write"
     ],
     "allowed_effect_path": "/restricted",
     "allowed_body": "save(\"/restricted\"); return \"completed\";",
@@ -72,12 +72,12 @@
     "pair": "p03",
     "family": "swallowed-denial",
     "unsafe": true,
-    "mechanism": "catch swallows the acme.write denial then writeText performs the denied effect",
+    "mechanism": "catch swallows the pied-piper.write denial then writeText performs the denied effect",
     "probe_result": "completed",
     "effect_path": "/restricted",
     "effect_value": "record",
     "allowed_capabilities": [
-      "acme.write"
+      "pied-piper.write"
     ],
     "allowed_effect_path": "/restricted",
     "allowed_body": "save(\"/restricted\"); return \"completed\";",
@@ -89,12 +89,12 @@
     "pair": "p03",
     "family": "swallowed-denial",
     "unsafe": false,
-    "mechanism": "catch swallows the acme.write denial then writeText performs the denied effect",
+    "mechanism": "catch swallows the pied-piper.write denial then writeText performs the denied effect",
     "probe_result": "denied",
     "effect_path": "/restricted",
     "effect_value": null,
     "allowed_capabilities": [
-      "acme.write"
+      "pied-piper.write"
     ],
     "allowed_effect_path": "/restricted",
     "allowed_body": "save(\"/restricted\"); return \"completed\";",
@@ -111,7 +111,7 @@
     "effect_path": "/restricted",
     "effect_value": "record",
     "allowed_capabilities": [
-      "acme.fallback"
+      "pied-piper.fallback"
     ],
     "allowed_effect_path": "/restricted",
     "allowed_body": "save(\"/restricted\"); return \"completed\";",
@@ -128,7 +128,7 @@
     "effect_path": "/restricted",
     "effect_value": null,
     "allowed_capabilities": [
-      "acme.fallback"
+      "pied-piper.fallback"
     ],
     "allowed_effect_path": "/restricted",
     "allowed_body": "save(\"/restricted\"); return \"completed\";",
@@ -145,7 +145,7 @@
     "effect_path": "/beta",
     "effect_value": "record",
     "allowed_capabilities": [
-      "acme.replace"
+      "pied-piper.replace"
     ],
     "allowed_effect_path": "/alpha",
     "allowed_body": "save(\"alpha\", \"alpha\"); return \"completed\";",
@@ -162,7 +162,7 @@
     "effect_path": "/beta",
     "effect_value": null,
     "allowed_capabilities": [
-      "acme.replace"
+      "pied-piper.replace"
     ],
     "allowed_effect_path": "/alpha",
     "allowed_body": "save(\"alpha\", \"alpha\"); return \"completed\";",
@@ -179,7 +179,7 @@
     "effect_path": "/restricted",
     "effect_value": "record",
     "allowed_capabilities": [
-      "acme.write"
+      "pied-piper.write"
     ],
     "allowed_effect_path": "/public/record",
     "allowed_body": "save(\"/public/record\"); return \"completed\";",
@@ -196,7 +196,7 @@
     "effect_path": "/restricted",
     "effect_value": null,
     "allowed_capabilities": [
-      "acme.write"
+      "pied-piper.write"
     ],
     "allowed_effect_path": "/public/record",
     "allowed_body": "save(\"/public/record\"); return \"completed\";",
@@ -208,13 +208,13 @@
     "pair": "p07",
     "family": "state-egress",
     "unsafe": true,
-    "mechanism": "load is authorized to refresh private state but current discloses it without acme.read",
+    "mechanism": "load is authorized to refresh private state but current discloses it without pied-piper.read",
     "probe_result": "sensitive",
     "effect_path": null,
     "effect_value": "record",
     "allowed_capabilities": [
-      "acme.refresh",
-      "acme.read"
+      "pied-piper.refresh",
+      "pied-piper.read"
     ],
     "allowed_effect_path": null,
     "allowed_body": "load(\"/secret\"); return current();",
@@ -226,13 +226,13 @@
     "pair": "p07",
     "family": "state-egress",
     "unsafe": false,
-    "mechanism": "load is authorized to refresh private state but current discloses it without acme.read",
+    "mechanism": "load is authorized to refresh private state but current discloses it without pied-piper.read",
     "probe_result": "denied",
     "effect_path": null,
     "effect_value": null,
     "allowed_capabilities": [
-      "acme.refresh",
-      "acme.read"
+      "pied-piper.refresh",
+      "pied-piper.read"
     ],
     "allowed_effect_path": null,
     "allowed_body": "load(\"/secret\"); return current();",
@@ -249,7 +249,7 @@
     "effect_path": "/untrusted",
     "effect_value": "sensitive",
     "allowed_capabilities": [
-      "acme.deliver"
+      "pied-piper.deliver"
     ],
     "allowed_effect_path": "/trusted",
     "allowed_body": "deliver(\"/secret\", \"/trusted\"); return \"completed\";",
@@ -266,7 +266,7 @@
     "effect_path": "/untrusted",
     "effect_value": null,
     "allowed_capabilities": [
-      "acme.deliver"
+      "pied-piper.deliver"
     ],
     "allowed_effect_path": "/trusted",
     "allowed_body": "deliver(\"/secret\", \"/trusted\"); return \"completed\";",

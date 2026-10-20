@@ -25,7 +25,7 @@ fn token_auth(source: TokenSource) -> GithubAuth {
 
 fn spec(git_ref: &str) -> GithubSpec {
     GithubSpec {
-        org: "acme".into(),
+        org: "pied-piper".into(),
         repo: "crm".into(),
         git_ref: Some(git_ref.into()),
     }
@@ -33,7 +33,7 @@ fn spec(git_ref: &str) -> GithubSpec {
 
 fn resolved() -> ResolvedRepo {
     ResolvedRepo {
-        org: "acme".into(),
+        org: "pied-piper".into(),
         repo: "crm".into(),
         sha: SHA.into(),
     }
@@ -69,7 +69,7 @@ fn a_token_reaches_resolve_and_download_and_keeps_the_hash() {
     let server = MockServer::start();
     let resolve = server.mock(|when, then| {
         when.method(GET)
-            .path("/repos/acme/crm/commits/main")
+            .path("/repos/pied-piper/crm/commits/main")
             .header("authorization", format!("Bearer {TOKEN}"))
             .header("accept", "application/vnd.github.sha");
         then.status(200).body(SHA);
@@ -77,7 +77,7 @@ fn a_token_reaches_resolve_and_download_and_keeps_the_hash() {
     let body = gzipped_repo();
     let download = server.mock(|when, then| {
         when.method(GET)
-            .path(format!("/acme/crm/tar.gz/{SHA}"))
+            .path(format!("/pied-piper/crm/tar.gz/{SHA}"))
             .header("authorization", format!("Bearer {TOKEN}"));
         then.status(200).body(body.clone());
     });
@@ -105,7 +105,7 @@ fn no_token_sends_no_authorization_header() {
         then.status(418);
     });
     let anonymous = server.mock(|when, then| {
-        when.method(GET).path("/repos/acme/crm/commits/main");
+        when.method(GET).path("/repos/pied-piper/crm/commits/main");
         then.status(200).body(SHA);
     });
     spec("main")
@@ -135,7 +135,7 @@ fn not_found_without_a_token_says_it_may_be_private() {
         "{message}"
     );
     assert!(message.contains("contents=read"), "{message}");
-    assert_eq!(auth.unauthenticated_not_found(), Some("acme"));
+    assert_eq!(auth.unauthenticated_not_found(), Some("pied-piper"));
 }
 
 #[test]
@@ -169,14 +169,14 @@ fn a_rejected_token_is_dropped_and_the_fetch_retried_without_it() {
     });
     let anonymous = server.mock(|when, then| {
         when.method(GET)
-            .path("/repos/acme/crm/commits/main")
+            .path("/repos/pied-piper/crm/commits/main")
             .matches(has_no_authorization);
         then.status(200).body(SHA);
     });
     let body = gzipped_repo();
     let download = server.mock(|when, then| {
         when.method(GET)
-            .path(format!("/acme/crm/tar.gz/{SHA}"))
+            .path(format!("/pied-piper/crm/tar.gz/{SHA}"))
             .matches(has_no_authorization);
         then.status(200).body(body.clone());
     });
@@ -223,7 +223,7 @@ fn saml_sso_points_at_the_authorization_url() {
         when.any_request();
         then.status(403).header(
             "X-GitHub-SSO",
-            "required; url=https://github.com/orgs/acme/sso?authorization_request=abc",
+            "required; url=https://github.com/orgs/pied-piper/sso?authorization_request=abc",
         );
     });
     let err = spec("main")
@@ -232,7 +232,7 @@ fn saml_sso_points_at_the_authorization_url() {
     let message = err.to_string();
     assert!(matches!(err, GithubError::Access(_)), "{err:?}");
     assert!(
-        message.contains("https://github.com/orgs/acme/sso?authorization_request=abc"),
+        message.contains("https://github.com/orgs/pied-piper/sso?authorization_request=abc"),
         "{message}"
     );
 }
@@ -269,8 +269,10 @@ fn an_authenticated_redirect_to_another_host_is_not_followed() {
     let server = MockServer::start();
     server.mock(|when, then| {
         when.any_request();
-        then.status(302)
-            .header("location", elsewhere.url("/repos/acme/crm/commits/main"));
+        then.status(302).header(
+            "location",
+            elsewhere.url("/repos/pied-piper/crm/commits/main"),
+        );
     });
     let err = spec("main")
         .resolve_at(&endpoints(&server), &token_auth(TokenSource::Stored))
@@ -290,7 +292,7 @@ fn an_authenticated_same_host_redirect_is_followed() {
         then.status(200).body(SHA);
     });
     server.mock(|when, then| {
-        when.path("/repos/acme/crm/commits/main");
+        when.path("/repos/pied-piper/crm/commits/main");
         then.status(301)
             .header("location", "/repositories/1/commits/main");
     });
@@ -307,7 +309,7 @@ fn the_dependency_fetcher_sends_the_token() {
     let server = MockServer::start();
     let body = gzipped_repo();
     let download = server.mock(|when, then| {
-        when.path(format!("/acme/crm/tar.gz/{SHA}"))
+        when.path(format!("/pied-piper/crm/tar.gz/{SHA}"))
             .header("authorization", format!("Bearer {TOKEN}"));
         then.status(200).body(body.clone());
     });
@@ -316,7 +318,9 @@ fn the_dependency_fetcher_sends_the_token() {
         auth: &auth,
         endpoints: endpoints(&server),
     };
-    let fetched = fetcher.fetch("https://github.com/acme/crm", SHA).unwrap();
+    let fetched = fetcher
+        .fetch("https://github.com/pied-piper/crm", SHA)
+        .unwrap();
     assert_eq!(fetched.source_hash, sha256_hex(&body));
     download.assert();
 }
@@ -378,12 +382,12 @@ fn secondary_rate_limits_and_429_are_rate_limited() {
 fn an_authenticated_redirect_loop_or_missing_location_fails_cleanly() {
     let server = MockServer::start();
     server.mock(|when, then| {
-        when.path("/repos/acme/crm/commits/loop");
+        when.path("/repos/pied-piper/crm/commits/loop");
         then.status(302)
-            .header("location", "/repos/acme/crm/commits/loop");
+            .header("location", "/repos/pied-piper/crm/commits/loop");
     });
     server.mock(|when, then| {
-        when.path("/repos/acme/crm/commits/nowhere");
+        when.path("/repos/pied-piper/crm/commits/nowhere");
         then.status(302);
     });
     let auth = token_auth(TokenSource::Stored);
@@ -466,11 +470,11 @@ fn the_dependency_fetcher_keeps_the_error_kind() {
         auth: &auth,
         endpoints: endpoints(&server),
     };
-    let Err(err) = fetcher.fetch("https://github.com/acme/crm", SHA) else {
+    let Err(err) = fetcher.fetch("https://github.com/pied-piper/crm", SHA) else {
         panic!("a 404 must fail the fetch");
     };
     assert_eq!(err.kind, submilli_build::FetchErrorKind::Access);
-    assert_eq!(auth.unauthenticated_not_found(), Some("acme"));
+    assert_eq!(auth.unauthenticated_not_found(), Some("pied-piper"));
 }
 
 /// A 403 that is neither SSO nor a rate limit is an organization's token
@@ -655,7 +659,7 @@ fn a_not_found_with_a_token_configured_is_recorded_only_after_rejection() {
         .unwrap_err()
         .to_string();
     assert!(auth.token_rejected());
-    assert_eq!(auth.unauthenticated_not_found(), Some("acme"));
+    assert_eq!(auth.unauthenticated_not_found(), Some("pied-piper"));
     assert!(err.contains("rejected"), "{err}");
 }
 
@@ -676,7 +680,7 @@ fn a_missing_ref_says_so() {
     assert_eq!(auth.unauthenticated_not_found(), None);
     let err = err.to_string();
     assert!(
-        err.contains("no such branch, tag, or commit in `acme/crm`"),
+        err.contains("no such branch, tag, or commit in `pied-piper/crm`"),
         "{err}"
     );
     assert!(err.contains("`mian`"), "{err}");

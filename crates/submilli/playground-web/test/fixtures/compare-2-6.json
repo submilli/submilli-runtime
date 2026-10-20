@@ -24,7 +24,7 @@
    "before": "2.1",
    "after": "6.1",
    "caller": "main",
-   "capability": "acme.com/charges.list",
+   "capability": "pied-piper.example/charges.list",
    "decided_by": "by `globex-support`",
    "rule": {
     "caller": "main",
@@ -38,7 +38,7 @@
   }
  ],
  "unmatched": [
-  "1 more @acme/billing → fs.read decisions in run 6 than in run 2"
+  "1 more @pied-piper/billing → fs.read decisions in run 6 than in run 2"
  ],
  "alignment": "the nth decision of each caller and capability in one run with the nth of the same caller and capability in the other",
  "next": [

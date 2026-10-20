@@ -1,4 +1,4 @@
-import { listCharges } from "@acme/billing";
+import { listCharges } from "@pied-piper/billing";
 
 function main(): string {
     const charges = listCharges("pied_piper");

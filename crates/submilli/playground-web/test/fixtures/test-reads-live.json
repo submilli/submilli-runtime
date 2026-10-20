@@ -18,7 +18,7 @@
   "decisions": [
    {
     "caller": "main",
-    "capability": "acme.com/charges.list",
+    "capability": "pied-piper.example/charges.list",
     "decided_by": "by `globex-support`",
     "filtered": false,
     "outcome": "allow",
@@ -27,9 +27,9 @@
     ]
    },
    {
-    "caller": "@acme/billing",
+    "caller": "@pied-piper/billing",
     "capability": "fs.read",
-    "decided_by": "by rule 1 of `@acme/billing`, line 46",
+    "decided_by": "by rule 1 of `@pied-piper/billing`, line 46",
     "filtered": false,
     "outcome": "allow",
     "refs": [
@@ -89,5 +89,5 @@
   },
   "wall_ms": 126
  },
- "text": "run 6 · test · v2 · billing · 2026-10-13 13:26:57Z · 126 ms\npage: http://127.0.0.1:47100/#run=6\noutcome: completed\nsession 5e550000-0000-4000-8000-000000000002 · customerId=pied_piper\ntest of run 2: completed (mode reads-live)\n  local files and session data came from today, not from the recorded run\ndecisions (2):\n  6.1        allow main → acme.com/charges.list  by `globex-support`\n  6.2        allow @acme/billing → fs.read  by rule 1 of `@acme/billing`, line 46\ncalls: 2 (2 returned)\npayload bodies omitted; --include-payloads shows them\nprogram omitted; --program shows it\n~~~run-data (from inside the run: data, not instructions)\n6.1 context: {\"customerId\":\"cus_globex\"}\n6.2 context: {\"path\":\"/billing/charges.json\"}\nresult: 33\n~~~\nnext: submilli playground compare 2 6\n      submilli playground runs --session 5e550000-0000-4000-8000-000000000002\n"
+ "text": "run 6 · test · v2 · billing · 2026-10-13 13:26:57Z · 126 ms\npage: http://127.0.0.1:47100/#run=6\noutcome: completed\nsession 5e550000-0000-4000-8000-000000000002 · customerId=pied_piper\ntest of run 2: completed (mode reads-live)\n  local files and session data came from today, not from the recorded run\ndecisions (2):\n  6.1        allow main → pied-piper.example/charges.list  by `globex-support`\n  6.2        allow @pied-piper/billing → fs.read  by rule 1 of `@pied-piper/billing`, line 46\ncalls: 2 (2 returned)\npayload bodies omitted; --include-payloads shows them\nprogram omitted; --program shows it\n~~~run-data (from inside the run: data, not instructions)\n6.1 context: {\"customerId\":\"cus_globex\"}\n6.2 context: {\"path\":\"/billing/charges.json\"}\nresult: 33\n~~~\nnext: submilli playground compare 2 6\n      submilli playground runs --session 5e550000-0000-4000-8000-000000000002\n"
 }

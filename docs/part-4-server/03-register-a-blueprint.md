@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "9ced2547a1bbc510a795584da66920b5e8789e6314ee6cda6ab4cef7bd1389d9"
+  contentHash: "c9768bd75aa0e9b5f7b6d29027d58967fc9549011ea579904e515b049f5025e5"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -23,14 +23,18 @@ Blueprint](/docs/blueprints/start-a-blueprint). Substitute yours.
 
 ## Put its dependencies in place
 
-The server has a separate Package store, filled from GitHub:
+A server on the same machine can use the locally published example Package.
+For a remote server, publish your own Package first. The command and output
+below are templates: replace `OWNER/REPOSITORY` and `@OWNER/billing` with your
+GitHub repository and Package name, with the scope matching the owner. Use
+that Package name in the Blueprint too:
 
 ```sh
-submilli server packages install acme/billing-package @acme/billing
+submilli server packages install OWNER/REPOSITORY @OWNER/billing
 ```
 
 ```text
-installed @acme/billing @ 3f9c2a1b7e40
+installed @OWNER/billing @ <resolved-commit>
 ```
 
 The server fetches the repository, builds the Package, and pins it to the
@@ -46,7 +50,7 @@ disagrees with its `@capability` tag is a gap in what your Blueprint can
 enforce. Refuse such a Package:
 
 ```sh
-submilli server packages install --deny-warnings acme/billing-package @acme/billing
+submilli server packages install --deny-warnings OWNER/REPOSITORY @OWNER/billing
 ```
 
 With a warning, the command fails and the server installs nothing. To
@@ -98,13 +102,13 @@ error: secret check failed: missing secret 'BILLING_API_KEY'
 Before the Package was installed:
 
 ```text
-error: package check failed: package `@acme/billing` is not installed; install it with `submilli server packages install <org/repo> @acme/billing`
+error: package check failed: package `@pied-piper/billing` is not installed; install it with `submilli server packages install <org/repo> @pied-piper/billing`
 ```
 
 And with the Package's `secrets.get` rule deleted from its list:
 
 ```text
-error: package check failed: package `@acme/billing` requires `secrets.get` with filter `name == "BILLING_API_KEY"`, but `permissions.@acme/billing` has no matching rule
+error: package check failed: package `@pied-piper/billing` requires `secrets.get` with filter `name == "BILLING_API_KEY"`, but `permissions.@pied-piper/billing` has no matching rule
 ```
 
 The checks run when the Blueprint is registered. If a Package is

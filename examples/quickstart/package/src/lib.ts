@@ -22,10 +22,10 @@ const LEDGER: Charge[] = [
  * List the charges on one customer's account.
  * @param customerId Billing customer ID, such as `pied_piper`.
  * @returns The customer's charges; empty when they have none.
- * @capability acme.com/charges.list { customerId: string }
+ * @capability pied-piper.example/charges.list { customerId: string }
  */
 export function listCharges(customerId: string): Charge[] {
-    check("acme.com/charges.list", { customerId });
+    check("pied-piper.example/charges.list", { customerId });
 
     // In Production, this would call an API endpoint.
     const found: Charge[] = [];
