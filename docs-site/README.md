@@ -22,9 +22,13 @@ Open the preview URL with `/docs/` appended (normally
 ## Analytics test hygiene
 
 Before any team or agent browser profile makes a tracked navigation on a real
-production origin, first open that origin with `?analytics=off` and verify that
-the opt-out persists in that profile. Repeat this separately for each origin
-(including the website and docs host) and each browser profile. Use marked
+production origin, first open
+`https://submilli.ai/?analytics=off` in that profile. This writes the shared
+`submilli.analytics-consent.v1=denied` preference for the canonical origin, so
+the website and `/docs/` paths in that profile are covered. If a tab is already
+open, use the link and then reload that tab; setting localStorage from the same
+tab does not emit a storage event to itself. Repeat after clearing site data or
+when using a new/incognito profile. Use marked
 `analytics_test=1` or verification attribution only in authorized offline or
 staging checks; never create production events merely to verify instrumentation.
 Do not infer people or IP identity from browser analytics.
@@ -210,9 +214,11 @@ owner's request; replay can include text readers enter. Console logs, network
 headers/bodies and error capture remain disabled. Preview origins and marked
 `analytics_test` sessions do not record.
 
-Internal browsers must open `https://submilli.ai/docs/?analytics=off` once per
-browser/profile. The query applies before SDK initialization and saves the shared
-website/docs opt-out; a denial in another tab also stops recording. A browser
+Internal browsers must open `https://submilli.ai/?analytics=off` once per
+browser/profile before tracked navigation. The query applies before SDK
+initialization and saves the shared website/docs opt-out; a denial in another tab
+also stops recording, while an already-open tab should be reloaded after using
+the link. A browser
 whose identity has never been supplied cannot be matched to a team member.
 The internal cohort is a reporting filter, not a browser recording gate. Verify
 the opt-out separately in every team member and agent browser profile before
