@@ -19,7 +19,7 @@
 //! `SUBMILLI_TEST_NIGHTLY_ONLY=1` in nightly/release checks. `CONFORMANCE_FILTER`
 //! narrows an opted-in run; it does not enable conformance on its own.
 
-use submilli_core::RunId;
+use interpreter::runtime::durable::RunId;
 #[path = "support/conformance_gate.rs"]
 mod conformance_gate;
 

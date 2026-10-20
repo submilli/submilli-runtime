@@ -7,9 +7,9 @@
 //! Codecs preserve stored formats and do not decide operation state transitions.
 use crate::unit_of_work::*;
 use interpreter::runtime::durable::EffectId;
+use interpreter::runtime::durable::RunId;
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
-use submilli_core::RunId;
 use submilli_shared::secret_store::{KEY_ID_LEN, SecretCipher};
 pub const MAX_RECORD: usize = 64 * 1024;
 

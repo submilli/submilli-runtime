@@ -998,7 +998,6 @@ dependencies = [
 name = "conformance"
 version = "0.4.2"
 dependencies = [
- "submilli-core",
  "submilli-engine",
  "submilli-wasm",
  "tokio",
@@ -5419,7 +5418,6 @@ dependencies = [
  "sha2 0.10.9",
  "submilli-blueprint",
  "submilli-build",
- "submilli-core",
  "submilli-engine",
  "submilli-server",
  "submilli-shared",
@@ -5462,16 +5460,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "submilli-core"
-version = "0.4.2"
-dependencies = [
- "getrandom 0.2.17",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
 name = "submilli-durable"
 version = "0.4.2"
 dependencies = [
@@ -5485,7 +5473,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "submilli-core",
  "submilli-engine",
  "submilli-shared",
  "tempfile",
@@ -5530,7 +5517,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "similar",
- "submilli-core",
  "submilli-wasm",
  "tempfile",
  "thiserror 2.0.21",
@@ -5590,7 +5576,6 @@ dependencies = [
  "sqlx",
  "submilli-blueprint",
  "submilli-build",
- "submilli-core",
  "submilli-durable",
  "submilli-engine",
  "submilli-shared",

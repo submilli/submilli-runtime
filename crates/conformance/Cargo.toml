@@ -10,7 +10,6 @@ publish.workspace = true
 workspace = true
 
 [dev-dependencies]
-submilli-core.workspace = true
 interpreter = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
 wasmtime = { workspace = true }

@@ -14,7 +14,6 @@ name = "submilli"
 path = "src/main.rs"
 
 [dependencies]
-submilli-core.workspace = true
 interpreter = { workspace = true }
 submilli-blueprint = { path = "../submilli-blueprint" }
 submilli-build = { path = "../submilli-build" }

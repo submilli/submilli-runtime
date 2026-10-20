@@ -5,11 +5,11 @@
 //! module replicates the engine/store/linker/instantiate dance so the buffer
 //! is readable after `dispatch_main_async` returns in either branch.
 
+use interpreter::runtime::durable::RunId;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use submilli_core::RunId;
 
 use interpreter::diagnostics::{self, Severity};
 use interpreter::runtime::limits::ExecutionUsage;

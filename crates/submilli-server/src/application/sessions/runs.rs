@@ -4,9 +4,9 @@ use crate::application::sessions::ports::StagedLastRun;
 use crate::application::unit_of_work::{UnitOfWork, UnitOfWorkFactory};
 use crate::domain::idempotent_request::{RecordedOutcome, RequestState, ResponseRetention};
 use crate::domain::run::Run;
+use interpreter::runtime::durable::RunId;
 use std::sync::Arc;
 use std::time::SystemTime;
-use submilli_core::RunId;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RunFailure {

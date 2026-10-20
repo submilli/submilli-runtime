@@ -1,6 +1,6 @@
 //! Wasmtime engine configuration for Submilli.
 
-use submilli_core::RunId;
+use crate::runtime::durable::RunId;
 pub mod agents;
 pub(crate) mod array_storage;
 pub mod blocking;

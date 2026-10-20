@@ -1,12 +1,12 @@
 //! `submilli run` — console output goes to stderr; JSON-encoded `main` return goes to stdout.
 
+use interpreter::runtime::durable::RunId;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use submilli_core::RunId;
 
 use interpreter::runtime::limits::ExecutionUsage;
 

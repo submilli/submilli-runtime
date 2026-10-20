@@ -600,10 +600,10 @@ pub(super) fn render_manifest_diagnostics(
 /// error/trap fails the open one. A file with no `label()` calls is one
 /// anonymous test that passes iff `main()` returns cleanly.
 mod test_runner {
+    use interpreter::runtime::durable::RunId;
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::Path;
     use std::process::ExitCode;
-    use submilli_core::RunId;
 
     use anyhow::Context;
     use interpreter::runtime::{

@@ -13,13 +13,13 @@
 //!
 //! A suspended run is lost on restart: nothing here is durable.
 
+use interpreter::runtime::durable::RunId;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
-use submilli_core::RunId;
 
 use interpreter::runtime::{McpResponse, ToolCallError, ToolProvider};
 use serde::Serialize;

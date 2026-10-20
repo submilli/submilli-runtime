@@ -11,11 +11,11 @@
 use cap_std::fs::Dir;
 use interpreter::runtime::Vfs;
 use interpreter::runtime::durable::EffectId;
+use interpreter::runtime::durable::RunId;
 use interpreter::runtime::fs::{ContainError, FileIdentity};
 use std::collections::BTreeMap;
 use std::io;
 use std::sync::Arc;
-use submilli_core::RunId;
 
 /// Private artifacts are hidden by this backend. Git's stage namespace also
 /// prevents checkout/publication from installing this name.

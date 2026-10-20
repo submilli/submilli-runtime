@@ -1,7 +1,7 @@
 //! Persistent program identity and guarded lifecycle transitions. No I/O.
 use super::idempotent_request::{RecordedOutcome, RequestState};
+use interpreter::runtime::durable::RunId;
 use std::time::SystemTime;
-use submilli_core::RunId;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Run {

@@ -17,7 +17,6 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [dependencies]
-submilli-core.workspace = true
 submilli-durable = { path = "../submilli-durable" }
 getrandom = "0.2"
 interpreter = { workspace = true }

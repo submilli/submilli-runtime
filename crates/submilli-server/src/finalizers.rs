@@ -1,7 +1,7 @@
 //! Execute an installed package entry point in an independently bounded runtime.
+use interpreter::runtime::durable::RunId;
 use std::sync::Arc;
 use std::time::Duration;
-use submilli_core::RunId;
 
 use interpreter::runtime::{
     LinkedPackageModule, StoreData, dispatch_main_async, install_package_modules_async,
