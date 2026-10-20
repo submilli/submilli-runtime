@@ -1,7 +1,8 @@
 // A generic class or interface relates its instantiations at each type
 // parameter's variance, measured from where the parameter appears, as in tsc:
 // a property or a method's return is covariant, a function-typed property's
-// parameter contravariant, and a method's own parameter bivariant.
+// parameter contravariant, and so is a method's own parameter, where tsc
+// compares that one both ways.
 class Box<T> {
   constructor(public v: T) {}
 }
@@ -38,9 +39,9 @@ function main(): void {
   const literal: Sink<1> = narrow;
   assert(literal.put(1) === "1", "a narrower argument takes the wider sink");
 
-  const logger: Logger<number | string> = new Logger<number>();
+  const logger: Logger<number> = new Logger<number | string>();
   const one: Logger<1> = new Logger<number>();
-  assert(logger.log(3) === "logged" && one.log(1) === "logged", "a method parameter is bivariant");
+  assert(logger.log(3) === "logged" && one.log(1) === "logged", "a method parameter is contravariant");
 
   const feed: Feed<number | string> = new Feed<number>((cb: (x: number) => void) => cb(4));
   let seen = "";

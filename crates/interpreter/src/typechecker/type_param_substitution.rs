@@ -19,6 +19,10 @@ pub struct TypeParamSubstitution {
     /// an argument may still replace: as in tsc, what the arguments say comes
     /// first. One stays replaceable until an argument agrees with it.
     replaceable: std::collections::BTreeSet<String>,
+    /// Replaceable bindings whose type parameter the result names at its top
+    /// level: tsc keeps a literal candidate for those rather than widening it
+    /// to the expected type (`const n: number = first(1, "s")` binds `1`).
+    keeps_literals: std::collections::BTreeSet<String>,
     /// Bindings taken from an argument at a covariant position, which a later
     /// argument of a wider type may widen: tsc infers the common supertype of
     /// such candidates (`pick(dog, animal)` is an `Animal`). One used at a
@@ -90,6 +94,7 @@ impl TypeParamSubstitution {
                 .map(|(name, ty)| (name.clone(), ty.clone()))
                 .collect(),
             replaceable: Default::default(),
+            keeps_literals: Default::default(),
             widenable: Default::default(),
             narrowable: Default::default(),
             literal_candidates: Default::default(),
@@ -107,6 +112,7 @@ impl TypeParamSubstitution {
         Self {
             bindings,
             replaceable: Default::default(),
+            keeps_literals: Default::default(),
             widenable: Default::default(),
             narrowable: Default::default(),
             literal_candidates: Default::default(),
@@ -117,11 +123,19 @@ impl TypeParamSubstitution {
     }
 
     /// Mark the bindings made since `before` as taken from the call's expected
-    /// result type, so an argument may replace them.
-    pub fn mark_from_expected_result(&mut self, before: &TypeParamSubstitution) {
+    /// result type, so an argument may replace them. `top_level` names the
+    /// type parameters the result type names at its top level.
+    pub fn mark_from_expected_result(
+        &mut self,
+        before: &TypeParamSubstitution,
+        top_level: &[&str],
+    ) {
         for name in self.bindings.keys() {
             if !before.bindings.contains_key(name) {
                 self.replaceable.insert(name.clone());
+                if top_level.contains(&name.as_str()) {
+                    self.keeps_literals.insert(name.clone());
+                }
             }
         }
     }
@@ -345,6 +359,7 @@ impl TypeParamSubstitution {
         let TypeParamSubstitution {
             bindings,
             replaceable,
+            keeps_literals,
             widenable,
             narrowable,
             literal_candidates,
@@ -370,6 +385,7 @@ impl TypeParamSubstitution {
             );
             for (set, was) in [
                 (&mut self.replaceable, replaceable),
+                (&mut self.keeps_literals, keeps_literals),
                 (&mut self.widenable, widenable),
                 (&mut self.narrowable, narrowable),
                 (&mut self.literal_candidates, literal_candidates),
@@ -750,6 +766,16 @@ impl<'a> Unifier<'a> {
                         && !self.inside_function_result
                         && !self.sub.several_literal_candidates.contains(name)
                         && !self.is_subtype_of_literal(&arg_resolved, &resolved);
+                // A literal the hint holds widens to it, as tsc widens a
+                // literal candidate of a type parameter that the result
+                // doesn't name at its top level: `const m: Map<string,
+                // boolean> = new Map([["a", true]])` binds `boolean`.
+                if replaces_hint
+                    && !self.sub.keeps_literals.contains(name)
+                    && self.widens_to_hint(&arg_resolved, &resolved)
+                {
+                    return Ok(());
+                }
                 let mut replaces_literals = false;
                 if covariant && takes_over && !self.combines_literals {
                     replaces_literals = self.sub.literal_candidates.remove(name);
@@ -1205,6 +1231,18 @@ impl<'a> Unifier<'a> {
             }
         }
         self.in_function_parameter(|u| u.unify(expected, actual))
+    }
+
+    /// Whether `arg` is a literal type whose primitive `hint` holds, while
+    /// `hint` itself is not a literal type.
+    fn widens_to_hint(&self, arg: &Type, hint: &Type) -> bool {
+        let Some(types) = self.types else {
+            return false;
+        };
+        hint.literal_base().is_none()
+            && arg
+                .literal_base()
+                .is_some_and(|base| assignable(&base, hint, types))
     }
 
     /// Whether an argument that failed to unify with an already-bound type
