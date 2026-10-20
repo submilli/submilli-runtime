@@ -11,3 +11,13 @@ export function promptLink(agent, prompt) {
   // Keep the same conservative limit for every destination, with Copy available.
   return href.length <= 10000 ? href : undefined;
 }
+
+// Keep copied and launched setup prompts on the page the reader is viewing.
+export function promptForPage(prompt, canonicalUrl, pageUrl) {
+  const page = new URL(pageUrl);
+  if (page.protocol !== 'http:' && page.protocol !== 'https:') return prompt;
+  const sourceUrl = page.origin + page.pathname;
+  return prompt.replace(/https?:\/\/[^\s<>"`]+/g, url =>
+    url === canonicalUrl ? sourceUrl : url,
+  );
+}

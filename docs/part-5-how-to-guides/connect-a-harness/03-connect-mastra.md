@@ -9,7 +9,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "a89c0576994775be5b46df304f844e3a3dcd41764fee8dc28975e52326fbbbc9"
+  contentHash: "8ca71e16ad2dd6cd67c993a8c1b305f82272d8daf7de5d7034979ac7eb84b9b2"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
@@ -24,6 +24,8 @@ Open a project directory in your coding agent.
 the coding agent to load it. Give it this prompt:
 
 ```text agent-prompt
+Read https://submilli.ai/docs/how-to/connect-mastra/ as the source for this setup.
+
 Use the Submilli skill and this guide to create a fresh Mastra agent in the
 current project (or an empty neutral directory if I ask for one). Preserve my
 existing agent configuration. Create the complete `submilli-agent.mjs` file
@@ -49,16 +51,22 @@ follow the manual path.
 <details>
 <summary>Connecting an existing agent</summary>
 
-In the existing Mastra `Agent` configuration, clear `tools`, `workflows`,
-`agents`, and `workspace`. Remove `clientTools` from `generate` or `stream`
-options and replace other `toolsets` with the `submilli` toolset returned by
-`submilli.listToolsets()`. Check those settings in the installed Mastra version
-before running the agent. A Blueprint governs programs run through Submilli;
-another execution route would bypass that boundary.
+1. In the existing Mastra `Agent` configuration, clear `tools`, `workflows`,
+   `agents`, and `workspace`.
+2. Remove `clientTools` from `generate` or `stream` options.
+3. Replace other `toolsets` with the `submilli` toolset returned by
+   `submilli.listToolsets()`.
+4. Check those settings in the installed Mastra version before running the
+   agent.
+
+A Blueprint governs programs run through Submilli. Another execution route
+would bypass that boundary.
 
 </details>
 
 ## Set up manually
+
+### Prerequisites
 
 Before this guide, install the [Submilli CLI](/docs/install), start a
 [server](/docs/server/run-the-server), and register a Blueprint using the
@@ -75,23 +83,23 @@ npm init -y
 npm install @mastra/core @mastra/mcp@^1.18.0
 ```
 
-Set these environment variables in the terminal where you will run the file,
-using the existing server and registered Blueprint:
+Replace the example values, then run these commands in bash or zsh. The file
+reads this terminal's environment and does not automatically load `.env` files.
 
-| Variable | Value |
-| --- | --- |
-| `SUBMILLI_SERVER` | The running server URL, such as `http://127.0.0.1:8128` |
-| `SUBMILLI_SERVER_TOKEN` | A token accepted by that server |
-| `SUBMILLI_BLUEPRINT` | The name of your registered Blueprint |
-| `MASTRA_MODEL` | A `provider/model` ID from [Mastra’s model router](https://mastra.ai/models). Configure the credential environment variable documented for that provider in this terminal. |
+```sh
+export SUBMILLI_SERVER='http://127.0.0.1:8128'
+export SUBMILLI_SERVER_TOKEN='your-server-token'
+export SUBMILLI_BLUEPRINT='your-registered-blueprint'
+export OPENAI_API_KEY='your-openai-api-key'
+```
 
-The model credentials are separate from the Submilli server token. Reuse your
-chosen provider’s setup. Do not put credentials in the file you save next.
+This example uses OpenAI's `gpt-5-mini`. To choose another model, edit `model`
+in the file.
 
-### Save the runnable agent
+### Create the agent file
 
-Save this complete file as `submilli-agent.mjs` in the directory where you ran
-the install command.
+Create `submilli-agent.mjs` in the directory where you ran the install command,
+and paste the code below.
 
 ```javascript title="submilli-agent.mjs"
 import { Agent } from "@mastra/core/agent";
@@ -105,7 +113,6 @@ function required(name) {
 const server = required("SUBMILLI_SERVER").replace(/\/$/, "");
 const blueprint = required("SUBMILLI_BLUEPRINT");
 const token = required("SUBMILLI_SERVER_TOKEN");
-const model = required("MASTRA_MODEL");
 const submilli = new MCPClient({
   id: "submilli",
   servers: {
@@ -123,7 +130,7 @@ try {
   console.log("Connected to Submilli.");
   if (process.argv[2] !== "--check") {
     const agent = new Agent({
-      id: "submilli-agent", name: "Submilli agent", model, tools: {},
+      id: "submilli-agent", name: "Submilli agent", model: "openai/gpt-5-mini", tools: {},
       instructions: "Run requested programs through Submilli and report tool results.",
     });
     const toolsets = await submilli.listToolsets();

@@ -9,7 +9,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "8d5c93327cf6b49912fae7099205aec7525a3f2cf39be03dfba4f98039fdd0ad"
+  contentHash: "2b5572bf6834c31c00c05f59562f451e4123f0d5ff8248c187a2eed76c21a66c"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
@@ -24,6 +24,8 @@ Open a project directory in your coding agent.
 the coding agent to load it. Give it this prompt:
 
 ```text agent-prompt
+Read https://submilli.ai/docs/how-to/use-the-http-api/ as the source for this setup.
+
 Use the Submilli skill and this guide to create a fresh Vercel AI SDK agent in
 the current project (or an empty neutral directory if I ask for one). Preserve
 my existing agent configuration. Create the complete `submilli-agent.mjs` file
@@ -49,17 +51,22 @@ follow the manual path.
 <details>
 <summary>Connecting an existing agent</summary>
 
-Replace the existing `generateText` or `streamText` call’s `tools` map with
-`{ submilli__typescript__execute: submilli }`, removing provider-defined and
-delegation tools from that map. Review `prepareStep` callbacks for changes to
-`model` or `providerOptions` that enable other execution routes. Preserve the
-provider authentication and model options the chosen model needs. A Blueprint
-governs programs run through Submilli; another execution route would bypass
-that boundary.
+1. Replace the existing `generateText` or `streamText` call's `tools` map with
+   `{ submilli__typescript__execute: submilli }`.
+2. Remove provider-defined and delegation tools from that map.
+3. Review `prepareStep` callbacks for changes to `model` or `providerOptions`
+   that enable other execution routes.
+4. Preserve the provider authentication and model options the chosen model
+   needs.
+
+A Blueprint governs programs run through Submilli. Another execution route
+would bypass that boundary.
 
 </details>
 
 ## Set up manually
+
+### Prerequisites
 
 Before this guide, install the [Submilli CLI](/docs/install), start a
 [server](/docs/server/run-the-server), and register a Blueprint using the
@@ -76,23 +83,23 @@ npm init -y
 npm install ai@^7.0.0 zod@^4.1.8 @ai-sdk/openai
 ```
 
-Set these environment variables in the terminal where you will run the file,
-using the existing server and registered Blueprint:
+Replace the example values, then run these commands in bash or zsh. The file
+reads this terminal's environment and does not automatically load `.env` files.
 
-| Variable | Value |
-| --- | --- |
-| `SUBMILLI_SERVER` | The running server URL, such as `http://127.0.0.1:8128` |
-| `SUBMILLI_SERVER_TOKEN` | A token accepted by that server |
-| `SUBMILLI_BLUEPRINT` | The name of your registered Blueprint |
-| `AI_MODEL` | An OpenAI model ID available to your account. Export your existing `OPENAI_API_KEY` in this terminal. This complete example uses the [OpenAI adapter](https://ai-sdk.dev/providers/ai-sdk-providers/openai). |
+```sh
+export SUBMILLI_SERVER='http://127.0.0.1:8128'
+export SUBMILLI_SERVER_TOKEN='your-server-token'
+export SUBMILLI_BLUEPRINT='your-registered-blueprint'
+export OPENAI_API_KEY='your-openai-api-key'
+```
 
-The model credentials are separate from the Submilli server token. Reuse your
-chosen provider’s setup. Do not put credentials in the file you save next.
+This example uses OpenAI's `gpt-5-mini`. To choose another model, edit the
+argument to `openai()` in the file.
 
-### Save the runnable agent
+### Create the agent file
 
-Save this complete file as `submilli-agent.mjs` in the directory where you ran
-the install command.
+Create `submilli-agent.mjs` in the directory where you ran the install command,
+and paste the code below.
 
 ```javascript title="submilli-agent.mjs"
 import { generateText, stepCountIs, tool } from "ai";
@@ -107,7 +114,6 @@ function required(name) {
 const server = required("SUBMILLI_SERVER").replace(/\/$/, "");
 const blueprint = required("SUBMILLI_BLUEPRINT");
 const token = required("SUBMILLI_SERVER_TOKEN");
-const model = required("AI_MODEL");
 required("OPENAI_API_KEY");
 const headers = {
   Authorization: `Bearer ${token}`, "Content-Type": "application/json",
@@ -137,7 +143,7 @@ if (process.argv[2] === "--check") {
 } else {
   const prompt = process.argv.slice(2).join(" ") || 'Run this program through Submilli and report its result: export function main(): number { return 2 + 2; }';
   const result = await generateText({
-    model: openai(model), prompt, tools: { submilli__typescript__execute: submilli },
+    model: openai("gpt-5-mini"), prompt, tools: { submilli__typescript__execute: submilli },
     stopWhen: stepCountIs(10),
   });
   for (const step of result.steps) {

@@ -9,7 +9,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "0f245308cb6b8b4ac5cdef98ee8cf3128dfcdeac7929c2ba8acd1f9a9b2582aa"
+  contentHash: "f9254e42a4075e6482df4e5c0dd5bb50e88609d0a6851f8f263a08c150f6dd20"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
@@ -24,6 +24,8 @@ Open a project directory in your coding agent.
 the coding agent to load it. Give it this prompt:
 
 ```text agent-prompt
+Read https://submilli.ai/docs/how-to/connect-deepagents/ as the source for this setup.
+
 Use the Submilli skill and this guide to create a fresh deepagents agent in
 the current project. Create the complete submilli-agent.py file shown in this
 guide, including its command-line prompt and tool-result logging. Pass it no
@@ -46,18 +48,24 @@ After the coding agent finishes, [try it out](#try-it-out).
 <details>
 <summary>Connecting an existing agent</summary>
 
-In `create_deep_agent`, set `tools=[]`, `subagents=[]`, and
-`middleware=[submilli]`. Remove any custom backend. Register the
-`HarnessProfile.excluded_tools` list shown in the runnable file and set
-`GeneralPurposeSubagentProfile(enabled=False)` to remove DeepAgents' built-in
-tools and general-purpose subagent. Profiles apply to the model in the current
-process, so use a separate process if other agents need that model's default
-tools. A Blueprint governs programs run through Submilli; another execution
-route would bypass that boundary.
+1. In `create_deep_agent`, set `tools=[]` and `subagents=[]`.
+2. Set `middleware=[submilli]` and remove any custom backend.
+3. Register the `HarnessProfile.excluded_tools` list in the example to remove
+   DeepAgents' built-in tools.
+4. Set `GeneralPurposeSubagentProfile(enabled=False)` to disable its built-in
+   general-purpose subagent.
+
+Profiles apply to the model in the current process. Use a separate process if
+other agents need that model's default tools.
+
+A Blueprint governs programs run through Submilli. Another execution route
+would bypass that boundary.
 
 </details>
 
-## Prerequisites
+## Set up manually
+
+### Prerequisites
 
 Use the [Submilli install guide](/docs/install), [server guide](/docs/server/run-the-server),
 and [Blueprint registration guide](/docs/server/register-a-blueprint) if you still
@@ -65,49 +73,34 @@ need to prepare the service. This page assumes that preparation is complete:
 you have a running Submilli server, a token it accepts, and a registered
 Blueprint. You also need Python 3.11 or later and model access for deepagents.
 
-Configure these values in the project environment or its existing local
-configuration:
-
-| Variable | Value |
-| --- | --- |
-| `SUBMILLI_SERVER` | The URL of your running Submilli server |
-| `SUBMILLI_SERVER_TOKEN` | A token accepted by that server |
-| `SUBMILLI_BLUEPRINT` | The name of your registered Blueprint |
-| `DEEPAGENTS_MODEL` | A provider-qualified LangChain model identifier supported by your installed provider integration. Install that provider’s LangChain package and configure its credentials using the [LangChain model setup](https://docs.langchain.com/oss/python/langchain/models). |
-
-The model credentials are separate from the Submilli server token. Reuse your
-chosen provider's setup. Do not put credentials in the file.
-
-## Set up manually
-
-In the current project environment, install the integration packages if they
-are not already installed:
+Replace the example values, then run these commands in bash or zsh. The file
+reads this terminal's environment and does not automatically load `.env` files.
 
 ```sh
-python -m pip install "langchain-submilli[deepagents]>=0.1" "deepagents==0.7.28"
+export SUBMILLI_SERVER='http://127.0.0.1:8128'
+export SUBMILLI_SERVER_TOKEN='your-server-token'
+export SUBMILLI_BLUEPRINT='your-registered-blueprint'
+export OPENAI_API_KEY='your-openai-api-key'
 ```
 
-Set `SUBMILLI_SERVER`, `SUBMILLI_SERVER_TOKEN`, `SUBMILLI_BLUEPRINT`, and
-`DEEPAGENTS_MODEL` from your existing local configuration. If a connection
-value is missing, use the [server guide](/docs/server/run-the-server) or
-[Blueprint registration guide](/docs/server/register-a-blueprint) to identify
-the value, then continue with the file below.
+This example uses OpenAI's `gpt-5-mini`. To choose another model, edit
+`model_name` in the file and install its provider integration.
 
-### Save the runnable agent
+Install the dependencies in the current project environment:
 
-Save this complete file as `submilli-agent.py` in the current project directory.
+```sh
+python -m pip install \
+  "langchain-submilli[deepagents]>=0.1" \
+  "deepagents==0.7.28" langchain-openai
+```
 
-This file uses DeepAgents' public harness settings. `HarnessProfile.excluded_tools`
-removes the ten built-in tools: `ls`, `read_file`, `write_file`, `edit_file`,
-`delete`, `glob`, `grep`, `execute`, `task`, and `write_todos`.
-`GeneralPurposeSubagentProfile(enabled=False)` separately disables the built-in
-general-purpose subagent. The first setting is a model-keyed profile and the
-second is the general-purpose-subagent setting; neither grants tools. The
-profile is registered for this model in the current process, so run this file
-in its own process when other agents use the same model. The middleware requires
-asynchronous calls. The `tools=[]`, `subagents=[]`, and `middleware=[submilli]`
-arguments below must remain as shown: do not add application tools, middleware
-that adds tools, a custom backend, or subagents.
+### Create the agent file
+
+The profile removes DeepAgents' built-in tools and general-purpose subagent.
+Keep `tools=[]`, `subagents=[]`, and `middleware=[submilli]` as shown, and use
+asynchronous calls with the Submilli middleware.
+
+Create `submilli-agent.py` in your project directory and paste the code below.
 
 ```python title="submilli-agent.py"
 import asyncio
@@ -134,7 +127,7 @@ async def main():
     required("SUBMILLI_SERVER")
     required("SUBMILLI_SERVER_TOKEN")
     required("SUBMILLI_BLUEPRINT")
-    model_name = required("DEEPAGENTS_MODEL")
+    model_name = "openai:gpt-5-mini"
     register_harness_profile(
         model_name,
         HarnessProfile(

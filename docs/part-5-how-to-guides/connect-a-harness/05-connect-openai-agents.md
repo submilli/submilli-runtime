@@ -1,7 +1,7 @@
 ---
 docType: how-to
 title: "Connect OpenAI Agents SDK to Submilli"
-description: "Create a OpenAI Agents SDK agent that uses Submilli for permitted code execution."
+description: "Create an OpenAI Agents SDK agent that uses Submilli for permitted code execution."
 showDescription: false
 slug: how-to/connect-openai-agents
 sidebar:
@@ -9,7 +9,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "c40edebf6341ff48bcf42b502321d7fa93a607521af6070671bacc75814c2e0d"
+  contentHash: "1a7ca5361290a01ca70baa6684aa5b8f638f906b808b099189a091b01e4edc8c"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
@@ -25,6 +25,8 @@ Open a project directory in your coding agent.
 the coding agent to load it. Give it this prompt:
 
 ```text agent-prompt
+Read https://submilli.ai/docs/how-to/connect-openai-agents/ as the source for this setup.
+
 Use the Submilli skill and this guide to create a fresh OpenAI Agents SDK
 agent in a new or existing project folder. Preserve my existing agent
 configuration. Create the complete submilli-agent.py file shown in this guide,
@@ -44,18 +46,23 @@ follow the manual path.
 <details>
 <summary>Connecting an existing agent</summary>
 
-Build the MCP connection with `MCPServerStreamableHttp`, using the server URL
-and Blueprint path `SUBMILLI_SERVER/mcp/SUBMILLI_BLUEPRINT` and the bearer token
-in `SUBMILLI_SERVER_TOKEN`. Pass that connection to the Agent as
-`mcp_servers=[submilli]`, and set `tools=[]` and `handoffs=[]`. Remove other
-providers from the Agent's `tools` and `handoffs` lists, including tools or
-agents assembled from local `tools/` or `handoffs/` configuration. This keeps
-the Agent's callable execution surface on the configured Submilli MCP server;
-the Blueprint still governs what the server can execute.
+1. Build the MCP connection with `MCPServerStreamableHttp`, using the server
+   URL and Blueprint path `SUBMILLI_SERVER/mcp/SUBMILLI_BLUEPRINT`.
+2. Use the bearer token in `SUBMILLI_SERVER_TOKEN`.
+3. Pass the connection to the Agent as `mcp_servers=[submilli]`.
+4. Set `tools=[]` and `handoffs=[]`.
+5. Remove other providers from the Agent's `tools` and `handoffs` lists,
+   including tools or agents assembled from local `tools/` or `handoffs/`
+   configuration.
+
+This keeps the Agent's callable execution surface on the configured Submilli
+MCP server. The Blueprint still governs what the server can execute.
 
 </details>
 
 ## Set up manually
+
+### Prerequisites
 
 Before this guide, use the [Submilli install guide](/docs/install), [server
 guide](/docs/server/run-the-server), and [Blueprint registration
@@ -74,22 +81,23 @@ python3 -m venv .venv
 python -m pip install "openai-agents>=0.3"
 ```
 
-Set these environment variables in this terminal using your existing server,
-token, Blueprint, and model configuration:
+Replace the example values, then run these commands in bash or zsh. The file
+reads this terminal's environment and does not automatically load `.env` files.
 
-| Variable | Value |
-| --- | --- |
-| `SUBMILLI_SERVER` | The server URL where your Blueprint is registered |
-| `SUBMILLI_SERVER_TOKEN` | A token accepted by that server |
-| `SUBMILLI_BLUEPRINT` | The name of your registered Blueprint |
-| `OPENAI_MODEL` | An OpenAI model ID available to your account; also export your existing `OPENAI_API_KEY` in this terminal |
+```sh
+export SUBMILLI_SERVER='http://127.0.0.1:8128'
+export SUBMILLI_SERVER_TOKEN='your-server-token'
+export SUBMILLI_BLUEPRINT='your-registered-blueprint'
+export OPENAI_API_KEY='your-openai-api-key'
+```
 
-The model credentials are separate from the Submilli server token. Reuse your
-chosen provider’s setup. Do not put credentials in the file you save next.
+This example uses OpenAI's `gpt-5-mini`. To choose another model, edit `model`
+in the file.
 
-### Save the runnable agent
+### Create the agent file
 
-Save this complete file as `submilli-agent.py` in the folder you opened.
+Create `submilli-agent.py` in the folder where you installed the dependencies,
+and paste the code below.
 
 ```python title="submilli-agent.py"
 import asyncio
@@ -108,7 +116,6 @@ from agents.mcp import MCPServerStreamableHttp
 
 
 async def main():
-    model = required("OPENAI_MODEL")
     required("OPENAI_API_KEY")
     server = required("SUBMILLI_SERVER").rstrip("/")
     blueprint = required("SUBMILLI_BLUEPRINT")
@@ -128,7 +135,7 @@ async def main():
         if sys.argv[1:] == ["--check"]:
             return
         agent = Agent(
-            name="Submilli agent", model=model, tools=[], handoffs=[],
+            name="Submilli agent", model="gpt-5-mini", tools=[], handoffs=[],
             mcp_servers=[submilli],
             instructions="Run requested programs through Submilli and report tool results.",
         )

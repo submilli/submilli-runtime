@@ -72,3 +72,18 @@ test('ordinary text is not offered to agents and oversized prompts remain copyab
   assert.equal(selectAll('[aria-disabled="true"]', long.renderedGroupAst).length, 3);
   assert.equal(selectAll('textarea', long.renderedGroupAst)[0].children[0].value, 'é'.repeat(3000));
 });
+
+test('setup source URL follows the viewed page without query, fragment, or other URL changes', async () => {
+  const { promptForPage, agents, promptLink } = await import('../src/lib/agent-prompt-context.mjs');
+  const canonical = 'https://submilli.ai/docs/how-to/connect-deepagents/';
+  const prompt = `Read ${canonical} as the source.\nKeep ${canonical}extra ${canonical}?original=1 https://submilli.ai/docs/install/`;
+  assert.equal(promptForPage(prompt, canonical, `${canonical}?analytics=off#setup`), prompt);
+  assert.equal(promptForPage(prompt, canonical, 'file:///tmp/page.html'), prompt);
+  const actual = promptForPage(prompt, canonical, 'http://127.0.0.1:14321/docs/how-to/connect-deepagents/?private=value#setup');
+  const expected = prompt.replace(`Read ${canonical}`, 'Read http://127.0.0.1:14321/docs/how-to/connect-deepagents/');
+  assert.equal(actual, expected);
+  for (const agent of agents) {
+    const url = new URL(promptLink(agent, actual));
+    assert.equal(url.searchParams.get('prompt') ?? url.searchParams.get('q') ?? url.searchParams.get('text'), expected);
+  }
+});

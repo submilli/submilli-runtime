@@ -9,7 +9,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "7ca865b2def63de090f815ba8e146a965a35c5105f9a1ebf4948f6473766b8bb"
+  contentHash: "49424af215b79d4893e6bcc7c0a0ae28d717baa8e14e445cd308f3900bd3b97c"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
@@ -25,6 +25,8 @@ Open a project directory in your coding agent.
 the coding agent to load it. Give it this prompt:
 
 ```text agent-prompt
+Read https://submilli.ai/docs/how-to/connect-claude-agent-sdk/ as the source for this setup.
+
 Use the Submilli skill and this guide to create a fresh Claude Agent SDK
 agent in a new or existing project folder. Preserve my existing agent
 configuration. Create the complete submilli-agent.mjs file shown in this guide,
@@ -44,18 +46,23 @@ follow the manual path.
 <details>
 <summary>Connecting an existing agent</summary>
 
-Configure the query's `mcpServers.submilli` entry with the server URL and
-Blueprint path `SUBMILLI_SERVER/mcp/SUBMILLI_BLUEPRINT`, plus the bearer token
-in `SUBMILLI_SERVER_TOKEN`. Set `tools: []`, `strictMcpConfig: true`, and
-`settingSources: []`; keep `allowedTools: ["mcp__submilli__*"]` and the
-Submilli entry in `mcpServers`. Remove other MCP servers and any subagent,
-plugin, or hook configuration that adds another execution route. These are
-Claude Agent SDK options; the Blueprint still governs what the server can
-execute.
+1. Configure the query's `mcpServers.submilli` entry with the server URL and
+   Blueprint path `SUBMILLI_SERVER/mcp/SUBMILLI_BLUEPRINT`.
+2. Use the bearer token in `SUBMILLI_SERVER_TOKEN`.
+3. Set `tools: []`, `strictMcpConfig: true`, and `settingSources: []`.
+4. Keep `allowedTools: ["mcp__submilli__*"]` and the Submilli entry in
+   `mcpServers`.
+5. Remove other MCP servers and any subagent, plugin, or hook configuration
+   that adds another execution route.
+
+These are Claude Agent SDK options. The Blueprint still governs what the
+server can execute.
 
 </details>
 
 ## Set up manually
+
+### Prerequisites
 
 Before this guide, use the [Submilli install guide](/docs/install), [server
 guide](/docs/server/run-the-server), and [Blueprint registration
@@ -73,24 +80,27 @@ npm init -y
 npm install @anthropic-ai/claude-agent-sdk
 ```
 
-Set these environment variables in this terminal using your existing server,
-token, Blueprint, and model configuration:
+Replace the example values, then run these commands in bash or zsh. The file
+reads this terminal's environment and does not automatically load `.env` files.
 
-| Variable | Value |
-| --- | --- |
-| `SUBMILLI_SERVER` | The server URL where your Blueprint is registered |
-| `SUBMILLI_SERVER_TOKEN` | A token accepted by that server |
-| `SUBMILLI_BLUEPRINT` | The name of your registered Blueprint |
-| `CLAUDE_MODEL` | A Claude model ID supported by your configured [Agent SDK authentication](https://platform.claude.com/docs/en/agent-sdk/overview). Configure that authentication in this terminal before running the file. |
+```sh
+export SUBMILLI_SERVER='http://127.0.0.1:8128'
+export SUBMILLI_SERVER_TOKEN='your-server-token'
+export SUBMILLI_BLUEPRINT='your-registered-blueprint'
+```
 
-The model credentials are separate from the Submilli server token. Reuse your
-chosen provider’s setup. Do not put credentials in the file you save next.
+This example uses `claude-sonnet-5`. Configure
+[Claude Agent SDK authentication](https://platform.claude.com/docs/en/agent-sdk/overview)
+in this terminal. To choose another supported Claude model, edit `model` in
+the file. Keep credentials out of the file.
 
-### Save the runnable agent
+### Create the agent file
 
-Save this complete file as `submilli-agent.mjs` in the folder you opened.
+The query disables built-in tools and project settings, and restricts MCP to
+the configured Submilli server.
 
-The query disables built-in tools and project settings, and restricts MCP to the configured Submilli server.
+Create `submilli-agent.mjs` in the folder where you installed the dependencies,
+and paste the code below.
 
 ```javascript title="submilli-agent.mjs"
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -103,12 +113,11 @@ function required(name) {
 const server = required("SUBMILLI_SERVER").replace(/\/$/, "");
 const blueprint = required("SUBMILLI_BLUEPRINT");
 const token = required("SUBMILLI_SERVER_TOKEN");
-const model = required("CLAUDE_MODEL");
 const prompt = process.argv.slice(2).join(" ") || 'Run this program through Submilli and report its result: export function main(): number { return 2 + 2; }';
 const agent = query({
   prompt,
   options: {
-    model,
+    model: "claude-sonnet-5",
     mcpServers: {
       submilli: {
         type: "http", url: `${server}/mcp/${blueprint}`,
