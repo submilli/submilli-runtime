@@ -324,7 +324,7 @@ mod unix {
             "params": {
                 "protocolVersion": "2025-06-18", "capabilities": {},
                 "clientInfo": { "name": "submilli-bridge", "version": "0" },
-                "_meta": { "variables": { "customerId": "cus_northwind" } }
+                "_meta": { "variables": { "customerId": "pied_piper" } }
             }
         });
         let (status, session, text) = post(&url, token, &[], &initialize);

@@ -68,7 +68,7 @@ import { check } from "submilli:security";
 /** @capability acme.com/credits.apply { customerId: string, amount: number, customerClass: string } */
 export function applyCredits(): void {
     check("acme.com/credits.apply", {
-        customerId: "cus_northwind", amount: 42, customerClass: "business"
+        customerId: "pied_piper", amount: 42, customerClass: "business"
     });
 }
 "#,
@@ -178,7 +178,7 @@ function main(): void {
     assert_eq!(
         package_payload,
         json!({
-            "customerId": "cus_northwind", "amount": 42, "customerClass": "business"
+            "customerId": "pied_piper", "amount": 42, "customerClass": "business"
         })
     );
     assert_eq!(package["decision"], "deny");
@@ -212,7 +212,7 @@ function main(): void {
         .unwrap();
     assert_eq!(package["decision"], "allow");
     let package_payload: Value = serde_json::from_str(&package["contexts.0.payload_json"]).unwrap();
-    assert_eq!(package_payload["customerId"], "cus_northwind");
+    assert_eq!(package_payload["customerId"], "pied_piper");
     let stdlib = rows
         .iter()
         .find(|row| row.get("capability") == Some(&"fs.write".to_string()))

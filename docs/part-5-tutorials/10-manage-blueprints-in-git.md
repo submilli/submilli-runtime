@@ -9,7 +9,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "f247fde266edd95a1381eb518cbe7223963bf2f1dcf27ce20f54af8c7d068707"
+  contentHash: "45941e9b4b4c02a4485ac5a4aab9c2fa3dca03227af8d2701f8c8c5eae4826e0"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -92,7 +92,7 @@ the rule should allow and then to one it should refuse:
 import { listCharges } from "@submilli/acme-billing";
 
 function main(): string {
-    const charges = listCharges("cus_northwind");
+    const charges = listCharges("pied_piper");
     let total = 0;
     for (const charge of charges) {
         total += charge.amount;
@@ -106,8 +106,8 @@ function main(): string {
 # Runs total.ts under this blueprint as two sessions: the customer it
 # should allow, and one it should refuse.
 set -eu
-submilli run --blueprint blueprint.yaml --var customerId=cus_northwind total.ts
-submilli run --blueprint blueprint.yaml --var customerId=cus_initech total.ts 2>&1 | grep PermissionDeniedError
+submilli run --blueprint blueprint.yaml --var customerId=pied_piper total.ts
+submilli run --blueprint blueprint.yaml --var customerId=hooli total.ts 2>&1 | grep PermissionDeniedError
 ```
 
 Install the pinned Package, lint, and run the test, as the pull-request
@@ -125,12 +125,12 @@ chmod +x test.sh
 installed @submilli/acme-billing v0.1.0 -> ~/.submilli/packages/@submilli/acme-billing
 ✓ blueprint.yaml is valid
 2 charges, 6150 cents
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "cus_northwind" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "pied_piper" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
 ```
 
 The first line of the test is the program's result for the customer the
-session is for. The second is the test. Bound to Initech, the same
-program asks for Northwind's charges and is refused, and the `grep`
+session is for. The second is the test. Bound to Hooli, the same
+program asks for Pied Piper's charges and is refused, and the `grep`
 passes only when that denial appears. A run that fails for another
 reason, or that is allowed, fails the script.
 
@@ -249,7 +249,7 @@ trigger to `release: types: [published]` and the job's condition to
 
 ```sh
 submilli server blueprint list
-submilli server run-code blueprints/support/total.ts --blueprint support --var customerId=cus_northwind
+submilli server run-code blueprints/support/total.ts --blueprint support --var customerId=pied_piper
 ```
 
 ```text

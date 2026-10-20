@@ -570,12 +570,12 @@ fn a_resumed_stand_in_goes_on_in_the_session_its_next_call_runs_in() {
     world.post(live(
         "agent-1",
         "toolu_1",
-        vec![asked("t1", "Northwind?", "toolu_1")],
+        vec![asked("t1", "Pied Piper?", "toolu_1")],
     ));
     world.call("sess-1", "toolu_1");
     world.post(live("agent-1", "toolu_1", Vec::new()));
     let first = vec![
-        asked("t1", "Northwind?", "toolu_1"),
+        asked("t1", "Pied Piper?", "toolu_1"),
         says("t2", "Two charges."),
     ];
     world.post(stop(&["toolu_1"], first.clone()));
@@ -593,7 +593,7 @@ fn a_resumed_stand_in_goes_on_in_the_session_its_next_call_runs_in() {
     again.push(says("t4", "Refused."));
     world.post(stop(&["toolu_1", "toolu_2"], again));
 
-    assert_eq!(texts(&world.log("sess-1")), ["Northwind?", "Two charges."]);
+    assert_eq!(texts(&world.log("sess-1")), ["Pied Piper?", "Two charges."]);
     assert_eq!(texts(&world.log("sess-2")), ["Globex?", "Refused."]);
     assert_eq!(
         order(&world.log("sess-2")),
@@ -606,7 +606,7 @@ fn a_stand_in_resumed_after_a_long_silence_keeps_its_old_turns_where_they_were()
     let mut world = World::new();
     let start = Instant::now();
     world.call("sess-1", "toolu_1");
-    let first = vec![says("t1", "Northwind?"), says("t2", "Two charges.")];
+    let first = vec![says("t1", "Pied Piper?"), says("t2", "Two charges.")];
     world.post_at(
         ChatPost {
             agent: "agent-1".into(),
@@ -624,7 +624,7 @@ fn a_stand_in_resumed_after_a_long_silence_keeps_its_old_turns_where_they_were()
     world.call("sess-2", "toolu_2");
     world.post_at(live("agent-1", "toolu_2", again), later);
 
-    assert_eq!(texts(&world.log("sess-1")), ["Northwind?", "Two charges."]);
+    assert_eq!(texts(&world.log("sess-1")), ["Pied Piper?", "Two charges."]);
     assert_eq!(texts(&world.log("sess-2")), ["Globex?"]);
 }
 
@@ -633,7 +633,7 @@ fn a_resumed_stand_in_whose_first_call_takes_long_keeps_its_old_turns_where_they
     let mut world = World::new();
     let start = Instant::now();
     world.call("sess-1", "toolu_1");
-    let first = vec![says("t1", "Northwind?"), says("t2", "Two charges.")];
+    let first = vec![says("t1", "Pied Piper?"), says("t2", "Two charges.")];
     world.post_at(
         ChatPost {
             agent: "agent-1".into(),
@@ -652,7 +652,7 @@ fn a_resumed_stand_in_whose_first_call_takes_long_keeps_its_old_turns_where_they
     let later = start + HELD_FOR + Duration::from_secs(1);
     world.post_at(live("agent-1", "toolu_2", again), later);
 
-    assert_eq!(texts(&world.log("sess-1")), ["Northwind?", "Two charges."]);
+    assert_eq!(texts(&world.log("sess-1")), ["Pied Piper?", "Two charges."]);
     assert_eq!(texts(&world.log("sess-2")), ["Globex?"]);
 }
 

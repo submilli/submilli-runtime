@@ -175,8 +175,8 @@ order; each chapter assumes only the ones before it.
   `submilli docs @acme/billing` output is copied from that run. Ran
   `credit.ts` under a blueprint granting `acme.com/credits.apply` filtered on
   `${vars.customerId}` and `customerClass == "premium"`: `credited 1500
-  cents` bound to `cus_northwind`, `PermissionDeniedError` bound to
-  `cus_initech`. Those two runs used the stub version of `applyCredit`
+  cents` bound to `pied_piper`, `PermissionDeniedError` bound to
+  `hooli`. Those two runs used the stub version of `applyCredit`
   that returned a literal; the page's fragment now makes the real call
   (`secrets.get`, `http.post` to `billing.internal.example.com`), which
   `build check` compiles and derives into `requires: http.post` on that host

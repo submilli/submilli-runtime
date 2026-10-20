@@ -40,7 +40,7 @@ service. Install the CLI/server using [setup](setup.md), then:
 
    ```typescript
    import { readBalance } from "@acme/billing";
-   function main(): void { assert(readBalance("cus_northwind") === 6150); }
+   function main(): void { assert(readBalance("pied_piper") === 6150); }
    ```
 
 3. Save the **smallest slice** YAML in [blueprints](blueprints.md) as
@@ -60,10 +60,10 @@ Before involving a model, verify the endpoint:
 curl --fail-with-body http://127.0.0.1:8128/v1/execute \
   -H "Authorization: Bearer $SUBMILLI_SERVER_TOKEN" \
   -H 'content-type: application/json' \
-  -d '{"blueprint":"support-read","variables":{"customerId":"cus_northwind"},"code":"import { readBalance } from \"@acme/billing\"; function main(): number { return readBalance(\"cus_northwind\"); }"}'
+  -d '{"blueprint":"support-read","variables":{"customerId":"pied_piper"},"code":"import { readBalance } from \"@acme/billing\"; function main(): number { return readBalance(\"pied_piper\"); }"}'
 ```
 
-Expect `result: "6150"`. Change only the program's argument to `cus_initech`:
+Expect `result: "6150"`. Change only the program's argument to `hooli`:
 expect a capability denial. Remove `variables`: expect `invalid_request` for
 the missing binding. The fixture returns a constant; these checks prove the
 policy path, not connectivity to a billing service. Replace it with reviewed
@@ -98,7 +98,7 @@ token.
 
 Bind session variables before MCP initialization, from authenticated and
 authorized application state. Header format:
-`submilli-variables: customerId=cus_northwind` (multiple bindings use `;`).
+`submilli-variables: customerId=pied_piper` (multiple bindings use `;`).
 Validate values against the application's ID format; never interpolate a
 value containing `;`, CR, or LF. Clients that support it can use initialize
 `_meta.variables` with string values instead. Values from a chat message are

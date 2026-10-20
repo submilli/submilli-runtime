@@ -290,7 +290,7 @@ fn other_sources_are_reported_unchanged_and_labelled() {
 #[test]
 fn newly_declared_variables_are_filled_and_removed_ones_dropped() {
     let run = recorded(
-        &[("customerId", "cus_northwind"), ("legacy", "x")],
+        &[("customerId", "pied_piper"), ("legacy", "x")],
         vec![decision(0, "http.get", http_context("api.test"), None)],
     );
     let current = blueprint(
@@ -304,7 +304,7 @@ fn newly_declared_variables_are_filled_and_removed_ones_dropped() {
     // The recorded value wins where the blueprint still declares the variable.
     assert_eq!(
         report.variables.kept,
-        VarBindings::from([("customerId".to_owned(), "cus_northwind".to_owned())])
+        VarBindings::from([("customerId".to_owned(), "pied_piper".to_owned())])
     );
     assert_eq!(
         report.variables.filled,

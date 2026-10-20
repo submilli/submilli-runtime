@@ -108,7 +108,7 @@ fn run_start(execution_id: &str, session: Option<&str>) -> RunStart {
         blueprint_version: "v1".into(),
         variables: Arc::new(VarBindings::from([(
             "customerId".to_owned(),
-            "cus_northwind".to_owned(),
+            "pied_piper".to_owned(),
         )])),
         harness_secrets: Arc::default(),
         code: Some(Arc::from("function main(): string { return \"x\"; }")),
@@ -352,7 +352,7 @@ fn a_recorded_run_round_trips_with_every_field() {
         (1, "app", 1)
     );
     assert_eq!(summary.session_id.as_deref(), Some("sess-1"));
-    assert_eq!(summary.variables["customerId"], "cus_northwind");
+    assert_eq!(summary.variables["customerId"], "pied_piper");
 }
 
 #[test]

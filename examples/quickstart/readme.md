@@ -55,7 +55,7 @@ files, and checks that the downloads match.
 
 The example uses the server to exercise the same HTTP route as an application.
 For a local CLI check, use `submilli run --blueprint blueprint.yaml
---var customerId=cus_northwind total.ts` after publishing the Package locally.
+--var customerId=pied_piper total.ts` after publishing the Package locally.
 Both routes enforce the Blueprint and require the customer binding.
 
 ## Checking the book

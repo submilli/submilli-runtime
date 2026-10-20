@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "53bfeddfa1d3eb9580e83e6dad2803d26b6502cb01a9728e3c23a8f22276d7af"
+  contentHash: "c30e9c2714f73a02b6b8827220ba4a818a312dc406465ccf334ece41f66f1dd8"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -56,7 +56,7 @@ export interface Credit {
 
 /**
  * Add a goodwill credit to a customer's account.
- * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param customerId The customer's id in the billing system, such as `pied_piper`.
  * @param amount The credit, in cents; must be positive.
  * @returns The credit as recorded.
  * @capability acme.com/credits.apply { customerId: string, amount: number }
@@ -200,7 +200,7 @@ now:
 ```typescript title="packages/billing/src/lib.ts (fragment)"
 /**
  * Add a goodwill credit to a customer's account.
- * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param customerId The customer's id in the billing system, such as `pied_piper`.
  * @param amount The credit, in cents; must be positive.
  * @returns The credit as recorded.
  * @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number }
@@ -415,7 +415,7 @@ export interface Credit {
 
 /**
  * Add a goodwill credit to a customer's account.
- * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param customerId The customer's id in the billing system, such as `pied_piper`.
  * @param amount The credit, in cents; must be positive.
  * @returns The credit as recorded, with the customer's balance after it.
  * @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number }

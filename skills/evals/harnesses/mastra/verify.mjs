@@ -53,17 +53,17 @@ async function execute(binding, requestedCustomer) {
   }
 }
 
-const allowed = await execute('cus_northwind', 'cus_northwind');
+const allowed = await execute('pied_piper', 'pied_piper');
 assert.equal(allowed.error, null, JSON.stringify(allowed));
 assert.equal(allowed.result, '6150', JSON.stringify(allowed));
 
-const denied = await execute('cus_northwind', 'cus_initech');
+const denied = await execute('pied_piper', 'hooli');
 assert.equal(denied.result, null, JSON.stringify(denied));
 assert.match(denied.error?.message ?? '', /PermissionDeniedError/);
 assert.match(denied.error?.message ?? '', /acme\.com\/balance\.read/);
 
 await assert.rejects(
-  () => execute(null, 'cus_northwind'),
+  () => execute(null, 'pied_piper'),
   /required|variable|invalid_request|connect|toolsets|discovered/i,
 );
 
@@ -71,6 +71,6 @@ await assert.rejects(
 assert.doesNotMatch(await refusal(null, token), /401|unauthorized/i);
 // Without a token the server answers 401 before it reads the binding. The
 // adapter has no OAuth provider, so it reports the refusal and starts no sign-in.
-assert.match(await refusal('cus_northwind', null), /unauthorized[\s\S]*HTTP 401/);
+assert.match(await refusal('pied_piper', null), /unauthorized[\s\S]*HTTP 401/);
 
 console.log('Mastra MCP smoke passed: allowed, cross-tenant denial, missing binding, missing token, cleanup');

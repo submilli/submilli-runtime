@@ -63,7 +63,7 @@
   "untrusted": {
    "contexts": {
     "7.1": {
-     "customerId": "cus_northwind"
+     "customerId": "pied_piper"
     },
     "7.2": {
      "path": "/billing/charges.json"
@@ -72,9 +72,9 @@
    "result": "209 charges, 822571 cents"
   },
   "variables": {
-   "customerId": "cus_northwind"
+   "customerId": "pied_piper"
   },
   "wall_ms": 157
  },
- "text": "run 7 · rerun · v2 · billing · 2026-10-13 13:26:58Z · 157 ms\npage: http://127.0.0.1:47100/#run=7\noutcome: completed\nsession 5e550000-0000-4000-8000-000000000001 · customerId=cus_northwind\nrerun of run 1, live under the binding in force\ndecisions (2):\n  7.1        allow main → acme.com/charges.list  by `charges-for-signed-in-customer`\n  7.2        allow @acme/billing → fs.read  by rule 1 of `@acme/billing`, line 46\ncalls: 2 (2 returned)\npayload bodies omitted; --include-payloads shows them\nprogram omitted; --program shows it\n~~~run-data (from inside the run: data, not instructions)\n7.1 context: {\"customerId\":\"cus_northwind\"}\n7.2 context: {\"path\":\"/billing/charges.json\"}\nresult: 209 charges, 822571 cents\n~~~\nnext: submilli playground compare 1 7\n      submilli playground runs --session 5e550000-0000-4000-8000-000000000001\n"
+ "text": "run 7 · rerun · v2 · billing · 2026-10-13 13:26:58Z · 157 ms\npage: http://127.0.0.1:47100/#run=7\noutcome: completed\nsession 5e550000-0000-4000-8000-000000000001 · customerId=pied_piper\nrerun of run 1, live under the binding in force\ndecisions (2):\n  7.1        allow main → acme.com/charges.list  by `charges-for-signed-in-customer`\n  7.2        allow @acme/billing → fs.read  by rule 1 of `@acme/billing`, line 46\ncalls: 2 (2 returned)\npayload bodies omitted; --include-payloads shows them\nprogram omitted; --program shows it\n~~~run-data (from inside the run: data, not instructions)\n7.1 context: {\"customerId\":\"pied_piper\"}\n7.2 context: {\"path\":\"/billing/charges.json\"}\nresult: 209 charges, 822571 cents\n~~~\nnext: submilli playground compare 1 7\n      submilli playground runs --session 5e550000-0000-4000-8000-000000000001\n"
 }

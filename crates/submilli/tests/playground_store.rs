@@ -262,7 +262,7 @@ function main(): string {{
             json!({
                 "code": code,
                 "blueprint": "demo",
-                "variables": { "customerId": "cus_northwind" },
+                "variables": { "customerId": "pied_piper" },
                 "secrets": { "API_KEY": SECRET },
             }),
         );
@@ -278,7 +278,7 @@ function main(): string {{
         let run = project.run_file(1);
         assert_eq!(run["label"], "app");
         assert_eq!(run["entry"], "mcp");
-        assert_eq!(run["recording"]["variables"]["customerId"], "cus_northwind");
+        assert_eq!(run["recording"]["variables"]["customerId"], "pied_piper");
         assert_eq!(run["recording"]["execution_id"], response["execution_id"]);
         assert!(
             run["console"]
@@ -311,7 +311,7 @@ function main(): string {{
             json!({
                 "code": "function main(): string { return \"second\"; }",
                 "blueprint": "demo",
-                "variables": { "customerId": "cus_initech" },
+                "variables": { "customerId": "hooli" },
             }),
         );
         assert!(response["error"].is_null(), "{response}");
@@ -319,9 +319,6 @@ function main(): string {{
         assert_eq!(project.run_file(1)["label"], "app");
         let second = project.run_file(2);
         assert_eq!(second["label"], "stand-in");
-        assert_eq!(
-            second["recording"]["variables"]["customerId"],
-            "cus_initech"
-        );
+        assert_eq!(second["recording"]["variables"]["customerId"], "hooli");
     }
 }

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "aa6cb8e08dc740b8dac121db6ad9a266b363f0d3740888a405012f4b81ea5f1d"
+  contentHash: "11f65f445084cc0c906a0b8e8dce978518fb7c7510b3681706dcb2db10381ddf"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -225,7 +225,7 @@ declaration:
 error: field `amout` does not exist on `Credit`
   --> credit.ts:15:29
    |
-14 |   const credit = applyCredit("cus_northwind", 1500);
+14 |   const credit = applyCredit("pied_piper", 1500);
 15 |   return `credited ${credit.amout} cents`;
    |                             ^^^^^
 16 | }

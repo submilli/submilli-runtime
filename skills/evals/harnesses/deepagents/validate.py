@@ -81,7 +81,7 @@ def flatten(error: BaseException) -> list[str]:
 
 
 async def main() -> None:
-    allowed, offered = await run_agent("cus_northwind", "cus_northwind")
+    allowed, offered = await run_agent("pied_piper", "pied_piper")
     assert "6150" in allowed, allowed
 
     # Record what the default middleware hands the model besides Submilli.
@@ -91,13 +91,13 @@ async def main() -> None:
     assert EXECUTE in offered, offered
     assert "execute" not in offered, offered
 
-    denied, _ = await run_agent("cus_northwind", "cus_initech")
+    denied, _ = await run_agent("pied_piper", "hooli")
     assert "permission denied" in denied.lower() and "balance.read" in denied, denied
 
     # The token is still sent here: this must be the 400 for the missing
     # binding, not an authentication error.
     try:
-        await run_agent(None, "cus_northwind")
+        await run_agent(None, "pied_piper")
     except BaseException as error:
         assert "400" in "".join(flatten(error)), error
     else:
@@ -106,7 +106,7 @@ async def main() -> None:
     # adapter has no OAuth provider configured, so it raises instead of
     # starting a sign-in.
     try:
-        await run_agent("cus_northwind", "cus_northwind", token=None)
+        await run_agent("pied_piper", "pied_piper", token=None)
     except BaseException as error:
         assert "401" in "".join(flatten(error)), error
     else:

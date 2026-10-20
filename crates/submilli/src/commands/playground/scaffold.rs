@@ -221,7 +221,7 @@ export interface Charge {
 
 /**
  * List the charges on one customer's account.
- * @param customerId Billing customer ID, such as `cus_northwind`.
+ * @param customerId Billing customer ID, such as `pied_piper`.
  * @returns The customer's charges; empty when they have none.
  * @capability acme.com/charges.list { customerId: string }
  */
@@ -264,26 +264,26 @@ function main(): void {
     mkdir("/billing", true);
     writeText(
         "/billing/charges.json",
-        '[{"customerId":"cus_northwind","id":"ch_a1","amount":4900},' +
-            '{"customerId":"cus_northwind","id":"ch_a2","amount":1250},' +
-            '{"customerId":"cus_initech","id":"ch_a3","amount":39900}]',
+        '[{"customerId":"pied_piper","id":"ch_a1","amount":4900},' +
+            '{"customerId":"pied_piper","id":"ch_a2","amount":1250},' +
+            '{"customerId":"hooli","id":"ch_a3","amount":39900}]',
     );
 
     label("lists a customer's own charges");
-    const charges = listCharges("cus_northwind");
-    assert(charges.length === 2, "cus_northwind has two charges in the fixture");
+    const charges = listCharges("pied_piper");
+    assert(charges.length === 2, "pied_piper has two charges in the fixture");
     assert(charges[0].amount === 4900, "the first is the 4900-cent charge");
 
     label("scopes the lookup to the customer asked for");
-    assert(listCharges("cus_initech").length === 1, "cus_initech has one charge");
+    assert(listCharges("hooli").length === 1, "hooli has one charge");
     assert(listCharges("cus_unknown").length === 0, "an unknown customer has none");
 }
 "#;
 
 const FIXTURE: &str = r#"[
-  { "customerId": "cus_northwind", "id": "ch_a1", "amount": 4900 },
-  { "customerId": "cus_northwind", "id": "ch_a2", "amount": 1250 },
-  { "customerId": "cus_initech", "id": "ch_a3", "amount": 39900 }
+  { "customerId": "pied_piper", "id": "ch_a1", "amount": 4900 },
+  { "customerId": "pied_piper", "id": "ch_a2", "amount": 1250 },
+  { "customerId": "hooli", "id": "ch_a3", "amount": 39900 }
 ]
 "#;
 
@@ -326,11 +326,11 @@ permissions:
 "#;
 
 const EXAMPLE_PROGRAM: &str = r#"// Total up the signed-in customer's charges. Run it with `customerId` bound to
-// `cus_northwind`; asking for another customer's charges is denied.
+// `pied_piper`; asking for another customer's charges is denied.
 import { listCharges } from "@acme/billing";
 
 function main(): string {
-    const charges = listCharges("cus_northwind");
+    const charges = listCharges("pied_piper");
     let total = 0;
     for (const charge of charges) {
         total += charge.amount;
