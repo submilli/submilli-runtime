@@ -1,138 +1,131 @@
 ---
 title: "Connect OpenAI Agents"
-description: "Run the research agent on the OpenAI Agents SDK: the connection scope is the session, then a real conversation."
+description: "Connect an OpenAI Agents SDK application to a registered Submilli Blueprint over MCP."
 slug: tutorials/connect-openai-agents
+docType: how-to
 sidebar:
   order: 5
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "f2c742b9d2d1f8d881ebe0af39bb211917ebf07bbce1390f48ba181cdbe1ccaa"
+  contentHash: "94e9317c3e3af5462cdac0a8eac4cbc84678132d1f9531f0cf5e858c5b3c80c9"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
-In this tutorial we will run the research agent on the OpenAI Agents SDK,
-with its programs executed on the server as the signed-in user (`u_ada` in the examples). You need the server and the `research`
-Blueprint from [Connect a harness](/docs/tutorials/connect-a-harness),
-with `SUBMILLI_SERVER_TOKEN` still exported, Python 3.10 or later, and an
-OpenAI key for the conversation. This SDK speaks to OpenAI's models,
-whichever provider the Blueprint's model uses.
+Connect an OpenAI Agents SDK application to Submilli over MCP, ask it to run
+one program that computes the 40th Fibonacci number, and close the MCP session
+when the run ends. You need Python 3.10 or
+later, `submilli-server` 0.4.1 or later, an OpenAI API key, and a Blueprint
+already registered on your server. For this example, use a Blueprint with no
+required variables. The calculation does not need Package or tool permissions.
 
-## Start the project
+Start the [server](/docs/server/run-the-server) and [register a
+Blueprint](/docs/server/register-a-blueprint) before running this example. Keep
+`SUBMILLI_SERVER_TOKEN` exported in the shell where you run this example.
+Set `SUBMILLI_BLUEPRINT` to the name of the Blueprint you registered:
 
-In `harnesses`, make a directory for this harness, a virtual environment,
-and install the dependencies. The full project is
-[`examples/harnesses/openai-agents/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/openai-agents).
+```sh
+export SUBMILLI_BLUEPRINT=your-registered-blueprint
+```
+
+If your Blueprint requires variables or harness secrets, send them in the
+MCP connection headers described by the [MCP session
+headers](/docs/application#three-decisions-the-model-has-no-part-in) reference.
+The application supplies those values when the connection opens; the model
+cannot set them.
+
+## Install the SDK
+
+Create a project and install the OpenAI Agents SDK:
 
 ```sh
 mkdir openai-agents && cd openai-agents
-python -m venv .venv && . .venv/bin/activate
+python3 -m venv .venv
+. .venv/bin/activate
 pip install "openai-agents>=0.3"
 ```
 
-## The agent
+## Write the agent
 
-Save this as `agent.py`. It reads the brief from `../prompt.txt`:
+Save this as `agent.py`:
 
 ```python title="agent.py"
-"""An OpenAI Agents SDK agent that runs its programs on submilli-server, over MCP."""
+"""An OpenAI Agents SDK application backed by Submilli over MCP."""
 
 import asyncio
 import os
-import pathlib
 
 from agents import Agent, Runner
 from agents.mcp import MCPServerStreamableHttp
 
-SUBMILLI_SERVER = os.environ.get("SUBMILLI_SERVER", "http://127.0.0.1:8128")
-# The API token this application was given for the server.
-SUBMILLI_SERVER_TOKEN = os.environ["SUBMILLI_SERVER_TOKEN"]
-BLUEPRINT = "research"
+
+SERVER = os.environ.get("SUBMILLI_SERVER", "http://127.0.0.1:8128")
+SERVER_TOKEN = os.environ["SUBMILLI_SERVER_TOKEN"]
+BLUEPRINT = os.environ["SUBMILLI_BLUEPRINT"]
 
 
-# The agent's brief, kept beside the blueprint.
-INSTRUCTIONS = (pathlib.Path(__file__).parent.parent / "prompt.txt").read_text()
-
-
-async def answer(question: str, user_id: str, model=None) -> str:
-    # One connection per user: the binding is fixed when it opens.
+async def main() -> None:
     async with MCPServerStreamableHttp(
         name="submilli",
         params={
-            "url": f"{SUBMILLI_SERVER}/mcp/{BLUEPRINT}",
-            "headers": {
-                "Authorization": f"Bearer {SUBMILLI_SERVER_TOKEN}",
-                "submilli-variables": f"userId={user_id}",
-            },
+            "url": f"{SERVER}/mcp/{BLUEPRINT}",
+            "headers": {"Authorization": f"Bearer {SERVER_TOKEN}"},
         },
-        # The SDK gives up on a tool call after 5 seconds by default; a
-        # program that searches and reads pages takes longer.
         client_session_timeout_seconds=120,
     ) as submilli:
         agent = Agent(
-            name="researcher",
-            instructions=INSTRUCTIONS,
-            model=model,
+            name="fibonacci-agent",
+            instructions="Use Submilli to write and run a program that computes the 40th Fibonacci number.",
             mcp_servers=[submilli],
         )
-        result = await Runner.run(agent, question, max_turns=20)
-        return result.final_output
+        result = await Runner.run(
+            agent,
+            "Use Submilli to compute the 40th Fibonacci number.",
+            max_turns=20,
+        )
+        print(result.final_output)
 
 
 if __name__ == "__main__":
-    # In a real application the user comes from the signed-in session.
-    print(asyncio.run(answer("What is new in the latest stable release of Rust? Save a note with your sources.", "u_ada")))
+    asyncio.run(main())
 ```
 
-Notice that the `async with` block is the session. The SDK connects when
-the block opens and ends the session when it closes, so the agent is
-built and run inside it. Keep `client_session_timeout_seconds`. The SDK
-gives up on a tool call after five seconds by default, and a program
-that searches and reads pages takes longer. Without it, the run gets an
-error while the server is still working. `model=None` leaves the choice
-to the SDK's default. Pass a model name to choose one. `max_turns`
-bounds the loop.
+The MCP URL names the registered Blueprint. The `async with` block is the
+session: it opens the connection before the agent runs and closes it after
+the result is printed. Keep `client_session_timeout_seconds=120`; the SDK's
+five-second default is too short for a program that needs several tool calls.
+`max_turns` bounds the model's agent loop.
 
-## One conversation
+This example leaves `Agent.tools` empty and exposes Submilli through
+`mcp_servers`. Keep application tools out of `Agent.tools` if their calls must
+pass through Blueprint permissions: tools added there are called directly by
+the agent and bypass Submilli. This MCP connection does not support application-tool callbacks.
+To reuse existing tools from Submilli programs, use the
+[LangChain middleware integration](/docs/tutorials/connect-deepagents) or
+implement the [HTTP callback lifecycle](/docs/reference/http-api#application-tools).
+
+## Try it out
+
+Run the application with the OpenAI key:
 
 ```sh
 OPENAI_API_KEY=... python agent.py
 ```
 
-This is one real run, with the SDK's default model, gpt-5.6-luna, made
-after the other four tutorials' agents had answered the same question
-for the same user. The model's programs are its own, and another run
-writes different ones. Its first program listed the notebook, got
-today's date, and searched:
-
-```typescript
-import jina from "@submilli/jina";
-import * as fs from "submilli:fs";
-
-function main(): string {
-  const entries: string[] = [];
-  for (const e of fs.list("/notes", false)) entries.push(e.path + " (" + e.kind + ")");
-  const today = Temporal.Now.plainDateISO().toString();
-  const r = jina.searchJson("latest stable Rust release release notes 2025", {site:"blog.rust-lang.org"});
-  const out: string[] = ["today=" + today, "notes=" + entries.join(", ")];
-  for (const x of r) out.push(x.title + " | " + x.url + " | " + x.description);
-  return out.join("\n");
-}
-```
-
-The answer began and ended:
+The agent must make a Submilli execute-tool call whose result contains
+`102334155`. The final answer alone does not verify the connection; inspect
+the Agents SDK trace and confirm both the Submilli execute call and its result.
 
 ```text
-The latest stable Rust release is **1.99.0**, released **October 1, 2026**.
-…
-I saved and updated the research note at `/notes/rust-latest-release.md`.
+102334155
 ```
 
-It updated the note the other agents kept, a file on the server's
-volume, there for the next conversation `u_ada` opens, on this harness
-or any other.
+The model wrote the program, while the runtime compiled and ran it in the
+registered Blueprint's session. Check the trace before treating the example
+as connected.
 
-You have the research agent running on the OpenAI Agents SDK, each
-program it writes executed on the server as the signed-in user, and the
-binding proved on the index before any model was involved. Project:
-[`examples/harnesses/openai-agents/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/openai-agents).
+You now have an OpenAI Agents SDK application connected to a registered
+Blueprint over MCP, with the session closed by the connection context. For
+the shared application-tool lifecycle and the LangChain-specific `ptc`
+contract, read the [harness tools overview](/docs/tutorials/connect-a-harness#call-harness-tools-from-programs)
+and the [`langchain-submilli` reference](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#your-tools-in-programs).
