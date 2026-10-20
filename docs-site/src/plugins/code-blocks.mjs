@@ -1,3 +1,5 @@
+import { agentPromptAst } from '../lib/agent-prompts.mjs';
+
 /**
  * Shared code-block affordances for the docs site.
  *
@@ -52,6 +54,10 @@ export function codeBlocks() {
 		name: 'Submilli code-block affordances',
 		hooks: {
 			postprocessRenderedBlock({ codeBlock, renderData }) {
+				if (codeBlock.metaOptions.getBoolean('agent-prompt') === true) {
+					renderData.blockAst = agentPromptAst(codeBlock.code);
+					return;
+				}
 				const role = classifyCodeBlock(codeBlock.code, codeBlock.language, codeBlock.metaOptions);
 				if (!role) return;
 
