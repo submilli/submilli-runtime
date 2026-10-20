@@ -19,6 +19,16 @@ Open the preview URL with `/docs/` appended (normally
 `http://localhost:4321/docs/`). For live editing, run
 `npm --prefix docs-site run dev`.
 
+## Analytics test hygiene
+
+Before any team or agent browser profile makes a tracked navigation on a real
+production origin, first open that origin with `?analytics=off` and verify that
+the opt-out persists in that profile. Repeat this separately for each origin
+(including the website and docs host) and each browser profile. Use marked
+`analytics_test=1` or verification attribution only in authorized offline or
+staging checks; never create production events merely to verify instrumentation.
+Do not infer people or IP identity from browser analytics.
+
 `npm run build` produces the static website in `docs-site/dist/docs/`, including
 HTML, styles, scripts, and the search index. The preparation script creates an
 ignored TypeScript configuration stub if the runtime package tooling has not
@@ -205,7 +215,8 @@ browser/profile. The query applies before SDK initialization and saves the share
 website/docs opt-out; a denial in another tab also stops recording. A browser
 whose identity has never been supplied cannot be matched to a team member.
 The internal cohort is a reporting filter, not a browser recording gate. Verify
-the three team members' browser opt-outs separately before claiming exclusion.
+the opt-out separately in every team member and agent browser profile before
+claiming exclusion.
 
 The event inventory is `$pageview` (`page_path`, `$current_url`),
 `link_clicked` (`destination`, `external`), and `docs_cta_clicked`
@@ -214,13 +225,14 @@ The event inventory is `$pageview` (`page_path`, `$current_url`),
 `booking_provider: google_calendar`, `destination`, `external`) so website
 funnels can include docs traffic. CTA IDs cover `meeting`, `website`, `github`,
 `discord`, `agent_setup`, `view_markdown`, and `agent_docs`.
-Synthetic verification can add `?analytics_test=1`; every captured event then
-has `is_test: true` for the rest of the browser tab session so it can be excluded
-from reporting, including after navigating to another docs page.
+Synthetic verification can add `?analytics_test=1` or a verification UTM. These
+markers prevent SDK initialization and event capture on the first page and on
+later pages in the same browser tab, including after an explicit consent click.
 
 At `https://submilli.ai/docs/`, the same capture key and `localStorage` persistence
 reuse marketing’s PostHog identity and `submilli.attribution.v1` first/latest touch.
-The direct Render hostname is a separate origin and cannot join that identity.
+The direct Render hostname is a separate origin, cannot join that identity, and
+now has SDK event capture disabled entirely.
 Production capture requires configuring both public environment values in the
 docs Render service and rebuilding after merge; repository checks alone do not
 verify received production events.

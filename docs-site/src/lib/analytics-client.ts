@@ -52,6 +52,9 @@ function applyQueryOptOut() {
 	} catch {}
 	return false;
 }
+function isProductionAnalyticsHost() {
+	return location.hostname === 'submilli.ai';
+}
 
 function capture(event: string, properties: Record<string, unknown> = {}) {
 	if (!active || posthog.has_opted_out_capturing()) return;
@@ -107,7 +110,7 @@ function instrumentClicks() {
 }
 
 function start(explicitConsent = false) {
-	if (active || !key || !host) return;
+	if (active || !key || !host || isTest || !isProductionAnalyticsHost()) return;
 	if (!initialized) {
 		posthog.init(key, {
 			api_host: host,

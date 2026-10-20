@@ -90,8 +90,36 @@ test('team opt-out link stops initialization even when storage is unavailable', 
 });
 
 test('recordings are disabled on previews and marked verification sessions', () => {
-  for (const options of [{hostname:'localhost'}, {hostname:'preview.onrender.com'}, {search:'?analytics_test=1'}, {search:'?utm_source=verification'}, {attribution:{first:{utm_campaign:'deployment_verification'}}}, {attribution:{latest:{utm_content:'utm_e2e'}}}]) {
-    assert.equal(browser(options).options.disable_session_recording, true);
+  for (const options of [{search:'?analytics_test=1'}, {search:'?utm_source=verification'}, {attribution:{first:{utm_campaign:'deployment_verification'}}}, {attribution:{latest:{utm_content:'utm_e2e'}}}]) {
+    const marked = browser(options);
+    assert.equal(marked.initCount, 0);
+    assert.equal(marked.events.length, 0);
+  }
+});
+
+test('verification marker blocks SDK initialization on revisit', () => {
+  const session = new Map();
+  const first = browser({ search: '?analytics_test=1', session });
+  const next = browser({ session });
+  assert.equal(first.initCount, 0);
+  assert.equal(next.initCount, 0);
+  assert.equal(next.events.length, 0);
+});
+
+test('non-production hosts cannot initialize analytics', () => {
+  for (const hostname of ['localhost', 'preview.onrender.com']) {
+    const b = browser({ hostname });
+    assert.equal(b.initCount, 0);
+    assert.equal(b.events.length, 0);
+  }
+});
+
+test('marked and preview sessions stay blocked after explicit consent', () => {
+  for (const options of [{ search: '?analytics_test=1' }, { search: '?utm_source=verification' }, { hostname: 'preview.onrender.com' }]) {
+    const b = browser(options);
+    b.buttons.granted();
+    assert.equal(b.initCount, 0);
+    assert.equal(b.events.length, 0);
   }
 });
 
@@ -105,7 +133,8 @@ test('shared opt-out immediately stops recording and event capture', () => {
 
 test('test marker survives full page navigation in the same tab', () => {
   const session = new Map(); browser({ search: '?analytics_test=1', session });
-  const next = browser({ session }); next.click('github');
-  assert.ok(next.events.every(event => event.properties.is_test === true));
+  const next = browser({ session });
+  assert.equal(next.initCount, 0);
+  assert.equal(next.events.length, 0);
   assert.equal(browser().events[0].properties.is_test, false);
 });
