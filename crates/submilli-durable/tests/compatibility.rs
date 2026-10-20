@@ -48,18 +48,42 @@ fn resource_values_roundtrip_without_backend_services() {
     );
     let encoded = serde_json::to_vec(&reader).unwrap();
     let reader: FileReader = serde_json::from_slice(&encoded).unwrap();
-    assert_eq!(reader.run_id.as_ref().unwrap().as_str(), "run");
+    assert_eq!(reader.run_id.as_str(), "run");
     assert_eq!(reader.id.as_str(), "reader");
     assert_eq!(reader.options, ReaderOptions::Bytes { chunk_size: 3 });
 
     let writer = FileWriter::new("run".into(), "writer".into());
     let encoded = serde_json::to_vec(&writer).unwrap();
     let writer: FileWriter = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(writer.run_id.as_str(), "run");
     assert_eq!(writer.id.as_str(), "writer");
     assert!(!writer.closed);
 
     let listing = DirectoryReader::new("run".into(), "listing".into());
     let encoded = serde_json::to_vec(&listing).unwrap();
     let listing: DirectoryReader = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(listing.run_id.as_str(), "run");
     assert_eq!(listing.id.as_str(), "listing");
+}
+
+#[test]
+fn resources_require_a_run_identity() {
+    let reader = FileReader::new(
+        "run".into(),
+        "reader".into(),
+        ReaderOptions::Bytes { chunk_size: 3 },
+    );
+    let writer = FileWriter::new("run".into(), "writer".into());
+    let directory = DirectoryReader::new("run".into(), "directory".into());
+    require_run_identity(&reader);
+    require_run_identity(&writer);
+    require_run_identity(&directory);
+}
+
+fn require_run_identity<T: serde::Serialize + serde::de::DeserializeOwned>(resource: &T) {
+    let mut encoded = serde_json::to_value(resource).unwrap();
+    encoded["run_id"] = serde_json::Value::Null;
+    assert!(serde_json::from_value::<T>(encoded.clone()).is_err());
+    encoded.as_object_mut().unwrap().remove("run_id");
+    assert!(serde_json::from_value::<T>(encoded).is_err());
 }

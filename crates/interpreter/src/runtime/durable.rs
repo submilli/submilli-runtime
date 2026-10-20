@@ -27,6 +27,17 @@ impl std::fmt::Display for RunId {
     }
 }
 impl RunId {
+    /// Identity for an in-process run without retained execution history.
+    /// These identities are local to this process, not restart-stable IDs.
+    pub(crate) fn local() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_RUN: AtomicU64 = AtomicU64::new(0);
+        Self(format!(
+            "local-{}",
+            NEXT_RUN.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }

@@ -276,6 +276,67 @@ async fn execution_history_replays_observations_and_skips_completed_filesystem_w
     );
 }
 
+#[tokio::test]
+async fn execution_history_rejects_process_local_resources_with_run_ids() {
+    use interpreter::runtime::{
+        RuntimeConfig, StoreData, Vfs, dispatch_main_async, install_runtime_async,
+        instantiate_program_async,
+    };
+    for (operation, resource) in [
+        ("bytes(\"/input\", 3)", "reader"),
+        ("list(\"/\", false)", "listing"),
+        ("writer(\"/output\")", "writer"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("files");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("input"), b"abc").unwrap();
+        let (_database, units, attempt) = fixture(&directory.path().join("db")).await;
+        let history = Arc::new(History::new(attempt.clone(), units.clone()));
+        let mut data = StoreData::with_vfs(Vfs::external(root.clone()).unwrap());
+        data.effects = Some(history);
+        let source = format!(
+            r#"
+            import {{ bytes, list, writer }} from "submilli:fs";
+            function main(): void {{ {operation}; }}
+        "#
+        );
+        let compiled =
+            interpreter::compile_script(&source, "resources.ts", interpreter::FileId(0), &[], &[])
+                .unwrap();
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut store = config.store(&engine, data).unwrap();
+        let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
+        let mut linker = wasmtime::Linker::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let instance = instantiate_program_async(&linker, &mut store, &module)
+            .await
+            .unwrap();
+        let error = dispatch_main_async(&mut store, &instance)
+            .await
+            .unwrap_err();
+        store.data_mut().blocking_work.finish().await.unwrap();
+        assert!(
+            error.is::<interpreter::runtime::host::FatalHostError>(),
+            "{error:#}"
+        );
+        assert!(
+            format!("{error:#}").contains(&format!("requires a persistent {resource}")),
+            "{error:#}"
+        );
+        let mut unit = units().await.unwrap();
+        assert!(
+            unit.get_history_entry(&attempt.run_id, 0, memory())
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
 struct InterruptHistory {
     history: History,
     before_commit: u64,

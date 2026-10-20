@@ -213,6 +213,10 @@ impl DurableFilesystem {
 
 #[async_trait::async_trait]
 impl Filesystem for DurableFilesystem {
+    fn supports_resource_replay(&self) -> bool {
+        true
+    }
+
     fn info(&self) -> FilesystemInfo {
         FilesystemInfo::from_vfs(self.files.vfs())
     }
@@ -424,7 +428,7 @@ impl Filesystem for DurableFilesystem {
         reader: &mut FileReader,
         limits: &TenantLimits,
     ) -> Result<ReadOutput, PortError> {
-        check_resource(self, reader.run_id.as_ref(), &reader.id)?;
+        check_resource(self, &reader.run_id, &reader.id)?;
         self.operation(work)
             .next_reader(&reader.id, effect_id, &reader.options, limits)
             .await
@@ -435,7 +439,7 @@ impl Filesystem for DurableFilesystem {
         work: Option<Arc<WorkBudget>>,
         reader: &mut FileReader,
     ) -> Result<(), PortError> {
-        check_resource(self, reader.run_id.as_ref(), &reader.id)?;
+        check_resource(self, &reader.run_id, &reader.id)?;
         self.operation(work)
             .close_reader(&reader.id, effect_id, &reader.options)
             .await
@@ -447,7 +451,7 @@ impl Filesystem for DurableFilesystem {
         directory: &mut DirectoryReader,
         limits: &TenantLimits,
     ) -> Result<Option<DirectoryEntry>, PortError> {
-        check_resource(self, directory.run_id.as_ref(), &directory.id)?;
+        check_resource(self, &directory.run_id, &directory.id)?;
         self.operation(work)
             .next_listing(&directory.id, effect_id, limits)
             .await
@@ -460,7 +464,7 @@ impl Filesystem for DurableFilesystem {
         directory: &mut DirectoryReader,
         limits: &TenantLimits,
     ) -> Result<(), PortError> {
-        check_resource(self, directory.run_id.as_ref(), &directory.id)?;
+        check_resource(self, &directory.run_id, &directory.id)?;
         self.operation(work)
             .close_listing(&directory.id, effect_id, limits)
             .await
@@ -474,7 +478,7 @@ impl Filesystem for DurableFilesystem {
         writer: &mut FileWriter,
         bytes: Vec<u8>,
     ) -> Result<(), PortError> {
-        check_resource(self, writer.run_id.as_ref(), &writer.id)?;
+        check_resource(self, &writer.run_id, &writer.id)?;
         self.operation(work)
             .write_chunk(&writer.id, effect_id, bytes)
             .await
@@ -486,7 +490,7 @@ impl Filesystem for DurableFilesystem {
         work: Option<Arc<WorkBudget>>,
         writer: &mut FileWriter,
     ) -> Result<(), PortError> {
-        check_resource(self, writer.run_id.as_ref(), &writer.id)?;
+        check_resource(self, &writer.run_id, &writer.id)?;
         let result = self
             .operation(work)
             .close_writer(&writer.id, effect_id)
@@ -521,11 +525,11 @@ pub(crate) fn backend(error: FilesystemError) -> PortError {
 
 fn check_resource(
     filesystem: &DurableFilesystem,
-    run_id: Option<&RunId>,
+    run_id: &RunId,
     id: &EffectId,
 ) -> Result<(), PortError> {
     validate_id(id).map_err(backend)?;
-    if run_id != Some(&filesystem.run_id) {
+    if run_id != &filesystem.run_id {
         return Err(backend(RecoveryError::Conflict.into()));
     }
     Ok(())

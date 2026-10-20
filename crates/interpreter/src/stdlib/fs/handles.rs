@@ -224,6 +224,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let filesystem = DefaultFilesystem::new(
             crate::runtime::Vfs::external(root.path().to_path_buf()).unwrap(),
+            "run".into(),
         );
         let effect_id = EffectId::stub().unwrap();
         let limits = TenantLimits::new(64 * 1024);
@@ -245,7 +246,7 @@ mod tests {
     async fn writer_over(vfs: &crate::runtime::Vfs, limits: &TenantLimits) -> BackendFileWriter {
         use crate::runtime::default_filesystem::DefaultFilesystem;
         use crate::runtime::filesystem::Filesystem;
-        let writer = DefaultFilesystem::new(vfs.clone())
+        let writer = DefaultFilesystem::new(vfs.clone(), "run".into())
             .open_writer(&EffectId::stub().unwrap(), None, "/out.txt")
             .await
             .unwrap();
@@ -267,7 +268,7 @@ mod tests {
         let vfs = crate::runtime::Vfs::external(dir.path().to_path_buf()).unwrap();
         let mut w = writer_over(&vfs, &limits).await;
         w.write(
-            &DefaultFilesystem::new(vfs.clone()),
+            &DefaultFilesystem::new(vfs.clone(), "run".into()),
             &EffectId::stub().unwrap(),
             None,
             b"hello\n".to_vec(),
@@ -295,7 +296,7 @@ mod tests {
         let final_path = dir.path().join("out.txt");
         let mut w = writer_over(&vfs, &limits).await;
         w.write(
-            &DefaultFilesystem::new(vfs.clone()),
+            &DefaultFilesystem::new(vfs.clone(), "run".into()),
             &EffectId::stub().unwrap(),
             None,
             b"hello\n".to_vec(),
@@ -303,7 +304,7 @@ mod tests {
         .await
         .unwrap();
         w.close(
-            &DefaultFilesystem::new(vfs.clone()),
+            &DefaultFilesystem::new(vfs.clone(), "run".into()),
             &EffectId::stub().unwrap(),
             None,
         )

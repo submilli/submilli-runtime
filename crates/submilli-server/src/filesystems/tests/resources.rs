@@ -159,7 +159,7 @@ async fn reader_progress_precedes_history_and_replay_skips_recorded_calls() {
     );
     drop(unit);
     let mut foreign = recorded_resource(&descriptor);
-    foreign.run_id = Some(uuid::Uuid::new_v4().to_string().into());
+    foreign.run_id = uuid::Uuid::new_v4().to_string().into();
     assert!(
         Filesystem::next_reader(
             restarted,

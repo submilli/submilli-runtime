@@ -36,7 +36,9 @@ pub(super) async fn open_reader(
                     .await;
                 work.settle(&mut *caller)?;
                 let reader = result.map_err(|error| backend_error(label, &request.path, error))?;
-                if caller.data().effects.is_some() && reader.run_id.is_none() {
+                if caller.data().effects.is_some()
+                    && !caller.data().filesystem.supports_resource_replay()
+                {
                     return Err(fatal_host_error(
                         "recorded execution requires a persistent reader",
                     ));
@@ -80,7 +82,9 @@ pub(super) async fn open_directory(
                 work.settle(&mut *caller)?;
                 let directory =
                     result.map_err(|error| backend_error("fs.list", &request.path, error))?;
-                if caller.data().effects.is_some() && directory.run_id.is_none() {
+                if caller.data().effects.is_some()
+                    && !caller.data().filesystem.supports_resource_replay()
+                {
                     return Err(fatal_host_error(
                         "recorded execution requires a persistent listing",
                     ));
@@ -106,7 +110,9 @@ pub(super) async fn open_writer(
                 .await;
             work.settle(&mut *caller)?;
             let writer = result.map_err(|error| backend_error("fs.writer", &path, error))?;
-            if caller.data().effects.is_some() && writer.run_id.is_none() {
+            if caller.data().effects.is_some()
+                && !caller.data().filesystem.supports_resource_replay()
+            {
                 return Err(fatal_host_error(
                     "recorded execution requires a persistent writer",
                 ));

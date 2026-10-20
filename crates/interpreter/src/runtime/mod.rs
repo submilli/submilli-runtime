@@ -301,7 +301,10 @@ impl StoreData {
             #[cfg(test)]
             array_growth: array_storage::GrowthStats::default(),
             console: Box::new(std::io::stderr()),
-            filesystem: Arc::new(default_filesystem::DefaultFilesystem::new(vfs.clone())),
+            filesystem: Arc::new(default_filesystem::DefaultFilesystem::new(
+                vfs.clone(),
+                durable::RunId::local(),
+            )),
             effects: None,
             vfs,
             vfs_info,

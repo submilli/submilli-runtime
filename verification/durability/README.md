@@ -249,8 +249,11 @@ the boundary: it writes normally on every attempt, including replay, and can
 publish duplicate console events. Output is retained with the finished run;
 incremental console persistence is deferred to SUB-1885.
 
-Reader, writer and listing values serialize persistent identity/options directly.
-Process-local handles are skipped. Resources hold no filesystem or unit-of-work
+Reader, writer and listing values all require a run ID and serialize identity/options
+directly. Process-local handle state lives alongside these types in the filesystem
+interface and is skipped during serialization. The default backend receives a run ID
+but cannot restore resources without their local handles; recording requires a backend
+that explicitly supports resource replay. Resources hold no filesystem or unit-of-work
 reference; operations receive the resource through the active filesystem backend.
 Deserialization itself performs no I/O. The default backend retains its existing
 local handles; durable handle caching remains SUB-1883. Host return adapters own

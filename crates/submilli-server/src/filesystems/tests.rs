@@ -821,7 +821,7 @@ async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
 
     // Backend policy must not leak into the interpreter's ordinary implementation.
     // Production callers must keep retained volumes assigned to their durable backend.
-    let native = DefaultFilesystem::new(Vfs::external(root.to_owned()).unwrap());
+    let native = DefaultFilesystem::new(Vfs::external(root.to_owned()).unwrap(), "run".into());
     assert_eq!(
         Filesystem::read(
             &native,

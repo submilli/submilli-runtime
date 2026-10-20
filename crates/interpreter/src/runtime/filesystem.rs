@@ -3,11 +3,12 @@
 //! Capability checks and fuel admission belong to the host caller. Embedders
 //! supply an effect ID and optional work budget with each call.
 use super::durable::{EffectId, RunId};
-use super::fs::ContainError;
+use super::fs::{ContainError, ContentPath, FileIdentity};
 use super::fuel::WorkBudget;
 use super::vfs::{Access, Placement, VfsMode};
-use super::{QuotaExceeded, Vfs};
-use std::io::{Read, Seek, SeekFrom};
+use super::{OpenFileGuard, QuotaCharge, QuotaExceeded, Vfs};
+use std::fs::File;
+use std::io::{BufWriter, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -101,20 +102,20 @@ impl FilesystemInfo {
 }
 
 /// Resource values contain persistent identity and optional process-local handles.
-/// They never retain a backend or persistence services. Only durable resources
-/// have a run identity; default resources are valid in their original process.
+/// They never retain a backend or persistence services. Every resource belongs to
+/// a run; process-local handles are omitted from history and absent after decoding.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct FileReader {
-    pub run_id: Option<RunId>,
+    pub run_id: RunId,
     pub id: EffectId,
     pub options: ReaderOptions,
     #[serde(skip)]
-    pub(crate) local: Option<super::default_filesystem::DefaultReader>,
+    pub(crate) local: Option<ReaderHandle>,
 }
 impl FileReader {
     pub fn new(run_id: RunId, id: EffectId, options: ReaderOptions) -> Self {
         Self {
-            run_id: Some(run_id),
+            run_id,
             id,
             options,
             local: None,
@@ -124,16 +125,16 @@ impl FileReader {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct FileWriter {
-    pub run_id: Option<RunId>,
+    pub run_id: RunId,
     pub id: EffectId,
     pub closed: bool,
     #[serde(skip)]
-    pub(crate) local: Option<super::default_filesystem::DefaultWriter>,
+    pub(crate) local: Option<WriterHandle>,
 }
 impl FileWriter {
     pub fn new(run_id: RunId, id: EffectId) -> Self {
         Self {
-            run_id: Some(run_id),
+            run_id,
             id,
             closed: false,
             local: None,
@@ -143,19 +144,65 @@ impl FileWriter {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct DirectoryReader {
-    pub run_id: Option<RunId>,
+    pub run_id: RunId,
     pub id: EffectId,
     #[serde(skip)]
-    pub(crate) local: Option<super::default_filesystem::DefaultDirectory>,
+    pub(crate) local: Option<DirectoryHandle>,
 }
 impl DirectoryReader {
     pub fn new(run_id: RunId, id: EffectId) -> Self {
         Self {
-            run_id: Some(run_id),
+            run_id,
             id,
             local: None,
         }
     }
+}
+
+/// An open reader's process-local file, cursor and disk-quota hold.
+pub(crate) struct ReaderHandle {
+    pub(crate) file: Option<File>,
+    pub(crate) position: ReadPosition,
+    pub(crate) held: Option<OpenFileGuard>,
+}
+
+/// A directory iterator is process-local and closes when dropped.
+pub(crate) struct DirectoryHandle {
+    pub(crate) entries: Option<Box<dyn Iterator<Item = DirectoryEntry> + Send + Sync>>,
+}
+
+/// Buffered writer to a temp sibling file. Explicit [`close`](Self::close) fsyncs and
+/// atomically renames it onto `final_path`; `Drop` (the safety net for an un-`close`d
+/// writer) discards the temp file without renaming, removing it only while its name
+/// still refers to the writer's file.
+pub(crate) struct WriterHandle {
+    /// `None` once the writer is closed.
+    pub(crate) open: Option<OpenWrite>,
+    /// Both sides stay contained paths for the whole lifetime of the writer. The commit
+    /// happens through the same handle the open resolved against, so a link swapped over
+    /// the parent between `writer()` and `close()` cannot redirect it — and the drop path
+    /// cannot unlink something under the server's working directory.
+    pub(crate) temp: TempFile,
+    pub(crate) final_path: ContentPath,
+}
+
+/// The temp file a writer streams into. The program can reach it by name while the
+/// writer is open, so before committing or discarding it, the writer checks that the
+/// name still refers to the file it created.
+pub(crate) struct TempFile {
+    pub(crate) path: ContentPath,
+    pub(crate) identity: FileIdentity,
+}
+
+/// An open writer's buffer and its claim on the VFS's size limit. Program code runs
+/// between writes, so the claim replaces nothing up front: every byte written counts
+/// until `close` covers the file it replaces.
+pub(crate) struct OpenWrite {
+    pub(crate) writer: BufWriter<File>,
+    pub(crate) disk_charge: QuotaCharge,
+    /// Registers the temp file as the writer's own, so a removal of it by name
+    /// leaves its bytes for the writer to settle.
+    pub(crate) held: Option<OpenFileGuard>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -192,6 +239,11 @@ impl<'de> serde::Deserialize<'de> for DirectoryEntry {
 }
 #[async_trait::async_trait]
 pub trait Filesystem: Send + Sync {
+    /// Whether resources can be used after decoding without their local handles.
+    fn supports_resource_replay(&self) -> bool {
+        false
+    }
+
     fn info(&self) -> FilesystemInfo;
     fn cwd(&self) -> &str;
     /// Additional fuel to admit before resolving a guest path.
