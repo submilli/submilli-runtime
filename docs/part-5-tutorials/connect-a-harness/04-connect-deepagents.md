@@ -8,7 +8,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "be467f3ba5a72532e497c45de67d5fe790c27db2a59ea9230e714733419d0f06"
+  contentHash: "5a9b2fd3b2ba4f4a0ca0b44050f70745d4b9389faec122ffffba9a38e2b07726"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -61,7 +61,7 @@ example. Keep
 If your Blueprint requires variables or harness secrets, pass them with the
 middleware's `variables=` and `secrets=` callables from your run context. The
 values are bound when the session opens; the model cannot set them. The
-[`langchain-submilli` middleware reference](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#configuration)
+[`langchain-submilli` middleware reference](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#middleware-reference)
 describes the binding options.
 
 ### Install the integration
@@ -214,7 +214,7 @@ Keep `create_deep_agent`'s `tools` empty: adding the same tools there creates a
 direct path that bypasses Submilli. Use `interrupt_on` for callback
 calls that need LangChain human-in-the-loop approval. The
 [harness tools overview](/docs/tutorials/connect-a-harness#call-harness-tools-from-programs)
-describes the shared lifecycle; the [`langchain-submilli` reference](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#your-tools-in-programs)
+describes the shared lifecycle; the [`langchain-submilli` reference](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#application-tools)
 covers the integration contract.
 
 You now have a Deep Agents application whose program execution is governed by
