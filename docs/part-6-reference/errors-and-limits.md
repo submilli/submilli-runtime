@@ -282,7 +282,7 @@ For a capability on files, `<capability>` is followed by the path, after
 `.` and `..` are resolved, as in `policy denied fs.write on /big.txt for main`.
 For a capability a Package declares, it is followed by the values the call
 asked with, as in `policy denied acme.com/charges.list with customerId =
-"cus_initech" for main`, so the model can tell which request was refused.
+"hooli" for main`, so the model can tell which request was refused.
 The [Permissions](/docs/reference/permissions) reference describes how a
 call is decided.
 
@@ -368,10 +368,10 @@ error: call stack exhausted
 ```
 
 ```text
-error: Error: customer cus_northwind not found
+error: Error: customer pied_piper not found
   at main (<execute>:2:21)  [thrown here]
 1 | function main(): void {
-2 |     throw new Error("customer cus_northwind not found");
+2 |     throw new Error("customer pied_piper not found");
   |                     ^
 3 | }
 ```
@@ -412,7 +412,7 @@ The server reports a failed run as an `error` object with a `kind`, a
 | `timeout` | The run passed `max_execution_time`. | `error: timeout exceeded` and the source excerpt |
 | `memory_exhausted` | The run passed `max_execution_memory`. | `memory exhausted: GC heap out of memory: no capacity for allocation of 2000044 bytes` |
 | `permission_denied` | A gated call was denied and no `catch` handled it. Carries `caller`, `capability`, and `source` (`policy`, `invariant`, `read_only`, or `harness`). The `message` is the same text a `runtime_error` would carry. | `error: PermissionDeniedError: permission denied: caller=main capability=fs.read: …` and the source excerpt |
-| `runtime_error` | An uncaught error, a stack overflow, or a runtime fault. | `error: Error: customer cus_northwind not found` and the source excerpt |
+| `runtime_error` | An uncaught error, a stack overflow, or a runtime fault. | `error: Error: customer pied_piper not found` and the source excerpt |
 | `blueprint_not_found` | The request names a Blueprint the server doesn't hold. | `unknown blueprint: nope` |
 | `invalid_request` | A required variable is missing from the request, or the request has one the Blueprint doesn't declare. | `invalid variables: variable 'userId' is not declared in the blueprint` |
 | `package_resolution` | A Package the program imports can't be loaded from the server's Package store. | — |

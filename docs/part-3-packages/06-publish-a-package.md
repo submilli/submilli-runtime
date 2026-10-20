@@ -111,7 +111,7 @@ Stored secret 'billing_api_key'
 ```
 
 Create `credit.ts`, a program like one the model would write. It credits
-Northwind, a premium customer in Stripe's test mode:
+Pied Piper, a premium customer in Stripe's test mode:
 
 ```typescript title="credit.ts"
 import { applyCredit } from "@acme/billing";
@@ -122,7 +122,7 @@ function main(): string {
 }
 ```
 
-Run it bound to Northwind:
+Run it bound to Pied Piper:
 
 ```sh
 submilli run --blueprint blueprint.yaml --var customerId=cus_VMQR3azuTWVAWs credit.ts

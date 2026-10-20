@@ -204,8 +204,8 @@ reuse one example blueprint, the support agent's, but each stands alone.
   on the first five pages is copied from that run, as is the whole file at
   the end of page 1. `add-package` now reports `http.post`, matching the
   package's real call.
-- Test runs: `cus_initech` denial and the missing-variable refusal are
-  from that run. The `cus_northwind` success line is from the earlier
+- Test runs: `hooli` denial and the missing-variable refusal are
+  from that run. The `pied_piper` success line is from the earlier
   stub version of the package; with the real call it fails on DNS for the
   fictional host.
 - `blueprint prompt` in 0.1.6 prints the whole execute-tool description

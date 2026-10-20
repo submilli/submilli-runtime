@@ -14,7 +14,7 @@ from langgraph.prebuilt import ToolNode
 URL = os.environ.get("SUBMILLI_SERVER_URL", "http://127.0.0.1:18128").rstrip("/")
 # serve_fixture.py prints this. It is a `user`-role token, so a pass shows this surface needs no more.
 TOKEN = os.environ["SUBMILLI_SERVER_TOKEN"]
-CODE = 'import { readBalance } from "@acme/billing"; function main(): number { return readBalance("cus_northwind"); }'
+CODE = 'import { readBalance } from "@acme/billing"; function main(): number { return readBalance("pied_piper"); }'
 
 
 def execution_tool(tools: list[Any]) -> Any:
@@ -86,7 +86,7 @@ def graph_for(tools: list[Any], saver: InMemorySaver):
 async def resume_test() -> None:
     saver = InMemorySaver()
     config = {"configurable": {"thread_id": "langchain-submilli-resume"}}
-    first_client, first_session, first_tools = await load("cus_northwind")
+    first_client, first_session, first_tools = await load("pied_piper")
     try:
         graph = graph_for(first_tools, saver)
         await graph.ainvoke({"messages": [{"role": "user", "content": "Read my balance"}]}, config,
@@ -97,7 +97,7 @@ async def resume_test() -> None:
         if close is not None:
             await close()
 
-    second_client, second_session, second_tools = await load("cus_northwind")
+    second_client, second_session, second_tools = await load("pied_piper")
     try:
         result = await graph_for(second_tools, saver).ainvoke(None, config)
         content = str(result["messages"][-1].content)
@@ -110,9 +110,9 @@ async def resume_test() -> None:
 
 
 async def main() -> None:
-    tools_result = await call("cus_northwind", CODE)
+    tools_result = await call("pied_piper", CODE)
     assert "6150" in tools_result, tools_result
-    denied = await call("cus_northwind", CODE.replace("cus_northwind", "cus_initech"))
+    denied = await call("pied_piper", CODE.replace("pied_piper", "hooli"))
     assert "permission denied" in denied.lower() and "balance.read" in denied, denied
     # The server rejects a session without the required binding at initialize,
     # so the failure surfaces from the transport before any tool is listed.
@@ -127,12 +127,12 @@ async def main() -> None:
     # adapter has no OAuth provider configured, so it raises instead of
     # starting a sign-in.
     try:
-        await call("cus_northwind", CODE, token=None)
+        await call("pied_piper", CODE, token=None)
     except BaseException as error:
         assert "401" in "".join(flatten(error)), error
     else:
         raise AssertionError("session without a token was accepted")
-    invalid = await call("cus_northwind", "bad program")
+    invalid = await call("pied_piper", "bad program")
     assert "6150" not in invalid and "error" in invalid.lower(), invalid
     await resume_test()
     print("PASS: discovery, allowed=6150, denied, missing binding, missing token, error cleanup, checkpoint resume")

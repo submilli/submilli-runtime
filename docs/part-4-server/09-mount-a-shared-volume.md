@@ -120,7 +120,7 @@ import fs from "submilli:fs";
 
 function main(): string {
     const policy = fs.readText("/handbook/refunds.md") ?? "";
-    fs.appendText("/memory/notes.md", "Northwind asked about refunds; pointed them to the policy.\n");
+    fs.appendText("/memory/notes.md", "Pied Piper asked about refunds; pointed them to the policy.\n");
     const notes = fs.readText("/memory/notes.md") ?? "";
     return `policy: ${policy.split("\n")[2]}\nnotes so far: ${notes.split("\n").length - 1}`;
 }
@@ -200,8 +200,8 @@ error: blueprint.yaml: blueprint 'support' uses named volume 'company-handbook' 
 ## Give each user their own directory
 
 One memory every session shares suits a handbook but not notes about
-customers. The agent serving Northwind shouldn't read what it noted
-about Initech. Mount only that customer's directory of the volume,
+customers. The agent serving Pied Piper shouldn't read what it noted
+about Hooli. Mount only that customer's directory of the volume,
 chosen by the variable the application binds for the session:
 
 ```yaml title="blueprint.yaml (fragment)"
@@ -237,12 +237,12 @@ function main(): string {
 }
 ```
 
-Run it twice for Northwind, then once for Initech:
+Run it twice for Pied Piper, then once for Hooli:
 
 ```sh
-submilli server run-code remember.ts --blueprint support --var customerId=cus_northwind
-submilli server run-code remember.ts --blueprint support --var customerId=cus_northwind
-submilli server run-code remember.ts --blueprint support --var customerId=cus_initech
+submilli server run-code remember.ts --blueprint support --var customerId=pied_piper
+submilli server run-code remember.ts --blueprint support --var customerId=pied_piper
+submilli server run-code remember.ts --blueprint support --var customerId=hooli
 ```
 
 ```text
@@ -251,12 +251,12 @@ submilli server run-code remember.ts --blueprint support --var customerId=cus_in
 /memory/notes.md: 1 lines
 ```
 
-Notice the third run. The path is the same, and Initech's notes start
+Notice the third run. The path is the same, and Hooli's notes start
 at one line. The volume holds a directory per customer:
 
 ```text
-project-memory/customers/cus_initech/notes.md
-project-memory/customers/cus_northwind/notes.md
+project-memory/customers/hooli/notes.md
+project-memory/customers/pied_piper/notes.md
 ```
 
 A session bound to a value that isn't one directory name, such as `..`,

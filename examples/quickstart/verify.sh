@@ -233,9 +233,9 @@ expect_contains "$unfiltered" "reconciliation: 1 charges" "without the filter th
 # Flip the binding and both outcomes invert. This is the assertion that ties the
 # denial to the value the application supplied: same blueprint, same programs,
 # only the client's binding changed.
-sed 's/"cus_northwind"/"cus_initech"/' app.mjs > app-flipped.mjs
+sed 's/"pied_piper"/"hooli"/' app.mjs > app-flipped.mjs
 flipped_legit="$(expect_failure node app-flipped.mjs total.ts)"
-expect_contains "$flipped_legit" "[denied]" "with cus_initech bound, the northwind call is denied"
+expect_contains "$flipped_legit" "[denied]" "with hooli bound, the Pied Piper call is denied"
 flipped_injected="$(expect_failure node app-flipped.mjs total-injected.ts)"
 expect_contains "$flipped_injected" "[denied]" "the flipped run still denies the first call it makes"
 

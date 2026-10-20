@@ -225,7 +225,7 @@ declaration:
 error: field `amout` does not exist on `Credit`
   --> credit.ts:15:29
    |
-14 |   const credit = applyCredit("cus_northwind", 1500);
+14 |   const credit = applyCredit("pied_piper", 1500);
 15 |   return `credited ${credit.amout} cents`;
    |                             ^^^^^
 16 | }

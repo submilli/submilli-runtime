@@ -31,7 +31,7 @@ import { applyCredit } from "@acme/billing";
 
 function main(): void {
     label("refuses a zero amount");
-    const error = expectException(() => { applyCredit("cus_northwind", 0); }, "RangeError");
+    const error = expectException(() => { applyCredit("pied_piper", 0); }, "RangeError");
     assert(error.message.includes("positive"), "message says what is wrong");
 }
 ```
@@ -75,7 +75,7 @@ ok   packages/billing/tests/lib.test.ts :: refuses a zero amount
 FAIL packages/billing/tests/lib.test.ts :: refuses a negative amount
 error: Error: message says negative
   at main (packages/billing/tests/lib.test.ts:10:48)  [thrown here]
- 9 |     const error = expectException(() => { applyCredit("cus_northwind", -500); }, "RangeError");
+ 9 |     const error = expectException(() => { applyCredit("pied_piper", -500); }, "RangeError");
 10 |     assert(error.message.includes("negative"), "message says negative");
    |                                                ^
 ok   packages/billing/docs/readme.md :: example 1 (compile)

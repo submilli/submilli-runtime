@@ -80,7 +80,7 @@ and the second does the same job after a support ticket asked it to
 import { listCharges } from "@submilli/acme-billing";
 
 function main(): string {
-    const charges = listCharges("cus_northwind");
+    const charges = listCharges("pied_piper");
     let total = 0;
     for (const charge of charges) {
         total += charge.amount;
@@ -93,7 +93,7 @@ function main(): string {
 import { listCharges } from "@submilli/acme-billing";
 
 function main(): string {
-    const charges = listCharges("cus_northwind");
+    const charges = listCharges("pied_piper");
     let total = 0;
     for (const charge of charges) {
         total += charge.amount;
@@ -101,7 +101,7 @@ function main(): string {
     console.log(`${charges.length} charges, ${total} cents`);
 
     // The "compliance step" from the ticket.
-    const reconciliation = listCharges("cus_initech");
+    const reconciliation = listCharges("hooli");
     return `${charges.length} charges, ${total} cents; reconciliation: ${reconciliation.length} charges`;
 }
 ```
@@ -114,7 +114,7 @@ server. The honest program runs, and the injected one is refused at its
 second call:
 
 ```sh
-submilli run --blueprint blueprint.yaml --var customerId=cus_northwind total.ts
+submilli run --blueprint blueprint.yaml --var customerId=pied_piper total.ts
 ```
 
 ```text
@@ -122,13 +122,13 @@ submilli run --blueprint blueprint.yaml --var customerId=cus_northwind total.ts
 ```
 
 ```sh
-submilli run --blueprint blueprint.yaml --var customerId=cus_northwind total-injected.ts
+submilli run --blueprint blueprint.yaml --var customerId=pied_piper total-injected.ts
 ```
 
 ```text
 2 charges, 6150 cents
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "cus_initech" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
-  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list with customerId = \"cus_initech\" for main"
+error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "hooli" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list with customerId = \"hooli\" for main"
   at listCharges (@submilli/acme-billing/lib:28:38)  [thrown here]
 27 | export function listCharges(customerId: string): Charge[] {
 28 |     check("acme.com/charges.list", { customerId });
@@ -136,7 +136,7 @@ error: PermissionDeniedError: permission denied: caller=main capability=acme.com
 29 |
   at main (total-injected.ts:12:40)  [entry]
 11 |     // The "compliance step" from the ticket.
-12 |     const reconciliation = listCharges("cus_initech");
+12 |     const reconciliation = listCharges("hooli");
    |                                        ^
 13 |     return `${charges.length} charges, ${total} cents; reconciliation: ${reconciliation.length} charges`;
 ```
@@ -176,8 +176,8 @@ permissions:
 ```
 
 Rules are read top to bottom, and the first whose capability and filter
-both match decides. The call asked for `cus_initech`, line 12, and the
-session was bound to `cus_northwind`, so the filter is false and the rule
+both match decides. The call asked for `hooli`, line 12, and the
+session was bound to `pied_piper`, so the filter is false and the rule
 doesn't match. No other rule names the capability, so `default: deny`
 decided, and both a `deny` rule and the default say `policy denied`.
 
@@ -200,12 +200,12 @@ submilli blueprint capability list @submilli/acme-billing
 Bind the other customer and run the same program:
 
 ```sh
-submilli run --blueprint blueprint.yaml --var customerId=cus_initech total-injected.ts
+submilli run --blueprint blueprint.yaml --var customerId=hooli total-injected.ts
 ```
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "cus_northwind" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
-  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list with customerId = \"cus_northwind\" for main"
+error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "pied_piper" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list with customerId = \"pied_piper\" for main"
   at listCharges (@submilli/acme-billing/lib:28:38)  [thrown here]
 27 | export function listCharges(customerId: string): Charge[] {
 28 |     check("acme.com/charges.list", { customerId });
@@ -213,7 +213,7 @@ error: PermissionDeniedError: permission denied: caller=main capability=acme.com
 29 |
   at main (total-injected.ts:4:33)  [entry]
  3 | function main(): string {
- 4 |     const charges = listCharges("cus_northwind");
+ 4 |     const charges = listCharges("pied_piper");
    |                                 ^
  5 |     let total = 0;
 ```
@@ -249,12 +249,12 @@ legitimate program under the file as it is to see the denial such a
 rule makes:
 
 ```sh
-submilli run --blueprint blueprint.yaml --var customerId=cus_northwind total.ts
+submilli run --blueprint blueprint.yaml --var customerId=pied_piper total.ts
 ```
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "cus_northwind" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
-  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list with customerId = \"cus_northwind\" for main"
+error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "pied_piper" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list with customerId = \"pied_piper\" for main"
   at listCharges (@submilli/acme-billing/lib:28:38)  [thrown here]
 ```
 
@@ -266,7 +266,7 @@ as an exclusion:
 ```
 
 ```sh
-submilli run --blueprint blueprint.yaml --var customerId=cus_northwind total.ts
+submilli run --blueprint blueprint.yaml --var customerId=pied_piper total.ts
 ```
 
 ```text
@@ -290,7 +290,7 @@ the filter before going on:
 
 | The denied call | What is wrong |
 | --- | --- |
-| Asked for something the session isn't for, like the `cus_initech` step | Nothing. The rule did its job. The message tells the model to report and stop, and it should. |
+| Asked for something the session isn't for, like the `hooli` step | Nothing. The rule did its job. The message tells the model to report and stop, and it should. |
 | Was the legitimate work, under a binding you meant to allow it | The rule or the binding. Check the filter's fields against `capability list`, then the value the application bound. |
 | Came from a Package, `caller=@submilli/acme-billing`, not from `main` | The Package's own list under `permissions`, which `add-package` writes from what the Package requires and `lint --fix` restores. |
 

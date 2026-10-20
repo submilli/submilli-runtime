@@ -1120,11 +1120,11 @@ mod tests {
 
     #[test]
     fn the_model_is_told_the_session_s_variables() {
-        let variables = BTreeMap::from([("customerId".to_owned(), "cus_northwind".to_owned())]);
+        let variables = BTreeMap::from([("customerId".to_owned(), "pied_piper".to_owned())]);
         let system = system_prompt(&variables);
         assert!(system.starts_with(SYSTEM), "{system}");
         assert!(
-            system.contains(r#"customerId = "cus_northwind""#),
+            system.contains(r#"customerId = "pied_piper""#),
             "{system}"
         );
         assert_eq!(system_prompt(&BTreeMap::new()), SYSTEM);

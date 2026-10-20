@@ -89,7 +89,7 @@
     "path": "/billing/charges.json"
    },
    "7.1": {
-    "customerId": "cus_northwind"
+    "customerId": "pied_piper"
    },
    "7.2": {
     "path": "/billing/charges.json"

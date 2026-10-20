@@ -692,8 +692,8 @@ mod tests {
         state.create().unwrap();
         assert_eq!(state.read_binding().unwrap(), None);
         let binding = RememberedBinding {
-            variables: BTreeMap::from([("customerId".into(), "cus_northwind".into())]),
-            last: BTreeMap::from([("customerId".into(), "cus_northwind".into())]),
+            variables: BTreeMap::from([("customerId".into(), "pied_piper".into())]),
+            last: BTreeMap::from([("customerId".into(), "pied_piper".into())]),
             secret_names: BTreeSet::from(["API_KEY".into()]),
         };
         let path = state.binding_path();
@@ -712,11 +712,11 @@ mod tests {
         // A field a newer playground added is ignored; the variables are kept.
         fs::write(
             &path,
-            "{\"variables\": {\"customerId\": \"cus_initech\"}, \"added_later\": true}",
+            "{\"variables\": {\"customerId\": \"hooli\"}, \"added_later\": true}",
         )
         .unwrap();
         let read = state.read_binding().unwrap().expect("a binding");
-        assert_eq!(read.variables["customerId"], "cus_initech");
+        assert_eq!(read.variables["customerId"], "hooli");
 
         fs::write(&path, "{\"variables\": 3}").unwrap();
         assert!(state.read_binding().is_err());

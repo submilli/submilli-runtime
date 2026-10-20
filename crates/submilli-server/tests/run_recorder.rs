@@ -403,7 +403,7 @@ async fn rest_session_and_mcp_execute_each_record_exactly_one_run() {
 async fn an_mcp_run_records_its_token_binding_and_client() {
     let server = recorded();
     let session = server
-        .mcp_session(json!({ "customerId": "cus_northwind" }))
+        .mcp_session(json!({ "customerId": "pied_piper" }))
         .await;
     server
         .mcp_tool(
@@ -419,7 +419,7 @@ async fn an_mcp_run_records_its_token_binding_and_client() {
     assert_eq!(run.start.session_id.as_deref(), Some(session.as_str()));
     assert_eq!(
         run.start.variables.get("customerId").map(String::as_str),
-        Some("cus_northwind")
+        Some("pied_piper")
     );
 }
 
@@ -603,7 +603,7 @@ async fn run_program_records_a_run_under_the_label_it_was_given() {
             label: "example".into(),
             blueprint: BLUEPRINT.into(),
             code: ALLOWED.into(),
-            variables: BTreeMap::from([("customerId".into(), "cus_initech".into())]),
+            variables: BTreeMap::from([("customerId".into(), "hooli".into())]),
             secrets: Default::default(),
         },
     )
@@ -615,7 +615,7 @@ async fn run_program_records_a_run_under_the_label_it_was_given() {
     assert_eq!(run.start.execution_id, response.execution_id);
     assert_eq!(
         run.start.variables.get("customerId").map(String::as_str),
-        Some("cus_initech")
+        Some("hooli")
     );
 }
 

@@ -54,14 +54,14 @@ export interface Charge {
 }
 
 const LEDGER: Charge[] = [
-    { customerId: "cus_northwind", id: "ch_a1", amount: 4900 },
-    { customerId: "cus_northwind", id: "ch_a2", amount: 1250 },
-    { customerId: "cus_initech", id: "ch_a3", amount: 39900 },
+    { customerId: "pied_piper", id: "ch_a1", amount: 4900 },
+    { customerId: "pied_piper", id: "ch_a2", amount: 1250 },
+    { customerId: "hooli", id: "ch_a3", amount: 39900 },
 ];
 
 /**
  * List the charges on one customer's account.
- * @param customerId Billing customer ID, such as `cus_northwind`.
+ * @param customerId Billing customer ID, such as `pied_piper`.
  * @returns The customer's charges; empty when they have none.
  * @capability acme.com/charges.list { customerId: string }
  */
@@ -85,12 +85,12 @@ import { listCharges } from "@acme/billing";
 
 function main(): void {
     label("lists a customer's own charges");
-    const charges = listCharges("cus_northwind");
-    assert(charges.length === 2, "cus_northwind has two charges in the fixture");
+    const charges = listCharges("pied_piper");
+    assert(charges.length === 2, "pied_piper has two charges in the fixture");
     assert(charges[0].amount === 4900, "the first is the 4900-cent charge");
 
     label("scopes the lookup to the customer asked for");
-    assert(listCharges("cus_initech").length === 1, "cus_initech has one charge");
+    assert(listCharges("hooli").length === 1, "hooli has one charge");
     assert(listCharges("cus_unknown").length === 0, "an unknown customer has none");
 }
 ```
@@ -102,8 +102,8 @@ submilli build test
 ```
 
 ```text
-[security] caller=main capability=acme.com/charges.list context={"customerId":"cus_northwind"}
-[security] caller=main capability=acme.com/charges.list context={"customerId":"cus_initech"}
+[security] caller=main capability=acme.com/charges.list context={"customerId":"pied_piper"}
+[security] caller=main capability=acme.com/charges.list context={"customerId":"hooli"}
 [security] caller=main capability=acme.com/charges.list context={"customerId":"cus_unknown"}
 ok   packages/billing/tests/lib.test.ts :: lists a customer's own charges
 ok   packages/billing/tests/lib.test.ts :: scopes the lookup to the customer asked for
@@ -165,12 +165,12 @@ submilli build test
 ```
 
 ```text
-[security] caller=main capability=acme.com/charges.list context={"customerId":"cus_northwind"}
+[security] caller=main capability=acme.com/charges.list context={"customerId":"pied_piper"}
 FAIL packages/billing/tests/lib.test.ts :: lists a customer's own charges
-error: Error: cus_northwind has two charges in the fixture
+error: Error: pied_piper has two charges in the fixture
   at main (packages/billing/tests/lib.test.ts:7:34)  [thrown here]
- 6 |     const charges = listCharges("cus_northwind");
- 7 |     assert(charges.length === 2, "cus_northwind has two charges in the fixture");
+ 6 |     const charges = listCharges("pied_piper");
+ 7 |     assert(charges.length === 2, "pied_piper has two charges in the fixture");
    |                                  ^
  8 |     assert(charges[0].amount === 4900, "the first is the 4900-cent charge");
 
@@ -178,7 +178,7 @@ error: Error: cus_northwind has two charges in the fixture
 ```
 
 Notice that the `check` still passed. The Package asked about
-`cus_northwind` and was told yes. A Blueprint can't catch this. Only the
+`pied_piper` and was told yes. A Blueprint can't catch this. Only the
 Package's tests can, so they gate the merge. Restore the
 line.
 
@@ -307,7 +307,7 @@ the customer but finds the charge by its ID alone:
 ```typescript title="packages/billing/src/lib.ts (added at the end)"
 /**
  * Look up one of a customer's charges.
- * @param customerId Billing customer ID, such as `cus_northwind`.
+ * @param customerId Billing customer ID, such as `pied_piper`.
  * @param chargeId Charge identifier, such as `ch_a1`.
  * @returns The charge, or `null` when there is none.
  * @capability acme.com/charges.get { customerId: string }
@@ -324,7 +324,7 @@ export function getCharge(customerId: string, chargeId: string): Charge | null {
 }
 ```
 
-A test that looks up Northwind's own charge passes, and so would any rule,
+A test that looks up Pied Piper's own charge passes, and so would any rule,
 because `check` was asked about the right customer. An agent reading the source
 catches it. Install Codex, sign in, and review the project:
 
@@ -337,7 +337,7 @@ submilli build security-review -a codex -m gpt-6.1-sol -e high --output review.j
 ```text
 Security review: complete (2 finding(s))
 High packages/billing/src/lib.ts:51 — Charge lookup checks a customer unrelated to the returned charge
-  … A caller authorized for cus_northwind can call getCharge("cus_northwind", "ch_a3") and receive cus_initech's charge …
+  … A caller authorized for pied_piper can call getCharge("pied_piper", "ch_a3") and receive hooli's charge …
 Medium packages/billing/src/lib.ts:34 — Read operations expose mutable internal ledger records
   …
 ```

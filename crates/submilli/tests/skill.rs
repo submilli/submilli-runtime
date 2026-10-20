@@ -377,7 +377,7 @@ async fn documented_package_and_blueprint_enforce_the_bound_customer() {
     )
     .unwrap();
     fs::write(root.path().join("package/tests/lib.test.ts"),
-        "import { readBalance } from \"@acme/billing\";\nfunction main(): void { assert(readBalance(\"cus_northwind\") === 6150); }\n").unwrap();
+        "import { readBalance } from \"@acme/billing\";\nfunction main(): void { assert(readBalance(\"pied_piper\") === 6150); }\n").unwrap();
     ok(cli(&["build", "check"]));
     ok(cli(&["build", "test"]));
     ok(cli(&["build", "publish-local"]));
@@ -399,12 +399,12 @@ async fn documented_package_and_blueprint_enforce_the_bound_customer() {
     for (program, variables, expected) in [
         (
             code.to_owned(),
-            json!({"customerId":"cus_northwind"}),
+            json!({"customerId":"pied_piper"}),
             "allowed",
         ),
         (
-            code.replace("cus_northwind", "cus_initech"),
-            json!({"customerId":"cus_northwind"}),
+            code.replace("pied_piper", "hooli"),
+            json!({"customerId":"pied_piper"}),
             "denied",
         ),
         (code.to_owned(), json!({}), "missing"),

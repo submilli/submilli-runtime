@@ -38,7 +38,7 @@ A program the agent might write against it:
 ```typescript
 import { readBalance } from "@acme/billing";
 function main(): number {
-    return readBalance("cus_northwind");
+    return readBalance("pied_piper");
 }
 ```
 
@@ -414,7 +414,7 @@ the response carries `result`, `console`, and on failure `error.kind` and
 `error.message`. A missing required variable is rejected as `invalid_request`
 before compilation. MCP clients bind variables in the `submilli-variables`
 header or `initialize` `_meta.variables`; see [harnesses](harnesses.md).
-Locally, `submilli run --blueprint file.yaml --var customerId=cus_northwind
+Locally, `submilli run --blueprint file.yaml --var customerId=pied_piper
 program.ts` applies the policy with that binding, the way an application binds
 it; `--var` repeats, and a required variable left out is refused. No server is
 needed, so run the verification matrix below this way first.
@@ -425,8 +425,8 @@ Prove the boundary with deterministic calls, not a model ignoring bait:
 
 | Case | Expect |
 | --- | --- |
-| Bind `customerId=cus_northwind`, program reads that customer | Result returned |
-| Same binding, program passes `cus_initech` | `permission denied ... capability=acme.com/...`, not a network error or empty list |
+| Bind `customerId=pied_piper`, program reads that customer | Result returned |
+| Same binding, program passes `hooli` | `permission denied ... capability=acme.com/...`, not a network error or empty list |
 | Omit the required variable | `invalid_request` naming the variable; program never runs |
 | Call an unlisted capability or a raw `http.get` from `main` | Denied |
 | A write under `ask-human` | `PermissionDeniedError`, no side effect, and no built-in approval or resume flow |

@@ -106,7 +106,7 @@ mod tests {
         store
             .append_session(SessionEntry::Started {
                 session_id: "s-1".into(),
-                variables: BTreeMap::from([("customerId".into(), "cus_northwind".into())]),
+                variables: BTreeMap::from([("customerId".into(), "pied_piper".into())]),
                 label: "assistant".into(),
                 idle_timeout_ms: None,
                 model: None,

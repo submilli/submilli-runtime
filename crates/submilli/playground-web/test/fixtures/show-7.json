@@ -19,7 +19,7 @@
  "denied": [],
  "session": "5e550000-0000-4000-8000-000000000001",
  "variables": {
-  "customerId": "cus_northwind"
+  "customerId": "pied_piper"
  },
  "rerun_of": 1,
  "reruns": [],
@@ -65,13 +65,13 @@
  "untrusted": {
   "contexts": {
    "7.1": {
-    "customerId": "cus_northwind"
+    "customerId": "pied_piper"
    },
    "7.2": {
     "path": "/billing/charges.json"
    }
   },
   "result": "209 charges, 822571 cents",
-  "program": "import { listCharges } from \"@acme/billing\";\n\nfunction main(): string {\n    const charges = listCharges(\"cus_northwind\");\n    let total = 0;\n    for (const charge of charges) {\n        total += charge.amount;\n    }\n    return `${charges.length} charges, ${total} cents`;\n}\n"
+  "program": "import { listCharges } from \"@acme/billing\";\n\nfunction main(): string {\n    const charges = listCharges(\"pied_piper\");\n    let total = 0;\n    for (const charge of charges) {\n        total += charge.amount;\n    }\n    return `${charges.length} charges, ${total} cents`;\n}\n"
  }
 }

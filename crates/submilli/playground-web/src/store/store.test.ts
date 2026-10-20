@@ -234,7 +234,7 @@ test("a page-started chat is followed before its request returns, with no notice
     await started;
     const sent = store.chat("Hello", {
       model: "anthropic:claude-sonnet-5-5",
-      variables: { customerId: "cus_northwind" },
+      variables: { customerId: "pied_piper" },
     });
     expect(store.getSnapshot().pendingChat).toEqual({ message: "Hello", session: null });
     await expect.poll(() => store.getSnapshot().data.sessionId).toBe(SESSION(8));
@@ -243,7 +243,7 @@ test("a page-started chat is followed before its request returns, with no notice
     expect(agent?.body).toEqual({
       task: "Hello",
       model: "anthropic:claude-sonnet-5-5",
-      variables: { customerId: "cus_northwind" },
+      variables: { customerId: "pied_piper" },
     });
     expect(server.requests()).toContain(`GET /api/sessions/${SESSION(8)}/events`);
     expect(store.getSnapshot().newSession).toBeNull();

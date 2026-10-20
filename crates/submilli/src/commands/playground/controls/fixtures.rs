@@ -144,7 +144,7 @@ impl RunSpec {
             label: "stand-in".into(),
             entry: "session".into(),
             session: Some("s-1".into()),
-            variables: BTreeMap::from([("customerId".into(), "cus_northwind".into())]),
+            variables: BTreeMap::from([("customerId".into(), "pied_piper".into())]),
             version: None,
             calls: decisions
                 .iter()
@@ -258,7 +258,7 @@ pub(crate) fn charges_allowed(call_index: u64, customer: &str) -> DecisionRecord
 }
 
 /// A charges listing for `customer` denied by the default, the starter rule a near miss
-/// that needed `cus_northwind`.
+/// that needed `pied_piper`.
 pub(crate) fn charges_denied(call_index: u64, customer: &str) -> DecisionRecord {
     let mut decision = record(
         call_index,
@@ -278,7 +278,7 @@ pub(crate) fn charges_denied(call_index: u64, customer: &str) -> DecisionRecord 
         failures: vec![FailureRecord {
             comparison: "customerId == ${vars.customerId}".into(),
             actual: Some(json!(customer)),
-            expected: Some("cus_northwind".into()),
+            expected: Some("pied_piper".into()),
             reason: FailureReasonRecord::NotSatisfied,
             negated: false,
         }],

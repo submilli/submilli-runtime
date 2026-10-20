@@ -56,7 +56,7 @@ export interface Credit {
 
 /**
  * Add a goodwill credit to a customer's account.
- * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param customerId The customer's id in the billing system, such as `pied_piper`.
  * @param amount The credit, in cents; must be positive.
  * @returns The credit as recorded.
  * @capability acme.com/credits.apply { customerId: string, amount: number }
@@ -200,7 +200,7 @@ now:
 ```typescript title="packages/billing/src/lib.ts (fragment)"
 /**
  * Add a goodwill credit to a customer's account.
- * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param customerId The customer's id in the billing system, such as `pied_piper`.
  * @param amount The credit, in cents; must be positive.
  * @returns The credit as recorded.
  * @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number }
@@ -415,7 +415,7 @@ export interface Credit {
 
 /**
  * Add a goodwill credit to a customer's account.
- * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param customerId The customer's id in the billing system, such as `pied_piper`.
  * @param amount The credit, in cents; must be positive.
  * @returns The credit as recorded, with the customer's balance after it.
  * @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number }

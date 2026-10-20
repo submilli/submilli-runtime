@@ -85,7 +85,7 @@ export function plainSession(): PageData {
       started_at: "2026-10-13T13:27:00Z",
       started_at_micros: 1791898020000000,
       sources: ["chat"],
-      variables: { customerId: "cus_northwind" },
+      variables: { customerId: "pied_piper" },
       model: "anthropic:claude-sonnet-5-5",
       run_count: 1,
       runs: [10],

@@ -196,8 +196,8 @@ The filter compares two values. `customerId` is the customer the program is
 asking to credit, supplied by the Package in the permission check.
 `${vars.customerId}` is the customer the application authorized for this
 session, taken from trusted context such as the signed-in account and
-supplied outside the generated program. With `cus_northwind` bound, a
-credit for `cus_initech` fails the rule even though applying credits is
+supplied outside the generated program. With `pied_piper` bound, a
+credit for `hooli` fails the rule even though applying credits is
 allowed, and nothing the program does can change the binding.
 
 The application or harness opens a **session** for one conversation with

@@ -45,7 +45,7 @@ as the quickstart's `customerId`, gets it from the harness when it
 connects:
 
 ```text
-submilli-variables: customerId=cus_northwind
+submilli-variables: customerId=pied_piper
 ```
 
 The server checks the values against the Blueprint before it accepts the
@@ -140,7 +140,7 @@ throws, or is denied, is also an ordinary answer, with `error` set and
   "console": ["2 charges, 6150 cents"],
   "error": {
     "kind": "runtime_error",
-    "message": "error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = \"cus_initech\" for main. …"
+    "message": "error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = \"hooli\" for main. …"
   }
 }
 ```

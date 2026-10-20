@@ -18,8 +18,8 @@ use. `applyCredit` reads the customer's `metadata.class` from Stripe
 (`GET /v1/customers/{id}`), checks `{ customerId, customerClass,
 amount }`, and posts a negative customer balance transaction (`POST
 /v1/customers/{id}/balance_transactions`), which Stripe records as a
-credit. Two test customers were created for the book: Northwind
-(`cus_VMQR3azuTWVAWs`, class premium) and Initech (`cus_VMQRgpQKYgN52y`,
+credit. Two test customers were created for the book: Pied Piper
+(`cus_VMQR3azuTWVAWs`, class premium) and Hooli (`cus_VMQRgpQKYgN52y`,
 class standard). The key is `STRIPE_SECRET_KEY` in the repository's
 `.env`, loaded into the scratch store and the scratch project's `.env`
 without being printed. Part 2 page 1 still shows the fictional
@@ -153,7 +153,7 @@ revisited.
   context line), the
   live run against Stripe with the `[security]` lines (two duplicated
   `secrets.get` lines were dropped), the skip line (path shortened). The
-  live test credits 100 cents to Northwind in test mode on every run.
+  live test credits 100 cents to Pied Piper in test mode on every run.
 
 ## Publish a package
 

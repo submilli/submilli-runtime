@@ -34,7 +34,7 @@
  },
  "binding": {
   "variables": {
-   "customerId": "cus_northwind"
+   "customerId": "pied_piper"
   },
   "secrets": []
  },
