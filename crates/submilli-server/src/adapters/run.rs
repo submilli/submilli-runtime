@@ -71,8 +71,8 @@ pub(crate) async fn save(
             "unrecorded"
         };
         sqlx::query("INSERT INTO runs(run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms,recovery_mode,execution_manifest) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)" )
-        .bind(request.reservation_id()).bind(request.reservation_id())
-        .bind(&request.identity().execution_id).bind(request.session_id()).bind(request.optional_key())
+        .bind(request.reservation_id().as_str()).bind(request.reservation_id().as_str())
+        .bind(request.identity().execution_id.as_deref()).bind(request.session_id()).bind(request.optional_key())
         .bind(request.fingerprint()).bind(&request.identity().principal).bind(&request.identity().entry)
         .bind(request.owner_generation()).bind(request.attempt())
         .bind(request.revision()).bind(request.identity().admission_order).bind(created).bind(state)
@@ -82,7 +82,7 @@ pub(crate) async fn save(
         sqlx::query("UPDATE runs SET owner_generation=?,request_key=?,state=?,reason=?,attempt=?,revision=?,response_status=?,response_body=?,completed_at_unix_ms=? WHERE run_id=? AND revision=? AND (owner_generation=? OR (recovery_mode='recorded' AND state IN ('reserved','running','blocked') AND ?='running' AND attempt=?-1))")
             .bind(request.owner_generation()).bind(request.optional_key()).bind(state).bind(reason(request.state()))
             .bind(request.attempt()).bind(request.revision()).bind(status).bind(body).bind(completed)
-            .bind(request.reservation_id()).bind(request.revision()-1).bind(request.owner_generation()).bind(state).bind(request.attempt())
+            .bind(request.reservation_id().as_str()).bind(request.revision()-1).bind(request.owner_generation()).bind(state).bind(request.attempt())
             .execute(connection).await?
     };
     if result.rows_affected() != 1 {
@@ -183,13 +183,15 @@ fn decode(row: SqliteRow, sealer: &Sealer) -> Result<Run, DatabaseError> {
         row.try_get("session_id")?,
         key,
         row.try_get("fingerprint")?,
-        row.try_get("reservation_id")?,
+        row.try_get::<String, _>("reservation_id")?.into(),
         row.try_get("owner_generation")?,
         from_unix_ms(row.try_get("created_at_unix_ms")?)?,
         state,
         completed_at,
         crate::domain::run::RunIdentity {
-            execution_id: row.try_get("execution_id")?,
+            execution_id: row
+                .try_get::<Option<String>, _>("execution_id")?
+                .map(Into::into),
             principal: row.try_get("principal")?,
             entry: row.try_get("entry_point")?,
             admission_order: row.try_get("admission_order")?,

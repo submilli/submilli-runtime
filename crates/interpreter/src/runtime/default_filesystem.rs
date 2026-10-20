@@ -1436,8 +1436,11 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("input"), b"abc").unwrap();
-        let filesystem =
-            DefaultFilesystem::new(Vfs::external(root.path().to_owned()).unwrap(), "run".into());
+        let data = crate::runtime::StoreData::with_vfs(
+            "run".into(),
+            Vfs::external(root.path().to_owned()).unwrap(),
+        );
+        let filesystem = data.filesystem;
         let limits = TenantLimits::new(1 << 20);
         let mut reader = filesystem
             .open_reader(

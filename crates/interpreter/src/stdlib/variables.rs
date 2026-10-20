@@ -235,7 +235,7 @@ mod tests {
         .expect("program compiles");
         let config = RuntimeConfig::default();
         let engine = config.engine()?;
-        let mut data = StoreData::with_vfs(Vfs::none());
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::none());
         data.variables = Arc::new(BTreeMap::from([
             ("BROWSER_STORE_NAME".into(), "user-1".into()),
             ("USER_ID".into(), "user-1".into()),

@@ -501,7 +501,10 @@ mod tests {
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().unwrap();
         let mut store = cfg
-            .store_async(&engine, StoreData::with_vfs(Vfs::tempdir().unwrap()))
+            .store_async(
+                &engine,
+                StoreData::with_vfs("test-run".into(), Vfs::tempdir().unwrap()),
+            )
             .unwrap();
         let mut linker = Linker::new(&engine);
         install_runtime_async(&mut linker, &mut store)

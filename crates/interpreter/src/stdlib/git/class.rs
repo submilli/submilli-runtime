@@ -436,7 +436,10 @@ mod tests {
         let engine = config.engine().unwrap();
         let intr = build_intrinsic_types(&engine).unwrap();
         let mut store = config
-            .store(&engine, StoreData::with_vfs(crate::runtime::Vfs::none()))
+            .store(
+                &engine,
+                StoreData::with_vfs("test-run".into(), crate::runtime::Vfs::none()),
+            )
             .unwrap();
         let error = make_field_names(&mut store, &intr).unwrap_err();
         assert!(error.is::<crate::runtime::host::FatalHostError>());

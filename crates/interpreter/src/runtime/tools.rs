@@ -348,7 +348,7 @@ mod tests {
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().unwrap();
         let calls = Calls::default();
-        let mut data = StoreData::with_vfs(Vfs::none());
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::none());
         data.install_type_info(compiled.type_info.clone());
         if provided {
             data.tool_provider = Some(Arc::new(Answer {

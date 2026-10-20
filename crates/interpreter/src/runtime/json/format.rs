@@ -310,7 +310,7 @@ mod tests {
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
-            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .store_async(&engine, StoreData::with_vfs("test-run".into(), Vfs::none()))
             .unwrap();
         let callback = Func::new(
             &mut store,

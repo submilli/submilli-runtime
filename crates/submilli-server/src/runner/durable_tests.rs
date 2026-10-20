@@ -73,6 +73,7 @@ async fn execute(
         history,
         units,
         RunnerRuntime {
+            run_id: run.reservation_id(),
             blueprint: "durable",
             session: "session",
             engine: &engine,
@@ -296,7 +297,7 @@ async fn recorded_run_reopens_original_program_and_publishes_terminal_response()
         })
         .await
         .unwrap();
-    assert_eq!(last_id, first.reservation_id());
+    assert_eq!(last_id, first.reservation_id().as_str());
 
     assert!(
         matches!(PrepareRun::new(units.as_ref()).execute(prepared).await.unwrap(), RunDisposition::Completed(saved) if saved == response)

@@ -603,6 +603,7 @@ mod test_runner {
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::Path;
     use std::process::ExitCode;
+    use submilli_core::RunId;
 
     use anyhow::Context;
     use interpreter::runtime::{
@@ -1071,7 +1072,11 @@ mod test_runner {
             .map_err(|err| anyhow::anyhow!("compiling {filename}: {err}"))?;
 
         let outcome = rt.block_on(async {
-            let mut data = StoreData::with_vfs_and_cap(Vfs::tempdir()?, cfg.max_store_bytes);
+            let mut data = StoreData::with_vfs_and_cap(
+                RunId::generate()?,
+                Vfs::tempdir()?,
+                cfg.max_store_bytes,
+            );
             data.secret_provider = secret_provider.clone();
             let mut store = cfg.store_async(engine, data)?;
             install_tenant_limits(&mut store);

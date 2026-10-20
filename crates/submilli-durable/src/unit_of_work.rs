@@ -9,10 +9,11 @@
 //! checks complement the database's uniqueness and pending-operation constraints.
 use crate::readers::{DirectoryEntry, ReaderPosition};
 use futures::future::BoxFuture;
-use interpreter::runtime::durable::{EffectId, RunId};
+use interpreter::runtime::durable::EffectId;
 use interpreter::runtime::filesystem::{ReadPosition, ReaderOptions};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use submilli_core::RunId;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {

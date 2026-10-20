@@ -926,7 +926,7 @@ mod tests {
             .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.install_type_info(compiled.type_info.clone());
         data.embedding_provider = provider.map(|p| p as Arc<dyn EmbeddingProvider>);
         data.embedding_budget = budget;
@@ -1236,7 +1236,7 @@ mod tests {
         .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.install_type_info(compiled.type_info.clone());
         let mut store = cfg.store_async(&engine, data).expect("store");
         crate::runtime::install_tenant_limits(&mut store);
@@ -1295,7 +1295,7 @@ mod tests {
         .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.install_type_info(compiled.type_info.clone());
         data.embedding_provider = Some(provider);
         let budget = budget(EmbeddingLimits::default());

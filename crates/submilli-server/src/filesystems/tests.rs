@@ -596,7 +596,11 @@ async fn run_backend_fueled(
             .unwrap();
     let config = RuntimeConfig::default();
     let engine = config.engine().unwrap();
-    let mut data = StoreData::with_vfs_and_cap(fixture.filesystem.vfs().clone(), 64 << 20);
+    let mut data = StoreData::with_vfs_and_cap(
+        fixture.filesystem.run_id().clone(),
+        fixture.filesystem.vfs().clone(),
+        64 << 20,
+    );
     data.filesystem = Arc::new(fixture.filesystem.clone());
     let mut store = config.store(&engine, data).unwrap();
     let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();

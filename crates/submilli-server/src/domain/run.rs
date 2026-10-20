@@ -1,13 +1,14 @@
 //! Persistent program identity and guarded lifecycle transitions. No I/O.
 use super::idempotent_request::{RecordedOutcome, RequestState};
 use std::time::SystemTime;
+use submilli_core::RunId;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Run {
     session_id: String,
     key: Option<String>,
     fingerprint: String,
-    reservation_id: String,
+    reservation_id: RunId,
     owner_generation: String,
     created_at: SystemTime,
     /// Set exactly when the request is completed or expired.
@@ -24,7 +25,7 @@ pub struct Run {
 /// their reservation identity is retained without inventing an execution.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunIdentity {
-    pub execution_id: Option<String>,
+    pub execution_id: Option<RunId>,
     pub principal: Option<String>,
     pub entry: String,
     pub admission_order: i64,
@@ -51,7 +52,7 @@ impl Run {
         session_id: String,
         key: String,
         fingerprint: String,
-        reservation_id: String,
+        reservation_id: RunId,
         owner_generation: String,
         created_at: SystemTime,
     ) -> Result<Self, RequestError> {
@@ -72,7 +73,7 @@ impl Run {
         session_id: String,
         key: Option<String>,
         fingerprint: String,
-        reservation_id: String,
+        reservation_id: RunId,
         owner_generation: String,
         created_at: SystemTime,
         state: RequestState,
@@ -148,7 +149,7 @@ impl Run {
     }
 
     pub fn require_reservation(&self, reservation_id: &str) -> Result<(), RequestError> {
-        if self.reservation_id != reservation_id
+        if self.reservation_id.as_str() != reservation_id
             || !matches!(self.state, RequestState::Reserved | RequestState::Running)
         {
             return Err(RequestError::ReservationMismatch);
@@ -162,7 +163,7 @@ impl Run {
         session_id: String,
         key: Option<String>,
         fingerprint: String,
-        run_id: String,
+        run_id: RunId,
         startup: String,
         identity: RunIdentity,
         created_at: SystemTime,
@@ -332,7 +333,7 @@ impl Run {
     pub fn fingerprint(&self) -> &str {
         &self.fingerprint
     }
-    pub fn reservation_id(&self) -> &str {
+    pub fn reservation_id(&self) -> &RunId {
         &self.reservation_id
     }
     pub fn owner_generation(&self) -> &str {

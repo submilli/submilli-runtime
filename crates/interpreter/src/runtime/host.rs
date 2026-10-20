@@ -2208,7 +2208,10 @@ mod tests {
     fn async_store() -> (Engine, Store<StoreData>, Linker<StoreData>) {
         let cfg = crate::runtime::RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let data = StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let data = StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         let store = cfg.store_async(&engine, data).expect("store");
         let linker = Linker::<StoreData>::new(&engine);
         (engine, store, linker)

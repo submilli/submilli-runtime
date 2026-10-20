@@ -358,7 +358,7 @@ async fn run(source: &str, setup: Setup) -> Outcome {
             })
             .expect("mount");
     }
-    let mut data = StoreData::with_vfs(vfs);
+    let mut data = StoreData::with_vfs("test-run".into(), vfs);
     data.install_type_info(script.type_info.clone());
     data.variables = Arc::new(
         setup

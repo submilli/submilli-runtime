@@ -81,6 +81,7 @@ async fn tree_does_not_open_subtrees_beyond_its_sorted_page() {
             std::fs::write(root.path().join(format!("z/unused{index:04}")), "x").unwrap();
         }
         let data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
             crate::runtime::Vfs::external(root.path().to_path_buf()).unwrap(),
         );
         let usage = run_measured(
@@ -112,6 +113,7 @@ async fn tree_orders_descendant_prefixes_between_siblings() {
     std::fs::write(root.path().join("a/file"), "x").unwrap();
     std::fs::write(root.path().join("a-/file"), "x").unwrap();
     let data = crate::runtime::StoreData::with_vfs(
+        "test-run".into(),
         crate::runtime::Vfs::external(root.path().to_path_buf()).unwrap(),
     );
     run(
@@ -165,9 +167,12 @@ async fn native_work_is_reported_as_host_fuel() {
         }
     "#;
     let vfs = crate::runtime::Vfs::tempdir().unwrap();
-    let usage = run_measured(source, crate::runtime::StoreData::with_vfs(vfs))
-        .await
-        .unwrap();
+    let usage = run_measured(
+        source,
+        crate::runtime::StoreData::with_vfs("test-run".into(), vfs),
+    )
+    .await
+    .unwrap();
     assert!(usage.host_fuel > 0, "{usage:?}");
     assert!(usage.wasm_fuel > 0, "{usage:?}");
     assert_eq!(usage.fuel, usage.wasm_fuel + usage.host_fuel);
@@ -176,7 +181,10 @@ async fn native_work_is_reported_as_host_fuel() {
 async fn workspace_fixture() {
     run(
         include_str!("../../../tests/fixtures/code/workspace.ts"),
-        crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().unwrap()),
+        crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().unwrap(),
+        ),
     )
     .await
     .unwrap();
@@ -207,7 +215,7 @@ async fn ignore_rules_and_output_modes() {
         assert(search("hello", {path:"src",exclude:["*.tmp"]}).matches.length === 1);
         assert(search("hello", {path:"src",caseSensitive:false,limit:1}).truncated);
     }"#,
-        crate::runtime::StoreData::with_vfs(vfs),
+        crate::runtime::StoreData::with_vfs("test-run".into(), vfs),
     )
     .await
     .unwrap();
@@ -267,7 +275,7 @@ async fn permissions_and_no_partial_write() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
         std::fs::write(vfs.root().join("secret"), "secret").unwrap();
         std::fs::write(vfs.root().join(".gitignore"), "").unwrap();
-        let mut data = crate::runtime::StoreData::with_vfs(vfs.clone());
+        let mut data = crate::runtime::StoreData::with_vfs("test-run".into(), vfs.clone());
         data.security_check = std::sync::Arc::new(Deny { capability, path });
         assert!(
             run(source, data)
@@ -322,7 +330,7 @@ async fn grants_narrowed_to_a_nested_root() {
     ] {
         std::fs::write(vfs.root().join(path), text).unwrap();
     }
-    let mut data = crate::runtime::StoreData::with_vfs(vfs.clone());
+    let mut data = crate::runtime::StoreData::with_vfs("test-run".into(), vfs.clone());
     data.security_check = std::sync::Arc::new(Within {
         root: "/work/repo",
         also: &[],
@@ -340,7 +348,7 @@ async fn grants_narrowed_to_a_nested_root() {
     )
     .await
     .unwrap();
-    let mut data = crate::runtime::StoreData::with_vfs(vfs);
+    let mut data = crate::runtime::StoreData::with_vfs("test-run".into(), vfs);
     data.security_check = std::sync::Arc::new(Within {
         root: "/work/repo",
         also: &["/.gitignore"],
@@ -377,7 +385,7 @@ async fn symlink_ancestor_errors_name_only_the_root() {
 }
 
 async fn assert_ancestor_error(vfs: crate::runtime::Vfs, root: &'static str, message: &str) {
-    let mut data = crate::runtime::StoreData::with_vfs(vfs);
+    let mut data = crate::runtime::StoreData::with_vfs("test-run".into(), vfs);
     data.security_check = std::sync::Arc::new(Within { root, also: &[] });
     let source = format!(
         "import {{ tree }} from 'submilli:code'; function main(): void {{ tree('{root}', 1); }}"
@@ -391,14 +399,17 @@ async fn invalid_utf8_limits_and_disabled_vfs() {
     let vfs = crate::runtime::Vfs::tempdir().unwrap();
     std::fs::write(vfs.root().join("file"), [255]).unwrap();
     assert!(
-        run(source, crate::runtime::StoreData::with_vfs(vfs.clone()))
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("UTF-8")
+        run(
+            source,
+            crate::runtime::StoreData::with_vfs("test-run".into(), vfs.clone())
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("UTF-8")
     );
     std::fs::write(vfs.root().join("file"), "123456").unwrap();
-    let mut data = crate::runtime::StoreData::with_vfs(vfs);
+    let mut data = crate::runtime::StoreData::with_vfs("test-run".into(), vfs);
     data.fs_max_read_size = 4;
     assert!(
         run(source, data)
@@ -410,7 +421,7 @@ async fn invalid_utf8_limits_and_disabled_vfs() {
     assert!(
         run(
             source,
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::none())
+            crate::runtime::StoreData::with_vfs("test-run".into(), crate::runtime::Vfs::none())
         )
         .await
         .is_err()
@@ -423,7 +434,7 @@ async fn symlink_containment() {
     let outside = tempfile::tempdir().unwrap();
     std::fs::write(outside.path().join("secret"), "secret").unwrap();
     std::os::unix::fs::symlink(outside.path(), vfs.root().join("escape")).unwrap();
-    let data = || crate::runtime::StoreData::with_vfs(vfs.clone());
+    let data = || crate::runtime::StoreData::with_vfs("test-run".into(), vfs.clone());
     run("import { search, tree } from 'submilli:code'; function main(): void { assert(search('secret').matches.length === 0); assert(tree('/').entries[0].kind === 'symlink'); }",data()).await.unwrap();
     assert!(run("import { read } from 'submilli:code'; function main(): void { read('/escape/secret'); }",data()).await.unwrap_err().to_string().contains("escapes"));
 }
@@ -472,7 +483,7 @@ async fn context_results_truncate_before_expansion() {
         "match xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n".repeat(100),
     )
     .unwrap();
-    let mut data = crate::runtime::StoreData::with_vfs(vfs);
+    let mut data = crate::runtime::StoreData::with_vfs("test-run".into(), vfs);
     data.fs_max_read_size = 65536;
     run("import { search } from 'submilli:code'; function main(): void { const r = search('match', {context:1000}); assert(r.truncated); assert(r.matches.length < 10); }",data).await.unwrap();
 }
@@ -482,7 +493,7 @@ async fn glob_star_stays_in_directory() {
     std::fs::create_dir_all(vfs.root().join("src/nested")).unwrap();
     std::fs::write(vfs.root().join("src/a.ts"), "x").unwrap();
     std::fs::write(vfs.root().join("src/nested/a.ts"), "x").unwrap();
-    run("import { glob, search } from 'submilli:code'; function main(): void { assert(glob('src/*.ts').entries.length === 1); assert(glob('src/**/*.ts').entries.length === 2); assert(search('x',{path:'src',include:['*.ts']}).matches.length === 1); }",crate::runtime::StoreData::with_vfs(vfs)).await.unwrap();
+    run("import { glob, search } from 'submilli:code'; function main(): void { assert(glob('src/*.ts').entries.length === 1); assert(glob('src/**/*.ts').entries.length === 2); assert(search('x',{path:'src',include:['*.ts']}).matches.length === 1); }",crate::runtime::StoreData::with_vfs("test-run".into(), vfs)).await.unwrap();
 }
 
 #[test]
@@ -522,7 +533,7 @@ fn patch_eof_marker_must_resolve_to_eof() {
 async fn noop_edit_near_file_limit() {
     let vfs = crate::runtime::Vfs::tempdir().unwrap();
     std::fs::write(vfs.root().join("file"), "a".repeat(600)).unwrap();
-    let mut data = crate::runtime::StoreData::with_vfs(vfs);
+    let mut data = crate::runtime::StoreData::with_vfs("test-run".into(), vfs);
     data.fs_max_read_size = 1024;
     run("import { edit } from 'submilli:code'; function main(): void { const r = edit('/file','a','a',true); assert(r.success); assert(!r.changed); }",data).await.unwrap();
 }
@@ -531,7 +542,7 @@ async fn noop_edit_near_file_limit() {
 async fn binary_search_skips_before_utf8_decoding() {
     let vfs = crate::runtime::Vfs::tempdir().unwrap();
     std::fs::write(vfs.root().join("binary"), [0, 255, 254]).unwrap();
-    run("import { search } from 'submilli:code'; function main(): void { assert(search('.').matches.length === 0); }",crate::runtime::StoreData::with_vfs(vfs)).await.unwrap();
+    run("import { search } from 'submilli:code'; function main(): void { assert(search('.').matches.length === 0); }",crate::runtime::StoreData::with_vfs("test-run".into(), vfs)).await.unwrap();
 }
 
 #[tokio::test]
@@ -539,7 +550,7 @@ async fn nul_in_ignore_comment_does_not_disable_rules() {
     let vfs = crate::runtime::Vfs::tempdir().unwrap();
     std::fs::write(vfs.root().join(".gitignore"), "secret\n#\0\n").unwrap();
     std::fs::write(vfs.root().join("secret"), "secret").unwrap();
-    run("import { search,tree } from 'submilli:code'; function main(): void { assert(search('secret').matches.length === 0); assert(tree('/').entries.length === 0); }",crate::runtime::StoreData::with_vfs(vfs)).await.unwrap();
+    run("import { search,tree } from 'submilli:code'; function main(): void { assert(search('secret').matches.length === 0); assert(tree('/').entries.length === 0); }",crate::runtime::StoreData::with_vfs("test-run".into(), vfs)).await.unwrap();
 }
 
 #[cfg(unix)]
@@ -568,9 +579,12 @@ async fn special_files_are_refused_before_reading() {
         let source = format!(
             "import {{ read, edit, insertAt, diffFiles, applyPatch }} from 'submilli:code'; function main(): void {{ {expression}; }}"
         );
-        let error = run(&source, crate::runtime::StoreData::with_vfs(vfs.clone()))
-            .await
-            .unwrap_err();
+        let error = run(
+            &source,
+            crate::runtime::StoreData::with_vfs("test-run".into(), vfs.clone()),
+        )
+        .await
+        .unwrap_err();
         assert!(
             error.to_string().contains("not a regular file"),
             "{expression}: {error}"
@@ -590,7 +604,7 @@ async fn bom_prefixed_ignore_rules_hide_files() {
         let vfs = crate::runtime::Vfs::tempdir().unwrap();
         std::fs::write(vfs.root().join(name), "\u{feff}secret.txt\n").unwrap();
         std::fs::write(vfs.root().join("secret.txt"), "secret").unwrap();
-        run("import { search, tree, glob } from 'submilli:code'; function main(): void { assert(search('secret').matches.length === 0); assert(tree('/').entries.length === 0); assert(glob('**/*').entries.length === 0); }", crate::runtime::StoreData::with_vfs(vfs)).await.unwrap();
+        run("import { search, tree, glob } from 'submilli:code'; function main(): void { assert(search('secret').matches.length === 0); assert(tree('/').entries.length === 0); assert(glob('**/*').entries.length === 0); }", crate::runtime::StoreData::with_vfs("test-run".into(), vfs)).await.unwrap();
     }
 }
 
@@ -601,7 +615,7 @@ async fn custom_ignore_precedes_nested_gitignore() {
     std::fs::write(vfs.root().join(".ignore"), "secret.txt\n").unwrap();
     std::fs::write(vfs.root().join("src/.gitignore"), "!secret.txt\n").unwrap();
     std::fs::write(vfs.root().join("src/secret.txt"), "secret").unwrap();
-    run("import { search, tree, glob } from 'submilli:code'; function main(): void { assert(search('secret').matches.length === 0); assert(tree('/src').entries.length === 0); assert(glob('**/*.txt').entries.length === 0); }", crate::runtime::StoreData::with_vfs(vfs)).await.unwrap();
+    run("import { search, tree, glob } from 'submilli:code'; function main(): void { assert(search('secret').matches.length === 0); assert(tree('/src').entries.length === 0); assert(glob('**/*.txt').entries.length === 0); }", crate::runtime::StoreData::with_vfs("test-run".into(), vfs)).await.unwrap();
 }
 
 #[cfg(unix)]
@@ -621,9 +635,12 @@ async fn code_mutations_preserve_file_permissions() {
             let source = format!(
                 "import {{ edit, insertAt, applyPatch }} from 'submilli:code'; function main(): void {{ assert({expression}.changed); }}"
             );
-            run(&source, crate::runtime::StoreData::with_vfs(vfs.clone()))
-                .await
-                .unwrap();
+            run(
+                &source,
+                crate::runtime::StoreData::with_vfs("test-run".into(), vfs.clone()),
+            )
+            .await
+            .unwrap();
             assert_eq!(
                 std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
                 mode,
@@ -648,9 +665,12 @@ async fn navigation_root_rejects_symlink_components() {
             let source = format!(
                 "import {{ tree, search }} from 'submilli:code'; function main(): void {{ {expression}; }}"
             );
-            let error = run(&source, crate::runtime::StoreData::with_vfs(vfs.clone()))
-                .await
-                .unwrap_err();
+            let error = run(
+                &source,
+                crate::runtime::StoreData::with_vfs("test-run".into(), vfs.clone()),
+            )
+            .await
+            .unwrap_err();
             assert!(
                 error.to_string().contains(&format!(
                     "navigation root {path} must not traverse a symlink"
@@ -720,9 +740,12 @@ async fn edits_are_counted_against_the_size_limit() {
     let vfs = crate::runtime::Vfs::tempdir()
         .unwrap()
         .with_size_limit(100_000);
-    run(source, crate::runtime::StoreData::with_vfs(vfs))
-        .await
-        .unwrap();
+    run(
+        source,
+        crate::runtime::StoreData::with_vfs("test-run".into(), vfs),
+    )
+    .await
+    .unwrap();
 }
 #[tokio::test]
 async fn edits_in_a_read_only_mount_are_refused_and_searches_still_work() {
@@ -746,7 +769,7 @@ async fn edits_in_a_read_only_mount_are_refused_and_searches_still_work() {
         try { edit("/ro/a.ts", "hello", "bye"); } catch (e: PermissionDeniedError) { denied = true; }
         assert(denied);
     }"#,
-        crate::runtime::StoreData::with_vfs(vfs),
+        crate::runtime::StoreData::with_vfs("test-run".into(), vfs),
     )
     .await
     .unwrap();
@@ -781,7 +804,7 @@ async fn code_tools_resolve_relative_paths_and_patterns_from_cwd() {
             assert(glob("src/*.ts").entries[0].depth === 2, "prefix from cwd depth");
         }
     "#,
-        crate::runtime::StoreData::with_vfs(vfs),
+        crate::runtime::StoreData::with_vfs("test-run".into(), vfs),
     )
     .await
     .unwrap();
@@ -800,7 +823,7 @@ async fn glob_literal_prefix_excludes_unrelated_work() {
         }
         let usage = run_measured(
             "import { glob } from 'submilli:code'; function main(): void { const entries = glob('wanted/nested/*.ts').entries; assert(entries.length === 1); assert(entries[0].depth === 3); }",
-            crate::runtime::StoreData::with_vfs(vfs),
+            crate::runtime::StoreData::with_vfs("test-run".into(), vfs),
         ).await.unwrap();
         fuel.push(usage.host_fuel);
     }
@@ -819,14 +842,17 @@ async fn glob_prefix_preserves_hidden_ignored_missing_and_symlink_paths() {
     std::fs::write(vfs.root().join("hidden/.gitignore"), "!nested/\n").unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink("visible", vfs.root().join("alias")).unwrap();
-    run("import { glob } from 'submilli:code'; function main(): void { assert(glob('hidden/nested/*.ts').entries.length === 0); assert(glob('.private/*.ts').entries.length === 0); assert(glob('missing/*.ts').entries.length === 0); assert(glob('alias/*.ts').entries.length === 0); assert(glob('visible/file.ts/*.ts').entries.length === 0); assert(glob('visible/*.ts').entries.length === 1); }", crate::runtime::StoreData::with_vfs(vfs)).await.unwrap();
+    run("import { glob } from 'submilli:code'; function main(): void { assert(glob('hidden/nested/*.ts').entries.length === 0); assert(glob('.private/*.ts').entries.length === 0); assert(glob('missing/*.ts').entries.length === 0); assert(glob('alias/*.ts').entries.length === 0); assert(glob('visible/file.ts/*.ts').entries.length === 0); assert(glob('visible/*.ts').entries.length === 1); }", crate::runtime::StoreData::with_vfs("test-run".into(), vfs)).await.unwrap();
 }
 
 #[tokio::test]
 async fn large_small_edits_are_not_refused_by_a_line_product() {
     run(
         include_str!("../../../tests/fixtures/code/linear_diff.ts"),
-        crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().unwrap()),
+        crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().unwrap(),
+        ),
     )
     .await
     .unwrap();
@@ -835,7 +861,11 @@ async fn large_small_edits_are_not_refused_by_a_line_product() {
 #[tokio::test]
 async fn diff_native_memory_admission_is_fatal_and_releases_its_budget() {
     let vfs = crate::runtime::Vfs::tempdir().unwrap();
-    let data = crate::runtime::StoreData::with_vfs_and_cap(vfs.clone(), 4 * 1024 * 1024);
+    let data = crate::runtime::StoreData::with_vfs_and_cap(
+        "test-run".into(),
+        vfs.clone(),
+        4 * 1024 * 1024,
+    );
     let error = run(
         r#"
         import { diffText } from "submilli:code";
@@ -854,7 +884,7 @@ async fn diff_native_memory_admission_is_fatal_and_releases_its_budget() {
         import { diffText } from "submilli:code";
         function main(): void { assert(diffText("same\n", "same\n") === ""); }
     "#,
-        crate::runtime::StoreData::with_vfs(vfs),
+        crate::runtime::StoreData::with_vfs("test-run".into(), vfs),
     )
     .await
     .unwrap();
@@ -898,7 +928,7 @@ async fn relative_glob_starts_inside_hidden_or_ignored_cwd() {
                 assert(glob("src/*.ts").entries[0].depth === 2);
             }
         "#,
-            crate::runtime::StoreData::with_vfs(vfs),
+            crate::runtime::StoreData::with_vfs("test-run".into(), vfs),
         )
         .await
         .unwrap();
@@ -910,6 +940,7 @@ async fn rejected_mutation_result_does_not_publish_the_edit() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("file"), "a\n").unwrap();
     let mut data = crate::runtime::StoreData::with_vfs(
+        "test-run".into(),
         crate::runtime::Vfs::external(root.path().to_owned()).unwrap(),
     );
     data.fs_max_read_size = 64;

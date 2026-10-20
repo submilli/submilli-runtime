@@ -165,7 +165,7 @@ mod tests {
             compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.security_check = recording.clone();
         let mut store = cfg.store(&engine, data).expect("store");
         let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");

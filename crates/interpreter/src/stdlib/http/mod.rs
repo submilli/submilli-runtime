@@ -1272,7 +1272,7 @@ mod tests {
             .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.install_type_info(compiled.type_info.clone());
         let mock = Arc::new(MockHttpClient::new(scripted));
         data.http_client = mock.clone();
@@ -1297,7 +1297,7 @@ mod tests {
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
-            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .store_async(&engine, StoreData::with_vfs("test-run".into(), Vfs::none()))
             .unwrap();
         let mut linker = wasmtime::Linker::new(&engine);
         install_runtime_async(&mut linker, &mut store)
@@ -1470,7 +1470,7 @@ function main(): void {
         .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         let mock = Arc::new(MockHttpClient::new(vec![ok_response(200, "hi")]));
         let proxy = Arc::new(RecordingAuthProxy {
             callers: Mutex::new(Vec::new()),
@@ -1561,7 +1561,7 @@ function main(): void {
         );
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.install_type_info(lib_type_info);
         let mock = Arc::new(MockHttpClient::new(vec![ok_response(200, "hi")]));
         let proxy = Arc::new(RecordingAuthProxy {
@@ -1649,7 +1649,7 @@ function main(): void {
             compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         let mock = Arc::new(MockHttpClient::new(vec![ok_response(200, "hi")]));
         let proxy = Arc::new(RecordingAuthProxy {
             callers: Mutex::new(Vec::new()),
@@ -1709,7 +1709,7 @@ function main(): void {
             compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.security_check = Arc::new(DenyAllHttp);
         // Mock client never invoked — the security check denies first.
         data.http_client = Arc::new(MockHttpClient::new(vec![ok_response(200, "")]));
@@ -1886,7 +1886,7 @@ function main(): void {
             .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.security_check = recording.clone();
         data.http_client = Arc::new(MockHttpClient::new(vec![ok_response(200, "")]));
         let mut store = cfg.store(&engine, data).expect("store");
@@ -1940,7 +1940,7 @@ function main(): void {
         .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.security_check = recording.clone();
         data.http_client = Arc::new(MockHttpClient::new(vec![ok_response(200, "")]));
         let mut store = cfg.store(&engine, data).expect("store");
@@ -2053,7 +2053,7 @@ function main(): void {
             .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         let response_404 = HttpResponse {
             status: 404,
             status_text: "Not Found".to_string(),
@@ -2130,7 +2130,7 @@ function main(): void {
             let compiled = compile_script(&source, "test.ts", crate::FileId(0), &[], &[]).unwrap();
             let cfg = RuntimeConfig::default();
             let engine = cfg.engine().unwrap();
-            let mut data = StoreData::with_vfs(Vfs::tempdir().unwrap());
+            let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().unwrap());
             data.http_client = Arc::new(BrokenSetup);
             let mut store = cfg.store(&engine, data).unwrap();
             let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
@@ -2206,7 +2206,7 @@ function main(): void {
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().unwrap();
         let client = Arc::new(CountingClient(std::sync::atomic::AtomicUsize::new(0)));
-        let mut data = StoreData::with_vfs(vfs);
+        let mut data = StoreData::with_vfs("test-run".into(), vfs);
         data.http_client = client.clone();
         let mut store = cfg.store(&engine, data).unwrap();
         let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
@@ -2251,7 +2251,7 @@ function main(): void {
             compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.http_client = Arc::new(FailingClient);
         let mut store = cfg.store(&engine, data).expect("store");
         let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
@@ -2597,7 +2597,7 @@ function main(): void {
             .expect("external vfs")
             .with_cwd(cwd)
             .expect("cwd");
-        let mut data = StoreData::with_vfs(vfs);
+        let mut data = StoreData::with_vfs("test-run".into(), vfs);
         data.http_client = client;
         if let Some(sec) = security {
             data.security_check = sec;
@@ -2736,7 +2736,7 @@ function main(): void {
         let engine = cfg.engine().expect("engine");
         let vfs = Vfs::tempdir().expect("tempdir");
         std::fs::write(vfs.root().join("exists.bin"), b"old").expect("seed");
-        let mut data = StoreData::with_vfs(vfs);
+        let mut data = StoreData::with_vfs("test-run".into(), vfs);
         let mock = Arc::new(MockHttpClient::new(vec![ok_response(200, "hello")]));
         data.http_client = mock;
         let compiled =
@@ -2783,7 +2783,7 @@ function main(): void {
         let vfs = Vfs::tempdir().expect("tempdir");
         std::fs::write(vfs.root().join("exists.bin"), b"old").expect("seed");
         let vfs_root = vfs.root().to_path_buf();
-        let mut data = StoreData::with_vfs(vfs);
+        let mut data = StoreData::with_vfs("test-run".into(), vfs);
         let mock = Arc::new(MockHttpClient::new(vec![ok_response(200, "new")]));
         data.http_client = mock;
         let compiled =
@@ -3349,7 +3349,7 @@ function main(): void {
         let engine = cfg.engine().expect("engine");
         let tmp = tempfile::tempdir().expect("tempdir");
         let vfs = Vfs::external(tmp.path().to_path_buf()).expect("external vfs");
-        let mut data = StoreData::with_vfs(vfs);
+        let mut data = StoreData::with_vfs("test-run".into(), vfs);
         data.http_client = Arc::new(StreamingClient);
         let mut store = cfg.store(&engine, data).expect("store");
         let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
@@ -3765,7 +3765,7 @@ function main(): void {
             .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         let client = Arc::new(RedirectingClient {
             hop_method: "GET",
             hop_url: "https://evil.test/collect",

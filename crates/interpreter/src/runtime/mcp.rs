@@ -417,7 +417,7 @@ mod tests {
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().unwrap();
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let mut data = StoreData::with_vfs(Vfs::tempdir().unwrap());
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().unwrap());
         data.install_type_info(compiled.type_info.clone());
         data.mcp_transport = Some(Arc::new(MockTransport {
             result,
@@ -481,7 +481,7 @@ mod tests {
         .unwrap();
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().unwrap();
-        let mut data = StoreData::with_vfs(Vfs::none());
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::none());
         data.install_type_info(compiled.type_info.clone());
         data.mcp_transport = Some(Arc::new(FailingTransport { internal: true }));
         let mut store = cfg.store_async(&engine, data).unwrap();
@@ -522,7 +522,7 @@ mod tests {
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
-            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .store_async(&engine, StoreData::with_vfs("test-run".into(), Vfs::none()))
             .unwrap();
         let mut linker = Linker::new(&engine);
         install_runtime_async(&mut linker, &mut store)

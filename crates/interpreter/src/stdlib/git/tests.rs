@@ -187,7 +187,7 @@ async fn repository_class_construction_and_dispatch() {
 }
 
 fn test_data(vfs: Vfs) -> StoreData {
-    let mut data = StoreData::with_vfs(vfs);
+    let mut data = StoreData::with_vfs("test-run".into(), vfs);
     data.git = Some(GitConfig {
         name: "Agent".into(),
         email: "agent@example.com".into(),

@@ -274,7 +274,7 @@ mod tests {
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
-            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .store_async(&engine, StoreData::with_vfs("test-run".into(), Vfs::none()))
             .unwrap();
         let mut linker = Linker::new(&engine);
         install_runtime_async(&mut linker, &mut store)
@@ -329,7 +329,7 @@ mod tests {
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
-            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .store_async(&engine, StoreData::with_vfs("test-run".into(), Vfs::none()))
             .unwrap();
         let mut linker = Linker::new(&engine);
         install_runtime_async(&mut linker, &mut store)

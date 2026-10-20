@@ -1782,7 +1782,7 @@ mod tests {
         };
         let engine = server_engine(&runtime).expect("server engine");
         let module = Module::new(&engine, &compiled.wasm).expect("module");
-        let data = StoreData::with_vfs(Vfs::tempdir().unwrap());
+        let data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().unwrap());
         let mut store = runtime.store_async(&engine, data).expect("store");
         install_tenant_limits(&mut store);
         let mut linker = Linker::<StoreData>::new(&engine);

@@ -9,6 +9,7 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use submilli_core::RunId;
 
 use interpreter::diagnostics::{self, Severity};
 use interpreter::runtime::limits::ExecutionUsage;
@@ -150,6 +151,7 @@ pub(crate) struct ToolsPackage {
 }
 
 pub(crate) struct RunnerRuntime<'a> {
+    pub run_id: &'a RunId,
     pub blueprint: &'a str,
     pub session: &'a str,
     pub engine: &'a Engine,
@@ -172,6 +174,7 @@ pub(crate) async fn run(
     imports: RunnerImports<'_>,
 ) -> RunOutcome {
     let started = Instant::now();
+    let run_id = runtime.run_id.clone();
     let blueprint = runtime.blueprint.to_owned();
     let session = runtime.session.to_owned();
     let owned_code = code.to_owned();
@@ -220,6 +223,7 @@ pub(crate) async fn run(
             &owned_code,
             parsed,
             RunnerRuntime {
+                run_id: &run_id,
                 blueprint: &blueprint,
                 session: &session,
                 engine: &engine,
@@ -367,7 +371,8 @@ async fn run_inner(
     crate::metrics::compile_phases(&compiled.timings);
 
     let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let mut data = StoreData::with_vfs_and_cap(vfs, runtime.config.max_store_bytes);
+    let mut data =
+        StoreData::with_vfs_and_cap(runtime.run_id.clone(), vfs, runtime.config.max_store_bytes);
     data.effects = services.effects;
     if let Some(filesystem) = services.filesystem {
         data.filesystem = filesystem;
@@ -1170,7 +1175,7 @@ mod tests {
     async fn cancelled_git_owner_retains_resources(panic_after_resume: bool) {
         let vfs = Vfs::tempdir().unwrap();
         let root = vfs.root().to_owned();
-        let defaults = StoreData::with_vfs(Vfs::none());
+        let defaults = StoreData::with_vfs("test-run".into(), Vfs::none());
         let (finish, cleanup) = std::sync::mpsc::channel();
         let security = Arc::new(PausedGit {
             panic_after_resume,
@@ -1224,10 +1229,12 @@ mod tests {
                 fs.writeText("/continued", "must not run");
             }
         "#;
+        let run_id = "test-run".into();
         let mut request = Box::pin(run(
             code,
             parse(code).unwrap(),
             RunnerRuntime {
+                run_id: &run_id,
                 blueprint: "test",
                 session: "test-session",
                 engine: &engine,

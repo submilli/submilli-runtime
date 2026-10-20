@@ -230,7 +230,7 @@ mod tests {
         let mut store = cfg
             .store_async(
                 &engine,
-                StoreData::with_vfs(Vfs::tempdir().expect("tempdir")),
+                StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir")),
             )
             .expect("store");
         let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");

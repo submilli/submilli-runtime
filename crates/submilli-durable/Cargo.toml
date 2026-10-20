@@ -9,6 +9,7 @@ publish.workspace = true
 test-support = []
 
 [dependencies]
+submilli-core.workspace = true
 interpreter.workspace = true
 async-trait.workspace = true
 base64.workspace = true

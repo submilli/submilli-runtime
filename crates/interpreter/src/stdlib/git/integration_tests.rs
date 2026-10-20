@@ -93,7 +93,7 @@ fn failed_metadata_staging_does_not_leave_a_recovery_blocker() {
 }
 
 fn job(vfs: &Vfs, op: &str) -> Job {
-    let data = StoreData::with_vfs(vfs.clone());
+    let data = StoreData::with_vfs("test-run".into(), vfs.clone());
     Job {
         op: op.into(),
         path: "/".into(),

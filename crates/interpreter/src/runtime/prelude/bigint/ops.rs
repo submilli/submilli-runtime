@@ -632,7 +632,10 @@ mod tests {
     fn division_and_modulo_are_registered_synchronously() {
         let cfg = crate::runtime::RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let data = StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let data = StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         let mut store = cfg.store_async(&engine, data).expect("store");
         let mut linker = Linker::<StoreData>::new(&engine);
         crate::runtime::host::install_host_functions(&mut linker).expect("install");

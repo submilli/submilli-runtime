@@ -1,5 +1,6 @@
 //! Wasmtime engine configuration for Submilli.
 
+use submilli_core::RunId;
 pub mod agents;
 pub(crate) mod array_storage;
 pub mod blocking;
@@ -286,11 +287,11 @@ pub struct LinkedPackageModule<'a> {
 }
 
 impl StoreData {
-    pub fn with_vfs(vfs: Vfs) -> Self {
-        Self::with_vfs_and_cap(vfs, DEFAULT_MAX_STORE_BYTES)
+    pub fn with_vfs(run_id: RunId, vfs: Vfs) -> Self {
+        Self::with_vfs_and_cap(run_id, vfs, DEFAULT_MAX_STORE_BYTES)
     }
 
-    pub fn with_vfs_and_cap(vfs: Vfs, max_store_bytes: u64) -> Self {
+    pub fn with_vfs_and_cap(run_id: RunId, vfs: Vfs, max_store_bytes: u64) -> Self {
         let vfs_info = VfsInfo {
             mode: vfs.mode(),
             size_limit: None,
@@ -301,7 +302,7 @@ impl StoreData {
             console: Box::new(std::io::stderr()),
             filesystem: Arc::new(default_filesystem::DefaultFilesystem::new(
                 vfs.clone(),
-                durable::RunId::local(),
+                run_id,
             )),
             effects: None,
             vfs,
@@ -364,7 +365,7 @@ impl StoreData {
     }
 
     pub fn with_tempdir() -> std::io::Result<Self> {
-        Ok(Self::with_vfs(Vfs::tempdir()?))
+        Ok(Self::with_vfs(RunId::generate()?, Vfs::tempdir()?))
     }
 }
 
@@ -638,7 +639,8 @@ impl RuntimeConfig {
         type_info: Option<TypeInfoTable>,
     ) -> wasmtime::Result<RunResult> {
         let buf = Arc::new(Mutex::new(Vec::new()));
-        let mut data = StoreData::with_vfs_and_cap(Vfs::tempdir()?, self.max_store_bytes);
+        let mut data =
+            StoreData::with_vfs_and_cap(RunId::generate()?, Vfs::tempdir()?, self.max_store_bytes);
         data.console = Box::new(ConsoleSink(Arc::clone(&buf)));
         if let Some(type_info) = type_info {
             data.install_type_info(type_info);

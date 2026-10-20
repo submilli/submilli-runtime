@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use submilli_core::RunId;
 
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::response::IntoResponse;
@@ -477,7 +478,7 @@ async fn execute_core_with(
 fn run_start(inputs: &ExecuteInputs<'_>, test: Option<&TestWorld>) -> crate::record::RunStart {
     let audit = inputs.audit.as_deref();
     crate::record::RunStart {
-        execution_id: execution_id_of(audit),
+        execution_id: execution_id_of(audit).to_string(),
         label: audit.map_or_else(
             || "unauthenticated".to_owned(),
             |audit| audit.principal.clone(),
@@ -743,6 +744,7 @@ async fn prepare_and_run(
         code,
         parsed,
         runner::RunnerRuntime {
+            run_id: &execution_id_of(audit),
             blueprint: blueprint_name,
             session: session_id,
             engine: state.engine(),
@@ -971,7 +973,7 @@ fn response_for_error(
     message: String,
 ) -> ExecuteResponse {
     ExecuteResponse {
-        execution_id: execution_id_of(audit),
+        execution_id: execution_id_of(audit).to_string(),
         session_id: session_id.to_string(),
         result: None,
         console: Vec::new(),
@@ -1007,7 +1009,7 @@ pub(crate) fn internal_failure(
     }
 }
 
-fn execution_id_of(audit: Option<&crate::audit::ExecutionAudit>) -> String {
+fn execution_id_of(audit: Option<&crate::audit::ExecutionAudit>) -> RunId {
     audit.map_or_else(crate::audit::execution_id, |audit| audit.id.clone())
 }
 
@@ -1019,7 +1021,7 @@ fn into_response(
 ) -> ExecuteResponse {
     let (result, console, error) = outcome_to_parts(outcome, console_lines);
     ExecuteResponse {
-        execution_id: execution_id_of(audit),
+        execution_id: execution_id_of(audit).to_string(),
         session_id: session_id.to_string(),
         result,
         console,

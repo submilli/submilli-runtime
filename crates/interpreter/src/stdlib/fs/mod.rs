@@ -1894,7 +1894,9 @@ mod tests {
                 assert(found, "listing uses cwd");
             }
         "#;
-        run_with(source, StoreData::with_vfs(vfs)).await.unwrap();
+        run_with(source, StoreData::with_vfs("test-run".into(), vfs))
+            .await
+            .unwrap();
         assert_eq!(quota.used(), 8);
     }
 
@@ -1919,7 +1921,7 @@ mod tests {
                 assert(readText("/notes/a") === "hello", "copy merges into mount root");
             }
         "#,
-            StoreData::with_vfs(vfs),
+            StoreData::with_vfs("test-run".into(), vfs),
         )
         .await
         .unwrap();
@@ -1940,7 +1942,7 @@ mod tests {
                 assert(text === "ok", "a later reader still works");
             }
         "#;
-        let mut data = StoreData::with_vfs(Vfs::tempdir().unwrap());
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().unwrap());
         data.fs_max_read_size = 4;
         run_with(source, data).await.unwrap();
     }
@@ -2010,7 +2012,7 @@ function main(): void {
             crate::runtime::vfs::Access::ReadWrite,
             None,
         );
-        run_with(source, StoreData::with_vfs(vfs))
+        run_with(source, StoreData::with_vfs("test-run".into(), vfs))
             .await
             .expect("host guards");
     }
@@ -2123,7 +2125,7 @@ function main(): void {
             compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         let mut store = cfg.store(&engine, data).expect("store");
         let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
         let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
@@ -2192,7 +2194,7 @@ function main(): void {
         let recording = Arc::new(ReadContextCheck {
             seen: std::sync::Mutex::new(Vec::new()),
         });
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.security_check = recording.clone();
         run_with(source, data).await.expect("main ran");
 
@@ -2225,7 +2227,7 @@ function main(): void {
             compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.security_check = recording.clone();
         let mut store = cfg.store(&engine, data).expect("store");
         let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
@@ -2280,7 +2282,7 @@ function main(): void {
         .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.security_check = recording.clone();
         let mut store = cfg.store(&engine, data).expect("store");
         let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
@@ -2322,7 +2324,7 @@ function main(): void {
                 return "not denied";
             }
         "#;
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.security_check = Arc::new(DenyAllFs);
         let value = run_with(source, data)
             .await
@@ -2375,7 +2377,7 @@ function main(): void {
         let result = run_with_fuel(
             r#"import { remove, exists } from "submilli:fs";
             function main(): void { remove("/tree", true); assert(!exists("/tree")); }"#,
-            StoreData::with_vfs(vfs.clone()),
+            StoreData::with_vfs("test-run".into(), vfs.clone()),
             Some(9000),
         )
         .await;
@@ -2389,7 +2391,7 @@ function main(): void {
         );
         run_with(r#"import { writeText, readText } from "submilli:fs";
             function main(): void { writeText("/healthy", "ok"); assert(readText("/healthy") === "ok"); }"#,
-            StoreData::with_vfs(vfs)).await.unwrap();
+            StoreData::with_vfs("test-run".into(), vfs)).await.unwrap();
     }
 
     #[tokio::test]
@@ -2400,7 +2402,7 @@ function main(): void {
                 writeText("/x.txt", "hi");
             }
         "#;
-        let data = StoreData::with_vfs(Vfs::none());
+        let data = StoreData::with_vfs("test-run".into(), Vfs::none());
         let err = run_with(source, data)
             .await
             .expect_err("none mode must trap fs calls");
@@ -2421,7 +2423,7 @@ function main(): void {
                 assert(fs.sizeLimit === 1048576, "size limit surfaced");
             }
         "#;
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.vfs_info = VfsInfo {
             mode: VfsMode::PerSession,
             size_limit: Some(1024 * 1024),
@@ -2431,7 +2433,7 @@ function main(): void {
 
     fn limited(limit: u64) -> StoreData {
         let vfs = Vfs::tempdir().expect("tempdir").with_size_limit(limit);
-        let mut data = StoreData::with_vfs(vfs);
+        let mut data = StoreData::with_vfs("test-run".into(), vfs);
         data.vfs_info.size_limit = Some(limit);
         data
     }
@@ -2579,7 +2581,7 @@ function main(): void {
                 writeText("/after.txt", "y".repeat(100));
             }
         "#;
-        run_with(source, StoreData::with_vfs(vfs))
+        run_with(source, StoreData::with_vfs("test-run".into(), vfs))
             .await
             .expect("truncating and removing recover the limit");
     }
@@ -2647,7 +2649,7 @@ function main(): void {
                 catch (e) { return (e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError) ? "true " : "false ") + (e as Error).message; }
             }
         "#;
-        let result = run_with(source, StoreData::with_vfs(vfs))
+        let result = run_with(source, StoreData::with_vfs("test-run".into(), vfs))
             .await
             .expect("runs")
             .expect("a result");
@@ -2771,7 +2773,7 @@ function main(): void {
         std::fs::write(vfs.root().join("t.bin"), vec![b't'; 50000]).expect("write");
         std::os::unix::fs::symlink("t.bin", vfs.root().join("l")).expect("symlink");
         let vfs = vfs.with_size_limit(100000);
-        let mut data = StoreData::with_vfs(vfs);
+        let mut data = StoreData::with_vfs("test-run".into(), vfs);
         data.vfs_info.size_limit = Some(100000);
         let source = r#"
             import { writeText, copy } from "submilli:fs";
@@ -2874,7 +2876,7 @@ function main(): void {
                 assert(mount.sizeLimit === 1000, "mount size limit");
             }
         "#;
-        let data = StoreData::with_vfs(vfs);
+        let data = StoreData::with_vfs("test-run".into(), vfs);
         let quota = data.vfs.mounts()[0].quota().cloned().expect("quota");
         run_with(source, data).await.expect("mount asserts hold");
         assert_eq!(
@@ -2925,7 +2927,7 @@ function main(): void {
                 assert(info().mounts[0].access === "read_only", "info reports read-only");
             }
         "#;
-        run_with(source, StoreData::with_vfs(vfs))
+        run_with(source, StoreData::with_vfs("test-run".into(), vfs))
             .await
             .expect("read-only asserts hold");
         assert!(!volume.path().join("b.txt").exists());
@@ -2950,7 +2952,7 @@ function main(): void {
                 return "not denied";
             }
         "#;
-        let mut data = StoreData::with_vfs(vfs);
+        let mut data = StoreData::with_vfs("test-run".into(), vfs);
         data.security_check = Arc::new(DenyAllFs);
         let value = run_with(source, data).await.expect("caught");
         assert_eq!(value.as_deref(), Some("denied fs.write in test"));
@@ -2999,7 +3001,7 @@ function main(): void {
                 assert(info().access === "read_only", "root access surfaced");
             }
         "#;
-        run_with(source, StoreData::with_vfs(vfs))
+        run_with(source, StoreData::with_vfs("test-run".into(), vfs))
             .await
             .expect("read-only root asserts hold");
         assert!(volume.path().join("x.txt").exists());
@@ -3036,7 +3038,7 @@ function main(): void {
                 remove("/a/sibling.txt", false);
             }
         "#;
-        run_with(source, StoreData::with_vfs(vfs))
+        run_with(source, StoreData::with_vfs("test-run".into(), vfs))
             .await
             .expect("mount-point asserts hold");
         assert!(volume.path().join("v.txt").exists());
@@ -3062,7 +3064,7 @@ function main(): void {
             import { writeText } from "submilli:fs";
             function main(): void { writeText("/one/a.txt", "x".repeat(60)); }
         "#;
-        run_with(write, StoreData::with_vfs(first))
+        run_with(write, StoreData::with_vfs("test-run".into(), first))
             .await
             .expect("first write fits");
         let refuse = r#"
@@ -3074,7 +3076,7 @@ function main(): void {
                 assert(refused, "the shared limit refuses the second write");
             }
         "#;
-        run_with(refuse, StoreData::with_vfs(second))
+        run_with(refuse, StoreData::with_vfs("test-run".into(), second))
             .await
             .expect("second alias shares the limit");
         assert_eq!(quota.used(), 60);
@@ -3108,7 +3110,7 @@ function main(): void {
                 assert(readText("/back.txt")!.length === 10, "moved back");
             }
         "#;
-        run_with(source, StoreData::with_vfs(vfs))
+        run_with(source, StoreData::with_vfs("test-run".into(), vfs))
             .await
             .expect("cross-volume move asserts hold");
         assert_eq!(root_quota.used(), 10, "the root holds only back.txt");
@@ -3166,7 +3168,7 @@ function main(): void {
                 assert(readText("/here") === "replaced", "a write replaces a link to the root rather than refusing");
             }
         "#;
-        run_with(source, StoreData::with_vfs(vfs))
+        run_with(source, StoreData::with_vfs("test-run".into(), vfs))
             .await
             .expect("link asserts hold");
         assert!(
@@ -3215,7 +3217,7 @@ function main(): void {
                 assert(exists(deep + "/f.txt"), "the source is untouched");
             }
         "#;
-        run_with(source, StoreData::with_vfs(vfs))
+        run_with(source, StoreData::with_vfs("test-run".into(), vfs))
             .await
             .expect("deep move asserts hold");
         assert_eq!(
@@ -3280,7 +3282,7 @@ function main(): void {
                 assert(exists("/dir") && exists("/file.txt"), "the sources are untouched");
             }
         "#;
-        run_with(source, StoreData::with_vfs(vfs))
+        run_with(source, StoreData::with_vfs("test-run".into(), vfs))
             .await
             .expect("existing-destination asserts hold");
         assert_eq!(
@@ -3322,7 +3324,7 @@ function main(): void {
                 assert(refused(() => move("/ſkills", "/elsewhere")), "move the mount point by its alias");
             }
         "#;
-        run_with(source, StoreData::with_vfs(vfs))
+        run_with(source, StoreData::with_vfs("test-run".into(), vfs))
             .await
             .expect("alias asserts hold");
         assert_eq!(
@@ -3362,7 +3364,7 @@ function main(): void {
                 writeText("/\u017Fets/beside.txt", "beside");
             }
         "#;
-        run_with(source, StoreData::with_vfs(vfs))
+        run_with(source, StoreData::with_vfs("test-run".into(), vfs))
             .await
             .expect("nested alias asserts hold");
         assert_eq!(
@@ -3404,7 +3406,7 @@ function main(): void {
                 writeText("/fine.txt", "fine");
             }
         "#;
-        run_with(source, StoreData::with_vfs(vfs))
+        run_with(source, StoreData::with_vfs("test-run".into(), vfs))
             .await
             .expect("loop asserts hold");
     }
@@ -3442,7 +3444,7 @@ function main(): void {
                 assert(exists("/memory/tree.txt"), "the source is untouched");
             }
         "#;
-        run_with(source, StoreData::with_vfs(vfs))
+        run_with(source, StoreData::with_vfs("test-run".into(), vfs))
             .await
             .expect("ancestor move asserts hold");
         assert_eq!(quota.used(), 0);

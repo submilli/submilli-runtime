@@ -36,7 +36,7 @@ pub(crate) fn capture_program(
 pub(crate) fn history(run: &Run, units: submilli_durable::UnitFactory) -> Arc<History> {
     Arc::new(History::new(
         ExecutionAttempt {
-            run_id: run.reservation_id().into(),
+            run_id: run.reservation_id().clone(),
             owner_generation: run.owner_generation().into(),
             attempt: run.attempt(),
         },
@@ -63,11 +63,14 @@ pub(crate) async fn run(
     {
         return Err("recorded runtime or limits do not match this execution environment".into());
     }
-    if runtime.session != run.session_id() || runtime.blueprint != program.blueprint.name {
+    if runtime.run_id != run.reservation_id()
+        || runtime.session != run.session_id()
+        || runtime.blueprint != program.blueprint.name
+    {
         return Err("recorded execution identity does not match the requested environment".into());
     }
     let filesystem =
-        submilli_durable::DurableFilesystem::open(vfs.clone(), &run.reservation_id().into(), units)
+        submilli_durable::DurableFilesystem::open(vfs.clone(), run.reservation_id(), units)
             .await
             .map_err(|error| error.to_string())?;
     services.effects = Some(history.clone());

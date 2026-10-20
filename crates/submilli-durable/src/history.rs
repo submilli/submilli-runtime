@@ -2,13 +2,14 @@
 //!
 //! There is no durable pending state: the program supplies the next call again
 //! after restart. Only a committed outcome suppresses its native action.
-use interpreter::runtime::durable::{EffectId, RunId};
+use interpreter::runtime::durable::EffectId;
 use interpreter::runtime::effects::{
     CODEC_VERSION, EffectCall, EffectHistory, HistoryError, RecordedOutcome,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
+use submilli_core::RunId;
 use tokio::sync::Mutex;
 
 use crate::unit_of_work::{StoreError, UnitFactory};

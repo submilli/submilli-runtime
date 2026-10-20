@@ -44,7 +44,7 @@ jobs:
       # Packaging builds each from its packaged files alone, so a source file
       # left out of a package fails here rather than at release.
       - name: Package for crates.io
-        run: cargo publish --dry-run --locked -p submilli-engine -p submilli-policy -p submilli-build
+        run: cargo publish --dry-run --locked -p submilli-core -p submilli-engine -p submilli-policy -p submilli-build
 
       # The workspace build always turns on `submilli-policy`'s `engine`
       # feature; embedders may not, so lint and test it without the feature too.

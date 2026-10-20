@@ -1,0 +1,19 @@
+[package]
+name = "submilli-core"
+description = "Shared execution identities for Submilli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+getrandom = "0.2"
+uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

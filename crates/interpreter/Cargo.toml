@@ -16,6 +16,7 @@ exclude = ["tests/**", "**/snapshots/**"]
 workspace = true
 
 [dependencies]
+submilli-core.workspace = true
 wasmtime = { workspace = true }
 wasm-encoder = { workspace = true }
 wasmparser = { workspace = true }

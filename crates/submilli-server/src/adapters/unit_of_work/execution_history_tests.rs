@@ -198,7 +198,10 @@ async fn run_script_with(
         interpreter::compile_script(source, "replay.ts", interpreter::FileId(0), &[], &[]).unwrap();
     let config = RuntimeConfig::default();
     let engine = config.engine().unwrap();
-    let mut data = StoreData::with_vfs(Vfs::external(root.to_path_buf()).unwrap());
+    let mut data = StoreData::with_vfs(
+        "test-run".into(),
+        Vfs::external(root.to_path_buf()).unwrap(),
+    );
     data.effects = Some(history.clone());
     configure(&mut data);
     let mut store = config.store(&engine, data).unwrap();
@@ -269,7 +272,7 @@ async fn execution_history_rejects_process_local_resources_with_run_ids() {
         std::fs::write(root.join("input"), b"abc").unwrap();
         let (_database, units, attempt) = fixture(&directory.path().join("db")).await;
         let history = Arc::new(History::new(attempt.clone(), units.clone()));
-        let mut data = StoreData::with_vfs(Vfs::external(root.clone()).unwrap());
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::external(root.clone()).unwrap());
         data.effects = Some(history);
         let source = format!(
             r#"
@@ -360,7 +363,7 @@ async fn run_filesystem_script(
     let vfs = Vfs::external(root.to_path_buf())?;
     let filesystem =
         submilli_durable::DurableFilesystem::open(vfs.clone(), &attempt.run_id, units).await?;
-    let mut data = StoreData::with_vfs(vfs);
+    let mut data = StoreData::with_vfs(attempt.run_id.clone(), vfs);
     data.filesystem = Arc::new(filesystem);
     data.effects = Some(history.clone());
     let compiled =
@@ -448,7 +451,7 @@ async fn execution_history_replays_after_result_conversion_runs_out_of_fuel() {
         let history = Arc::new(History::new(attempt.clone(), units.clone()));
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
-        let mut data = StoreData::with_vfs(Vfs::none());
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::none());
         data.effects = Some(history.clone());
         let mut store = config.store_async(&engine, data).unwrap();
         let mut linker = wasmtime::Linker::new(&engine);

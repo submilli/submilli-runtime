@@ -1,47 +1,6 @@
 //! Shared identities for durable execution.
 
-/// Identity of one run. Its effects and resource handles share this namespace.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
-#[serde(transparent)]
-pub struct RunId(pub String);
-
-impl From<String> for RunId {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-impl From<&str> for RunId {
-    fn from(value: &str) -> Self {
-        Self(value.to_owned())
-    }
-}
-impl std::ops::Deref for RunId {
-    type Target = str;
-    fn deref(&self) -> &str {
-        self.as_str()
-    }
-}
-impl std::fmt::Display for RunId {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-impl RunId {
-    /// Identity for an in-process run without retained execution history.
-    /// These identities are local to this process, not restart-stable IDs.
-    pub(crate) fn local() -> Self {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT_RUN: AtomicU64 = AtomicU64::new(0);
-        Self(format!(
-            "local-{}",
-            NEXT_RUN.fetch_add(1, Ordering::Relaxed)
-        ))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
+pub use submilli_core::RunId;
 
 /// Identity of one logical call. Retries must reuse it; distinct calls must not.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]

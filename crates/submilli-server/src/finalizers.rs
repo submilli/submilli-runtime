@@ -1,6 +1,7 @@
 //! Execute an installed package entry point in an independently bounded runtime.
 use std::sync::Arc;
 use std::time::Duration;
+use submilli_core::RunId;
 
 use interpreter::runtime::{
     LinkedPackageModule, StoreData, dispatch_main_async, install_package_modules_async,
@@ -239,7 +240,11 @@ async fn host_services(
         .finalizer_vfs(&invocation.session_id, blueprint, &variables)
         .await
         .map_err(|_| FinalizerFailure::Execution)?;
-    let mut data = StoreData::with_vfs_and_cap(vfs, state.runtime().max_store_bytes);
+    let mut data = StoreData::with_vfs_and_cap(
+        RunId::generate().map_err(|_| FinalizerFailure::Execution)?,
+        vfs,
+        state.runtime().max_store_bytes,
+    );
     data.vfs_info = vfs_info;
     data.finalizing = true;
     data.git = submilli_shared::resolve_git(blueprint, &variables)

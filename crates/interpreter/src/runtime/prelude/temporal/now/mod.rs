@@ -82,7 +82,7 @@ mod tests {
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
-            .store(&engine, StoreData::with_vfs(Vfs::none()))
+            .store(&engine, StoreData::with_vfs("test-run".into(), Vfs::none()))
             .unwrap();
         let probe = Func::new(
             &mut store,

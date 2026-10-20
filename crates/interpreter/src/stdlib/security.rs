@@ -357,7 +357,10 @@ mod tests {
         let config = crate::runtime::RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
-            .store_async(&engine, StoreData::with_vfs(crate::runtime::Vfs::none()))
+            .store_async(
+                &engine,
+                StoreData::with_vfs("test-run".into(), crate::runtime::Vfs::none()),
+            )
             .unwrap();
         let costs = Arc::new(Mutex::new(Vec::new()));
         let measured = Arc::clone(&costs);
@@ -444,8 +447,10 @@ mod tests {
         .expect("compile clean");
         let cfg = crate::runtime::RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data =
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         data.install_type_info(compiled.type_info.clone());
         data.security_check = std::sync::Arc::new(DenyAll);
         let mut store = cfg.store(&engine, data).expect("store");
@@ -493,8 +498,10 @@ mod tests {
         );
         let cfg = crate::runtime::RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data =
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         data.install_type_info(lib_type_info);
         let mut store = cfg.store(&engine, data).expect("store");
         let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
@@ -629,8 +636,10 @@ mod tests {
             "the fixture must genuinely lack a module name, or it proves nothing"
         );
 
-        let mut data =
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         data.install_type_info(compiled.type_info.clone());
         let mut store = cfg.store(&engine, data).expect("store");
         let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
@@ -675,8 +684,10 @@ mod tests {
         let cfg = crate::runtime::RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
         let module = wasmtime::Module::new(&engine, &stripped).expect("module validates");
-        let mut data =
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         data.install_type_info(compiled.type_info.clone());
         let mut store = cfg.store(&engine, data).expect("store");
         let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
@@ -758,8 +769,10 @@ mod tests {
 
         let cfg = crate::runtime::RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data =
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         data.install_type_info(inner_ti);
         data.install_type_info(relay_ti);
         let mut store = cfg.store(&engine, data).expect("store");
@@ -861,8 +874,10 @@ mod tests {
             .expect("compile clean");
         let cfg = crate::runtime::RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data =
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         data.install_type_info(compiled.type_info.clone());
         data.security_check = std::sync::Arc::new(DenyAll);
         let mut store = cfg.store(&engine, data).expect("store");

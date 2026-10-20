@@ -71,10 +71,10 @@ impl Fixture {
     async fn finish_with(&self, id: &str, last_run: Option<&LastRun>, lose_ack: bool) {
         let mut guard = proceed(
             self.coordinator
-                .prepare("session", None, "code", id, None, "mcp")
+                .prepare("session", None, "code", &id.into(), None, "mcp")
                 .await,
         );
-        self.coordinator.claim(id).await.unwrap();
+        self.coordinator.claim(&id.into()).await.unwrap();
         if let Some(last_run) = last_run {
             guard.set_last_run(last_run);
         }
@@ -155,7 +155,7 @@ async fn a_run_that_never_dispatched_leaves_the_last_run_before() {
     let mut guard = proceed(
         fixture
             .coordinator
-            .prepare("session", None, "code", "released", None, "mcp")
+            .prepare("session", None, "code", &"released".into(), None, "mcp")
             .await,
     );
     guard.set_last_run(&run("never ran"));
@@ -206,10 +206,10 @@ async fn a_run_cancelled_by_its_session_closing_brings_nothing_back() {
     let mut guard = proceed(
         fixture
             .coordinator
-            .prepare("session", None, "code", "late", None, "mcp")
+            .prepare("session", None, "code", &"late".into(), None, "mcp")
             .await,
     );
-    fixture.coordinator.claim("late").await.unwrap();
+    fixture.coordinator.claim(&"late".into()).await.unwrap();
     assert!(
         CloseSession::new(fixture.units.as_ref(), &Audit)
             .execute("session", ClosedReason::Deleted)
@@ -263,10 +263,10 @@ async fn a_run_cut_off_by_a_restart_leaves_no_last_run() {
     let _guard = proceed(
         fixture
             .coordinator
-            .prepare("session", None, "code", "cut-off", None, "mcp")
+            .prepare("session", None, "code", &"cut-off".into(), None, "mcp")
             .await,
     );
-    fixture.coordinator.claim("cut-off").await.unwrap();
+    fixture.coordinator.claim(&"cut-off".into()).await.unwrap();
     crate::application::sessions::runs::RecoverRuns::new(fixture.units.as_ref())
         .execute("a later generation")
         .await
@@ -282,10 +282,10 @@ async fn a_run_that_started_and_then_failed_to_settle_leaves_no_last_run() {
     let mut guard = proceed(
         fixture
             .coordinator
-            .prepare("session", None, "code", "started", None, "mcp")
+            .prepare("session", None, "code", &"started".into(), None, "mcp")
             .await,
     );
-    fixture.coordinator.claim("started").await.unwrap();
+    fixture.coordinator.claim(&"started".into()).await.unwrap();
     guard.set_last_run(&run("started"));
     guard.release().await;
     assert_eq!(fixture.state("started").await, RequestState::Indeterminate);
@@ -304,10 +304,10 @@ async fn a_run_end_reports_the_file_it_replaced() {
     let _guard = proceed(
         fixture
             .coordinator
-            .prepare("session", None, "code", "second", None, "mcp")
+            .prepare("session", None, "code", &"second".into(), None, "mcp")
             .await,
     );
-    fixture.coordinator.claim("second").await.unwrap();
+    fixture.coordinator.claim(&"second".into()).await.unwrap();
     let request = fixture
         .units
         .begin()

@@ -6,6 +6,7 @@ use crate::domain::idempotent_request::{RecordedOutcome, RequestState, ResponseR
 use crate::domain::run::Run;
 use std::sync::Arc;
 use std::time::SystemTime;
+use submilli_core::RunId;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RunFailure {
@@ -23,7 +24,7 @@ pub(crate) enum RunFailure {
 
 pub(crate) enum RunDisposition {
     Proceed,
-    Wait(String),
+    Wait(RunId),
     Completed(RecordedOutcome),
 }
 
