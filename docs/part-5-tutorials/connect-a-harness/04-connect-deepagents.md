@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "3f93e7fa984b2784ad0ed0f6b094286125bf0d7737530e7de6cd32132e03b744"
+  contentHash: "67236fc2328edcfa4e96de3d0fb14074bd2bdf84e3b79a445e8084148b1d0bc1"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -246,7 +246,7 @@ one that queries your database. Pass them to the middleware as
 the `@tools` Package. `interrupt_on=` asks a person to approve those
 calls through LangChain's human-in-the-loop flow. The Blueprint has to
 grant the `tools.call` capability. The package's README shows how, in
-[Your tools in programs](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#your-tools-in-programs).
+[Application tools](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#application-tools).
 
 ## With your coding agent
 
