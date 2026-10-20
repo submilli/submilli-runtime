@@ -147,8 +147,7 @@ fn either_side_of_an_added_rule(context: &str) -> (Reader, tempfile::TempDir, u6
         Some("parent-account-charges"),
     );
     now.seq = 2;
-    let after =
-        fixture.run(RunSpec::new(vec![charges_allowed(0, "pied_piper"), now]).version(v2));
+    let after = fixture.run(RunSpec::new(vec![charges_allowed(0, "pied_piper"), now]).version(v2));
     let (reader, dir) = fixture.reader();
     (reader, dir, before, after)
 }
@@ -300,10 +299,7 @@ fn explain_on_a_denial_names_the_near_miss_its_line_the_comparison_and_both_valu
         miss.failures[0].comparison,
         "customerId == ${vars.customerId}"
     );
-    assert_eq!(
-        explained.untrusted.near_misses[0][0].actual,
-        json!("hooli")
-    );
+    assert_eq!(explained.untrusted.near_misses[0][0].actual, json!("hooli"));
     assert_eq!(
         explained.untrusted.near_misses[0][0].expected,
         json!("pied_piper")
@@ -836,8 +832,7 @@ fn sessions_list_each_sessions_first_message_and_its_tests_and_reruns() {
         ChatRole, ChatTurn, EventBody, Position, StoredEvent,
     };
     let mut fixture = Fixture::new();
-    let source =
-        fixture.run(RunSpec::new(vec![charges_allowed(0, "pied_piper")]).session("s-a"));
+    let source = fixture.run(RunSpec::new(vec![charges_allowed(0, "pied_piper")]).session("s-a"));
     fixture.run(RunSpec::new(vec![charges_allowed(0, "pied_piper")]).session("s-b"));
     let mut stopped = RunSpec::new(Vec::new()).session("s-b");
     stopped.error = Some(cancelled());

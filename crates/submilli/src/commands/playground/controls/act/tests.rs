@@ -56,10 +56,7 @@ fn a_draft_prints_the_rule_as_run_data_and_leaves_the_file_alone() {
     .unwrap();
     assert_eq!(std::fs::read_to_string(&file).unwrap(), BLUEPRINT);
     assert!(!drafted.written);
-    assert!(
-        drafted.untrusted.rule.contains("hooli"),
-        "{drafted:?}"
-    );
+    assert!(drafted.untrusted.rule.contains("hooli"), "{drafted:?}");
     assert!(drafted.overrides.is_none());
     assert_next_is_safe(&drafted.next);
     let text = render::draft_text(&drafted);

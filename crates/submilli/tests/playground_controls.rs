@@ -615,10 +615,7 @@ mod unix {
             .map(|session| session["session"].as_str().unwrap())
             .collect();
         assert_eq!(ids, ["s-c", "s-b", "s-a"]);
-        assert_eq!(
-            listed["sessions"][1]["variables"]["customerId"],
-            "hooli"
-        );
+        assert_eq!(listed["sessions"][1]["variables"]["customerId"], "hooli");
         assert_eq!(listed["sessions"][1]["denied"], true);
         assert_eq!(listed["sessions"][0]["run_count"], 1);
         let text = project.text(&["sessions"]);
@@ -1014,8 +1011,7 @@ function main(): string {{
             let playground = Playground::with_blueprint(HTTP_BLUEPRINT);
             playground.start();
             let program = playground.write("program.ts", &read_read_write(port));
-            let ran =
-                playground.expect(3, &["exec", &program, "--var", "customerId=pied_piper"]);
+            let ran = playground.expect(3, &["exec", &program, "--var", "customerId=pied_piper"]);
             let run = ran["run"].to_string();
             let denied = ran["decision_refs"][1].as_str().unwrap().to_owned();
             playground.expect(0, &["draft-rule", &denied, "--write"]);
@@ -1221,10 +1217,8 @@ function main(): string {
         fn a_started_session_keeps_its_values_and_bind_applies_to_new_runs_only() {
             let playground = Playground::starter();
             playground.start();
-            let started = playground.expect(
-                0,
-                &["session", "start", "--var", "customerId=pied_piper"],
-            );
+            let started =
+                playground.expect(0, &["session", "start", "--var", "customerId=pied_piper"]);
             let session = started["session"].as_str().unwrap().to_owned();
             assert!(
                 started["next"]
@@ -1246,10 +1240,8 @@ function main(): string {
             assert_eq!(second["session"], session);
 
             // Several open sessions are said once: one of them, and how many more.
-            let other = playground.expect(
-                0,
-                &["session", "start", "--var", "customerId=pied_piper"],
-            );
+            let other =
+                playground.expect(0, &["session", "start", "--var", "customerId=pied_piper"]);
             let bound = playground.run(&["bind", "customerId=hooli"]);
             assert!(bound.status.success(), "{}", stderr(&bound));
             let said = stderr(&bound);
@@ -2505,10 +2497,8 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
         fn cancel_stops_a_run_in_flight_with_a_cancelled_outcome() {
             let playground = Playground::starter();
             playground.start();
-            let started = playground.expect(
-                0,
-                &["session", "start", "--var", "customerId=pied_piper"],
-            );
+            let started =
+                playground.expect(0, &["session", "start", "--var", "customerId=pied_piper"]);
             let session = started["session"].as_str().unwrap().to_owned();
             let program = playground.write(
                 "loop.ts",
@@ -2543,13 +2533,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
 
             // A run in a fresh session, and a test run, cancel the same way.
             let one_shot = playground
-                .command(&[
-                    "exec",
-                    &program,
-                    "--var",
-                    "customerId=pied_piper",
-                    "--json",
-                ])
+                .command(&["exec", &program, "--var", "customerId=pied_piper", "--json"])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
@@ -2680,10 +2664,8 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             let playground = Playground::starter();
             let page = playground.start();
             let admin = playground.token("admin");
-            let started = playground.expect(
-                0,
-                &["session", "start", "--var", "customerId=pied_piper"],
-            );
+            let started =
+                playground.expect(0, &["session", "start", "--var", "customerId=pied_piper"]);
             let session = started["session"].as_str().unwrap().to_owned();
             let program = playground.write(
                 "many.ts",
@@ -2749,10 +2731,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             let run = decision["run"].as_u64().unwrap();
             assert_eq!(decision["decision"], format!("{run}.1"));
             assert_eq!(decision["capability"], "acme.com/charges.list");
-            assert_eq!(
-                decision["untrusted"]["context"]["customerId"],
-                "pied_piper"
-            );
+            assert_eq!(decision["untrusted"]["context"]["customerId"], "pied_piper");
             assert!(decision.get("context").is_none(), "{decision}");
             assert_eq!(lines.len() as u64, logged + 1);
         }
@@ -2884,13 +2863,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             assert_eq!(taken["error"]["kind"], "invalid-name");
             let written = playground.expect(
                 0,
-                &[
-                    "draft-rule",
-                    &denial,
-                    "--name",
-                    "hooli-charges",
-                    "--write",
-                ],
+                &["draft-rule", &denial, "--name", "hooli-charges", "--write"],
             );
             assert_eq!(written["name"], "hooli-charges");
             let file =
@@ -2950,10 +2923,8 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             let playground = Playground::starter();
             let page = playground.start();
             let admin = playground.token("admin");
-            let started = playground.expect(
-                0,
-                &["session", "start", "--var", "customerId=pied_piper"],
-            );
+            let started =
+                playground.expect(0, &["session", "start", "--var", "customerId=pied_piper"]);
             let session = started["session"].as_str().unwrap().to_owned();
             let program = playground.write(
                 "three.ts",
@@ -3001,10 +2972,8 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
         fn watch_stops_when_idle_unless_asked_to_follow_the_session_to_its_end() {
             let playground = Playground::starter();
             playground.start();
-            let started = playground.expect(
-                0,
-                &["session", "start", "--var", "customerId=pied_piper"],
-            );
+            let started =
+                playground.expect(0, &["session", "start", "--var", "customerId=pied_piper"]);
             let session = started["session"].as_str().unwrap().to_owned();
             let following = playground
                 .command(&["watch", &session, "--follow"])
@@ -3068,10 +3037,8 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
         fn watch_following_a_session_says_not_running_when_the_playground_dies() {
             let playground = Playground::starter();
             playground.start();
-            let started = playground.expect(
-                0,
-                &["session", "start", "--var", "customerId=pied_piper"],
-            );
+            let started =
+                playground.expect(0, &["session", "start", "--var", "customerId=pied_piper"]);
             let session = started["session"].as_str().unwrap().to_owned();
             playground.expect(0, &["exec", "--example", "--session", &session]);
             let mut following = playground
@@ -3099,10 +3066,8 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
         fn watch_stops_following_when_its_output_is_closed() {
             let playground = Playground::starter();
             playground.start();
-            let started = playground.expect(
-                0,
-                &["session", "start", "--var", "customerId=pied_piper"],
-            );
+            let started =
+                playground.expect(0, &["session", "start", "--var", "customerId=pied_piper"]);
             let session = started["session"].as_str().unwrap().to_owned();
             playground.expect(0, &["exec", "--example", "--session", &session]);
             let mut following = playground
@@ -3142,10 +3107,8 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             let playground = Playground::starter();
             let page = playground.start();
             let admin = playground.token("admin");
-            let started = playground.expect(
-                0,
-                &["session", "start", "--var", "customerId=pied_piper"],
-            );
+            let started =
+                playground.expect(0, &["session", "start", "--var", "customerId=pied_piper"]);
             let session = started["session"].as_str().unwrap().to_owned();
             playground.expect(0, &["exec", "--example", "--session", &session]);
             let (_, idle) = read_feed(&page, &admin, &session, None, usize::MAX);
@@ -3162,10 +3125,8 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
         fn a_run_a_crashed_playground_left_unfinished_does_not_keep_watch_waiting() {
             let playground = Playground::starter();
             playground.start();
-            let started = playground.expect(
-                0,
-                &["session", "start", "--var", "customerId=pied_piper"],
-            );
+            let started =
+                playground.expect(0, &["session", "start", "--var", "customerId=pied_piper"]);
             let session = started["session"].as_str().unwrap().to_owned();
             let program = playground.write(
                 "loop.ts",
@@ -3302,10 +3263,8 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
         fn a_variable_the_blueprint_does_not_declare_is_refused_by_name_in_a_session() {
             let playground = Playground::starter();
             playground.start();
-            let started = playground.expect(
-                0,
-                &["session", "start", "--var", "customerId=pied_piper"],
-            );
+            let started =
+                playground.expect(0, &["session", "start", "--var", "customerId=pied_piper"]);
             let session = started["session"].as_str().unwrap().to_owned();
             let (refused, code) = playground.json(&[
                 "exec",
@@ -3536,8 +3495,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             let playground = Playground::with_blueprint(HTTP_BLUEPRINT);
             let page = playground.start();
             let program = playground.write("program.ts", &read_read_write(port));
-            let ran =
-                playground.expect(3, &["exec", &program, "--var", "customerId=pied_piper"]);
+            let ran = playground.expect(3, &["exec", &program, "--var", "customerId=pied_piper"]);
             let run = ran["run"].as_u64().unwrap();
             playground.expect(0, &["bind", "customerId=pied_piper"]);
             let browser = browser_session(&playground, &page);

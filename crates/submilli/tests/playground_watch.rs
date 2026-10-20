@@ -340,13 +340,7 @@ function main(): string {
         project.save_by_rename(
             &PINNED.replace("      filter: customerId == ${vars.customerId}\n", ""),
         );
-        let output = project.run(&[
-            "exec",
-            &program,
-            "--var",
-            "customerId=pied_piper",
-            "--json",
-        ]);
+        let output = project.run(&["exec", &program, "--var", "customerId=pied_piper", "--json"]);
         let ran: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(ran["untrusted"]["result"], "allowed", "{ran}");
         assert_eq!(ran["blueprint_version"], "2", "{ran}");

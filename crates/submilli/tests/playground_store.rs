@@ -268,9 +268,6 @@ function main(): string {{
         assert_eq!(project.run_file(1)["label"], "app");
         let second = project.run_file(2);
         assert_eq!(second["label"], "stand-in");
-        assert_eq!(
-            second["recording"]["variables"]["customerId"],
-            "hooli"
-        );
+        assert_eq!(second["recording"]["variables"]["customerId"], "hooli");
     }
 }
