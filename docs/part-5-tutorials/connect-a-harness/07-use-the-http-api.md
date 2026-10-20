@@ -8,9 +8,43 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "cb05435d7412c725285fdc15d4631b98121739844d3e4a5fa4fdd17a2c20d07b"
+  contentHash: "c4f10a455982ed9696b30916bf26279d92ad2aaf849f200263295c30dffbb2d8"
   confirmedAt: "2026-10-20T09:28:54Z"
 ---
+
+## Use your coding agent
+
+Choose an icon to open a prefilled prompt. Select your project, review, and send.
+
+```text agent-prompt
+Read https://submilli.ai/docs/tutorials/use-the-http-api/ as the source for this setup.
+
+Inspect my project and follow this guide to create agent.ts and submilli.ts.
+Reuse valid local Submilli connection settings and provider credentials. If
+SUBMILLI_SERVER, SUBMILLI_SERVER_TOKEN, or SUBMILLI_BLUEPRINT is missing, ask
+for that value or its local configuration source. Do not invent values,
+expose secrets, create a Blueprint, or change the server. Ask for missing
+provider credentials without printing them. Install only the
+missing dependencies shown in this guide. Preserve its tool restrictions and
+session cleanup. Run the file with --check to verify the connection without
+a model request.
+Leave the files ready for the exact Try it out command.
+```
+
+After setup, [try it out](#try-it-out).
+
+## Set up manually
+
+The files read this terminal's environment; they do not automatically load
+`.env` files. Use your running server's base URL and registered Blueprint.
+Replace these values before running the files:
+
+```sh
+export SUBMILLI_SERVER='your-server-base-url'
+export SUBMILLI_SERVER_TOKEN='your-server-token'
+export SUBMILLI_BLUEPRINT='your-registered-blueprint'
+export OPENAI_API_KEY='your-openai-api-key'
+```
 
 Use the HTTP API when a harness has no MCP client or when your application
 needs to build and name the model's tools itself. This guide uses the Vercel AI
@@ -24,26 +58,33 @@ Before you start:
 - [Register a Blueprint](/docs/server/register-a-blueprint), then set
   `SUBMILLI_BLUEPRINT` to its registered name. The calculation below assumes
   the Blueprint has no required variables. The sample calls no external tools.
-- Install Node.js 20 or later and set the API key for your model provider.
+- Install Node.js 22 or later and set the API key for your model provider.
 
-## Start the project
+### Start the project
 
 ```sh
 mkdir vercel-ai-submilli && cd vercel-ai-submilli
 npm init -y
 npm pkg set type=module
-npm install ai @ai-sdk/anthropic zod
+npm install ai @ai-sdk/openai zod
 npm install --save-dev tsx typescript @types/node
 ```
 
-## Connect the agent
+### Connect the agent
 
-Save this as `agent.ts`:
+Create `agent.ts` in the project directory and paste the code below:
 
 ```typescript title="agent.ts"
-import { anthropic } from "@ai-sdk/anthropic";
+import { openai } from "@ai-sdk/openai";
 import { generateText, stepCountIs } from "ai";
 import { openSession } from "./submilli.ts";
+
+const args = process.argv.slice(2);
+const checking = args.length === 1 && args[0] === "--check";
+const prompt = args.join(" ");
+if (!checking && !prompt.trim()) {
+  throw new Error("Usage: npx tsx agent.ts '<message>' (or --check)");
+}
 
 const submilli = await openSession({
   server: process.env.SUBMILLI_SERVER ?? "http://127.0.0.1:8128",
@@ -52,17 +93,22 @@ const submilli = await openSession({
 });
 
 try {
-  const result = await generateText({
-    model: anthropic("claude-sonnet-5"),
-    system: "Use Submilli to do calculations in TypeScript. Return the execution result.",
-    tools: submilli.tools,
-    prompt: "Use Submilli to compute the 40th Fibonacci number, with F(0)=0 and F(1)=1.",
-    stopWhen: stepCountIs(10),
-    onStepFinish({ toolCalls, toolResults }) {
-      if (toolCalls.length > 0) console.dir({ toolCalls, toolResults }, { depth: null });
-    },
-  });
-  console.log(result.text);
+  if (checking) {
+    console.log("Connected to Submilli.");
+  } else {
+    const result = await generateText({
+      // Change this model ID to use another OpenAI model.
+      model: openai("gpt-5-mini"),
+      system: "Use Submilli to do calculations in TypeScript. Return the execution result.",
+      tools: submilli.tools,
+      prompt,
+      stopWhen: stepCountIs(10),
+      onStepFinish({ toolCalls, toolResults }) {
+        if (toolCalls.length > 0) console.dir({ toolCalls, toolResults }, { depth: null });
+      },
+    });
+    console.log(result.text);
+  }
 } finally {
   await submilli.close();
 }
@@ -78,9 +124,9 @@ function required(name: string): string {
 one step, before the model can use that result. `onStepFinish` prints the tool
 calls and results so you can verify execution separately from the final answer.
 
-## Build the tools
+### Build the tools
 
-Save this as `submilli.ts`:
+Create `submilli.ts` beside `agent.ts` and paste the code below:
 
 ```typescript title="submilli.ts"
 import { tool, type ToolSet } from "ai";
@@ -224,15 +270,27 @@ If your Blueprint has required variables or harness secrets, pass them in
 validation, rebinding after a restart, failures, and the complete session
 contract.
 
-## Run it
+### Check the connection
+
+With the setup environment active, run this without a model request:
 
 ```sh
-export SUBMILLI_BLUEPRINT=<registered-blueprint-name>
-ANTHROPIC_API_KEY=... npx tsx agent.ts
+npx tsx agent.ts --check
+```
+
+Look for `Connected to Submilli.`. This checks the server and registered
+Blueprint; the model runs only when you supply a message.
+
+## Try it out
+
+```sh
+npx tsx agent.ts \
+  'Run this program through Submilli and report its result:
+export function main(): number { return 2 + 2; }'
 ```
 
 In the printed step data, confirm a call to
-`submilli__typescript__execute` and a tool result containing `102334155`. The
+`submilli__typescript__execute` and a tool result containing `4`. The
 final assistant text alone does not verify where the calculation ran. This
 sample uses the model provider for the Vercel AI SDK conversation. The
 TypeScript program itself only computes a value and calls no Package,

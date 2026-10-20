@@ -8,9 +8,42 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "6f8bd781cdf52e110f2dad35286bce1b4979156dbbbfd94a6f067d2631acb574"
+  contentHash: "118ce86aec07b979ce42a82ad7c3bd22c67bdd3fb19cc4c5765689752667504c"
   confirmedAt: "2026-10-20T09:28:54Z"
 ---
+
+## Use your coding agent
+
+Choose an icon to open a prefilled prompt. Select your project, review, and send.
+
+```text agent-prompt
+Read https://submilli.ai/docs/tutorials/connect-claude-agent-sdk/ as the source for this setup.
+
+Inspect my project and follow this guide to create agent.ts.
+Reuse valid local Submilli connection settings and provider credentials. If
+SUBMILLI_SERVER, SUBMILLI_SERVER_TOKEN, or SUBMILLI_BLUEPRINT is missing, ask
+for that value or its local configuration source. Do not invent values,
+expose secrets, create a Blueprint, or change the server. Ask for missing
+provider credentials without printing them. Install only the
+missing dependencies shown in this guide. Preserve its tool restrictions and
+session cleanup. Prepare the files without running the agent or making a
+model request.
+Leave the files ready for the exact Try it out command.
+```
+
+After setup, [try it out](#try-it-out).
+
+## Set up manually
+
+The files read this terminal's environment; they do not automatically load
+`.env` files. Use your running server's base URL and registered Blueprint.
+Replace these values before running the files:
+
+```sh
+export SUBMILLI_SERVER='your-server-base-url'
+export SUBMILLI_SERVER_TOKEN='your-server-token'
+export SUBMILLI_BLUEPRINT='your-registered-blueprint'
+```
 
 This guide connects a Claude Agent SDK agent to Submilli over MCP. The SDK
 keeps control of the agent loop, and Submilli executes the TypeScript programs
@@ -26,7 +59,7 @@ Before you start:
 - Install Node.js 20 or later and configure the Claude Agent SDK with an
   Anthropic API key, Amazon Bedrock, Google Vertex AI, or a Claude Code login.
 
-## Start the project
+### Start the project
 
 ```sh
 mkdir claude-agent-submilli && cd claude-agent-submilli
@@ -36,17 +69,21 @@ npm install @anthropic-ai/claude-agent-sdk
 npm install --save-dev tsx typescript @types/node
 ```
 
-## Connect the agent
+### Connect the agent
 
-Save this as `agent.ts`:
+Create `agent.ts` in the project directory and paste the code below:
 
 ```typescript title="agent.ts"
 import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
+
+const prompt = process.argv.slice(2).join(" ");
+if (!prompt.trim()) throw new Error("Usage: npx tsx agent.ts '<message>'");
 
 const server = process.env.SUBMILLI_SERVER ?? "http://127.0.0.1:8128";
 const blueprint = required("SUBMILLI_BLUEPRINT");
 
 const options: Options = {
+  // Change this model ID to use another supported Claude model.
   model: "claude-sonnet-5",
   systemPrompt: "Use Submilli to do calculations in TypeScript. Return the execution result.",
   mcpServers: {
@@ -64,9 +101,6 @@ const options: Options = {
   settingSources: [],
   maxTurns: 10,
 };
-
-const prompt =
-  "Use Submilli to compute the 40th Fibonacci number, with F(0)=0 and F(1)=1.";
 
 for await (const message of query({ prompt, options })) {
   // Keep the SDK events visible so the tool call and its result can be checked.
@@ -102,15 +136,16 @@ If the selected Blueprint declares required variables, add a
 as described in [Your application](/docs/application#three-decisions-the-model-has-no-part-in).
 Never take those values from the conversation.
 
-## Run it
+## Try it out
 
 ```sh
-export SUBMILLI_BLUEPRINT=<registered-blueprint-name>
-ANTHROPIC_API_KEY=... npx tsx agent.ts
+npx tsx agent.ts \
+  'Run this program through Submilli and report its result:
+export function main(): number { return 2 + 2; }'
 ```
 
 The script prints the SDK messages. Confirm that they contain a call to
-Submilli's execute tool and a tool result containing `102334155`; the final
+Submilli's execute tool and a tool result containing `4`; the final
 assistant text alone does not verify where the calculation ran. This example
 uses the model provider for the agent conversation. The TypeScript program
 itself only computes a value and calls no Package, application tool, or

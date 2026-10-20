@@ -8,7 +8,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "6a5c00d79e1201f794b592d1f24ec0fbfbead9d99e1e96693c9ae899e90cb8d4"
+  contentHash: "0b2c0d39b9871dc5b42640735424708828c90ca095a4914440e825a1c8ac7c38"
   confirmedAt: "2026-10-20T09:39:00Z"
 ---
 
@@ -101,6 +101,6 @@ Submilli’s MCP connections do not support tools passed in by the harness. The
 Vercel AI SDK example uses HTTP, but does not implement this feature.
 
 See the [HTTP API reference](/docs/reference/http-api#application-tools) for the
-protocol, the [LangChain middleware reference](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#your-tools-in-programs)
+protocol, the [LangChain middleware reference](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#application-tools)
 for `ptc` and approvals, and the [Python SDK reference](https://github.com/submilli/submilli-python/tree/main/packages/submilli#your-tools-in-programs)
 for implementing the harness side.

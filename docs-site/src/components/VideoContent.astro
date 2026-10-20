@@ -1,4 +1,6 @@
 ---
+import AgentPromptBehavior from './AgentPromptBehavior.astro';
+import '../styles/agent-prompts.css';
 import DefaultContent from '@astrojs/starlight/components/MarkdownContent.astro';
 import AgentSetup from './AgentSetup.astro';
 import { films } from '../lib/videos';
@@ -27,6 +29,7 @@ const sections = rendered.split(/<!-- video:([a-z][a-z0-9-]*) -->/);
   </> : <slot />}
 </DefaultContent>
 <SectionLinks />
+<AgentPromptBehavior />
 
 <script>
   // Preserve native table semantics while making overflow keyboard-scrollable.
