@@ -12,9 +12,7 @@ use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
-use crate::runtime::host::{
-    convert_result, fatal_host_error, intrinsic_array_type, register_host_fn_async,
-};
+use crate::runtime::host::{fatal_host_error, intrinsic_array_type, register_host_fn_async};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_string_units};
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
@@ -87,13 +85,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     })?;
                     output.write_all(bytes).map_err(fatal_host_error)?;
                 }
-                convert_result(caller, |caller| match &outcome.error {
-                    Some(error) => Err(crate::runtime::host::throw_host_error(
-                        caller,
-                        crate::runtime::host::range_error(error),
-                    )),
+                match &outcome.error {
+                    Some(error) => Err(crate::runtime::host::range_error(error)),
                     None => Ok(()),
-                })
+                }
             })
         },
     )

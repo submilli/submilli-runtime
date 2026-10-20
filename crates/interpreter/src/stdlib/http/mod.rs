@@ -9,7 +9,7 @@
 
 use crate::runtime::effects;
 use crate::runtime::host::{
-    abi_arg, abi_result, convert_result, read_boxed_number, read_string_arg, read_uint8_array_arg,
+    abi_arg, abi_result, read_boxed_number, read_string_arg, read_uint8_array_arg,
     register_host_fn, register_host_value_async, write_submilli_string_struct,
 };
 mod declaration;
@@ -442,7 +442,7 @@ async fn perform_request(
         })
     })
     .await?;
-    convert_result(caller, |caller| write_response(caller, response))
+    write_response(caller, response)
 }
 
 /// The request's key and digest as the call log records them, when the transport reads
@@ -520,18 +520,6 @@ fn settle_native_response(
     fuel::settle(&mut *caller, fuel::IO, response_bytes(&response))?;
     fuel::settle(&mut *caller, fuel::SCAN, response.body.len() as u64)?;
     Ok(response)
-}
-
-#[cfg(test)]
-fn settle_response(
-    caller: &mut Caller<'_, StoreData>,
-    send_result: std::result::Result<HttpResponse, HttpError>,
-    method: &str,
-) -> wasmtime::Result<Val> {
-    convert_result(caller, |caller| {
-        let response = settle_native_response(caller, send_result, method)?;
-        write_response(caller, response)
-    })
 }
 
 /// The bytes a request sends: method, URL, headers and body.
@@ -825,14 +813,12 @@ async fn perform_download(
         commit_temp(file, disk_charge, &tmp, &resolved, &guest_path)?;
         Ok(Downloaded { meta, duration_ms: start.elapsed().as_millis() as f64 })
     })).await?;
-    convert_result(caller, |caller| {
-        write_download_result(
-            caller,
-            &downloaded.meta,
-            &guest_path,
-            downloaded.duration_ms,
-        )
-    })
+    write_download_result(
+        caller,
+        &downloaded.meta,
+        &guest_path,
+        downloaded.duration_ms,
+    )
 }
 
 /// Only metadata enters history. The downloaded body remains in the mounted file.
@@ -1307,7 +1293,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn response_marshalling_settles_after_short_fuel_and_preserves_errors() {
+    async fn response_marshalling_checks_fuel_and_uses_normal_error_handling() {
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
@@ -1317,24 +1303,31 @@ mod tests {
         install_runtime_async(&mut linker, &mut store)
             .await
             .unwrap();
-        let probe = wasmtime::Func::new(
+        let probe = crate::runtime::host::host_value_async(
             &mut store,
-            wasmtime::FuncType::new(&engine, [wasmtime::ValType::I32], []),
-            |mut caller, params, _| {
-                let invalid = params[0].i32().unwrap() != 0;
-                caller.set_fuel(1)?;
-                super::fuel::settle(&mut caller, super::fuel::IO, 128)?;
-                let mut response = ok_response(200, "café");
-                response.headers = vec![
-                    ("a".into(), "first".into()),
-                    ("a".into(), "last".into()),
-                    ("b".into(), "second".into()),
-                ];
-                if invalid {
-                    response.body = vec![0xFF];
-                }
-                let response = super::settle_response(&mut caller, Ok(response), "GET")?;
-                super::fuel::settle_result(&mut caller, |caller| {
+            wasmtime::FuncType::new(
+                &engine,
+                [wasmtime::ValType::I32, wasmtime::ValType::I32],
+                [wasmtime::ValType::I32],
+            ),
+            |caller, params| {
+                Box::new(async move {
+                    let depleted = params[0].i32().unwrap() != 0;
+                    let invalid = params[1].i32().unwrap() != 0;
+                    if depleted {
+                        caller.set_fuel(0)?;
+                    }
+                    let mut response = ok_response(200, "café");
+                    response.headers = vec![
+                        ("a".into(), "first".into()),
+                        ("a".into(), "last".into()),
+                        ("b".into(), "second".into()),
+                    ];
+                    if invalid {
+                        response.body = vec![0xFF];
+                    }
+                    let response = super::settle_native_response(caller, Ok(response), "GET")?;
+                    let response = super::write_response(caller, response)?;
                     let response = crate::runtime::prelude::iterator::as_struct(
                         caller, &response, "response",
                     )?;
@@ -1348,16 +1341,25 @@ mod tests {
                         super::map::string_entries(caller, &headers)?,
                         vec![("a".into(), "last".into()), ("b".into(), "second".into())]
                     );
-                    Ok(())
+                    Ok(wasmtime::Val::I32(1))
                 })
             },
         );
-        for invalid in [0, 1, 0] {
+        for (depleted, invalid) in [(1, 0), (0, 1), (0, 0)] {
             store.set_fuel(1_000_000).unwrap();
             let result = probe
-                .call_async(&mut store, &[wasmtime::Val::I32(invalid)], &mut [])
+                .call_async(
+                    &mut store,
+                    &[wasmtime::Val::I32(depleted), wasmtime::Val::I32(invalid)],
+                    &mut [wasmtime::Val::I32(0)],
+                )
                 .await;
-            if invalid != 0 {
+            if depleted != 0 {
+                assert_eq!(
+                    result.unwrap_err().downcast_ref::<wasmtime::Trap>(),
+                    Some(&wasmtime::Trap::OutOfFuel)
+                );
+            } else if invalid != 0 {
                 let error = result.unwrap_err();
                 assert!(error.is::<wasmtime::ThrownException>());
                 let original = crate::runtime::exec::uncaught_error(&mut store, error);
@@ -1365,7 +1367,6 @@ mod tests {
             } else {
                 result.unwrap();
             }
-            assert_eq!(store.get_fuel().unwrap(), 0);
             assert!(!store.data().settling_host_result);
         }
     }

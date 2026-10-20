@@ -24,8 +24,8 @@
 
 use crate::runtime::effects;
 use crate::runtime::host::{
-    abi_arg, convert_result, quota_exceeded_error, range_error, read_string_arg,
-    register_host_value_async, type_error, write_submilli_string_struct,
+    abi_arg, quota_exceeded_error, range_error, read_string_arg, register_host_value_async,
+    type_error, write_submilli_string_struct,
 };
 pub mod declaration;
 
@@ -114,14 +114,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     read_optional_string(caller, abi_arg(params, 2)?, "llm.call (schema)")?;
                 let typed = schema.is_some();
                 let outcomes = dispatch(caller, "call", &model, vec![prompt], schema).await?;
-                convert_result(caller, |caller| {
-                    let outcome = first_outcome(&model, outcomes)?;
-                    if typed {
-                        structured_value(caller, "llm.call", outcome)
-                    } else {
-                        build_completion(caller, outcome)
-                    }
-                })
+                let outcome = first_outcome(&model, outcomes)?;
+                if typed {
+                    structured_value(caller, "llm.call", outcome)
+                } else {
+                    build_completion(caller, outcome)
+                }
             })
         },
     )?;
@@ -149,17 +147,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     read_optional_string(caller, abi_arg(params, 2)?, "llm.batch (schema)")?;
                 let typed = schema.is_some();
                 let outcomes = dispatch(caller, "batch", &model, prompts, schema).await?;
-                convert_result(caller, |caller| {
-                    let mut built = Vec::with_capacity(outcomes.len());
-                    for outcome in outcomes {
-                        built.push(if typed {
-                            structured_value(caller, "llm.batch", outcome)?
-                        } else {
-                            build_completion(caller, outcome)?
-                        });
-                    }
-                    build_array(caller, built)
-                })
+                let mut built = Vec::with_capacity(outcomes.len());
+                for outcome in outcomes {
+                    built.push(if typed {
+                        structured_value(caller, "llm.batch", outcome)?
+                    } else {
+                        build_completion(caller, outcome)?
+                    });
+                }
+                build_array(caller, built)
             })
         },
     )?;
@@ -468,15 +464,13 @@ async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Resul
     })
     .await?;
 
-    convert_result(caller, |caller| {
-        let mut built = Vec::new();
-        for candidate in candidates {
-            if may_call(caller, &candidate.name)? {
-                built.push(build_model(caller, candidate)?);
-            }
+    let mut built = Vec::new();
+    for candidate in candidates {
+        if may_call(caller, &candidate.name)? {
+            built.push(build_model(caller, candidate)?);
         }
-        build_array(caller, built)
-    })
+    }
+    build_array(caller, built)
 }
 
 /// The per-candidate gate. A denial omits the model rather

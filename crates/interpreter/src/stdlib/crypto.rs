@@ -4,7 +4,7 @@
 
 use crate::runtime::effects;
 use crate::runtime::host::{
-    abi_arg, abi_result, convert_result, read_string_arg, read_uint8_array_arg, register_host_fn,
+    abi_arg, abi_result, read_string_arg, read_uint8_array_arg, register_host_fn,
     register_host_value_async, write_submilli_uint8array_struct,
 };
 use hmac::{Hmac, Mac};
@@ -187,9 +187,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     })
                 })
                 .await?;
-                let arr = convert_result(caller, |caller| {
-                    write_submilli_uint8array_struct(caller, &buf.0)
-                })?;
+                let arr = write_submilli_uint8array_struct(caller, &buf.0)?;
                 Ok(Val::AnyRef(Some(arr.to_anyref())))
             })
         },

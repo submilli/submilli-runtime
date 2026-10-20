@@ -1,7 +1,7 @@
 //! Capability-controlled Git operations. No subprocesses or guest-visible credentials.
 use crate::runtime::effects;
 use crate::runtime::host::{
-    abi_arg, convert_result, permission_denied, read_string_arg, register_host_value_async,
+    abi_arg, permission_denied, read_string_arg, register_host_value_async,
     write_submilli_string_struct, write_submilli_uint8array_struct,
 };
 pub(crate) mod class;
@@ -514,9 +514,7 @@ async fn invoke(
         })
     })
     .await?;
-    convert_result(caller, |caller| {
-        encode_result(caller, outcome, &path, !method, op == "commit", max_bytes)
-    })
+    encode_result(caller, outcome, &path, !method, op == "commit", max_bytes)
 }
 
 async fn before_deadline<T>(
@@ -647,8 +645,8 @@ fn encode_result(
     if text.len() > max_bytes as usize {
         bail!("git: result limit exceeded");
     }
-    // Serialized and parsed back; the operation is already published.
-    fuel::settle(&mut *caller, fuel::PARSE, 2 * text.len() as u64)?;
+    // Charge for the serialized representation and its guest-side decoding.
+    fuel::charge(&mut *caller, fuel::PARSE, 2 * text.len() as u64)?;
     value::deserialize(caller, &text.encode_utf16().collect::<Vec<_>>())
 }
 

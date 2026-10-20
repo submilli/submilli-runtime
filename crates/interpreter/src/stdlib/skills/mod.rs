@@ -22,8 +22,7 @@ use crate::runtime::call_log::{Payload, Side, record_payload};
 use crate::runtime::decision::CallTicket;
 use crate::runtime::fuel;
 use crate::runtime::host::{
-    abi_arg, convert_result, range_error, read_string_arg, register_host_value_async,
-    write_submilli_string_struct,
+    abi_arg, range_error, read_string_arg, register_host_value_async, write_submilli_string_struct,
 };
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::skills::{Skill, SkillError, SkillInfo, SkillProvider};
@@ -151,24 +150,22 @@ async fn list(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<
         })
     })
     .await?;
-    convert_result(caller, |caller| {
-        // A name `load` would refuse is no use to the program, so it is not offered.
-        let loadable = candidates
-            .into_iter()
-            .filter(|skill| is_skill_name(&skill.name))
-            .collect();
-        let visible = permitted_candidates(
-            caller,
-            loadable,
-            |skill| skill.name.as_str(),
-            |caller, name| gate(caller, name).map(|_| ()),
-        )?;
-        let mut built = Vec::with_capacity(visible.len());
-        for skill in visible {
-            built.push(build_skill_info(caller, skill)?);
-        }
-        abi::new_array(caller, &built)
-    })
+    // A name `load` would refuse is no use to the program, so it is not offered.
+    let loadable = candidates
+        .into_iter()
+        .filter(|skill| is_skill_name(&skill.name))
+        .collect();
+    let visible = permitted_candidates(
+        caller,
+        loadable,
+        |skill| skill.name.as_str(),
+        |caller, name| gate(caller, name).map(|_| ()),
+    )?;
+    let mut built = Vec::with_capacity(visible.len());
+    for skill in visible {
+        built.push(build_skill_info(caller, skill)?);
+    }
+    abi::new_array(caller, &built)
 }
 
 /// `load(name)`: gate, refuse what cannot be sent, record the request, then ask
@@ -209,7 +206,7 @@ async fn load(caller: &mut wasmtime::Caller<'_, StoreData>, name: String) -> was
         })
     })
     .await?;
-    convert_result(caller, |caller| build_skill(caller, skill))
+    build_skill(caller, skill)
 }
 
 /// `readFile(name, path)`: in the order `load` follows, with the path checked
@@ -259,10 +256,8 @@ async fn read_file(
         },
     )
     .await?;
-    convert_result(caller, |caller| {
-        let text = write_submilli_string_struct(caller, &text)?;
-        Ok(Val::AnyRef(Some(text.to_anyref())))
-    })
+    let text = write_submilli_string_struct(caller, &text)?;
+    Ok(Val::AnyRef(Some(text.to_anyref())))
 }
 
 /// The longest skill name, and the longest path, the engine passes to a

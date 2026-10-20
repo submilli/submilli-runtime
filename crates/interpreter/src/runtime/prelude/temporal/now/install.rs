@@ -1,7 +1,6 @@
 use crate::runtime::effects;
 use crate::runtime::host::{
-    abi_arg, convert_result, read_string_arg, register_host_value_async,
-    write_submilli_string_struct,
+    abi_arg, read_string_arg, register_host_value_async, write_submilli_string_struct,
 };
 use std::collections::BTreeMap;
 
@@ -26,7 +25,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                     Box::pin(async { Ok(super::instant()) })
                 })
                 .await?;
-                convert_result(caller, |caller| shared::make_instant(caller, instant))
+                shared::make_instant(caller, instant)
             })
         },
     )?;
@@ -41,8 +40,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                     Box::pin(async { Ok(super::time_zone_id().to_string()) })
                 })
                 .await?;
-                let value =
-                    convert_result(caller, |caller| write_submilli_string_struct(caller, &id))?;
+                let value = write_submilli_string_struct(caller, &id)?;
                 Ok(Val::AnyRef(Some(value.to_anyref())))
             })
         },
@@ -79,10 +77,8 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                     },
                 )
                 .await?;
-                convert_result(caller, |caller| {
-                    let zoned = observation.zoned(caller)?;
-                    shared::make_zoned_date_time(caller, &zoned, &observation.id)
-                })
+                let zoned = observation.zoned(caller)?;
+                shared::make_zoned_date_time(caller, &zoned, &observation.id)
             })
         },
     )?;
@@ -121,10 +117,8 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                     },
                 )
                 .await?;
-                convert_result(caller, |caller| {
-                    let zoned = observation.zoned(caller)?;
-                    shared::make_zoned_date_time(caller, &zoned, &observation.id)
-                })
+                let zoned = observation.zoned(caller)?;
+                shared::make_zoned_date_time(caller, &zoned, &observation.id)
             })
         },
     )?;
@@ -146,14 +140,12 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                     now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainDateISO").await?;
                 let z = observation.zoned(caller)?;
                 let d = z.date();
-                convert_result(caller, |caller| {
-                    shared::make_plain_date(
-                        caller,
-                        i32::from(d.year()),
-                        i32::from(d.month()),
-                        i32::from(d.day()),
-                    )
-                })
+                shared::make_plain_date(
+                    caller,
+                    i32::from(d.year()),
+                    i32::from(d.month()),
+                    i32::from(d.day()),
+                )
             })
         },
     )?;
@@ -172,15 +164,13 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                     now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainTimeISO").await?;
                 let z = observation.zoned(caller)?;
                 let t = z.time();
-                convert_result(caller, |caller| {
-                    shared::make_plain_time(
-                        caller,
-                        i32::from(t.hour()),
-                        i32::from(t.minute()),
-                        i32::from(t.second()),
-                        t.subsec_nanosecond(),
-                    )
-                })
+                shared::make_plain_time(
+                    caller,
+                    i32::from(t.hour()),
+                    i32::from(t.minute()),
+                    i32::from(t.second()),
+                    t.subsec_nanosecond(),
+                )
             })
         },
     )?;
@@ -199,18 +189,16 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                     now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainDateTimeISO").await?;
                 let z = observation.zoned(caller)?;
                 let dt = z.datetime();
-                convert_result(caller, |caller| {
-                    shared::make_plain_date_time(
-                        caller,
-                        i32::from(dt.year()),
-                        i32::from(dt.month()),
-                        i32::from(dt.day()),
-                        i32::from(dt.hour()),
-                        i32::from(dt.minute()),
-                        i32::from(dt.second()),
-                        dt.subsec_nanosecond(),
-                    )
-                })
+                shared::make_plain_date_time(
+                    caller,
+                    i32::from(dt.year()),
+                    i32::from(dt.month()),
+                    i32::from(dt.day()),
+                    i32::from(dt.hour()),
+                    i32::from(dt.minute()),
+                    i32::from(dt.second()),
+                    dt.subsec_nanosecond(),
+                )
             })
         },
     )?;

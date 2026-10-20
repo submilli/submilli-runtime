@@ -1,6 +1,6 @@
 //! Contained workspace navigation and anchor-based editing, gated by existing fs grants.
 use crate::runtime::effects;
-use crate::runtime::host::{abi_arg, convert_result, register_host_value_async};
+use crate::runtime::host::{abi_arg, register_host_value_async};
 mod budget;
 pub mod declaration;
 mod myers;
@@ -271,12 +271,12 @@ async fn invoke(
         })
     })
     .await?;
-    convert_result(caller, |caller| match &result.value {
+    match &result.value {
         CodeValue::Json(value) => encode(caller, &mut Budget::new(caller), value),
         CodeValue::Text(text) => Ok(Val::AnyRef(Some(
             write_submilli_string_struct_units(caller, text)?.to_anyref(),
         ))),
-    })
+    }
 }
 fn encode(caller: &mut Caller<'_, StoreData>, budget: &mut Budget, result: &Value) -> Result<Val> {
     let encoded = serde_json::to_string(result)?;

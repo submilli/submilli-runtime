@@ -1870,22 +1870,25 @@ pub(crate) fn host_value_async<F>(
 ) -> wasmtime::Func
 where
     F: for<'a> Fn(
-            Caller<'a, StoreData>,
+            &'a mut Caller<'_, StoreData>,
             &'a [Val],
         ) -> Box<dyn Future<Output = wasmtime::Result<Val>> + Send + 'a>
         + Send
         + Sync
         + 'static,
 {
-    fuel::host_func_async(store, ty, move |caller, params, results| {
-        let value = Box::into_pin(body(caller, params));
+    let body = std::sync::Arc::new(body);
+    fuel::host_func_async(store, ty, move |mut caller, params, results| {
+        let body = std::sync::Arc::clone(&body);
         Box::new(async move {
             let [result] = results else {
                 return Err(fatal_host_error(
                     "value-returning callback requires one ABI result",
                 ));
             };
-            *result = value.await?;
+            *result = Box::into_pin(body(&mut caller, params))
+                .await
+                .map_err(|error| throw_host_error(&mut caller, error))?;
             Ok(())
         })
     })
@@ -1976,17 +1979,6 @@ fn number_module_definitions() -> PackageDeclaration {
 /// defaulted parameter still accepts `undefined` at the call.
 pub(crate) fn parse_int_radix_param() -> Param {
     Param::with_default("radix", Type::Number, crate::DefaultValue::Number(0.0))
-}
-
-/// Convert an observed result to guest values without losing an ordinary error
-/// while allocating its exception at the end of the fuel budget.
-pub(crate) fn convert_result<T>(
-    caller: &mut Caller<'_, StoreData>,
-    convert: impl FnOnce(&mut Caller<'_, StoreData>) -> wasmtime::Result<T>,
-) -> wasmtime::Result<T> {
-    fuel::settle_result(caller, |caller| {
-        convert(caller).map_err(|error| throw_host_error(caller, error))
-    })
 }
 
 #[cfg(test)]

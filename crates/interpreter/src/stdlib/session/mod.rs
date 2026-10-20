@@ -13,9 +13,7 @@
 //! trait and back — see [`value`] for why.
 
 use crate::runtime::effects;
-use crate::runtime::host::{
-    abi_arg, convert_result, register_host_fn_async, register_host_value_async,
-};
+use crate::runtime::host::{abi_arg, register_host_fn_async, register_host_value_async};
 mod cursor;
 pub mod declaration;
 mod finalizers;
@@ -123,13 +121,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         .with_owned_body(String::from_utf16_lossy(payload).into_bytes()),
                     None => Payload::meta(serde_json::json!({ "found": false })),
                 });
-                convert_result(caller, |caller| {
-                    let Some(payload) = &found else {
-                        return crate::runtime::prelude::undefined::value(caller);
-                    };
-                    fuel::charge(&mut *caller, fuel::PARSE, payload.len() as u64)?;
-                    value::deserialize(caller, payload)
-                })
+                let Some(payload) = &found else {
+                    return crate::runtime::prelude::undefined::value(caller);
+                };
+                fuel::charge(&mut *caller, fuel::PARSE, payload.len() as u64)?;
+                value::deserialize(caller, payload)
             })
         },
     )?;
@@ -372,23 +368,21 @@ async fn list(
         })
     })
     .await?;
-    convert_result(caller, |caller| {
-        let mut visible = Vec::new();
-        for entry in page.entries {
-            fuel::charge(&mut *caller, fuel::ELEM, 1)?;
-            if may_read(caller, &entry.key)? {
-                visible.push(entry);
-            }
+    let mut visible = Vec::new();
+    for entry in page.entries {
+        fuel::charge(&mut *caller, fuel::ELEM, 1)?;
+        if may_read(caller, &entry.key)? {
+            visible.push(entry);
         }
-        record_payload(&*caller, ticket, Side::Response, || {
-            let keys: Vec<_> = visible
-                .iter()
-                .map(|entry| String::from_utf16_lossy(&entry.key))
-                .collect();
-            Payload::meta(serde_json::json!({ "keys": keys, "cursor": page.cursor.is_some() }))
-        });
-        build_page(caller, &visible, page.cursor.as_deref())
-    })
+    }
+    record_payload(&*caller, ticket, Side::Response, || {
+        let keys: Vec<_> = visible
+            .iter()
+            .map(|entry| String::from_utf16_lossy(&entry.key))
+            .collect();
+        Payload::meta(serde_json::json!({ "keys": keys, "cursor": page.cursor.is_some() }))
+    });
+    build_page(caller, &visible, page.cursor.as_deref())
 }
 
 /// Where the next page resumes, or `None` once nothing matching can remain.

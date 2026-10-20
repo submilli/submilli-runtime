@@ -13,8 +13,8 @@
 
 use crate::runtime::effects as runtime_effects;
 use crate::runtime::host::{
-    abi_arg, abi_result, convert_result, fatal_host_error, host_value_async, read_string_arg,
-    read_uint8_array_arg, register_host_fn, register_host_fn_async, register_host_value_async,
+    abi_arg, abi_result, fatal_host_error, host_value_async, read_string_arg, read_uint8_array_arg,
+    register_host_fn, register_host_fn_async, register_host_value_async,
     write_submilli_string_struct, write_submilli_uint8array_struct,
 };
 pub mod declaration;
@@ -379,13 +379,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.read")?;
                 let output = read_whole_capped(caller, &path, "read").await?;
-                convert_result(caller, |caller| match &output {
+                match &output {
                     Some(bytes) => {
                         let arr = write_submilli_uint8array_struct(caller, &bytes.0)?;
                         Ok(Val::AnyRef(Some(arr.to_anyref())))
                     }
                     None => crate::runtime::prelude::undefined::value(caller),
-                })
+                }
             })
         },
     )?;
@@ -399,20 +399,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.readText")?;
                 let output = read_whole_capped(caller, &path, "readText").await?;
-                convert_result(caller, |caller| {
-                    match &output {
-                        Some(bytes) => {
-                            // Lossy UTF-8: invalid bytes become U+FFFD rather than trapping.
-                            let mut text = String::from_utf8_lossy(&bytes.0).into_owned();
-                            if text.starts_with('\u{FEFF}') {
-                                text.remove(0);
-                            }
-                            let st = write_submilli_string_struct(caller, &text)?;
-                            Ok(Val::AnyRef(Some(st.to_anyref())))
+                match &output {
+                    Some(bytes) => {
+                        // Lossy UTF-8: invalid bytes become U+FFFD rather than trapping.
+                        let mut text = String::from_utf8_lossy(&bytes.0).into_owned();
+                        if text.starts_with('\u{FEFF}') {
+                            text.remove(0);
                         }
-                        None => crate::runtime::prelude::undefined::value(caller),
+                        let st = write_submilli_string_struct(caller, &text)?;
+                        Ok(Val::AnyRef(Some(st.to_anyref())))
                     }
-                })
+                    None => crate::runtime::prelude::undefined::value(caller),
+                }
             })
         },
     )?;
@@ -443,9 +441,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 record_payload(&*caller, ticket, Side::Response, || {
                     Payload::meta(serde_json::json!({ "offset": offset })).with_body(&bytes.0)
                 });
-                let arr = convert_result(caller, |caller| {
-                    write_submilli_uint8array_struct(caller, &bytes.0)
-                })?;
+                let arr = write_submilli_uint8array_struct(caller, &bytes.0)?;
                 Ok(Val::AnyRef(Some(arr.to_anyref())))
             })
         },
@@ -561,7 +557,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     serde_json::json!({ "path": &path, "recursive": recursive }),
                 )?;
                 let request = effects::PathMutation { path, recursive };
-                let outcome = runtime_effects::execute(
+                runtime_effects::execute(
                     caller,
                     "fs.mkdir",
                     request,
@@ -590,12 +586,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         })
                     },
                 )
-                .await;
-                convert_result(caller, |caller| {
-                    outcome
-                        .map(|_| ())
-                        .map_err(|error| crate::runtime::host::throw_host_error(caller, error))
-                })
+                .await
             })
         },
     )?;
@@ -615,7 +606,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     serde_json::json!({ "path": &path, "recursive": recursive }),
                 )?;
                 let request = effects::PathMutation { path, recursive };
-                let outcome = runtime_effects::execute(
+                runtime_effects::execute(
                     caller,
                     "fs.remove",
                     request,
@@ -644,12 +635,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         })
                     },
                 )
-                .await;
-                convert_result(caller, |caller| {
-                    outcome
-                        .map(|_| ())
-                        .map_err(|error| crate::runtime::host::throw_host_error(caller, error))
-                })
+                .await
             })
         },
     )?;
@@ -669,7 +655,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     serde_json::json!({ "from": &from, "to": &to }),
                 )?;
                 let request = effects::MoveEntry { from, to };
-                let outcome = runtime_effects::execute(
+                runtime_effects::execute(
                     caller,
                     "fs.move",
                     request,
@@ -696,12 +682,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         })
                     },
                 )
-                .await;
-                convert_result(caller, |caller| {
-                    outcome
-                        .map(|_| ())
-                        .map_err(|error| crate::runtime::host::throw_host_error(caller, error))
-                })
+                .await
             })
         },
     )?;
@@ -730,7 +711,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     to,
                     recursive,
                 };
-                let outcome = runtime_effects::execute(
+                runtime_effects::execute(
                     caller,
                     "fs.copy",
                     request,
@@ -764,12 +745,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         })
                     },
                 )
-                .await;
-                convert_result(caller, |caller| {
-                    outcome
-                        .map(|_| ())
-                        .map_err(|error| crate::runtime::host::throw_host_error(caller, error))
-                })
+                .await
             })
         },
     )?;
@@ -811,10 +787,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let reader = effects::open_reader(caller, path, options, "fs.lines").await?;
                 let reader = BackendReader::new(reader, &caller.data().tenant_limits)
                     .map_err(wasmtime::Error::new)?;
-                convert_result(caller, |caller| {
-                    make_handle_iterator(caller, reader, |mut caller, params| {
-                        Box::new(async move { reader_next(&mut caller, params).await })
-                    })
+                make_handle_iterator(caller, reader, |caller, params| {
+                    Box::new(async move { reader_next(caller, params).await })
                 })
             })
         },
@@ -849,10 +823,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let reader = effects::open_reader(caller, path, options, "fs.bytes").await?;
                 let reader = BackendReader::new(reader, &caller.data().tenant_limits)
                     .map_err(wasmtime::Error::new)?;
-                convert_result(caller, |caller| {
-                    make_handle_iterator(caller, reader, |mut caller, params| {
-                        Box::new(async move { reader_next(&mut caller, params).await })
-                    })
+                make_handle_iterator(caller, reader, |caller, params| {
+                    Box::new(async move { reader_next(caller, params).await })
                 })
             })
         },
@@ -879,10 +851,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let walk = effects::open_directory(caller, path.clone(), recursive).await?;
                 let dir = ChargedDirIter::new(walk, &caller.data().tenant_limits)
                     .map_err(|e| wasmtime::Error::new(e).context(format!("fs.list {path}")))?;
-                convert_result(caller, |caller| {
-                    make_handle_iterator(caller, dir, |mut caller, params| {
-                        Box::new(async move { list_next(&mut caller, params).await })
-                    })
+                make_handle_iterator(caller, dir, |caller, params| {
+                    Box::new(async move { list_next(caller, params).await })
                 })
             })
         },
@@ -1023,19 +993,17 @@ async fn stat_entry(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime:
     let Some(stat) = &observation else {
         return crate::runtime::prelude::undefined::value(caller);
     };
-    convert_result(caller, |caller| {
-        let kind = write_submilli_string_struct(caller, &stat.kind)?.to_anyref();
-        let ty = stat_backing_struct(caller.engine())?;
-        abi::new_backing(
-            caller,
-            ty,
-            &[
-                Val::AnyRef(Some(kind)),
-                Val::F64(stat.size.to_bits()),
-                Val::F64(stat.modified_ms.to_bits()),
-            ],
-        )
-    })
+    let kind = write_submilli_string_struct(caller, &stat.kind)?.to_anyref();
+    let ty = stat_backing_struct(caller.engine())?;
+    abi::new_backing(
+        caller,
+        ty,
+        &[
+            Val::AnyRef(Some(kind)),
+            Val::F64(stat.size.to_bits()),
+            Val::F64(stat.modified_ms.to_bits()),
+        ],
+    )
 }
 
 /// `peek(path)`: sniff the first ~256 bytes into a `$PeekBacking`.
@@ -1070,31 +1038,29 @@ async fn peek_file(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::
     )
     .await?;
     let buf = &observation.bytes.0;
-    convert_result(caller, |caller| {
-        let (encoding, content_start) = detect_encoding(buf);
-        let content = &buf[content_start..];
-        let line_ending = if content.windows(2).any(|w| w == b"\r\n") {
-            "crlf"
-        } else {
-            "lf"
-        };
-        let preview = String::from_utf8_lossy(content).into_owned();
+    let (encoding, content_start) = detect_encoding(buf);
+    let content = &buf[content_start..];
+    let line_ending = if content.windows(2).any(|w| w == b"\r\n") {
+        "crlf"
+    } else {
+        "lf"
+    };
+    let preview = String::from_utf8_lossy(content).into_owned();
 
-        let preview = write_submilli_string_struct(caller, &preview)?.to_anyref();
-        let encoding = write_submilli_string_struct(caller, encoding)?.to_anyref();
-        let line_ending = write_submilli_string_struct(caller, line_ending)?.to_anyref();
-        let ty = peek_backing_struct(caller.engine())?;
-        abi::new_backing(
-            caller,
-            ty,
-            &[
-                Val::AnyRef(Some(preview)),
-                Val::AnyRef(Some(encoding)),
-                Val::AnyRef(Some(line_ending)),
-                Val::F64((observation.size as f64).to_bits()),
-            ],
-        )
-    })
+    let preview = write_submilli_string_struct(caller, &preview)?.to_anyref();
+    let encoding = write_submilli_string_struct(caller, encoding)?.to_anyref();
+    let line_ending = write_submilli_string_struct(caller, line_ending)?.to_anyref();
+    let ty = peek_backing_struct(caller.engine())?;
+    abi::new_backing(
+        caller,
+        ty,
+        &[
+            Val::AnyRef(Some(preview)),
+            Val::AnyRef(Some(encoding)),
+            Val::AnyRef(Some(line_ending)),
+            Val::F64((observation.size as f64).to_bits()),
+        ],
+    )
 }
 
 /// BOM-first encoding sniff; falls back to a UTF-8 validity check, then latin1.
@@ -1247,9 +1213,7 @@ async fn open_writer(
         .map_err(crate::runtime::host::fatal_host_error)?;
     let handle = ExternRef::new(&mut *caller, writer)?;
     let ty = file_writer_backing_struct(caller.engine())?;
-    convert_result(caller, |caller| {
-        abi::new_backing(caller, ty, &[Val::ExternRef(Some(handle))])
-    })
+    abi::new_backing(caller, ty, &[Val::ExternRef(Some(handle))])
 }
 
 // ---------------------------------------------------------------------------
@@ -1258,7 +1222,7 @@ async fn open_writer(
 
 type IterCallback =
     for<'a> fn(
-        Caller<'a, StoreData>,
+        &'a mut Caller<'_, StoreData>,
         &'a [Val],
     ) -> Box<dyn std::future::Future<Output = wasmtime::Result<Val>> + Send + 'a>;
 
@@ -1279,8 +1243,8 @@ fn make_handle_iterator<T: handles::Closable + 'static>(
     let (next_ty, _) = next_closure_type(caller.engine(), &intr)?;
     let (close_ty, _) = void_closure_type(caller.engine(), &intr)?;
     let next_fn = host_value_async(&mut *caller, next_ty, next_step);
-    let close_fn = host_value_async(&mut *caller, close_ty, |mut caller, params| {
-        Box::new(async move { close_handle_of::<T>(&mut caller, params).await })
+    let close_fn = host_value_async(&mut *caller, close_ty, |caller, params| {
+        Box::new(async move { close_handle_of::<T>(caller, params).await })
     });
     build_closable_iterator(
         caller,
@@ -1355,22 +1319,18 @@ async fn reader_next(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasm
             })
         },
     )
-    .await;
-    convert_result(caller, |caller| {
-        let output =
-            output.map_err(|error| crate::runtime::host::throw_host_error(caller, error))?;
-        match &output.item {
-            Some(ReadItem::Line(text)) => {
-                let value = write_submilli_string_struct(caller, text)?;
-                iter_yield(caller, Val::AnyRef(Some(value.to_anyref())))
-            }
-            Some(ReadItem::Bytes(bytes)) => {
-                let value = write_submilli_uint8array_struct(caller, bytes)?;
-                iter_yield(caller, Val::AnyRef(Some(value.to_anyref())))
-            }
-            None => iter_done(caller),
+    .await?;
+    match &output.item {
+        Some(ReadItem::Line(text)) => {
+            let value = write_submilli_string_struct(caller, text)?;
+            iter_yield(caller, Val::AnyRef(Some(value.to_anyref())))
         }
-    })
+        Some(ReadItem::Bytes(bytes)) => {
+            let value = write_submilli_uint8array_struct(caller, bytes)?;
+            iter_yield(caller, Val::AnyRef(Some(value.to_anyref())))
+        }
+        None => iter_done(caller),
+    }
 }
 
 async fn list_next(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
@@ -1411,30 +1371,27 @@ async fn list_next(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmti
             })
         },
     )
-    .await
-    .map_err(|error| crate::runtime::host::throw_host_error(caller, error))?;
+    .await?;
     let Some(entry) = &outcome else {
         return iter_done(caller);
     };
-    convert_result(caller, |caller| {
-        let size = entry.bytes as f64;
-        let kind = write_submilli_string_struct(caller, entry.kind)?.to_anyref();
-        let name = write_submilli_string_struct(caller, &entry.name)?.to_anyref();
-        let path = write_submilli_string_struct(caller, &entry.path)?.to_anyref();
-        let ty = dir_entry_backing_struct(caller.engine())?;
-        let entry = abi::new_backing(
-            caller,
-            ty,
-            &[
-                Val::AnyRef(Some(kind)),
-                Val::AnyRef(Some(name)),
-                Val::AnyRef(Some(path)),
-                Val::F64(size.to_bits()),
-                Val::I64(0),
-            ],
-        )?;
-        iter_yield(caller, entry)
-    })
+    let size = entry.bytes as f64;
+    let kind = write_submilli_string_struct(caller, entry.kind)?.to_anyref();
+    let name = write_submilli_string_struct(caller, &entry.name)?.to_anyref();
+    let path = write_submilli_string_struct(caller, &entry.path)?.to_anyref();
+    let ty = dir_entry_backing_struct(caller.engine())?;
+    let entry = abi::new_backing(
+        caller,
+        ty,
+        &[
+            Val::AnyRef(Some(kind)),
+            Val::AnyRef(Some(name)),
+            Val::AnyRef(Some(path)),
+            Val::F64(size.to_bits()),
+            Val::I64(0),
+        ],
+    )?;
+    iter_yield(caller, entry)
 }
 
 /// Eager close: drops the OS handle and refunds bytes now. A reclaimed
@@ -1476,8 +1433,7 @@ async fn close_handle_of<T: handles::Closable + 'static>(
                 })
             },
         )
-        .await
-        .map_err(|error| crate::runtime::host::throw_host_error(caller, error))?;
+        .await?;
         if let Some(payload) = handle_payload::<Option<T>>(caller, &handle, "fs.close")?.as_mut() {
             payload.release_buffer();
         }

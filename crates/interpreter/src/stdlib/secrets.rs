@@ -6,8 +6,7 @@
 
 use crate::runtime::effects;
 use crate::runtime::host::{
-    abi_arg, convert_result, read_string_arg, register_host_value_async,
-    write_submilli_string_struct,
+    abi_arg, read_string_arg, register_host_value_async, write_submilli_string_struct,
 };
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
@@ -81,8 +80,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     return crate::runtime::prelude::undefined::value(caller);
                 };
 
-                let st =
-                    convert_result(caller, |caller| write_submilli_string_struct(caller, value))?;
+                let st = write_submilli_string_struct(caller, value)?;
                 Ok(Val::AnyRef(Some(st.to_anyref())))
             })
         },

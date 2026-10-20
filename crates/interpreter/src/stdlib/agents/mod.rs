@@ -28,8 +28,7 @@ use crate::runtime::call_log::{ModelUsage, Payload, Side, record_payload, record
 use crate::runtime::decision::CallTicket;
 use crate::runtime::fuel;
 use crate::runtime::host::{
-    abi_arg, convert_result, read_string_arg, register_host_value_async,
-    write_submilli_string_struct,
+    abi_arg, read_string_arg, register_host_value_async, write_submilli_string_struct,
 };
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::stdlib::abi::{
@@ -151,21 +150,19 @@ async fn run(
         })
     })
     .await?;
-    convert_result(caller, |caller| {
-        if typed {
-            crate::runtime::json::parse_json_as_unknown(
-                caller,
-                &outcome.text,
-                &format!(
-                    "agents.run(\"{}\"): the agent's result is not JSON",
-                    truncated(&agent)
-                ),
-            )
-        } else {
-            let text = write_submilli_string_struct(caller, &outcome.text)?;
-            Ok(Val::AnyRef(Some(text.to_anyref())))
-        }
-    })
+    if typed {
+        crate::runtime::json::parse_json_as_unknown(
+            caller,
+            &outcome.text,
+            &format!(
+                "agents.run(\"{}\"): the agent's result is not JSON",
+                truncated(&agent)
+            ),
+        )
+    } else {
+        let text = write_submilli_string_struct(caller, &outcome.text)?;
+        Ok(Val::AnyRef(Some(text.to_anyref())))
+    }
 }
 
 /// Record `error` as the call's response and turn it into the guest's error.
@@ -232,19 +229,17 @@ async fn list(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<
         })
     })
     .await?;
-    convert_result(caller, |caller| {
-        let visible = permitted_candidates(
-            caller,
-            candidates,
-            |agent| agent.name.as_str(),
-            |caller, name| gate(caller, name).map(|_| ()),
-        )?;
-        let mut built = Vec::with_capacity(visible.len());
-        for agent in visible {
-            built.push(build_agent_info(caller, agent)?);
-        }
-        abi::new_array(caller, &built)
-    })
+    let visible = permitted_candidates(
+        caller,
+        candidates,
+        |agent| agent.name.as_str(),
+        |caller, name| gate(caller, name).map(|_| ()),
+    )?;
+    let mut built = Vec::with_capacity(visible.len());
+    for agent in visible {
+        built.push(build_agent_info(caller, agent)?);
+    }
+    abi::new_array(caller, &built)
 }
 
 /// Clone the provider out of the store before any `await`. `run` looks it up

@@ -44,10 +44,10 @@ use crate::runtime::embedding::{
 };
 use crate::runtime::fuel;
 use crate::runtime::host::{
-    abi_arg, abi_result, convert_result, fatal_host_error, quota_exceeded_error, range_error,
-    read_string_arg, register_host_fn, register_host_value_async, type_error,
-    write_boxed_number_struct, write_submilli_array_struct_precharged,
-    write_submilli_string_struct, write_submilli_uint8array_struct, write_uint8_array_precharged,
+    abi_arg, abi_result, fatal_host_error, quota_exceeded_error, range_error, read_string_arg,
+    register_host_fn, register_host_value_async, type_error, write_boxed_number_struct,
+    write_submilli_array_struct_precharged, write_submilli_string_struct,
+    write_submilli_uint8array_struct, write_uint8_array_precharged,
 };
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::stdlib::abi::{
@@ -365,7 +365,7 @@ async fn embed(
         },
     )
     .await?;
-    convert_result(caller, |caller| build_embeddings(caller, batch))
+    build_embeddings(caller, batch)
 }
 
 /// The capability check, run before any bytes leave the process. The context is
@@ -491,15 +491,13 @@ async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Resul
         Box::pin(async move { provider(caller, "")?.models().await.map_err(throw) })
     })
     .await?;
-    convert_result(caller, |caller| {
-        let mut built = Vec::with_capacity(candidates.len());
-        for candidate in candidates {
-            if may_embed(caller, &candidate.name)? {
-                built.push(build_model(caller, candidate)?);
-            }
+    let mut built = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        if may_embed(caller, &candidate.name)? {
+            built.push(build_model(caller, candidate)?);
         }
-        abi::new_array(caller, &built)
-    })
+    }
+    abi::new_array(caller, &built)
 }
 
 /// The per-candidate gate. A denial omits the alias rather than failing the
@@ -617,8 +615,8 @@ fn model_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructTyp
 /// Seal `batch`: copy its vectors into a packed byte array in the GC heap and
 /// hand the guest a backing struct that holds it in a hidden field.
 ///
-/// The provider's call has already happened, so the copy is settled rather than
-/// refused: `count × dimensions × 4` bytes, charged once, before the encoding.
+/// Charge `count × dimensions × 4` bytes once, before encoding. A recorded
+/// native batch can be replayed if this conversion runs out of fuel.
 /// At most two host copies of the vectors are live at once (the encoded bytes
 /// and the engine's internal copy); the batch's own floats are gone before the
 /// array is allocated.
@@ -631,7 +629,7 @@ fn build_embeddings(
         .len()
         .checked_mul(4)
         .ok_or_else(|| fatal_host_error("embedding.embed: result size overflows"))?;
-    fuel::settle(&mut *caller, fuel::COPY, byte_count as u64)?;
+    fuel::charge(&mut *caller, fuel::COPY, byte_count as u64)?;
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(byte_count)

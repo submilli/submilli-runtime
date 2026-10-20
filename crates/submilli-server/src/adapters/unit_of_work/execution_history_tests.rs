@@ -400,6 +400,86 @@ async fn execution_history_resumes_id_only_resources_after_each_uncommitted_resu
     }
 }
 
+#[tokio::test]
+async fn execution_history_replays_after_result_conversion_runs_out_of_fuel() {
+    use interpreter::runtime::host::{read_string_arg, write_submilli_string_struct};
+    use interpreter::runtime::{RuntimeConfig, StoreData, Vfs, effects, install_runtime_async};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let directory = tempfile::tempdir().unwrap();
+    let (_database, units, attempt) = fixture(&directory.path().join("db")).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    for replay in [false, true] {
+        let history = Arc::new(History::new(attempt.clone(), units.clone()));
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut data = StoreData::with_vfs(Vfs::none());
+        data.effects = Some(history.clone());
+        let mut store = config.store_async(&engine, data).unwrap();
+        let mut linker = wasmtime::Linker::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let calls = calls.clone();
+        let probe = wasmtime::Func::new_async(
+            &mut store,
+            wasmtime::FuncType::new(&engine, [], [wasmtime::ValType::I32]),
+            move |mut caller, _, results| {
+                let calls = calls.clone();
+                Box::new(async move {
+                    let value = effects::execute(
+                        &mut caller,
+                        "test.result_conversion",
+                        (),
+                        move |caller, _, ()| {
+                            Box::pin(async move {
+                                calls.fetch_add(1, Ordering::SeqCst);
+                                // Model a completed operation that spent the remaining fuel.
+                                caller.set_fuel(0)?;
+                                Ok("saved result".to_owned())
+                            })
+                        },
+                    )
+                    .await?;
+                    let string = write_submilli_string_struct(&mut caller, &value)?;
+                    let value = wasmtime::Val::AnyRef(Some(string.to_anyref()));
+                    assert_eq!(
+                        read_string_arg(&mut caller, &value, "result")?,
+                        "saved result"
+                    );
+                    results[0] = wasmtime::Val::I32(1);
+                    Ok(())
+                })
+            },
+        );
+        store.set_fuel(1_000_000).unwrap();
+        let mut output = [wasmtime::Val::I32(0)];
+        let result = probe.call_async(&mut store, &[], &mut output).await;
+        if replay {
+            result.unwrap();
+            assert_eq!(output[0].i32(), Some(1));
+        } else {
+            assert_eq!(
+                result.unwrap_err().downcast_ref::<wasmtime::Trap>(),
+                Some(&wasmtime::Trap::OutOfFuel)
+            );
+        }
+        history.finish().await.unwrap();
+        let mut unit = units().await.unwrap();
+        assert!(
+            unit.get_history_entry(&attempt.run_id, 0, memory())
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "replay must not repeat the operation"
+    );
+}
+
 fn memory() -> interpreter::runtime::limits::HostMemory {
     interpreter::runtime::limits::TenantLimits::new(256 * 1024 * 1024).host_memory()
 }

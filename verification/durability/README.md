@@ -251,7 +251,13 @@ Process-local handles are skipped. Resources hold no filesystem or unit-of-work
 reference; operations receive the resource through the active filesystem backend.
 Deserialization itself performs no I/O. The default backend retains its existing
 local handles; durable handle caching remains SUB-1883. Host return adapters own
-Wasm result slots, and ordinary host conversion helpers preserve fuel settlement.
+Wasm result slots and translate ordinary errors at the host boundary. Result
+conversion uses normal fuel checks after the native outcome is committed. If it
+runs out of fuel, replay retrieves the saved outcome without dispatching the
+operation again; conversion can succeed when the run has enough fuel. Ordinary
+execution without recording uses the same conversion checks but has no saved
+outcome to replay. Native work completed before the history commit still settles
+its fuel costs.
 
 Filesystem bytes, namespace changes and fsync are not modeled as atomic SQLite
 effects here; SUB-1815 owns that protocol. The [filesystem models](../filesystem/README.md)

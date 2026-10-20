@@ -20,9 +20,7 @@ use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 use crate::runtime::StoreData;
 use crate::runtime::call_log::{Payload, Side, record_payload};
 use crate::runtime::fuel;
-use crate::runtime::host::{
-    convert_result, intrinsic_string_type, read_string_arg, register_host_fn_async,
-};
+use crate::runtime::host::{intrinsic_string_type, read_string_arg, register_host_fn_async};
 use crate::stdlib::shared::check_security_call;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
@@ -218,12 +216,10 @@ pub(crate) fn allocate_response(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     response: &McpResponse,
 ) -> wasmtime::Result<Val> {
-    convert_result(caller, |caller| {
-        fuel::settle(&mut *caller, fuel::ELEM, response.visited_nodes())?;
-        let allocator = crate::runtime::json::JsonUnknownAllocator::new(caller)?;
-        let value = crate::runtime::json::JsonValue::from(response.value());
-        allocator.allocate(caller, &value)
-    })
+    fuel::charge(&mut *caller, fuel::ELEM, response.visited_nodes())?;
+    let allocator = crate::runtime::json::JsonUnknownAllocator::new(caller)?;
+    let value = crate::runtime::json::JsonValue::from(response.value());
+    allocator.allocate(caller, &value)
 }
 
 /// Codegen-facing definitions for the internal `submilli:mcp.call` host fn:
@@ -521,7 +517,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completed_response_is_fully_allocated_before_exhausted_fuel_stops_execution() {
+    async fn response_allocation_obeys_the_fuel_budget() {
         use wasmtime::{Func, FuncType, Val, ValType};
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
@@ -568,15 +564,25 @@ mod tests {
             assert_eq!(result[0].i32(), Some(count));
         }
         store.set_fuel(1).unwrap();
+        let mut result = [Val::I32(-1), Val::F64(0)];
+        let error = complete
+            .call_async(&mut store, &[Val::I32(256)], &mut result)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<wasmtime::Trap>(),
+            Some(&wasmtime::Trap::OutOfFuel)
+        );
+        assert_eq!(result[0].i32(), Some(-1));
+        assert_eq!(store.get_fuel().unwrap(), 0);
+        assert!(!store.data().settling_host_result);
+        store.set_fuel(100_000).unwrap();
         complete
             .call_async(&mut store, &[Val::I32(256)], &mut result)
             .await
             .unwrap();
         assert_eq!(result[0].i32(), Some(256));
         assert_eq!(result[1].f64(), Some(255.0));
-        assert_eq!(store.get_fuel().unwrap(), 0);
-        assert!(!store.data().settling_host_result);
-        assert!(crate::runtime::fuel::charge_call(&mut store).is_err());
     }
 
     #[tokio::test]
