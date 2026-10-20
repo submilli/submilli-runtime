@@ -8,7 +8,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "13f277dbe086201c9d485b2520e3be89b421faa8228b92e99777fc46c1fd556d"
+  contentHash: "3dc9c0498837b0ff38aa44cea710435ae968524be3b57faf69988c3a5ed97144"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -179,8 +179,16 @@ an already registered Blueprint and whose thread closes its server session.
 For the same connection through another harness, see the [OpenAI Agents
 SDK](/docs/tutorials/connect-openai-agents) tutorial.
 
-## Reference
+## Use application tools
 
 <a id="your-tools-in-programs"></a>
 
-For application tools, see the [`langchain-submilli` reference](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#application-tools).
+To reuse application tools under Blueprint permissions, pass your LangChain
+tools to `SubmilliMiddleware`'s `ptc` parameter. They become callable from
+Submilli programs; the middleware does not expose them directly to the model.
+Keep `create_deep_agent`'s `tools` empty: adding the same tools there creates a
+direct path that bypasses Submilli. Use `interrupt_on` for callback
+calls that need LangChain human-in-the-loop approval. The
+[harness tools overview](/docs/tutorials/connect-a-harness#call-harness-tools-from-programs)
+describes the shared lifecycle; the [`langchain-submilli` reference](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#application-tools)
+covers the integration contract.
