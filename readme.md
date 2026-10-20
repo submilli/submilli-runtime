@@ -5,7 +5,7 @@
 A code-execution runtime with a [semantic permission model](https://submilli.ai/docs/blueprints/#semantic-permission-model), for business agents that
 generate code. For example, a support agent could issue a refund of up to $500 for platinum clients and up to $100 for all other customer tiers.
 
-They could try to add it as a safeguard to the prompt, but due to the nature of models, it will likely only work *some* of the time. By using the Submilli Runtime to execute the agent generated code, the owner of that agentic workflow can define these guardrails in advance, and they will be enforced by the runtime, outside the model's control.
+The developer could try to add that rule as a safeguard to the prompt, but due to the nature of models, it will likely only work *some* of the time. By using the Submilli Runtime to execute the agent generated code, the owner of that agentic workflow can define these guardrails in advance, and they will be enforced by the runtime, outside the model's control.
 
 [Docs](https://submilli.ai/docs/) ·
 [Set up with your agent](https://submilli.ai/docs/quickstart/#agent-setup) ·
@@ -38,10 +38,10 @@ Submilli executes it in WebAssembly for isolation. Programs reach the outside
 world through Packages, not `node:http` or `node:fs`.
 
 Before a program calls the outside world, Submilli checks the Blueprint's
-permissions. A Package author defines each operation in semantic terms, such as
+permissions. Package authors define operations and fields. You set rules such as
 "Allow a refund up to $500, only for customer 123". Submilli Packages are built
 for agents with [semantic permissions](https://submilli.ai/docs/blueprints/#semantic-permission-model).
-We don't use npm Packages, and while we support MCP servers, Packages are the
+We don't use npm packages, and while we support MCP servers, Packages are the
 native way to work with Submilli.
 
 ## What a rule looks like
