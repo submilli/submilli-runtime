@@ -8,7 +8,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "bae87bc92a5fd2d669b283e1ba1b6c9707d747152b1ce381de853885dcf868fc"
+  contentHash: "13f277dbe086201c9d485b2520e3be89b421faa8228b92e99777fc46c1fd556d"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -26,8 +26,7 @@ for that value or its local configuration source. Do not invent values,
 expose secrets, create a Blueprint, or change the server. Ask for missing
 provider credentials without printing them. Install only the
 missing dependencies shown in this guide. Preserve its tool restrictions and
-session cleanup. Run the file with --check to verify the connection without
-a model request.
+session cleanup. Prepare the file without running it or making a model request.
 Leave the files ready for the exact Try it out command.
 ```
 
@@ -82,8 +81,6 @@ pip install "langchain-submilli[deepagents]" \
 Create `agent.py` in the project directory and paste the code below:
 
 ```python title="agent.py"
-"""A Deep Agents application backed by Submilli."""
-
 import asyncio
 import os
 import sys
@@ -96,15 +93,12 @@ from deepagents import (
 )
 from langchain_submilli import SubmilliMiddleware
 from langgraph.checkpoint.memory import InMemorySaver
+from submilli import AsyncSubmilli
 
+prompt = " ".join(sys.argv[1:])
+if not prompt.strip():
+    raise SystemExit("Usage: python agent.py '<message>'")
 
-args = sys.argv[1:]
-checking = args == ["--check"]
-prompt = " ".join(args)
-if not checking and not prompt.strip():
-    raise SystemExit("Usage: python agent.py '<message>' (or --check)")
-
-# Change the model here; install its integration if changing providers.
 model_name = "openai:gpt-5-mini"
 register_harness_profile(
     model_name,
@@ -117,19 +111,12 @@ register_harness_profile(
     ),
 )
 
-submilli = SubmilliMiddleware(
-    blueprint=os.environ["SUBMILLI_BLUEPRINT"],
-)
-
 
 async def main() -> None:
-    config = {"configurable": {"thread_id": "submilli-example"}}
-    agent = None
-    try:
-        await submilli.client.blueprints.prompt(submilli.blueprint)
-        if checking:
-            print("Connected to Submilli.")
-            return
+    async with AsyncSubmilli() as client:
+        submilli = SubmilliMiddleware(
+            blueprint=os.environ["SUBMILLI_BLUEPRINT"], client=client,
+        )
         agent = create_deep_agent(
             model=model_name,
             tools=[],
@@ -137,54 +124,34 @@ async def main() -> None:
             middleware=[submilli],
             checkpointer=InMemorySaver(),
         )
-        result = await agent.ainvoke(
-            {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    }
-                ]
-            },
-            config,
-        )
-        for message in result["messages"]:
-            if message.type == "tool" and message.name == "submilli__typescript__execute":
-                print(f"Submilli execute result: {message.content}", file=sys.stderr)
-        print(result["messages"][-1].text)
-    finally:
+        config = {"configurable": {"thread_id": "submilli-example"}}
         try:
-            if agent is not None:
-                await submilli.aclose_thread(agent, config)
+            result = await agent.ainvoke(
+                {"messages": [{"role": "user", "content": prompt}]}, config,
+            )
+            for message in result["messages"]:
+                if message.type == "tool" and message.name == "submilli__typescript__execute":
+                    print(f"Submilli execute result: {message.content}", file=sys.stderr)
+            print(result["messages"][-1].text)
         finally:
-            await submilli.client.aclose()
+            await submilli.aclose_thread(agent, config)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-`SubmilliMiddleware` reads the server address from `SUBMILLI_SERVER` or uses
+`AsyncSubmilli` reads the server address from `SUBMILLI_SERVER` or uses
 `http://127.0.0.1:8128`, and reads the token from
 `SUBMILLI_SERVER_TOKEN`. The checkpointer keeps the server session id in the
-thread state. `aclose_thread` closes that session in the `finally` block.
+thread state. `aclose_thread` closes that session in the `finally` block. The async context
+closes the HTTP client.
 
 The profile removes Deep Agents' built-in tools, including file, shell, and
 subagent delegation tools, and disables its general-purpose subagent.
 `tools=[]` and `subagents=[]` add no direct tools or custom subagents. This
 example exposes only Submilli's tools to the model. The profile is registered
 for `model_name` in this process; use the same name in `create_deep_agent`.
-
-### Check the connection
-
-With the setup environment active, run this without a model request:
-
-```sh
-python agent.py --check
-```
-
-Look for `Connected to Submilli.`. This checks the server and registered
-Blueprint; the model runs only when you supply a message.
 
 ## Try it out
 
@@ -207,19 +174,13 @@ The model passed the supplied program to Submilli, which compiled and ran it in 
 registered Blueprint's session. Check the printed execute-tool result as well
 as the final answer to confirm that the connection completed.
 
-<a id="your-tools-in-programs"></a>
-
-To reuse application tools under Blueprint permissions, pass your LangChain
-tools to `SubmilliMiddleware`'s `ptc` parameter. They become callable from
-Submilli programs; the middleware does not expose them directly to the model.
-Keep `create_deep_agent`'s `tools` empty: adding the same tools there creates a
-direct path that bypasses Submilli. Use `interrupt_on` for callback
-calls that need LangChain human-in-the-loop approval. The
-[harness tools overview](/docs/tutorials/connect-a-harness#call-harness-tools-from-programs)
-describes the shared lifecycle; the [`langchain-submilli` reference](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#application-tools)
-covers the integration contract.
-
 You now have a Deep Agents application whose program execution is governed by
 an already registered Blueprint and whose thread closes its server session.
 For the same connection through another harness, see the [OpenAI Agents
 SDK](/docs/tutorials/connect-openai-agents) tutorial.
+
+## Reference
+
+<a id="your-tools-in-programs"></a>
+
+For application tools, see the [`langchain-submilli` reference](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#application-tools).

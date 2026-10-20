@@ -164,5 +164,5 @@ test("the Deep Agents guide retains the Python README's application-tools anchor
     new URL("../../docs/part-5-tutorials/connect-a-harness/04-connect-deepagents.md", import.meta.url),
     "utf8",
   );
-  assert.match(deepagents, /<a id="your-tools-in-programs"><\/a>\s+To reuse application tools/);
+  assert.match(deepagents, /<a id="your-tools-in-programs"><\/a>\s+For application tools, see [^\n]+#application-tools/);
 });
