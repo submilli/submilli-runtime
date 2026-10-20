@@ -8,7 +8,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "16361a428ce10c5946a2049f3f7c373c387128391af268fd830efcf07a9c69a0"
+  contentHash: "bc7edc5d23f2486e68cb9c2e3ced3f60c56a1cbd879cfa627b7d7939fb07f989"
   confirmedAt: "2026-10-20T09:28:54Z"
 ---
 
@@ -89,26 +89,10 @@ const endpoint = new URL(`${server}/mcp/${encodeURIComponent(blueprint)}`);
 const requestInit = { headers: { Authorization: `Bearer ${required("SUBMILLI_SERVER_TOKEN")}` } };
 const transport = new StreamableHTTPClientTransport(endpoint, { requestInit });
 const client = new Client({ name: "claude-submilli", version: "1.0.0" });
-const abortController = new AbortController();
-let closeOnSignal: Promise<void> | undefined;
-const interrupt = () => stop(130);
-const terminate = () => stop(143);
-process.on("SIGINT", interrupt);
-process.on("SIGTERM", terminate);
-
-function stop(exitCode: number) {
-  if (abortController.signal.aborted) return;
-  process.exitCode = exitCode;
-  abortController.abort();
-  closeOnSignal = client.close();
-  // Observe rejection now; the finally block awaits and reports it.
-  void closeOnSignal.catch(() => {});
-}
 
 try {
-  await client.connect(transport, { signal: abortController.signal });
-  const catalog = await client.listTools({}, { signal: abortController.signal });
-  abortController.signal.throwIfAborted();
+  await client.connect(transport);
+  const catalog = await client.listTools();
   if (!catalog.tools.some((tool) => tool.name === "submilli__typescript__execute")) {
     throw new Error("Submilli's execute tool is unavailable");
   }
@@ -120,7 +104,6 @@ try {
   mcp.server.setRequestHandler(ListToolsRequestSchema, (request) => client.listTools(request.params));
   mcp.server.setRequestHandler(CallToolRequestSchema, (request) => client.callTool(request.params));
   const options: Options = {
-    abortController,
     // Change this model ID to use another supported Claude model.
     model: "claude-sonnet-5",
     systemPrompt: "Use Submilli to do calculations in TypeScript. Return the execution result.",
@@ -144,8 +127,6 @@ try {
     agent.close();
     await mcp.close();
   }
-} catch (error) {
-  if (!abortController.signal.aborted) throw error;
 } finally {
   try {
     if (transport.sessionId) {
@@ -161,12 +142,7 @@ try {
       }
     }
   } finally {
-    try {
-      await (closeOnSignal ?? client.close());
-    } finally {
-      process.off("SIGINT", interrupt);
-      process.off("SIGTERM", terminate);
-    }
+    await client.close();
   }
 }
 

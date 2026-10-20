@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { EventEmitter } from "node:events";
 import { stripTypeScriptTypes } from "node:module";
 import test from "node:test";
 
@@ -29,10 +28,6 @@ const catalog = {
 function fixture(failure) {
   const active = new Set();
   const state = { models: 0, clientClosed: 0, queryClosed: 0, bridgeClosed: 0, deletes: 0, cleanupClosed: 0 };
-  const process = Object.assign(new EventEmitter(), {
-    argv: ["node", "agent.ts", "calculate"],
-    env: { SUBMILLI_BLUEPRINT: "test", SUBMILLI_SERVER_TOKEN: "placeholder" },
-  });
   let transport;
   class Transport {
     constructor(endpoint, options) {
@@ -56,7 +51,7 @@ function fixture(failure) {
     }
   }
   class Client {
-    async connect(value, options) {
+    async connect(value) {
       transport = value;
       if (["unknown Blueprint", "missing context", "unauthorized"].includes(failure)) {
         throw new Error(failure);
@@ -64,10 +59,6 @@ function fixture(failure) {
       transport.sessionId = `session-${state.models}`;
       transport.protocolVersion = "2025-11-25";
       active.add(transport.sessionId);
-      if (failure?.startsWith("setup SIG")) {
-        process.emit(failure.slice("setup ".length));
-        options.signal.throwIfAborted();
-      }
       if (failure === "initialize") {
         // The real SDK closes its transport before rejecting initialization.
         await this.close();
@@ -108,11 +99,6 @@ function fixture(failure) {
       close() { state.queryClosed++; },
       async *[Symbol.asyncIterator]() {
         assert.deepEqual(await server.handlers.get(list)({}), catalog);
-        if (failure?.startsWith("SIG")) {
-          process.emit(failure);
-          process.emit(failure); // A second signal must not bypass cleanup.
-          options.abortController.signal.throwIfAborted();
-        }
         if (failure === "model") throw new Error("model failed");
         const result = await server.handlers.get(call)({
           params: { name: "submilli__typescript__execute", arguments: { code: "2 + 2" } },
@@ -125,10 +111,10 @@ function fixture(failure) {
   }
   const run = () => execute(
     query, Client, Transport, McpServer, call, list,
-    process,
+    { argv: ["node", "agent.ts", "calculate"], env: { SUBMILLI_BLUEPRINT: "test", SUBMILLI_SERVER_TOKEN: "placeholder" } },
     { dir() {} },
   );
-  return { run, state, active, process };
+  return { run, state, active };
 }
 
 test("repeated guide runs forward Submilli tools and leave no active sessions", async () => {
@@ -172,23 +158,6 @@ test("a failed session deletion is reported and the HTTP client still closes", a
   assert.equal(f.state.cleanupClosed, 1);
   assert.equal(f.active.size, 1);
 });
-
-for (const signal of ["SIGINT", "SIGTERM"]) {
-  for (const phase of ["", "setup "]) {
-    test(`${phase}${signal} cancels work, deletes the session, and removes signal handlers`, async () => {
-      const f = fixture(`${phase}${signal}`);
-      await f.run();
-      assert.equal(f.active.size, 0);
-      assert.equal(f.state.deletes, 1);
-      assert.equal(f.state.clientClosed, 1);
-      assert.equal(f.process.exitCode, signal === "SIGINT" ? 130 : 143);
-      assert.equal(f.process.listenerCount("SIGINT"), 0);
-      assert.equal(f.process.listenerCount("SIGTERM"), 0);
-      assert.equal(f.state.models, phase ? 0 : 1);
-      assert.equal(f.state.queryClosed, phase ? 0 : 1);
-    });
-  }
-}
 
 test("the Deep Agents guide retains the Python README's application-tools anchor", () => {
   const deepagents = readFileSync(
