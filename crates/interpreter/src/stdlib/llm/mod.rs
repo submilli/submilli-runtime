@@ -255,9 +255,68 @@ async fn dispatch(
         prompts,
         schema,
     };
-    effects::execute(caller, if op == "call" { "llm.call" } else { "llm.batch" }, request, move |caller, _, request| Box::pin(async move {
-        let LlmRequest { model, prompts, schema } = request;
-        let model = model.as_str();
+    let operation = if op == "call" {
+        "llm.call"
+    } else {
+        "llm.batch"
+    };
+    let mut response = effects::execute(caller, operation, request, move |caller, _, request| {
+        Box::pin(call_provider(caller, op, ticket, request))
+    })
+    .await?;
+    // The live reservation is settled once; replay restores only this run's spend.
+    if let Some(settlement) = &mut response.settlement {
+        settlement.charge();
+    } else if let Some(budget) = budget(caller) {
+        budget.restore_spend(response.used, response.held);
+    }
+    Ok(response.outcomes)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LlmResponse {
+    outcomes: Vec<LlmOutcome>,
+    used: u64,
+    held: u64,
+    #[serde(skip)]
+    settlement: Option<LlmSettlement>,
+}
+
+/// A live reservation is not part of history. Keep its settlement until the
+/// outcome commits; dropping it also settles if persistence fails.
+struct LlmSettlement {
+    budget: Option<Arc<ExecutionTokenBudget>>,
+    reserved: u64,
+    reported: u64,
+    held: u64,
+}
+
+impl LlmSettlement {
+    fn charge(&mut self) {
+        if let Some(budget) = self.budget.take() {
+            budget.reconcile(self.reserved, self.reported, self.held);
+        }
+    }
+}
+
+impl Drop for LlmSettlement {
+    fn drop(&mut self) {
+        self.charge();
+    }
+}
+
+async fn call_provider(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    op: &'static str,
+    ticket: Option<CallTicket>,
+    request: LlmRequest,
+) -> wasmtime::Result<LlmResponse> {
+    let LlmRequest {
+        model,
+        prompts,
+        schema,
+    } = request;
+    let model = model.as_str();
     let budget = budget(caller);
     let limits = budget
         .as_ref()
@@ -284,10 +343,13 @@ async fn dispatch(
 
     match dispatched {
         Ok(outcomes) => {
-            if let Some(budget) = budget.as_deref() {
-                let (reported, indeterminate) = usage(&outcomes, reservation, prompts.len());
-                budget.reconcile(reservation, reported, indeterminate);
-            }
+            let (reported, held) = usage(&outcomes, reservation, prompts.len());
+            let settlement = budget.map(|budget| LlmSettlement {
+                budget: Some(budget),
+                reserved: reservation,
+                reported,
+                held,
+            });
             // The completions are here and billed: settled, not refused.
             let received: usize = outcomes
                 .iter()
@@ -315,7 +377,12 @@ async fn dispatch(
             });
             record_usage(&*caller, ticket, reported_usage(&outcomes));
             fuel::settle(&mut *caller, fuel::IO, received as u64)?;
-            Ok(outcomes)
+            Ok(LlmResponse {
+                outcomes,
+                used: reservation.min(reported.saturating_add(held)),
+                held,
+                settlement,
+            })
         }
         Err(error) => {
             // Nothing ran, so nothing was billed: the whole reservation goes
@@ -335,7 +402,6 @@ async fn dispatch(
             Err(throw(op, error))
         }
     }
-    })).await
 }
 
 #[derive(serde::Serialize)]

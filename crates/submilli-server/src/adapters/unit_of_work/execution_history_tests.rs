@@ -27,11 +27,7 @@ async fn fixture(
     (database, factory, attempt)
 }
 fn result(bytes: &[u8]) -> RecordedOutcome {
-    RecordedOutcome {
-        result: Ok(interpreter::runtime::effects::OutcomeBytes(bytes.into())),
-        llm_spend: Default::default(),
-        embedding_spend: Default::default(),
-    }
+    Ok(interpreter::runtime::effects::OutcomeBytes(bytes.into()))
 }
 
 #[tokio::test]
@@ -186,10 +182,21 @@ async fn run_script(source: &str, history: Arc<History>, root: &std::path::Path)
 
 async fn run_script_with(
     source: &str,
-    history: Arc<History>,
+    history: Arc<dyn EffectHistory>,
     root: &std::path::Path,
     configure: impl FnOnce(&mut interpreter::runtime::StoreData),
 ) -> Option<String> {
+    try_run_script_with(source, history, root, configure)
+        .await
+        .unwrap()
+}
+
+async fn try_run_script_with(
+    source: &str,
+    history: Arc<dyn EffectHistory>,
+    root: &std::path::Path,
+    configure: impl FnOnce(&mut interpreter::runtime::StoreData),
+) -> wasmtime::Result<Option<String>> {
     use interpreter::runtime::{
         RuntimeConfig, StoreData, Vfs, dispatch_main_async, install_runtime_async,
         instantiate_program_async,
@@ -213,8 +220,10 @@ async fn run_script_with(
     let instance = instantiate_program_async(&linker, &mut store, &module)
         .await
         .unwrap();
-    let result = dispatch_main_async(&mut store, &instance).await.unwrap();
-    history.finish().await.unwrap();
+    let result = dispatch_main_async(&mut store, &instance).await;
+    if result.is_ok() {
+        history.finish().await.unwrap();
+    }
     store.data_mut().blocking_work.finish().await.unwrap();
     result
 }
@@ -625,4 +634,377 @@ async fn execution_history_replays_native_http_errors_session_values_and_code_mu
         std::fs::read_to_string(root.join("code")).unwrap(),
         "later contents"
     );
+}
+
+/// Inspect budgets while the outcome is being saved, before execute returns.
+struct InspectSpendHistory {
+    history: History,
+    inspect: Box<dyn Fn() + Send + Sync>,
+    fail_commit: bool,
+}
+#[async_trait::async_trait]
+impl EffectHistory for InspectSpendHistory {
+    async fn begin(
+        &self,
+        operation: &str,
+        fingerprint: [u8; 32],
+    ) -> Result<
+        interpreter::runtime::effects::EffectCall,
+        interpreter::runtime::effects::HistoryError,
+    > {
+        self.history.begin(operation, fingerprint).await
+    }
+    async fn complete(
+        &self,
+        call: &interpreter::runtime::effects::EffectCall,
+        outcome: RecordedOutcome,
+    ) -> Result<(), interpreter::runtime::effects::HistoryError> {
+        (self.inspect)();
+        if self.fail_commit {
+            return Err(interpreter::runtime::effects::HistoryError(
+                "injected commit failure".into(),
+            ));
+        }
+        self.history.complete(call, outcome).await
+    }
+    async fn finish(&self) -> Result<(), interpreter::runtime::effects::HistoryError> {
+        self.history.finish().await
+    }
+}
+
+struct SpendLlm {
+    outcome: interpreter::runtime::llm::LlmOutcome,
+    calls: std::sync::atomic::AtomicU64,
+}
+impl interpreter::runtime::llm::LlmProvider for SpendLlm {
+    fn call<'a>(
+        &'a self,
+        _: &'a str,
+        _: &'a [String],
+        _: Option<&'a str>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        Vec<interpreter::runtime::llm::LlmOutcome>,
+                        interpreter::runtime::llm::LlmCallError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Box::pin(async { Ok(vec![self.outcome.clone()]) })
+    }
+    fn models<'a>(
+        &'a self,
+    ) -> std::pin::Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        Vec<interpreter::runtime::llm::LlmModel>,
+                        interpreter::runtime::llm::LlmCallError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+}
+
+#[tokio::test]
+async fn execution_history_llm_charges_after_commit_and_restores_run_spend() {
+    use interpreter::runtime::llm::{
+        ExecutionTokenBudget, LlmLimits, LlmOutcome, SharedTokenBudget,
+    };
+    for (input, output, used, held) in [
+        (Some(3), Some(4), 7, 0),
+        (None, None, 101, 101),
+        (Some(5), None, 101, 96),
+    ] {
+        for fail_commit in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let (_database, units, attempt) = fixture(&directory.path().join("db")).await;
+            let limits = LlmLimits {
+                per_execution_tokens: 105,
+                default_output_cap: 100,
+                ..LlmLimits::default()
+            };
+            let aggregate = SharedTokenBudget::new(1_000);
+            let budget = Arc::new(ExecutionTokenBudget::new(limits, aggregate.clone()));
+            let provider = Arc::new(SpendLlm {
+                outcome: LlmOutcome::success("done").with_usage(input, output),
+                calls: Default::default(),
+            });
+            let inspected = budget.clone();
+            let history = Arc::new(InspectSpendHistory {
+                history: History::new(attempt.clone(), units.clone()),
+                inspect: Box::new(move || {
+                    assert_eq!(
+                        inspected.used(),
+                        101,
+                        "live estimate remains until execute returns"
+                    );
+                    assert_eq!(
+                        inspected.held(),
+                        0,
+                        "final usage is not charged inside execute"
+                    );
+                }),
+                fail_commit,
+            });
+            let source = r#"import llm from "submilli:llm";
+                function main(): string { return llm.call("m", "p").text ?? ""; }"#;
+            let live = try_run_script_with(source, history, directory.path(), |data| {
+                data.llm_provider = Some(provider.clone());
+                data.llm_budget = Some(budget.clone());
+            })
+            .await;
+            assert_eq!(live.is_err(), fail_commit);
+            assert_eq!(budget.used(), used);
+            assert_eq!(budget.held(), held);
+            assert_eq!(
+                aggregate.used(),
+                used,
+                "settled once, including on commit failure"
+            );
+            if fail_commit {
+                continue;
+            }
+            assert_eq!(live.unwrap(), Some("done".into()));
+
+            let replay_aggregate = SharedTokenBudget::new(0);
+            let replay_budget =
+                Arc::new(ExecutionTokenBudget::new(limits, replay_aggregate.clone()));
+            let resumed = r#"import llm from "submilli:llm";
+                function main(): string {
+                    assert(llm.call("m", "p").text === "done");
+                    try { llm.call("m", "q"); return "missed limit"; }
+                    catch (e: QuotaExceededError) { return "quota"; }
+                }"#;
+            let replay = run_script_with(
+                resumed,
+                Arc::new(History::new(attempt, units)),
+                directory.path(),
+                |data| {
+                    data.llm_provider = Some(provider.clone());
+                    data.llm_budget = Some(replay_budget.clone());
+                },
+            )
+            .await;
+            assert_eq!(replay, Some("quota".into()));
+            assert_eq!(replay_budget.used(), used);
+            assert_eq!(replay_budget.held(), held);
+            assert_eq!(
+                replay_aggregate.used(),
+                0,
+                "replay makes no shared reservation"
+            );
+            assert_eq!(provider.calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SpendEmbeddingOutcome {
+    Reported,
+    Unknown,
+    PartialFailure,
+    CountMismatch,
+    Internal,
+}
+struct SpendEmbedding {
+    outcome: SpendEmbeddingOutcome,
+    calls: std::sync::atomic::AtomicU64,
+}
+impl interpreter::runtime::EmbeddingProvider for SpendEmbedding {
+    fn embed<'a>(
+        &'a self,
+        alias: &'a str,
+        _: &'a [String],
+        _: interpreter::runtime::Purpose,
+        budget: &'a interpreter::runtime::EmbeddingTokenBudget,
+    ) -> std::pin::Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        interpreter::runtime::EmbeddingBatch,
+                        interpreter::runtime::EmbeddingError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        use interpreter::runtime::{
+            EmbeddingBatch, EmbeddingError, EmbeddingFailureReason, SubBatchSettlement,
+        };
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Box::pin(async move {
+            budget.mark_sent(alias, 10)?;
+            let settlement = SubBatchSettlement {
+                estimate: 10,
+                reported: if matches!(self.outcome, SpendEmbeddingOutcome::Unknown) {
+                    0
+                } else {
+                    3
+                },
+                indeterminate: match self.outcome {
+                    SpendEmbeddingOutcome::Unknown => 10,
+                    SpendEmbeddingOutcome::PartialFailure | SpendEmbeddingOutcome::Internal => 7,
+                    _ => 0,
+                },
+            };
+            let settlements = vec![settlement];
+            match self.outcome {
+                SpendEmbeddingOutcome::PartialFailure => Err(EmbeddingError::Provider {
+                    alias: alias.into(),
+                    reason: EmbeddingFailureReason::Transport,
+                    settlements,
+                }),
+                SpendEmbeddingOutcome::Internal => Err(EmbeddingError::Internal {
+                    alias: alias.into(),
+                    settlements,
+                }),
+                _ => {
+                    let count = if matches!(self.outcome, SpendEmbeddingOutcome::CountMismatch) {
+                        2
+                    } else {
+                        1
+                    };
+                    Ok(
+                        EmbeddingBatch::new(vec![0.5; count], count, 1, "emb1:test", alias)
+                            .unwrap()
+                            .with_input_tokens(Some(settlement.reported))
+                            .with_settlements(settlements),
+                    )
+                }
+            }
+        })
+    }
+    fn models<'a>(
+        &'a self,
+    ) -> std::pin::Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        Vec<interpreter::runtime::EmbeddingModel>,
+                        interpreter::runtime::EmbeddingError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    fn max_input_bytes(&self, _: &str) -> Option<u64> {
+        Some(100)
+    }
+    fn estimate_tokens(&self, _: &str, _: &[String]) -> u64 {
+        10
+    }
+}
+
+#[tokio::test]
+async fn execution_history_embedding_charges_success_and_failure_after_commit() {
+    use interpreter::runtime::llm::SharedTokenBudget;
+    use interpreter::runtime::{EmbeddingLimits, EmbeddingTokenBudget};
+    for (outcome, used, held, answer) in [
+        (SpendEmbeddingOutcome::Reported, 3, 0, "ok"),
+        (SpendEmbeddingOutcome::Unknown, 10, 10, "ok"),
+        (SpendEmbeddingOutcome::PartialFailure, 10, 7, "error"),
+        (SpendEmbeddingOutcome::CountMismatch, 3, 0, "error"),
+        (SpendEmbeddingOutcome::Internal, 10, 7, ""),
+    ] {
+        for fail_commit in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let (_database, units, attempt) = fixture(&directory.path().join("db")).await;
+            let limits = EmbeddingLimits {
+                per_execution_tokens: 12,
+                ..EmbeddingLimits::default()
+            };
+            let aggregate = SharedTokenBudget::new(100);
+            let budget = Arc::new(EmbeddingTokenBudget::new(limits, aggregate.clone()));
+            let provider = Arc::new(SpendEmbedding {
+                outcome,
+                calls: Default::default(),
+            });
+            let inspected = budget.clone();
+            let history = Arc::new(InspectSpendHistory {
+                history: History::new(attempt.clone(), units.clone()),
+                inspect: Box::new(move || {
+                    assert_eq!(
+                        inspected.used(),
+                        10,
+                        "estimate is not settled before commit"
+                    );
+                    assert_eq!(
+                        inspected.held(),
+                        10,
+                        "sent estimate remains held before commit"
+                    );
+                    assert_eq!(inspected.requests(), 1);
+                }),
+                fail_commit,
+            });
+            let source = r#"import embedding from "submilli:embedding";
+                function main(): string {
+                    try { embedding.embed("m", ["a"], "document"); return "ok"; }
+                    catch (e: Error) { return "error"; }
+                }"#;
+            let live = try_run_script_with(source, history, directory.path(), |data| {
+                data.embedding_provider = Some(provider.clone());
+                data.embedding_budget = Some(budget.clone());
+            })
+            .await;
+            let internal = matches!(outcome, SpendEmbeddingOutcome::Internal);
+            assert_eq!(live.is_err(), fail_commit || internal, "{outcome:?}");
+            assert_eq!(
+                (budget.used(), budget.held(), budget.requests()),
+                (used, held, 1)
+            );
+            assert_eq!(aggregate.used(), used);
+            if fail_commit || internal {
+                let mut unit = units().await.unwrap();
+                assert!(
+                    unit.get_history_entry(&attempt.run_id, 0)
+                        .await
+                        .unwrap()
+                        .is_none()
+                );
+                continue;
+            }
+            assert_eq!(live.unwrap(), Some(answer.into()));
+            let replay_aggregate = SharedTokenBudget::new(0);
+            let replay_budget =
+                Arc::new(EmbeddingTokenBudget::new(limits, replay_aggregate.clone()));
+            let replay = run_script_with(
+                source,
+                Arc::new(History::new(attempt, units)),
+                directory.path(),
+                |data| {
+                    data.embedding_provider = Some(provider.clone());
+                    data.embedding_budget = Some(replay_budget.clone());
+                },
+            )
+            .await;
+            assert_eq!(replay, Some(answer.into()));
+            assert_eq!(
+                (
+                    replay_budget.used(),
+                    replay_budget.held(),
+                    replay_budget.requests()
+                ),
+                (used, held, 1)
+            );
+            assert_eq!(replay_aggregate.used(), 0);
+            assert_eq!(provider.calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+            assert!(
+                replay_budget.reserve("m", 10).is_err(),
+                "historical usage constrains new requests"
+            );
+        }
+    }
 }

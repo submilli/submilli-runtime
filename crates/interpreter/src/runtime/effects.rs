@@ -17,7 +17,7 @@ use super::host::{self, fatal_host_error};
 
 /// Independent of the filesystem journal's much smaller metadata limit.
 pub const MAX_OUTCOME_BYTES: usize = 64 * 1024 * 1024;
-pub const CODEC_VERSION: u32 = 3;
+pub const CODEC_VERSION: u32 = 4;
 
 #[derive(Debug, thiserror::Error)]
 #[error("durable execution: {0}")]
@@ -30,20 +30,8 @@ pub struct EffectCall {
     pub recorded: Option<RecordedOutcome>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RecordedOutcome {
-    pub result: Result<OutcomeBytes, NativeError>,
-    pub llm_spend: TokenSpend,
-    pub embedding_spend: TokenSpend,
-}
+pub type RecordedOutcome = Result<OutcomeBytes, NativeError>;
 
-/// Logical per-run spend; replay never reserves these tokens against the provider.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TokenSpend {
-    pub used: u64,
-    pub held: u64,
-    pub requests: u64,
-}
 /// Encoded bytes use MessagePack's binary representation, never an integer array.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -100,17 +88,7 @@ where
         .await
         .map_err(fatal_host_error)?;
     if let Some(recorded) = &call.recorded {
-        if let Some(budget) = &caller.data().llm_budget {
-            budget.restore_spend(recorded.llm_spend.used, recorded.llm_spend.held);
-        }
-        if let Some(budget) = &caller.data().embedding_budget {
-            budget.restore_spend(
-                recorded.embedding_spend.used,
-                recorded.embedding_spend.held,
-                recorded.embedding_spend.requests,
-            );
-        }
-        return match &recorded.result {
+        return match recorded {
             Ok(bytes) => {
                 fuel::charge(&mut *caller, fuel::PARSE, bytes.0.len() as u64)?;
                 decode(&bytes.0)
@@ -121,8 +99,6 @@ where
         };
     }
 
-    let llm_before = llm_spend(caller.data());
-    let embedding_before = embedding_spend(caller.data());
     let result = action(caller, call.id.clone(), arguments).await;
     if let Err(error) = &result
         && (host::ends_the_run(error) || error.is::<wasmtime::ThrownException>())
@@ -139,58 +115,13 @@ where
         }
         Err(error) => Err(NativeError::capture(error)),
     };
-    let outcome = RecordedOutcome {
-        result: recorded_result,
-        llm_spend: llm_spend(caller.data()).since(&llm_before)?,
-        embedding_spend: embedding_spend(caller.data()).since(&embedding_before)?,
-    };
     history
-        .complete(&call, outcome)
+        .complete(&call, recorded_result)
         .await
         .map_err(fatal_host_error)?;
     fuel::settle_result(caller, |caller| {
         result.map_err(|error| host::throw_host_error(caller, error))
     })
-}
-
-impl TokenSpend {
-    fn since(&self, before: &Self) -> wasmtime::Result<Self> {
-        let used = self
-            .used
-            .checked_sub(before.used)
-            .ok_or_else(|| fatal_host_error("native call reduced prior token spend"))?;
-        let held = self
-            .held
-            .checked_sub(before.held)
-            .ok_or_else(|| fatal_host_error("native call reduced prior held tokens"))?;
-        let requests = self
-            .requests
-            .checked_sub(before.requests)
-            .ok_or_else(|| fatal_host_error("native call reduced prior request count"))?;
-        Ok(Self {
-            used,
-            held,
-            requests,
-        })
-    }
-}
-fn llm_spend(data: &StoreData) -> TokenSpend {
-    data.llm_budget
-        .as_ref()
-        .map_or_else(TokenSpend::default, |budget| TokenSpend {
-            used: budget.used(),
-            held: budget.held(),
-            requests: 0,
-        })
-}
-fn embedding_spend(data: &StoreData) -> TokenSpend {
-    data.embedding_budget
-        .as_ref()
-        .map_or_else(TokenSpend::default, |budget| TokenSpend {
-            used: budget.used(),
-            held: budget.held(),
-            requests: budget.requests(),
-        })
 }
 
 pub(crate) mod binary {
@@ -316,7 +247,7 @@ pub enum NativeError {
     PermissionDenied(host::PermissionDenied),
 }
 impl NativeError {
-    fn capture(error: &wasmtime::Error) -> Self {
+    pub(crate) fn capture(error: &wasmtime::Error) -> Self {
         let message = error.to_string();
         if let Some(denial) = error.downcast_ref::<host::PermissionDenied>() {
             return Self::PermissionDenied(denial.clone());
@@ -341,7 +272,7 @@ impl NativeError {
         }
         Self::Error(message)
     }
-    fn into_error(self) -> wasmtime::Error {
+    pub(crate) fn into_error(self) -> wasmtime::Error {
         match self {
             Self::Error(message) => wasmtime::Error::msg(message),
             Self::Range(message) => wasmtime::Error::new(host::RangeError(message)),

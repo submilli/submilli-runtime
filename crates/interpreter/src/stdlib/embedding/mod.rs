@@ -30,7 +30,7 @@
 
 pub mod declaration;
 
-use crate::runtime::effects;
+use crate::runtime::effects::{self, NativeError};
 use std::sync::Arc;
 
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
@@ -40,7 +40,7 @@ use crate::runtime::call_log::{ModelUsage, Payload, Side, record_payload, record
 use crate::runtime::decision::CallTicket;
 use crate::runtime::embedding::{
     EmbeddingBatch, EmbeddingBoundKind, EmbeddingError, EmbeddingLimits, EmbeddingMalformedReason,
-    EmbeddingModel, EmbeddingProvider, EmbeddingTokenBudget, Purpose,
+    EmbeddingModel, EmbeddingProvider, EmbeddingTokenBudget, Purpose, SubBatchSettlement,
 };
 use crate::runtime::fuel;
 use crate::runtime::host::{
@@ -279,93 +279,152 @@ async fn embed(
         texts,
         purpose,
     };
-    let batch = effects::execute(
+    let mut response = effects::execute(
         caller,
         "embedding.embed",
         request,
-        move |caller, _, request| {
-            Box::pin(async move {
-                let model = request.model.as_str();
-                let texts = request.texts;
-                let purpose = request.purpose;
-                let budget = execution_budget(caller);
-                let provider = provider(caller, model)?;
-                check_inputs(caller, &*provider, model, &texts).await?;
+        move |caller, _, request| Box::pin(call_provider(caller, ticket, request)),
+    )
+    .await?;
+    // Charge even a partially failed batch before exposing its result or error.
+    if let Some(settlement) = &mut response.settlement {
+        settlement.charge();
+    } else {
+        budget.restore_spend(response.used, response.held, response.requests);
+    }
+    let batch = response.result.map_err(NativeError::into_error)?;
+    build_embeddings(caller, batch)
+}
 
-                let sent: usize = texts.iter().map(String::len).sum();
-                fuel::charge(&mut *caller, fuel::IO, sent as u64)?;
+#[derive(serde::Serialize, serde::Deserialize)]
+struct EmbeddingResponse {
+    result: Result<EmbeddingBatch, NativeError>,
+    used: u64,
+    held: u64,
+    requests: u64,
+    #[serde(skip)]
+    settlement: Option<EmbeddingSettlement>,
+}
 
-                let estimate = provider.estimate_tokens(model, &texts);
-                budget
-                    .reserve(model, estimate)
-                    .map_err(|error| quota_throw(caller, ticket, model, error))?;
+/// Retain live reservation cleanup if storing the outcome fails. Replay has no
+/// live reservation and restores only the recorded per-run counters.
+struct EmbeddingSettlement {
+    budget: Option<Arc<EmbeddingTokenBudget>>,
+    reserved: u64,
+    settlements: Vec<SubBatchSettlement>,
+}
 
-                let batch = match provider.embed(model, &texts, purpose, &budget).await {
-                    Ok(batch) => batch,
-                    Err(error) => {
-                        // Settled before the error becomes a throw, or a fatal one, so the
-                        // sent sub-batches stay charged either way.
-                        budget.settle(estimate, error.settlements());
-                        // What the sent sub-batches reported is real spend; record it, and
-                        // nothing when no sub-batch reported any. Unlike success, which is
-                        // all-or-nothing, this is a lower bound: unreported sub-batches
-                        // add nothing to it.
-                        let reported: u64 = error
-                            .settlements()
-                            .iter()
-                            .fold(0, |sum, settlement| sum.saturating_add(settlement.reported));
-                        if reported > 0 {
-                            record_usage(
-                                &*caller,
-                                ticket,
-                                ModelUsage {
-                                    input_tokens: Some(reported),
-                                    output_tokens: None,
-                                },
-                            );
-                        }
-                        return Err(quota_throw(caller, ticket, model, error));
-                    }
-                };
-                budget.settle(estimate, batch.settlements());
+impl EmbeddingSettlement {
+    fn charge(&mut self) {
+        if let Some(budget) = self.budget.take() {
+            budget.settle(self.reserved, &self.settlements);
+        }
+    }
+}
 
-                // The provider owes one vector per text. Settlement is already applied, so
-                // a violation is a defect reported to the program, never a partial result.
-                if batch.count() != texts.len() {
-                    return Err(throw(EmbeddingError::Malformed {
-                        alias: model.to_string(),
-                        reason: EmbeddingMalformedReason::CountMismatch,
-                        settlements: Vec::new(),
-                    }));
-                }
+impl Drop for EmbeddingSettlement {
+    fn drop(&mut self) {
+        self.charge();
+    }
+}
 
-                let received = (batch.values().len() as u64).saturating_mul(4);
-                // Metadata only: vectors are large and say nothing a call log can use.
-                record_payload(&*caller, ticket, Side::Response, || {
-                    Payload::meta(serde_json::json!({
-                        "count": batch.count(),
-                        "dimensions": batch.dimensions(),
-                        "identity": batch.identity(),
-                        "model": model,
-                        "inputTokens": batch.input_tokens(),
-                    }))
-                    .with_size(received)
-                });
+async fn call_provider(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    ticket: Option<CallTicket>,
+    request: EmbedRequest,
+) -> wasmtime::Result<EmbeddingResponse> {
+    let model = request.model.as_str();
+    let texts = request.texts;
+    let purpose = request.purpose;
+    let budget = execution_budget(caller);
+    let provider = provider(caller, model)?;
+    check_inputs(caller, &*provider, model, &texts).await?;
+
+    let sent: usize = texts.iter().map(String::len).sum();
+    fuel::charge(&mut *caller, fuel::IO, sent as u64)?;
+
+    let estimate = provider.estimate_tokens(model, &texts);
+    budget
+        .reserve(model, estimate)
+        .map_err(|error| quota_throw(caller, ticket, model, error))?;
+    let requests_before = budget.requests();
+    let dispatched = provider.embed(model, &texts, purpose, &budget).await;
+    let requests = budget.requests().saturating_sub(requests_before);
+    let settlements = match &dispatched {
+        Ok(batch) => batch.settlements(),
+        Err(error) => error.settlements(),
+    };
+    let (used, held) = settlements.iter().fold((0u64, 0u64), |(used, held), part| {
+        (
+            used.saturating_add(part.reported)
+                .saturating_add(part.indeterminate),
+            held.saturating_add(part.indeterminate),
+        )
+    });
+    let settlement = EmbeddingSettlement {
+        budget: Some(budget),
+        reserved: estimate,
+        settlements: settlements.to_vec(),
+    };
+    let result = match dispatched {
+        Ok(batch) if batch.count() != texts.len() => Err(throw(EmbeddingError::Malformed {
+            alias: model.to_string(),
+            reason: EmbeddingMalformedReason::CountMismatch,
+            settlements: Vec::new(),
+        })),
+        Ok(batch) => {
+            let received = (batch.values().len() as u64).saturating_mul(4);
+            record_payload(&*caller, ticket, Side::Response, || {
+                Payload::meta(serde_json::json!({
+                    "count": batch.count(),
+                    "dimensions": batch.dimensions(),
+                    "identity": batch.identity(),
+                    "model": model,
+                    "inputTokens": batch.input_tokens(),
+                }))
+                .with_size(received)
+            });
+            record_usage(
+                &*caller,
+                ticket,
+                ModelUsage {
+                    input_tokens: batch.input_tokens(),
+                    output_tokens: None,
+                },
+            );
+            fuel::settle(&mut *caller, fuel::IO, received)?;
+            Ok(batch)
+        }
+        Err(error) => {
+            // Some sub-batches may have completed before the provider failed.
+            let reported = error
+                .settlements()
+                .iter()
+                .fold(0u64, |sum, part| sum.saturating_add(part.reported));
+            if reported > 0 {
                 record_usage(
                     &*caller,
                     ticket,
                     ModelUsage {
-                        input_tokens: batch.input_tokens(),
+                        input_tokens: Some(reported),
                         output_tokens: None,
                     },
                 );
-                fuel::settle(&mut *caller, fuel::IO, received)?;
-                Ok(batch)
-            })
-        },
-    )
-    .await?;
-    build_embeddings(caller, batch)
+            }
+            Err(quota_throw(caller, ticket, model, error))
+        }
+    };
+    let result = match result {
+        Err(error) if crate::runtime::host::ends_the_run(&error) => return Err(error),
+        result => result.map_err(|error| NativeError::capture(&error)),
+    };
+    Ok(EmbeddingResponse {
+        result,
+        used,
+        held,
+        requests,
+        settlement: Some(settlement),
+    })
 }
 
 /// The capability check, run before any bytes leave the process. The context is
