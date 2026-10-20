@@ -17,7 +17,7 @@ export function contextualizePrompt(prompt, pageUrl) {
   const page = new URL(pageUrl);
   if (page.protocol !== 'https:' && page.protocol !== 'http:') return prompt;
   return prompt.replace(
-    /https:\/\/submilli\.ai(\/docs\/examples\/permission-demo\/(?:basic-blueprint\.yaml|blueprint\.yaml|billing-source\.zip))(?=$|[\s)\]>,;])/g,
+    /https:\/\/submilli\.ai(\/docs\/examples\/permission-demo\/basic-blueprint\.yaml)(?=$|[\s)\]>,;])/g,
     (_, path) => page.origin + path,
   );
 }

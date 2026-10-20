@@ -85,6 +85,12 @@ Treat established acronyms such as MCP as familiar terms. Do not expand or
 define them automatically. Explain the protocol's behavior when that detail
 helps the reader complete the task.
 
+For executable steps in any how-to, give the exact filename, complete copyable code,
+terminal command, and expected result. Do not use `...` to omit code the reader must
+supply, or refer to an unspecified app, chat, or test input. Keep verification focused
+on the guide's task. When coding-agent and manual setup paths share a verification
+step, both must prepare the same named file for that step.
+
 Put advanced options in reference. A how-to is read on its own: never explain its output by
 what another page did. Don't hedge; one sentence beside the rule it qualifies
 is enough.

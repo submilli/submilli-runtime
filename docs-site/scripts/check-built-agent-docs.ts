@@ -124,26 +124,15 @@ for (const file of ['agent.py', 'requirements.txt']) {
 	);
 }
 
-// Downloads are native files, never generated HTML pages or SPA fallbacks.
-for (const file of ['basic-blueprint.yaml', 'blueprint.yaml']) {
-  assert.equal(
-    await readFile(new URL(`docs/examples/permission-demo/${file}`, directory), 'utf8'),
-    await readFile(new URL(`../../examples/harnesses/permission-demo/${file}`, import.meta.url), 'utf8'),
-  );
-}
-const { execFileSync } = await import('node:child_process');
-const { fileURLToPath } = await import('node:url');
-const demoArchive = fileURLToPath(new URL('docs/examples/permission-demo/billing-source.zip', directory));
-for (const file of ['submilli.toml', 'package/src/lib.ts', 'package/docs/readme.md']) {
-  assert.equal(execFileSync('unzip', ['-p', demoArchive, file], { encoding: 'utf8' }),
-    await readFile(new URL(`../../examples/quickstart/${file}`, import.meta.url), 'utf8'),
-    `Permission demo download matches verified Package: ${file}`);
-}
+// The downloadable Blueprint is a native YAML file, not an HTML fallback.
+const blueprintPath = 'docs/examples/permission-demo/basic-blueprint.yaml';
+assert.equal(
+  await readFile(new URL(blueprintPath, directory), 'utf8'),
+  await readFile(new URL('../public/examples/permission-demo/basic-blueprint.yaml', import.meta.url), 'utf8'),
+);
 for (const slug of ['connect-mastra', 'connect-deepagents', 'connect-openai-agents', 'connect-claude-agent-sdk', 'use-the-http-api']) {
   for (const suffix of ['/index.html', '.md']) {
     const content = await readFile(new URL(`docs/how-to/${slug}${suffix}`, directory), 'utf8');
-    for (const file of ['basic-blueprint.yaml', 'blueprint.yaml', 'billing-source.zip']) {
-      assert.ok(content.includes(`/docs/examples/permission-demo/${file}`), `${slug}${suffix} links to ${file}`);
-    }
+    assert.ok(content.includes(`/${blueprintPath}`), `${slug}${suffix} links to the Blueprint`);
   }
 }

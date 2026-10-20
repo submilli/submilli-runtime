@@ -9,7 +9,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "d5ec40970e9ddd761f6bc376b2cfd103a526ccfe6d271a58055fe53ea319dd8f"
+  contentHash: "6a2001b76cf8def147aaa9de1a82b287c6917495871d8844a5e610649e69d1d8"
   confirmedAt: "2026-10-18T13:09:05.218103+00:00"
 # Unpublished AI draft. Human prose rewrite required before publication.
 ---
@@ -38,7 +38,7 @@ SUBMILLI_BLUEPRINT. This first example requires no Package.
 Install the dependencies shown here. Verify the server and basic program
 without making a model request. Leave the runnable file ready for the exact
 Try it out command, and tell me the directory to open and any remaining
-human setup. Do not run the optional billing scenario yet.
+human setup.
 ```
 
 After setup, [try it out](#try-it-out). To set up the same file yourself,
@@ -162,79 +162,16 @@ Look for `Connected to Submilli.`. This confirms the server and Blueprint are re
 
 ## Try it out
 
-1. Open a terminal in the `submilli-demo` directory created during setup. Activate its Python environment with `. .venv/bin/activate`. Use the same environment variables as during setup.
-2. Run the saved agent. Its default request asks Submilli to execute `export function main(): number { return 2 + 2; }`:
-
-   ```sh
-   python submilli-agent.py
-   ```
-
-3. Read the printed tool call and its matching result, then the agent’s answer. Look for the Submilli execution tool, the program containing `2 + 2`, and a returned value of `4`. An answer of `4` without an execution call does not verify the connection.
-
-The file prints tool calls and results automatically. Match a call’s ID to
-its result’s ID. MCP results may contain the value inside a text block.
-If no execution call appears, run this explicit request:
+Open a terminal in `submilli-demo` with the environment variables from setup. Activate its Python environment with `. .venv/bin/activate`.
+Run the saved file:
 
 ```sh
-python submilli-agent.py 'Use the Submilli execution tool now. Run export function main(): number { return 2 + 2; } and report the tool result. Do not calculate the answer without a tool call.'
+python submilli-agent.py
 ```
 
-<details>
-<summary>Optional scenario 2: allow one customer and reject another</summary>
-
-Keep the same agent file. This scenario adds a billing Package containing
-local sample charges and a Blueprint permitting `cus_northwind` only.
-No billing credentials are needed. Run the Package commands under the same
-user and `SUBMILLI_HOME` as your local server.
-
-From `submilli-demo`, prepare the optional demo:
-
-```sh
-mkdir permission-demo
-cd permission-demo
-curl -fsSLo blueprint.yaml https://submilli.ai/docs/examples/permission-demo/blueprint.yaml
-curl -fsSLo billing-source.zip https://submilli.ai/docs/examples/permission-demo/billing-source.zip
-unzip billing-source.zip
-submilli build publish-local
-SUBMILLI_SERVER_URL="$SUBMILLI_SERVER" submilli server blueprint apply blueprint.yaml
-cd ..
-export SUBMILLI_BLUEPRINT=permission-demo
-```
-
-Run the allowed request:
-
-```sh
-python submilli-agent.py 'Use the billing Package through Submilli to list charges for customer cus_northwind. Report the runtime result.'
-```
-
-Look for `ch_a1` (4900) and `ch_a2` (1250) in the printed Submilli tool result.
-Then run the denied request:
-
-```sh
-python submilli-agent.py 'Use the billing Package through Submilli to list charges for customer cus_initech. Attempt the operation and report the runtime result. Keep the customer ID and Blueprint permissions unchanged.'
-```
-
-Look for a tool result with `permission_denied` for `acme.com/charges.list`
-and no charges. A model refusal without a tool call does not test the runtime.
-
-To test the rejection directly, including when the model refuses to call the
-tool, run this complete request from the same terminal:
-
-```sh
-curl -fsS "$SUBMILLI_SERVER/v1/execute" \
-  -H "Authorization: Bearer $SUBMILLI_SERVER_TOKEN" \
-  -H "Content-Type: application/json" \
-  --data '{"blueprint":"permission-demo","code":"import { listCharges, Charge } from \"@acme/billing\"; function main(): Charge[] { return listCharges(\"cus_initech\"); }"}'
-```
-
-Check for `error.kind` equal to `"permission_denied"`, Capability
-`acme.com/charges.list`, and `result: null`. Older runtimes may return
-`runtime_error` with a `PermissionDeniedError` message instead. This direct
-request verifies the runtime’s rejection independently of the model.
-
-Return to the basic example with `export SUBMILLI_BLUEPRINT=harness-demo`.
-
-</details>
+Look for a Submilli execution tool call containing `2 + 2` and its returned
+value of `4`. This verifies that the agent ran the program through Submilli.
+An answer of `4` without a tool call does not verify the connection.
 
 ## Troubleshooting
 
