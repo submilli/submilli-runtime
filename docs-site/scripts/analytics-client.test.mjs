@@ -89,6 +89,27 @@ test('team opt-out link stops initialization even when storage is unavailable', 
   assert.equal(browser({ search: '?analytics=off', storageFailure: true }).initCount, 0);
 });
 
+test('query opt-out is inline before the analytics module dependency', () => {
+  const source = readFileSync(new URL('../src/components/Analytics.astro', import.meta.url), 'utf8');
+  const inline = source.indexOf('<script is:inline>');
+  const module = source.indexOf("import '../lib/analytics-client';");
+  assert.notEqual(inline, -1);
+  assert.ok(inline < module);
+  assert.match(source.slice(inline, module), /localStorage\.setItem\('submilli\.analytics-consent\.v1', 'denied'\)/);
+});
+
+test('inline query opt-out writes before the analytics module is available', () => {
+  const source = readFileSync(new URL('../src/components/Analytics.astro', import.meta.url), 'utf8');
+  const inline = source.match(/<script is:inline>([\s\S]*?)<\/script>/)?.[1];
+  const store = new Map();
+  vm.runInNewContext(inline, {
+    URL,
+    location: new URL('https://submilli.ai/docs/?analytics=off'),
+    localStorage: { setItem: (key, value) => store.set(key, value) },
+  });
+  assert.equal(store.get('submilli.analytics-consent.v1'), 'denied');
+});
+
 test('recordings are disabled on previews and marked verification sessions', () => {
   for (const options of [{search:'?analytics_test=1'}, {search:'?utm_source=verification'}, {attribution:{first:{utm_campaign:'deployment_verification'}}}, {attribution:{latest:{utm_content:'utm_e2e'}}}]) {
     const marked = browser(options);
