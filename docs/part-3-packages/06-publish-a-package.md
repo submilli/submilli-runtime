@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "eb2dc8c8c69140a6e0b9b9252ab84ecc0c62e3ab90d468436b95ba9ba92cc015"
+  contentHash: "ba86201a1f6fff77bc3af3061570ed39b022d6f546a2a40dd26162d1d4cb11d8"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
