@@ -106,6 +106,19 @@ test('inline query opt-out writes before analytics dependencies load', () => {
 	assert.equal(cookies.value, 'submilli_analytics_consent=denied');
 });
 
+test('inline query opt-out still writes the cookie when localStorage throws', () => {
+	const source = readFileSync(new URL('../src/components/Analytics.astro', import.meta.url), 'utf8');
+	const inline = source.match(/<script is:inline>([\s\S]*?)<\/script>/)?.[1];
+	const cookies = { value: '' };
+	vm.runInNewContext(inline, {
+		URL,
+		location: new URL('https://submilli.ai/docs/?analytics=off'),
+		localStorage: { setItem() { throw new Error('blocked'); } },
+		document: { get cookie() { return cookies.value; }, set cookie(value) { cookies.value = value.split(';', 1)[0]; } },
+	});
+	assert.equal(cookies.value, 'submilli_analytics_consent=denied');
+});
+
 test('cookie denial survives a fresh context when localStorage is unavailable', () => {
 	const cookieStore = { value: '' };
 	const first = browser({ search: '?analytics=off', storageFailure: true, cookieStore });
@@ -125,8 +138,14 @@ test('explicit docs opt-in clears cookie denial', () => {
 
 test('recordings are disabled on previews and marked verification sessions', () => {
   for (const options of [{hostname:'localhost'}, {hostname:'preview.onrender.com'}, {search:'?analytics_test=1'}, {search:'?utm_source=verification'}, {attribution:{first:{utm_campaign:'deployment_verification'}}}, {attribution:{latest:{utm_content:'utm_e2e'}}}]) {
-    assert.equal(browser(options).options.disable_session_recording, true);
+		assert.equal(browser(options).initCount, 0);
   }
+});
+
+test('preview and marked verification sessions never initialize analytics', () => {
+	for (const options of [{ hostname: 'localhost' }, { search: '?analytics_test=1' }, { search: '?utm_source=verification' }]) {
+		assert.equal(browser(options).initCount, 0);
+	}
 });
 
 test('shared opt-out immediately stops recording and event capture', () => {

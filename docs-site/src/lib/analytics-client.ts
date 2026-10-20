@@ -64,6 +64,10 @@ function hasVerificationAttribution() {
 	}
 }
 
+function isProductionAnalyticsHost() {
+	return location.hostname === 'submilli.ai';
+}
+
 function applyQueryOptOut() {
 	try {
 		if (new URL(location.href).searchParams.get('analytics') !== 'off') return false;
@@ -128,7 +132,7 @@ function instrumentClicks() {
 }
 
 function start(explicitConsent = false) {
-	if (active || !key || !host) return;
+	if (active || !key || !host || isTest || !isProductionAnalyticsHost()) return;
 	if (!initialized) {
 		posthog.init(key, {
 			api_host: host,
