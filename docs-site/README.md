@@ -204,7 +204,8 @@ Internal browsers must open `https://submilli.ai/docs/?analytics=off` once per
 browser/profile. The query applies before SDK initialization and saves the shared
 website/docs opt-out in localStorage plus the first-party
 `submilli_analytics_consent=denied` cookie (`Path=/`, host-only); either denial
-blocks startup, and a denial in another tab also stops recording. Each profile
+blocks startup. A localStorage denial is propagated to already-open tabs by the
+storage event; cookie-only enrollment requires reloading already-open tabs. Each profile
 and fresh agent context must be enrolled separately; this repository cannot
 enforce opt-out in unmanaged profiles or claim that an anonymous browser belongs
 to a team member. The internal cohort is a reporting filter, not a browser
