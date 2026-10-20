@@ -656,7 +656,7 @@ fn a_run_that_was_not_saved_keeps_the_servers_message_in_run_data() {
         session_id: "s-1".into(),
         result: None,
         console: Vec::new(),
-        error: Some(submilli_server::error::ExecuteError {
+        error: Some(crate::commands::playground::host::run::ExecuteError {
             kind: ErrorKind::RuntimeError,
             message: HOSTILE.into(),
             diagnostics: Vec::new(),
