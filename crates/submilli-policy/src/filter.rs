@@ -1479,13 +1479,13 @@ mod tests {
 
     #[test]
     fn string_interpolation_in_equality() {
-        let f = filter("host == \"api.${vars.tenant}.com\"");
+        let f = filter("host == \"api.${vars.tenant}.example\"");
         assert!(f.matches_with(
             &json!({ "host": "api.pied-piper.example" }),
             &vars(&[("tenant", "pied-piper")])
         ));
         assert!(!f.matches_with(
-            &json!({ "host": "api.evil.com" }),
+            &json!({ "host": "api.evil.example" }),
             &vars(&[("tenant", "pied-piper")])
         ));
     }
