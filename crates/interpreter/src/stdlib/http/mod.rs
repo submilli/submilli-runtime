@@ -7,7 +7,11 @@
 //! embedder-facing transport traits live in [`transport`], the SSRF policy in
 //! [`policy`].
 
-use crate::runtime::host::{abi_arg, abi_result};
+use crate::runtime::effects;
+use crate::runtime::host::{
+    abi_arg, abi_result, convert_result, read_boxed_number, read_string_arg, read_uint8_array_arg,
+    register_host_fn, register_host_value_async, write_submilli_string_struct,
+};
 mod declaration;
 pub mod policy;
 mod redirect_guard;
@@ -23,10 +27,6 @@ use wasmtime::{
 use crate::runtime::call_log::{Payload, Side, mask_headers, mask_url, record_payload};
 use crate::runtime::fs::{ContainError, ContentPath};
 use crate::runtime::fuel;
-use crate::runtime::host::{
-    read_boxed_number, read_string_arg, read_uint8_array_arg, register_host_fn,
-    write_submilli_string_struct,
-};
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types, intrinsic_types};
 use crate::runtime::metrics::{HttpMetric, MetricsSink};
 use crate::runtime::prelude::collection::{is_a, object_field, unbox_bool};
@@ -144,7 +144,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     // Body-less verbs: (url, headers?) → Response.
     for verb in ["get", "delete", "head", "options"] {
         let method = verb.to_ascii_uppercase();
-        crate::runtime::host::register_host_value_async(
+        register_host_value_async(
             linker,
             MODULE_NAME,
             crate::mangle::package_symbol(MODULE_NAME, verb),
@@ -167,7 +167,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     // Body-carrying verbs: (url, body?, headers?) → Response.
     for verb in ["post", "put", "patch"] {
         let method = verb.to_ascii_uppercase();
-        crate::runtime::host::register_host_value_async(
+        register_host_value_async(
             linker,
             MODULE_NAME,
             crate::mangle::package_symbol(MODULE_NAME, verb),
@@ -198,7 +198,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     }
 
     // Runtime-verb form: (method, url, body?, headers?) → Response.
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "request"),
@@ -229,7 +229,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "download"),
@@ -407,43 +407,42 @@ async fn perform_request(
         redirect_guard: None,
         recorded_as,
     };
-    let response =
-        crate::runtime::effects::execute(caller, "http.request", req, move |caller, _, req| {
-            Box::pin(async move {
-                let method = req.method.clone();
-                let auth_proxy = std::sync::Arc::clone(&caller.data().auth_proxy);
-                let http_client = std::sync::Arc::clone(&caller.data().http_client);
-                let mut req = auth_proxy
-                    .transform(req, &who)
-                    .await
-                    .map_err(|e| wasmtime::Error::msg(format!("http {method}: auth proxy: {e}")))?;
-                // Attached after the proxy, so no proxy can drop it and leave hops unchecked.
-                req.redirect_guard = Some(guard);
+    let response = effects::execute(caller, "http.request", req, move |caller, _, req| {
+        Box::pin(async move {
+            let method = req.method.clone();
+            let auth_proxy = std::sync::Arc::clone(&caller.data().auth_proxy);
+            let http_client = std::sync::Arc::clone(&caller.data().http_client);
+            let mut req = auth_proxy
+                .transform(req, &who)
+                .await
+                .map_err(|e| wasmtime::Error::msg(format!("http {method}: auth proxy: {e}")))?;
+            // Attached after the proxy, so no proxy can drop it and leave hops unchecked.
+            req.redirect_guard = Some(guard);
 
-                // The request's bytes are the work before any effect; the response's are
-                // charged once it is here, since a stop in between would lose it.
-                fuel::charge(&mut *caller, fuel::IO, request_bytes(&req))?;
-                let metrics = std::sync::Arc::clone(&caller.data().metrics);
-                let start = std::time::Instant::now();
-                let send_result = http_client.send(&req).await;
-                let duration_ms = start.elapsed().as_millis() as u64;
-                record_http_metric(
-                    metrics.as_ref(),
-                    capability,
-                    host_str,
-                    duration_ms,
-                    send_result
-                        .as_ref()
-                        .map(|resp| (resp.status, resp.body.len() as u64)),
-                );
-                record_payload(&*caller, ticket, Side::Response, || {
-                    response_payload(&send_result)
-                });
-                settle_native_response(caller, send_result, &method)
-            })
+            // The request's bytes are the work before any effect; the response's are
+            // charged once it is here, since a stop in between would lose it.
+            fuel::charge(&mut *caller, fuel::IO, request_bytes(&req))?;
+            let metrics = std::sync::Arc::clone(&caller.data().metrics);
+            let start = std::time::Instant::now();
+            let send_result = http_client.send(&req).await;
+            let duration_ms = start.elapsed().as_millis() as u64;
+            record_http_metric(
+                metrics.as_ref(),
+                capability,
+                host_str,
+                duration_ms,
+                send_result
+                    .as_ref()
+                    .map(|resp| (resp.status, resp.body.len() as u64)),
+            );
+            record_payload(&*caller, ticket, Side::Response, || {
+                response_payload(&send_result)
+            });
+            settle_native_response(caller, send_result, &method)
         })
-        .await?;
-    crate::runtime::host::convert_result(caller, |caller| write_response(caller, response))
+    })
+    .await?;
+    convert_result(caller, |caller| write_response(caller, response))
 }
 
 /// The request's key and digest as the call log records them, when the transport reads
@@ -529,7 +528,7 @@ fn settle_response(
     send_result: std::result::Result<HttpResponse, HttpError>,
     method: &str,
 ) -> wasmtime::Result<Val> {
-    crate::runtime::host::convert_result(caller, |caller| {
+    convert_result(caller, |caller| {
         let response = settle_native_response(caller, send_result, method)?;
         write_response(caller, response)
     })
@@ -710,7 +709,7 @@ async fn perform_download(
         path: guest_path.clone(),
         options,
     };
-    let downloaded = crate::runtime::effects::execute(caller, "http.download", request, move |caller, _, request| Box::pin(async move {
+    let downloaded = effects::execute(caller, "http.download", request, move |caller, _, request| Box::pin(async move {
         let url = request.url;
         let guest_path = request.path;
         let options = request.options;
@@ -826,7 +825,7 @@ async fn perform_download(
         commit_temp(file, disk_charge, &tmp, &resolved, &guest_path)?;
         Ok(Downloaded { meta, duration_ms: start.elapsed().as_millis() as f64 })
     })).await?;
-    crate::runtime::host::convert_result(caller, |caller| {
+    convert_result(caller, |caller| {
         write_download_result(
             caller,
             &downloaded.meta,

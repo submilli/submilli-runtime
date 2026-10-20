@@ -12,7 +12,10 @@
 //! Keys and payloads stay UTF-16 code units from the guest `$string` to the
 //! trait and back — see [`value`] for why.
 
-use crate::runtime::host::abi_arg;
+use crate::runtime::effects;
+use crate::runtime::host::{
+    abi_arg, convert_result, register_host_fn_async, register_host_value_async,
+};
 mod cursor;
 pub mod declaration;
 mod finalizers;
@@ -26,7 +29,6 @@ use crate::runtime::StoreData;
 use crate::runtime::call_log::{Payload, Side, record_payload};
 use crate::runtime::decision::CallTicket;
 use crate::runtime::fuel;
-use crate::runtime::host::register_host_fn_async;
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
 use crate::runtime::session_kv::{
     CursorKeys, SessionKvEntry, SessionKvError, SessionKvPage, SessionKvStore,
@@ -89,7 +91,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.object.clone()),
     ));
 
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "get"),
@@ -98,27 +100,22 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "get")?;
                 let ticket = gate(caller, "session.read", &key)?;
-                let found = crate::runtime::effects::execute(
-                    caller,
-                    "session.get",
-                    key,
-                    |caller, _, key| {
-                        Box::pin(async move {
-                            let found = provider(caller, "get")?
-                                .get(&key)
-                                .await
-                                .map_err(|e| trap(caller, None, &e))?;
-                            if let Some(payload) = &found {
-                                fuel::settle(
-                                    &mut *caller,
-                                    fuel::IO,
-                                    (payload.len() as u64).saturating_mul(2),
-                                )?;
-                            }
-                            Ok(found)
-                        })
-                    },
-                )
+                let found = effects::execute(caller, "session.get", key, |caller, _, key| {
+                    Box::pin(async move {
+                        let found = provider(caller, "get")?
+                            .get(&key)
+                            .await
+                            .map_err(|e| trap(caller, None, &e))?;
+                        if let Some(payload) = &found {
+                            fuel::settle(
+                                &mut *caller,
+                                fuel::IO,
+                                (payload.len() as u64).saturating_mul(2),
+                            )?;
+                        }
+                        Ok(found)
+                    })
+                })
                 .await?;
                 record_payload(&*caller, ticket, Side::Response, || match &found {
                     // The size is of the copy and digest's encoding: UTF-8 bytes.
@@ -126,7 +123,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         .with_owned_body(String::from_utf16_lossy(payload).into_bytes()),
                     None => Payload::meta(serde_json::json!({ "found": false })),
                 });
-                crate::runtime::host::convert_result(caller, |caller| {
+                convert_result(caller, |caller| {
                     let Some(payload) = &found else {
                         return crate::runtime::prelude::undefined::value(caller);
                     };
@@ -137,7 +134,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "has"),
@@ -146,19 +143,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "has")?;
                 let ticket = gate(caller, "session.read", &key)?;
-                let found = crate::runtime::effects::execute(
-                    caller,
-                    "session.has",
-                    key,
-                    |caller, _, key| {
-                        Box::pin(async move {
-                            provider(caller, "has")?
-                                .has(&key)
-                                .await
-                                .map_err(|e| trap(caller, None, &e))
-                        })
-                    },
-                )
+                let found = effects::execute(caller, "session.has", key, |caller, _, key| {
+                    Box::pin(async move {
+                        provider(caller, "has")?
+                            .has(&key)
+                            .await
+                            .map_err(|e| trap(caller, None, &e))
+                    })
+                })
                 .await?;
                 record_payload(&*caller, ticket, Side::Response, || {
                     Payload::meta(serde_json::json!({ "found": found }))
@@ -181,31 +173,26 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 // with no JSON form must leave the previous entry intact.
                 let payload = value::serialize(caller, abi_arg(params, 1)?).await?;
                 let request = SessionWrite { key, payload };
-                crate::runtime::effects::execute(
-                    caller,
-                    "session.set",
-                    request,
-                    move |caller, _, request| {
-                        Box::pin(async move {
-                            fuel::charge(
-                                &mut *caller,
-                                fuel::IO,
-                                (request.payload.len() as u64).saturating_mul(2),
-                            )?;
-                            provider(caller, "set")?
-                                .set(&request.key, &request.payload)
-                                .await
-                                .map_err(|e| trap(caller, ticket, &e))
-                        })
-                    },
-                )
+                effects::execute(caller, "session.set", request, move |caller, _, request| {
+                    Box::pin(async move {
+                        fuel::charge(
+                            &mut *caller,
+                            fuel::IO,
+                            (request.payload.len() as u64).saturating_mul(2),
+                        )?;
+                        provider(caller, "set")?
+                            .set(&request.key, &request.payload)
+                            .await
+                            .map_err(|e| trap(caller, ticket, &e))
+                    })
+                })
                 .await?;
                 Ok(())
             })
         },
     )?;
 
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "remove"),
@@ -214,19 +201,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "remove")?;
                 gate(caller, "session.remove", &key)?;
-                let removed = crate::runtime::effects::execute(
-                    caller,
-                    "session.remove",
-                    key,
-                    |caller, _, key| {
-                        Box::pin(async move {
-                            provider(caller, "remove")?
-                                .remove(&key)
-                                .await
-                                .map_err(|e| trap(caller, None, &e))
-                        })
-                    },
-                )
+                let removed = effects::execute(caller, "session.remove", key, |caller, _, key| {
+                    Box::pin(async move {
+                        provider(caller, "remove")?
+                            .remove(&key)
+                            .await
+                            .map_err(|e| trap(caller, None, &e))
+                    })
+                })
                 .await?;
                 Ok(Val::I32(i32::from(removed)))
             })
@@ -234,7 +216,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     )?;
 
     // `list` re-enters no guest code, but its store may reach durable storage.
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "list"),
@@ -362,36 +344,35 @@ async fn list(
         limit,
         cursor,
     };
-    let page =
-        crate::runtime::effects::execute(caller, "session.list", request, |caller, _, request| {
-            Box::pin(async move {
-                let keys = caller.data().cursor_keys.clone();
-                let resume_after = request
-                    .cursor
-                    .as_ref()
-                    .map(|units| cursor::decode(keys.as_deref(), &request.prefix, units))
-                    .transpose()
-                    .map_err(cursor_trap)?;
-                let mut scanned = provider(caller, "list")?
-                    .scan(resume_after.as_deref(), &request.prefix, MAX_SCAN_PER_PAGE)
-                    .await
-                    .map_err(|e| trap(caller, None, &e))?;
-                // Bound candidates before filtering, so policy cannot change the cursor.
-                scanned.entries.truncate(request.limit);
-                let entries = std::mem::take(&mut scanned.entries);
-                let cursor = next_cursor(
-                    keys.as_deref(),
-                    &request.prefix,
-                    &scanned,
-                    &entries,
-                    request.limit,
-                )
+    let page = effects::execute(caller, "session.list", request, |caller, _, request| {
+        Box::pin(async move {
+            let keys = caller.data().cursor_keys.clone();
+            let resume_after = request
+                .cursor
+                .as_ref()
+                .map(|units| cursor::decode(keys.as_deref(), &request.prefix, units))
+                .transpose()
                 .map_err(cursor_trap)?;
-                Ok(ListedPage { entries, cursor })
-            })
+            let mut scanned = provider(caller, "list")?
+                .scan(resume_after.as_deref(), &request.prefix, MAX_SCAN_PER_PAGE)
+                .await
+                .map_err(|e| trap(caller, None, &e))?;
+            // Bound candidates before filtering, so policy cannot change the cursor.
+            scanned.entries.truncate(request.limit);
+            let entries = std::mem::take(&mut scanned.entries);
+            let cursor = next_cursor(
+                keys.as_deref(),
+                &request.prefix,
+                &scanned,
+                &entries,
+                request.limit,
+            )
+            .map_err(cursor_trap)?;
+            Ok(ListedPage { entries, cursor })
         })
-        .await?;
-    crate::runtime::host::convert_result(caller, |caller| {
+    })
+    .await?;
+    convert_result(caller, |caller| {
         let mut visible = Vec::new();
         for entry in page.entries {
             fuel::charge(&mut *caller, fuel::ELEM, 1)?;

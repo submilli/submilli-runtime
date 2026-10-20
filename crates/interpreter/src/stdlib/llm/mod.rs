@@ -22,7 +22,11 @@
 //! the filter context, not in an error, not in a log. The context carries
 //! `model` and `prompt_count` — the numbers, never the payload.
 
-use crate::runtime::host::abi_arg;
+use crate::runtime::effects;
+use crate::runtime::host::{
+    abi_arg, convert_result, quota_exceeded_error, range_error, read_string_arg,
+    register_host_value_async, type_error, write_submilli_string_struct,
+};
 pub mod declaration;
 
 use std::sync::Arc;
@@ -33,9 +37,6 @@ use crate::runtime::StoreData;
 use crate::runtime::call_log::{ModelUsage, Payload, Side, record_payload, record_usage};
 use crate::runtime::decision::CallTicket;
 use crate::runtime::fuel;
-use crate::runtime::host::{
-    quota_exceeded_error, range_error, read_string_arg, type_error, write_submilli_string_struct,
-};
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
 use crate::runtime::llm::{
     ExecutionTokenBudget, LlmCallError, LlmLimits, LlmModel, LlmOutcome, LlmProvider,
@@ -95,7 +96,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.array.clone()),
     ));
 
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "call"),
@@ -113,7 +114,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     read_optional_string(caller, abi_arg(params, 2)?, "llm.call (schema)")?;
                 let typed = schema.is_some();
                 let outcomes = dispatch(caller, "call", &model, vec![prompt], schema).await?;
-                crate::runtime::host::convert_result(caller, |caller| {
+                convert_result(caller, |caller| {
                     let outcome = first_outcome(&model, outcomes)?;
                     if typed {
                         structured_value(caller, "llm.call", outcome)
@@ -125,7 +126,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "batch"),
@@ -148,7 +149,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     read_optional_string(caller, abi_arg(params, 2)?, "llm.batch (schema)")?;
                 let typed = schema.is_some();
                 let outcomes = dispatch(caller, "batch", &model, prompts, schema).await?;
-                crate::runtime::host::convert_result(caller, |caller| {
+                convert_result(caller, |caller| {
                     let mut built = Vec::with_capacity(outcomes.len());
                     for outcome in outcomes {
                         built.push(if typed {
@@ -163,7 +164,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "models"),
@@ -258,7 +259,7 @@ async fn dispatch(
         prompts,
         schema,
     };
-    crate::runtime::effects::execute(caller, if op == "call" { "llm.call" } else { "llm.batch" }, request, move |caller, _, request| Box::pin(async move {
+    effects::execute(caller, if op == "call" { "llm.call" } else { "llm.batch" }, request, move |caller, _, request| Box::pin(async move {
         let LlmRequest { model, prompts, schema } = request;
         let model = model.as_str();
     let budget = budget(caller);
@@ -457,7 +458,7 @@ fn gate(
 /// runtime configured with only those models would return.
 async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     preflight_models(caller, CAPABILITY, "prompt_count")?;
-    let candidates = crate::runtime::effects::execute(caller, "llm.models", (), |caller, _, ()| {
+    let candidates = effects::execute(caller, "llm.models", (), |caller, _, ()| {
         Box::pin(async move {
             provider(caller, "models", "")?
                 .models()
@@ -467,7 +468,7 @@ async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Resul
     })
     .await?;
 
-    crate::runtime::host::convert_result(caller, |caller| {
+    convert_result(caller, |caller| {
         let mut built = Vec::new();
         for candidate in candidates {
             if may_call(caller, &candidate.name)? {

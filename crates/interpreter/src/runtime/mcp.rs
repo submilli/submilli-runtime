@@ -20,7 +20,9 @@ use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 use crate::runtime::StoreData;
 use crate::runtime::call_log::{Payload, Side, record_payload};
 use crate::runtime::fuel;
-use crate::runtime::host::{intrinsic_string_type, read_string_arg, register_host_fn_async};
+use crate::runtime::host::{
+    convert_result, intrinsic_string_type, read_string_arg, register_host_fn_async,
+};
 use crate::stdlib::shared::check_security_call;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
@@ -216,7 +218,7 @@ pub(crate) fn allocate_response(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     response: &McpResponse,
 ) -> wasmtime::Result<Val> {
-    crate::runtime::host::convert_result(caller, |caller| {
+    convert_result(caller, |caller| {
         fuel::settle(&mut *caller, fuel::ELEM, response.visited_nodes())?;
         let allocator = crate::runtime::json::JsonUnknownAllocator::new(caller)?;
         let value = crate::runtime::json::JsonValue::from(response.value());

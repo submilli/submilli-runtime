@@ -12,6 +12,7 @@
 
 pub mod declaration;
 
+use crate::runtime::effects;
 use std::sync::Arc;
 
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
@@ -20,7 +21,10 @@ use crate::runtime::StoreData;
 use crate::runtime::call_log::{Payload, Side, record_payload};
 use crate::runtime::decision::CallTicket;
 use crate::runtime::fuel;
-use crate::runtime::host::{abi_arg, range_error, read_string_arg, write_submilli_string_struct};
+use crate::runtime::host::{
+    abi_arg, convert_result, range_error, read_string_arg, register_host_value_async,
+    write_submilli_string_struct,
+};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::skills::{Skill, SkillError, SkillInfo, SkillProvider};
 use crate::stdlib::abi::{
@@ -68,7 +72,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.array.clone()),
     ));
 
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "list"),
@@ -76,7 +80,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, _params| Box::pin(async move { list(caller).await }),
     )?;
 
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "load"),
@@ -91,7 +95,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "readFile"),
@@ -137,18 +141,17 @@ fn gate(
 /// hidden here: a listing has no candidate to gate before asking it.
 async fn list(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     preflight_listing(caller, CAPABILITY, &serde_json::json!({ "name": "" }))?;
-    let candidates =
-        crate::runtime::effects::execute(caller, "skills.list", (), |caller, _, ()| {
-            Box::pin(async move {
-                provider(caller)
-                    .map_err(|error| throw("list", &error))?
-                    .list()
-                    .await
-                    .map_err(|e| throw("list", &e))
-            })
+    let candidates = effects::execute(caller, "skills.list", (), |caller, _, ()| {
+        Box::pin(async move {
+            provider(caller)
+                .map_err(|error| throw("list", &error))?
+                .list()
+                .await
+                .map_err(|e| throw("list", &e))
         })
-        .await?;
-    crate::runtime::host::convert_result(caller, |caller| {
+    })
+    .await?;
+    convert_result(caller, |caller| {
         // A name `load` would refuse is no use to the program, so it is not offered.
         let loadable = candidates
             .into_iter()
@@ -184,30 +187,29 @@ async fn load(caller: &mut wasmtime::Caller<'_, StoreData>, name: String) -> was
     record_payload(&*caller, ticket, Side::Request, || {
         Payload::meta(serde_json::json!({ "op": "load", "name": name }))
     });
-    let skill =
-        crate::runtime::effects::execute(caller, "skills.load", name, move |caller, _, name| {
-            Box::pin(async move {
-                let provider =
-                    provider(caller).map_err(|error| fail(caller, ticket, "load", &error))?;
-                let skill = provider
-                    .load(&name)
-                    .await
-                    .map_err(|error| fail(caller, ticket, "load", &error))?;
-                fuel::settle(&mut *caller, fuel::IO, skill.content.len() as u64)?;
-                if skill.name != name {
-                    return Err(fail(
-                        caller,
-                        ticket,
-                        "load",
-                        &SkillError::WrongSkill { name },
-                    ));
-                }
-                record_text(caller, ticket, &skill.content);
-                Ok(skill)
-            })
+    let skill = effects::execute(caller, "skills.load", name, move |caller, _, name| {
+        Box::pin(async move {
+            let provider =
+                provider(caller).map_err(|error| fail(caller, ticket, "load", &error))?;
+            let skill = provider
+                .load(&name)
+                .await
+                .map_err(|error| fail(caller, ticket, "load", &error))?;
+            fuel::settle(&mut *caller, fuel::IO, skill.content.len() as u64)?;
+            if skill.name != name {
+                return Err(fail(
+                    caller,
+                    ticket,
+                    "load",
+                    &SkillError::WrongSkill { name },
+                ));
+            }
+            record_text(caller, ticket, &skill.content);
+            Ok(skill)
         })
-        .await?;
-    crate::runtime::host::convert_result(caller, |caller| build_skill(caller, skill))
+    })
+    .await?;
+    convert_result(caller, |caller| build_skill(caller, skill))
 }
 
 /// `readFile(name, path)`: in the order `load` follows, with the path checked
@@ -238,7 +240,7 @@ async fn read_file(
         Payload::meta(serde_json::json!({ "op": "readFile", "name": name, "path": path }))
     });
 
-    let text = crate::runtime::effects::execute(
+    let text = effects::execute(
         caller,
         "skills.readFile",
         SkillFile { name, path },
@@ -257,7 +259,7 @@ async fn read_file(
         },
     )
     .await?;
-    crate::runtime::host::convert_result(caller, |caller| {
+    convert_result(caller, |caller| {
         let text = write_submilli_string_struct(caller, &text)?;
         Ok(Val::AnyRef(Some(text.to_anyref())))
     })

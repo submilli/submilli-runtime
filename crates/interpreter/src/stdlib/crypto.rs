@@ -2,16 +2,17 @@
 //! compare. Pure Rust host functions registered directly under the package
 //! name; the `string | Uint8Array` union params are discriminated host-side.
 
-use crate::runtime::host::{abi_arg, abi_result};
+use crate::runtime::effects;
+use crate::runtime::host::{
+    abi_arg, abi_result, convert_result, read_string_arg, read_uint8_array_arg, register_host_fn,
+    register_host_value_async, write_submilli_uint8array_struct,
+};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256, Sha512};
 use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
-use crate::runtime::host::{
-    read_string_arg, read_uint8_array_arg, register_host_fn, write_submilli_uint8array_struct,
-};
 use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
 use crate::runtime::prelude::collection::is_a;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
@@ -152,7 +153,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "randomBytes"),
@@ -176,22 +177,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     )));
                 }
                 fuel::charge(&mut *caller, fuel::SCAN, len as u64)?;
-                let buf = crate::runtime::effects::execute(
-                    caller,
-                    "crypto.randomBytes",
-                    len,
-                    |_, _, len| {
-                        Box::pin(async move {
-                            let mut bytes = vec![0u8; len as usize];
-                            getrandom::getrandom(&mut bytes).map_err(|e| {
-                                wasmtime::Error::msg(format!("crypto.randomBytes: {e}"))
-                            })?;
-                            Ok(crate::runtime::effects::OutcomeBytes(bytes))
-                        })
-                    },
-                )
+                let buf = effects::execute(caller, "crypto.randomBytes", len, |_, _, len| {
+                    Box::pin(async move {
+                        let mut bytes = vec![0u8; len as usize];
+                        getrandom::getrandom(&mut bytes).map_err(|e| {
+                            wasmtime::Error::msg(format!("crypto.randomBytes: {e}"))
+                        })?;
+                        Ok(effects::OutcomeBytes(bytes))
+                    })
+                })
                 .await?;
-                let arr = crate::runtime::host::convert_result(caller, |caller| {
+                let arr = convert_result(caller, |caller| {
                     write_submilli_uint8array_struct(caller, &buf.0)
                 })?;
                 Ok(Val::AnyRef(Some(arr.to_anyref())))

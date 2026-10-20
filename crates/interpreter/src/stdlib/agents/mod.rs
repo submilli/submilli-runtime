@@ -15,6 +15,7 @@
 
 pub mod declaration;
 
+use crate::runtime::effects;
 use std::sync::Arc;
 
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
@@ -26,7 +27,10 @@ use crate::runtime::agents::{
 use crate::runtime::call_log::{ModelUsage, Payload, Side, record_payload, record_usage};
 use crate::runtime::decision::CallTicket;
 use crate::runtime::fuel;
-use crate::runtime::host::{abi_arg, read_string_arg, write_submilli_string_struct};
+use crate::runtime::host::{
+    abi_arg, convert_result, read_string_arg, register_host_value_async,
+    write_submilli_string_struct,
+};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::stdlib::abi::{
     self, backing_struct, install_field_getters, nullable_object_field, string_field,
@@ -63,7 +67,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.array.clone()),
     ));
 
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "run"),
@@ -85,7 +89,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "list"),
@@ -133,27 +137,21 @@ async fn run(
         schema,
         caller: principal,
     };
-    let outcome = crate::runtime::effects::execute(
-        caller,
-        "agents.run",
-        request,
-        move |caller, _, request| {
-            Box::pin(async move {
-                fuel::charge(&mut *caller, fuel::IO, sent)?;
-                let provider =
-                    provider(caller).map_err(|error| fail(caller, ticket, "run", &error))?;
-                let outcome = provider
-                    .run(request)
-                    .await
-                    .map_err(|error| fail(caller, ticket, "run", &error))?;
-                record_outcome(caller, ticket, &outcome);
-                fuel::settle(&mut *caller, fuel::IO, outcome.text.len() as u64)?;
-                Ok(outcome)
-            })
-        },
-    )
+    let outcome = effects::execute(caller, "agents.run", request, move |caller, _, request| {
+        Box::pin(async move {
+            fuel::charge(&mut *caller, fuel::IO, sent)?;
+            let provider = provider(caller).map_err(|error| fail(caller, ticket, "run", &error))?;
+            let outcome = provider
+                .run(request)
+                .await
+                .map_err(|error| fail(caller, ticket, "run", &error))?;
+            record_outcome(caller, ticket, &outcome);
+            fuel::settle(&mut *caller, fuel::IO, outcome.text.len() as u64)?;
+            Ok(outcome)
+        })
+    })
     .await?;
-    crate::runtime::host::convert_result(caller, |caller| {
+    convert_result(caller, |caller| {
         if typed {
             crate::runtime::json::parse_json_as_unknown(
                 caller,
@@ -224,18 +222,17 @@ fn gate(
 /// hidden here: a listing has no candidate to gate before asking it.
 async fn list(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     preflight_listing(caller, CAPABILITY, &serde_json::json!({ "agent": "" }))?;
-    let candidates =
-        crate::runtime::effects::execute(caller, "agents.list", (), |caller, _, ()| {
-            Box::pin(async move {
-                provider(caller)
-                    .map_err(|error| throw("list", &error))?
-                    .agents()
-                    .await
-                    .map_err(|e| throw("list", &e))
-            })
+    let candidates = effects::execute(caller, "agents.list", (), |caller, _, ()| {
+        Box::pin(async move {
+            provider(caller)
+                .map_err(|error| throw("list", &error))?
+                .agents()
+                .await
+                .map_err(|e| throw("list", &e))
         })
-        .await?;
-    crate::runtime::host::convert_result(caller, |caller| {
+    })
+    .await?;
+    convert_result(caller, |caller| {
         let visible = permitted_candidates(
             caller,
             candidates,

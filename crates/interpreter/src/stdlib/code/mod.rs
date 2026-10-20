@@ -1,5 +1,6 @@
 //! Contained workspace navigation and anchor-based editing, gated by existing fs grants.
-use crate::runtime::host::abi_arg;
+use crate::runtime::effects;
+use crate::runtime::host::{abi_arg, convert_result, register_host_value_async};
 mod budget;
 pub mod declaration;
 mod myers;
@@ -71,7 +72,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
         ),
         ("applyPatch", vec![string.clone(), string], object),
     ] {
-        crate::runtime::host::register_host_value_async(
+        register_host_value_async(
             linker,
             MODULE_NAME,
             crate::mangle::package_symbol(MODULE_NAME, name),
@@ -225,53 +226,52 @@ async fn invoke(
         );
     }
 
-    let result =
-        crate::runtime::effects::execute(caller, "code", request, move |caller, _, request| {
-            Box::pin(async move {
-                let value = match request {
-                    CodeRequest::Search { pattern, options } => {
-                        CodeValue::Json(walk::search(caller, &mut budget, &pattern, &options)?)
-                    }
-                    CodeRequest::Glob { pattern } => {
-                        CodeValue::Json(walk::glob(caller, &mut budget, &pattern)?)
-                    }
-                    CodeRequest::Tree { path, depth } => {
-                        CodeValue::Json(walk::tree(caller, &mut budget, &path, depth)?)
-                    }
-                    CodeRequest::Read { path, start, limit } => {
-                        CodeValue::Json(read_window(caller, &mut budget, &path, start, limit)?)
-                    }
-                    CodeRequest::DiffFiles { first, second } => {
-                        let first = read_file(caller, &mut budget, &first, op)?;
-                        let second = read_file(caller, &mut budget, &second, op)?;
-                        budget.charge(caller, (first.len() + second.len()).saturating_mul(2))?;
-                        CodeValue::Text(diff(
-                            caller,
-                            &mut budget,
-                            &first.encode_utf16().collect::<Vec<_>>(),
-                            &second.encode_utf16().collect::<Vec<_>>(),
-                        )?)
-                    }
-                    CodeRequest::Mutate { path, change } => CodeValue::Json(mutate(
+    let result = effects::execute(caller, "code", request, move |caller, _, request| {
+        Box::pin(async move {
+            let value = match request {
+                CodeRequest::Search { pattern, options } => {
+                    CodeValue::Json(walk::search(caller, &mut budget, &pattern, &options)?)
+                }
+                CodeRequest::Glob { pattern } => {
+                    CodeValue::Json(walk::glob(caller, &mut budget, &pattern)?)
+                }
+                CodeRequest::Tree { path, depth } => {
+                    CodeValue::Json(walk::tree(caller, &mut budget, &path, depth)?)
+                }
+                CodeRequest::Read { path, start, limit } => {
+                    CodeValue::Json(read_window(caller, &mut budget, &path, start, limit)?)
+                }
+                CodeRequest::DiffFiles { first, second } => {
+                    let first = read_file(caller, &mut budget, &first, op)?;
+                    let second = read_file(caller, &mut budget, &second, op)?;
+                    budget.charge(caller, (first.len() + second.len()).saturating_mul(2))?;
+                    CodeValue::Text(diff(
                         caller,
                         &mut budget,
-                        &path,
-                        op,
-                        change,
-                        |_, budget, value| {
-                            budget.check_size(serde_json::to_string(&value)?.len())?;
-                            Ok(value)
-                        },
-                    )?),
-                };
-                Ok(CodeResult {
-                    value,
-                    _budget: Some(budget),
-                })
+                        &first.encode_utf16().collect::<Vec<_>>(),
+                        &second.encode_utf16().collect::<Vec<_>>(),
+                    )?)
+                }
+                CodeRequest::Mutate { path, change } => CodeValue::Json(mutate(
+                    caller,
+                    &mut budget,
+                    &path,
+                    op,
+                    change,
+                    |_, budget, value| {
+                        budget.check_size(serde_json::to_string(&value)?.len())?;
+                        Ok(value)
+                    },
+                )?),
+            };
+            Ok(CodeResult {
+                value,
+                _budget: Some(budget),
             })
         })
-        .await?;
-    crate::runtime::host::convert_result(caller, |caller| match &result.value {
+    })
+    .await?;
+    convert_result(caller, |caller| match &result.value {
         CodeValue::Json(value) => encode(caller, &mut Budget::new(caller), value),
         CodeValue::Text(text) => Ok(Val::AnyRef(Some(
             write_submilli_string_struct_units(caller, text)?.to_anyref(),

@@ -5,13 +5,16 @@
 //! through its vtable `toString` slot; the pieces are space-joined and written
 //! to the store's console stream with a trailing newline.
 
+use crate::runtime::effects;
 use std::io::Write;
 
 use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
-use crate::runtime::host::{fatal_host_error, intrinsic_array_type, register_host_fn_async};
+use crate::runtime::host::{
+    convert_result, fatal_host_error, intrinsic_array_type, register_host_fn_async,
+};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_string_units};
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
@@ -55,11 +58,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     line.len() as u64,
                 )?;
                 let mut emitted = false;
-                let outcome = crate::runtime::effects::execute(
-                    caller,
-                    "console.log",
-                    line.clone(),
-                    |caller, _, line| {
+                let outcome =
+                    effects::execute(caller, "console.log", line.clone(), |caller, _, line| {
                         emitted = true;
                         Box::pin(async move {
                             let mut output = CountedWriter {
@@ -78,9 +78,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                             };
                             Ok(ConsoleOutcome { written, error })
                         })
-                    },
-                )
-                .await?;
+                    })
+                    .await?;
                 if !emitted && let Some(output) = &mut caller.data_mut().replay_console {
                     let length = usize::try_from(outcome.written).map_err(fatal_host_error)?;
                     let bytes = line.as_bytes().get(..length).ok_or_else(|| {
@@ -88,7 +87,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     })?;
                     output.write_all(bytes).map_err(fatal_host_error)?;
                 }
-                crate::runtime::host::convert_result(caller, |caller| match &outcome.error {
+                convert_result(caller, |caller| match &outcome.error {
                     Some(error) => Err(crate::runtime::host::throw_host_error(
                         caller,
                         crate::runtime::host::range_error(error),

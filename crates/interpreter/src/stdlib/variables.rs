@@ -4,10 +4,13 @@
 //! the linker resolves the user import (`submilli:variables#get`) with no Wasm
 //! module.
 
-use crate::runtime::host::abi_arg;
+use crate::runtime::effects;
+use crate::runtime::host::{
+    abi_arg, convert_result, fatal_host_error, read_string_arg_units, register_host_value_async,
+    write_submilli_string_struct,
+};
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
-use crate::runtime::host::{fatal_host_error, read_string_arg_units, write_submilli_string_struct};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::{StoreData, fuel};
 use crate::stdlib::shared::check_security;
@@ -45,7 +48,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     // `string | undefined` lowers to the erased `(ref null $Object)` in codegen.
     let nullable_object = ValType::Ref(RefType::new(true, HeapType::ConcreteStruct(intr.object)));
     let ty = FuncType::new(&engine, [string], [nullable_object]);
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "get"),
@@ -78,11 +81,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let valid_name = name.is_some();
                 check_security(&mut *caller, "variables.get", context)?;
                 let name = valid_name.then_some(lookup);
-                let observation = crate::runtime::effects::execute(
-                    caller,
-                    "variables.get",
-                    name,
-                    |caller, _, name| {
+                let observation =
+                    effects::execute(caller, "variables.get", name, |caller, _, name| {
                         Box::pin(async move {
                             let variables = caller.data().variables.clone();
                             if let Some(name) = &name {
@@ -95,15 +95,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                             }
                             Ok(name.as_ref().and_then(|name| variables.get(name)).cloned())
                         })
-                    },
-                )
-                .await?;
+                    })
+                    .await?;
                 let Some(value) = &observation else {
                     return crate::runtime::prelude::undefined::value(caller);
                 };
-                let value = crate::runtime::host::convert_result(caller, |caller| {
-                    write_submilli_string_struct(caller, value)
-                })?;
+                let value =
+                    convert_result(caller, |caller| write_submilli_string_struct(caller, value))?;
                 Ok(Val::AnyRef(Some(value.to_anyref())))
             })
         },

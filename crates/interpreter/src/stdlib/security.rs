@@ -5,15 +5,16 @@
 //! (the dispatch may run guest code for user classes), then handed to the
 //! embedder's policy engine.
 
-use crate::runtime::host::abi_arg;
+use crate::runtime::effects;
+use crate::runtime::host::{
+    abi_arg, permission_denied, permission_denied_invariant, read_string_arg,
+    register_host_fn_async,
+};
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
 use crate::runtime::decision::{CallSite, EntryPath};
 use crate::runtime::fuel;
-use crate::runtime::host::{
-    permission_denied, permission_denied_invariant, read_string_arg, register_host_fn_async,
-};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::vtable::dispatch_vtable_slot;
 use crate::{MangledName, PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
@@ -112,7 +113,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     },
                 )?;
 
-                crate::runtime::effects::execute(
+                effects::execute(
                     caller,
                     "security.check",
                     Check {

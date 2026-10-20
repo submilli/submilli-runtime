@@ -1,59 +1,53 @@
-use crate::runtime::host::abi_arg;
+use crate::runtime::effects;
+use crate::runtime::host::{
+    abi_arg, convert_result, read_string_arg, register_host_value_async,
+    write_submilli_string_struct,
+};
 use std::collections::BTreeMap;
 
 use wasmtime::{FuncType, Linker, Val};
 
 use super::super::{DirectTypes, shared};
 use crate::runtime::StoreData;
-use crate::runtime::host::{read_string_arg, write_submilli_string_struct};
 use crate::runtime::prelude::MODULE_NAME;
 use crate::{
     DefaultValue, NamespaceSymbol, PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol,
 };
 
 pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmtime::Result<()> {
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         shared::prelude_key("Now", "instant"),
         FuncType::new(&types.engine, [], [types.object.clone()]),
         |caller, _params| {
             Box::pin(async move {
-                let instant = crate::runtime::effects::execute(
-                    caller,
-                    "Temporal.Now.instant",
-                    (),
-                    |_, _, ()| Box::pin(async { Ok(super::instant()) }),
-                )
-                .await?;
-                crate::runtime::host::convert_result(caller, |caller| {
-                    shared::make_instant(caller, instant)
+                let instant = effects::execute(caller, "Temporal.Now.instant", (), |_, _, ()| {
+                    Box::pin(async { Ok(super::instant()) })
                 })
+                .await?;
+                convert_result(caller, |caller| shared::make_instant(caller, instant))
             })
         },
     )?;
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         shared::prelude_key("Now", "timeZoneId"),
         FuncType::new(&types.engine, [], [types.string.clone()]),
         |caller, _params| {
             Box::pin(async move {
-                let id = crate::runtime::effects::execute(
-                    caller,
-                    "Temporal.Now.timeZoneId",
-                    (),
-                    |_, _, ()| Box::pin(async { Ok(super::time_zone_id().to_string()) }),
-                )
+                let id = effects::execute(caller, "Temporal.Now.timeZoneId", (), |_, _, ()| {
+                    Box::pin(async { Ok(super::time_zone_id().to_string()) })
+                })
                 .await?;
-                let value = crate::runtime::host::convert_result(caller, |caller| {
-                    write_submilli_string_struct(caller, &id)
-                })?;
+                let value =
+                    convert_result(caller, |caller| write_submilli_string_struct(caller, &id))?;
                 Ok(Val::AnyRef(Some(value.to_anyref())))
             })
         },
     )?;
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         shared::prelude_key("Now", "zonedDateTimeISO"),
@@ -74,7 +68,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                         "Temporal.Now.zonedDateTimeISO",
                     )?),
                 };
-                let observation = crate::runtime::effects::execute(
+                let observation = effects::execute(
                     caller,
                     "Temporal.Now.zonedDateTimeISO",
                     time_zone,
@@ -85,7 +79,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                     },
                 )
                 .await?;
-                crate::runtime::host::convert_result(caller, |caller| {
+                convert_result(caller, |caller| {
                     let zoned = observation.zoned(caller)?;
                     shared::make_zoned_date_time(caller, &zoned, &observation.id)
                 })
@@ -95,7 +89,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
 
     // `Temporal.Now.zonedDateTime` — declared alias of `zonedDateTimeISO` (our
     // subset has no calendar argument), same body under its own dispatch key.
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         shared::prelude_key("Now", "zonedDateTime"),
@@ -116,7 +110,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                         "Temporal.Now.zonedDateTime",
                     )?),
                 };
-                let observation = crate::runtime::effects::execute(
+                let observation = effects::execute(
                     caller,
                     "Temporal.Now.zonedDateTime",
                     time_zone,
@@ -127,7 +121,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                     },
                 )
                 .await?;
-                crate::runtime::host::convert_result(caller, |caller| {
+                convert_result(caller, |caller| {
                     let zoned = observation.zoned(caller)?;
                     shared::make_zoned_date_time(caller, &zoned, &observation.id)
                 })
@@ -137,7 +131,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
 
     // `Temporal.Now.plain{Date,Time,DateTime}ISO(tz?)` — the current zoned
     // moment projected onto the calendar-naive Plain types.
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         shared::prelude_key("Now", "plainDateISO"),
@@ -152,7 +146,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                     now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainDateISO").await?;
                 let z = observation.zoned(caller)?;
                 let d = z.date();
-                crate::runtime::host::convert_result(caller, |caller| {
+                convert_result(caller, |caller| {
                     shared::make_plain_date(
                         caller,
                         i32::from(d.year()),
@@ -163,7 +157,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             })
         },
     )?;
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         shared::prelude_key("Now", "plainTimeISO"),
@@ -178,7 +172,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                     now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainTimeISO").await?;
                 let z = observation.zoned(caller)?;
                 let t = z.time();
-                crate::runtime::host::convert_result(caller, |caller| {
+                convert_result(caller, |caller| {
                     shared::make_plain_time(
                         caller,
                         i32::from(t.hour()),
@@ -190,7 +184,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             })
         },
     )?;
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         shared::prelude_key("Now", "plainDateTimeISO"),
@@ -205,7 +199,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                     now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainDateTimeISO").await?;
                 let z = observation.zoned(caller)?;
                 let dt = z.datetime();
-                crate::runtime::host::convert_result(caller, |caller| {
+                convert_result(caller, |caller| {
                     shared::make_plain_date_time(
                         caller,
                         i32::from(dt.year()),
@@ -233,7 +227,7 @@ async fn now_zoned(
         value if crate::runtime::prelude::undefined::is_undefined(caller, value)? => None,
         _ => Some(read_string_arg(caller, tz, label)?),
     };
-    let observation = crate::runtime::effects::execute(caller, label, tz, |caller, _, tz| {
+    let observation = effects::execute(caller, label, tz, |caller, _, tz| {
         Box::pin(async move { super::zoned_date_time_iso(caller, tz.as_deref()) })
     })
     .await?;

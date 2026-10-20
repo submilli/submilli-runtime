@@ -1,5 +1,6 @@
 //! Package attribution is checked at the host boundary, including indirect calls.
 use super::{MODULE_NAME, read_key, trap, value};
+use crate::runtime::effects;
 use crate::runtime::host::{abi_arg, fatal_host_error, register_host_fn_async};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::{StoreData, fuel};
@@ -55,7 +56,7 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         key,
                         payload,
                     };
-                    crate::runtime::effects::execute(
+                    effects::execute(
                         caller,
                         if registering {
                             "session.registerFinalizer"

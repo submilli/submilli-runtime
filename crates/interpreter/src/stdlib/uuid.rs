@@ -3,13 +3,14 @@
 //! Pure Rust host functions registered directly under the package name; the
 //! linker resolves user imports (`submilli:uuid#v4`, …) with no Wasm module.
 
-use crate::runtime::host::{abi_arg, abi_result};
+use crate::runtime::effects;
+use crate::runtime::host::{
+    abi_arg, abi_result, convert_result, intrinsic_string_type, read_string_arg, register_host_fn,
+    register_host_value_async, write_submilli_string_struct,
+};
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
-use crate::runtime::host::{
-    intrinsic_string_type, read_string_arg, register_host_fn, write_submilli_string_struct,
-};
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
 pub const MODULE_NAME: &str = "submilli:uuid";
@@ -66,18 +67,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     ));
 
     let gen_ty = FuncType::new(&engine, [], [string.clone()]);
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "v4"),
         gen_ty.clone(),
         |caller, _params| {
             Box::pin(async move {
-                let value = crate::runtime::effects::execute(caller, "uuid.v4", (), |_, _, ()| {
+                let value = effects::execute(caller, "uuid.v4", (), |_, _, ()| {
                     Box::pin(async { Ok(::uuid::Uuid::new_v4().to_string()) })
                 })
                 .await?;
-                let st = crate::runtime::host::convert_result(caller, |caller| {
+                let st = convert_result(caller, |caller| {
                     write_submilli_string_struct(caller, &value)
                 })?;
                 Ok(Val::AnyRef(Some(st.to_anyref())))
@@ -85,18 +86,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "v7"),
         gen_ty,
         |caller, _params| {
             Box::pin(async move {
-                let value = crate::runtime::effects::execute(caller, "uuid.v7", (), |_, _, ()| {
+                let value = effects::execute(caller, "uuid.v7", (), |_, _, ()| {
                     Box::pin(async { Ok(::uuid::Uuid::now_v7().to_string()) })
                 })
                 .await?;
-                let st = crate::runtime::host::convert_result(caller, |caller| {
+                let st = convert_result(caller, |caller| {
                     write_submilli_string_struct(caller, &value)
                 })?;
                 Ok(Val::AnyRef(Some(st.to_anyref())))

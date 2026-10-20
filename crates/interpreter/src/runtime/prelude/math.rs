@@ -1,11 +1,11 @@
 //! The Rust port of the prelude's built-in `Math` namespace.
 
-use crate::runtime::host::{abi_arg, abi_result};
+use crate::runtime::effects;
+use crate::runtime::host::{abi_arg, abi_result, register_host_fn, register_host_value_async};
 use std::collections::BTreeMap;
 use wasmtime::{Caller, FuncType, Global, GlobalType, Linker, Mutability, Store, Val, ValType};
 
 use crate::runtime::StoreData;
-use crate::runtime::host::register_host_fn;
 use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::number::{to_int32, to_uint32};
 use crate::runtime::prelude::MODULE_NAME;
@@ -264,27 +264,26 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         )?;
     }
 
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         math_key("random"),
         FuncType::new(&engine, [], [ValType::F64]),
         |caller, _params| {
             Box::pin(async move {
-                let value =
-                    crate::runtime::effects::execute(caller, "Math.random", (), |_, _, ()| {
-                        Box::pin(async {
-                            let mut bytes = [0u8; 8];
-                            getrandom::getrandom(&mut bytes).map_err(|e| {
-                                wasmtime::Error::msg(format!("Math.random getrandom failed: {e}"))
-                            })?;
-                            let raw = u64::from_le_bytes(bytes);
-                            let mantissa = raw & ((1u64 << 52) - 1);
-                            let bits = (0x3FFu64 << 52) | mantissa;
-                            Ok(f64::from_bits(bits) - 1.0)
-                        })
+                let value = effects::execute(caller, "Math.random", (), |_, _, ()| {
+                    Box::pin(async {
+                        let mut bytes = [0u8; 8];
+                        getrandom::getrandom(&mut bytes).map_err(|e| {
+                            wasmtime::Error::msg(format!("Math.random getrandom failed: {e}"))
+                        })?;
+                        let raw = u64::from_le_bytes(bytes);
+                        let mantissa = raw & ((1u64 << 52) - 1);
+                        let bits = (0x3FFu64 << 52) | mantissa;
+                        Ok(f64::from_bits(bits) - 1.0)
                     })
-                    .await?;
+                })
+                .await?;
                 Ok(Val::F64(value.to_bits()))
             })
         },

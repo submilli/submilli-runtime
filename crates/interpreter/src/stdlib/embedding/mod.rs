@@ -30,6 +30,7 @@
 
 pub mod declaration;
 
+use crate::runtime::effects;
 use std::sync::Arc;
 
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
@@ -43,10 +44,10 @@ use crate::runtime::embedding::{
 };
 use crate::runtime::fuel;
 use crate::runtime::host::{
-    abi_arg, abi_result, fatal_host_error, quota_exceeded_error, range_error, read_string_arg,
-    register_host_fn, type_error, write_boxed_number_struct,
-    write_submilli_array_struct_precharged, write_submilli_string_struct,
-    write_submilli_uint8array_struct, write_uint8_array_precharged,
+    abi_arg, abi_result, convert_result, fatal_host_error, quota_exceeded_error, range_error,
+    read_string_arg, register_host_fn, register_host_value_async, type_error,
+    write_boxed_number_struct, write_submilli_array_struct_precharged,
+    write_submilli_string_struct, write_submilli_uint8array_struct, write_uint8_array_precharged,
 };
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::stdlib::abi::{
@@ -113,7 +114,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.object.clone()),
     ));
 
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "embed"),
@@ -136,7 +137,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    crate::runtime::host::register_host_value_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "models"),
@@ -278,7 +279,7 @@ async fn embed(
         texts,
         purpose,
     };
-    let batch = crate::runtime::effects::execute(
+    let batch = effects::execute(
         caller,
         "embedding.embed",
         request,
@@ -364,7 +365,7 @@ async fn embed(
         },
     )
     .await?;
-    crate::runtime::host::convert_result(caller, |caller| build_embeddings(caller, batch))
+    convert_result(caller, |caller| build_embeddings(caller, batch))
 }
 
 /// The capability check, run before any bytes leave the process. The context is
@@ -486,12 +487,11 @@ async fn available_aliases(
 /// refusal into a silently short listing.
 async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     preflight_models(caller, CAPABILITY, "input_count")?;
-    let candidates =
-        crate::runtime::effects::execute(caller, "embedding.models", (), |caller, _, ()| {
-            Box::pin(async move { provider(caller, "")?.models().await.map_err(throw) })
-        })
-        .await?;
-    crate::runtime::host::convert_result(caller, |caller| {
+    let candidates = effects::execute(caller, "embedding.models", (), |caller, _, ()| {
+        Box::pin(async move { provider(caller, "")?.models().await.map_err(throw) })
+    })
+    .await?;
+    convert_result(caller, |caller| {
         let mut built = Vec::with_capacity(candidates.len());
         for candidate in candidates {
             if may_embed(caller, &candidate.name)? {
