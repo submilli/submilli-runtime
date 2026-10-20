@@ -19,7 +19,6 @@ submilli-blueprint = { path = "../submilli-blueprint" }
 submilli-build = { path = "../submilli-build" }
 submilli-durable = { path = "../submilli-durable" }
 submilli-shared = { path = "../submilli-shared" }
-submilli-server = { path = "../submilli-server" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 wasmtime = { workspace = true }
@@ -60,6 +59,7 @@ unicode-properties = { version = "0.1", default-features = false, features = ["g
 
 [dev-dependencies]
 rcgen.workspace = true
+submilli-server = { path = "../submilli-server" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
 tempfile = { workspace = true }
 wasm-encoder = { workspace = true }

@@ -1,9 +1,75 @@
 use super::*;
 use crate::blueprint::StoredBlueprint;
 use crate::config::ServerConfig;
-use crate::record::{
-    SessionProgram, SessionStart, end_session, run_in_session, session_finalizers, start_session,
-};
+use crate::handlers::sessions::{self, end_session_with_finalizers, session_finalizers};
+
+/// A session to start as `POST /v1/sessions` would, with no application tools.
+struct SessionStart {
+    blueprint: String,
+    variables: std::collections::BTreeMap<String, String>,
+    secrets: submilli_blueprint::HarnessSecretBindings,
+}
+
+async fn start_session(
+    state: &crate::AppState,
+    start: SessionStart,
+) -> Result<String, sessions::SessionStartError> {
+    sessions::start(
+        state,
+        &start.blueprint,
+        &start.variables,
+        &start.secrets,
+        Vec::new(),
+    )
+    .await
+    .map(|started| started.session_id)
+}
+
+/// Code to run in a started session, as `POST /v1/sessions/{id}/execute` without an
+/// `Idempotency-Key` runs it.
+struct SessionProgram {
+    label: String,
+    session_id: String,
+    code: String,
+}
+
+async fn run_in_session(
+    state: &crate::AppState,
+    program: SessionProgram,
+) -> Result<crate::handlers::execute::ExecuteResponse, sessions::SessionRunError> {
+    let SessionProgram {
+        label,
+        session_id,
+        code,
+    } = program;
+    let audit = crate::audit::ExecutionAudit::new(
+        state.audit().clone(),
+        &label,
+        "session",
+        Some(&session_id),
+    );
+    let bound = sessions::bound_for_run(state, &session_id, &code, Some(&audit)).await?;
+    let outcome = sessions::run(
+        state,
+        &session_id,
+        bound,
+        &code,
+        None,
+        Some(audit.clone()),
+        None,
+    )
+    .await;
+    audit.finish(outcome.response.error.is_none());
+    Ok(outcome.response)
+}
+
+/// Ends a session as `DELETE /v1/sessions/{id}` does.
+async fn end_session(
+    state: &crate::AppState,
+    session_id: &str,
+) -> Result<bool, crate::session_manager::SessionError> {
+    state.session_manager().close_owned(session_id).await
+}
 
 const SOURCE: &str = r#"
 import * as session from "submilli:session";
@@ -372,7 +438,7 @@ vfs: per_session
         ))
         .await
         .unwrap();
-    let report = crate::record::end_session_with_finalizers(&server.state, &id)
+    let report = end_session_with_finalizers(&server.state, &id)
         .await
         .unwrap();
     assert!(report.closed);
@@ -806,8 +872,8 @@ async fn concurrent_close_callers_wait_for_the_same_finalization() {
         .await;
     assert!(response.error.is_none(), "{:?}", response.error);
     let (first, second) = tokio::join!(
-        crate::record::end_session_with_finalizers(&server.state, &id),
-        crate::record::end_session_with_finalizers(&server.state, &id),
+        end_session_with_finalizers(&server.state, &id),
+        end_session_with_finalizers(&server.state, &id),
     );
     let first = first.unwrap();
     let second = second.unwrap();

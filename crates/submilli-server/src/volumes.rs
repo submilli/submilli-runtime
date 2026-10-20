@@ -25,12 +25,8 @@ use crate::config::{
 use crate::session_manager::SessionError;
 
 pub struct VolumeRegistry {
-    /// Fixed at startup, except that the operator-trusted local apply path may add
-    /// a `managed-local` volume ([`Self::declare_managed`]), and withdraw one it
-    /// just added when the blueprint naming it was not stored
-    /// ([`Self::withdraw_managed`]); nothing changes a declaration. Poison means a
-    /// panic interrupted such an addition or withdrawal; AGENTS.md permits the
-    /// poisoned-lock panic rather than reading a table that may be half-updated.
+    /// Fixed at startup. Poison means a panic interrupted a reader; AGENTS.md permits
+    /// the poisoned-lock panic.
     table: RwLock<VolumeTable>,
     /// The volume root's `managed-local/`, created at startup and never again:
     /// a missing one means its mount is gone.
@@ -39,10 +35,6 @@ pub struct VolumeRegistry {
     /// measure it once and share the result. Grows with the table, under the
     /// same poisoning rule.
     quotas: RwLock<BTreeMap<String, Arc<OnceCell<Arc<DiskQuota>>>>>,
-    /// For a volume that is a partial copy: what the source holds that the copy does not,
-    /// added to the copy's own measure. `None` is a source that could not be measured.
-    /// Empty for every volume of a normal run.
-    usage_offsets: BTreeMap<String, Option<u64>>,
 }
 
 impl Default for VolumeRegistry {
@@ -95,53 +87,6 @@ impl std::fmt::Display for ReferenceError {
 
 impl std::error::Error for ReferenceError {}
 
-/// Why a volume could not be declared at runtime.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DeclareError {
-    /// The name cannot be one directory name under the managed root.
-    BadName { volume: String },
-    /// The name differs only in letter case from a declared volume or a directory
-    /// under the managed root: on a case-insensitive filesystem both would be
-    /// stored in one directory.
-    CaseConflict { volume: String, existing: String },
-}
-
-impl std::fmt::Display for DeclareError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DeclareError::BadName { volume } => write!(
-                f,
-                "volume '{volume}' cannot be stored as a managed volume: a name is up to 64 \
-                 letters, digits, `.`, `_`, or `-`, starting with a letter or digit"
-            ),
-            DeclareError::CaseConflict { volume, existing } => write!(
-                f,
-                "volume '{volume}' differs only in letter case from '{existing}', which this \
-                 server already stores; on a case-insensitive filesystem they would share one \
-                 directory, so use '{existing}' or a name that differs in more than case"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for DeclareError {}
-
-/// The checks on a volume `table` does not declare yet, against the table alone.
-fn check_new_managed(table: &VolumeTable, volume: &str) -> Result<(), DeclareError> {
-    if !is_managed_name(volume) {
-        return Err(DeclareError::BadName {
-            volume: volume.to_owned(),
-        });
-    }
-    match table.keys().find(|name| name.eq_ignore_ascii_case(volume)) {
-        Some(existing) => Err(DeclareError::CaseConflict {
-            volume: volume.to_owned(),
-            existing: existing.clone(),
-        }),
-        None => Ok(()),
-    }
-}
-
 impl VolumeRegistry {
     /// The volumes of `table`, with `managed-local` ones stored under `root`.
     pub fn in_root(table: VolumeTable, root: &VolumeRoot) -> Self {
@@ -161,84 +106,6 @@ impl VolumeRegistry {
             table: RwLock::new(table),
             managed_root,
             quotas: RwLock::new(quotas),
-            usage_offsets: BTreeMap::new(),
-        }
-    }
-
-    /// Whether `volume` could be declared as a `managed-local` volume: its name is
-    /// one directory name, and differs in more than letter case from every declared
-    /// volume and every directory under the managed root. A volume already declared
-    /// passes. The operator-trusted local apply path checks this before it stores a
-    /// blueprint, so the declaration that follows the store cannot be refused.
-    pub(crate) fn check_managed(&self, volume: &str) -> Result<(), DeclareError> {
-        let table = self.table.read().expect("volume table poisoned");
-        if table.contains_key(volume) {
-            return Ok(());
-        }
-        check_new_managed(&table, volume)?;
-        // A directory a volume of another case left behind, from an earlier run.
-        // A root that cannot be listed is a lost mount, which fails the volume
-        // when it is used; there is nothing here to compare against.
-        let Ok(entries) = std::fs::read_dir(&self.managed_root) else {
-            return Ok(());
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            if let Some(name) = name.to_str()
-                && name != volume
-                && name.eq_ignore_ascii_case(volume)
-            {
-                return Err(DeclareError::CaseConflict {
-                    volume: volume.to_owned(),
-                    existing: name.to_owned(),
-                });
-            }
-        }
-        Ok(())
-    }
-
-    /// Declares `volume` as a `managed-local` volume, read-write, stored at
-    /// `<managed root>/<volume>`, unless a volume of that name is already declared.
-    /// Returns whether it was added. Only the operator-trusted local apply path
-    /// calls this, after [`Self::check_managed`]: a deployed server's table stays
-    /// what its operator declared.
-    pub(crate) fn declare_managed(
-        &self,
-        volume: &str,
-        size_limit: SizeLimit,
-    ) -> Result<bool, DeclareError> {
-        // Lock order: the table, then the quotas, as `quota` never holds both.
-        let mut table = self.table.write().expect("volume table poisoned");
-        if table.contains_key(volume) {
-            return Ok(false);
-        }
-        check_new_managed(&table, volume)?;
-        if matches!(size_limit, SizeLimit::Bytes(_)) {
-            self.quotas
-                .write()
-                .expect("volume quotas poisoned")
-                .insert(volume.to_owned(), Arc::new(OnceCell::new()));
-        }
-        table.insert(volume.to_owned(), VolumeSpec::managed(size_limit));
-        Ok(true)
-    }
-
-    /// Removes a `managed-local` declaration [`Self::declare_managed`] added. Only the
-    /// local apply path calls this, for a volume it declared under the blueprint tag
-    /// lock it still holds, when the blueprint that names the volume was not
-    /// stored: no stored blueprint references it, so no run resolves it.
-    pub(crate) fn withdraw_managed(&self, volume: &str) {
-        // Lock order: the table, then the quotas, as in `declare_managed`.
-        let mut table = self.table.write().expect("volume table poisoned");
-        if table
-            .get(volume)
-            .is_some_and(|spec| matches!(spec.kind, VolumeKind::ManagedLocal))
-        {
-            table.remove(volume);
-            self.quotas
-                .write()
-                .expect("volume quotas poisoned")
-                .remove(volume);
         }
     }
 
@@ -248,13 +115,6 @@ impl VolumeRegistry {
             .expect("volume table poisoned")
             .get(volume)
             .cloned()
-    }
-
-    /// Counts `offsets` against each named volume's size limit on top of what its
-    /// directory holds, for a volume that holds only part of its source.
-    pub(crate) fn with_usage_offsets(mut self, offsets: BTreeMap<String, Option<u64>>) -> Self {
-        self.usage_offsets = offsets;
-        self
     }
 
     /// The declarations, by name, as they are now.
@@ -356,19 +216,11 @@ impl VolumeRegistry {
             return Err(SessionError::UnknownVolume(volume.to_string()));
         };
         let host = self.host_of(volume, &spec.kind)?;
-        let offset = self.usage_offsets.get(volume).copied();
         let measured = cell
             .get_or_try_init(|| async move {
-                let mut used = tokio::task::spawn_blocking(move || measure_host_dir(&host))
+                let used = tokio::task::spawn_blocking(move || measure_host_dir(&host))
                     .await
                     .map_err(|err| std::io::Error::other(err.to_string()))??;
-                match offset {
-                    None => {}
-                    Some(Some(offset)) => used = used.saturating_add(offset),
-                    Some(None) => {
-                        return Err(std::io::Error::other("the source volume was not measured"));
-                    }
-                }
                 Ok::<_, std::io::Error>(Arc::new(DiskQuota::new(limit, used)))
             })
             .await;
@@ -525,30 +377,6 @@ mod tests {
                 "the host path stays in the log: {err}"
             );
         }
-    }
-
-    #[test]
-    fn a_withdrawn_declaration_is_gone_and_can_be_made_again() {
-        let root = tempfile::tempdir().unwrap();
-        let registry = registry(root.path(), VolumeTable::new());
-        assert_eq!(
-            registry.declare_managed("notes", SizeLimit::Bytes(10)),
-            Ok(true)
-        );
-        registry.withdraw_managed("notes");
-        assert!(!registry.table().contains_key("notes"));
-        assert!(
-            !registry
-                .quotas
-                .read()
-                .expect("volume quotas poisoned")
-                .contains_key("notes")
-        );
-        assert!(registry.check_reference("notes", None).is_err());
-        assert_eq!(
-            registry.declare_managed("notes", SizeLimit::Unlimited),
-            Ok(true)
-        );
     }
 
     #[tokio::test]
