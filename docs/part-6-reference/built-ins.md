@@ -8,7 +8,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "fe3037ec8ae4fe25c04cf4f8e09d4853feae5a78c14ca5d17d8b44942e4db95a"
+  contentHash: "2806850b7331d9063fc7d4e038779cf89e89c5dbdb815f2630e8b671301437ea"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -441,7 +441,7 @@ The built-in range-error class (`extends Error`, `name` = `"RangeError"`).
 A `Map` that can only be read: `get`, `has`, `size`, `forEach` and iteration, but not `set`, `delete` or `clear`.
 
 ```typescript
-type ReadonlyMap<K, V> = readonly Map<K, V>;
+type ReadonlyMap<K, V> = ReadonlyMap<K, V>;
 ```
 
 ## `ReadonlySet`
@@ -451,7 +451,7 @@ type ReadonlyMap<K, V> = readonly Map<K, V>;
 A `Set` that can only be read: `has`, `size`, `forEach`, iteration and the set algebra, but not `add`, `delete` or `clear`.
 
 ```typescript
-type ReadonlySet<T> = readonly Set<T>;
+type ReadonlySet<T> = ReadonlySet<T>;
 ```
 
 ## `Record`
@@ -513,18 +513,18 @@ A hash-backed unique-value collection.
 | `add(value: T): Set<T>` | Adds `value` to the set. |
 | `clear(): void` | Removes every element. |
 | `delete(value: T): boolean` | Removes `value` from the set. |
-| `difference<U>(other: Set<U>): Set<T>` | Returns a new set with this set's elements that are not in `other`. |
+| `difference<U>(other: ReadonlySet<U>): Set<T>` | Returns a new set with this set's elements that are not in `other`. |
 | `entries(): Iterator<[T, T]>` | Returns a lazy `Iterator<[T, T]>` of `[value, value]` pairs (the element repeats, mirroring `Map#entries`). |
 | `forEach(callback: (arg0: T, arg1: T, arg2: Set<T>) => void): void` | Calls `callback(value, value, set)` once for each element in insertion order, including elements the callback adds. |
 | `has(value: T): boolean` | Returns `true` when `value` is present. |
-| `intersection<U>(other: Set<U>): Set<T>` | Returns a new set with the elements present in both this set and `other`. |
-| `isDisjointFrom<U>(other: Set<U>): boolean` | Returns `true` when this set and `other` share no elements. |
-| `isSubsetOf<U>(other: Set<U>): boolean` | Returns `true` when every element of this set is in `other`. |
-| `isSupersetOf<U>(other: Set<U>): boolean` | Returns `true` when every element of `other` is in this set. |
+| `intersection<U>(other: ReadonlySet<U>): Set<T>` | Returns a new set with the elements present in both this set and `other`. |
+| `isDisjointFrom<U>(other: ReadonlySet<U>): boolean` | Returns `true` when this set and `other` share no elements. |
+| `isSubsetOf<U>(other: ReadonlySet<U>): boolean` | Returns `true` when every element of this set is in `other`. |
+| `isSupersetOf<U>(other: ReadonlySet<U>): boolean` | Returns `true` when every element of `other` is in this set. |
 | `iterator(): Iterator<T>` | Returns a fresh `Iterator<T>` over the elements in insertion order. |
 | `keys(): Iterator<T>` | Alias of `values()` — sets have no separate keys. |
-| `symmetricDifference<U>(other: Set<U>): Set<T \| U>` | Returns a new set with the elements in exactly one of this set and `other` (the overlap is dropped). |
-| `union<U>(other: Set<U>): Set<T \| U>` | Returns a new set with every element of this set and `other`. |
+| `symmetricDifference<U>(other: ReadonlySet<U>): Set<T \| U>` | Returns a new set with the elements in exactly one of this set and `other` (the overlap is dropped). |
+| `union<U>(other: ReadonlySet<U>): Set<T \| U>` | Returns a new set with every element of this set and `other`. |
 | `values(): Iterator<T>` | Returns a fresh array of every element in insertion order. |
 
 | Constant | Description |

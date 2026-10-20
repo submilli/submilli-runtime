@@ -8,7 +8,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1f3cf011146ef21d9790f3cc3eef9834eeeaf5e1e16ee6933d73631a3d81f36c"
+  contentHash: "210a47d0c6811a3bfe0314064da133b4a92625c6222323abcc95f4bb3a1bb0ee"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -202,3 +202,9 @@ requests it made. But a passing test says nothing about what a program
 is refused. For that, publish the Package and run programs under a
 Blueprint, one that should be allowed and one that shouldn't, as
 [Publish a Package](/docs/packages/publish-a-package) shows.
+
+## Configuration reference
+
+| Task | Reference |
+| --- | --- |
+| Supply required Package values, override defaults, or configure a dependency | [Package configuration](/docs/reference/package-configuration) |

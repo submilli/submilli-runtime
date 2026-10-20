@@ -8,7 +8,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "06fb15b26a4d15f704a5594984672989a0c6b06e5783b2c9c8e161cd5a46ace2"
+  contentHash: "9bc3df920d982bb2567dd7ce0b5fd701398cb25025a693b68dd3b830a31be63e"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -210,6 +210,7 @@ read checks the requested alias name and grants no access to its target name.
 
 | Capability | Fields | Operation | Example filter |
 | --- | --- | --- | --- |
+| `session.finalize` | `key: string` | Register or unregister durable package-owned session cleanup | `key glob "browser/*"` |
 | `session.read` | `key: string` | Read session state (get, has), and decide which keys a list may reveal | `key glob "triage/*"` |
 | `session.write` | `key: string` | Store or overwrite a session value (set) | `key glob "triage/*"` |
 | `session.remove` | `key: string` | Delete a session key | `key glob "triage/*"` |

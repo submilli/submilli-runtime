@@ -8,7 +8,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "ef7cdd4b4cd56987cd49a5a7d4ebcf63309dcd33365665945fc4201e536bd658"
+  contentHash: "7fa95d60c1c1b69a701cfd16698c7299be4c2aaa99977a54695a854fbac1b075"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -527,3 +527,10 @@ or secrets (`error.kind` `invalid_request`):
 ```json
 {"status":"finished","execution_id":"06c8d2b3-bd65-4ec5-95c6-92426962ead9","session_id":"de5c829e-6520-4563-86be-9acfa84e900d","result":null,"console":[],"error":{"kind":"invalid_request","message":"invalid variables: required variable 'userId' was not supplied"}}
 ```
+
+## Package installation configuration
+
+| Surface | Contract |
+| --- | --- |
+| `POST /v1/packages/install` | [Configuration inputs and dependency errors](/docs/reference/package-configuration/#administrative-http-api) |
+| `GET /v1/packages` | Installed Package metadata, including saved overrides and resolved configuration |

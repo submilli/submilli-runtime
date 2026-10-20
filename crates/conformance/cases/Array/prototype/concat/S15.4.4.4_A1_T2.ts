@@ -1,16 +1,22 @@
 // test262: test/built-ins/Array/prototype/concat/S15.4.4.4_A1_T2.js
-// expect-fail: standard concat appends non-array arguments as elements; our concat only accepts arrays (concat(...others: T[][])), so a scalar argument is a compile error
-// Adapted: numeric elements only; the point — concat of a scalar argument —
-// is preserved.
+// Source: https://github.com/tc39/test262/blob/d53ebc8b1931d9f1541e43d59650776e4b766248/test/built-ins/Array/prototype/concat/S15.4.4.4_A1_T2.js
+// unknown[] preserves the mixed arguments. An object literal with a discriminator
+// replaces new Object(); Array.isArray replaces prototype-based brand reflection.
+// The SameValue shim compares objects structurally, not by reference identity.
 
 function main(): void {
-  const x = [0];
+  const x: unknown[] = [0];
+  const y = { marker: "concat object" };
   const z = [1, 2];
-  const arr = x.concat(z, -1);
+  const arr = x.concat(y, z, -1, true, "NaN");
 
-  assert(arr[0] === 0, "The value of arr[0] is expected to be 0");
-  assert(arr[1] === 1, "The value of arr[1] is expected to be 1");
-  assert(arr[2] === 2, "The value of arr[2] is expected to be 2");
-  assert(arr[3] === -1, "The value of arr[3] is expected to be -1");
-  assert(arr.length === 4, "The value of arr.length is expected to be 4");
+  assertSameValue(Array.isArray(arr), true, "Array.isArray(arr) must return true");
+  assertSameValue(arr[0], 0, 'The value of arr[0] is expected to be 0');
+  assertSameValue(arr[1], y, 'The value of arr[1] is expected to equal the value of y');
+  assertSameValue(arr[2], 1, 'The value of arr[2] is expected to be 1');
+  assertSameValue(arr[3], 2, 'The value of arr[3] is expected to be 2');
+  assertSameValue(arr[4], -1, 'The value of arr[4] is expected to be -1');
+  assertSameValue(arr[5], true, 'The value of arr[5] is expected to be true');
+  assertSameValue(arr[6], "NaN", 'The value of arr[6] is expected to be "NaN"');
+  assertSameValue(arr.length, 7, 'The value of arr.length is expected to be 7');
 }

@@ -32,9 +32,9 @@ that general knowledge gets wrong; what goes wrong without it is named.
 - Choosing operations, check fields, package and blueprint boundaries:
   [capability design](references/capability-design.md); without it checks
   guard fields the model can choose.
-- Package implementation: [packages](references/packages.md); without it the
-  package is written as Node.js and fails `build`, or checks one value and
-  sends another. For session-owned remote resources, follow its durable
+- Packages and install-time `src/config.ts`: [packages](references/packages.md);
+  without it code uses unsupported Node.js APIs or checks one value and sends
+  another. For session-owned remote resources, follow its durable
   finalizer pattern; KV storage alone does not register cleanup.
 - Policy design and verification, including MCP servers and direct HTTP:
   [blueprints](references/blueprints.md); without it the blueprint lints but

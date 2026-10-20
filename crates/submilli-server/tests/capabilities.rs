@@ -241,6 +241,7 @@ async fn installed_packages_are_listed() {
             "description": "test package",
             "root": root.path().display().to_string(),
             "managed": true,
+            "config": { "overrides": {}, "values": {} },
         }])
     );
 }

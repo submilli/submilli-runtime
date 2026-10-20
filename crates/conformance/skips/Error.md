@@ -1,24 +1,23 @@
 # Error
 
 Source: `test/built-ins/Error/**` (93 files). spec.md §1.8 defines `Error`
-as a class with mutable `message` and `name` fields, a required `message`
-constructor argument, `toString()`, `Error.isError`, and user subclasses via
+as a class with mutable `message`, `name`, and `cause` fields, optional message
+and `ErrorOptions` constructor arguments, `toString()`, `Error.isError`, and user subclasses via
 `extends`. Most of the area tests prototype objects, property descriptors,
 the `stack` accessor, and realms, which don't exist here.
 
-Ported: 13 (11 passing, 2 `expect-error` pins). Representative rejected
+Ported: 15 (13 passing, 1 `expect-error` pin, and 1 `expect-fail` known gap). Representative rejected
 originals under `rejected/Error/`.
 
-Where the original calls `new Error()`, the port uses `new Error("")`: the
-constructor requires a message, and an empty message reaches the same
-`toString` step as an absent one.
+Some older ports spell `new Error()` as `new Error("")`. Both now use the
+empty default message.
 
 | Pattern | Disposition | Reason |
 |:--------|:------------|:-------|
 | `message_property.js` | ported, passing | Value check and write kept; descriptor half dropped. |
 | `prototype/toString/15.11.4.4-{6-1,6-2,8-1,8-2,9-1,10-1}.js` | ported, passing | The name/message combinations of `toString`. |
 | `isError/{errors,error-subclass,primitives,bigints,non-error-objects,fake-errors}.js` | ported, passing | Arms for `EvalError`/`ReferenceError`/`URIError`/`AggregateError`/`SuppressedError`, and constructors passed as values are dropped. `fake-errors` becomes an object literal with Error's fields. |
-| `cause_property.js` | ported, `expect-error` | `new Error(message, { cause })` isn't in §1.8. Pinned to ``constructor of `Error` expects 1 argument(s), got 2``. |
+| `cause_property.js` | ported, `expect-fail` (SUB-1830) | Keeps own-property presence and cause-value checks, including an absent cause and an explicit `undefined` cause. An omitted cause still occupies an own field. Descriptor flags are excluded; object-valued SameValue uses structural equality. |
 | `the-initial-value-of-errorprototypemessage-is-the-empty-string.js` | ported, `expect-error` | `Error('a')` without `new`: a class isn't callable. Pinned to ``` `Error` is a class, not a value ```. |
 | `prototype/toString/S15.11.4.4_A2.js` (`toString()` is not `undefined`) | not ported | Redundant with `15.11.4.4-6-2`. |
 | `constructor.js`, `cause_abrupt.js` | rejected | Message `toString` coercion and `cause` getter traps. Originals in `rejected/`. |

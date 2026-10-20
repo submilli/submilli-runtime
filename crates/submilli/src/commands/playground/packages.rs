@@ -28,8 +28,8 @@ use serde::{Deserialize, Serialize};
 use submilli_blueprint::Blueprint;
 use submilli_build::{
     ArtifactSource, DependencyKind, DriverError, PackageManifest, PackageName, PackageStore,
-    PackageStoreError, ProjectManifest, build_packages, install_packages, package_sources,
-    parse_manifest, read_installed_sources,
+    PackageStoreError, ProjectManifest, build_packages_configured, install_packages,
+    package_sources, parse_manifest, read_installed_sources,
 };
 use submilli_server::{AppState, PreExecute, PreExecuteHook, PreExecuteRefusal};
 
@@ -365,8 +365,25 @@ impl ProjectPackages {
             if installed.iter().any(|done: &String| done == name.as_str()) {
                 continue;
             }
-            let built = build_packages(manifest, &self.manifest_dir, store, Some(name))
-                .map_err(|error| self.build_failure(name, error))?;
+            let mut configuration = BTreeMap::new();
+            for package in submilli_build::package_build_scope(manifest, Some(name))
+                .map_err(|error| self.build_failure(name, error))?
+            {
+                let overrides = match store.load(package.name.as_str()) {
+                    Ok(artifact) => artifact.metadata.config.overrides,
+                    Err(PackageStoreError::MissingPackage { .. }) => BTreeMap::new(),
+                    Err(error) => return Err(ResolutionFailure::Store(error)),
+                };
+                configuration.insert(package.name.clone(), overrides);
+            }
+            let built = build_packages_configured(
+                manifest,
+                &self.manifest_dir,
+                store,
+                Some(name),
+                &configuration,
+            )
+            .map_err(|error| self.build_failure(name, error))?;
             let wanted: Vec<_> = built
                 .into_iter()
                 .filter(|package| stale.contains(&package.name))
@@ -629,6 +646,9 @@ fn fingerprint(manifest_text: &str, store: &PackageStore, inputs: &[PackageInput
     };
     part(manifest_text);
     for input in inputs {
+        if let Ok(Some(located)) = store.locate(input.package.name.as_str()) {
+            part(&format!("{:?}", installed_at(&located.dir)));
+        }
         part(input.package.name.as_str());
         part(&input.documentation);
         for source in &input.sources {

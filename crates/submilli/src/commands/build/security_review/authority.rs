@@ -7,7 +7,7 @@ use interpreter::{AuthorityCallable, AuthorityEdge, AuthorityExposure, Authority
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use submilli_build::{
-    CapabilitySchema, PackageName, PackageStore, ProjectManifest, build_packages,
+    CapabilitySchema, PackageName, PackageStore, ProjectManifest, build_packages_configured,
 };
 
 use super::snapshot::{Snapshot, Source};
@@ -26,6 +26,7 @@ pub(super) struct Evidence {
 #[derive(Serialize)]
 pub(super) struct PackageEvidence {
     name: String,
+    config: submilli_build::PackageConfig,
     capabilities: CapabilitySchema,
     callables: Vec<AuthorityCallable>,
     edges: Vec<AuthorityEdge>,
@@ -44,6 +45,7 @@ pub(super) fn collect(
     snapshot: &Snapshot,
     manifest: &ProjectManifest,
     only: Option<&str>,
+    inputs: &submilli_build::ConfigInputs,
 ) -> anyhow::Result<Evidence> {
     let workspace = tempfile::tempdir().context("create captured compiler workspace")?;
     let root = workspace.path();
@@ -58,7 +60,16 @@ pub(super) fn collect(
     // An empty private store prevents ambient installed artifacts from affecting
     // the evidence. Missing external sources are rejected by the caller.
     let store = PackageStore::new(root.join(".review-empty-store"));
-    let built = build_packages(manifest, root, &store, only.as_ref())
+    inputs.validate(only.is_some())?;
+    let mut configuration: BTreeMap<_, _> = snapshot
+        .configuration
+        .iter()
+        .map(|(name, values)| (PackageName::new(name), values.clone()))
+        .collect();
+    if let Some(name) = &only {
+        configuration.insert(name.clone(), inputs.values.clone());
+    }
+    let built = build_packages_configured(manifest, root, &store, only.as_ref(), &configuration)
         .context("compile captured review snapshot")?;
     let mut packages = Vec::new();
     for package in built {
@@ -81,6 +92,7 @@ pub(super) fn collect(
             callable.transitive_effects.clear();
         }
         packages.push(PackageEvidence {
+            config: package.config,
             name: package.name.as_str().to_owned(),
             capabilities: package.capabilities,
             callables: map.callables,

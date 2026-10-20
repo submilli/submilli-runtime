@@ -1,6 +1,6 @@
 // test262: test/built-ins/Array/prototype/push/S15.4.4.7_A1_T1.js
-// Adapted: the zero-argument push() blocks are dropped — push takes exactly
-// one element here (see the expect-fail variadic case S15.4.4.7_A1_T2).
+// Adapted: this port retains the single-element calls and omits the upstream
+// zero-argument blocks. S15.4.4.7_A1_T2 covers variadic push.
 
 function main(): void {
   const x: number[] = [];
