@@ -30,18 +30,10 @@ pub(super) fn time_zone_id() -> &'static str {
     SYSTEM.get().and_then(TimeZone::iana_name).unwrap_or("UTC")
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-pub(super) struct ZonedObservation {
-    pub instant: Timestamp,
-    pub id: String,
-    #[serde(skip)]
-    zone: Option<TimeZone>,
-}
-
 pub(super) fn zoned_date_time_iso(
     caller: &mut Caller<'_, StoreData>,
     time_zone: Option<&str>,
-) -> wasmtime::Result<ZonedObservation> {
+) -> wasmtime::Result<(Zoned, String)> {
     let (zone, id) = if let Some(requested) = time_zone {
         super::zoned_date_time::resolve_time_zone(caller, requested, "Now.zonedDateTimeISO")?
     } else {
@@ -53,59 +45,92 @@ pub(super) fn zoned_date_time_iso(
             .clone();
         (zone, time_zone_id().to_string())
     };
-    Ok(ZonedObservation {
-        instant: Timestamp::now(),
-        id,
-        zone: Some(zone),
-    })
+    Ok((Timestamp::now().to_zoned(zone), id))
 }
 
-impl ZonedObservation {
-    pub fn zoned(&self, caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Zoned> {
-        let zone = match &self.zone {
-            Some(zone) => zone.clone(),
-            None => super::zoned_date_time::resolve_time_zone(caller, &self.id, "Temporal.Now")?.0,
-        };
-        Ok(self.instant.to_zoned(zone))
+/// Records the native result while restoring zones from our pinned database.
+/// Jiff's default `Zoned` deserializer uses the machine's time-zone database.
+pub(super) struct RecordedZoned(pub (Zoned, String));
+
+impl serde::Serialize for RecordedZoned {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+
+        let (zoned, id) = &self.0;
+        let mut state = serializer.serialize_struct("RecordedZoned", 2)?;
+        state.serialize_field("instant", &zoned.timestamp())?;
+        state.serialize_field("id", id)?;
+        state.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for RecordedZoned {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct SavedZoned {
+            instant: Timestamp,
+            id: String,
+        }
+
+        let saved = SavedZoned::deserialize(deserializer)?;
+        let (zone, _) = super::zoned_date_time::lookup_time_zone(&saved.id, "Temporal.Now")
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self((saved.instant.to_zoned(zone), saved.id)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{RuntimeConfig, Vfs, fuel};
-    use wasmtime::{Func, FuncType};
 
     #[test]
-    fn recorded_zone_reconstruction_charges_only_the_lookup_it_performs() {
-        super::super::zoned_date_time::prepare_zones().unwrap();
-        let config = RuntimeConfig::default();
-        let engine = config.engine().unwrap();
-        let mut store = config
-            .store(&engine, StoreData::with_vfs("test-run".into(), Vfs::none()))
-            .unwrap();
-        let probe = Func::new(
-            &mut store,
-            FuncType::new(&engine, [], []),
-            |mut caller, _, _| {
-                for id in ["UTC", "+02:00"] {
-                    let observed = zoned_date_time_iso(&mut caller, Some(id))?;
-                    let before = caller.data().host_fuel;
-                    let live = observed.zoned(&mut caller)?;
-                    assert_eq!(caller.data().host_fuel, before);
+    fn recorded_zones_round_trip_through_the_pinned_database() {
+        for id in ["UTC", "+02:00", "-05:30", "America/New_York", "US/Eastern"] {
+            for instant in ["2024-03-10T06:59:59Z", "2024-03-10T07:00:00Z"] {
+                let instant: Timestamp = instant.parse().unwrap();
+                let (zone, id) =
+                    super::super::zoned_date_time::lookup_time_zone(id, "test").unwrap();
+                let original = RecordedZoned((instant.to_zoned(zone), id));
+                let bytes = rmp_serde::to_vec_named(&original).unwrap();
+                let RecordedZoned((restored, restored_id)) = rmp_serde::from_slice(&bytes).unwrap();
+                let (zoned, id) = original.0;
+                assert_eq!(restored.timestamp(), zoned.timestamp());
+                assert_eq!(restored.datetime(), zoned.datetime());
+                assert_eq!(restored.offset(), zoned.offset());
+                assert_eq!(restored_id, id);
+                assert_eq!(
+                    restored.time_zone().iana_name(),
+                    zoned.time_zone().iana_name()
+                );
+            }
+        }
+    }
 
-                    let bytes = rmp_serde::to_vec_named(&observed).unwrap();
-                    let restored: ZonedObservation = rmp_serde::from_slice(&bytes).unwrap();
-                    assert!(restored.zone.is_none());
-                    let replay = restored.zoned(&mut caller)?;
-                    assert_eq!(caller.data().host_fuel - before, fuel::TZ);
-                    assert_eq!(live.timestamp(), replay.timestamp());
-                    assert_eq!(live.offset(), replay.offset());
-                }
-                Ok(())
-            },
-        );
-        store.set_fuel(1_000_000).unwrap();
-        probe.call(&mut store, &[], &mut []).unwrap();
+    #[test]
+    fn previous_recorded_outcomes_keep_the_same_encoding() {
+        #[derive(serde::Serialize)]
+        struct PreviousObservation {
+            instant: Timestamp,
+            id: String,
+        }
+
+        let previous = PreviousObservation {
+            instant: "2024-07-01T12:00:00Z".parse().unwrap(),
+            id: "America/New_York".into(),
+        };
+        let bytes = rmp_serde::to_vec_named(&previous).unwrap();
+        let restored: RecordedZoned = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(rmp_serde::to_vec_named(&restored).unwrap(), bytes);
+        let RecordedZoned((zoned, id)) = restored;
+        assert_eq!(zoned.timestamp(), previous.instant);
+        assert_eq!(id, previous.id);
+    }
+
+    #[test]
+    fn invalid_recorded_zones_are_rejected() {
+        for id in ["Not/A_Zone", "+99:00", ""] {
+            let saved = serde_json::json!({"instant": "2024-07-01T12:00:00Z", "id": id});
+            assert!(serde_json::from_value::<RecordedZoned>(saved).is_err());
+        }
     }
 }

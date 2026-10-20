@@ -236,6 +236,13 @@ async fn execution_history_replays_observations_and_skips_completed_filesystem_w
             return first + "|" + v7() + "|" + Math.random().toString() + "|"
                 + randomBytes(8).toString() + "|" + Temporal.Now.instant().toString()
                 + "|" + Temporal.Now.timeZoneId() + "|" + Temporal.Now.zonedDateTimeISO("UTC").toString()
+                + "|" + Temporal.Now.zonedDateTimeISO("America/New_York").toString()
+                + "|" + Temporal.Now.zonedDateTimeISO("-05:30").toString()
+                + "|" + Temporal.Now.zonedDateTimeISO().toString()
+                + "|" + Temporal.Now.zonedDateTime("US/Eastern").toString()
+                + "|" + Temporal.Now.plainDateISO("America/New_York").toString()
+                + "|" + Temporal.Now.plainTimeISO("+02:00").toString()
+                + "|" + Temporal.Now.plainDateTimeISO().toString()
                 + "|" + size("/file").toString() + "|" + exists("/file").toString();
         }
     "#;

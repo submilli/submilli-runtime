@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use wasmtime::{FuncType, Linker, Val};
 
 use super::super::{DirectTypes, shared};
+use super::RecordedZoned;
 use crate::runtime::StoreData;
 use crate::runtime::prelude::MODULE_NAME;
 use crate::{
@@ -66,19 +67,19 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                         "Temporal.Now.zonedDateTimeISO",
                     )?),
                 };
-                let observation = effects::execute(
+                let RecordedZoned((zoned, id)) = effects::execute(
                     caller,
                     "Temporal.Now.zonedDateTimeISO",
                     time_zone,
                     |caller, _, time_zone| {
-                        Box::pin(
-                            async move { super::zoned_date_time_iso(caller, time_zone.as_deref()) },
-                        )
+                        Box::pin(async move {
+                            super::zoned_date_time_iso(caller, time_zone.as_deref())
+                                .map(RecordedZoned)
+                        })
                     },
                 )
                 .await?;
-                let zoned = observation.zoned(caller)?;
-                shared::make_zoned_date_time(caller, &zoned, &observation.id)
+                shared::make_zoned_date_time(caller, &zoned, &id)
             })
         },
     )?;
@@ -106,19 +107,19 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                         "Temporal.Now.zonedDateTime",
                     )?),
                 };
-                let observation = effects::execute(
+                let RecordedZoned((zoned, id)) = effects::execute(
                     caller,
                     "Temporal.Now.zonedDateTime",
                     time_zone,
                     |caller, _, time_zone| {
-                        Box::pin(
-                            async move { super::zoned_date_time_iso(caller, time_zone.as_deref()) },
-                        )
+                        Box::pin(async move {
+                            super::zoned_date_time_iso(caller, time_zone.as_deref())
+                                .map(RecordedZoned)
+                        })
                     },
                 )
                 .await?;
-                let zoned = observation.zoned(caller)?;
-                shared::make_zoned_date_time(caller, &zoned, &observation.id)
+                shared::make_zoned_date_time(caller, &zoned, &id)
             })
         },
     )?;
@@ -136,9 +137,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         ),
         |caller, params| {
             Box::pin(async move {
-                let observation =
-                    now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainDateISO").await?;
-                let z = observation.zoned(caller)?;
+                let z = now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainDateISO").await?;
                 let d = z.date();
                 shared::make_plain_date(
                     caller,
@@ -160,9 +159,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         ),
         |caller, params| {
             Box::pin(async move {
-                let observation =
-                    now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainTimeISO").await?;
-                let z = observation.zoned(caller)?;
+                let z = now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainTimeISO").await?;
                 let t = z.time();
                 shared::make_plain_time(
                     caller,
@@ -185,9 +182,8 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         ),
         |caller, params| {
             Box::pin(async move {
-                let observation =
+                let z =
                     now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainDateTimeISO").await?;
-                let z = observation.zoned(caller)?;
                 let dt = z.datetime();
                 shared::make_plain_date_time(
                     caller,
@@ -210,16 +206,18 @@ async fn now_zoned(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     tz: &Val,
     label: &'static str,
-) -> wasmtime::Result<super::ZonedObservation> {
+) -> wasmtime::Result<jiff::Zoned> {
     let tz = match tz {
         value if crate::runtime::prelude::undefined::is_undefined(caller, value)? => None,
         _ => Some(read_string_arg(caller, tz, label)?),
     };
-    let observation = effects::execute(caller, label, tz, |caller, _, tz| {
-        Box::pin(async move { super::zoned_date_time_iso(caller, tz.as_deref()) })
+    let RecordedZoned((zoned, _)) = effects::execute(caller, label, tz, |caller, _, tz| {
+        Box::pin(
+            async move { super::zoned_date_time_iso(caller, tz.as_deref()).map(RecordedZoned) },
+        )
     })
     .await?;
-    Ok(observation)
+    Ok(zoned)
 }
 
 pub(crate) fn declare(defs: &mut PackageDeclaration) {
