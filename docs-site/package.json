@@ -9,6 +9,7 @@
     "dev": "astro dev",
     "prebuild": "node ./scripts/ensure-root-tsconfig.mjs && node ./scripts/check-video-preview.mjs && node ./scripts/check-published-videos.mjs",
     "build": "astro build && node --experimental-strip-types ./scripts/check-built-agent-docs.ts",
+    "check:permission-demo": "node ./scripts/check-permission-demo.mjs",
     "check:links:fixtures": "node --test ./scripts/link-check-fixtures.test.mjs",
     "check:published-videos": "node --test ./scripts/check-published-videos.test.mjs",
     "preview": "astro preview",

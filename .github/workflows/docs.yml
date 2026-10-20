@@ -7,12 +7,14 @@ on:
       - "docs/**"
       - "docs-site/**"
       - "examples/quickstart/**"
+      - "examples/harnesses/permission-demo/**"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "docs/**"
       - "docs-site/**"
       - "examples/quickstart/**"
+      - "examples/harnesses/permission-demo/**"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 

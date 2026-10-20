@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import type { AstroIntegration } from 'astro';
+import { permissionDemoDownloads } from '../lib/permission-demo-downloads.mjs';
 import { legacyDocsRoutes } from '../lib/legacy-docs.ts';
 import { createAgentDocs, readChapters } from '../lib/agent-docs.ts';
 
@@ -25,6 +26,11 @@ export function agentDocs(): AstroIntegration {
 					outputs.set(`/docs/examples/quickstart/${file}`, await readFile(source, 'utf8'));
 				}
 				for (const [path, content] of outputs) {
+					const destination = new URL(`.${path}`, publishDirectory);
+					await mkdir(new URL('./', destination), { recursive: true });
+					await writeFile(destination, content);
+				}
+				for (const [path, content] of await permissionDemoDownloads()) {
 					const destination = new URL(`.${path}`, publishDirectory);
 					await mkdir(new URL('./', destination), { recursive: true });
 					await writeFile(destination, content);

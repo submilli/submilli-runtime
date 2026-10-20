@@ -1,21 +1,10 @@
 import { agentIconPaths } from '../assets/agent-logos/paths.mjs';
 import { h, s } from '@expressive-code/core/hast';
 
-// Links prefill a composer; the reader chooses a project and sends the prompt.
-// Sources and limits: see src/assets/agent-logos/README.md.
-export const agents = [
-  { id: 'codex', name: 'Codex', base: 'codex://threads/new?prompt=', icon: 'codex.svg' },
-  { id: 'claude', name: 'Claude Code', base: 'claude://code/new?q=', icon: 'claude-code.svg' },
-  { id: 'cursor', name: 'Cursor', base: 'cursor://anysphere.cursor-deeplink/prompt?text=', icon: 'cursor.svg' },
-];
-const icon = id => s('svg', { viewBox: '0 0 24 24', width: 18, height: 18, fill: 'currentColor', fillRule: 'evenodd', 'aria-hidden': 'true' }, agentIconPaths[id].map(d => s('path', { d, clipRule: 'evenodd' })));
+import { agents, promptLink } from './agent-prompt-context.mjs';
+export { agents, promptLink } from './agent-prompt-context.mjs';
 
-export function promptLink(agent, prompt) {
-  const href = agent.base + encodeURIComponent(prompt);
-  // Cursor rejects URLs over 10,000 characters; Claude truncates long prompts.
-  // Keep the same conservative limit for every destination, with Copy available.
-  return href.length <= 10000 ? href : undefined;
-}
+const icon = id => s('svg', { viewBox: '0 0 24 24', width: 18, height: 18, fill: 'currentColor', fillRule: 'evenodd', 'aria-hidden': 'true' }, agentIconPaths[id].map(d => s('path', { d, clipRule: 'evenodd' })));
 
 function promptTextAst(prompt) {
   const blocks = prompt.split(/\n{2,}/);
@@ -39,7 +28,7 @@ export function agentPromptAst(prompt, { collapsed = true } = {}) {
     const href = promptLink(agent, prompt);
     const label = href ? `Open in ${agent.name}` : `${agent.name}: use Copy prompt for this long prompt`;
     return h(href ? 'a' : 'span', {
-      className: ['agent-prompt-launch'], href, 'aria-label': label,
+      className: ['agent-prompt-launch'], 'data-agent-launch': agent.id, href, 'aria-label': label,
       'aria-disabled': href ? undefined : 'true',
       title: href ? `${label}. Choose your project, review, then send.` : label,
     }, [icon(agent.id)]);

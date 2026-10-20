@@ -1,0 +1,15 @@
+kind: blueprint
+name: permission-demo
+
+packages:
+- '@acme/billing'
+
+default: deny
+
+permissions:
+  main:
+  - capability: acme.com/charges.list
+    filter: customerId == "cus_northwind"
+    action: allow
+  # The Package reads a static fixture and needs no host capabilities.
+  '@acme/billing': []
