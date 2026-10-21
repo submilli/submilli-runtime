@@ -826,12 +826,17 @@ impl<'a> Inferer<'a> {
         if !self.type_queries_see_narrowing {
             return None;
         }
-        let entry = self.scopes.get(&root.name)?;
-        let path = super::narrowing::ReferencePath {
-            root: super::narrowing::BindingId::Local {
+        let binding = match self.scopes.get(&root.name) {
+            Some(entry) => super::narrowing::BindingId::Local {
                 name: root.name.clone(),
                 decl_scope: entry.decl_scope,
             },
+            None => super::narrowing::BindingId::Global(
+                self.top_symbols.get(&root.name)?.mangled_name.clone(),
+            ),
+        };
+        let path = super::narrowing::ReferencePath {
+            root: binding,
             chain: rest
                 .iter()
                 .map(|segment| super::narrowing::PathElem::Field(segment.name.clone()))

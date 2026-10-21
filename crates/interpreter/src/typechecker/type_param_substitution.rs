@@ -317,21 +317,24 @@ impl TypeParamSubstitution {
         loose
     }
 
-    /// This substitution without its `never` bindings, when it has any: a
+    /// This substitution without its `never` candidates, when it has any: a
     /// `never` candidate is no hint for a later argument, which takes the
     /// binding instead (tsc drops `never` from the candidates).
     pub fn without_never_bindings(&self) -> Option<TypeParamSubstitution> {
+        let is_never_candidate = |name: &str, ty: &Type| {
+            self.widenable.contains(name) && matches!(ty.peel(), Type::Never)
+        };
         if !self
             .bindings
-            .values()
-            .any(|ty| matches!(ty.peel(), Type::Never))
+            .iter()
+            .any(|(name, ty)| is_never_candidate(name, ty))
         {
             return None;
         }
         let mut loose = self.clone();
         loose
             .bindings
-            .retain(|_, ty| !matches!(ty.peel(), Type::Never));
+            .retain(|name, ty| !is_never_candidate(name, ty));
         Some(loose)
     }
 
@@ -762,9 +765,11 @@ impl<'a> Unifier<'a> {
                 let replaces_hint = replaceable && covariant;
                 // A `never` candidate, as from an empty array, adds nothing to
                 // the candidates' common supertype, so the next one takes the
-                // binding, as tsc drops `never` from the candidates.
+                // binding, as tsc drops `never` from the candidates. A binding
+                // from the receiver, as `never[]`'s, is no candidate.
                 let replaces_never = covariant
                     && self.is_argument
+                    && self.sub.widenable.contains(name)
                     && matches!(resolved.peel(), Type::Never)
                     && !matches!(arg_resolved.peel(), Type::Never | Type::Error);
                 // A non-literal candidate wins over object and array literal

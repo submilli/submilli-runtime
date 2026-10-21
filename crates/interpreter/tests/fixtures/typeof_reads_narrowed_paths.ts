@@ -26,6 +26,8 @@ function pick(): string | number {
   return "abc";
 }
 
+let moduleLevel: A | B = { kind: "a", p: "abcd" };
+
 function main(): void {
   assert(lengthOfP({ kind: "a", p: "ab" }) === 2, "a narrowed root's field");
   let v: string | number = pick();
@@ -37,4 +39,8 @@ function main(): void {
     assert(f(5) === 1, "a function type in an annotation");
   }
   v = 1;
+  if (moduleLevel.kind === "a") {
+    const q: typeof moduleLevel.p = moduleLevel.p;
+    assert(q.length === 4, "a module-level binding's narrowed path");
+  }
 }

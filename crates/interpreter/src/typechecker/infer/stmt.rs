@@ -56,6 +56,33 @@ impl Inferer<'_> {
         stmt_id: StmtId,
         preserve_binding_literals: bool,
     ) -> Result<Option<StmtId>, CompilerFailure> {
+        let is_loop = matches!(
+            self.ast
+                .try_stmt(stmt_id)
+                .map_err(super::arena_failure)?
+                .kind,
+            StmtKind::While { .. }
+                | StmtKind::DoWhile { .. }
+                | StmtKind::For { .. }
+                | StmtKind::ForOf { .. }
+                | StmtKind::ForOfPattern { .. }
+        );
+        if !is_loop {
+            return self.infer_stmt_kind(stmt_id, preserve_binding_literals);
+        }
+        // A loop types its body and condition again under the narrowing a
+        // pass leaves, so argument types remembered before it no longer hold.
+        let memo = self.invoked_argument_memo.take();
+        let inferred = self.infer_stmt_kind(stmt_id, preserve_binding_literals);
+        self.invoked_argument_memo = memo;
+        inferred
+    }
+
+    fn infer_stmt_kind(
+        &mut self,
+        stmt_id: StmtId,
+        preserve_binding_literals: bool,
+    ) -> Result<Option<StmtId>, CompilerFailure> {
         let stmt = self
             .ast
             .try_stmt(stmt_id)
