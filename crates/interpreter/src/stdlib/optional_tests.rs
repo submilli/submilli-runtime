@@ -242,7 +242,7 @@ impl Harness {
         .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.install_type_info(compiled.type_info.clone());
         data.agent_provider = self.agents;
         data.skill_provider = self.skills;

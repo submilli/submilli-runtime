@@ -9,7 +9,8 @@
 //! checks complement the database's uniqueness and pending-operation constraints.
 use crate::readers::{DirectoryEntry, ReaderPosition};
 use futures::future::BoxFuture;
-use interpreter::runtime::durable::{EffectId, RunId};
+use interpreter::runtime::durable::EffectId;
+use interpreter::runtime::durable::RunId;
 use interpreter::runtime::filesystem::{ReadPosition, ReaderOptions};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -37,6 +38,21 @@ pub type UnitFactory =
 /// durable identity in a fresh unit, never by repeating an external mutation.
 #[async_trait::async_trait]
 pub trait UnitOfWork: Send {
+    async fn history_progress(
+        &mut self,
+        attempt: &crate::history::ExecutionAttempt,
+    ) -> Result<crate::history::HistoryProgress, StoreError>;
+    async fn get_history_entry(
+        &mut self,
+        run_id: &RunId,
+        sequence: u64,
+    ) -> Result<Option<crate::history::HistoryEntry>, StoreError>;
+    async fn append_history(
+        &mut self,
+        attempt: &crate::history::ExecutionAttempt,
+        entry: Arc<crate::history::HistoryEntry>,
+    ) -> Result<(), StoreError>;
+
     async fn get_journal_entry(
         &mut self,
         run_id: &RunId,

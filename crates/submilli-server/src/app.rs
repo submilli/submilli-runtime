@@ -110,6 +110,7 @@ struct AppStateInner {
     blueprints: Arc<dyn BlueprintStore>,
     unit_of_work: Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory>,
     secret_store: Option<Arc<dyn SecretStore>>,
+    secret_cipher: Option<Arc<submilli_shared::secret_store::SecretCipher>>,
     /// A pre-database secret-store directory startup imports.
     legacy_secrets: Option<LegacySecrets>,
     /// Mints/rotates `@mcp/<server>` OAuth access tokens, and holds the grant
@@ -454,6 +455,7 @@ impl AppState {
                 blueprints,
                 unit_of_work,
                 secret_store,
+                secret_cipher: config.session_cipher.clone(),
                 legacy_secrets,
                 oauth_tokens,
                 session_manager,
@@ -727,6 +729,10 @@ impl AppState {
 
     pub(crate) fn blueprints(&self) -> &Arc<dyn BlueprintStore> {
         &self.inner.blueprints
+    }
+
+    pub(crate) fn secret_cipher(&self) -> Option<Arc<submilli_shared::secret_store::SecretCipher>> {
+        self.inner.secret_cipher.clone()
     }
 
     pub(crate) fn secret_store(&self) -> Option<&Arc<dyn SecretStore>> {
@@ -1782,7 +1788,7 @@ mod tests {
         };
         let engine = server_engine(&runtime).expect("server engine");
         let module = Module::new(&engine, &compiled.wasm).expect("module");
-        let data = StoreData::with_vfs(Vfs::tempdir().unwrap());
+        let data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().unwrap());
         let mut store = runtime.store_async(&engine, data).expect("store");
         install_tenant_limits(&mut store);
         let mut linker = Linker::<StoreData>::new(&engine);

@@ -304,7 +304,7 @@ async fn run(source: &str, setup: Setup) -> Outcome {
     let script = compile_script(source, "main.ts", FileId(0), &[], &[])
         .unwrap_or_else(|d| panic!("script: {d:#?}"));
 
-    let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+    let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
     data.install_type_info(script.type_info.clone());
     data.http_client = setup.http;
     data.auth_proxy = Arc::new(BlueprintAuthProxy::with_harness(

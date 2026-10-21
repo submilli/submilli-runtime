@@ -1,14 +1,14 @@
 //! Default filesystem implementation over the contained VFS.
-use super::durable::EffectId;
+use super::durable::{EffectId, RunId};
 use super::filesystem::{
-    DirectoryEntry, DirectoryReader, FileReader, FileWriter, Filesystem, FilesystemError,
-    FilesystemInfo, MutationBudget, ReadItem, ReadOutput, ReadPosition, ReaderOptions,
-    bounded_read,
+    DirectoryEntry, DirectoryHandle, DirectoryReader, FileReader, FileWriter, Filesystem,
+    FilesystemError, FilesystemInfo, MutationBudget, OpenWrite, ReadItem, ReadOutput, ReadPosition,
+    ReaderHandle, ReaderOptions, TempFile, WriterHandle, bounded_read,
 };
 use super::fs::{self, ContainError, ContentPath, FileIdentity, LinkPath, MAX_REMOVE_ENTRIES};
 use super::fuel::WorkBudget;
 use super::vfs::Placement;
-use super::{DiskQuota, Holder, OpenFileGuard, QuotaCharge, QuotaExceeded, Vfs};
+use super::{DiskQuota, Holder, QuotaCharge, QuotaExceeded, Vfs};
 use crate::stdlib::shared::{contain_trap, quota_refusal, write_target_trap};
 use cap_std::fs::{Dir, DirEntry, ReadDir};
 use std::collections::VecDeque;
@@ -20,10 +20,11 @@ use std::sync::Arc;
 
 pub struct DefaultFilesystem {
     vfs: Vfs,
+    run_id: RunId,
 }
 impl DefaultFilesystem {
-    pub fn new(vfs: Vfs) -> Self {
-        Self { vfs }
+    pub fn new(vfs: Vfs, run_id: RunId) -> Self {
+        Self { vfs, run_id }
     }
 }
 #[async_trait::async_trait]
@@ -172,25 +173,120 @@ impl Filesystem for DefaultFilesystem {
     ) -> Result<(), FilesystemError> {
         default_copy(&self.vfs, from, to, recursive, budget).map_err(FilesystemError::Execution)
     }
+    async fn next_reader(
+        &self,
+        _: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+        reader: &mut FileReader,
+        limits: &super::limits::TenantLimits,
+    ) -> Result<ReadOutput, FilesystemError> {
+        let native = reader.local.as_mut().ok_or(FilesystemError::Unsupported(
+            "default reader is not available in this process",
+        ))?;
+        let Some(file) = &mut native.file else {
+            return empty_read(limits);
+        };
+        read_item(
+            file,
+            &reader.options,
+            &mut native.position,
+            work.as_deref(),
+            limits,
+        )
+    }
+    async fn close_reader(
+        &self,
+        _: &EffectId,
+        _: Option<Arc<WorkBudget>>,
+        reader: &mut FileReader,
+    ) -> Result<(), FilesystemError> {
+        let native = reader.local.as_mut().ok_or(FilesystemError::Unsupported(
+            "default reader is not available in this process",
+        ))?;
+        native.file = None;
+        native.held = None;
+        native.position.closed = true;
+        Ok(())
+    }
+    async fn next_directory(
+        &self,
+        _: &EffectId,
+        _: Option<Arc<WorkBudget>>,
+        directory: &mut DirectoryReader,
+        _: &super::limits::TenantLimits,
+    ) -> Result<Option<DirectoryEntry>, FilesystemError> {
+        let native = directory
+            .local
+            .as_mut()
+            .ok_or(FilesystemError::Unsupported(
+                "default listing is not available in this process",
+            ))?;
+        Ok(native.entries.as_mut().and_then(Iterator::next))
+    }
+    async fn close_directory(
+        &self,
+        _: &EffectId,
+        _: Option<Arc<WorkBudget>>,
+        directory: &mut DirectoryReader,
+        _: &super::limits::TenantLimits,
+    ) -> Result<(), FilesystemError> {
+        let native = directory
+            .local
+            .as_mut()
+            .ok_or(FilesystemError::Unsupported(
+                "default listing is not available in this process",
+            ))?;
+        native.entries = None;
+        Ok(())
+    }
+    async fn write_chunk(
+        &self,
+        _: &EffectId,
+        _: Option<Arc<WorkBudget>>,
+        writer: &mut FileWriter,
+        bytes: Vec<u8>,
+    ) -> Result<(), FilesystemError> {
+        let native = writer.local.as_mut().ok_or(FilesystemError::Unsupported(
+            "default writer is not available in this process",
+        ))?;
+        native.write_bytes(&bytes).map_err(Into::into)
+    }
+    async fn close_writer(
+        &self,
+        _: &EffectId,
+        _: Option<Arc<WorkBudget>>,
+        writer: &mut FileWriter,
+    ) -> Result<(), FilesystemError> {
+        let native = writer.local.as_mut().ok_or(FilesystemError::Unsupported(
+            "default writer is not available in this process",
+        ))?;
+        let result = native.close().map_err(Into::into);
+        writer.closed = native.open.is_none();
+        result
+    }
     async fn open_reader(
         &self,
         _effect_id: &EffectId,
         _work: Option<Arc<WorkBudget>>,
         path: &str,
         options: ReaderOptions,
-    ) -> Result<Box<dyn FileReader>, FilesystemError> {
+    ) -> Result<FileReader, FilesystemError> {
         let path = fs::resolve_content(&self.vfs, self.vfs.cwd(), path)?;
         let file = path.open()?;
         let held = path.placement().quota().and_then(|quota| {
             let metadata = file.metadata().ok()?;
             Some(quota.hold(fs::FileIdentity::of(&metadata).ok()?, super::Holder::Reader))
         });
-        Ok(Box::new(DefaultReader {
-            file: Some(file.into_std()),
+        Ok(FileReader {
+            run_id: self.run_id.clone(),
+            id: _effect_id.clone(),
             options,
-            position: ReadPosition::default(),
-            _held: held,
-        }))
+            local: Some(ReaderHandle {
+                file: Some(file.into_std()),
+                position: ReadPosition::default(),
+                held,
+            }),
+        })
     }
     async fn open_directory(
         &self,
@@ -199,7 +295,7 @@ impl Filesystem for DefaultFilesystem {
         path: &str,
         recursive: bool,
         _: &super::limits::TenantLimits,
-    ) -> Result<Box<dyn DirectoryReader>, FilesystemError> {
+    ) -> Result<DirectoryReader, FilesystemError> {
         let resolved = fs::resolve_content(&self.vfs, self.vfs.cwd(), path)?;
         if !resolved.metadata()?.is_dir() {
             return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory).into());
@@ -216,15 +312,21 @@ impl Filesystem for DefaultFilesystem {
         } else {
             format!("{}/", normalized.trim_start_matches('/'))
         };
-        let walk = ContainedWalk::new(base, prefix, recursive, mounts)?;
-        Ok(Box::new(DefaultDirectory(Some(walk))))
+        let mut walk = ContainedWalk::new(base, prefix, recursive, mounts)?;
+        Ok(DirectoryReader {
+            run_id: self.run_id.clone(),
+            id: _effect_id.clone(),
+            local: Some(DirectoryHandle {
+                entries: Some(Box::new(std::iter::from_fn(move || walk.next_entry()))),
+            }),
+        })
     }
     async fn open_writer(
         &self,
         _effect_id: &EffectId,
         _work: Option<Arc<WorkBudget>>,
         path: &str,
-    ) -> Result<Box<dyn FileWriter>, FilesystemError> {
+    ) -> Result<FileWriter, FilesystemError> {
         let path = fs::resolve_content(&self.vfs, self.vfs.cwd(), path)?;
         path.writable()?;
         if path.is_root() {
@@ -236,49 +338,12 @@ impl Filesystem for DefaultFilesystem {
         let file = temp_path.create_new()?;
         let temp = TempFile::created(temp_path, &file)?;
         let quota = path.placement().quota().cloned();
-        Ok(Box::new(DefaultWriter::new(
-            file.into_std(),
-            temp,
-            path,
-            quota,
-        )))
-    }
-}
-
-struct DefaultReader {
-    file: Option<std::fs::File>,
-    options: ReaderOptions,
-    position: ReadPosition,
-    _held: Option<super::OpenFileGuard>,
-}
-#[async_trait::async_trait]
-impl FileReader for DefaultReader {
-    async fn next(
-        &mut self,
-        _effect_id: &EffectId,
-        work: Option<Arc<WorkBudget>>,
-        limits: &super::limits::TenantLimits,
-    ) -> Result<ReadOutput, FilesystemError> {
-        let Some(file) = &mut self.file else {
-            return empty_read(limits);
-        };
-        read_item(
-            file,
-            &self.options,
-            &mut self.position,
-            work.as_deref(),
-            limits,
-        )
-    }
-    async fn close(
-        &mut self,
-        _effect_id: &EffectId,
-        _work: Option<Arc<WorkBudget>>,
-    ) -> Result<(), FilesystemError> {
-        self.file = None;
-        self._held = None;
-        self.position.closed = true;
-        Ok(())
+        Ok(FileWriter {
+            run_id: self.run_id.clone(),
+            id: _effect_id.clone(),
+            closed: false,
+            local: Some(WriterHandle::new(file.into_std(), temp, path, quota)),
+        })
     }
 }
 
@@ -311,7 +376,7 @@ pub fn read_item(
 fn empty_read(limits: &super::limits::TenantLimits) -> Result<ReadOutput, FilesystemError> {
     Ok(ReadOutput {
         item: None,
-        _charge: memory(limits, 0)?,
+        _charge: Some(memory(limits, 0)?),
     })
 }
 fn memory(
@@ -370,7 +435,7 @@ fn read_chunk(
     bytes.truncate(filled);
     Ok(ReadOutput {
         item: (filled > 0).then_some(ReadItem::Bytes(bytes)),
-        _charge: charge,
+        _charge: Some(charge),
     })
 }
 fn read_line(
@@ -460,33 +525,8 @@ fn read_line(
     }
     Ok(ReadOutput {
         item: Some(ReadItem::Line(text)),
-        _charge: output_charge,
+        _charge: Some(output_charge),
     })
-}
-
-struct DefaultDirectory(Option<ContainedWalk>);
-#[async_trait::async_trait]
-impl DirectoryReader for DefaultDirectory {
-    async fn next_entry(
-        &mut self,
-        _effect_id: &EffectId,
-        _work: Option<Arc<WorkBudget>>,
-        _: &super::limits::TenantLimits,
-    ) -> Result<Option<DirectoryEntry>, FilesystemError> {
-        Ok(self.0.as_mut().and_then(ContainedWalk::next_entry))
-    }
-    fn retained_bytes(&self) -> u64 {
-        8192
-    }
-    async fn close(
-        &mut self,
-        _effect_id: &EffectId,
-        _work: Option<Arc<WorkBudget>>,
-        _: &super::limits::TenantLimits,
-    ) -> Result<(), FilesystemError> {
-        self.0 = None;
-        Ok(())
-    }
 }
 
 /// Concurrently open directory handles per walk. A deep tree times the number of list
@@ -734,29 +774,6 @@ pub fn kind_of(ft: &cap_std::fs::FileType) -> &'static str {
     }
 }
 
-/// Buffered writer to a temp sibling file. Explicit [`close`](Self::close) fsyncs and
-/// atomically renames it onto `final_path`; `Drop` (the safety net for an un-`close`d
-/// writer) discards the temp file without renaming, removing it only while its name
-/// still refers to the writer's file.
-struct DefaultWriter {
-    /// `None` once the writer is closed.
-    open: Option<OpenWrite>,
-    /// Both sides stay contained paths for the whole lifetime of the writer. The commit
-    /// happens through the same handle the open resolved against, so a link swapped over
-    /// the parent between `writer()` and `close()` cannot redirect it — and the drop path
-    /// cannot unlink something under the server's working directory.
-    temp: TempFile,
-    final_path: ContentPath,
-}
-
-/// The temp file a writer streams into. The program can reach it by name while the
-/// writer is open, so before committing or discarding it, the writer checks that the
-/// name still refers to the file it created.
-struct TempFile {
-    path: ContentPath,
-    identity: FileIdentity,
-}
-
 impl TempFile {
     /// The temp file just created at `path` and opened as `file`.
     pub fn created(path: ContentPath, file: &cap_std::fs::File) -> std::io::Result<Self> {
@@ -771,18 +788,7 @@ impl TempFile {
     }
 }
 
-/// An open writer's buffer and its claim on the VFS's size limit. Program code runs
-/// between writes, so the claim replaces nothing up front: every byte written counts
-/// until `close` covers the file it replaces.
-struct OpenWrite {
-    writer: BufWriter<File>,
-    disk_charge: QuotaCharge,
-    /// Registers the temp file as the writer's own, so a removal of it by name
-    /// leaves its bytes for the writer to settle.
-    held: Option<OpenFileGuard>,
-}
-
-/// Why a write through a [`DefaultWriter`] failed.
+/// Why a write through a [`WriterHandle`] failed.
 #[derive(Debug)]
 enum WriteError {
     Io(std::io::Error),
@@ -800,8 +806,8 @@ impl std::fmt::Display for WriteError {
     }
 }
 
-impl DefaultWriter {
-    pub fn new(
+impl WriterHandle {
+    fn new(
         file: File,
         temp: TempFile,
         final_path: ContentPath,
@@ -821,7 +827,7 @@ impl DefaultWriter {
         }
     }
 
-    pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<(), WriteError> {
+    fn write_bytes(&mut self, bytes: &[u8]) -> Result<(), WriteError> {
         let open = self.reserve(bytes.len() as u64)?;
         open.writer.write_all(bytes).map_err(WriteError::Io)
     }
@@ -837,7 +843,7 @@ impl DefaultWriter {
 
     /// Flush, fsync, and atomically rename temp→final. Idempotent: a second call after a
     /// successful close is a no-op.
-    pub fn close(&mut self) -> Result<(), WriteError> {
+    fn close(&mut self) -> Result<(), WriteError> {
         let Some(open) = self.open.take() else {
             return Ok(());
         };
@@ -845,7 +851,7 @@ impl DefaultWriter {
     }
 }
 
-impl Drop for DefaultWriter {
+impl Drop for WriterHandle {
     fn drop(&mut self) {
         if let Some(open) = self.open.take() {
             // Discard the temp file rather than rename it: a GC-timed rename would be
@@ -937,27 +943,6 @@ fn rename_into_place(
     temp.path.rename_to(final_path).map_err(WriteError::Contain)
 }
 
-#[async_trait::async_trait]
-impl FileWriter for DefaultWriter {
-    fn is_closed(&self) -> bool {
-        self.open.is_none()
-    }
-    async fn write(
-        &mut self,
-        _effect_id: &EffectId,
-        _work: Option<Arc<WorkBudget>>,
-        bytes: Vec<u8>,
-    ) -> Result<(), FilesystemError> {
-        self.write_bytes(&bytes).map_err(Into::into)
-    }
-    async fn close(
-        &mut self,
-        _effect_id: &EffectId,
-        _work: Option<Arc<WorkBudget>>,
-    ) -> Result<(), FilesystemError> {
-        DefaultWriter::close(self).map_err(Into::into)
-    }
-}
 impl From<WriteError> for FilesystemError {
     fn from(error: WriteError) -> Self {
         match error {
@@ -1444,6 +1429,80 @@ fn copy_entry(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn resource_serialization_keeps_identity_without_local_handles() {
+        use super::*;
+        use crate::runtime::limits::TenantLimits;
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("input"), b"abc").unwrap();
+        let data = crate::runtime::StoreData::with_vfs(
+            "run".into(),
+            Vfs::external(root.path().to_owned()).unwrap(),
+        );
+        let filesystem = data.filesystem;
+        let limits = TenantLimits::new(1 << 20);
+        let mut reader = filesystem
+            .open_reader(
+                &"open-reader".into(),
+                None,
+                "/input",
+                ReaderOptions::Bytes { chunk_size: 3 },
+            )
+            .await
+            .unwrap();
+        let mut writer = filesystem
+            .open_writer(&"open-writer".into(), None, "/output")
+            .await
+            .unwrap();
+        let mut directory = filesystem
+            .open_directory(&"open-directory".into(), None, "/", false, &limits)
+            .await
+            .unwrap();
+
+        // Encoding live resources neither includes nor closes their OS handles.
+        let encoded_reader = serde_json::to_value(&reader).unwrap();
+        let encoded_writer = serde_json::to_value(&writer).unwrap();
+        let encoded_directory = serde_json::to_value(&directory).unwrap();
+        for encoded in [&encoded_reader, &encoded_writer, &encoded_directory] {
+            assert_eq!(encoded["run_id"], "run");
+            assert!(encoded.get("local").is_none());
+        }
+        let restored_reader: FileReader = serde_json::from_value(encoded_reader).unwrap();
+        let restored_writer: FileWriter = serde_json::from_value(encoded_writer).unwrap();
+        let restored_directory: DirectoryReader =
+            serde_json::from_value(encoded_directory).unwrap();
+        assert!(restored_reader.local.is_none());
+        assert!(restored_writer.local.is_none());
+        assert!(restored_directory.local.is_none());
+        assert_eq!(restored_reader.id, reader.id);
+        assert_eq!(restored_writer.id, writer.id);
+        assert_eq!(restored_directory.id, directory.id);
+        drop((restored_reader, restored_writer, restored_directory));
+
+        let output = filesystem
+            .next_reader(&"read".into(), None, &mut reader, &limits)
+            .await
+            .unwrap();
+        assert!(matches!(output.item, Some(ReadItem::Bytes(bytes)) if bytes == b"abc"));
+        assert!(
+            filesystem
+                .next_directory(&"next".into(), None, &mut directory, &limits)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        filesystem
+            .write_chunk(&"write".into(), None, &mut writer, b"saved".to_vec())
+            .await
+            .unwrap();
+        filesystem
+            .close_writer(&"close".into(), None, &mut writer)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(root.path().join("output")).unwrap(), b"saved");
+    }
+
     #[test]
     fn logical_lines_bound_memory_and_restore_without_buffered_read_ahead() {
         use super::*;

@@ -72,7 +72,6 @@ fn reg_plain_month_day_with(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainMonthDay", "with"),
         ty,
-        true,
         |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainMonthDay.with")?;
             let m = clamp_month(
@@ -100,7 +99,6 @@ fn reg_plain_month_day_to_plain_date(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainMonthDay", "toPlainDate"),
         ty,
-        true,
         |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainMonthDay.toPlainDate")?;
             let month = clamp_month(i64::from(st_i32(

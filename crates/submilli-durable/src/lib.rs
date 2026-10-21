@@ -1,6 +1,7 @@
 //! Filesystem operations that can safely be called again with the same effect ID.
 //!
-//! The caller owns execution history and decides which call to retry. This crate
+//! [`history::History`] records ordered native outcomes and decides which calls
+//! to retry. The filesystem journal stays independent: this crate
 //! remembers enough about filesystem work to recognize completed calls and finish
 //! interrupted calls without applying their mutation twice. Opening a filesystem
 //! does not scan for unfinished work or resume a run.
@@ -8,7 +9,7 @@
 //! Start with [`DurableFilesystem`] for shared mounts, journal access, and local
 //! coordination. Its `operation(work)` method creates a
 //! [`filesystem::FilesystemOperation`] for one call's fuel budget. Read
-//! `filesystem/write_bytes.rs` to follow one state machine. Other operation
+//! `filesystem/append_bytes.rs` to follow a saved-offset state machine. Other operation
 //! files sit beside it, with their state types and encoders/decoders. `readers.rs`
 //! and `writers.rs` adapt resource handles and share native resource access.
 //!
@@ -22,13 +23,14 @@
 //! the journal stores their fingerprints, not a second copy of the inputs.
 pub mod codec;
 pub mod filesystem;
+pub mod history;
 mod io;
 mod readers;
 pub mod unit_of_work;
 mod writers;
 pub use filesystem::{DurableFilesystem, FilesystemError};
 pub use io::RecoveryError;
-pub use readers::{DirectoryEntry, FilesystemReader, ReaderPosition};
+pub use readers::{DirectoryEntry, ReaderPosition};
 pub use unit_of_work::{UnitFactory, UnitOfWork};
 #[cfg(feature = "test-support")]
 static CHECKPOINT: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();

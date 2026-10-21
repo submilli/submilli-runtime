@@ -253,8 +253,9 @@ impl UnitOfWork for SqliteUnitOfWork {
 
     async fn get_run(&mut self, id: &str) -> Result<Option<crate::domain::run::Run>, StoreError> {
         let id = id.to_owned();
+        let sealer = self.sealer.clone();
         self.query(move |connection| {
-            Box::pin(async move { crate::adapters::run::get_run(connection, &id).await })
+            Box::pin(async move { crate::adapters::run::get_run(connection, &sealer, &id).await })
         })
         .await
     }
@@ -265,29 +266,41 @@ impl UnitOfWork for SqliteUnitOfWork {
     ) -> Result<Option<crate::domain::run::Run>, StoreError> {
         let session_id = session_id.to_owned();
         let key = key.to_owned();
+        let sealer = self.sealer.clone();
         self.query(move |connection| {
-            Box::pin(async move { crate::adapters::run::get(connection, &session_id, &key).await })
+            Box::pin(async move {
+                crate::adapters::run::get(connection, &sealer, &session_id, &key).await
+            })
         })
         .await
     }
     async fn save_run(&mut self, request: crate::domain::run::Run) -> Result<(), StoreError> {
-        self.query(move |connection| Box::pin(crate::adapters::run::save(connection, request)))
-            .await
+        let sealer = self.sealer.clone();
+        self.query(move |connection| {
+            Box::pin(async move { crate::adapters::run::save(connection, &sealer, request).await })
+        })
+        .await
     }
     async fn active_session_runs(
         &mut self,
         session_id: &str,
     ) -> Result<Vec<crate::domain::run::Run>, StoreError> {
         let id = session_id.to_owned();
+        let sealer = self.sealer.clone();
         self.query(move |connection| {
-            Box::pin(async move { crate::adapters::run::active_for_session(connection, &id).await })
+            Box::pin(async move {
+                crate::adapters::run::active_for_session(connection, &sealer, &id).await
+            })
         })
         .await
     }
 
     async fn unfinished_runs(&mut self) -> Result<Vec<crate::domain::run::Run>, StoreError> {
-        self.query(|connection| Box::pin(crate::adapters::run::unfinished(connection)))
-            .await
+        let sealer = self.sealer.clone();
+        self.query(move |connection| {
+            Box::pin(async move { crate::adapters::run::unfinished(connection, &sealer).await })
+        })
+        .await
     }
     async fn sessions_with_responses_to_expire(
         &mut self,

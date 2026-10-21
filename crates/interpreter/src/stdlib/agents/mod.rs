@@ -15,6 +15,7 @@
 
 pub mod declaration;
 
+use crate::runtime::effects;
 use std::sync::Arc;
 
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
@@ -27,7 +28,7 @@ use crate::runtime::call_log::{ModelUsage, Payload, Side, record_payload, record
 use crate::runtime::decision::CallTicket;
 use crate::runtime::fuel;
 use crate::runtime::host::{
-    abi_arg, abi_result, read_string_arg, register_host_fn_async, write_submilli_string_struct,
+    abi_arg, read_string_arg, register_host_value_async, write_submilli_string_struct,
 };
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::stdlib::abi::{
@@ -65,7 +66,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.array.clone()),
     ));
 
-    register_host_fn_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "run"),
@@ -75,33 +76,24 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             // `run` is generic, so its result travels in the erased `T` slot.
             [nullable_object.clone()],
         ),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let agent =
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "agents.run (agent)")?;
                 let input =
                     read_string_arg(&mut *caller, abi_arg(params, 1)?, "agents.run (input)")?;
                 let schema = read_optional_string(caller, abi_arg(params, 2)?)?;
-                let result = abi_result(results, 0)?;
-                *result = run(caller, agent, input, schema).await?;
-                Ok(())
+                run(caller, agent, input, schema).await
             })
         },
     )?;
 
-    register_host_fn_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "list"),
         FuncType::new(&engine, [], [array]),
-        /* deterministic = */ false,
-        |caller, _params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = list(caller).await?;
-                Ok(())
-            })
-        },
+        |caller, _params| Box::pin(async move { list(caller).await }),
     )?;
 
     let receiver = ValType::Ref(RefType::new(
@@ -130,10 +122,8 @@ async fn run(
     schema: Option<String>,
 ) -> wasmtime::Result<Val> {
     let ticket = gate(caller, &agent)?;
-    let provider = provider(caller).map_err(|error| fail(caller, ticket, "run", &error))?;
     let principal = running_package(caller).map_err(|error| error.into_denial(CAPABILITY))?;
     let sent = (input.len() + schema.as_deref().map_or(0, str::len)) as u64;
-    fuel::charge(&mut *caller, fuel::IO, sent)?;
     record_payload(&*caller, ticket, Side::Request, || {
         Payload::meta(serde_json::json!({ "op": "run", "agent": agent, "schema": schema }))
             .with_owned_body(input.clone().into_bytes())
@@ -146,27 +136,32 @@ async fn run(
         schema,
         caller: principal,
     };
-    match provider.run(request).await {
-        Ok(outcome) => {
+    let outcome = effects::execute(caller, "agents.run", request, move |caller, _, request| {
+        Box::pin(async move {
+            fuel::charge(&mut *caller, fuel::IO, sent)?;
+            let provider = provider(caller).map_err(|error| fail(caller, ticket, "run", &error))?;
+            let outcome = provider
+                .run(request)
+                .await
+                .map_err(|error| fail(caller, ticket, "run", &error))?;
             record_outcome(caller, ticket, &outcome);
             fuel::settle(&mut *caller, fuel::IO, outcome.text.len() as u64)?;
-            fuel::settle_result(caller, |caller| {
-                if typed {
-                    crate::runtime::json::parse_json_as_unknown(
-                        caller,
-                        &outcome.text,
-                        &format!(
-                            "agents.run(\"{}\"): the agent's result is not JSON",
-                            truncated(&agent)
-                        ),
-                    )
-                } else {
-                    let text = write_submilli_string_struct(caller, &outcome.text)?;
-                    Ok(Val::AnyRef(Some(text.to_anyref())))
-                }
-            })
-        }
-        Err(error) => Err(fail(caller, ticket, "run", &error)),
+            Ok(outcome)
+        })
+    })
+    .await?;
+    if typed {
+        crate::runtime::json::parse_json_as_unknown(
+            caller,
+            &outcome.text,
+            &format!(
+                "agents.run(\"{}\"): the agent's result is not JSON",
+                truncated(&agent)
+            ),
+        )
+    } else {
+        let text = write_submilli_string_struct(caller, &outcome.text)?;
+        Ok(Val::AnyRef(Some(text.to_anyref())))
     }
 }
 
@@ -224,8 +219,16 @@ fn gate(
 /// hidden here: a listing has no candidate to gate before asking it.
 async fn list(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     preflight_listing(caller, CAPABILITY, &serde_json::json!({ "agent": "" }))?;
-    let provider = provider(caller).map_err(|error| throw("list", &error))?;
-    let candidates = provider.agents().await.map_err(|e| throw("list", &e))?;
+    let candidates = effects::execute(caller, "agents.list", (), |caller, _, ()| {
+        Box::pin(async move {
+            provider(caller)
+                .map_err(|error| throw("list", &error))?
+                .agents()
+                .await
+                .map_err(|e| throw("list", &e))
+        })
+    })
+    .await?;
     let visible = permitted_candidates(
         caller,
         candidates,

@@ -26,7 +26,7 @@ fn cap_run_with_host_bytes(
     // One engine may serve tenants with smaller caps than its own defaults.
     let cfg = RuntimeConfig::default();
     let engine = cfg.engine()?;
-    let data = StoreData::with_vfs_and_cap(Vfs::tempdir()?, max_store_bytes);
+    let data = StoreData::with_vfs_and_cap("test-run".into(), Vfs::tempdir()?, max_store_bytes);
     let mut store = cfg.store(&engine, data)?;
     install_tenant_limits(&mut store);
     let module = Module::new(&engine, &compiled.wasm)?;
@@ -238,7 +238,7 @@ function main(): void {
     let compiled =
         compile_script(src, "test.subm", submilli_engine::FileId(0), &[], &[]).expect("compile");
     let engine = cfg.engine().expect("engine");
-    let data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+    let data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
     let mut store = cfg.store(&engine, data).expect("store");
     install_tenant_limits(&mut store);
     let module = Module::new(&engine, &compiled.wasm).expect("module");
@@ -284,7 +284,8 @@ fn small_tenant_can_run_within_its_cap() {
 fn gc_reservation_counts_toward_host_allocations() {
     let cfg = RuntimeConfig::default();
     let engine = cfg.engine().expect("engine");
-    let data = StoreData::with_vfs_and_cap(Vfs::tempdir().expect("vfs"), 128 * 1024);
+    let data =
+        StoreData::with_vfs_and_cap("test-run".into(), Vfs::tempdir().expect("vfs"), 128 * 1024);
     let mut store = cfg.store(&engine, data).expect("store");
     install_tenant_limits(&mut store);
     let mut linker = Linker::<StoreData>::new(&engine);
@@ -392,7 +393,7 @@ function main(): void {
     let engine = cfg.engine().expect("engine");
     let tmp = tempfile::tempdir().expect("tempdir");
     let vfs = Vfs::external(tmp.path().to_path_buf()).expect("external vfs");
-    let mut data = StoreData::with_vfs_and_cap(vfs, CAP_BYTES);
+    let mut data = StoreData::with_vfs_and_cap("test-run".into(), vfs, CAP_BYTES);
     data.http_client = Arc::new(StreamingByteClient {
         body_size: BODY_BYTES,
     });
@@ -531,7 +532,7 @@ function main(): void {
     let cfg = RuntimeConfig::default();
     let engine = cfg.engine().expect("engine");
     let vfs = Vfs::tempdir().expect("tempdir").with_size_limit(LIMIT);
-    let mut data = StoreData::with_vfs(vfs);
+    let mut data = StoreData::with_vfs("test-run".into(), vfs);
     data.http_client = Arc::new(StreamingByteClient {
         body_size: 4 * 1024 * 1024,
     });
@@ -573,7 +574,7 @@ function main(): void {
     let vfs = Vfs::external(dir.path().to_path_buf())
         .expect("external")
         .with_size_limit(LIMIT);
-    let mut data = StoreData::with_vfs(vfs);
+    let mut data = StoreData::with_vfs("test-run".into(), vfs);
     data.http_client = Arc::new(StreamingByteClient {
         body_size: 400 * 1024,
     });

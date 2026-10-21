@@ -10,7 +10,8 @@
 //! The quota registry at the end shares counters across reopened VFS values.
 use cap_std::fs::Dir;
 use interpreter::runtime::Vfs;
-use interpreter::runtime::durable::{EffectId, RunId};
+use interpreter::runtime::durable::EffectId;
+use interpreter::runtime::durable::RunId;
 use interpreter::runtime::fs::{ContainError, FileIdentity};
 use std::collections::BTreeMap;
 use std::io;

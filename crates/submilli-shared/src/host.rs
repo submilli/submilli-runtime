@@ -8,8 +8,11 @@
 
 use std::sync::Arc;
 
+use crate::secret_store::SecretCipher;
 use async_trait::async_trait;
+use base64::Engine as _;
 use interpreter::runtime::{AuthProxy, AuthProxyError, HttpRequest, SecretProvider};
+use interpreter::runtime::{EncryptedSecret, SecretKeyId};
 use interpreter::stdlib::http::HttpTransportPolicy;
 use url::Url;
 
@@ -116,11 +119,19 @@ impl SecretResolver for BlueprintSecretResolver {
 
 /// Blueprint-backed provider for script-visible `submilli:secrets.get`.
 pub struct BlueprintSecretProvider {
+    cipher: Option<Arc<SecretCipher>>,
     blueprint: Arc<Blueprint>,
     resolver: BlueprintSecretResolver,
 }
 
 impl BlueprintSecretProvider {
+    /// Supply the persistent key used for recorded secret envelopes. Direct
+    /// lookups do not need it. Future keyrings can resolve older envelope IDs.
+    pub fn with_cipher(mut self, cipher: Option<Arc<SecretCipher>>) -> Self {
+        self.cipher = cipher;
+        self
+    }
+
     pub fn new(blueprint: Arc<Blueprint>, store: Option<Arc<dyn SecretStore>>) -> Self {
         Self::with_harness(blueprint, store, Arc::new(HarnessSecretBindings::new()))
     }
@@ -131,6 +142,7 @@ impl BlueprintSecretProvider {
         harness: Arc<HarnessSecretBindings>,
     ) -> Self {
         Self {
+            cipher: None,
             blueprint,
             resolver: BlueprintSecretResolver::with_harness(store, harness),
         }
@@ -155,6 +167,56 @@ impl SecretProvider for BlueprintSecretProvider {
             }
         })
     }
+
+    fn get_encrypted<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Option<EncryptedSecret>, String>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let cipher = self
+                .cipher
+                .as_ref()
+                .ok_or("configure the secret-store encryption key before recording secrets")?;
+            let Some(value) = self
+                .get(name)
+                .await
+                .map_err(|_| "cannot resolve secret for encrypted retrieval")?
+            else {
+                return Ok(None);
+            };
+            let ciphertext = cipher
+                .seal(value.as_bytes(), &secret_owner(name))
+                .map_err(|_| "cannot encrypt secret")?;
+            Ok(Some(EncryptedSecret {
+                key_id: secret_key_id(cipher),
+                ciphertext,
+            }))
+        })
+    }
+
+    fn decrypt(&self, name: &str, secret: &EncryptedSecret) -> Result<String, String> {
+        let cipher = self
+            .cipher
+            .as_ref()
+            .ok_or("configure the secret-store encryption key to decrypt recorded secrets")?;
+        if secret.key_id != secret_key_id(cipher) {
+            return Err("recorded secret requires a different encryption key; restore the key identified by its key_id".into());
+        }
+        let plaintext = cipher
+            .open(&secret.ciphertext, &secret_owner(name))
+            .map_err(|_| "cannot decrypt recorded secret")?;
+        String::from_utf8(plaintext).map_err(|_| "decrypted secret is not UTF-8".into())
+    }
+}
+
+fn secret_key_id(cipher: &SecretCipher) -> SecretKeyId {
+    SecretKeyId(base64::engine::general_purpose::STANDARD.encode(cipher.key_id()))
+}
+
+fn secret_owner(name: &str) -> Vec<u8> {
+    format!("secret-effect:v1:{name}").into_bytes()
 }
 
 // ---- AuthProxy -----------------------------------------------------------
@@ -480,6 +542,53 @@ mod tests {
         );
         assert_eq!(first.get("K").await.unwrap().as_deref(), Some("first"));
         assert_eq!(second.get("K").await.unwrap().as_deref(), Some("second"));
+    }
+
+    #[tokio::test]
+    async fn secret_envelopes_bind_the_name_and_key_and_reject_tampering() {
+        let blueprint = Arc::new(parse("name: x\nsecrets:\n  TOKEN: { harness: {} }\n").unwrap());
+        let cipher = Arc::new(SecretCipher::from_key([4; 32]));
+        let provider = BlueprintSecretProvider::with_harness(
+            blueprint.clone(),
+            None,
+            Arc::new(BTreeMap::from([(
+                "TOKEN".into(),
+                "credential-canary".into(),
+            )])),
+        )
+        .with_cipher(Some(cipher.clone()));
+        let encrypted = provider.get_encrypted("TOKEN").await.unwrap().unwrap();
+        assert_eq!(encrypted.key_id, secret_key_id(&cipher));
+        assert!(
+            !encrypted
+                .ciphertext
+                .windows(b"credential-canary".len())
+                .any(|bytes| bytes == b"credential-canary")
+        );
+        assert_eq!(
+            provider.decrypt("TOKEN", &encrypted).unwrap(),
+            "credential-canary"
+        );
+        assert!(provider.decrypt("OTHER", &encrypted).is_err());
+        let mut tampered = encrypted.clone();
+        *tampered.ciphertext.last_mut().unwrap() ^= 1;
+        assert!(provider.decrypt("TOKEN", &tampered).is_err());
+        assert!(provider.get_encrypted("ABSENT").await.unwrap().is_none());
+
+        let rotated = BlueprintSecretProvider::new(blueprint.clone(), None)
+            .with_cipher(Some(Arc::new(SecretCipher::from_key([5; 32]))));
+        assert!(
+            rotated
+                .decrypt("TOKEN", &encrypted)
+                .unwrap_err()
+                .contains("different encryption key")
+        );
+        let mut wrong_id = encrypted.clone();
+        wrong_id.key_id = SecretKeyId("unknown".into());
+        assert!(provider.decrypt("TOKEN", &wrong_id).is_err());
+        let unconfigured = BlueprintSecretProvider::new(blueprint, None);
+        assert!(unconfigured.get_encrypted("TOKEN").await.is_err());
+        assert!(unconfigured.decrypt("TOKEN", &encrypted).is_err());
     }
 
     #[tokio::test]

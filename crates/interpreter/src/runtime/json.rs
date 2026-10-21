@@ -45,7 +45,6 @@ pub(super) fn install_json_module(
         JSON_MODULE_NAME,
         crate::mangle::host(JSON_MODULE_NAME, "parse"),
         ty,
-        /* deterministic = */ true,
         move |caller, params, results| -> wasmtime::Result<()> {
             let raw = match *abi_arg(params, 0)? {
                 Val::AnyRef(Some(raw)) => raw.unwrap_array(&mut *caller)?,
@@ -81,7 +80,6 @@ pub(super) fn install_json_module(
         JSON_MODULE_NAME,
         crate::mangle::host(JSON_MODULE_NAME, "stringify"),
         escape_ty,
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let raw = match *abi_arg(params, 0)? {
                 Val::AnyRef(Some(raw)) => raw.unwrap_array(&mut *caller)?,
@@ -112,7 +110,6 @@ pub(super) fn install_json_module(
         JSON_MODULE_NAME,
         crate::mangle::host(JSON_MODULE_NAME, "stringifyPrettyNumber"),
         pretty_number_ty,
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let spaces = match *abi_arg(params, 1)? {
                 Val::F64(bits) => stringify_space_from_number(f64::from_bits(bits)),
@@ -147,7 +144,6 @@ pub(super) fn install_json_module(
         JSON_MODULE_NAME,
         crate::mangle::host(JSON_MODULE_NAME, "stringifyPrettyString"),
         pretty_string_ty,
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let raw_indent = match *abi_arg(params, 1)? {
                 Val::AnyRef(Some(raw)) => raw.unwrap_array(&mut *caller)?,
@@ -177,7 +173,6 @@ pub(super) fn install_json_module(
         JSON_MODULE_NAME,
         crate::mangle::host(JSON_MODULE_NAME, "stringifyTypedObject"),
         stringify_typed_object_ty,
-        /* deterministic = */ true,
         |mut caller, params, results| {
             Box::pin(async move {
                 let package =

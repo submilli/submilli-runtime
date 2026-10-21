@@ -109,7 +109,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "label"),
         FuncType::new(&engine, [string.clone()], []),
-        /* deterministic = */ true,
         |caller, params, _results| {
             let description = read_string_arg(
                 &mut *caller,
@@ -140,7 +139,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "expectException"),
         FuncType::new(&engine, [closure_param, string], [error_result]),
-        /* deterministic = */ true,
         |caller, params, results| {
             Box::pin(async move {
                 let expected = read_string_arg(
@@ -232,7 +230,7 @@ mod tests {
         let mut store = cfg
             .store_async(
                 &engine,
-                StoreData::with_vfs(Vfs::tempdir().expect("tempdir")),
+                StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir")),
             )
             .expect("store");
         let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");

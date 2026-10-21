@@ -44,7 +44,6 @@ async fn crash_child() {
     if let Some(operation) = kind.strip_prefix("quota-") {
         retry_quota_operation(&filesystem, operation).await;
     } else if kind == "reader" {
-        use interpreter::runtime::filesystem::FileReader;
         std::fs::write(filesystem.vfs().root().join("file"), b"abcdef").unwrap();
         let mut reader = filesystem
             .operation(None)
@@ -52,14 +51,15 @@ async fn crash_child() {
             .await
             .unwrap();
         let effect_id: EffectId = EFFECT.to_owned().into();
-        reader
-            .next(
-                &effect_id,
-                None,
-                &interpreter::runtime::limits::TenantLimits::new(1 << 20),
-            )
-            .await
-            .unwrap();
+        Filesystem::next_reader(
+            &filesystem,
+            &effect_id,
+            None,
+            &mut reader,
+            &interpreter::runtime::limits::TenantLimits::new(1 << 20),
+        )
+        .await
+        .unwrap();
     } else if kind == "listing" {
         use interpreter::runtime::filesystem::Filesystem;
         std::fs::write(filesystem.vfs().root().join("a"), b"a").unwrap();
@@ -76,14 +76,15 @@ async fn crash_child() {
         .await
         .unwrap();
         let effect_id: EffectId = EFFECT.to_owned().into();
-        listing
-            .next_entry(
-                &effect_id,
-                None,
-                &interpreter::runtime::limits::TenantLimits::new(64 << 20),
-            )
-            .await
-            .unwrap();
+        Filesystem::next_directory(
+            &filesystem,
+            &effect_id,
+            None,
+            &mut listing,
+            &interpreter::runtime::limits::TenantLimits::new(64 << 20),
+        )
+        .await
+        .unwrap();
     } else if std::env::var("SUBMILLI_FILESYSTEM_CRASH_KIND").as_deref() == Ok("writer") {
         filesystem
             .operation(None)
@@ -288,7 +289,7 @@ async fn writer_restart_repairs_unacknowledged_output_tail_and_close() {
 
 #[tokio::test]
 async fn resource_progress_survives_process_death_before_framework_completion() {
-    use interpreter::runtime::filesystem::{Filesystem, ResourceDescriptor, ResourceKind};
+    use interpreter::runtime::filesystem::{DirectoryReader, FileReader, Filesystem};
     for (kind, points) in [
         ("reader", ["reader-open", "reader-read", "reader-progress"]),
         (
@@ -314,60 +315,70 @@ async fn resource_progress_survives_process_death_before_framework_completion() 
             .unwrap();
             let effect_id: EffectId = EFFECT.to_owned().into();
             if kind == "reader" {
-                let descriptor = ResourceDescriptor {
-                    run_id: RUN.into(),
-                    id: RUN.into(),
-                    kind: ResourceKind::Reader(byte_options()),
-                };
-                let mut reader = Filesystem::restore_reader(&filesystem, descriptor).unwrap();
+                let descriptor = FileReader::new(RUN.into(), RUN.into(), byte_options());
+                let mut reader = descriptor;
                 let limits = interpreter::runtime::limits::TenantLimits::new(1 << 20);
                 assert_eq!(
-                    read_bytes(reader.next(&effect_id, None, &limits).await.unwrap()).unwrap(),
+                    read_bytes(
+                        Filesystem::next_reader(
+                            &filesystem,
+                            &effect_id,
+                            None,
+                            &mut reader,
+                            &limits
+                        )
+                        .await
+                        .unwrap()
+                    )
+                    .unwrap(),
                     b"abc",
                     "{point}"
                 );
                 assert_eq!(
                     read_bytes(
-                        reader
-                            .next(&resource_effect_id(), None, &limits)
-                            .await
-                            .unwrap()
+                        Filesystem::next_reader(
+                            &filesystem,
+                            &resource_effect_id(),
+                            None,
+                            &mut reader,
+                            &limits
+                        )
+                        .await
+                        .unwrap()
                     )
                     .unwrap(),
                     b"def"
                 );
             } else {
-                let descriptor = ResourceDescriptor {
-                    run_id: RUN.into(),
-                    id: RUN.into(),
-                    kind: ResourceKind::Directory,
-                };
-                let mut listing = Filesystem::restore_directory(&filesystem, descriptor).unwrap();
+                let descriptor = DirectoryReader::new(RUN.into(), RUN.into());
+                let mut listing = descriptor;
                 assert_eq!(
-                    listing
-                        .next_entry(
-                            &effect_id,
-                            None,
-                            &interpreter::runtime::limits::TenantLimits::new(64 << 20)
-                        )
-                        .await
-                        .unwrap()
-                        .unwrap()
-                        .path,
+                    Filesystem::next_directory(
+                        &filesystem,
+                        &effect_id,
+                        None,
+                        &mut listing,
+                        &interpreter::runtime::limits::TenantLimits::new(64 << 20)
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .path,
                     "/a",
                     "{point}"
                 );
                 assert_eq!(
-                    listing
-                        .next_entry(
-                            &resource_effect_id(),
-                            None,
-                            &interpreter::runtime::limits::TenantLimits::new(64 << 20)
-                        )
-                        .await
-                        .unwrap()
-                        .unwrap()
-                        .path,
+                    Filesystem::next_directory(
+                        &filesystem,
+                        &resource_effect_id(),
+                        None,
+                        &mut listing,
+                        &interpreter::runtime::limits::TenantLimits::new(64 << 20)
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .path,
                     "/b"
                 );
             }

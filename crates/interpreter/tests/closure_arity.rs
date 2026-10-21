@@ -233,7 +233,7 @@ fn run(source: &str, packages: &[CompiledPackage]) -> String {
         .expect("boundary script compiles");
     let config = RuntimeConfig::default();
     let engine = config.engine_async().unwrap();
-    let data = StoreData::with_vfs(Vfs::tempdir().unwrap());
+    let data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().unwrap());
     let mut store = config.store_async(&engine, data).unwrap();
     install_tenant_limits(&mut store);
     let mut linker = Linker::new(&engine);

@@ -1,42 +1,52 @@
-use crate::runtime::host::{abi_arg, abi_result};
+use crate::runtime::effects;
+use crate::runtime::host::{
+    abi_arg, read_string_arg, register_host_value_async, write_submilli_string_struct,
+};
 use std::collections::BTreeMap;
 
 use wasmtime::{FuncType, Linker, Val};
 
 use super::super::{DirectTypes, shared};
+use super::RecordedZoned;
 use crate::runtime::StoreData;
-use crate::runtime::host::{read_string_arg, register_host_fn, write_submilli_string_struct};
 use crate::runtime::prelude::MODULE_NAME;
 use crate::{
     DefaultValue, NamespaceSymbol, PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol,
 };
 
 pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmtime::Result<()> {
-    register_host_fn(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         shared::prelude_key("Now", "instant"),
         FuncType::new(&types.engine, [], [types.object.clone()]),
-        false,
-        |caller, _params, results| {
-            *abi_result(results, 0)? = shared::make_instant(caller, super::instant())?;
-            Ok(())
+        |caller, _params| {
+            Box::pin(async move {
+                let instant = effects::execute(caller, "Temporal.Now.instant", (), |_, _, ()| {
+                    Box::pin(async { Ok(super::instant()) })
+                })
+                .await?;
+                shared::make_instant(caller, instant)
+            })
         },
     )?;
-    register_host_fn(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         shared::prelude_key("Now", "timeZoneId"),
         FuncType::new(&types.engine, [], [types.string.clone()]),
-        false,
-        |caller, _params, results| {
-            let id = super::time_zone_id();
-            let value = write_submilli_string_struct(caller, id)?;
-            *abi_result(results, 0)? = Val::AnyRef(Some(value.to_anyref()));
-            Ok(())
+        |caller, _params| {
+            Box::pin(async move {
+                let id = effects::execute(caller, "Temporal.Now.timeZoneId", (), |_, _, ()| {
+                    Box::pin(async { Ok(super::time_zone_id().to_string()) })
+                })
+                .await?;
+                let value = write_submilli_string_struct(caller, &id)?;
+                Ok(Val::AnyRef(Some(value.to_anyref())))
+            })
         },
     )?;
-    register_host_fn(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         shared::prelude_key("Now", "zonedDateTimeISO"),
@@ -45,25 +55,38 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             [types.object.clone()],
             [types.object.clone()],
         ),
-        false,
-        |caller, params, results| {
-            let time_zone = match abi_arg(params, 0)? {
-                value if crate::runtime::prelude::undefined::is_undefined(caller, value)? => None,
-                _ => Some(read_string_arg(
+        |caller, params| {
+            Box::pin(async move {
+                let time_zone = match abi_arg(params, 0)? {
+                    value if crate::runtime::prelude::undefined::is_undefined(caller, value)? => {
+                        None
+                    }
+                    _ => Some(read_string_arg(
+                        caller,
+                        abi_arg(params, 0)?,
+                        "Temporal.Now.zonedDateTimeISO",
+                    )?),
+                };
+                let RecordedZoned((zoned, id)) = effects::execute(
                     caller,
-                    abi_arg(params, 0)?,
                     "Temporal.Now.zonedDateTimeISO",
-                )?),
-            };
-            let (zoned, id) = super::zoned_date_time_iso(caller, time_zone.as_deref())?;
-            *abi_result(results, 0)? = shared::make_zoned_date_time(caller, &zoned, &id)?;
-            Ok(())
+                    time_zone,
+                    |caller, _, time_zone| {
+                        Box::pin(async move {
+                            super::zoned_date_time_iso(caller, time_zone.as_deref())
+                                .map(RecordedZoned)
+                        })
+                    },
+                )
+                .await?;
+                shared::make_zoned_date_time(caller, &zoned, &id)
+            })
         },
     )?;
 
     // `Temporal.Now.zonedDateTime` — declared alias of `zonedDateTimeISO` (our
     // subset has no calendar argument), same body under its own dispatch key.
-    register_host_fn(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         shared::prelude_key("Now", "zonedDateTime"),
@@ -72,25 +95,38 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             [types.object.clone()],
             [types.object.clone()],
         ),
-        false,
-        |caller, params, results| {
-            let time_zone = match abi_arg(params, 0)? {
-                value if crate::runtime::prelude::undefined::is_undefined(caller, value)? => None,
-                _ => Some(read_string_arg(
+        |caller, params| {
+            Box::pin(async move {
+                let time_zone = match abi_arg(params, 0)? {
+                    value if crate::runtime::prelude::undefined::is_undefined(caller, value)? => {
+                        None
+                    }
+                    _ => Some(read_string_arg(
+                        caller,
+                        abi_arg(params, 0)?,
+                        "Temporal.Now.zonedDateTime",
+                    )?),
+                };
+                let RecordedZoned((zoned, id)) = effects::execute(
                     caller,
-                    abi_arg(params, 0)?,
                     "Temporal.Now.zonedDateTime",
-                )?),
-            };
-            let (zoned, id) = super::zoned_date_time_iso(caller, time_zone.as_deref())?;
-            *abi_result(results, 0)? = shared::make_zoned_date_time(caller, &zoned, &id)?;
-            Ok(())
+                    time_zone,
+                    |caller, _, time_zone| {
+                        Box::pin(async move {
+                            super::zoned_date_time_iso(caller, time_zone.as_deref())
+                                .map(RecordedZoned)
+                        })
+                    },
+                )
+                .await?;
+                shared::make_zoned_date_time(caller, &zoned, &id)
+            })
         },
     )?;
 
     // `Temporal.Now.plain{Date,Time,DateTime}ISO(tz?)` — the current zoned
     // moment projected onto the calendar-naive Plain types.
-    register_host_fn(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         shared::prelude_key("Now", "plainDateISO"),
@@ -99,20 +135,20 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             [types.object.clone()],
             [types.object.clone()],
         ),
-        false,
-        |caller, params, results| {
-            let z = now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainDateISO")?;
-            let d = z.date();
-            *abi_result(results, 0)? = shared::make_plain_date(
-                caller,
-                i32::from(d.year()),
-                i32::from(d.month()),
-                i32::from(d.day()),
-            )?;
-            Ok(())
+        |caller, params| {
+            Box::pin(async move {
+                let z = now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainDateISO").await?;
+                let d = z.date();
+                shared::make_plain_date(
+                    caller,
+                    i32::from(d.year()),
+                    i32::from(d.month()),
+                    i32::from(d.day()),
+                )
+            })
         },
     )?;
-    register_host_fn(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         shared::prelude_key("Now", "plainTimeISO"),
@@ -121,21 +157,21 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             [types.object.clone()],
             [types.object.clone()],
         ),
-        false,
-        |caller, params, results| {
-            let z = now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainTimeISO")?;
-            let t = z.time();
-            *abi_result(results, 0)? = shared::make_plain_time(
-                caller,
-                i32::from(t.hour()),
-                i32::from(t.minute()),
-                i32::from(t.second()),
-                t.subsec_nanosecond(),
-            )?;
-            Ok(())
+        |caller, params| {
+            Box::pin(async move {
+                let z = now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainTimeISO").await?;
+                let t = z.time();
+                shared::make_plain_time(
+                    caller,
+                    i32::from(t.hour()),
+                    i32::from(t.minute()),
+                    i32::from(t.second()),
+                    t.subsec_nanosecond(),
+                )
+            })
         },
     )?;
-    register_host_fn(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         shared::prelude_key("Now", "plainDateTimeISO"),
@@ -144,28 +180,29 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             [types.object.clone()],
             [types.object.clone()],
         ),
-        false,
-        |caller, params, results| {
-            let z = now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainDateTimeISO")?;
-            let dt = z.datetime();
-            *abi_result(results, 0)? = shared::make_plain_date_time(
-                caller,
-                i32::from(dt.year()),
-                i32::from(dt.month()),
-                i32::from(dt.day()),
-                i32::from(dt.hour()),
-                i32::from(dt.minute()),
-                i32::from(dt.second()),
-                dt.subsec_nanosecond(),
-            )?;
-            Ok(())
+        |caller, params| {
+            Box::pin(async move {
+                let z =
+                    now_zoned(caller, abi_arg(params, 0)?, "Temporal.Now.plainDateTimeISO").await?;
+                let dt = z.datetime();
+                shared::make_plain_date_time(
+                    caller,
+                    i32::from(dt.year()),
+                    i32::from(dt.month()),
+                    i32::from(dt.day()),
+                    i32::from(dt.hour()),
+                    i32::from(dt.minute()),
+                    i32::from(dt.second()),
+                    dt.subsec_nanosecond(),
+                )
+            })
         },
     )?;
     Ok(())
 }
 
 /// The current moment in the `tz` argument's zone (system zone when undefined).
-fn now_zoned(
+async fn now_zoned(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     tz: &Val,
     label: &'static str,
@@ -174,7 +211,12 @@ fn now_zoned(
         value if crate::runtime::prelude::undefined::is_undefined(caller, value)? => None,
         _ => Some(read_string_arg(caller, tz, label)?),
     };
-    let (zoned, _id) = super::zoned_date_time_iso(caller, tz.as_deref())?;
+    let RecordedZoned((zoned, _)) = effects::execute(caller, label, tz, |caller, _, tz| {
+        Box::pin(
+            async move { super::zoned_date_time_iso(caller, tz.as_deref()).map(RecordedZoned) },
+        )
+    })
+    .await?;
     Ok(zoned)
 }
 

@@ -126,7 +126,6 @@ fn reg_plain_date_time_duration_op(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainDateTime", method),
         ty,
-        true,
         move |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let dt = plain_date_from_struct(caller, st, &label)?
@@ -163,7 +162,6 @@ fn reg_plain_date_time_with(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainDateTime", "with"),
         ty,
-        true,
         |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainDateTime.with")?;
             let (y, m, d) = merge_date(
@@ -215,7 +213,6 @@ fn reg_plain_date_time_pair_op(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainDateTime", method),
         ty,
-        true,
         move |caller, params, results| {
             let a_st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let b_st = as_struct_val(caller, abi_arg(params, 1)?, &label)?;
@@ -255,7 +252,6 @@ fn reg_plain_date_time_projection(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainDateTime", method),
         ty,
-        true,
         move |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, method)?;
             *abi_result(results, 0)? = if method == "toPlainDate" {
@@ -284,7 +280,6 @@ fn reg_plain_date_time_to_zoned(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainDateTime", "toZonedDateTime"),
         ty,
-        true,
         |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainDateTime.toZonedDateTime")?;
             let tz_id =

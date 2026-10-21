@@ -21,7 +21,11 @@ mod tests;
 
 pub(crate) mod durable;
 mod durable_state;
+mod execution_history;
 mod transaction;
 
 #[cfg(test)]
 mod filesystem_tests;
+
+#[cfg(test)]
+mod execution_history_tests;

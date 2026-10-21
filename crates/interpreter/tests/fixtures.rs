@@ -133,7 +133,11 @@ impl PreparedRuntime {
         }
 
         let buf = Arc::new(Mutex::new(Vec::new()));
-        let mut data = StoreData::with_vfs_and_cap(Vfs::tempdir()?, self.config.max_store_bytes);
+        let mut data = StoreData::with_vfs_and_cap(
+            "test-run".into(),
+            Vfs::tempdir()?,
+            self.config.max_store_bytes,
+        );
         data.console = Box::new(Sink(Arc::clone(&buf)));
         data.session_kv = Some(Arc::new(InMemorySessionKv::default()));
         install_llm_fixture_support(&mut data, fixture);
@@ -175,7 +179,11 @@ impl PreparedRuntime {
         deny_capabilities: &[String],
         fixture: &str,
     ) -> wasmtime::Result<RunResult> {
-        let mut data = StoreData::with_vfs_and_cap(Vfs::tempdir()?, self.config.max_store_bytes);
+        let mut data = StoreData::with_vfs_and_cap(
+            "test-run".into(),
+            Vfs::tempdir()?,
+            self.config.max_store_bytes,
+        );
         data.session_kv = Some(Arc::new(InMemorySessionKv::default()));
         install_llm_fixture_support(&mut data, fixture);
         install_embedding_fixture_support(&mut data, fixture);

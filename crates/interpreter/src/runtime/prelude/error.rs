@@ -570,7 +570,6 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ctor_params(BuiltinErrorClass::Error, &string_ref, &nullable_object),
             [error_ref.clone()],
         ),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 *abi_result(results, 0)? =
@@ -592,7 +591,6 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 ctor_params(class, &string_ref, &nullable_object),
                 [subclass_ref.clone()],
             ),
-            true,
             move |caller, params, results| {
                 Box::pin(async move {
                     *abi_result(results, 0)? =
@@ -624,7 +622,6 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             class_key(class, "constructor_init"),
             FuncType::new(&engine, init_params, []),
-            true,
             move |caller, params, _results| {
                 Box::pin(async move {
                     let payload =
@@ -650,7 +647,6 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::static_member(&crate::mangle::prelude("Error"), "isError"),
         FuncType::new(&engine, [nullable_object.clone()], [ValType::I32]),
-        true,
         move |caller, params, results| {
             *abi_result(results, 0)? =
                 Val::I32(is_error(caller, abi_arg(params, 0)?, &class_vtable)? as i32);

@@ -22,17 +22,18 @@ mod replacement;
 mod write_bytes;
 mod write_chunk;
 use crate::io::{self as paths, Files, RecoveryError};
-use crate::readers::{DurableDirectory, FilesystemReader, MAX_LISTING_BYTES};
+use crate::readers::MAX_LISTING_BYTES;
 use crate::unit_of_work::*;
-use crate::writers::DurableWriter;
 use crate::{UnitFactory, UnitOfWork};
 use interpreter::runtime::Vfs;
-use interpreter::runtime::durable::{EffectId, RunId};
+use interpreter::runtime::durable::EffectId;
+use interpreter::runtime::durable::RunId;
 use interpreter::runtime::filesystem::{
-    DirectoryReader, FileReader, FileWriter, Filesystem, FilesystemError as PortError,
-    FilesystemInfo, ReaderOptions, ResourceDescriptor, ResourceKind,
+    DirectoryEntry, DirectoryReader, FileReader, FileWriter, Filesystem,
+    FilesystemError as PortError, FilesystemInfo, ReadOutput, ReaderOptions,
 };
 use interpreter::runtime::fuel::WorkBudget;
+use interpreter::runtime::limits::TenantLimits;
 use interpreter::runtime::{fs, vfs::Placement};
 pub use operation::FilesystemOperation;
 use serde::Serialize;
@@ -213,6 +214,10 @@ impl DurableFilesystem {
 
 #[async_trait::async_trait]
 impl Filesystem for DurableFilesystem {
+    fn supports_resource_replay(&self) -> bool {
+        true
+    }
+
     fn info(&self) -> FilesystemInfo {
         FilesystemInfo::from_vfs(self.files.vfs())
     }
@@ -378,14 +383,12 @@ impl Filesystem for DurableFilesystem {
         work: Option<Arc<WorkBudget>>,
         path: &str,
         options: ReaderOptions,
-    ) -> Result<Box<dyn FileReader>, PortError> {
+    ) -> Result<FileReader, PortError> {
         let operation = self.operation(work);
-        Ok(Box::new(
-            operation
-                .open_reader(effect_id, path, options)
-                .await
-                .map_err(backend)?,
-        ))
+        Ok(operation
+            .open_reader(effect_id, path, options)
+            .await
+            .map_err(backend)?)
     }
     async fn open_directory(
         &self,
@@ -394,7 +397,7 @@ impl Filesystem for DurableFilesystem {
         path: &str,
         recursive: bool,
         limits: &interpreter::runtime::limits::TenantLimits,
-    ) -> Result<Box<dyn DirectoryReader>, PortError> {
+    ) -> Result<DirectoryReader, PortError> {
         // Enumeration has a fixed 4 MiB encoded ceiling. Admit its worst-case
         // working set before SQL decoding or native enumeration. The guard also
         // covers codec/validation copies until the snapshot has been committed.
@@ -417,67 +420,99 @@ impl Filesystem for DurableFilesystem {
         })
         .await
         .map_err(backend)?;
-        Ok(Box::new(DurableDirectory {
-            filesystem: self.clone(),
-            resource: effect_id.clone(),
-        }))
+        Ok(DirectoryReader::new(self.run_id.clone(), effect_id.clone()))
     }
-    fn restore_reader(
+    async fn next_reader(
         &self,
-        descriptor: ResourceDescriptor,
-    ) -> Result<Box<dyn FileReader>, PortError> {
-        check_descriptor(self, &descriptor)?;
-        let ResourceKind::Reader(options) = descriptor.kind else {
-            return Err(backend(RecoveryError::Conflict.into()));
-        };
-        Ok(Box::new(FilesystemReader {
-            filesystem: self.clone(),
-            resource: descriptor.id,
-            options,
-        }))
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+        reader: &mut FileReader,
+        limits: &TenantLimits,
+    ) -> Result<ReadOutput, PortError> {
+        check_resource(self, &reader.run_id, &reader.id)?;
+        self.operation(work)
+            .next_reader(&reader.id, effect_id, &reader.options, limits)
+            .await
     }
-    fn restore_directory(
+    async fn close_reader(
         &self,
-        descriptor: ResourceDescriptor,
-    ) -> Result<Box<dyn DirectoryReader>, PortError> {
-        check_descriptor(self, &descriptor)?;
-        if descriptor.kind != ResourceKind::Directory {
-            return Err(backend(RecoveryError::Conflict.into()));
-        }
-        Ok(Box::new(DurableDirectory {
-            filesystem: self.clone(),
-            resource: descriptor.id,
-        }))
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+        reader: &mut FileReader,
+    ) -> Result<(), PortError> {
+        check_resource(self, &reader.run_id, &reader.id)?;
+        self.operation(work)
+            .close_reader(&reader.id, effect_id, &reader.options)
+            .await
     }
-    fn restore_writer(
+    async fn next_directory(
         &self,
-        descriptor: ResourceDescriptor,
-    ) -> Result<Box<dyn FileWriter>, PortError> {
-        check_descriptor(self, &descriptor)?;
-        if descriptor.kind != ResourceKind::Writer {
-            return Err(backend(RecoveryError::Conflict.into()));
-        }
-        Ok(Box::new(DurableWriter {
-            filesystem: self.clone(),
-            resource: descriptor.id,
-            closed: false,
-        }))
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+        directory: &mut DirectoryReader,
+        limits: &TenantLimits,
+    ) -> Result<Option<DirectoryEntry>, PortError> {
+        check_resource(self, &directory.run_id, &directory.id)?;
+        self.operation(work)
+            .next_listing(&directory.id, effect_id, limits)
+            .await
+            .map_err(backend)
+    }
+    async fn close_directory(
+        &self,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+        directory: &mut DirectoryReader,
+        limits: &TenantLimits,
+    ) -> Result<(), PortError> {
+        check_resource(self, &directory.run_id, &directory.id)?;
+        self.operation(work)
+            .close_listing(&directory.id, effect_id, limits)
+            .await
+            .map(|_| ())
+            .map_err(backend)
+    }
+    async fn write_chunk(
+        &self,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+        writer: &mut FileWriter,
+        bytes: Vec<u8>,
+    ) -> Result<(), PortError> {
+        check_resource(self, &writer.run_id, &writer.id)?;
+        self.operation(work)
+            .write_chunk(&writer.id, effect_id, bytes)
+            .await
+            .map_err(backend)
+    }
+    async fn close_writer(
+        &self,
+        effect_id: &EffectId,
+        work: Option<Arc<WorkBudget>>,
+        writer: &mut FileWriter,
+    ) -> Result<(), PortError> {
+        check_resource(self, &writer.run_id, &writer.id)?;
+        let result = self
+            .operation(work)
+            .close_writer(&writer.id, effect_id)
+            .await;
+        writer.closed = self
+            .stored_writer_is_closed(&writer.id)
+            .await
+            .map_err(backend)?;
+        result.map(|_| ()).map_err(backend)
     }
     async fn open_writer(
         &self,
         effect_id: &EffectId,
         work: Option<Arc<WorkBudget>>,
         path: &str,
-    ) -> Result<Box<dyn FileWriter>, PortError> {
+    ) -> Result<FileWriter, PortError> {
         self.operation(work)
             .open_writer(effect_id, path)
             .await
             .map_err(backend)?;
-        Ok(Box::new(DurableWriter {
-            filesystem: self.clone(),
-            resource: effect_id.clone(),
-            closed: false,
-        }))
+        Ok(FileWriter::new(self.run_id.clone(), effect_id.clone()))
     }
 }
 pub(crate) fn backend(error: FilesystemError) -> PortError {
@@ -489,12 +524,13 @@ pub(crate) fn backend(error: FilesystemError) -> PortError {
     }
 }
 
-fn check_descriptor(
+fn check_resource(
     filesystem: &DurableFilesystem,
-    descriptor: &ResourceDescriptor,
+    run_id: &RunId,
+    id: &EffectId,
 ) -> Result<(), PortError> {
-    validate_id(&descriptor.id).map_err(backend)?;
-    if descriptor.run_id != filesystem.run_id {
+    validate_id(id).map_err(backend)?;
+    if run_id != &filesystem.run_id {
         return Err(backend(RecoveryError::Conflict.into()));
     }
     Ok(())

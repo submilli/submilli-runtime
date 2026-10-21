@@ -4,12 +4,13 @@
 //! the linker resolves the user import (`submilli:variables#get`) with no Wasm
 //! module.
 
-use crate::runtime::host::{abi_arg, abi_result};
+use crate::runtime::effects;
+use crate::runtime::host::{
+    abi_arg, fatal_host_error, read_string_arg_units, register_host_value_async,
+    write_submilli_string_struct,
+};
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
-use crate::runtime::host::{
-    fatal_host_error, read_string_arg_units, register_host_fn, write_submilli_string_struct,
-};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::{StoreData, fuel};
 use crate::stdlib::shared::check_security;
@@ -47,56 +48,61 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     // `string | undefined` lowers to the erased `(ref null $Object)` in codegen.
     let nullable_object = ValType::Ref(RefType::new(true, HeapType::ConcreteStruct(intr.object)));
     let ty = FuncType::new(&engine, [string], [nullable_object]);
-    register_host_fn(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "get"),
         ty,
-        /* deterministic = */ false,
-        |caller, params, results| {
-            let units = read_string_arg_units(caller, abi_arg(params, 0)?, "variables.get")?;
-            fuel::charge(&mut *caller, fuel::SCAN, units.len() as u64)?;
-            // Configuration names are Unicode scalar strings. A guest name with
-            // an unpaired surrogate cannot name one; never replace it with U+FFFD
-            // and accidentally read a different configured variable.
-            let name = variable_name(&units)?;
-            let mut context = serde_json::Map::new();
-            context.insert(
-                "name".into(),
-                name.map_or(serde_json::Value::Null, serde_json::Value::String),
-            );
-            let context = serde_json::Value::Object(context);
-            let name = context["name"].as_str();
-            // The gate owns its context; retain the validated key in a separate
-            // fallibly allocated string for lookup after authorization.
-            let mut lookup = String::new();
-            if let Some(name) = name {
-                fuel::charge(&mut *caller, fuel::COPY, name.len() as u64)?;
-                lookup
-                    .try_reserve_exact(name.len())
-                    .map_err(fatal_host_error)?;
-                lookup.push_str(name);
-            }
-            let valid_name = name.is_some();
-            check_security(&mut *caller, "variables.get", context)?;
-            let name = valid_name.then_some(lookup);
-            let variables = caller.data().variables.clone();
-            if let Some(name) = &name {
-                let depth = variables.len().max(1).ilog2().saturating_add(1);
-                fuel::charge(
-                    &mut *caller,
-                    fuel::SCAN,
-                    (name.len() as u64).saturating_mul(u64::from(depth)),
-                )?;
-            }
-            let value = name.as_ref().and_then(|name| variables.get(name));
-            let Some(value) = value else {
-                *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
-                return Ok(());
-            };
-            let value = write_submilli_string_struct(caller, value)?;
-            *abi_result(results, 0)? = Val::AnyRef(Some(value.to_anyref()));
-            Ok(())
+        |caller, params| {
+            Box::pin(async move {
+                let units = read_string_arg_units(caller, abi_arg(params, 0)?, "variables.get")?;
+                fuel::charge(&mut *caller, fuel::SCAN, units.len() as u64)?;
+                // Configuration names are Unicode scalar strings. A guest name with
+                // an unpaired surrogate cannot name one; never replace it with U+FFFD
+                // and accidentally read a different configured variable.
+                let name = variable_name(&units)?;
+                let mut context = serde_json::Map::new();
+                context.insert(
+                    "name".into(),
+                    name.map_or(serde_json::Value::Null, serde_json::Value::String),
+                );
+                let context = serde_json::Value::Object(context);
+                let name = context["name"].as_str();
+                // The gate owns its context; retain the validated key in a separate
+                // fallibly allocated string for lookup after authorization.
+                let mut lookup = String::new();
+                if let Some(name) = name {
+                    fuel::charge(&mut *caller, fuel::COPY, name.len() as u64)?;
+                    lookup
+                        .try_reserve_exact(name.len())
+                        .map_err(fatal_host_error)?;
+                    lookup.push_str(name);
+                }
+                let valid_name = name.is_some();
+                check_security(&mut *caller, "variables.get", context)?;
+                let name = valid_name.then_some(lookup);
+                let observation =
+                    effects::execute(caller, "variables.get", name, |caller, _, name| {
+                        Box::pin(async move {
+                            let variables = caller.data().variables.clone();
+                            if let Some(name) = &name {
+                                let depth = variables.len().max(1).ilog2().saturating_add(1);
+                                fuel::charge(
+                                    &mut *caller,
+                                    fuel::SCAN,
+                                    (name.len() as u64).saturating_mul(u64::from(depth)),
+                                )?;
+                            }
+                            Ok(name.as_ref().and_then(|name| variables.get(name)).cloned())
+                        })
+                    })
+                    .await?;
+                let Some(value) = &observation else {
+                    return crate::runtime::prelude::undefined::value(caller);
+                };
+                let value = write_submilli_string_struct(caller, value)?;
+                Ok(Val::AnyRef(Some(value.to_anyref())))
+            })
         },
     )
 }
@@ -229,7 +235,7 @@ mod tests {
         .expect("program compiles");
         let config = RuntimeConfig::default();
         let engine = config.engine()?;
-        let mut data = StoreData::with_vfs(Vfs::none());
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::none());
         data.variables = Arc::new(BTreeMap::from([
             ("BROWSER_STORE_NAME".into(), "user-1".into()),
             ("USER_ID".into(), "user-1".into()),

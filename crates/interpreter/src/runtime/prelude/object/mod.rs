@@ -721,7 +721,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             ctor_key(kind.method()),
             ft(vec![obj.clone()], vec![array.clone()]),
-            true,
             move |caller, params, results| {
                 *abi_result(results, 0)? = enumerate(caller, abi_arg(params, 0)?, kind)?;
                 Ok(())
@@ -755,7 +754,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     ))
                 }],
             ),
-            true,
             move |caller, params, results| {
                 Box::pin(async move {
                     let first = abi_arg(params, 0)?;
@@ -786,7 +784,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 HeapType::ConcreteStruct(intr.object_shape.clone()),
             ))],
         ),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 *abi_result(results, 0)? =
@@ -801,7 +798,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("hasOwn"),
         ft(vec![obj.clone(), string.clone()], vec![boolean.clone()]),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = Val::I32(i32::from(has_own(
                 caller,
@@ -817,7 +813,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("#insertField"),
         ft(vec![obj.clone(), string, obj.clone()], vec![]),
-        true,
         |caller, params, _| {
             insert_field(
                 caller,
@@ -840,7 +835,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![obj.clone(), obj.clone(), obj.clone(), obj.clone()],
             vec![shape],
         ),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = spread(
                 caller,
@@ -857,7 +851,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("#toObject"),
         ft(vec![obj.clone()], vec![obj.clone()]),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = to_object(caller, abi_arg(params, 0)?)?;
             Ok(())
@@ -874,7 +867,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 HeapType::ConcreteStruct(intr.string.clone()),
             ))],
         ),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let intr = intrinsic_types(&mut *caller)?;
@@ -900,7 +892,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ))],
             vec![obj.clone()],
         ),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = static_value::static_value(caller, abi_arg(params, 0)?)?;
             Ok(())
@@ -911,7 +902,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("is"),
         ft(vec![obj.clone(), obj], vec![boolean]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 *abi_result(results, 0)? = Val::I32(i32::from(

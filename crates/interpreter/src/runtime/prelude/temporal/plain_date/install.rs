@@ -87,7 +87,6 @@ fn reg_plain_date_duration_op(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainDate", method),
         ty,
-        true,
         move |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let date = plain_date_from_struct(caller, st, &label)?;
@@ -119,7 +118,6 @@ fn reg_plain_date_with(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainDate", "with"),
         ty,
-        true,
         |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainDate.with")?;
             let (y, m, d) = merge_date(
@@ -157,7 +155,6 @@ fn reg_plain_date_pair_op(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainDate", method),
         ty,
-        true,
         move |caller, params, results| {
             let a_st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let b_st = as_struct_val(caller, abi_arg(params, 1)?, &label)?;
@@ -194,7 +191,6 @@ fn reg_plain_date_to_plain_date_time(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainDate", "toPlainDateTime"),
         ty,
-        true,
         |caller, params, results| {
             let d = as_struct_val(caller, abi_arg(params, 0)?, "PlainDate.toPlainDateTime")?;
             let maybe_t = *abi_arg(params, 1)?;
@@ -225,7 +221,6 @@ fn reg_plain_date_to_zoned(linker: &mut Linker<StoreData>, ty: FuncType) -> wasm
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainDate", "toZonedDateTime"),
         ty,
-        true,
         |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainDate.toZonedDateTime")?;
             let date = plain_date_from_struct(caller, st, "PlainDate.toZonedDateTime")?;

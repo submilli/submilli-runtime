@@ -37,6 +37,19 @@ impl McpResponse {
     }
 }
 
+impl serde::Serialize for McpResponse {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.value.serialize(serializer)
+    }
+}
+impl<'de> serde::Deserialize<'de> for McpResponse {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut value = Value::deserialize(deserializer)?;
+        Self::take(&mut value)
+            .map_err(|_| serde::de::Error::custom("recorded MCP response exceeds its bounds"))
+    }
+}
+
 // Bound retained tree data independently of wire JSON escaping. Each node/key
 // contributes a fixed allowance, and string bytes are added without rescanning.
 struct TreeBudget {

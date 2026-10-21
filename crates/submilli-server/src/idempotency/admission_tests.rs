@@ -5,19 +5,21 @@ use crate::domain::idempotent_request::RequestState;
 #[tokio::test]
 async fn unkeyed_invocations_have_distinct_ordered_identity_and_no_response_body() {
     let (_, units, coordinator) = fixture().await;
+    let first = "run-a".into();
+    let second = "run-b".into();
     let (a, b) = tokio::join!(
-        coordinator.prepare("session", None, "same", "run-a", Some("alice"), "mcp"),
-        coordinator.prepare("session", None, "same", "run-b", Some("alice"), "http"),
+        coordinator.prepare("session", None, "same", &first, Some("alice"), "mcp"),
+        coordinator.prepare("session", None, "same", &second, Some("alice"), "http"),
     );
     let a = proceed(a);
     let b = proceed(b);
-    coordinator.claim("run-a").await.unwrap();
+    coordinator.claim(&"run-a".into()).await.unwrap();
     assert!(
-        coordinator.claim("run-a").await.is_err(),
+        coordinator.claim(&"run-a".into()).await.is_err(),
         "a claim is not a second launch permit"
     );
     a.finish_unkeyed().await;
-    coordinator.claim("run-b").await.unwrap();
+    coordinator.claim(&"run-b".into()).await.unwrap();
     b.finish_unkeyed().await;
     let mut unit = units.begin().await.unwrap();
     let a = unit.get_run("run-a").await.unwrap().unwrap();
@@ -36,10 +38,10 @@ async fn release_after_claim_keeps_the_key_and_cannot_authorize_a_retry() {
     let (_, units, coordinator) = fixture().await;
     let guard = proceed(
         coordinator
-            .prepare("session", Some("key"), "code", "run", None, "http")
+            .prepare("session", Some("key"), "code", &"run".into(), None, "http")
             .await,
     );
-    coordinator.claim("run").await.unwrap();
+    coordinator.claim(&"run".into()).await.unwrap();
     guard.release().await;
     let run = units
         .begin()
@@ -62,10 +64,10 @@ async fn closure_fences_prepared_writes_and_retains_completed_identity() {
     let (_, units, coordinator) = fixture().await;
     let guard = proceed(
         coordinator
-            .prepare("session", Some("key"), "code", "run", None, "http")
+            .prepare("session", Some("key"), "code", &"run".into(), None, "http")
             .await,
     );
-    coordinator.claim("run").await.unwrap();
+    coordinator.claim(&"run".into()).await.unwrap();
     let mut unit = units.begin().await.unwrap();
     let mut stale = unit.get_run("run").await.unwrap().unwrap();
     drop(unit);
@@ -99,7 +101,7 @@ async fn closure_fences_prepared_writes_and_retains_completed_identity() {
     drop(unit);
     assert!(matches!(
         coordinator
-            .prepare("session", None, "code", "later", None, "mcp")
+            .prepare("session", None, "code", &"later".into(), None, "mcp")
             .await,
         Reservation::Refused(_)
     ));
@@ -120,10 +122,10 @@ fn process_exit_preserves_unkeyed_run_without_inventing_replay() {
             let (_, _, coordinator) = super::tests::fixture_with_database(database).await;
             let _guard = proceed(
                 coordinator
-                    .prepare("session", None, "code", "crashed", None, "mcp")
+                    .prepare("session", None, "code", &"crashed".into(), None, "mcp")
                     .await,
             );
-            coordinator.claim("crashed").await.unwrap();
+            coordinator.claim(&"crashed".into()).await.unwrap();
             std::process::exit(77);
         });
         unreachable!("child exits while the run is live");
@@ -171,7 +173,7 @@ fn process_exit_preserves_unkeyed_run_without_inventing_replay() {
             .unwrap();
         assert_eq!(after.state(), &RequestState::Indeterminate);
         assert_eq!(before.identity(), after.identity());
-        assert!(coordinator.claim("crashed").await.is_err());
+        assert!(coordinator.claim(&"crashed".into()).await.is_err());
         database.close().await.unwrap();
     });
 }
@@ -189,7 +191,7 @@ async fn saving_a_session_cannot_reset_its_run_order() {
         .unwrap();
     let first = proceed(
         coordinator
-            .prepare("session", None, "code", "first", None, "mcp")
+            .prepare("session", None, "code", &"first".into(), None, "mcp")
             .await,
     );
     first.release().await;
@@ -198,7 +200,7 @@ async fn saving_a_session_cannot_reset_its_run_order() {
     unit.commit().await.unwrap();
     let second = proceed(
         coordinator
-            .prepare("session", None, "code", "second", None, "mcp")
+            .prepare("session", None, "code", &"second".into(), None, "mcp")
             .await,
     );
     second.release().await;
@@ -233,7 +235,7 @@ async fn failed_run_insertion_rolls_back_the_session_counter() {
     })).await.unwrap();
     assert!(matches!(
         coordinator
-            .prepare("session", None, "code", "failed", None, "mcp")
+            .prepare("session", None, "code", &"failed".into(), None, "mcp")
             .await,
         Reservation::Refused(_)
     ));
@@ -256,7 +258,7 @@ async fn failed_run_insertion_rolls_back_the_session_counter() {
         .unwrap();
     let healthy = proceed(
         coordinator
-            .prepare("session", None, "code", "healthy", None, "mcp")
+            .prepare("session", None, "code", &"healthy".into(), None, "mcp")
             .await,
     );
     healthy.release().await;
@@ -290,13 +292,13 @@ async fn exhausted_run_order_refuses_admission_without_overflow() {
         .unwrap();
     let last = proceed(
         coordinator
-            .prepare("session", None, "code", "last", None, "mcp")
+            .prepare("session", None, "code", &"last".into(), None, "mcp")
             .await,
     );
     last.release().await;
     assert!(matches!(
         coordinator
-            .prepare("session", None, "code", "overflow", None, "mcp")
+            .prepare("session", None, "code", &"overflow".into(), None, "mcp")
             .await,
         Reservation::Refused(_)
     ));

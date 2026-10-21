@@ -157,7 +157,7 @@ fn measure_scenario(
     let tmp = tempfile::tempdir().expect("tempdir");
     seed(tmp.path());
     let vfs = Vfs::external(tmp.path().to_path_buf()).expect("external vfs");
-    let mut data = StoreData::with_vfs(vfs);
+    let mut data = StoreData::with_vfs("test-run".into(), vfs);
     install_client(&mut data);
     let mut store = cfg.store(&engine, data).expect("store");
     install_tenant_limits(&mut store);

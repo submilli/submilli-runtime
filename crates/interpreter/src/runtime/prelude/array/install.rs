@@ -78,7 +78,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("at"),
         ft(vec![array.clone(), num.clone()], vec![elem.clone()]),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? =
                 super::at(caller, abi_arg(params, 0)?, f64v(abi_arg(params, 1)?))?;
@@ -93,7 +92,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![array.clone(), num.clone(), num.clone()],
             vec![array.clone()],
         ),
-        true,
         |caller, params, results| {
             let out = super::slice(
                 caller,
@@ -110,7 +108,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("concat"),
         ft(vec![array.clone(), array.clone()], vec![array.clone()]),
-        true,
         |caller, params, results| {
             let self_elems = super::read_array(caller, abi_arg(params, 0)?, "Array#concat")?;
             let out = super::concat(caller, self_elems, abi_arg(params, 1)?)?;
@@ -123,7 +120,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("join"),
         ft(vec![array.clone(), string.clone()], vec![string.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_kept_array(caller, abi_arg(params, 0)?, "Array#join")?;
@@ -143,7 +139,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![array.clone(), elem.clone(), num.clone()],
             vec![num.clone()],
         ),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#indexOf")?;
@@ -167,7 +162,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![array.clone(), elem.clone(), num.clone()],
             vec![num.clone()],
         ),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#lastIndexOf")?;
@@ -191,7 +185,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![array.clone(), elem.clone(), num.clone()],
             vec![boolean.clone()],
         ),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#includes")?;
@@ -214,7 +207,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("push"),
         ft(vec![array.clone(), array.clone()], vec![num.clone()]),
-        true,
         |caller, params, results| {
             let items = super::read_array(caller, abi_arg(params, 1)?, "Array#push")?;
             let n = super::push(caller, abi_arg(params, 0)?, items)?;
@@ -227,7 +219,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("pop"),
         ft(vec![array.clone()], vec![elem.clone()]),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = super::pop(caller, abi_arg(params, 0)?)?;
             Ok(())
@@ -238,7 +229,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key(&crate::mangle::property_setter("length")),
         ft(vec![array.clone(), num.clone()], Vec::new()),
-        true,
         |caller, params, _results| {
             super::set_length(caller, abi_arg(params, 0)?, f64v(abi_arg(params, 1)?))
         },
@@ -248,7 +238,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("shift"),
         ft(vec![array.clone()], vec![elem.clone()]),
-        true,
         |caller, params, results| {
             let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#shift")?;
             *abi_result(results, 0)? = super::shift(caller, abi_arg(params, 0)?, elements)?;
@@ -260,7 +249,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("unshift"),
         ft(vec![array.clone(), array.clone()], vec![num.clone()]),
-        true,
         |caller, params, results| {
             let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#unshift")?;
             let items = super::read_array(caller, abi_arg(params, 1)?, "Array#unshift")?;
@@ -274,7 +262,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("reverse"),
         ft(vec![array.clone()], vec![array.clone()]),
-        true,
         |caller, params, results| {
             let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#reverse")?;
             *abi_result(results, 0)? = super::reverse(caller, abi_arg(params, 0)?, elements)?;
@@ -289,7 +276,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![array.clone(), elem.clone(), num.clone(), num.clone()],
             vec![array.clone()],
         ),
-        true,
         |caller, params, results| {
             let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#fill")?;
             *abi_result(results, 0)? = super::fill(
@@ -311,7 +297,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![array.clone(), num.clone(), num.clone(), num.clone()],
             vec![array.clone()],
         ),
-        true,
         |caller, params, results| {
             let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#copyWithin")?;
             *abi_result(results, 0)? = super::copy_within(
@@ -333,7 +318,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![array.clone(), num.clone(), num.clone(), array.clone()],
             vec![array.clone()],
         ),
-        true,
         |caller, params, results| {
             let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#splice")?;
             let items = super::read_array(caller, abi_arg(params, 3)?, "Array#splice")?;
@@ -353,7 +337,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("sort"),
         ft(vec![array.clone(), elem.clone()], vec![array.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_kept_array(caller, abi_arg(params, 0)?, "Array#sort")?;
@@ -382,7 +365,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("forEach"),
         ft(vec![array.clone(), callback.clone()], vec![]),
-        true,
         |caller, params, _results| {
             Box::pin(async move {
                 let elements =
@@ -398,7 +380,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("map"),
         ft(vec![array.clone(), callback.clone()], vec![array.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_kept_array(caller, abi_arg(params, 0)?, "Array#map")?;
@@ -414,7 +395,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("filter"),
         ft(vec![array.clone(), callback.clone()], vec![array.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_kept_array(caller, abi_arg(params, 0)?, "Array#filter")?;
@@ -434,7 +414,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![array.clone(), callback.clone(), elem.clone()],
             vec![elem.clone()],
         ),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_kept_array(caller, abi_arg(params, 0)?, "Array#reduce")?;
@@ -461,7 +440,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![array.clone(), callback.clone(), elem.clone()],
             vec![elem.clone()],
         ),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements =
@@ -490,7 +468,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             method_key(name),
             ft(vec![array.clone(), callback.clone()], vec![elem.clone()]),
-            true,
             move |caller, params, results| {
                 Box::pin(async move {
                     let elements =
@@ -527,7 +504,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             method_key(name),
             ft(vec![array.clone(), callback.clone()], vec![num.clone()]),
-            true,
             move |caller, params, results| {
                 Box::pin(async move {
                     let elements =
@@ -552,7 +528,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("some"),
         ft(vec![array.clone(), callback.clone()], vec![boolean.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_kept_array(caller, abi_arg(params, 0)?, "Array#some")?;
@@ -569,7 +544,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("every"),
         ft(vec![array.clone(), callback.clone()], vec![boolean.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements = super::read_kept_array(caller, abi_arg(params, 0)?, "Array#every")?;
@@ -586,7 +560,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("flat"),
         ft(vec![array.clone(), num.clone()], vec![array.clone()]),
-        true,
         |caller, params, results| {
             let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#flat")?;
             let depth = f64v(abi_arg(params, 1)?) as i32;
@@ -601,7 +574,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("flatMap"),
         ft(vec![array.clone(), callback.clone()], vec![array.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements =
@@ -621,7 +593,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("toReversed"),
         ft(vec![array.clone()], vec![array.clone()]),
-        true,
         |caller, params, results| {
             let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#toReversed")?;
             let out = super::to_reversed(elements);
@@ -634,7 +605,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("toSorted"),
         ft(vec![array.clone(), elem.clone()], vec![array.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let elements =
@@ -665,7 +635,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![array.clone(), num.clone(), num.clone(), array.clone()],
             vec![array.clone()],
         ),
-        true,
         |caller, params, results| {
             let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#toSpliced")?;
             let items = super::read_array(caller, abi_arg(params, 3)?, "Array#toSpliced")?;
@@ -687,7 +656,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![array.clone(), num.clone(), elem.clone()],
             vec![array.clone()],
         ),
-        true,
         |caller, params, results| {
             let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#with")?;
             match super::with(&elements, f64v(abi_arg(params, 1)?), *abi_arg(params, 2)?) {
@@ -707,7 +675,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("keys"),
         ft(vec![array.clone()], vec![iterator_ret.clone()]),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = super::keys(caller, abi_arg(params, 0)?)?;
             Ok(())
@@ -718,7 +685,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("values"),
         ft(vec![array.clone()], vec![iterator_ret.clone()]),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = super::values(caller, abi_arg(params, 0)?)?;
             Ok(())
@@ -729,7 +695,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("entries"),
         ft(vec![array.clone()], vec![iterator_ret.clone()]),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = super::entries(caller, abi_arg(params, 0)?)?;
             Ok(())
@@ -744,7 +709,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             method_key(name),
             ft(vec![array.clone()], vec![string.clone()]),
-            true,
             move |caller, params, results| {
                 Box::pin(async move {
                     *abi_result(results, 0)? =
@@ -768,7 +732,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("isArray"),
         ft(vec![elem.clone()], vec![boolean]),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? =
                 wasmtime::Val::I32(super::is_array(caller, abi_arg(params, 0)?)? as i32);
@@ -782,7 +745,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("of"),
         ft(vec![array.clone()], vec![array.clone()]),
-        true,
         |caller, params, results| {
             let items = super::read_array(caller, abi_arg(params, 0)?, "Array.of")?;
             *abi_result(results, 0)? = super::build_array(caller, &items)?;
@@ -799,7 +761,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![object_ref(&intr), object_ref(&intr)],
             vec![array.clone()],
         ),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 *abi_result(results, 0)? =

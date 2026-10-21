@@ -1,8 +1,9 @@
 //! Ignore-aware traversal uses VFS handles only; ignore matchers see virtual paths.
 use super::{
-    argument,
     budget::{Budget, OutputBudget},
-    gate, normalize, read_contents, read_file, text,
+    gate,
+    install::argument,
+    normalize, read_contents, read_file, text,
 };
 use crate::runtime::fs::resolve_link;
 use crate::runtime::fuel;
@@ -276,9 +277,10 @@ pub(super) fn search(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     pattern: &str,
-    options: &Val,
+    options: &Options,
 ) -> Result<Value> {
-    let options = Options::read(caller, budget, options)?;
+    let include = compile_patterns(&options.include)?;
+    let exclude = compile_patterns(&options.exclude)?;
     budget.charge(caller, 2 * 1024 * 1024)?;
     let regex = RegexBuilder::new(pattern)
         .case_insensitive(!options.sensitive)
@@ -296,9 +298,17 @@ pub(super) fn search(
         usize::MAX,
         "search",
     )?;
-    let mut results = SearchResults::new(&options);
+    let mut results = SearchResults::new(options);
     for entry in entries {
-        if entry.kind != "file" || !options.includes_path(&entry.path) {
+        let relative = entry
+            .path
+            .strip_prefix(options.path.trim_end_matches('/'))
+            .unwrap_or(&entry.path)
+            .trim_start_matches('/');
+        if entry.kind != "file"
+            || (!include.is_empty() && !include.is_match(relative))
+            || exclude.is_match(relative)
+        {
             continue;
         }
         search_file(caller, budget, &entry.path, &regex, &mut results)?;
@@ -787,32 +797,29 @@ fn may_probe_ignore(
         }
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize)]
 enum SearchMode {
     Matches,
     Files,
     Counts,
 }
 
-struct Options {
+#[derive(serde::Serialize)]
+pub(super) struct Options {
     path: String,
-    include: GlobSet,
-    exclude: GlobSet,
+    include: Vec<String>,
+    exclude: Vec<String>,
     sensitive: bool,
     context: usize,
     limit: usize,
     mode: SearchMode,
 }
 impl Options {
-    fn includes_path(&self, path: &str) -> bool {
-        let relative = path
-            .strip_prefix(self.path.trim_end_matches('/'))
-            .unwrap_or(path)
-            .trim_start_matches('/');
-        (self.include.is_empty() || self.include.is_match(relative))
-            && !self.exclude.is_match(relative)
-    }
-    fn read(caller: &mut Caller<'_, StoreData>, budget: &mut Budget, val: &Val) -> Result<Self> {
+    pub(super) fn read(
+        caller: &mut Caller<'_, StoreData>,
+        budget: &mut Budget,
+        val: &Val,
+    ) -> Result<Self> {
         let path = match present(caller, val, "path")? {
             Some(v) => {
                 let path = argument(caller, budget, &v)?;
@@ -878,16 +885,19 @@ fn patterns(
     budget: &mut Budget,
     obj: &Val,
     field: &str,
-) -> Result<GlobSet> {
-    let mut builder = GlobSetBuilder::new();
-    if let Some(v) = present(caller, obj, field)? {
-        for val in read_array_vals(caller, &v)? {
-            builder.add(
-                GlobBuilder::new(&argument(caller, budget, &val)?)
-                    .literal_separator(true)
-                    .build()?,
-            );
+) -> Result<Vec<String>> {
+    let mut patterns = Vec::new();
+    if let Some(value) = present(caller, obj, field)? {
+        for value in read_array_vals(caller, &value)? {
+            patterns.push(argument(caller, budget, &value)?);
         }
+    }
+    Ok(patterns)
+}
+fn compile_patterns(patterns: &[String]) -> Result<GlobSet> {
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns {
+        builder.add(GlobBuilder::new(pattern).literal_separator(true).build()?);
     }
     Ok(builder.build()?)
 }

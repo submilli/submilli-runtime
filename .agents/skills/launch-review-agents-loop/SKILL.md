@@ -201,6 +201,16 @@ not personal taste, line count, or file count.
   its name and interface clarify the caller; keep cohesive steps inline when
   extraction only adds navigation. Limited duplication can be clearer than a
   shared abstraction that couples different scenarios.
+- Challenge operation-name dispatchers and registration loops that route distinct
+  APIs through one `invoke` function or boolean mode flags. A caller should be
+  able to follow `write`, `append`, or a Git method to its own named operation,
+  without interpreting a tuple of flags or a distant switch. Prefer explicit
+  registrations in `install.rs` and focused implementations in the module;
+  share helpers for coherent common work such as fuel settlement or cleanup.
+  Moving the switch into another file, or adding named wrappers that still
+  select behavior by string, does not resolve the indirection. Preserve tables
+  that encode ABI layout, homogeneous field getters, and genuine exhaustive
+  protocol dispatch; they do not choose between unrelated operation scenarios.
 - Use descriptive domain names and consistent vocabulary across functions, return
   types, and variables. Avoid overloaded or vague names, cryptic abbreviations,
   and redundant type encodings. Boolean names should express a clear question.

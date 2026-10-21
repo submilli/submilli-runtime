@@ -91,7 +91,6 @@ fn reg_plain_year_month_duration_op(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainYearMonth", method),
         ty,
-        true,
         move |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let y = st_i32(caller, st, 1, &label)?;
@@ -138,7 +137,6 @@ fn reg_plain_year_month_with(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainYearMonth", "with"),
         ty,
-        true,
         |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainYearMonth.with")?;
             let y = object_i64_field(caller, abi_arg(params, 1)?, "year", "PlainYearMonth.with")?
@@ -167,7 +165,6 @@ fn reg_plain_year_month_pair_op(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainYearMonth", method),
         ty,
-        true,
         move |caller, params, results| {
             let a = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let b = as_struct_val(caller, abi_arg(params, 1)?, &label)?;
@@ -204,7 +201,6 @@ fn reg_plain_year_month_to_plain_date(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainYearMonth", "toPlainDate"),
         ty,
-        true,
         |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainYearMonth.toPlainDate")?;
             let year = i64::from(st_i32(caller, st, 1, "PlainYearMonth.toPlainDate")?);

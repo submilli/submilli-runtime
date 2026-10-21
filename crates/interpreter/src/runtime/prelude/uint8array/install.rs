@@ -89,7 +89,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("length"),
         ft(vec![uint8.clone()], vec![num.clone()]),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = Val::F64(
                 super::length(caller, abi_arg(params, 0)?, "Uint8Array#length")?.to_bits(),
@@ -102,7 +101,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("BYTES_PER_ELEMENT"),
         ft(vec![uint8.clone()], vec![num.clone()]),
-        true,
         |_caller, _params, results| {
             *abi_result(results, 0)? = Val::F64(BYTES_PER_ELEMENT.to_bits());
             Ok(())
@@ -113,7 +111,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("byteLength"),
         ft(vec![uint8.clone()], vec![num.clone()]),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = Val::F64(
                 super::length(caller, abi_arg(params, 0)?, "Uint8Array#byteLength")?.to_bits(),
@@ -126,7 +123,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("at"),
         ft(vec![uint8.clone(), num.clone()], vec![obj.clone()]),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = super::at(
                 caller,
@@ -148,7 +144,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             method_key(name),
             ft(vec![uint8.clone()], vec![obj.clone()]),
-            true,
             move |caller, params, results| {
                 *abi_result(results, 0)? = super::iterate(caller, abi_arg(params, 0)?, kind)?;
                 Ok(())
@@ -164,7 +159,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 vec![uint8.clone(), num.clone(), num.clone()],
                 vec![uint8.clone()],
             ),
-            true,
             |caller, params, results| {
                 let out = super::slice(
                     caller,
@@ -186,7 +180,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![uint8.clone(), num.clone(), num.clone()],
             vec![uint8.clone()],
         ),
-        true,
         |caller, params, results| {
             let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#with")?;
             match super::with(&bytes, f64v(abi_arg(params, 1)?), f64v(abi_arg(params, 2)?)) {
@@ -208,7 +201,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 vec![uint8.clone(), num.clone(), num.clone()],
                 vec![num.clone()],
             ),
-            true,
             move |caller, params, results| {
                 let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#indexOf")?;
                 let r = if last {
@@ -233,7 +225,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![uint8.clone(), num.clone(), num.clone()],
             vec![boolean.clone()],
         ),
-        true,
         |caller, params, results| {
             let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#includes")?;
             let r = super::includes(&bytes, f64v(abi_arg(params, 1)?), f64v(abi_arg(params, 2)?));
@@ -246,7 +237,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("join"),
         ft(vec![uint8.clone(), string.clone()], vec![string.clone()]),
-        true,
         |caller, params, results| {
             let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#join")?;
             let sep = read_string_units(caller, abi_arg(params, 1)?, "Uint8Array#join separator")?;
@@ -263,7 +253,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("toString"),
         ft(vec![uint8.clone()], vec![string.clone()]),
-        true,
         |caller, params, results| {
             let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#toString")?;
             let out = super::join(&bytes, &[u16::from(b',')]);
@@ -279,7 +268,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("toJson"),
         ft(vec![uint8.clone()], vec![string.clone()]),
-        true,
         |caller, params, results| {
             let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#toJson")?;
             let json = format!("\"{}\"", super::to_base64_standard(&bytes));
@@ -292,7 +280,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("toHex"),
         ft(vec![uint8.clone()], vec![string.clone()]),
-        true,
         |caller, params, results| {
             let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#toHex")?;
             *abi_result(results, 0)? = string_val(caller, &super::to_hex(&bytes))?;
@@ -304,7 +291,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("toBase64"),
         ft(vec![uint8.clone(), obj.clone()], vec![string.clone()]),
-        true,
         |caller, params, results| {
             let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#toBase64")?;
             let (url_safe, omit) = super::read_base64_options(caller, abi_arg(params, 1)?)?;
@@ -319,7 +305,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("equals"),
         ft(vec![uint8.clone(), uint8.clone()], vec![boolean.clone()]),
-        true,
         |caller, params, results| {
             let a = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#equals")?;
             let b = super::read_bytes(caller, abi_arg(params, 1)?, "Uint8Array#equals")?;
@@ -334,7 +319,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("reverse"),
         ft(vec![uint8.clone()], vec![uint8.clone()]),
-        true,
         |caller, params, results| {
             let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#reverse")?;
             *abi_result(results, 0)? = super::reverse(caller, abi_arg(params, 0)?, bytes)?;
@@ -349,7 +333,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![uint8.clone(), num.clone(), num.clone(), num.clone()],
             vec![uint8.clone()],
         ),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = super::fill(
                 caller,
@@ -369,7 +352,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![uint8.clone(), num.clone(), num.clone(), num.clone()],
             vec![uint8.clone()],
         ),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = super::copy_within(
                 caller,
@@ -386,7 +368,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("set"),
         ft(vec![uint8.clone(), uint8.clone(), num.clone()], vec![]),
-        true,
         |caller, params, _results| {
             super::set(
                 caller,
@@ -401,7 +382,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("sort"),
         ft(vec![uint8.clone(), obj.clone()], vec![uint8.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#sort")?;
@@ -420,7 +400,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("toReversed"),
         ft(vec![uint8.clone()], vec![uint8.clone()]),
-        true,
         |caller, params, results| {
             let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#toReversed")?;
             let out = super::to_reversed(bytes);
@@ -433,7 +412,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("toSorted"),
         ft(vec![uint8.clone(), obj.clone()], vec![uint8.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#toSorted")?;
@@ -455,7 +433,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("forEach"),
         ft(vec![uint8.clone(), callback.clone()], vec![]),
-        true,
         |caller, params, _results| {
             Box::pin(async move {
                 let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#forEach")?;
@@ -473,7 +450,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("map"),
         ft(vec![uint8.clone(), callback.clone()], vec![uint8.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#map")?;
@@ -490,7 +466,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("filter"),
         ft(vec![uint8.clone(), callback.clone()], vec![uint8.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#filter")?;
@@ -514,7 +489,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 vec![uint8.clone(), callback.clone(), obj.clone()],
                 vec![obj.clone()],
             ),
-            true,
             move |caller, params, results| {
                 Box::pin(async move {
                     let bytes =
@@ -544,7 +518,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             method_key(name),
             ft(vec![uint8.clone(), callback.clone()], vec![obj.clone()]),
-            true,
             move |caller, params, results| {
                 Box::pin(async move {
                     let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#find")?;
@@ -583,7 +556,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             method_key(name),
             ft(vec![uint8.clone(), callback.clone()], vec![num.clone()]),
-            true,
             move |caller, params, results| {
                 Box::pin(async move {
                     let bytes =
@@ -608,7 +580,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("some"),
         ft(vec![uint8.clone(), callback.clone()], vec![boolean.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#some")?;
@@ -628,7 +599,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("every"),
         ft(vec![uint8.clone(), callback.clone()], vec![boolean.clone()]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#every")?;
@@ -654,7 +624,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             ctor_key(name),
             ft(vec![array.clone()], vec![uint8.clone()]),
-            true,
             move |caller, params, results| {
                 let bytes = super::read_number_array(caller, abi_arg(params, 0)?, label)?;
                 *abi_result(results, 0)? = super::build(caller, &bytes)?;
@@ -675,7 +644,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("new"),
         ft(vec![object_nonnull], vec![uint8.clone()]),
-        true,
         |caller, params, results| {
             let intr = intrinsic_types(&mut *caller)?;
             let bytes = if crate::runtime::prelude::collection::is_a(
@@ -702,7 +670,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("alloc"),
         ft(vec![num.clone()], vec![uint8.clone()]),
-        true,
         |caller, params, results| {
             let n = super::alloc_len(f64v(abi_arg(params, 0)?))?;
             *abi_result(results, 0)? = super::allocate(caller, n)?;
@@ -714,7 +681,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("fromBytes"),
         ft(vec![uint8.clone()], vec![uint8.clone()]),
-        true,
         |caller, params, results| {
             let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array.fromBytes")?;
             *abi_result(results, 0)? = super::build(caller, &bytes)?;
@@ -726,7 +692,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("fromBase64"),
         ft(vec![string.clone(), obj.clone()], vec![uint8.clone()]),
-        true,
         |caller, params, results| {
             let units = read_string_units(caller, abi_arg(params, 0)?, "Uint8Array.fromBase64")?;
             let s = String::from_utf16_lossy(&units);
@@ -742,7 +707,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("fromHex"),
         ft(vec![string.clone()], vec![uint8.clone()]),
-        true,
         |caller, params, results| {
             let units = read_string_units(caller, abi_arg(params, 0)?, "Uint8Array.fromHex")?;
             let bytes = super::from_hex(&units)?;

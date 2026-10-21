@@ -1,11 +1,11 @@
 //! The Rust port of the prelude's built-in `Math` namespace.
 
-use crate::runtime::host::{abi_arg, abi_result};
+use crate::runtime::effects;
+use crate::runtime::host::{abi_arg, abi_result, register_host_fn, register_host_value_async};
 use std::collections::BTreeMap;
 use wasmtime::{Caller, FuncType, Global, GlobalType, Linker, Mutability, Store, Val, ValType};
 
 use crate::runtime::StoreData;
-use crate::runtime::host::register_host_fn;
 use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::number::{to_int32, to_uint32};
 use crate::runtime::prelude::MODULE_NAME;
@@ -215,7 +215,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             math_key(name),
             unary_ty.clone(),
-            /* deterministic = */ true,
             move |_caller, params, results| -> wasmtime::Result<()> {
                 let x = read_f64(abi_arg(params, 0)?, "Math unary")?;
                 *abi_result(results, 0)? = Val::F64(op(x).to_bits());
@@ -231,7 +230,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             math_key(name),
             binary_ty.clone(),
-            /* deterministic = */ true,
             move |_caller, params, results| -> wasmtime::Result<()> {
                 let a = read_f64(abi_arg(params, 0)?, "Math binary")?;
                 let b = read_f64(abi_arg(params, 1)?, "Math binary")?;
@@ -248,7 +246,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             math_key(name),
             variadic_ty.clone(),
-            /* deterministic = */ true,
             move |caller, params, results| -> wasmtime::Result<()> {
                 let values = read_variadic_numbers(caller, abi_arg(params, 0)?, op)?;
                 let result = match op {
@@ -267,21 +264,28 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         )?;
     }
 
-    register_host_fn(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         math_key("random"),
         FuncType::new(&engine, [], [ValType::F64]),
-        /* deterministic = */ false,
-        |_caller, _params, results| -> wasmtime::Result<()> {
-            let mut bytes = [0u8; 8];
-            getrandom::getrandom(&mut bytes)
-                .map_err(|e| wasmtime::Error::msg(format!("Math.random getrandom failed: {e}")))?;
-            let raw = u64::from_le_bytes(bytes);
-            let mantissa = raw & ((1u64 << 52) - 1);
-            let bits = (0x3FFu64 << 52) | mantissa;
-            *abi_result(results, 0)? = Val::F64((f64::from_bits(bits) - 1.0).to_bits());
-            Ok(())
+        |caller, _params| {
+            Box::pin(async move {
+                let value = effects::execute(caller, "Math.random", (), |_, _, ()| {
+                    Box::pin(async {
+                        let mut bytes = [0u8; 8];
+                        getrandom::getrandom(&mut bytes).map_err(|e| {
+                            wasmtime::Error::msg(format!("Math.random getrandom failed: {e}"))
+                        })?;
+                        let raw = u64::from_le_bytes(bytes);
+                        let mantissa = raw & ((1u64 << 52) - 1);
+                        let bits = (0x3FFu64 << 52) | mantissa;
+                        Ok(f64::from_bits(bits) - 1.0)
+                    })
+                })
+                .await?;
+                Ok(Val::F64(value.to_bits()))
+            })
         },
     )?;
 

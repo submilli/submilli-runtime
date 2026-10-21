@@ -31,7 +31,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             method_key(method),
             FuncType::new(&engine, [ValType::I32], [s]),
-            true,
             |caller, params, results| {
                 let truthy = match *abi_arg(params, 0)? {
                     Val::I32(v) => v != 0,
@@ -61,7 +60,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         call_key(),
         FuncType::new(&engine, [object], [ValType::I32]),
-        true,
         |caller, params, results| {
             let truthy = super::value::truthy(caller, abi_arg(params, 0)?)?;
             *abi_result(results, 0)? = Val::I32(i32::from(truthy));

@@ -5,9 +5,10 @@ use super::{
     test_checkpoint, validate_id,
 };
 use crate::io::{RecoveryError, validate_guest_path};
-use crate::readers::{FilesystemReader, ReaderPosition};
+use crate::readers::ReaderPosition;
 use crate::unit_of_work::{Reader, StoreError};
 use interpreter::runtime::durable::EffectId;
+use interpreter::runtime::filesystem::FileReader;
 use interpreter::runtime::filesystem::ReaderOptions;
 use std::sync::Arc;
 
@@ -21,7 +22,7 @@ impl FilesystemOperation {
         resource: &EffectId,
         path: &str,
         options: ReaderOptions,
-    ) -> Result<FilesystemReader, FilesystemError> {
+    ) -> Result<FileReader, FilesystemError> {
         validate_id(resource)?;
         validate_guest_path(path)?;
         if matches!(options, ReaderOptions::Bytes { chunk_size: 0 }) {
@@ -79,11 +80,11 @@ impl FilesystemOperation {
                 OpenReaderState::Completed(result) => {
                     result.map_err(FilesystemError::Rejected)?;
                     test_checkpoint("reader-open");
-                    return Ok(FilesystemReader {
-                        filesystem: self.filesystem.clone(),
-                        resource: resource.clone(),
+                    return Ok(FileReader::new(
+                        self.filesystem.run_id.clone(),
+                        resource.clone(),
                         options,
-                    });
+                    ));
                 }
             };
             encode_state(&mut reader, &state);

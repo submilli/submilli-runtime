@@ -1,5 +1,6 @@
 //! `submilli run` — console output goes to stderr; JSON-encoded `main` return goes to stdout.
 
+use interpreter::runtime::durable::RunId;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
@@ -497,7 +498,7 @@ fn execute_on_this_thread(
         vfs = vfs.with_measured_limit(limit, measured.ok());
     }
     // Use with_vfs_and_cap directly rather than RuntimeConfig::run to keep console output streaming, not buffered.
-    let mut data = StoreData::with_vfs_and_cap(vfs, cfg.max_store_bytes);
+    let mut data = StoreData::with_vfs_and_cap(RunId::generate()?, vfs, cfg.max_store_bytes);
     data.variables = Arc::clone(&variables);
     data.vfs_info.size_limit = size_limit;
     data.install_type_info(compiled.type_info.clone());

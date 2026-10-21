@@ -21,7 +21,7 @@ async fn a_recorded_run_cites_an_unnormalizable_path_as_a_runtime_invariant() {
     let cfg = RuntimeConfig::default();
     let engine = cfg.engine_async().unwrap();
     let script = compile_script(source, "main.ts", FileId(0), &[], &[]).unwrap();
-    let mut data = StoreData::with_vfs(Vfs::tempdir().unwrap());
+    let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().unwrap());
     data.install_type_info(script.type_info.clone());
     // Under `default: allow`, only the path keeps this call from being allowed.
     data.security_check = Arc::new(PolicyCheck::new(Arc::new(
