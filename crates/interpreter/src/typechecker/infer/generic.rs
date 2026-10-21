@@ -1917,8 +1917,14 @@ impl Inferer<'_> {
         arguments: &GenericArguments,
         sub: &mut TypeParamSubstitution,
     ) -> Result<(ExprId, Type), CompilerFailure> {
-        // An oversized hint fails at the argument's own checkpoint.
-        let hint = match sub.without_never_bindings() {
+        // An oversized hint fails at the argument's own checkpoint. A callback
+        // whose parameters need the hint takes a `never` binding as it is.
+        let loose = if self.is_context_sensitive_function(arg_id)? {
+            None
+        } else {
+            sub.without_never_bindings()
+        };
+        let hint = match loose {
             Some(loose) => loose.apply_or_record(param_ty, &self.type_limits),
             None => sub.apply_or_record(param_ty, &self.type_limits),
         };

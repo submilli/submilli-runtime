@@ -10,6 +10,13 @@ function unusualKeys(arr: number[], text: string): number {
   return negative + fraction + char.length;
 }
 
+// On a tuple, a key with no slot reads any element, as its number index.
+function tupleIndexKeys(t: [number, string], u: [number, string] | number[]): number | string {
+  const any: number | string = t["NaN"];
+  const fraction: number | string = u["1.5"];
+  return any || fraction;
+}
+
 function main(): void {
   const s = "héllo";
   const first: string = s["0"];

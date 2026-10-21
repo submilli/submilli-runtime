@@ -322,22 +322,29 @@ impl TypeParamSubstitution {
     /// takes or widens the binding instead (tsc drops `never` from the
     /// candidates, and `never[]` is a subtype of every array).
     pub fn without_never_bindings(&self) -> Option<TypeParamSubstitution> {
-        let is_never_candidate = |name: &str, ty: &Type| {
-            self.widenable.contains(name)
-                && (matches!(ty.peel(), Type::Never) || ty.holds_no_element())
-        };
-        if !self
+        let never_candidates: Vec<String> = self
             .bindings
-            .iter()
-            .any(|(name, ty)| is_never_candidate(name, ty))
-        {
+            .keys()
+            .filter(|name| self.is_never_candidate(name))
+            .cloned()
+            .collect();
+        if never_candidates.is_empty() {
             return None;
         }
         let mut loose = self.clone();
-        loose
-            .bindings
-            .retain(|name, ty| !is_never_candidate(name, ty));
+        for name in never_candidates {
+            loose.bindings.remove(&name);
+        }
         Some(loose)
+    }
+
+    /// Whether `name` is bound to a `never` or `never[]` argument candidate.
+    fn is_never_candidate(&self, name: &str) -> bool {
+        self.widenable.contains(name)
+            && self
+                .bindings
+                .get(name)
+                .is_some_and(|ty| matches!(ty.peel(), Type::Never) || ty.holds_no_element())
     }
 
     /// Whether `name` is bound to a candidate a later argument may widen.
@@ -575,7 +582,11 @@ impl TypeParamSubstitution {
                 .collect();
             self.several_literal_candidates.extend(joined);
         }
-        let bound_before: std::collections::BTreeSet<String> = self.bound_names().collect();
+        // A `never` candidate binds nothing a literal replacing it widens.
+        let bound_before: std::collections::BTreeSet<String> = self
+            .bound_names()
+            .filter(|name| !self.is_never_candidate(name))
+            .collect();
         let resolved = self.apply_or_record(param_ty, types.limits);
         let fits_binding = !super::infer::expr::type_contains_type_var(&resolved)
             && assignable(arg_ty, &resolved, types);

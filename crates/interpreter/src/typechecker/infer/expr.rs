@@ -8762,8 +8762,8 @@ impl Inferer<'_> {
             _ if receiver_ty.is_string_shaped() => Type::String,
             Type::Array(elem) => (**elem).clone(),
             Type::Uint8Array => Type::Number,
-            Type::Tuple(tuple) => match slot.and_then(|slot| tuple.elements.get(slot)) {
-                Some(elem) => elem.clone(),
+            Type::Tuple(tuple) => match tuple_key_element(tuple, slot) {
+                Some(elem) => elem,
                 None => return Ok(None),
             },
             // A union of arrays and tuples reads each member's element, as
@@ -8773,9 +8773,7 @@ impl Inferer<'_> {
                     .iter()
                     .map(|member| match member.peel() {
                         Type::Array(elem) => Some((**elem).clone()),
-                        Type::Tuple(tuple) => {
-                            slot.and_then(|slot| tuple.elements.get(slot)).cloned()
-                        }
+                        Type::Tuple(tuple) => tuple_key_element(tuple, slot),
                         _ => None,
                     })
                     .collect();
@@ -13298,6 +13296,22 @@ fn admits_literal_of(context: &Type, literal: &Type) -> bool {
         Type::NumberLiteral(_) => matches!(literal, Type::NumberLiteral(_)),
         Type::BooleanLiteral(_) | Type::Boolean => matches!(literal, Type::BooleanLiteral(_)),
         _ => false,
+    }
+}
+
+/// What a numeric key reads on `tuple`: the element at an integer `slot`,
+/// none past its end, and with no slot (`"-1"`, `"1.5"`, `"NaN"`) any
+/// element, as tsc reads the tuple's number index there.
+fn tuple_key_element(tuple: &crate::types::TupleType, slot: Option<usize>) -> Option<Type> {
+    match slot {
+        Some(slot) => tuple.elements.get(slot).cloned(),
+        None => {
+            let mut elements = tuple.elements.clone();
+            if tuple.optional > 0 {
+                elements.push(Type::Undefined);
+            }
+            Some(Type::union(elements))
+        }
     }
 }
 
