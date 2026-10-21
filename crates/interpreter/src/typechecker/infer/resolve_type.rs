@@ -277,17 +277,6 @@ impl<'a> Inferer<'a> {
     fn resolve_and_check_type(&mut self, annot: &TypeAnnotation) -> Result<Type, CompilerFailure> {
         let resolved = self.resolve_type_inner(annot)?;
         self.check_callable_type(&resolved, annot.span);
-        if let Some(index) = self.resolver().index_signature(&resolved)
-            && let Type::InterfaceRef {
-                mangled,
-                name,
-                args,
-                ..
-            } = resolved.peel()
-            && let Some(fields) = self.resolver().interface_full_form(mangled, name, args)
-        {
-            self.check_index_fields(&fields, Some(&index), annot.span)?;
-        }
         Ok(resolved)
     }
 

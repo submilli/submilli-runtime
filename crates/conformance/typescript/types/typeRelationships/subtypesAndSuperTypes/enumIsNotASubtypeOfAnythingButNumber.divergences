@@ -17,7 +17,6 @@ line 36: ours: property `foo` of type `E` does not satisfy string index value ty
 line 42: ours: property `foo` of type `E` does not satisfy string index value type `{ bar: number }` (tsc accepts)
 line 48: ours: property `foo` of type `E` does not satisfy string index value type `number[]` (tsc accepts)
 line 54: ours: property `foo` of type `E` does not satisfy string index value type `I8` (tsc accepts)
-line 55: ours: property `foo` of type `E` does not satisfy string index value type `number[]` (tsc accepts)
 line 60: ours: property `foo` of type `E` does not satisfy string index value type `A` (tsc accepts)
 line 66: ours: property `foo` of type `E` does not satisfy string index value type `A2<number>` (tsc accepts)
 line 85: ours: property `foo` of type `E` does not satisfy string index value type `E2` (tsc accepts)
