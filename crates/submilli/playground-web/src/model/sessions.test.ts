@@ -160,6 +160,15 @@ describe("an open session whose values differ from the ones bound now", () => {
     expect(keptValues(frame(ended, INITIAL_UI))).toBeNull();
   });
 
+  it("says nothing for a value only the session has, when nothing is bound under its name", () => {
+    expect(keptValues(frame(bound({}), INITIAL_UI))).toBeNull();
+    expect(keptValues(frame(bound({ region: "us" }), INITIAL_UI))).toEqual({
+      lead: "This session keeps the values it started with; the ones bound now differ: ",
+      changes: [{ name: "region", was: "not set", now: "us" }],
+      tail: ". Its messages still use its own.",
+    });
+  });
+
   it("says nothing over a new session that isn't started yet, nor while one is set up", () => {
     const data = bound({ customerId: "cus_globex" });
     expect(keptValues(frame(data, { ...INITIAL_UI, mode: "fresh" }))).toBeNull();
