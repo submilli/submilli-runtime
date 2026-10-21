@@ -503,10 +503,14 @@ function main(): void {
 }
 ```
 
-- Export only the operations an agent calls: an exported helper is shown to
-  every agent, whatever its blueprint allows. Test input validation (limits,
-  required fields, formats) through those operations: it runs before `check()`
-  and `secrets.get`, so it needs no network or secret.
+- In `src/lib.ts`, export only the operations an agent calls: an exported
+  helper there is shown to every agent, whatever its blueprint allows. Put
+  request builders and response mappers in another `src/` file that `lib.ts`
+  imports, export them there, and unit-test them offline with
+  `import { buildPageQuery } from "../src/request";`. A test reaches only its
+  own package's `src/` files; `submilli docs` and programs still see only
+  `lib.ts`. Test input validation through the operations: it runs before
+  `check()` and `secrets.get`, so it needs no network or secret.
 - Tests receive no credentials by default. Use `--env-var NAME` (repeatable or
   comma-separated), `--env-file PATH` (relative to the current directory), or
   `--all-env`. Precedence is `--env-var` > `--env-file` > `--all-env`, regardless

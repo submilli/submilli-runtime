@@ -1,0 +1,6 @@
+# Types a package's entry module re-exports from a sibling module keep one
+# identity: the signatures that name them and the package's type table agree,
+# so a consumer can read their fields.
+# name        dir   deps        root
+@test/lib     lib   -
+main          app   @test/lib   root

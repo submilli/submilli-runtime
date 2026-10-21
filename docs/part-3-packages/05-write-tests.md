@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "b450e2a21d29d91de979232f7914bbf7e4d0c28e61ac081a364aeb03c3b37603"
+  contentHash: "da71b3c600a31150f8dd805574e89a456bc65087ea8a6edf69b81c7deca8571e"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -62,6 +62,47 @@ Package](/docs/packages/document-the-package) describes.
 `errorType` is the error's name as a string, `"RangeError"`, not the
 class. Leave it out to accept any error. `submilli:test` is importable
 only under `submilli build test`.
+
+## Test a helper
+
+A helper the operations share, such as the customer path, is worth
+testing on its own. Keep it out of `src/lib.ts`, since programs and the
+model see whatever `lib.ts` exports. Export it from another file in
+`src/`, import it into `lib.ts`, and import it in the test by relative
+path:
+
+```typescript title="packages/billing/src/paths.ts"
+/**
+ * The path of one customer under the billing API.
+ * @param customerId The customer's id, escaped into the path.
+ * @returns The path, without the base URL.
+ */
+export function customerPath(customerId: string): string {
+    return "/customers/" + encodeURIComponent(customerId);
+}
+```
+
+```typescript title="packages/billing/tests/paths.test.ts"
+import { label } from "submilli:test";
+import { customerPath } from "../src/paths";
+
+function main(): void {
+    label("escapes a slash in the customer id");
+    assert(customerPath("a/b") === "/customers/a%2Fb", "slash is escaped");
+}
+```
+
+```text
+ok   packages/billing/tests/lib.test.ts :: refuses a zero amount
+ok   packages/billing/tests/paths.test.ts :: escapes a slash in the customer id
+ok   packages/billing/docs/readme.md :: example 1 (compile)
+
+3 passed, 0 failed across 3 files
+```
+
+A test reaches only its own Package's `src/` files. It imports `src/lib.ts`
+by the Package's name, and another Package by name too. `submilli docs`
+and programs still see only what `src/lib.ts` exports.
 
 ## Labels and failures
 

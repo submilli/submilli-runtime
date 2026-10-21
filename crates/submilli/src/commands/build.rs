@@ -621,12 +621,12 @@ mod test_runner {
         install_runtime_async, install_tenant_limits,
     };
     use interpreter::{
-        BacktraceMode, PackageDeclaration, Sources, compile_script_owned_by, dispatch_main_async,
-        failure_message, instantiate_program_async,
+        BacktraceMode, ModulePath, PackageDeclaration, PackageTestSurface, Sources,
+        compile_package_test, dispatch_main_async, failure_message, instantiate_program_async,
     };
     use submilli_build::{
         Artifact, ArtifactSource, BuiltPackage, DriverError, PackageName, PackageStore,
-        build_packages_with_inputs, find_manifest_upwards, parse_manifest,
+        build_packages_for_tests, find_manifest_upwards, parse_manifest,
     };
     use wasmtime::{Engine, Linker, Module};
 
@@ -669,7 +669,7 @@ mod test_runner {
             args.compile.package.is_some(),
         )?;
         let only = args.compile.package.map(PackageName::new);
-        let built = match build_packages_with_inputs(
+        let built = match build_packages_for_tests(
             &manifest,
             &manifest_dir,
             preparation.store(),
@@ -769,7 +769,8 @@ mod test_runner {
             let Some(pkg_path) = path_by_name.get(pkg.name.as_str()) else {
                 continue;
             };
-            let tests_dir = manifest_dir.join(pkg_path).join("tests");
+            let pkg_dir = manifest_dir.join(pkg_path);
+            let tests_dir = pkg_dir.join("tests");
             let test_files = discover_test_files(&tests_dir)
                 .with_context(|| format!("scanning {}", tests_dir.display()))?;
             for test_file in test_files {
@@ -782,7 +783,8 @@ mod test_runner {
                 files += 1;
                 let (p, f) = run_test_file(
                     &ctx,
-                    pkg.name.as_str(),
+                    pkg,
+                    &pkg_dir,
                     &test_file,
                     deny_warnings,
                     &mut warning_count,
@@ -1033,7 +1035,8 @@ mod test_runner {
 
     fn run_test_file(
         ctx: &TestContext<'_>,
-        package_name: &str,
+        pkg: &BuiltPackage,
+        pkg_dir: &Path,
         test_file: &Path,
         deny_warnings: bool,
         warning_count: &mut usize,
@@ -1056,14 +1059,25 @@ mod test_runner {
             .to_string_lossy()
             .into_owned();
         let (mut sources, file) = Sources::single(filename.clone(), source.clone())?;
+        let importer = match test_importer(pkg_dir, test_file) {
+            Ok(importer) => importer,
+            Err(reason) => {
+                println!("FAIL {filename} ({reason})");
+                return Ok((0, 1));
+            }
+        };
+        // A package built without its test surface has no modules to import.
+        let no_modules = PackageTestSurface::default();
+        let surface = pkg.test_surface.as_ref().unwrap_or(&no_modules);
 
-        let (bytes, type_info) = match compile_script_owned_by(
-            package_name,
+        let (bytes, type_info) = match compile_package_test(
+            &pkg.declaration,
+            surface,
+            &importer,
             &source,
             &filename,
             file,
             declarations,
-            &[],
         ) {
             Ok(compiled) => {
                 crate::commands::check::render(&compiled.warnings, &sources)?;
@@ -1130,6 +1144,25 @@ mod test_runner {
         };
 
         Ok(report_outcome(&filename, result, &labels, &sources, file))
+    }
+
+    /// The test file's path in its package directory, `/`-separated and without
+    /// its extension (`tests/paths.test`): what its relative imports resolve against.
+    fn test_importer(pkg_dir: &Path, test_file: &Path) -> Result<ModulePath, &'static str> {
+        let relative = test_file
+            .strip_prefix(pkg_dir)
+            .map_err(|_| "test file is outside its package directory")?;
+        let segments = relative
+            .components()
+            .map(|component| component.as_os_str().to_str())
+            .collect::<Option<Vec<_>>>()
+            .ok_or("test path is not valid UTF-8")?;
+        let path = segments.join("/");
+        let path = path
+            .strip_suffix(".ts")
+            .or_else(|| path.strip_suffix(".subm"))
+            .unwrap_or(&path);
+        Ok(ModulePath::from(path))
     }
 
     /// Map a finished run to (passed, failed) segment counts and print a line

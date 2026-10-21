@@ -1,9 +1,11 @@
 import { label } from "submilli:test";
+import secrets from "submilli:secrets";
 import { decodeComponent } from "submilli:url";
+import { BraveSearchError, search, context } from "@submilli/brave-search";
 import {
-    BraveSearchError, buildSearchQuery, buildContextQuery,
+    buildSearchQuery, buildContextQuery,
     normalizeSearchJson, normalizeContextJson, braveHttpError,
-} from "@submilli/brave-search";
+} from "../src/internal";
 
 function expectError(code: string, action: () => void): void {
     let matched = false;
@@ -112,4 +114,23 @@ function main(): void {
         assert(fallback.message === "Brave Search request failed: HTTP 422", "malformed or empty body keeps HTTP message");
         assert(fallback.status === 422 && fallback.retryAfter === "5", "fallback keeps HTTP metadata");
     }
+
+    label("public operations reject invalid input before any check, credential read or request");
+    expectError("invalid_argument", () => { search(" \t\n"); });
+    expectError("invalid_argument", () => { search("q", { offset: 10 }); });
+    expectError("invalid_argument", () => { context("word ".repeat(76)); });
+    expectError("invalid_argument", () => { context("q", { maxTokens: 1023 }); });
+
+    // Valid input passes validation and the check, then stops at the credential
+    // read. Skipped when BRAVE_SEARCH_API_KEY is bound, so this file never sends a request.
+    const key = secrets.get("BRAVE_SEARCH_API_KEY");
+    if (key !== undefined && key.trim().length > 0) {
+        label("skip: valid input reaches the credential read only when BRAVE_SEARCH_API_KEY is not bound");
+        return;
+    }
+    label("valid input passes validation and stops at the credential read");
+    expectError("missing_credentials", () => { search("a & b/path"); });
+    expectError("missing_credentials", () => { search("test", { count: 20, offset: 9, safeSearch: "strict" }); });
+    expectError("missing_credentials", () => { context("q"); });
+    expectError("missing_credentials", () => { context("q", { count: 50, maxUrls: 50, maxTokens: 32768, maxTokensPerUrl: 8192, safeSearch: "off" }); });
 }
