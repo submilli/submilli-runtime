@@ -1,6 +1,6 @@
 //! CI gate for package doc examples: every package in the repo's manifest must
 //! ship at least one fenced `ts` example in `docs/readme.md`, and every example
-//! must compile against the package's own surface. `submilli build test` runs
+//! must compile against the package and its dependencies. `submilli build test` runs
 //! the same checks with the full dependency closure; this test is the
 //! `cargo test --workspace` hook that keeps CI honest.
 
@@ -25,6 +25,7 @@ fn every_repo_package_ships_a_compiling_example() {
     let store = PackageStore::new(store_root.path());
     let built = build_packages(&manifest, root, &store, None).expect("packages build");
     assert!(!built.is_empty(), "the repo manifest declares packages");
+    let declarations: Vec<_> = built.iter().map(|pkg| &pkg.declaration).collect();
 
     let mut failures = Vec::new();
     for pkg in &built {
@@ -38,8 +39,7 @@ fn every_repo_package_ships_a_compiling_example() {
         }
         for (index, example) in examples.iter().enumerate() {
             let display_path = format!("{}/docs/readme.md", pkg.name.as_str());
-            if let Err(rendered) =
-                compile_check_doc_example(example, &display_path, &[&pkg.declaration])
+            if let Err(rendered) = compile_check_doc_example(example, &display_path, &declarations)
             {
                 failures.push(format!(
                     "{} example {}:\n{rendered}",
