@@ -385,7 +385,7 @@ impl Inferer<'_> {
             }
 
             let mut true_env = self.case_true_env(typed_disc, disc_source_span, &labels)?;
-            forget_writes(&mut true_env, &label_writes);
+            super::assign_expr::forget_writes(&mut true_env, &label_writes);
 
             let body_span = self
                 .ast
@@ -435,7 +435,7 @@ impl Inferer<'_> {
                 narrowed_before,
                 body_span,
             )?);
-            forget_writes(&mut env, &label_writes);
+            super::assign_expr::forget_writes(&mut env, &label_writes);
             self.push_narrow_frame(env.clone());
             self.switch_depth += 1;
             self.reachable = entry_reachable;
@@ -488,7 +488,7 @@ impl Inferer<'_> {
                 narrowed_before,
                 switch_span,
             )?);
-            forget_writes(&mut natural, &label_writes);
+            super::assign_expr::forget_writes(&mut natural, &label_writes);
             Some(natural)
         } else {
             None
@@ -1423,11 +1423,6 @@ fn discriminant_temporary(switch_id: StmtId, span: Span) -> Ident {
         name: format!("#switch_discriminant_{}", switch_id.0),
         span,
     }
-}
-
-/// `env` without the views under a path in `written`.
-fn forget_writes(env: &mut narrowing::NarrowEnv, written: &[narrowing::ReferencePath]) {
-    env.retain(|path, _| !written.iter().any(|written| written.is_prefix_of(path)));
 }
 
 /// The literals `ty` is made of, each with the member type that holds it (an

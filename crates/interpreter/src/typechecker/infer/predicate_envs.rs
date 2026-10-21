@@ -1081,8 +1081,7 @@ impl<'a> Inferer<'a> {
             let (span, ty) = (part.span(), part.result_ty().clone());
             let is_index = matches!(part, TypedChainPart::Index { .. });
             let kind = match part {
-                TypedChainPart::Field { name, .. }
-                | TypedChainPart::InterfaceProperty { name, .. } => {
+                TypedChainPart::Field { name, .. } => {
                     // A getter's value, like a call's, may change between
                     // reads. A primitive's property (`s?.length`) is no field
                     // path: a view on it would read `s` as an object.
@@ -1110,8 +1109,10 @@ impl<'a> Inferer<'a> {
                         index: idx,
                     }
                 }
-                // A call's result is no reference, so nothing after it narrows.
-                TypedChainPart::Call { .. }
+                // A call's result is no reference, nor is a property an
+                // interface implements (`m?.size`), so nothing after it narrows.
+                TypedChainPart::InterfaceProperty { .. }
+                | TypedChainPart::Call { .. }
                 | TypedChainPart::MethodCall { .. }
                 | TypedChainPart::NonNull { .. } => {
                     return Ok(Some(ChainReceivers {

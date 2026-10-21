@@ -392,9 +392,7 @@ impl Inferer<'_> {
         if env.is_empty() {
             return Ok(());
         }
-        for written in self.writes_between(read, end)? {
-            env.retain(|path, _| !written.is_prefix_of(path));
-        }
+        forget_writes(env, &self.writes_between(read, end)?);
         Ok(())
     }
 
@@ -501,4 +499,9 @@ impl Inferer<'_> {
 struct HeldIndex {
     original: ExprId,
     held: ExprId,
+}
+
+/// `env` without the views under a path in `written`.
+pub(super) fn forget_writes(env: &mut narrowing::NarrowEnv, written: &[narrowing::ReferencePath]) {
+    env.retain(|path, _| !written.iter().any(|written| written.is_prefix_of(path)));
 }
