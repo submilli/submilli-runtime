@@ -97,9 +97,11 @@ Embedders supplying another transport must preserve this guarantee.
 cargo run -p submilli -- build test -p @submilli/firecrawl
 ```
 
-Offline package tests cover input validation, which runs before any
-permission check, credential read, or request. Documentation fences are
-compiled by the package test runner.
+Offline package tests cover request mappings, optional extraction, full
+metadata, partial failures, malformed envelopes, pagination, lifecycle shapes,
+and cancellation, plus input validation, which runs before any permission
+check, credential read, or request. Documentation fences are compiled by the
+package test runner.
 
 The TypeScript policy tests in `tests/policy/` run as a real `main` caller under
 restricted blueprints. They verify every batch host, submitted-host and scope

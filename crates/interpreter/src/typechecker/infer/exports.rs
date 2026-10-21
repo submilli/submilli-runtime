@@ -244,17 +244,12 @@ impl Inferer<'_> {
             let mut sym = sym.clone();
             let target_mangled = sym.mangled_name.clone();
             sym.name = public_name.to_string();
-            // A class's mangled name is its nominal identity — the same name its
-            // `extends`/`implements` references and its WasmGC type/constructor
-            // exports use. Re-exporting must not rebrand it to the public package
-            // name, or a cross-package consumer would see the parent under one
-            // name and the subclass's `extends` under another (SUB-488). Only the
-            // public *name* (the lookup key) changes; other types still adopt the
-            // package-qualified mangle.
-            let is_class = matches!(sym.kind, crate::TypeKind::Class { .. });
-            if self.module == self.root_module && !is_class {
-                sym.mangled_name = public_mangled.clone();
-            }
+            // A type's mangled name is its identity: every signature and type
+            // reference names it so, as do a class's `extends`/`implements` and
+            // WasmGC exports. Re-exporting must not rebrand it to the public
+            // package name, or a consumer would find a signature's type under one
+            // name and the package's type table holding it under another
+            // (SUB-488). Only the public *name*, the lookup key, changes.
             let statics = static_export_entries(&sym.kind, &target_mangled, span);
             self.current_module_symbols
                 .types
@@ -264,14 +259,9 @@ impl Inferer<'_> {
                 // public static, keyed by the defining class's `Class#static#name`
                 // (stable across re-exports — statics derive from the class
                 // mangle, which never rebrands).
-
                 self.current_module_exports.extend(statics);
                 self.current_module_exports.push(ExportEntry {
-                    public_name: if is_class {
-                        target_mangled.clone()
-                    } else {
-                        public_mangled
-                    },
+                    public_name: target_mangled.clone(),
                     target: target_mangled,
                     kind: ExportKind::Type,
                     span,
@@ -309,7 +299,7 @@ pub(super) fn exported_decl_name(kind: &StmtKind) -> Option<&Ident> {
 /// One `Function`/`Global` export entry per public static of a class, keyed by
 /// the defining class's `Class#static#name`. Private statics stay
 /// module-internal (not exported, not rendered).
-fn static_export_entries(
+pub(crate) fn static_export_entries(
     kind: &crate::TypeKind,
     class_mangled: &crate::MangledName,
     span: crate::Span,

@@ -1,6 +1,8 @@
 import { label } from "submilli:test";
-import { ExaError, buildSearchBody, buildContentsBody, contentsHosts,
-    normalizeSearchJson, normalizeContentsJson, exaHttpError } from "@submilli/exa";
+import secrets from "submilli:secrets";
+import { ExaError, search, getContents } from "@submilli/exa";
+import { buildSearchBody, buildContentsBody, contentsHosts,
+    normalizeSearchJson, normalizeContentsJson, exaHttpError } from "../src/internal";
 
 function expectCode(code: string, action: () => void): void {
     let matched = false;
@@ -21,9 +23,9 @@ function main(): void {
     assert(parsed.query === 'a "quoted" query\nwith a newline', "JSON escaping round-trips");
 
     label("explicit extraction overrides have correct shape");
-    const search = buildSearchBody("test", { numResults: 3, contents: { mode: "text", maxCharacters: 5000, maxAgeHours: 0, livecrawlTimeout: 5000 } });
-    assert(search.includes('"contents":{"text":{"maxCharacters":5000},"maxAgeHours":0,"livecrawlTimeout":5000}'), "nested search options");
-    assert(!search.includes('"highlights"') && search.includes('"numResults":3'), "one extraction mode");
+    const nested = buildSearchBody("test", { numResults: 3, contents: { mode: "text", maxCharacters: 5000, maxAgeHours: 0, livecrawlTimeout: 5000 } });
+    assert(nested.includes('"contents":{"text":{"maxCharacters":5000},"maxAgeHours":0,"livecrawlTimeout":5000}'), "nested search options");
+    assert(!nested.includes('"highlights"') && nested.includes('"numResults":3'), "one extraction mode");
     const contents = buildContentsBody(["https://example.com"], { maxCharacters: 1000, maxAgeHours: -1 });
     assert(contents.includes('"highlights":{"maxCharacters":1000},"maxAgeHours":-1'), "explicit highlight budget and cache policy");
     assert(!contents.includes('"contents"'), "no nested contents on contents endpoint");
@@ -109,4 +111,29 @@ function main(): void {
     const rate = exaHttpError(429, "10");
     assert(rate.code === "rate_limited" && rate.status === 429 && rate.retryAfter === "10", "rate limit");
     assert(exaHttpError(503).code === "http_error", "server error");
+
+    label("public operations reject invalid input before any check, credential read or request");
+    expectCode("invalid_argument", () => { search(" \n"); });
+    expectCode("invalid_argument", () => { search("q", { numResults: 0 }); });
+    expectCode("invalid_argument", () => { search("q", { excludeDomains: [] }); });
+    expectCode("invalid_argument", () => { search("q", { startPublishedDate: "yesterday" }); });
+    expectCode("invalid_argument", () => { search("q", { contents: { maxCharacters: 0 } }); });
+    expectCode("invalid_argument", () => { getContents([]); });
+    expectCode("invalid_argument", () => { getContents(["https://example.com", "not a URL"]); });
+    expectCode("invalid_argument", () => { getContents(["https://example.com"], { livecrawlTimeout: 0 }); });
+    expectCode("invalid_argument", () => { getContents(many); });
+
+    // Valid input passes validation and the checks, then stops at the credential
+    // read. Skipped when EXA_API_KEY is bound, so this file never sends a request.
+    const key = secrets.get("EXA_API_KEY");
+    if (key !== undefined && key.trim().length > 0) {
+        label("skip: valid input reaches the credential read only when EXA_API_KEY is not bound");
+        return;
+    }
+    label("valid input passes validation and stops at the credential read");
+    expectCode("missing_credentials", () => { search("test"); });
+    expectCode("missing_credentials", () => { search("test", { numResults: 100, contents: { mode: "text", maxCharacters: 5000, maxAgeHours: 0, livecrawlTimeout: 5000 } }); });
+    expectCode("missing_credentials", () => { getContents(["https://EXAMPLE.com/a", "http://other.example:8080/b"], { maxCharacters: 1000, maxAgeHours: -1 }); });
+    many.pop();
+    expectCode("missing_credentials", () => { getContents(many); });
 }

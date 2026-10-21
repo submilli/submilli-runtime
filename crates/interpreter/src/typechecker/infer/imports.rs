@@ -203,8 +203,22 @@ impl<'a> Inferer<'a> {
             .chain(self.type_only_packages.values())
             .copied()
             .collect();
+        let test_modules = self.test_modules;
+        // A test reaches types its package keeps out of its public surface, through
+        // the internal declarations it imports. Registered first, so the public
+        // declaration of a class, which keeps its statics, wins.
+        if let Some(owner) =
+            test_modules.and_then(|test| self.packages_by_name.get(test.owner).copied())
+        {
+            for sym in owner.runtime_types.values() {
+                self.type_registry.insert_borrowed(sym);
+            }
+        }
         for defs in packages {
             register_package_types(&mut self.type_registry, defs);
+        }
+        for module in test_modules.iter().flat_map(|test| test.modules.values()) {
+            register_package_types(&mut self.type_registry, &module.declaration);
         }
     }
 
@@ -324,7 +338,10 @@ impl<'a> Inferer<'a> {
         kind: &crate::ImportKind,
     ) {
         if !self.package_inference {
-            self.reject_relative_import(module, module_span);
+            match self.test_modules {
+                Some(test) => self.populate_test_module_import(test, module, module_span, kind),
+                None => self.reject_relative_import(module, module_span),
+            }
             return;
         }
         let resolved = match self.module.resolve_relative(module) {
@@ -449,6 +466,112 @@ impl<'a> Inferer<'a> {
             format!("module `{specifier}` does not export `{imported}`"),
             imported_module.exports_help(),
         );
+    }
+
+    /// Bind a test file's relative import to a non-entry module of its own
+    /// package. Anything else a relative path can name is refused: a path out of
+    /// the package, a file outside `src/`, and the entry module, which a test
+    /// imports by package name like any program.
+    fn populate_test_module_import(
+        &mut self,
+        test: super::TestModules<'a>,
+        specifier: &str,
+        module_span: crate::Span,
+        kind: &crate::ImportKind,
+    ) {
+        let Ok(resolved) = test.importer.resolve_relative(specifier) else {
+            self.error_with_help(
+                module_span,
+                format!(
+                    "import escapes package directory: `{specifier}` climbs above the package root"
+                ),
+                vec![
+                    "a test may import only its own package's `src/` modules by relative path; \
+                     import another package by name: `import { … } from \"@org/pkg\"`"
+                        .to_string(),
+                ],
+            );
+            return;
+        };
+        let to_src = test_relative_src_prefix(test.importer);
+        let Some(module_path) = resolved.as_str().strip_prefix("src/") else {
+            let file_name = resolved
+                .as_str()
+                .rsplit('/')
+                .next()
+                .unwrap_or(resolved.as_str());
+            self.error_with_help(
+                module_span,
+                format!("`{specifier}` resolves to `{resolved}`, outside the package's `src/`"),
+                vec![format!(
+                    "move shared code into `src/` (e.g. `{to_src}{file_name}`) or import the \
+                     other package by name"
+                )],
+            );
+            return;
+        };
+        if module_path == "lib" {
+            self.error_with_help(
+                module_span,
+                format!("`{specifier}` is the package's entry module"),
+                vec![format!("import it by name: `from \"{}\"`", test.owner)],
+            );
+            return;
+        }
+        let Some(imported) = test.modules.get(&crate::ModulePath::from(module_path)) else {
+            let modules: Vec<String> = test
+                .modules
+                .keys()
+                .map(|path| format!("`{to_src}{path}`"))
+                .collect();
+            let help = if modules.is_empty() {
+                vec!["`src/` has no modules besides the entry module".to_string()]
+            } else {
+                vec![format!("modules in src/: {}", modules.join(", "))]
+            };
+            self.error_with_help(module_span, format!("no such module `{specifier}`"), help);
+            return;
+        };
+        self.typed_ast
+            .imported_packages
+            .insert(test.owner.to_string());
+        let declaration = &imported.declaration;
+        match kind {
+            crate::ImportKind::Named(specs) => {
+                for spec in specs {
+                    let name = spec.imported_name.name.as_str();
+                    if declaration.values.contains_key(name) || declaration.types.contains_key(name)
+                    {
+                        self.bind_named_import(declaration, spec);
+                    } else if imported.unexported.contains(name) {
+                        self.error_with_help(
+                            spec.imported_name.span,
+                            format!("`{name}` is not exported from `{specifier}`"),
+                            vec![format!(
+                                "add `export` to `{name}` in `src/{module_path}`; non-entry exports \
+                                 reach only this package's tests, never programs or `submilli docs`"
+                            )],
+                        );
+                    } else {
+                        let mut help = self.package_exports_help(declaration);
+                        if help.is_empty() {
+                            help.push(format!("`{specifier}` exports nothing"));
+                        }
+                        help.push(format!(
+                            "if the module re-exports `{name}` from another package, import it from that package"
+                        ));
+                        self.error_with_help(
+                            spec.imported_name.span,
+                            format!("module `{specifier}` does not export `{name}`"),
+                            help,
+                        );
+                    }
+                }
+            }
+            crate::ImportKind::Namespace { local_name } => {
+                self.bind_namespace_import(NamespaceMembers::from_package(declaration), local_name);
+            }
+        }
     }
 
     fn available_modules_help(&self) -> Vec<String> {
@@ -724,6 +847,19 @@ impl<'a> Inferer<'a> {
                 .join(", "),
         )]
     }
+}
+
+/// The relative path from a test file's directory to its package's `src/`:
+/// `../src/` for `tests/paths.test`.
+fn test_relative_src_prefix(importer: &crate::ModulePath) -> String {
+    let depth = importer.as_str().matches('/').count();
+    let mut prefix = if depth == 0 {
+        "./".to_string()
+    } else {
+        "../".repeat(depth)
+    };
+    prefix.push_str("src/");
+    prefix
 }
 
 #[cfg(test)]

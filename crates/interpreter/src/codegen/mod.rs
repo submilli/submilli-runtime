@@ -1811,7 +1811,8 @@ fn codegen_inner(
     if let Some((_, func_idx)) = main_output_shim {
         exports.export("__main_output", WasmExportKind::Func, func_idx);
     }
-    for entry in &ta.exports {
+    // A test build also exports what its non-entry modules export, each once.
+    for entry in ta.exports.iter().chain(&ta.test_exports) {
         match entry.kind {
             crate::ExportKind::Function => {
                 let func_idx = symbols
