@@ -2169,23 +2169,22 @@ impl Inferer<'_> {
         };
         let (typed_operand, _) = self.infer_expr(operand_id, None)?;
         // Retained refinements cannot prove the kind of a later live read.
-        let tag = match typeof_tag_kind(&tag) {
-            Some(kind) => kind,
-            None => {
-                self.error_with_help(
-                    tag_span,
-                    format!(
-                        "`typeof x === \"{tag}\"` is not a valid narrowing \
-                         guard",
-                    ),
-                    vec![
-                        "supported tags are \"number\", \"string\", \
-                         \"boolean\", \"object\", \"function\""
-                            .into(),
-                    ],
-                );
-                crate::TypeofTagKind::Object
-            }
+        let tag = if let Some(kind) = typeof_tag_kind(&tag) {
+            kind
+        } else {
+            self.error_with_help(
+                tag_span,
+                format!(
+                    "`typeof x === \"{tag}\"` is not a valid narrowing \
+                     guard",
+                ),
+                vec![
+                    "supported tags are \"number\", \"string\", \
+                     \"boolean\", \"object\", \"function\""
+                        .into(),
+                ],
+            );
+            crate::TypeofTagKind::Object
         };
         let inner_kind = TypedExprKind::TypeofTag {
             value: typed_operand,

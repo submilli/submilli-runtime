@@ -1848,6 +1848,7 @@ impl<'a> Inferer<'a> {
             .unwrap_or_else(|| root.kind.clone()))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn narrow_literal_discriminant(
         &mut self,
         op: crate::BinOp,
@@ -1880,23 +1881,20 @@ impl<'a> Inferer<'a> {
                 split
             }
             DiscriminantKey::Position(pos) => {
-                match narrowing::tuple_position_discriminant(members, *pos) {
-                    Some(table) => {
-                        let Some(split) = table.partition(members, &literal) else {
-                            return Ok(None);
-                        };
-                        split
-                    }
+                if let Some(table) = narrowing::tuple_position_discriminant(members, *pos) {
+                    let Some(split) = table.partition(members, &literal) else {
+                        return Ok(None);
+                    };
+                    split
+                } else {
                     // A position some member holds more than one value at
                     // (`[null, string] | [boolean, number]`) still splits by
                     // what each member's element may hold.
-                    None => {
-                        let Some(element_tys) = discriminant_element_types(members, *pos) else {
-                            return Ok(None);
-                        };
-                        let value_ty = narrowing::literal_type(&literal);
-                        self.split_by_key_types(members, element_tys, &value_ty)
-                    }
+                    let Some(element_tys) = discriminant_element_types(members, *pos) else {
+                        return Ok(None);
+                    };
+                    let value_ty = narrowing::literal_type(&literal);
+                    self.split_by_key_types(members, element_tys, &value_ty)
                 }
             }
         };
@@ -2158,6 +2156,7 @@ impl<'a> Inferer<'a> {
         (has_unit_member && !is_uniform).then_some(field_tys)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn narrow_direct_literal(
         &mut self,
         op: crate::BinOp,
