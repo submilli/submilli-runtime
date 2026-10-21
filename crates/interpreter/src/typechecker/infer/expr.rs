@@ -6874,7 +6874,7 @@ impl Inferer<'_> {
                     // a running type of only `null`/`undefined`, unless a hint pins
                     // it: the element widens the type instead (`[undefined, { a: 1 }]`).
                     let running_hint = element_ty.as_ref().filter(|t| {
-                        !holds_no_element(t) && (hint_pins_element_ty || !is_nullish_only(t))
+                        !t.holds_no_element() && (hint_pins_element_ty || !is_nullish_only(t))
                     });
                     let hint = if open_element_type && (types_itself || arrays_of_object_literals) {
                         None
@@ -8757,11 +8757,12 @@ impl Inferer<'_> {
         let Some(index) = array_index_key(&name.name) else {
             return Ok(None);
         };
+        let slot = (index >= 0.0 && index.fract() == 0.0).then_some(index as usize);
         let elem_ty = match receiver_ty.peel() {
             _ if receiver_ty.is_string_shaped() => Type::String,
             Type::Array(elem) => (**elem).clone(),
             Type::Uint8Array => Type::Number,
-            Type::Tuple(tuple) => match tuple.elements.get(index) {
+            Type::Tuple(tuple) => match slot.and_then(|slot| tuple.elements.get(slot)) {
                 Some(elem) => elem.clone(),
                 None => return Ok(None),
             },
@@ -8772,7 +8773,9 @@ impl Inferer<'_> {
                     .iter()
                     .map(|member| match member.peel() {
                         Type::Array(elem) => Some((**elem).clone()),
-                        Type::Tuple(tuple) => tuple.elements.get(index).cloned(),
+                        Type::Tuple(tuple) => {
+                            slot.and_then(|slot| tuple.elements.get(slot)).cloned()
+                        }
                         _ => None,
                     })
                     .collect();
@@ -8784,7 +8787,7 @@ impl Inferer<'_> {
             _ => return Ok(None),
         };
         let typed_index =
-            self.push_synthetic_expr(TypedExprKind::Number(index as f64), Type::Number, name.span)?;
+            self.push_synthetic_expr(TypedExprKind::Number(index), Type::Number, name.span)?;
         let kind = TypedExprKind::IndexAccess {
             receiver: typed_receiver,
             index: typed_index,
@@ -13298,10 +13301,11 @@ fn admits_literal_of(context: &Type, literal: &Type) -> bool {
     }
 }
 
-/// The index a canonical array-index key names: `"0"`, `"12"`, not `"01"`.
-fn array_index_key(key: &str) -> Option<usize> {
-    let index: usize = key.parse().ok()?;
-    (index.to_string() == key).then_some(index)
+/// The number a numeric key names, as tsc reads one: a key that is a
+/// number's own spelling (`"0"`, `"-1"`, `"1.5"`), not `"01"` or `"1.0"`.
+fn array_index_key(key: &str) -> Option<f64> {
+    let index: f64 = key.parse().ok()?;
+    (crate::runtime::number::format_number_js(index) == key).then_some(index)
 }
 
 /// The member a string-literal key names: `o["content-type"]` reads field
@@ -13418,15 +13422,6 @@ fn empty_literal_join(
         }
     }
     Ok(None)
-}
-
-/// Whether `ty` is the type of an array that holds no element at any depth:
-/// `never[]`, `never[][]`, as an empty literal is typed.
-fn holds_no_element(ty: &Type) -> bool {
-    match ty.peel() {
-        Type::Array(element) => matches!(element.peel(), Type::Never) || holds_no_element(element),
-        _ => false,
-    }
 }
 
 /// Whether `member` is the type of a fresh object literal with one of

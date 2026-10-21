@@ -1,5 +1,15 @@
 // A canonical numeric string key reads the number index, as in TypeScript:
 // `s["0"]` is `s[0]`. Other string keys still name properties.
+// Any number's own spelling is a numeric key, as tsc reads one: `"-1"`
+// and `"1.5"` read an element type, as `arr[-1]` does (and trap the same
+// way, out of range), while `"01"` names a field.
+function unusualKeys(arr: number[], text: string): number {
+  const negative: number = arr["-1"];
+  const fraction: number = arr["1.5"];
+  const char: string = text["-1"];
+  return negative + fraction + char.length;
+}
+
 function main(): void {
   const s = "héllo";
   const first: string = s["0"];

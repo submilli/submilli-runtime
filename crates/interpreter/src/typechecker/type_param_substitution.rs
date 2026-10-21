@@ -322,8 +322,10 @@ impl TypeParamSubstitution {
     /// takes or widens the binding instead (tsc drops `never` from the
     /// candidates, and `never[]` is a subtype of every array).
     pub fn without_never_bindings(&self) -> Option<TypeParamSubstitution> {
-        let is_never_candidate =
-            |name: &str, ty: &Type| self.widenable.contains(name) && holds_nothing(ty);
+        let is_never_candidate = |name: &str, ty: &Type| {
+            self.widenable.contains(name)
+                && (matches!(ty.peel(), Type::Never) || ty.holds_no_element())
+        };
         if !self
             .bindings
             .iter()
@@ -626,15 +628,6 @@ impl TypeParamSubstitution {
             return Ok(());
         }
         unified
-    }
-}
-
-/// Whether `ty` is `never`, or an array that can hold nothing.
-fn holds_nothing(ty: &Type) -> bool {
-    match ty.peel() {
-        Type::Never => true,
-        Type::Array(element) => holds_nothing(element),
-        _ => false,
     }
 }
 
