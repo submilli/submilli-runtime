@@ -1919,7 +1919,9 @@ impl Inferer<'_> {
     ) -> Result<(ExprId, Type), CompilerFailure> {
         // An oversized hint fails at the argument's own checkpoint. A callback
         // whose parameters need the hint takes a `never` binding as it is.
-        let loose = if self.is_context_sensitive_function(arg_id)? {
+        let loose = if self.is_context_sensitive_function(arg_id)?
+            || self.literal_holds_context_sensitive_function(arg_id)?
+        {
             None
         } else {
             sub.without_never_bindings()

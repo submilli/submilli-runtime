@@ -322,20 +322,11 @@ impl TypeParamSubstitution {
     /// takes or widens the binding instead (tsc drops `never` from the
     /// candidates, and `never[]` is a subtype of every array).
     pub fn without_never_bindings(&self) -> Option<TypeParamSubstitution> {
-        let never_candidates: Vec<String> = self
-            .bindings
-            .keys()
-            .filter(|name| self.is_never_candidate(name))
-            .cloned()
-            .collect();
-        if never_candidates.is_empty() {
-            return None;
-        }
         let mut loose = self.clone();
-        for name in never_candidates {
-            loose.bindings.remove(&name);
-        }
-        Some(loose)
+        loose
+            .bindings
+            .retain(|name, _| !self.is_never_candidate(name));
+        (loose.bindings.len() != self.bindings.len()).then_some(loose)
     }
 
     /// Whether `name` is bound to a `never` or `never[]` argument candidate.
@@ -582,10 +573,14 @@ impl TypeParamSubstitution {
                 .collect();
             self.several_literal_candidates.extend(joined);
         }
-        // A `never` candidate binds nothing a literal replacing it widens.
-        let bound_before: std::collections::BTreeSet<String> = self
-            .bound_names()
-            .filter(|name| !self.is_never_candidate(name))
+        // A `never` candidate binds nothing a literal replacing it widens:
+        // once replaced, the name counts as newly bound.
+        let bound_before: std::collections::BTreeSet<String> = self.bound_names().collect();
+        let never_candidates: BTreeMap<String, Type> = self
+            .bindings
+            .iter()
+            .filter(|(name, _)| self.is_never_candidate(name))
+            .map(|(name, ty)| (name.clone(), ty.clone()))
             .collect();
         let resolved = self.apply_or_record(param_ty, types.limits);
         let fits_binding = !super::infer::expr::type_contains_type_var(&resolved)
@@ -617,7 +612,12 @@ impl TypeParamSubstitution {
             // against `T[]` is an ordinary one.
             let newly_bound: Vec<String> = self
                 .bound_names()
-                .filter(|name| !bound_before.contains(name))
+                .filter(|name| {
+                    !bound_before.contains(name)
+                        || never_candidates
+                            .get(name)
+                            .is_some_and(|before| self.bindings.get(name) != Some(before))
+                })
                 .filter(|name| {
                     self.bindings.get(name).is_some_and(|bound| {
                         matches!(

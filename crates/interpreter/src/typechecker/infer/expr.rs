@@ -8762,13 +8762,24 @@ impl Inferer<'_> {
             _ if receiver_ty.is_string_shaped() => Type::String,
             Type::Array(elem) => (**elem).clone(),
             Type::Uint8Array => Type::Number,
-            Type::Tuple(tuple) => match tuple_key_element(tuple, slot) {
-                Some(elem) => elem,
+            // A tuple has no element at a key that names no slot, as tsc
+            // reports.
+            Type::Tuple(tuple) => match slot.and_then(|slot| tuple.elements.get(slot)) {
+                Some(elem) => elem.clone(),
                 None => return Ok(None),
             },
             // A union of arrays and tuples reads each member's element, as
-            // `infer_index_access` does with a numeric literal.
+            // `infer_index_access` does with a numeric literal. With an
+            // array among them, a key that names no slot reads the number
+            // index every member has.
             Type::Union(members) if receiver_ty.is_array_like_union() => {
+                if slot.is_none()
+                    && !members
+                        .iter()
+                        .any(|member| matches!(member.peel(), Type::Array(_)))
+                {
+                    return Ok(None);
+                }
                 let elements: Option<Vec<Type>> = members
                     .iter()
                     .map(|member| match member.peel() {
@@ -13299,9 +13310,9 @@ fn admits_literal_of(context: &Type, literal: &Type) -> bool {
     }
 }
 
-/// What a numeric key reads on `tuple`: the element at an integer `slot`,
-/// none past its end, and with no slot (`"-1"`, `"1.5"`, `"NaN"`) any
-/// element, as tsc reads the tuple's number index there.
+/// What a numeric key reads on a tuple member of a union with an array: the
+/// element at an integer `slot`, none past its end, and with no slot
+/// (`"-1"`, `"1.5"`, `"NaN"`) any element, its number index.
 fn tuple_key_element(tuple: &crate::types::TupleType, slot: Option<usize>) -> Option<Type> {
     match slot {
         Some(slot) => tuple.elements.get(slot).cloned(),
