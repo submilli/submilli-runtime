@@ -743,15 +743,20 @@ impl<'a> Inferer<'a> {
                 return_type,
             } => {
                 self.report_duplicate_params(params.iter().map(|f| &f.name));
-                let resolved_params: Vec<Type> = params
+                // A function type is a signature, whose type queries take no
+                // narrowing, as tsc gives each signature its own flow.
+                let in_flow = std::mem::replace(&mut self.type_queries_see_narrowing, false);
+                let resolved = params
                     .iter()
                     .map(|f| {
                         self.resolve_type(&f.ty)
                             .map(|ty| crate::ObjectField::widen_optional(f.optional, ty))
                     })
-                    .collect::<Result<_, _>>()?;
-                // The return position is the one place `void` belongs.
-                let resolved_ret = self.resolve_type(return_type)?;
+                    .collect::<Result<Vec<Type>, _>>()
+                    // The return position is the one place `void` belongs.
+                    .and_then(|params| Ok((params, self.resolve_type(return_type)?)));
+                self.type_queries_see_narrowing = in_flow;
+                let (resolved_params, resolved_ret) = resolved?;
                 let has_rest = params.last().is_some_and(|f| f.rest);
                 Type::Function {
                     params: resolved_params,

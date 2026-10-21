@@ -41,4 +41,11 @@ function main(): void {
 
   const flag = ((t) => !t)(true);
   assert(flag === false, "a boolean argument");
+
+  const one = 1;
+  const reassigned = ((x) => {
+    x = 2;
+    return x;
+  })(one);
+  assert(reassigned === 2, "a literal argument types its parameter widened");
 }

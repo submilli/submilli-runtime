@@ -33,6 +33,16 @@ function parenthesized([a, b = 5] = ([1])): number {
   return a + b;
 }
 
+// A padding default that reads a name the pattern binds reads the
+// pattern's own binding, not the outer one.
+const first = 10;
+function readsPattern([first, second = first]: [number, number?] = [1]): number {
+  return second;
+}
+function readsObjectPattern({ x = 3, y = x }: { x?: number; y?: number } = {}): number {
+  return y;
+}
+
 function main(): void {
   assert(offset() === 0, "the default");
   assert(offset({ x: 1 }) === 1, "the property's default");
@@ -51,4 +61,7 @@ function main(): void {
   assert(skipped([1, 2, 3]) === 4, "a slot past a hole");
   assert(skipped() === 6, "a hole reads nothing");
   assert(parenthesized([1, 2]) === 3, "a parenthesized default");
+  assert(readsPattern() === 1, "a padding default reads its pattern");
+  assert(readsObjectPattern() === 3, "an object padding default reads its pattern");
+  assert(first === 10, "the outer name is untouched");
 }

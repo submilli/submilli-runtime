@@ -31,6 +31,10 @@ function main(): void {
   let v: string | number = pick();
   if (typeof v === "string") {
     assert(id<typeof v>(v).length === 3, "a call's type argument");
+    // A function type's parameters are a signature, which keeps the
+    // declared type even inside an annotation that runs.
+    const f: (p: typeof v) => number = (p) => 1;
+    assert(f(5) === 1, "a function type in an annotation");
   }
   v = 1;
 }
