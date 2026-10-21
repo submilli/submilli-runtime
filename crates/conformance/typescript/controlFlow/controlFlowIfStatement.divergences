@@ -6,4 +6,4 @@ line 42: JSON.parse(data)
 
 errors:
 line 33: ours: expected `Error`, got `string` (tsc accepts)
-line 42: ours: `JSON.parse(s)` expects a `string` argument, got `string | (T & string)` (tsc accepts)
+line 42: ours: expected `T`, got `unknown` (tsc accepts)

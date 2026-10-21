@@ -4775,12 +4775,13 @@ impl Inferer<'_> {
 
         // Arg must be a `string`. Pass `Some(&Type::String)` as the
         // hint so string-literal arguments widen correctly, then
-        // verify the resolved type is actually a string.
+        // verify the resolved type is assignable to `string`, as a call's
+        // argument is: `string | (T & string)` narrowed from `string | T`
+        // passes. Codegen coerces it to the string slot.
         let (typed_arg, arg_ty) = self.infer_expr(args[0], Some(&Type::String))?;
-        if !matches!(
-            arg_ty.peel(),
-            Type::String | Type::StringLiteral(_) | Type::Error
-        ) {
+        if !matches!(arg_ty.peel(), Type::Error)
+            && !super::assignable::assignable(&arg_ty, &Type::String, self.resolver())
+        {
             self.error_with_help(
                 self.ast
                     .try_expr(args[0])
