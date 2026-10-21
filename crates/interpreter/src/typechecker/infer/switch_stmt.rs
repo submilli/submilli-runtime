@@ -868,6 +868,23 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?;
             if let Type::Union(members) = receiver_expr.ty.peel()
                 && let Some(position) = index_position(&index_expr.kind)
+                && narrowing::tuple_position_discriminant(members, position).is_none()
+                && let Some(element_tys) =
+                    super::predicate_envs::discriminant_element_types(members, position)
+            {
+                // A position some member types with no single literal
+                // (`[null, string] | [boolean, number]`) still discriminates,
+                // as a field typed so does.
+                let (kept, missing) = self.members_left_unmatched(members, &element_tys, covered);
+                return self.discriminated_residual(
+                    receiver_expr,
+                    kept,
+                    missing,
+                    format!("[{position}]"),
+                );
+            }
+            if let Type::Union(members) = receiver_expr.ty.peel()
+                && let Some(position) = index_position(&index_expr.kind)
                 && let Some(table) = narrowing::tuple_position_discriminant(members, position)
             {
                 let kept = table.uncovered_members(members, &covered.literals);

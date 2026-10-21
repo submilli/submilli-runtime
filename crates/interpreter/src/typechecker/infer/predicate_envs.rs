@@ -1479,7 +1479,11 @@ impl<'a> Inferer<'a> {
         let path_ty = self.narrowing_source_ty(path_expr)?;
         let path_span = path_expr.span;
         let fallback_kind = path_expr.kind.clone();
-        let equal_ty = self.shared_values(&path_ty, &value_ty);
+        let equal_ty = if matches!(path_ty.peel(), Type::Unknown) {
+            unknown_equal_to(&value_ty)
+        } else {
+            self.shared_values(&path_ty, &value_ty)
+        };
         if matches!(equal_ty, Type::Never) || equal_ty.peel() == path_ty.peel() {
             return Ok(None);
         }
@@ -2685,12 +2689,27 @@ impl<'a> Inferer<'a> {
         Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
         crate::compiler_error::CompilerFailure,
     > {
-        let crate::TypedExprKind::FieldAccess { receiver, name } = path_kind else {
-            return Ok(None);
+        let (receiver, key) = match path_kind {
+            crate::TypedExprKind::FieldAccess { receiver, name } => {
+                (*receiver, DiscriminantKey::Field(name.name.clone()))
+            }
+            crate::TypedExprKind::IndexAccess { receiver, index } => {
+                let Some(position) = index_position(
+                    &self
+                        .typed_ast
+                        .try_expr(*index)
+                        .map_err(crate::typechecker::arena_failure)?
+                        .kind,
+                ) else {
+                    return Ok(None);
+                };
+                (*receiver, DiscriminantKey::Position(position))
+            }
+            _ => return Ok(None),
         };
         let receiver_expr = self
             .typed_ast
-            .try_expr(*receiver)
+            .try_expr(receiver)
             .map_err(crate::typechecker::arena_failure)?
             .clone();
         let Some(root_path) = self.expr_to_reference_path(&receiver_expr)? else {
@@ -2703,10 +2722,7 @@ impl<'a> Inferer<'a> {
         let mut truthy = Vec::new();
         let mut falsy = Vec::new();
         for member in members {
-            let Some(field_ty) = self
-                .member_shape(member)
-                .and_then(|shape| shape.get(&name.name).map(crate::ObjectField::read_ty))
-            else {
+            let Some(field_ty) = self.discriminant_read_ty(member, &key) else {
                 return Ok(None);
             };
             is_discriminant |= narrowing::has_unit_member(&field_ty);
@@ -2738,6 +2754,27 @@ impl<'a> Inferer<'a> {
             (truthy, falsy),
         )
         .map(Some)
+    }
+
+    /// The type `member` reads at `key`: a field's read type, or a tuple's
+    /// element, `undefined` past its end.
+    fn discriminant_read_ty(&self, member: &Type, key: &DiscriminantKey) -> Option<Type> {
+        match key {
+            DiscriminantKey::Field(name) => self
+                .member_shape(member)
+                .and_then(|shape| shape.get(name).map(crate::ObjectField::read_ty)),
+            DiscriminantKey::Position(position) => {
+                let Type::Tuple(elements) = member.peel() else {
+                    return None;
+                };
+                Some(elements.get(*position).map_or(Type::Undefined, |element| {
+                    crate::ObjectField::widen_optional(
+                        *position >= elements.required_len(),
+                        element.clone(),
+                    )
+                }))
+            }
+        }
     }
 
     /// Leading `#` prevents collision with user identifiers (first-char rule: `[A-Za-z_$]`).
@@ -3232,7 +3269,10 @@ fn add_missing_views(env: &mut narrowing::NarrowEnv, extra: narrowing::NarrowEnv
 /// Each tuple member's element type at `position`, when that position is a
 /// discriminant: the members type it differently, some with a unit type such
 /// as `null`, as [`Inferer::discriminant_field_types`] requires of a field.
-fn discriminant_element_types(members: &[Type], position: usize) -> Option<Vec<Option<Type>>> {
+pub(super) fn discriminant_element_types(
+    members: &[Type],
+    position: usize,
+) -> Option<Vec<Option<Type>>> {
     // A tuple shorter than `position` reads `undefined` there, as a pattern does.
     let element_tys: Vec<Type> = members
         .iter()
@@ -3308,5 +3348,33 @@ fn chain_part_span(part: &crate::TypedChainPart) -> Span {
         | TypedChainPart::Call { span, .. }
         | TypedChainPart::MethodCall { span, .. }
         | TypedChainPart::NonNull { span, .. } => *span,
+    }
+}
+
+/// What an `unknown` equal to a value of type `value_ty` holds, as TypeScript
+/// narrows it: a primitive or `object` value's own type, and `object` for any
+/// other object type. A union says too little to narrow by, so it stays
+/// `unknown`.
+fn unknown_equal_to(value_ty: &Type) -> Type {
+    match value_ty.peel() {
+        Type::Number
+        | Type::NumberLiteral(_)
+        | Type::BigInt
+        | Type::BigIntLiteral(_)
+        | Type::String
+        | Type::StringLiteral(_)
+        | Type::Boolean
+        | Type::BooleanLiteral(_)
+        | Type::NonPrimitive => value_ty.clone(),
+        ty if ty.is_enum_member() => value_ty.clone(),
+        Type::Object { .. }
+        | Type::Array(_)
+        | Type::Tuple(_)
+        | Type::Readonly(_)
+        | Type::Function { .. }
+        | Type::InterfaceRef { .. }
+        | Type::ClassRef { .. }
+        | Type::Uint8Array => Type::NonPrimitive,
+        _ => Type::Unknown,
     }
 }

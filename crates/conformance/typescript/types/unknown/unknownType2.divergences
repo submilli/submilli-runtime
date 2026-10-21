@@ -1,16 +1,4 @@
-types: 176 of 288 tsc entries compared, 6 differ
-
-line 65: u
-  tsc:  string
-  ours: unknown
-
-line 69: u
-  tsc:  boolean
-  ours: unknown
-
-line 73: u
-  tsc:  number
-  ours: unknown
+types: 176 of 288 tsc entries compared, 3 differ
 
 line 140: x
   tsc:  StringEnum.A | StringEnum.B
@@ -25,8 +13,5 @@ line 143: x
   ours: StringEnum.C
 
 errors:
-line 65: ours: expected `string`, got `unknown` (tsc accepts)
-line 69: ours: expected `boolean`, got `unknown` (tsc accepts)
-line 73: ours: expected `number`, got `unknown` (tsc accepts)
 line 137: ours: `switch` case body must end with `break` or `return` — no fallthrough (tsc accepts)
 line 139: ours: `switch` case body must end with `break` or `return` — no fallthrough (tsc accepts)
