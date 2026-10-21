@@ -20,4 +20,3 @@ line 128 extra: artifact tsc reports the property on lines 130 and 131 that brea
 line 130, 131 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 128
 line 99 extra: artifact tsc reports the property on line 101 that breaks the index signature, we report the interface declaring it, here; also by-design spec §1.2 enums are nominal, so a `number` isn't assignable to a numeric enum (`foo2` on line 102)
 line 101 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 99
-line 64 extra: bug SUB-1722 an interface member that breaks its index signature is reported again at every reference to the interface (`I8`, declared on line 56)

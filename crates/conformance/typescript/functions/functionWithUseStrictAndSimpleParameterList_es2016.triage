@@ -1,1 +1,0 @@
-line 4, 5, 26, 27, 38, 39, 42, 44 missed: bug SUB-1725 a `"use strict"` directive in a function with a non-simple parameter list (here defaults) is accepted, where tsc and JavaScript reject it

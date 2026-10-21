@@ -28,7 +28,6 @@ line 42: ours: property `foo` of type `number | string` does not satisfy string 
 line 49: ours: property `foo` of type `number | string` does not satisfy string index value type `{ bar: number }` (tsc accepts)
 line 56: ours: property `foo` of type `number | string` does not satisfy string index value type `number[]` (tsc accepts)
 line 63: ours: property `foo` of type `number | string` does not satisfy string index value type `I8` (tsc accepts)
-line 64: ours: property `foo` of type `number | string` does not satisfy string index value type `number[]` (tsc accepts)
 line 70: ours: property `foo` of type `number | string` does not satisfy string index value type `A` (tsc accepts)
 line 77: ours: property `foo` of type `number | string` does not satisfy string index value type `A2<number>` (tsc accepts)
 line 99: ours: property `foo` of type `number | string` does not satisfy string index value type `E2` (tsc accepts)

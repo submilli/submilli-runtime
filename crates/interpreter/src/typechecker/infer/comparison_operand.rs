@@ -134,6 +134,26 @@ impl super::Inferer<'_> {
         ))
     }
 
+    /// `what` says which new object an operand makes, such as "a function
+    /// expression makes a new function".
+    pub(super) fn error_fresh_reference_comparison(
+        &mut self,
+        op: crate::BinOp,
+        what: &str,
+        span: crate::Span,
+    ) {
+        let always = if op == crate::BinOp::NotEq {
+            "true"
+        } else {
+            "false"
+        };
+        self.error_with_help(
+            span,
+            format!("this comparison is always `{always}`: {what}, which equals no other value"),
+            vec!["keep it in a variable to compare it by identity".to_string()],
+        );
+    }
+
     pub(super) fn error_nan_comparison(&mut self, op: crate::BinOp, span: crate::Span) {
         let always = if op == crate::BinOp::NotEq {
             "true"
