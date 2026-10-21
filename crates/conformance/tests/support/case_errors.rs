@@ -40,6 +40,7 @@ const SHARED_SYNTAX_CHECKS: &[&str] = &[
     "`<>` is not allowed",
     "can't name a binding in strict mode",
     "line break is not allowed before `=>`",
+    "`\"use strict\"` directive",
 ];
 
 /// Errors from any phase that name a feature we lack.
