@@ -1803,7 +1803,11 @@ impl Inferer<'_> {
                         _ => "+",
                     };
                     let mut help = Vec::new();
-                    if peeled.contains_string() {
+                    if matches!(op, UnOp::Pos) && peeled.is_bigint() {
+                        help.push(
+                            "unary `+` throws on a bigint; `Number(b)` converts it".to_string(),
+                        );
+                    } else if peeled.contains_string() {
                         help.push(
                             "convert first: `Number(s)` parses the text (`NaN` if it \
                              isn't a number), and `-Number(s)` negates the result"
@@ -13796,6 +13800,8 @@ fn unary_arith_result(op: UnOp, ty: &Type) -> Option<Type> {
         return bitnot_result(ty);
     }
     match ty.primitive_behavior() {
+        // JavaScript's `+` throws on a bigint (tsc: TS2736); `-` negates it.
+        Type::BigInt | Type::BigIntLiteral(_) if matches!(op, UnOp::Pos) => None,
         Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
         Type::Number | Type::NumberLiteral(_) | Type::Never | Type::Error => Some(Type::Number),
         // `+s` is JS's explicit string→number coercion and the one TS keeps; it
@@ -13803,6 +13809,15 @@ fn unary_arith_result(op: UnOp, ty: &Type) -> Option<Type> {
         // number). Unary `-` on a string stays rejected: it reads as arithmetic,
         // not a conversion.
         t if matches!(op, UnOp::Pos) && t.is_string_shaped() => Some(Type::Number),
+        // `number | string`: each member converts to a number, so the union does.
+        Type::Union(members)
+            if matches!(op, UnOp::Pos)
+                && members
+                    .iter()
+                    .all(|member| matches!(unary_arith_result(op, member), Some(Type::Number))) =>
+        {
+            Some(Type::Number)
+        }
         _ => None,
     }
 }

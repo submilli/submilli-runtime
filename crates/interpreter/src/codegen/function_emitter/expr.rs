@@ -5339,27 +5339,23 @@ fn emit_unary(
         UnOp::Pos => {
             // On a string, `+` is the explicit numeric coercion and lowers to
             // the same host parse `Number(s)` calls. On a number it is the
-            // identity, so the operand's value is already what we want.
-            emit_primitive_operand(emitter, ctx, operand)?;
-            if ctx
+            // identity, so the operand's value is already what we want. A
+            // `number | string` operand picks one of the two at run time.
+            let operand_ty = ctx
                 .ta
                 .try_expr(operand)
                 .map_err(crate::codegen::arena_failure)?
                 .ty
-                .is_string_shaped()
-            {
-                let host_idx = ctx
-                    .symbols
-                    .func_idx(&crate::mangle::host(
-                        crate::runtime::NUMBER_MODULE_NAME,
-                        "toNumber",
-                    ))
-                    .ok_or_else(|| {
-                        crate::codegen::internal_failure(
-                            "submilli:number.toNumber import recorded by codegen analysis",
-                        )
-                    })?;
-                emitter.instruction(Instruction::Call(host_idx));
+                .clone();
+            if operand_ty.is_string_shaped() {
+                emit_primitive_operand(emitter, ctx, operand)?;
+                emitter.instruction(Instruction::Call(to_number_host(ctx)?));
+            } else if matches!(operand_ty.primitive_behavior(), Type::Union(_)) {
+                emit_expr(emitter, ctx, operand)?;
+                cast::emit_box(emitter, ctx, &operand_ty)?;
+                emit_union_to_number(emitter, ctx)?;
+            } else {
+                emit_primitive_operand(emitter, ctx, operand)?;
             }
         }
         UnOp::Not => {
@@ -5383,6 +5379,43 @@ fn emit_unary(
             emitter.instruction(Instruction::I32Eqz);
         }
     };
+    Ok(())
+}
+
+fn to_number_host(ctx: &CodegenCtx) -> Result<u32, crate::compiler_error::CompilerFailure> {
+    ctx.symbols
+        .func_idx(&crate::mangle::host(
+            crate::runtime::NUMBER_MODULE_NAME,
+            "toNumber",
+        ))
+        .ok_or_else(|| {
+            crate::codegen::internal_failure(
+                "submilli:number.toNumber import recorded by codegen analysis",
+            )
+        })
+}
+
+/// `+x` on a boxed `number | string`: parses a string member as `Number(s)`
+/// does and unboxes a number member.
+fn emit_union_to_number(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let string = ctx
+        .symbols
+        .string_type_idx()
+        .ok_or_else(|| crate::codegen::internal_failure("$string intrinsic type registered"))?;
+    let tmp = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
+    emitter.instruction(Instruction::LocalTee(tmp));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(string)));
+    emitter.emit_if(BlockType::Result(ValType::F64));
+    emitter.instruction(Instruction::LocalGet(tmp));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(string)));
+    emitter.instruction(Instruction::Call(to_number_host(ctx)?));
+    emitter.emit_else();
+    emitter.instruction(Instruction::LocalGet(tmp));
+    cast::emit_cast_to(emitter, ctx, &Type::Number)?;
+    emitter.emit_end();
     Ok(())
 }
 

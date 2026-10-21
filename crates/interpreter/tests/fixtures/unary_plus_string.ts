@@ -17,9 +17,6 @@ function main(): void {
   const neg = -3;
   assert(+neg === -3, "+ on a negative number");
 
-  const big = 2n;
-  assert(+big === 2n, "+bigint is still the identity");
-
   // Every string-shaped operand, not just a bare `string`.
   const tmpl = `7${8}`;
   assert(+tmpl === 78, "template literal");
