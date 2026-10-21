@@ -9639,6 +9639,10 @@ impl Inferer<'_> {
                         Type::Error
                     }
                 }
+                (None, None) if let Some(ty) = self.invoked_parameter_type(span, i) => {
+                    self.parameters_typed_by_arguments.insert(p.name.span);
+                    ty
+                }
                 (None, None) if p.default.is_some() => {
                     let default = p.default.ok_or_else(|| {
                         super::inference_failure("default parameter lost its initializer")

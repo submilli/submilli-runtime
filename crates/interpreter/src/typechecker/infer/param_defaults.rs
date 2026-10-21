@@ -85,7 +85,9 @@ impl Inferer<'_> {
         };
         // An unannotated parameter's type is its default's own, which an object
         // pattern shapes; typing the default against it again would lose that.
+        // One typed from its argument is the default's context instead.
         let shaped_by_pattern = param.ty.is_none()
+            && !self.parameters_typed_by_arguments.contains(&param.name.span)
             && self
                 .ast
                 .object_pattern_sources

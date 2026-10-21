@@ -171,6 +171,8 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         spread_context_for_next_literal: None,
         soft_context_function_spans: None,
         invoked_return_hint: None,
+        invoked_parameter_types: None,
+        parameters_typed_by_arguments: Default::default(),
         cast_operand: None,
         invoked_body_exit: None,
         prebinding_parameter_types: false,
@@ -467,6 +469,8 @@ pub fn infer_package_checked<'a>(
         spread_context_for_next_literal: None,
         soft_context_function_spans: None,
         invoked_return_hint: None,
+        invoked_parameter_types: None,
+        parameters_typed_by_arguments: Default::default(),
         cast_operand: None,
         invoked_body_exit: None,
         prebinding_parameter_types: false,
@@ -831,6 +835,13 @@ pub(super) struct Inferer<'a> {
     /// The type the immediately-invoked call's result is expected to have,
     /// which the arrow it runs takes as its return type's context, as in tsc.
     invoked_return_hint: Option<Type>,
+    /// The span of the function literal a call is about to invoke in place
+    /// with arguments, and the type each argument gives its unannotated
+    /// parameter there (see [`Inferer::invoked_argument_types`]).
+    invoked_parameter_types: Option<(Span, Vec<Option<Type>>)>,
+    /// The name spans of the parameters typed from their arguments that way,
+    /// whose defaults are typed against them.
+    parameters_typed_by_arguments: std::collections::HashSet<Span>,
     /// The span of the function literal an `as` cast is about to infer, and
     /// the cast's target. The target only types the literal's unannotated
     /// parameters and lets an `unknown` return take any value; the cast

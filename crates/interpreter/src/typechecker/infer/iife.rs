@@ -30,9 +30,15 @@ pub(super) fn immediately_invoked_arrow(
     if !args.is_empty() {
         return Ok(None);
     }
+    invoked_function(ast, callee)
+}
+
+/// The arrow `callee` is, through parentheses: an arrow, or the arrow of an
+/// anonymous function expression.
+fn invoked_function(ast: &Ast, callee: ExprId) -> Result<Option<ExprId>, CompilerFailure> {
     Ok(
         match &ast.try_expr(callee).map_err(super::arena_failure)?.kind {
-            ExprKind::Paren(inner) => immediately_invoked_arrow(ast, *inner, args)?,
+            ExprKind::Paren(inner) => invoked_function(ast, *inner)?,
             ExprKind::FunctionExpression {
                 name: None,
                 function,
@@ -122,7 +128,7 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(crate::TypedExprKind, Type), CompilerFailure> {
         let Some(arrow) = immediately_invoked_arrow(self.ast, callee, &args)? else {
-            return self.infer_call(callee, type_args, args, expected, span);
+            return self.infer_call_typing_invoked_parameters(callee, type_args, args, expected, span);
         };
         let arrow_span = self.ast.try_expr(arrow).map_err(super::arena_failure)?.span;
         self.immediately_invoked = Some(arrow_span);
@@ -136,6 +142,71 @@ impl Inferer<'_> {
             self.apply_invoked_body_exit(exit, span)?;
         }
         Ok(inferred)
+    }
+
+    /// [`Self::infer_call`], giving a function literal invoked in place the
+    /// types of its arguments for its unannotated parameters, as tsc types an
+    /// immediately-invoked function's parameters from its arguments.
+    fn infer_call_typing_invoked_parameters(
+        &mut self,
+        callee: ExprId,
+        type_args: Option<Vec<crate::TypeAnnotation>>,
+        args: Vec<ExprId>,
+        expected: Option<&Type>,
+        span: Span,
+    ) -> Result<(crate::TypedExprKind, Type), CompilerFailure> {
+        let Some(arrow) = invoked_function(self.ast, callee)? else {
+            return self.infer_call(callee, type_args, args, expected, span);
+        };
+        let arrow_expr = self.ast.try_expr(arrow).map_err(super::arena_failure)?;
+        let arrow_span = arrow_expr.span;
+        let ExprKind::Arrow { params, .. } = &arrow_expr.kind else {
+            return self.infer_call(callee, type_args, args, expected, span);
+        };
+        let params = params.clone();
+        let types = self.invoked_argument_types(&params, &args)?;
+        if types.iter().any(Option::is_some) {
+            self.invoked_parameter_types = Some((arrow_span, types));
+        }
+        let inferred = self.infer_call(callee, type_args, args, expected, span);
+        self.invoked_parameter_types = None;
+        inferred
+    }
+
+    /// The type each argument gives the unannotated parameter it is passed
+    /// to: its own type, widened, as tsc takes it. A function literal that
+    /// needs its parameter's type to be typed itself gives none, and nor does
+    /// one passed to a rest parameter.
+    fn invoked_argument_types(
+        &mut self,
+        params: &[crate::ParamDecl],
+        args: &[ExprId],
+    ) -> Result<Vec<Option<Type>>, CompilerFailure> {
+        let mut types = vec![None; params.len()];
+        for (index, (param, &arg)) in params.iter().zip(args).enumerate() {
+            if param.rest {
+                break;
+            }
+            if param.ty.is_some() || self.is_context_sensitive_function(arg)? {
+                continue;
+            }
+            types[index] = self.with_parameter_type_trial(|this| {
+                let errors_before = this.error_count();
+                let (typed, ty) = this.infer_expr(arg, None)?;
+                if this.error_count() != errors_before {
+                    return Ok(None);
+                }
+                this.widen_fresh_literals(typed, &ty).map(Some)
+            })?;
+        }
+        Ok(types)
+    }
+
+    /// The type the argument at `index` gives the unannotated parameter
+    /// there of the function literal at `span`, invoked in place.
+    pub(super) fn invoked_parameter_type(&self, span: Span, index: usize) -> Option<Type> {
+        let (invoked, types) = self.invoked_parameter_types.as_ref()?;
+        (*invoked == span).then(|| types.get(index).cloned().flatten())?
     }
 
     /// What the immediately-invoked body being left hands to the code after
