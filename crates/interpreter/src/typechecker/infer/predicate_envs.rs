@@ -1279,15 +1279,15 @@ impl<'a> Inferer<'a> {
         let lhs_rewritten = self.is_written_within(lhs_id, rhs_id)?;
         match (lhs_lit, rhs_lit) {
             (None, Some(_) | None) if lhs_rewritten => Ok(None),
-            (None, Some(lit)) => self.narrow_to_other_literal(op, lhs_id, lit),
-            (Some(lit), None) => self.narrow_to_other_literal(op, rhs_id, lit),
+            (None, Some(lit)) => self.narrow_to_other_literal(op, lhs_id, rhs_id, lit),
+            (Some(lit), None) => self.narrow_to_other_literal(op, rhs_id, lhs_id, lit),
             (None, None) => self.narrow_equal_to_value(op, lhs_id, rhs_id),
             (Some(lhs_lit), Some(_)) if lhs_rewritten => {
-                self.narrow_to_other_literal(op, rhs_id, lhs_lit)
+                self.narrow_to_other_literal(op, rhs_id, lhs_id, lhs_lit)
             }
             (Some(lhs_lit), Some(rhs_lit)) => {
-                let lhs_envs = self.narrow_to_other_literal(op, lhs_id, rhs_lit)?;
-                let rhs_envs = self.narrow_to_other_literal(op, rhs_id, lhs_lit)?;
+                let lhs_envs = self.narrow_to_other_literal(op, lhs_id, rhs_id, rhs_lit)?;
+                let rhs_envs = self.narrow_to_other_literal(op, rhs_id, lhs_id, lhs_lit)?;
                 Ok(match (lhs_envs, rhs_envs) {
                     (Some((mut equal, mut unequal)), Some((other_equal, other_unequal))) => {
                         add_missing_views(&mut equal, other_equal);
@@ -1323,12 +1323,13 @@ impl<'a> Inferer<'a> {
         }))
     }
 
-    /// Narrows `path_id` compared with a value whose type is the literal
-    /// `other_lit`, unless `path_id` is itself written out as a literal.
+    /// Narrows `path_id` compared with `other_id`, a value whose type is the
+    /// literal `other_lit`, unless `path_id` is itself written out as a literal.
     fn narrow_to_other_literal(
         &mut self,
         op: crate::BinOp,
         path_id: ExprId,
+        other_id: ExprId,
         other_lit: narrowing::LiteralValue,
     ) -> Result<
         Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
@@ -1337,7 +1338,13 @@ impl<'a> Inferer<'a> {
         if is_written_literal(&self.typed_ast, path_id)? {
             return Ok(None);
         }
-        self.narrow_equal_to_literal(op, path_id, other_lit)
+        let other_ty = &self
+            .typed_ast
+            .try_expr(other_id)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty;
+        let literal_ty = compared_literal_type(other_ty, &other_lit);
+        self.narrow_equal_to_literal(op, path_id, other_lit, literal_ty)
     }
 
     /// Narrows a path compared with a value whose type is not one literal, as
@@ -1391,13 +1398,13 @@ impl<'a> Inferer<'a> {
     fn equal_to_one_of(
         &mut self,
         path_id: ExprId,
-        literals: Vec<narrowing::LiteralValue>,
+        literals: Vec<(narrowing::LiteralValue, Type)>,
     ) -> Result<Option<narrowing::NarrowEnv>, crate::compiler_error::CompilerFailure> {
         let mut equal: Option<narrowing::NarrowEnv> = None;
-        for literal in literals {
+        for (literal, literal_ty) in literals {
             // A literal the path can't hold can't be the one it equals.
             let Some((literal_eq, _)) =
-                self.narrow_equal_to_literal(crate::BinOp::Eq, path_id, literal)?
+                self.narrow_equal_to_literal(crate::BinOp::Eq, path_id, literal, literal_ty)?
             else {
                 continue;
             };
@@ -1537,12 +1544,14 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    /// Narrows the path `path_id` compared with `literal`.
+    /// Narrows the path `path_id` compared with `literal`, whose type is
+    /// `literal_ty`: its own literal type, or an enum member type.
     fn narrow_equal_to_literal(
         &mut self,
         op: crate::BinOp,
         path_id: ExprId,
         literal: narrowing::LiteralValue,
+        literal_ty: Type,
     ) -> Result<
         Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
         crate::compiler_error::CompilerFailure,
@@ -1552,8 +1561,11 @@ impl<'a> Inferer<'a> {
             .try_expr(path_id)
             .map_err(crate::typechecker::arena_failure)?;
         if matches!(path_expr.kind, crate::TypedExprKind::OptionalChain { .. }) {
-            let literal_ty = narrowing::literal_type(&literal);
-            if let Some(envs) = self.narrow_optional_chain_discriminant(op, path_id, &literal_ty)? {
+            if let Some(envs) = self.narrow_optional_chain_discriminant(
+                op,
+                path_id,
+                &narrowing::literal_type(&literal),
+            )? {
                 return Ok(Some(envs));
             }
             // Equal to a literal, the chain reached its end: nothing on it is
@@ -1563,7 +1575,7 @@ impl<'a> Inferer<'a> {
                 narrowing::TypeFacts::NE_NULL | narrowing::TypeFacts::NE_UNDEFINED,
                 |this, result| {
                     Ok(this
-                        .narrow_equal_to_literal(crate::BinOp::Eq, result, literal)?
+                        .narrow_equal_to_literal(crate::BinOp::Eq, result, literal, literal_ty)?
                         .map(|(equal, _)| equal))
                 },
             )?;
@@ -1596,6 +1608,7 @@ impl<'a> Inferer<'a> {
                 direct_source_kind,
                 path_span,
                 literal,
+                literal_ty,
             );
         }
 
@@ -1617,6 +1630,7 @@ impl<'a> Inferer<'a> {
                     direct_source_kind,
                     path_span,
                     literal,
+                    literal_ty,
                 )?
             })
         })
@@ -1774,9 +1788,15 @@ impl<'a> Inferer<'a> {
         let direct_source_kind = self
             .synthesize_unnarrowed_source(&path, path_span)?
             .unwrap_or(path_kind);
-        if let Some((extra_true, extra_false)) =
-            self.narrow_direct_literal(op, path, path_ty, direct_source_kind, path_span, literal)?
-        {
+        if let Some((extra_true, extra_false)) = self.narrow_direct_literal(
+            op,
+            path,
+            path_ty,
+            direct_source_kind,
+            path_span,
+            literal.clone(),
+            literal_to_type(&literal),
+        )? {
             for (p, v) in extra_true {
                 true_env.insert(p, v);
             }
@@ -2020,6 +2040,7 @@ impl<'a> Inferer<'a> {
         path_kind: crate::TypedExprKind,
         path_span: Span,
         literal: narrowing::LiteralValue,
+        literal_ty: Type,
     ) -> Result<
         Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
         crate::compiler_error::CompilerFailure,
@@ -2034,7 +2055,7 @@ impl<'a> Inferer<'a> {
         let mut matched: Vec<Type> = Vec::new();
         let mut remaining: Vec<Type> = Vec::new();
         for member in members {
-            let (equal, unequal) = self.split_by_literal(member, &literal, &excluded);
+            let (equal, unequal) = self.split_by_literal(member, &literal, &literal_ty, &excluded);
             matched.extend(equal);
             remaining.extend(unequal);
         }
@@ -2162,6 +2183,7 @@ impl<'a> Inferer<'a> {
         &self,
         member: &Type,
         literal: &narrowing::LiteralValue,
+        compared_ty: &Type,
         excluded: &std::collections::BTreeSet<narrowing::LiteralValue>,
     ) -> (Option<Type>, Option<Type>) {
         let literal_ty = literal_to_type(literal);
@@ -2201,7 +2223,9 @@ impl<'a> Inferer<'a> {
             || member.is_empty_object()
             || member.peel() == &literal_ty.widen_literal()
         {
-            Some(literal_ty)
+            // As in TypeScript, the value's own type replaces a type that
+            // holds it: equal to `E.A`, an `unknown` is `E.A`, not `0`.
+            Some(compared_ty.clone())
         } else if !narrowing::has_erased_member(member)
             && super::comparable::comparable(member, &literal_ty, self.resolver())
         {
@@ -3089,14 +3113,31 @@ fn is_written_literal(
 fn comparison_literal_union(
     ast: &crate::TypedAst,
     id: ExprId,
-) -> Result<Option<Vec<narrowing::LiteralValue>>, crate::compiler_error::CompilerFailure> {
+) -> Result<Option<Vec<(narrowing::LiteralValue, Type)>>, crate::compiler_error::CompilerFailure> {
     let expr = ast
         .try_expr(id)
         .map_err(crate::typechecker::arena_failure)?;
     let Type::Union(members) = expr.ty.peel() else {
         return Ok(None);
     };
-    Ok(members.iter().map(narrowing::unit_literal_value).collect())
+    Ok(members
+        .iter()
+        .map(|member| {
+            narrowing::unit_literal_value(member)
+                .map(|literal| (literal.clone(), compared_literal_type(member, &literal)))
+        })
+        .collect())
+}
+
+/// The type a path compared with `literal`, a value of type `ty`, narrows
+/// to where nothing narrower holds it: the enum member type `E.A` for a
+/// member, and the literal's own type otherwise.
+fn compared_literal_type(ty: &Type, literal: &narrowing::LiteralValue) -> Type {
+    if ty.enum_member_value().is_some() {
+        ty.peel().clone()
+    } else {
+        literal_to_type(literal)
+    }
 }
 
 /// Joins the two ways a short-circuit condition can reach one outcome, one
