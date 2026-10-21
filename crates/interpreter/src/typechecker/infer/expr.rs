@@ -317,9 +317,23 @@ pub(super) fn type_admits_nullish(ty: &Type, types: TypeResolver<'_>) -> bool {
     type_admits_null(ty, types) || type_admits_undefined(ty, types)
 }
 
+/// The `typeof` result a tag names, for each tag narrowing understands.
+pub(super) fn typeof_tag_kind(tag: &str) -> Option<crate::TypeofTagKind> {
+    Some(match tag {
+        "number" => crate::TypeofTagKind::Number,
+        "string" => crate::TypeofTagKind::String,
+        "boolean" => crate::TypeofTagKind::Boolean,
+        "object" => crate::TypeofTagKind::Object,
+        "function" => crate::TypeofTagKind::Function,
+        "undefined" => crate::TypeofTagKind::Undefined,
+        "bigint" => crate::TypeofTagKind::BigInt,
+        _ => return None,
+    })
+}
+
 /// Whether `undefined` is one of the values `ty` can hold: `void` results,
 /// `unknown`, and type parameters, which a caller may instantiate with it, count.
-fn type_admits_undefined(ty: &Type, types: TypeResolver<'_>) -> bool {
+pub(super) fn type_admits_undefined(ty: &Type, types: TypeResolver<'_>) -> bool {
     any_resolved_member(ty, types, &admits_undefined_leaf)
 }
 
@@ -2155,15 +2169,9 @@ impl Inferer<'_> {
         };
         let (typed_operand, _) = self.infer_expr(operand_id, None)?;
         // Retained refinements cannot prove the kind of a later live read.
-        let tag = match tag.as_str() {
-            "number" => crate::TypeofTagKind::Number,
-            "string" => crate::TypeofTagKind::String,
-            "boolean" => crate::TypeofTagKind::Boolean,
-            "object" => crate::TypeofTagKind::Object,
-            "function" => crate::TypeofTagKind::Function,
-            "undefined" => crate::TypeofTagKind::Undefined,
-            "bigint" => crate::TypeofTagKind::BigInt,
-            _ => {
+        let tag = match typeof_tag_kind(&tag) {
+            Some(kind) => kind,
+            None => {
                 self.error_with_help(
                     tag_span,
                     format!(

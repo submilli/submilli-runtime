@@ -910,82 +910,32 @@ impl<'a> Inferer<'a> {
         chain_id: ExprId,
         result_facts: narrowing::TypeFacts,
     ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
-        use crate::{BinOp, TypedChainPart, TypedExprKind};
-        let chain = self
-            .typed_ast
-            .try_expr(chain_id)
-            .map_err(crate::typechecker::arena_failure)?
-            .clone();
-        let TypedExprKind::OptionalChain { base, parts } = chain.kind else {
+        let Some((env, result)) = self.optional_chain_receivers_env(chain_id)? else {
             return Ok(narrowing::NarrowEnv::new());
         };
-        let mut env = narrowing::NarrowEnv::new();
-        let null = self
-            .typed_ast
-            .try_push_expr(TypedExpr {
-                kind: TypedExprKind::Null,
-                span: chain.span,
-                ty: Type::Null,
-            })
-            .map_err(crate::typechecker::arena_failure)?;
-        let mut receiver = base;
-        for part in parts {
-            let (TypedChainPart::Field {
-                name,
-                result_ty,
-                optional,
-                span,
-            }
-            | TypedChainPart::InterfaceProperty {
-                name,
-                result_ty,
-                optional,
-                span,
-                ..
-            }) = part
-            else {
-                return Ok(narrowing::NarrowEnv::new());
-            };
-            if optional {
-                let mut receiver_env = self
-                    .predicate_envs_eq_nullish(BinOp::NotEq, receiver, null)?
-                    .0;
-                for view in receiver_env.values_mut() {
-                    view.narrowed_ty = narrowing::strip_nullish(&view.narrowed_ty);
-                    view.facts |= narrowing::TypeFacts::NE_UNDEFINED;
-                }
-                env.extend(receiver_env);
-            }
-            let receiver_expr = self
-                .typed_ast
-                .try_expr(receiver)
-                .map_err(crate::typechecker::arena_failure)?;
-            if self.receiver_type_has_getter(receiver_expr, &name.name)? {
-                return Ok(narrowing::NarrowEnv::new());
-            }
-            // A primitive's property (`s?.length`) is no field path: a view on
-            // it would read `s` as an object.
-            if !Self::is_field_bearing(&narrowing::strip_nullish(&receiver_expr.ty)) {
-                return Ok(env);
-            }
-            receiver = self
-                .typed_ast
-                .try_push_expr(TypedExpr {
-                    kind: TypedExprKind::FieldAccess { receiver, name },
-                    span,
-                    ty: result_ty,
-                })
-                .map_err(crate::typechecker::arena_failure)?;
-        }
+        self.with_chain_result_present(env, result, result_facts)
+    }
+
+    /// `env` with the chain's `result` read narrowed to `result_facts`.
+    fn with_chain_result_present(
+        &mut self,
+        mut env: narrowing::NarrowEnv,
+        result: Option<ExprId>,
+        result_facts: narrowing::TypeFacts,
+    ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
+        let Some(result) = result else {
+            return Ok(env);
+        };
         let result_path = {
             let result_expr = self
                 .typed_ast
-                .try_expr(receiver)
+                .try_expr(result)
                 .map_err(crate::typechecker::arena_failure)?;
             self.expr_to_reference_path(result_expr)?
         };
+        let null = self.null_literal_at(result)?;
         let mut result_env = self
-            .predicate_envs_eq_nullish(BinOp::NotEq, receiver, null)?
+            .predicate_envs_eq_nullish(crate::BinOp::NotEq, result, null)?
             .0;
         // A discriminant view on the result's object holds where the result
         // isn't `null`, which only a truthy result proves.
@@ -1006,6 +956,169 @@ impl<'a> Inferer<'a> {
         }
         env.extend(result_env);
         Ok(env)
+    }
+
+    /// Where a test on an optional chain's result passes only for a value the
+    /// chain produced, as TypeScript narrows `o?.foo === value`: every optional
+    /// receiver is present, and the chain's result, read as `o.foo`, has
+    /// `result_facts`, or narrows as `narrow_result` narrows it where that
+    /// narrows it at all. Empty when the chain isn't one we follow.
+    fn optional_chain_reached_env(
+        &mut self,
+        chain_id: ExprId,
+        result_facts: narrowing::TypeFacts,
+        narrow_result: impl FnOnce(
+            &mut Self,
+            ExprId,
+        ) -> Result<
+            Option<narrowing::NarrowEnv>,
+            crate::compiler_error::CompilerFailure,
+        >,
+    ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
+        let Some((receivers, result)) = self.optional_chain_receivers_env(chain_id)? else {
+            return Ok(narrowing::NarrowEnv::new());
+        };
+        let mut env = self.with_chain_result_present(receivers, result, result_facts)?;
+        let Some(result) = result else {
+            return Ok(env);
+        };
+        if let Some(result_env) = narrow_result(self, result)? {
+            // The test's own narrowing of the result is finer than presence.
+            env.extend_env(result_env);
+        }
+        Ok(env)
+    }
+
+    /// `o?.foo instanceof C`, or a guard asserting a type without `undefined`,
+    /// holds only where the chain ran to its end.
+    pub(super) fn narrow_optional_chain_to_asserted(
+        &mut self,
+        chain_id: ExprId,
+        asserted: &Type,
+    ) -> Result<
+        Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
+        crate::compiler_error::CompilerFailure,
+    > {
+        if super::expr::type_admits_undefined(asserted, self.resolver()) {
+            return Ok(None);
+        }
+        let reached = self.optional_chain_reached_env(
+            chain_id,
+            narrowing::TypeFacts::NE_UNDEFINED,
+            |this, result| {
+                Ok(this
+                    .narrow_path_to_asserted(result, asserted)?
+                    .map(|(asserted, _)| asserted))
+            },
+        )?;
+        Ok(Some((reached, narrowing::NarrowEnv::new())))
+    }
+
+    /// The views proving each optional receiver of a chain present, and the
+    /// chain's result written as a plain read (`o?.a.b` as `o.a.b`) when every
+    /// step is a property or element read. `None` when the chain holds a step
+    /// that reads a getter, whose value a second read may not repeat.
+    fn optional_chain_receivers_env(
+        &mut self,
+        chain_id: ExprId,
+    ) -> Result<
+        Option<(narrowing::NarrowEnv, Option<ExprId>)>,
+        crate::compiler_error::CompilerFailure,
+    > {
+        use crate::{TypedChainPart, TypedExprKind};
+        let chain = self
+            .typed_ast
+            .try_expr(chain_id)
+            .map_err(crate::typechecker::arena_failure)?
+            .clone();
+        let TypedExprKind::OptionalChain { base, parts } = chain.kind else {
+            return Ok(None);
+        };
+        let mut env = narrowing::NarrowEnv::new();
+        let mut receiver = base;
+        for part in parts {
+            if part_is_optional(&part) {
+                env.extend(self.receiver_present_env(receiver)?);
+            }
+            let receiver_expr = self
+                .typed_ast
+                .try_expr(receiver)
+                .map_err(crate::typechecker::arena_failure)?;
+            let (span, ty) = (chain_part_span(&part), part.result_ty().clone());
+            let kind = match part {
+                TypedChainPart::Field { name, .. }
+                | TypedChainPart::InterfaceProperty { name, .. } => {
+                    if self.receiver_type_has_getter(receiver_expr, &name.name)? {
+                        return Ok(None);
+                    }
+                    // A primitive's property (`s?.length`) is no field path: a
+                    // view on it would read `s` as an object.
+                    if !Self::is_field_bearing(&narrowing::strip_nullish(&receiver_expr.ty)) {
+                        return Ok(Some((env, None)));
+                    }
+                    TypedExprKind::FieldAccess { receiver, name }
+                }
+                TypedChainPart::Index { idx, .. } => {
+                    if !Self::is_field_bearing(&narrowing::strip_nullish(&receiver_expr.ty)) {
+                        return Ok(Some((env, None)));
+                    }
+                    TypedExprKind::IndexAccess {
+                        receiver,
+                        index: idx,
+                    }
+                }
+                // A call's result is no reference, so nothing after it narrows.
+                TypedChainPart::Call { .. }
+                | TypedChainPart::MethodCall { .. }
+                | TypedChainPart::NonNull { .. } => return Ok(Some((env, None))),
+            };
+            receiver = self
+                .typed_ast
+                .try_push_expr(TypedExpr { kind, span, ty })
+                .map_err(crate::typechecker::arena_failure)?;
+            let read = self
+                .typed_ast
+                .try_expr(receiver)
+                .map_err(crate::typechecker::arena_failure)?;
+            if self.expr_to_reference_path(read)?.is_none() {
+                return Ok(Some((env, None)));
+            }
+        }
+        Ok(Some((env, Some(receiver))))
+    }
+
+    /// `receiver` narrowed to neither `null` nor `undefined`.
+    fn receiver_present_env(
+        &mut self,
+        receiver: ExprId,
+    ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
+        let null = self.null_literal_at(receiver)?;
+        let mut env = self
+            .predicate_envs_eq_nullish(crate::BinOp::NotEq, receiver, null)?
+            .0;
+        for view in env.values_mut() {
+            view.narrowed_ty = narrowing::strip_nullish(&view.narrowed_ty);
+            view.facts |= narrowing::TypeFacts::NE_UNDEFINED;
+        }
+        Ok(env)
+    }
+
+    fn null_literal_at(
+        &mut self,
+        at: ExprId,
+    ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
+        let span = self
+            .typed_ast
+            .try_expr(at)
+            .map_err(crate::typechecker::arena_failure)?
+            .span;
+        self.typed_ast
+            .try_push_expr(TypedExpr {
+                kind: crate::TypedExprKind::Null,
+                span,
+                ty: Type::Null,
+            })
+            .map_err(crate::typechecker::arena_failure)
     }
 
     fn predicate_envs_in_operator(
@@ -1335,7 +1448,20 @@ impl<'a> Inferer<'a> {
             .try_expr(path_id)
             .map_err(crate::typechecker::arena_failure)?;
         if matches!(path_expr.kind, crate::TypedExprKind::OptionalChain { .. }) {
-            return Ok(None);
+            // A chain that short-circuited is `undefined`, so equal to a value
+            // that can't be, it ran to its end.
+            if super::expr::type_admits_undefined(&value_ty, self.resolver()) {
+                return Ok(None);
+            }
+            let result_facts = if super::expr::type_admits_null(&value_ty, self.resolver()) {
+                narrowing::TypeFacts::NE_UNDEFINED
+            } else {
+                narrowing::TypeFacts::NE_NULL | narrowing::TypeFacts::NE_UNDEFINED
+            };
+            let env = self.optional_chain_reached_env(path_id, result_facts, |this, result| {
+                this.equal_to_value_of(result, value_id)
+            })?;
+            return Ok(Some(env));
         }
         let Some(path) = self.expr_to_reference_path(path_expr)? else {
             return Ok(None);
@@ -1432,9 +1558,14 @@ impl<'a> Inferer<'a> {
             }
             // Equal to a literal, the chain reached its end: nothing on it is
             // `null` or `undefined`, though the literal itself may be falsy.
-            let reached = self.optional_chain_present_env(
+            let reached = self.optional_chain_reached_env(
                 path_id,
                 narrowing::TypeFacts::NE_NULL | narrowing::TypeFacts::NE_UNDEFINED,
+                |this, result| {
+                    Ok(this
+                        .narrow_equal_to_literal(crate::BinOp::Eq, result, literal)?
+                        .map(|(equal, _)| equal))
+                },
             )?;
             return Ok(Some(if op == crate::BinOp::Eq {
                 (reached, narrowing::NarrowEnv::new())
@@ -2092,9 +2223,40 @@ impl<'a> Inferer<'a> {
         if facts.is_empty() {
             return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
         }
+        if matches!(
+            self.typed_ast
+                .try_expr(value_id)
+                .map_err(crate::typechecker::arena_failure)?
+                .kind,
+            crate::TypedExprKind::OptionalChain { .. }
+        ) {
+            return self.optional_chain_typeof_envs(value_id, facts);
+        }
         let (mut true_env, mut false_env) = self.predicate_envs_from_facts(value_id, facts)?;
         self.predicate_envs_tuple_typeof_rollup(value_id, facts, &mut true_env, &mut false_env)?;
         Ok((true_env, false_env))
+    }
+
+    /// `typeof o?.foo` names a type other than `"undefined"` only where the
+    /// chain ran to its end, and `"undefined"` wherever it short-circuited.
+    fn optional_chain_typeof_envs(
+        &mut self,
+        chain_id: ExprId,
+        facts: narrowing::TypeFacts,
+    ) -> Result<(narrowing::NarrowEnv, narrowing::NarrowEnv), crate::compiler_error::CompilerFailure>
+    {
+        if facts == narrowing::TypeFacts::IS_UNDEFINED {
+            let reached =
+                self.optional_chain_present_env(chain_id, narrowing::TypeFacts::NE_UNDEFINED)?;
+            return Ok((narrowing::NarrowEnv::new(), reached));
+        }
+        // `typeof null` is `"object"`, so only the facts say the result isn't `null`.
+        let reached = self.optional_chain_reached_env(
+            chain_id,
+            narrowing::TypeFacts::NE_UNDEFINED,
+            |this, result| Ok(Some(this.predicate_envs_from_facts(result, facts)?.0)),
+        )?;
+        Ok((reached, narrowing::NarrowEnv::new()))
     }
 
     fn predicate_envs_tuple_typeof_rollup(
@@ -3082,4 +3244,28 @@ fn with_type_parameters_of(ty: &Type, compared: Type) -> Type {
     }
     kept.push(compared);
     Type::union(kept)
+}
+
+fn part_is_optional(part: &crate::TypedChainPart) -> bool {
+    use crate::TypedChainPart;
+    match part {
+        TypedChainPart::Field { optional, .. }
+        | TypedChainPart::InterfaceProperty { optional, .. }
+        | TypedChainPart::Index { optional, .. }
+        | TypedChainPart::Call { optional, .. }
+        | TypedChainPart::MethodCall { optional, .. } => *optional,
+        TypedChainPart::NonNull { .. } => false,
+    }
+}
+
+fn chain_part_span(part: &crate::TypedChainPart) -> Span {
+    use crate::TypedChainPart;
+    match part {
+        TypedChainPart::Field { span, .. }
+        | TypedChainPart::InterfaceProperty { span, .. }
+        | TypedChainPart::Index { span, .. }
+        | TypedChainPart::Call { span, .. }
+        | TypedChainPart::MethodCall { span, .. }
+        | TypedChainPart::NonNull { span, .. } => *span,
+    }
 }

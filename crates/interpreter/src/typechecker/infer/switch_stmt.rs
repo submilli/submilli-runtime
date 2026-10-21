@@ -632,6 +632,9 @@ impl Inferer<'_> {
         disc_source_span: Span,
         labels: &[(TypedSwitchValue, Type)],
     ) -> Result<narrowing::NarrowEnv, CompilerFailure> {
+        if let Some(operand) = self.typeof_switch_operand(typed_disc)? {
+            return self.typeof_case_true_env(operand, disc_source_span, labels);
+        }
         let mut literal_values: Vec<(TypedSwitchValue, Type)> = Vec::new();
         for (value, value_ty) in labels {
             let TypedSwitchValue::Expr { label, span, .. } = value else {
@@ -671,6 +674,80 @@ impl Inferer<'_> {
             acc = joined;
         }
         Ok(acc)
+    }
+
+    /// The operand of a `switch (typeof x)` discriminant, written in place.
+    fn typeof_switch_operand(&self, typed_disc: ExprId) -> Result<Option<ExprId>, CompilerFailure> {
+        let expr = |id: ExprId| {
+            self.typed_ast
+                .try_expr(id)
+                .map_err(crate::typechecker::arena_failure)
+        };
+        let TypedExprKind::Cast {
+            value, target_ty, ..
+        } = &expr(typed_disc)?.kind
+        else {
+            return Ok(None);
+        };
+        if *target_ty != super::expr::typeof_result_type() {
+            return Ok(None);
+        }
+        let TypedExprKind::Sequence { stmts, .. } = &expr(*value)?.kind else {
+            return Ok(None);
+        };
+        let [binding] = stmts.as_slice() else {
+            return Ok(None);
+        };
+        Ok(
+            match &self
+                .typed_ast
+                .try_stmt(*binding)
+                .map_err(crate::typechecker::arena_failure)?
+                .kind
+            {
+                crate::TypedStmtKind::Const { value, .. } => Some(*value),
+                _ => None,
+            },
+        )
+    }
+
+    /// What a `case` of `switch (typeof x)` narrows `x` to: the join of what
+    /// `typeof x === label` narrows it to for each label. Nothing when a label
+    /// is no tag narrowing understands.
+    fn typeof_case_true_env(
+        &mut self,
+        operand: ExprId,
+        disc_source_span: Span,
+        labels: &[(TypedSwitchValue, Type)],
+    ) -> Result<narrowing::NarrowEnv, CompilerFailure> {
+        let mut joined: Option<narrowing::NarrowEnv> = None;
+        for (label, _) in labels {
+            let TypedSwitchValue::String { value, .. } = label else {
+                return Ok(narrowing::NarrowEnv::new());
+            };
+            let Some(tag) = super::expr::typeof_tag_kind(value) else {
+                return Ok(narrowing::NarrowEnv::new());
+            };
+            let test = self
+                .typed_ast
+                .try_push_expr(TypedExpr {
+                    kind: TypedExprKind::TypeofTag {
+                        value: operand,
+                        tag,
+                    },
+                    span: disc_source_span,
+                    ty: Type::Boolean,
+                })
+                .map_err(crate::typechecker::arena_failure)?;
+            let env = self.predicate_envs(test)?.0;
+            joined = Some(match joined {
+                None => env,
+                Some(so_far) => {
+                    narrowing::union_envs(so_far, BTreeSet::new(), env, BTreeSet::new()).0
+                }
+            });
+        }
+        Ok(joined.unwrap_or_default())
     }
 
     /// The label as an expression for the synthesized `disc === label` test. An
