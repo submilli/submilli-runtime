@@ -26,6 +26,14 @@ Create a personal API key in Linear's API settings and bind it as
 `LINEAR_API_KEY` when creating the harness session. The package reads the
 secret directly; no `auth_proxy` rule is needed.
 
+Agent sessions, activities, plans, external links, and threaded comments need
+an app OAuth access token instead, authorized with `actor=app` (add
+`app:mentionable` and `app:assignable` if needed). Bind it as
+`LINEAR_API_KEY`; the harness can bind its managed `linear` OAuth grant
+directly. The package adds the Bearer prefix to an OAuth token and sends a
+personal `lin_api_` key raw, which still works for issue and comment
+operations.
+
 ## Development
 
 Run:
@@ -37,12 +45,6 @@ submilli build test -p @submilli/linear
 Put `LINEAR_API_KEY` in the repository `.env` to enable the live read test.
 
 ## Agent interaction tests
-
-The package also supports agent sessions, activities, plans, external links, and
-threaded comments. Use an **app OAuth access token** (authorized with `actor=app`)
-as `LINEAR_API_KEY` for agent operations; the package adds the Bearer prefix.
-The harness can bind its managed `linear` OAuth grant directly to this secret.
-Personal API keys continue to work for ordinary issue and comment operations.
 
 Offline HTTP-contract tests (Node 22.13+ or Node 24) exercise the real wrappers
 with mocked host functions, checking capabilities, variables, responses, failures,

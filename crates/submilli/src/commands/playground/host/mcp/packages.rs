@@ -6,9 +6,7 @@
 //! the application tools only a REST session declares.
 
 use serde_json::{Value, json};
-use submilli_blueprint::Blueprint;
-use submilli_build::PackageStore;
-use submilli_shared::library_visibility::LibraryVisibility;
+use submilli_shared::docs_scope::{self, DocsScope, PackageView};
 
 use interpreter::packages::CatalogEntry;
 
@@ -44,6 +42,9 @@ pub(crate) enum DocLookup {
     Builtin { declarations: String },
     /// `@mcp/<server>` for a server this blueprint doesn't declare.
     McpUnknown,
+    /// A declared package whose installed documentation has malformed
+    /// directives, so no part of it can be shown safely.
+    InvalidDocumentation { message: String },
     Unknown {
         message: String,
         /// Closest name across every catalog this call site could see.
@@ -58,8 +59,8 @@ pub(crate) fn lookup(name: &str) -> DocLookup {
     if name.starts_with("@mcp/") {
         return DocLookup::McpUnknown;
     }
-    host_lookup(name, LibraryVisibility::unscoped())
-        .unwrap_or_else(|| builtin_fallback(name, &[], LibraryVisibility::unscoped()))
+    let scope = DocsScope::unscoped_shared();
+    host_lookup(name, scope).unwrap_or_else(|| builtin_fallback(name, &[], scope))
 }
 
 /// Like [`lookup`], but resolves `@mcp/<server>` names against a blueprint's
@@ -80,51 +81,40 @@ pub(crate) fn lookup_with_catalog(name: &str, catalog: &McpCatalog) -> DocLookup
             None => DocLookup::McpUnknown,
         };
     }
-    host_lookup(name, LibraryVisibility::unscoped()).unwrap_or_else(|| {
-        builtin_fallback(name, &catalog_names(catalog), LibraryVisibility::unscoped())
-    })
+    let scope = DocsScope::unscoped_shared();
+    host_lookup(name, scope)
+        .unwrap_or_else(|| builtin_fallback(name, &catalog_names(catalog), scope))
 }
 
-/// Like [`lookup_with_catalog`], but also resolves registry packages declared
-/// by the bound blueprint.
+/// Like [`lookup_with_catalog`], but scoped to what the bound blueprint lets
+/// programs use, `scope`, and resolving the registry packages it declares.
 pub(crate) fn lookup_with_blueprint(
     name: &str,
     catalog: &McpCatalog,
-    blueprint: &Blueprint,
-    store: &PackageStore,
+    scope: &DocsScope,
 ) -> DocLookup {
     if name.starts_with("@mcp/") {
         return lookup_with_catalog(name, catalog);
     }
-    if let Some(found) = host_lookup(name, LibraryVisibility::for_blueprint(blueprint)) {
+    if let Some(found) = host_lookup(name, scope) {
         return found;
     }
-    if blueprint.packages.contains(name) {
+    if scope.declares(name) {
         // A declared package whose artifact is missing is not an unknown name:
         // suggesting alternatives (or the name itself) would hide the real fix.
-        return match registry_lookup(name, store) {
-            Some(found) => found,
+        return match scope.package(name) {
+            Some(package) => registry_lookup(package),
             None => DocLookup::Unknown {
-                message: format!(
-                    "`{name}` is declared by this blueprint but its artifact could not be \
-                     loaded — run `submilli install` to fetch it."
-                ),
+                message: docs_scope::not_loaded_message(name),
                 suggestion: None,
             },
         };
     }
-    builtin_fallback(
-        name,
-        &union_candidates(catalog, blueprint),
-        LibraryVisibility::for_blueprint(blueprint),
-    )
+    builtin_fallback(name, &union_candidates(catalog, scope), scope)
 }
 
-fn host_lookup(name: &str, visibility: LibraryVisibility) -> Option<DocLookup> {
-    if !visibility.allows(name) {
-        return None;
-    }
-    interpreter::packages::docs(name).map(|doc| DocLookup::Host {
+fn host_lookup(name: &str, scope: &DocsScope) -> Option<DocLookup> {
+    scope.stdlib().docs(name).map(|doc| DocLookup::Host {
         description: doc.description,
         declarations: doc.declarations,
     })
@@ -133,7 +123,7 @@ fn host_lookup(name: &str, visibility: LibraryVisibility) -> Option<DocLookup> {
 /// A name no package source claims. Check the built-in catalog before erroring
 /// — a built-in needs no `import`, so serving it here costs the caller nothing
 /// — and carry a suggestion drawn from every catalog this call site can see.
-fn builtin_fallback(name: &str, extra: &[String], visibility: LibraryVisibility) -> DocLookup {
+fn builtin_fallback(name: &str, extra: &[String], scope: &DocsScope) -> DocLookup {
     use interpreter::packages::BuiltinLookup;
     match interpreter::packages::builtin_lookup(name) {
         BuiltinLookup::Found(declarations) => DocLookup::Builtin { declarations },
@@ -147,9 +137,7 @@ fn builtin_fallback(name: &str, extra: &[String], visibility: LibraryVisibility)
         },
         BuiltinLookup::Unknown => DocLookup::Unknown {
             message: format!("unknown package: {name}"),
-            suggestion: interpreter::packages::suggest_filtered(name, extra, |name| {
-                visibility.allows(name)
-            }),
+            suggestion: scope.suggest(name, extra),
         },
     }
 }
@@ -159,9 +147,9 @@ fn catalog_names(catalog: &McpCatalog) -> Vec<String> {
 }
 
 /// Every name this call site could have resolved, for did-you-mean.
-fn union_candidates(catalog: &McpCatalog, blueprint: &Blueprint) -> Vec<String> {
+fn union_candidates(catalog: &McpCatalog, scope: &DocsScope) -> Vec<String> {
     let mut names = catalog_names(catalog);
-    names.extend(blueprint.packages.iter().cloned());
+    names.extend(scope.usable_packages().map(|package| package.name.clone()));
     names
 }
 
@@ -208,6 +196,10 @@ pub(crate) fn docs_json(name: &str, lookup: DocLookup) -> Value {
             "error": "unknown_mcp_server",
             "message": format!("unknown MCP server: {name}"),
         }),
+        DocLookup::InvalidDocumentation { message } => json!({
+            "error": "invalid_documentation",
+            "message": message,
+        }),
         DocLookup::Unknown {
             message,
             suggestion: Some(hint),
@@ -248,11 +240,7 @@ pub(crate) fn docs_markdown(lookup: &DocLookup) -> Option<String> {
 ///
 /// `mcp_packages` are the `@mcp/*` names the bound blueprint declares. Without
 /// a binding the slice is empty and those names keep their existing behavior.
-pub(crate) fn builtin_entry_json(
-    name: &str,
-    mcp_packages: &[String],
-    visibility: LibraryVisibility,
-) -> Value {
+pub(crate) fn builtin_entry_json(name: &str, mcp_packages: &[String], scope: &DocsScope) -> Value {
     use interpreter::packages::BuiltinLookup;
     match interpreter::packages::builtin_lookup(name) {
         BuiltinLookup::Found(declarations) => json!({ "name": name, "declarations": declarations }),
@@ -265,8 +253,8 @@ pub(crate) fn builtin_entry_json(
             "error": "unknown_builtin",
             "message": interpreter::packages::unknown_member_message(&path, &member, &members),
         }),
-        BuiltinLookup::Unknown => package_correcting_call(name, mcp_packages, visibility)
-            .unwrap_or_else(|| unknown_builtin_entry(name, mcp_packages, visibility)),
+        BuiltinLookup::Unknown => package_correcting_call(name, mcp_packages, scope)
+            .unwrap_or_else(|| unknown_builtin_entry(name, mcp_packages, scope)),
     }
 }
 
@@ -281,12 +269,9 @@ pub(crate) fn builtin_entry_json(
 fn package_correcting_call(
     name: &str,
     mcp_packages: &[String],
-    visibility: LibraryVisibility,
+    scope: &DocsScope,
 ) -> Option<Value> {
-    if !visibility.allows(name) {
-        return None;
-    }
-    let is_package = interpreter::packages::docs(name).is_some()
+    let is_package = scope.stdlib().contains(name)
         || (name.starts_with("@mcp/") && mcp_packages.iter().any(|pkg| pkg == name));
     if !is_package {
         return None;
@@ -303,15 +288,11 @@ fn package_correcting_call(
     }))
 }
 
-fn unknown_builtin_entry(
-    name: &str,
-    mcp_packages: &[String],
-    visibility: LibraryVisibility,
-) -> Value {
+fn unknown_builtin_entry(name: &str, mcp_packages: &[String], scope: &DocsScope) -> Value {
     let message = format!("unknown built-in: {name}");
     // Built-in corrections have never advertised the opt-in Git module.
-    match interpreter::packages::suggest_filtered(name, mcp_packages, |name| {
-        name != "submilli:git" && visibility.allows(name)
+    match scope.stdlib().suggest_filtered(name, mcp_packages, |name| {
+        name != "submilli:git" && scope.allows(name)
     }) {
         Some(hint) => json!({
             "name": name,
@@ -329,11 +310,11 @@ fn unknown_builtin_entry(
 pub(crate) fn builtins_docs_json(
     names: &[String],
     mcp_packages: &[String],
-    visibility: LibraryVisibility,
+    scope: &DocsScope,
 ) -> Value {
     let results: Vec<Value> = names
         .iter()
-        .map(|n| builtin_entry_json(n, mcp_packages, visibility))
+        .map(|n| builtin_entry_json(n, mcp_packages, scope))
         .collect();
     json!({ "results": results })
 }
@@ -361,31 +342,21 @@ pub(crate) fn search_json(query: &str) -> Value {
 /// Like [`search_json`], but also folds in a blueprint's discovered
 /// `@mcp/<server>` packages, tagged `source: "mcp"`, after the stdlib hits.
 pub(crate) fn search_json_with_catalog(query: &str, catalog: &McpCatalog) -> Value {
-    let results = search_json_results(query, catalog, LibraryVisibility::unscoped());
-    search_body(results, LibraryVisibility::unscoped(), || {
-        mcp_entries(catalog)
-    })
+    let scope = DocsScope::unscoped_shared();
+    let results = search_json_results(query, catalog, scope);
+    search_body(results, scope, || mcp_entries(catalog))
 }
 
 pub(crate) fn search_json_with_blueprint(
     query: &str,
     catalog: &McpCatalog,
-    blueprint: &Blueprint,
-    store: &PackageStore,
+    scope: &DocsScope,
 ) -> Value {
-    // Load each declared artifact once and derive both views from it: the hit
-    // list and, only on a miss, the catalog listing.
-    let artifacts: Vec<_> = blueprint
-        .packages
-        .iter()
-        .filter_map(|name| store.load(name).ok())
-        .collect();
-    let mut results =
-        search_json_results(query, catalog, LibraryVisibility::for_blueprint(blueprint));
-    results.extend(registry_search(query, &artifacts));
-    search_body(results, LibraryVisibility::for_blueprint(blueprint), || {
+    let mut results = search_json_results(query, catalog, scope);
+    results.extend(registry_search(query, scope));
+    search_body(results, scope, || {
         let mut entries = mcp_entries(catalog);
-        entries.extend(registry_entries(&artifacts));
+        entries.extend(registry_entries(scope));
         entries
     })
 }
@@ -401,14 +372,13 @@ pub(crate) fn search_json_with_blueprint(
 /// `available` is a closure so a hit never pays to assemble the listing.
 fn search_body(
     results: Vec<Value>,
-    visibility: LibraryVisibility,
+    scope: &DocsScope,
     available: impl FnOnce() -> Vec<CatalogEntry>,
 ) -> Value {
     if !results.is_empty() {
         return json!({ "results": results });
     }
-    let catalog =
-        interpreter::packages::catalog_filtered(available(), |name| visibility.allows(name));
+    let catalog = scope.catalog(available());
     let listing: Vec<Value> = catalog
         .entries
         .iter()
@@ -437,25 +407,22 @@ fn mcp_entries(catalog: &McpCatalog) -> Vec<CatalogEntry> {
         .collect()
 }
 
-fn registry_entries(artifacts: &[submilli_build::Artifact]) -> Vec<CatalogEntry> {
-    artifacts
-        .iter()
-        .map(|artifact| CatalogEntry {
-            name: artifact.metadata.package_name.clone(),
+fn registry_entries(scope: &DocsScope) -> Vec<CatalogEntry> {
+    scope
+        .usable_packages()
+        .map(|package| CatalogEntry {
+            name: package.name.clone(),
             source: "registry".to_string(),
-            description: registry_description(&artifact.metadata),
+            description: package.summary(),
         })
         .collect()
 }
 
-fn search_json_results(
-    query: &str,
-    catalog: &McpCatalog,
-    visibility: LibraryVisibility,
-) -> Vec<Value> {
-    let mut results: Vec<Value> = interpreter::packages::search(query)
+fn search_json_results(query: &str, catalog: &McpCatalog, scope: &DocsScope) -> Vec<Value> {
+    let mut results: Vec<Value> = scope
+        .stdlib()
+        .search(query)
         .into_iter()
-        .filter(|module| visibility.allows(&module.name))
         .map(|m| json!({ "name": m.name, "source": "host", "description": m.description }))
         .collect();
     results.extend(
@@ -467,60 +434,38 @@ fn search_json_results(
     results
 }
 
-fn registry_lookup(name: &str, store: &PackageStore) -> Option<DocLookup> {
-    let artifact = store.load(name).ok()?;
-    Some(DocLookup::Registry {
-        description: registry_description(&artifact.metadata),
-        declarations: interpreter::packages::render_declarations(&artifact.package_declaration),
-        documentation: artifact.documentation,
-    })
+fn registry_lookup(package: &PackageView) -> DocLookup {
+    if !package.usable {
+        return DocLookup::Unknown {
+            message: docs_scope::nothing_allowed_message(&package.name),
+            suggestion: None,
+        };
+    }
+    match &package.documentation {
+        Ok(documentation) => DocLookup::Registry {
+            description: package.summary(),
+            declarations: package.declarations.clone(),
+            documentation: documentation.clone(),
+        },
+        Err(errors) => DocLookup::InvalidDocumentation {
+            message: docs_scope::invalid_documentation_message(&package.name, errors),
+        },
+    }
 }
 
-fn registry_search(query: &str, artifacts: &[submilli_build::Artifact]) -> Vec<Value> {
+fn registry_search(query: &str, scope: &DocsScope) -> Vec<Value> {
     let q = query.trim().to_lowercase();
-    artifacts
-        .iter()
-        .filter(|artifact| registry_matches(artifact, &q))
-        .map(|artifact| {
+    scope
+        .usable_packages()
+        .filter(|package| package.matches(&q))
+        .map(|package| {
             json!({
-                "name": artifact.metadata.package_name,
+                "name": package.name,
                 "source": "registry",
-                "description": registry_description(&artifact.metadata),
+                "description": package.summary(),
             })
         })
         .collect()
-}
-
-fn registry_matches(artifact: &submilli_build::Artifact, query: &str) -> bool {
-    query.is_empty()
-        || artifact
-            .metadata
-            .package_name
-            .to_lowercase()
-            .contains(query)
-        || artifact.metadata.description.to_lowercase().contains(query)
-        || artifact
-            .metadata
-            .keywords
-            .iter()
-            .any(|keyword| keyword.to_lowercase().contains(query))
-        || artifact
-            .package_declaration
-            .values
-            .keys()
-            .chain(artifact.package_declaration.types.keys())
-            .any(|name| name.to_lowercase().contains(query))
-}
-
-fn registry_description(metadata: &submilli_build::ArtifactMetadata) -> String {
-    if metadata.description.trim().is_empty() {
-        format!(
-            "Registry package {} v{}.",
-            metadata.package_name, metadata.package_version
-        )
-    } else {
-        metadata.description.clone()
-    }
 }
 
 /// Render docs as markdown: an intro paragraph (registry documentation, or an

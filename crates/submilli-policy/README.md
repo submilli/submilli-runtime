@@ -38,9 +38,12 @@ assert_eq!(decision.action, Action::Allow);
 
 `Rules::explain` gives the reasoning: the deciding rule or the default, and the
 rules whose filters rejected the call, with each comparison that failed.
+`Rules::possible_actions` answers before a call, when only part of its context
+is known: which actions it could still resolve to.
 
 With the `engine` feature, `PermissionCheck` is the `SecurityCheck` to install
 on a `submilli-engine` store, built from a rule set and the session's
-`${vars.NAME}` bindings.
+`${vars.NAME}` bindings, and `RulesAvailability` tells `submilli-engine`'s
+documentation view what a caller could use, so docs show only that.
 
 Licensed under Apache-2.0.

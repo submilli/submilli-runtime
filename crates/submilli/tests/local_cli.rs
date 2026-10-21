@@ -1664,10 +1664,7 @@ fn capability_add_suggests_closest_name_without_changing_blueprint() {
     write_file(&file, original);
     for (input, expected) in [
         ("fs.cpy", "did you mean: fs.copy"),
-        (
-            "http.downlod",
-            "looks like a misspelling of `http.download`",
-        ),
+        ("http.downlod", "did you mean: http.download"),
         ("FS.Write", "did you mean: fs.write"),
     ] {
         let out = run_with_home(
@@ -1893,22 +1890,21 @@ fn lint_rejects_stdlib_and_mcp_filters_on_unreported_fields() {
     );
 }
 
-/// A method only `http.request` takes reports the same fields as the
-/// cataloged verbs.
+/// `http.request` reports the method alongside the verbs' fields.
 #[test]
-fn lint_checks_fields_of_an_uncataloged_http_method() {
+fn lint_checks_fields_of_http_request() {
     let file = write_temp(
-        "submilli-lint-http-method-fields.yaml",
-        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: http.trace\n      filter: host == \"a.com\"\n      action: allow\n    - capability: http.propfind\n      filter: owner == \"ops\"\n      action: deny\n",
+        "submilli-lint-http-request-fields.yaml",
+        "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: http.request\n      filter: method == \"GET\" and host == \"a.com\"\n      action: allow\n    - capability: http.request\n      filter: owner == \"ops\"\n      action: deny\n",
     );
 
     let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
 
     assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
     let err = stderr(&out);
-    assert!(!err.contains("tests `host`"), "got: {err}");
+    assert!(!err.contains("tests `method`"), "got: {err}");
     assert!(
-        err.contains("`permissions.main` rule 2 for `http.propfind` tests `owner`, which the operation doesn't report, so a condition on it is false for every call, and true under `not`; its fields are: body_size, host, path, timeout_ms"),
+        err.contains("`permissions.main` rule 2 for `http.request` tests `owner`, which the operation doesn't report, so a condition on it is false for every call, and true under `not`; its fields are: body_size, host, method, path, timeout_ms"),
         "got: {err}"
     );
 }
@@ -2003,9 +1999,7 @@ fn lint_accepts_filters_on_reported_fields() {
 }
 
 /// A misspelled name is a rule that never matches. It stays a warning: the
-/// policy engine matches names verbatim, so the file is still valid. An
-/// uncataloged HTTP method matches `http.request` calls with that method, so
-/// its warning says so rather than "never matches".
+/// policy engine matches names verbatim, so the file is still valid.
 #[test]
 fn lint_warns_on_a_capability_name_nothing_lists() {
     let file = write_temp(
@@ -2022,19 +2016,14 @@ fn lint_warns_on_a_capability_name_nothing_lists() {
         "got: {err}"
     );
     assert!(err.contains("fs.write"), "got: {err}");
-    // `http.request` gates any method, so the rule matches a `TRACE` call.
+    // A method is not a capability of its own: `http.request` checks it.
     assert!(
-        err.contains("`permissions.main` rule 3 for `http.trace` matches only `http.request` calls with method `TRACE`, through `http.<method>`\n"),
+        err.contains("`permissions.main` rule 3 for `http.trace` never matches"),
         "got: {err}"
     );
-    // The function's name is not a catch-all: it is checked per method too.
+    assert!(!err.contains("rule 4 for `http.request`"), "got: {err}");
     assert!(
-        err.contains("rule 4 for `http.request` matches only `http.request` calls with method `REQUEST`, through `http.<method>`"),
-        "got: {err}"
-    );
-    // A near miss of a cataloged operation: a misspelled `deny` lets it through.
-    assert!(
-        err.contains("rule 5 for `http.dlete` looks like a misspelling of `http.delete`; as written it matches only `http.request` calls with method `DLETE`"),
+        err.contains("`permissions.main` rule 5 for `http.dlete` never matches: no standard-library operation, declared package, or declared MCP server provides it; did you mean: http.delete"),
         "got: {err}"
     );
     // A stale caller block's own warning covers its rules.
@@ -2042,7 +2031,7 @@ fn lint_warns_on_a_capability_name_nothing_lists() {
         err.contains("caller block for `@pied-piper/util`"),
         "got: {err}"
     );
-    assert_eq!(err.matches("never matches").count(), 1, "got: {err}");
+    assert_eq!(err.matches("never matches").count(), 3, "got: {err}");
 }
 
 /// Names the catalog, a declared MCP server, or a declared package provide
@@ -2625,7 +2614,7 @@ fn lint_suggests_closest_capability_names_without_changing_blueprint() {
     let message = stderr(&out);
     for expected in [
         "did you mean: fs.copy",
-        "looks like a misspelling of `http.download`",
+        "did you mean: http.download",
         "did you mean: fs.write",
     ] {
         assert!(message.contains(expected), "{message}");

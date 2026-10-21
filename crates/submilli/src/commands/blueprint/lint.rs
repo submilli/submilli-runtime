@@ -15,8 +15,7 @@
 //! a warning. So does a rule that follows an unfiltered rule for the same
 //! capability under the same caller: the first match decides, so it never
 //! matches. So does a rule for a capability name nothing the caller can
-//! reach provides, such as a misspelling; an `http.<method>` name the catalog
-//! lacks is told apart, since `http.request` gates it. A filter that tests a
+//! reach provides, such as a misspelling. A filter that tests a
 //! field the capability's check doesn't report is an error: a condition on a
 //! missing field is false for every call, and true under `not`, whatever the
 //! call's arguments.
@@ -31,9 +30,7 @@ use submilli_blueprint::{Action, Blueprint, DefaultAction, FilterExpr, Permissio
 use submilli_build::{CapabilitySchema, PackageStore};
 
 use super::capability::action_label;
-use super::capability_names::{
-    UnlistedName, did_you_mean, http_method_scope, http_misspelling, unlisted_name,
-};
+use super::capability_names::{UnlistedName, did_you_mean, unlisted_name};
 use super::declared_packages::{self, DeclaredPackages};
 use super::file::{has_capability_rule, has_matching_rule};
 use super::package_configuration::missing_package_configuration_warnings;
@@ -131,6 +128,7 @@ fn inspect_blueprint(blueprint: &Blueprint) -> LintFindings {
     let mut warnings = Vec::from_iter(default_allow_warning(blueprint));
     warnings.extend(unreachable_main_rule_warnings(blueprint));
     warnings.extend(shadowed_rule_warnings(blueprint));
+    warnings.extend(uppercase_field_warnings(blueprint));
     // An incomplete closure hides the dependencies past the failure, so a
     // caller block for one of them cannot be told from a stale one, and a
     // name the missing package provides cannot be told from a misspelling.
@@ -337,6 +335,46 @@ fn shadowed_rule_warnings(blueprint: &Blueprint) -> Vec<String> {
     warnings
 }
 
+/// A field the runtime uppercases, like `http.request`'s `method`, never
+/// equals a value written in lowercase. Only `==` is judged: the comparison
+/// itself is false for every call, whatever `not` or `or` makes of it, while
+/// a glob may still match.
+fn uppercase_field_warnings(blueprint: &Blueprint) -> Vec<String> {
+    use interpreter::stdlib::capabilities::{self, FieldNormalization};
+    use submilli_blueprint::FieldMatch;
+    let mut warnings = Vec::new();
+    for (caller, rules) in &blueprint.permissions {
+        for (position, rule) in (1..).zip(rules) {
+            let (Some(filter), Some(known)) = (&rule.filter, capabilities::find(&rule.capability))
+            else {
+                continue;
+            };
+            let uppercased = known
+                .filter_fields
+                .iter()
+                .filter(|field| field.normalization == FieldNormalization::AsciiUppercase);
+            for field in uppercased {
+                for matched in filter.field_matches(field.name) {
+                    let FieldMatch::Equals(value) = matched else {
+                        continue;
+                    };
+                    if value != value.to_ascii_uppercase() {
+                        warnings.push(format!(
+                            "`permissions.{caller}` rule {position} for `{}` tests `{} == \"{value}\"`, \
+                             which is false for every call: the check reports it in uppercase, as \
+                             \"{}\"",
+                            rule.capability,
+                            field.name,
+                            value.to_ascii_uppercase()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    warnings
+}
+
 fn is_refused_to_main(capability: &str) -> bool {
     interpreter::stdlib::capabilities::find(capability)
         .is_some_and(|known| known.main_denial.is_some())
@@ -409,12 +447,6 @@ fn unlisted_capability_warnings(blueprint: &Blueprint, packages: &DeclaredPackag
                         .collect::<Vec<_>>()
                         .join(" or ")
                 ),
-                UnlistedName::UncatalogedHttpMethod { method } => {
-                    format!("{rule_label} {}", http_method_scope(&method))
-                }
-                UnlistedName::MisspelledHttpOperation { intended, method } => {
-                    format!("{rule_label} {}", http_misspelling(intended, &method))
-                }
                 UnlistedName::Unknown { near } => format!(
                     "{rule_label} never matches: no standard-library operation, declared \
                      package, or declared MCP server provides it{}",
@@ -469,5 +501,36 @@ mod fix_failure_tests {
             )
         );
         assert_eq!(blueprint.permissions, original);
+    }
+}
+
+#[cfg(test)]
+mod uppercase_field_tests {
+    use super::*;
+
+    #[test]
+    fn a_lowercase_method_is_reported() {
+        let blueprint = submilli_blueprint::parse(
+            "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: http.request\n      filter: method == \"delete\"\n      action: deny\n    - capability: http.request\n      filter: method == \"GET\"\n      action: allow\n",
+        )
+        .unwrap();
+        assert_eq!(
+            uppercase_field_warnings(&blueprint),
+            [
+                "`permissions.main` rule 1 for `http.request` tests `method == \"delete\"`, which is false for every call: the check reports it in uppercase, as \"DELETE\""
+            ]
+        );
+    }
+
+    #[test]
+    fn negation_and_globs_are_judged_only_by_their_comparison() {
+        let blueprint = submilli_blueprint::parse(
+            "name: x\ndefault: deny\npermissions:\n  main:\n    - capability: http.request\n      filter: not method == \"post\"\n      action: deny\n    - capability: http.request\n      filter: method glob \"[Gg]ET\"\n      action: allow\n",
+        )
+        .unwrap();
+        let warnings = uppercase_field_warnings(&blueprint);
+        // The comparison under `not` is still false for every call; the glob can match.
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("rule 1"), "{warnings:?}");
     }
 }

@@ -344,6 +344,82 @@ permissions:
 }
 
 #[test]
+fn documentation_directives_name_known_capabilities() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        r#"
+[[package]]
+name = "@a/app"
+version = "0.1.0"
+description = "Test package."
+path = "app"
+dependencies = ["@z/util"]
+
+[[package]]
+name = "@z/util"
+version = "0.1.0"
+description = "Test package."
+path = "util"
+"#,
+    );
+    write_file(
+        &project.join("util/src/lib.ts"),
+        r#"
+            import { check } from "submilli:security";
+            /** @capability util.test/op */
+            export function op(): void { check("util.test/op", {}); }
+        "#,
+    );
+    write_file(
+        &project.join("app/src/lib.ts"),
+        r#"
+            import { check } from "submilli:security";
+            /** @capability app.test/write */
+            export function write(): void { check("app.test/write", {}); }
+        "#,
+    );
+    let docs = project.join("app/docs/readme.md");
+    write_file(
+        &docs,
+        "# App\n\n<!-- submilli:if all=\"app.test/write util.test/op http.get\" -->\nWrite.\n\n```ts\nimport { write } from \"@a/app\";\nwrite();\n```\n<!-- submilli:endif -->\n",
+    );
+    let out = build(&project, tmp.path(), &[]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+
+    write_file(
+        &docs,
+        "# App\n\n<!-- submilli:if capability=\"app.test/wrte\" -->\nWrite.\n<!-- submilli:endif -->\n<!-- submilli:endif -->\n",
+    );
+    let out = build(&project, tmp.path(), &[]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(
+        err.contains("package `@a/app` has malformed documentation directives:"),
+        "{err}"
+    );
+    assert!(
+        err.contains("docs/readme.md:6: `submilli:endif` has no matching `submilli:if`"),
+        "{err}"
+    );
+
+    write_file(
+        &docs,
+        "# App
+
+<!-- submilli:if capability=\"app.test/wrte\" -->\nWrite.\n<!-- submilli:endif -->\n",
+    );
+    let out = build(&project, tmp.path(), &[]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("docs/readme.md:3: `app.test/wrte` is not a capability the standard library, this package, or its dependencies provide"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
 fn closure_only_dependency_is_not_importable_by_the_script() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join("project");

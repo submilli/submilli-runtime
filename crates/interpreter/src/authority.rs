@@ -1871,9 +1871,6 @@ impl CallVisitor<'_, '_> {
         if let Some(&target) = self.builder.named.get(mangled) {
             return self.builder.add_edge(self.caller, target, span);
         }
-        if mangled.as_str() == "submilli:http#request" {
-            return self.dynamic_http(args, span);
-        }
         if let Some(callee) = self.builder.capability_functions.get(mangled).copied() {
             self.builder
                 .add_capability_effects(self.caller, callee, args, span)?;
@@ -1881,63 +1878,6 @@ impl CallVisitor<'_, '_> {
             self.builder
                 .add_unresolved(self.caller, span, "unresolved direct call target")?;
         }
-        Ok(())
-    }
-
-    fn dynamic_http(&mut self, args: &[ExprId], span: Span) -> Result<(), CompilerFailure> {
-        let method = match args.first() {
-            Some(id) => self
-                .builder
-                .ta
-                .try_expr(*id)
-                .map_err(crate::typechecker::arena_failure)?,
-            None => return self.dynamic_http_effect(None, BTreeMap::new(), span),
-        };
-        let method = match &method.kind {
-            TypedExprKind::String(method) => Some(method.to_ascii_lowercase()),
-            _ => None,
-        };
-        let mut known_bindings = BTreeMap::new();
-        if let Some(id) = args.get(1) {
-            let url = self
-                .builder
-                .ta
-                .try_expr(*id)
-                .map_err(crate::typechecker::arena_failure)?;
-            if let TypedExprKind::String(url) = &url.kind
-                && let Ok(parsed) = url::Url::parse(url)
-            {
-                if let Some(host) = parsed.host_str() {
-                    known_bindings.insert("host".to_string(), format!("\"{host}\""));
-                }
-                known_bindings.insert("path".to_string(), format!("\"{}\"", parsed.path()));
-            }
-        }
-        self.dynamic_http_effect(method, known_bindings, span)
-    }
-
-    fn dynamic_http_effect(
-        &mut self,
-        method: Option<String>,
-        known_bindings: BTreeMap<String, String>,
-        span: Span,
-    ) -> Result<(), CompilerFailure> {
-        self.builder.push_effect(
-            self.caller,
-            AuthorityEffect {
-                capability: Some(method.as_ref().map_or_else(
-                    || "http.<method>".to_string(),
-                    |method| format!("http.{method}"),
-                )),
-                sink: source_span(self.builder.sources, span)?,
-                known_bindings,
-                unresolved: method.is_none(),
-                reason: method
-                    .is_none()
-                    .then(|| "HTTP method is selected at runtime".to_string()),
-            },
-            span,
-        )?;
         Ok(())
     }
 
@@ -2675,7 +2615,36 @@ export function unchecked(): void { get("https://example.com"); }
     }
 
     #[test]
-    fn dynamic_closure_and_http_method_are_explicit_uncertainties() {
+    fn literal_http_request_method_is_bound_uppercase() {
+        let map = compile(&[(
+            "lib",
+            r#"
+                import { request } from "submilli:http";
+                export function run(): void {
+                    request("post", "https://example.com/v1");
+                }
+            "#,
+        )]);
+        let route = route(&map, "#run");
+        assert!(
+            route.effects.iter().any(|effect| {
+                effect.effect.capability.as_deref() == Some("http.request")
+                    && effect
+                        .effect
+                        .known_bindings
+                        .get("method")
+                        .map(String::as_str)
+                        == Some("\"POST\"")
+                    && effect.effect.known_bindings.get("host").map(String::as_str)
+                        == Some("\"example.com\"")
+            }),
+            "{:?}",
+            route.effects
+        );
+    }
+
+    #[test]
+    fn dynamic_closure_is_an_explicit_uncertainty_and_http_method_unbound() {
         let map = compile(&[(
             "lib",
             r#"
@@ -2688,7 +2657,8 @@ export function unchecked(): void { get("https://example.com"); }
         )]);
         let route = route(&map, "#run");
         assert!(route.effects.iter().any(|effect| {
-            effect.effect.capability.as_deref() == Some("http.<method>") && effect.effect.unresolved
+            effect.effect.capability.as_deref() == Some("http.request")
+                && !effect.effect.known_bindings.contains_key("method")
         }));
         assert!(route.effects.iter().any(|effect| {
             effect.effect.capability.is_none()
