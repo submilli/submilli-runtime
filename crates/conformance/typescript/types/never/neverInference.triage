@@ -1,1 +1,0 @@
-line 32 type: bug SUB-1727 a generic call with nothing to infer from, passed as an argument to a generic function, takes the outer callee's uninstantiated type parameter (`Array.from([])` is `a[]`)

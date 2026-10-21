@@ -317,6 +317,20 @@ impl TypeParamSubstitution {
         loose
     }
 
+    /// This substitution without its `never` bindings, when it has any: a
+    /// `never` candidate is no hint for a later argument, which takes the
+    /// binding instead (tsc drops `never` from the candidates).
+    pub fn without_never_bindings(&self) -> Option<TypeParamSubstitution> {
+        if !self.bindings.values().any(|ty| matches!(ty.peel(), Type::Never)) {
+            return None;
+        }
+        let mut loose = self.clone();
+        loose
+            .bindings
+            .retain(|_, ty| !matches!(ty.peel(), Type::Never));
+        Some(loose)
+    }
+
     /// Whether `name` is bound to a candidate a later argument may widen.
     pub fn is_widenable(&self, name: &str) -> bool {
         self.widenable.contains(name)
@@ -729,6 +743,13 @@ impl<'a> Unifier<'a> {
                 // ones widen, and the result is checked against the expected
                 // type afterwards.
                 let replaces_hint = replaceable && covariant;
+                // A `never` candidate, as from an empty array, adds nothing to
+                // the candidates' common supertype, so the next one takes the
+                // binding, as tsc drops `never` from the candidates.
+                let replaces_never = covariant
+                    && self.is_argument
+                    && matches!(resolved.peel(), Type::Never)
+                    && !matches!(arg_resolved.peel(), Type::Never | Type::Error);
                 // A non-literal candidate wins over object and array literal
                 // candidates, as in tsc: it takes the binding, and the
                 // literals are checked against it once inference is done, the
@@ -754,7 +775,7 @@ impl<'a> Unifier<'a> {
                 if covariant && takes_over && !self.combines_literals {
                     replaces_literals = self.sub.literal_candidates.remove(name);
                 }
-                if replaces_hint || replaces_literals {
+                if replaces_hint || replaces_literals || replaces_never {
                     self.sub.bindings.insert(name.clone(), arg_ty.clone());
                     self.sub.widenable.insert(name.clone());
                     return Ok(());
