@@ -619,7 +619,11 @@ impl<'a> Inferer<'a> {
         }
 
         if !found {
-            let exports = self.package_exports_help(pkg);
+            let exports = Self::missing_export_help(
+                &pkg.package_name,
+                imported,
+                self.package_exports_help(pkg),
+            );
             self.error_with_help(
                 spec.imported_name.span,
                 format!(
