@@ -975,18 +975,25 @@ impl<'a> Inferer<'a> {
             crate::compiler_error::CompilerFailure,
         >,
     ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
-        let Some((receivers, result)) = self.optional_chain_receivers_env(chain_id)? else {
+        let Some((mut receivers, result)) = self.optional_chain_receivers_env(chain_id)? else {
             return Ok(narrowing::NarrowEnv::new());
         };
-        let mut env = self.with_chain_result_present(receivers, result, result_facts)?;
         let Some(result) = result else {
-            return Ok(env);
+            return Ok(receivers);
         };
-        if let Some(result_env) = narrow_result(self, result)? {
+        // The result is read where every receiver is present, so a test on
+        // `o?.n.kind` narrows `o.n` as one on `o.n.kind` would.
+        self.push_narrow_frame(receivers.clone());
+        let result_env = narrow_result(self, result);
+        self.pop_narrow_frame()?;
+        match result_env? {
             // The test's own narrowing of the result is finer than presence.
-            env.extend_env(result_env);
+            Some(result_env) => {
+                receivers.extend_env(result_env);
+                Ok(receivers)
+            }
+            None => self.with_chain_result_present(receivers, Some(result), result_facts),
         }
-        Ok(env)
     }
 
     /// `o?.foo instanceof C`, or a guard asserting a type without `undefined`,
@@ -1035,16 +1042,17 @@ impl<'a> Inferer<'a> {
             return Ok(None);
         };
         let mut env = narrowing::NarrowEnv::new();
+        let null = self.null_literal_at(chain_id)?;
         let mut receiver = base;
         for part in parts {
-            if part_is_optional(&part) {
-                env.extend(self.receiver_present_env(receiver)?);
+            if part.is_optional() {
+                env.extend(self.receiver_present_env(receiver, null)?);
             }
             let receiver_expr = self
                 .typed_ast
                 .try_expr(receiver)
                 .map_err(crate::typechecker::arena_failure)?;
-            let (span, ty) = (chain_part_span(&part), part.result_ty().clone());
+            let (span, ty) = (part.span(), part.result_ty().clone());
             let kind = match part {
                 TypedChainPart::Field { name, .. }
                 | TypedChainPart::InterfaceProperty { name, .. } => {
@@ -1053,13 +1061,13 @@ impl<'a> Inferer<'a> {
                     }
                     // A primitive's property (`s?.length`) is no field path: a
                     // view on it would read `s` as an object.
-                    if !Self::is_field_bearing(&narrowing::strip_nullish(&receiver_expr.ty)) {
+                    if !reads_fields(&receiver_expr.ty) {
                         return Ok(Some((env, None)));
                     }
                     TypedExprKind::FieldAccess { receiver, name }
                 }
                 TypedChainPart::Index { idx, .. } => {
-                    if !Self::is_field_bearing(&narrowing::strip_nullish(&receiver_expr.ty)) {
+                    if !reads_fields(&receiver_expr.ty) {
                         return Ok(Some((env, None)));
                     }
                     TypedExprKind::IndexAccess {
@@ -1091,8 +1099,8 @@ impl<'a> Inferer<'a> {
     fn receiver_present_env(
         &mut self,
         receiver: ExprId,
+        null: ExprId,
     ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
-        let null = self.null_literal_at(receiver)?;
         let mut env = self
             .predicate_envs_eq_nullish(crate::BinOp::NotEq, receiver, null)?
             .0;
@@ -1565,12 +1573,26 @@ impl<'a> Inferer<'a> {
             .try_expr(path_id)
             .map_err(crate::typechecker::arena_failure)?;
         if matches!(path_expr.kind, crate::TypedExprKind::OptionalChain { .. }) {
+            let chain_ty = path_expr.ty.clone();
             if let Some(envs) = self.narrow_optional_chain_discriminant(
                 op,
                 path_id,
                 &narrowing::literal_type(&literal),
             )? {
                 return Ok(Some(envs));
+            }
+            // A literal the chain can't produce can't be the one it equals,
+            // so a join over a union's literals passes it by.
+            let no_exclusions = std::collections::BTreeSet::new();
+            if !narrowing::union_members(&chain_ty)
+                .into_iter()
+                .any(|member| {
+                    self.split_by_literal(member, &literal, &literal_ty, &no_exclusions)
+                        .0
+                        .is_some()
+                })
+            {
+                return Ok(None);
             }
             // Equal to a literal, the chain reached its end: nothing on it is
             // `null` or `undefined`, though the literal itself may be falsy.
@@ -1623,6 +1645,7 @@ impl<'a> Inferer<'a> {
             path_kind,
             path_span,
             literal.clone(),
+            literal_ty.clone(),
         )?
         .map(|value| Ok(Some(value)))
         .unwrap_or_else(|| {
@@ -1742,6 +1765,7 @@ impl<'a> Inferer<'a> {
         path_kind: crate::TypedExprKind,
         path_span: Span,
         literal: narrowing::LiteralValue,
+        literal_ty: Type,
     ) -> Result<
         Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
         crate::compiler_error::CompilerFailure,
@@ -1798,8 +1822,8 @@ impl<'a> Inferer<'a> {
             path_ty,
             direct_source_kind,
             path_span,
-            literal.clone(),
-            literal_to_type(&literal),
+            literal,
+            literal_ty,
         )? {
             for (p, v) in extra_true {
                 true_env.insert(p, v);
@@ -2603,6 +2627,7 @@ impl<'a> Inferer<'a> {
                 fallback_kind.clone(),
                 span,
                 narrowing::LiteralValue::Boolean(true),
+                Type::BooleanLiteral(true),
             )?
         {
             return Ok(envs);
@@ -3327,30 +3352,6 @@ fn with_type_parameters_of(ty: &Type, compared: Type) -> Type {
     Type::union(kept)
 }
 
-fn part_is_optional(part: &crate::TypedChainPart) -> bool {
-    use crate::TypedChainPart;
-    match part {
-        TypedChainPart::Field { optional, .. }
-        | TypedChainPart::InterfaceProperty { optional, .. }
-        | TypedChainPart::Index { optional, .. }
-        | TypedChainPart::Call { optional, .. }
-        | TypedChainPart::MethodCall { optional, .. } => *optional,
-        TypedChainPart::NonNull { .. } => false,
-    }
-}
-
-fn chain_part_span(part: &crate::TypedChainPart) -> Span {
-    use crate::TypedChainPart;
-    match part {
-        TypedChainPart::Field { span, .. }
-        | TypedChainPart::InterfaceProperty { span, .. }
-        | TypedChainPart::Index { span, .. }
-        | TypedChainPart::Call { span, .. }
-        | TypedChainPart::MethodCall { span, .. }
-        | TypedChainPart::NonNull { span, .. } => *span,
-    }
-}
-
 /// What an `unknown` equal to a value of type `value_ty` holds, as TypeScript
 /// narrows it: a primitive or `object` value's own type, and `object` for any
 /// other object type. A union says too little to narrow by, so it stays
@@ -3367,14 +3368,23 @@ fn unknown_equal_to(value_ty: &Type) -> Type {
         | Type::BooleanLiteral(_)
         | Type::NonPrimitive => value_ty.clone(),
         ty if ty.is_enum_member() => value_ty.clone(),
+        // `{}` holds primitives too.
+        ty if ty.is_empty_object() => Type::Unknown,
         Type::Object { .. }
         | Type::Array(_)
         | Type::Tuple(_)
-        | Type::Readonly(_)
         | Type::Function { .. }
         | Type::InterfaceRef { .. }
         | Type::ClassRef { .. }
         | Type::Uint8Array => Type::NonPrimitive,
         _ => Type::Unknown,
     }
+}
+
+/// Whether every value of `ty` other than `null` and `undefined` has fields,
+/// so that a property read of it is a field path.
+fn reads_fields(ty: &Type) -> bool {
+    narrowing::union_members(&narrowing::strip_nullish(ty))
+        .into_iter()
+        .all(Inferer::is_field_bearing)
 }

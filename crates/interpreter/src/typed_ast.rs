@@ -367,6 +367,18 @@ impl TypedChainPart {
         }
     }
 
+    /// Where this step is written.
+    pub fn span(&self) -> crate::Span {
+        match self {
+            TypedChainPart::Field { span, .. }
+            | TypedChainPart::InterfaceProperty { span, .. }
+            | TypedChainPart::Index { span, .. }
+            | TypedChainPart::Call { span, .. }
+            | TypedChainPart::MethodCall { span, .. }
+            | TypedChainPart::NonNull { span, .. } => *span,
+        }
+    }
+
     /// Whether this step short-circuits on a null receiver (`?.`).
     pub fn is_optional(&self) -> bool {
         match self {

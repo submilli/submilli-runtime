@@ -868,39 +868,34 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?;
             if let Type::Union(members) = receiver_expr.ty.peel()
                 && let Some(position) = index_position(&index_expr.kind)
-                && narrowing::tuple_position_discriminant(members, position).is_none()
-                && let Some(element_tys) =
-                    super::predicate_envs::discriminant_element_types(members, position)
             {
-                // A position some member types with no single literal
-                // (`[null, string] | [boolean, number]`) still discriminates,
-                // as a field typed so does.
-                let (kept, missing) = self.members_left_unmatched(members, &element_tys, covered);
-                return self.discriminated_residual(
-                    receiver_expr,
-                    kept,
-                    missing,
-                    format!("[{position}]"),
-                );
-            }
-            if let Type::Union(members) = receiver_expr.ty.peel()
-                && let Some(position) = index_position(&index_expr.kind)
-                && let Some(table) = narrowing::tuple_position_discriminant(members, position)
-            {
-                let kept = table.uncovered_members(members, &covered.literals);
-                let missing = Type::union(
-                    table
-                        .uncovered(&covered.literals)
-                        .iter()
-                        .map(narrowing::literal_type)
-                        .collect(),
-                );
-                return self.discriminated_residual(
-                    receiver_expr,
-                    kept,
-                    missing,
-                    format!("[{position}]"),
-                );
+                let left = match narrowing::tuple_position_discriminant(members, position) {
+                    Some(table) => Some((
+                        table.uncovered_members(members, &covered.literals),
+                        Type::union(
+                            table
+                                .uncovered(&covered.literals)
+                                .iter()
+                                .map(narrowing::literal_type)
+                                .collect(),
+                        ),
+                    )),
+                    // A position some member types with no single literal
+                    // (`[null, string] | [boolean, number]`) still
+                    // discriminates, as a field typed so does.
+                    None => super::predicate_envs::discriminant_element_types(members, position)
+                        .map(|element_tys| {
+                            self.members_left_unmatched(members, &element_tys, covered)
+                        }),
+                };
+                if let Some((kept, missing)) = left {
+                    return self.discriminated_residual(
+                        receiver_expr,
+                        kept,
+                        missing,
+                        format!("[{position}]"),
+                    );
+                }
             }
         }
         let residual = self.unmatched_values(disc_ty, covered);

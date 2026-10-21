@@ -49,6 +49,21 @@ function keepsNull(o: Thing | undefined, v: { s: string | null } | null): boolea
   return false;
 }
 
+type Circle = { kind: "circle"; r: number };
+type Square = { kind: "square"; side: number };
+type Holds = { shape: Circle | Square; tag: "a" | "b" | number };
+
+// The result narrows as the plain read would, the receivers being present:
+// through a discriminant, and to only the literals the chain can produce.
+function nested(o: Holds | undefined, k: "a" | "c"): number {
+  if (o?.shape.kind === "circle") return o.shape.r;
+  if (o?.tag === k) {
+    const a: "a" = o.tag;
+    return a.length;
+  }
+  return 0;
+}
+
 function main(): void {
   assert(sum(undefined, 1, null) === 0);
   assert(sum({ foo: 1, bar: () => 1, baz: {}, n: null }, 1, { b: new Box(5) }) === 111);
@@ -59,5 +74,8 @@ function main(): void {
   assert(byCase({ foo: "abc", bar: () => 0, baz: {}, n: null }) === "ABC");
   assert(byCase({ foo: 42, bar: () => 0, baz: {}, n: null }) === "42.0");
   assert(byCase(undefined) === "none");
+  assert(nested({ shape: { kind: "circle", r: 3 }, tag: 1 }, "a") === 3);
+  assert(nested({ shape: { kind: "square", side: 2 }, tag: "a" }, "a") === 1);
+  assert(nested(undefined, "a") === 0);
   assert(keepsNull({ foo: 0, bar: () => 0, baz: {}, n: null }, null));
 }
