@@ -6,7 +6,7 @@
 //! Shared so the server (which serves it) and the CLI (which prints it for
 //! debugging) can't drift apart.
 
-use crate::library_visibility::LibraryVisibility;
+use crate::docs_scope::DocsScope;
 use interpreter::stdlib::capabilities;
 use submilli_blueprint::{Action, Blueprint, DefaultAction, FieldMatch, FilterExpr};
 
@@ -90,9 +90,9 @@ pub enum PromptSurface {
 /// The `execute` tool description for a blueprint: the canonical prompt with
 /// policy-dependent library listings and guidance resolved.
 pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -> String {
-    let visibility = LibraryVisibility::for_blueprint(blueprint);
-    let http_visible = visibility.allows(HTTP_MODULE);
-    let sandbox = if visibility.allows("submilli:fs") || visibility.allows("submilli:code") {
+    let scope = DocsScope::for_blueprint(blueprint, &[]);
+    let http_visible = scope.allows(HTTP_MODULE);
+    let sandbox = if scope.allows("submilli:fs") || scope.allows("submilli:code") {
         format!(
             "Sandbox: File system {}. Working directory: {}{}.",
             vfs_mode_phrase(&blueprint.vfs),
@@ -109,14 +109,14 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
     let http_access = if http_visible {
         format!(
             "Network (`submilli:http`): {}.",
-            http_access_phrase(blueprint)
+            http_access_phrase(blueprint, http_visible)
         )
     } else {
         String::new()
     };
     let [search, docs, builtins] = surface.discovery_tools();
     prompt_template()
-        .replace("{stdlib_modules}", &stdlib_modules_phrase(visibility))
+        .replace("{stdlib_modules}", &stdlib_modules_phrase(&scope))
         .replace("{sandbox}", &sandbox)
         .replace(
             "{http_guidance}",
@@ -125,7 +125,7 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
         .replace("{http_access}", &http_access)
         .replace(
             "{llm_guidance}",
-            if visibility.allows("submilli:llm") {
+            if scope.allows("submilli:llm") {
                 LLM_GUIDANCE
             } else {
                 ""
@@ -133,7 +133,7 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
         )
         .replace(
             "{session_guidance}",
-            if visibility.allows("submilli:session") {
+            if scope.allows("submilli:session") {
                 SESSION_GUIDANCE
             } else {
                 ""
@@ -141,7 +141,7 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
         )
         .replace(
             "{embedding_guidance}",
-            if visibility.allows("submilli:embedding") {
+            if scope.allows("submilli:embedding") {
                 EMBEDDING_GUIDANCE
             } else {
                 ""
@@ -152,7 +152,7 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
         .replace(
             "{tools_package}",
             // Only a REST session can suspend at a tool call, so MCP never offers them.
-            if matches!(surface, PromptSurface::Rest) && visibility.tools() {
+            if matches!(surface, PromptSurface::Rest) && scope.tools().is_available() {
                 TOOLS_GUIDANCE
             } else {
                 ""
@@ -163,7 +163,7 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
         .replace("{t_builtins_docs}", builtins)
         .replace(
             "{git_package}",
-            if visibility.allows("submilli:git") {
+            if scope.allows("submilli:git") {
                 GIT_GUIDANCE
             } else {
                 ""
@@ -226,7 +226,7 @@ or include API keys in query strings. The operator's policy
 configures an `auth_proxy` that injects credentials transparently —
 just hit the URL."#;
 
-fn stdlib_modules_phrase(visibility: LibraryVisibility) -> String {
+fn stdlib_modules_phrase(scope: &DocsScope) -> String {
     [
         "submilli:code",
         "submilli:fs",
@@ -239,7 +239,7 @@ fn stdlib_modules_phrase(visibility: LibraryVisibility) -> String {
         "submilli:embedding",
     ]
     .into_iter()
-    .filter(|name| visibility.allows(name))
+    .filter(|name| scope.allows(name))
     .map(|name| format!("`{name}`"))
     .collect::<Vec<_>>()
     .join(", ")
@@ -367,7 +367,8 @@ enum HostScope {
 /// reaches nothing. Under `default: allow` the posture inverts: every method
 /// reaches any host unless a `deny` rule carves it out, which is too varied to
 /// summarize per-method, so we state the posture instead.
-fn http_access_phrase(blueprint: &Blueprint) -> String {
+/// `http_visible` is whether the blueprint's programs see `submilli:http`.
+fn http_access_phrase(blueprint: &Blueprint, http_visible: bool) -> String {
     if blueprint.default_action == Some(DefaultAction::Allow) {
         return "any host, any method (allow-by-default; specific `deny` rules may \
                 carve out hosts or methods)"
@@ -379,13 +380,17 @@ fn http_access_phrase(blueprint: &Blueprint) -> String {
         let Some(scope) = allowed_host_scope(rules, cap) else {
             continue;
         };
-        let label = method_label(cap);
+        let label = if cap == "http.request" {
+            request_label(rules)
+        } else {
+            method_label(cap)
+        };
         match groups.iter_mut().find(|(_, s)| same_scope(s, &scope)) {
             Some((labels, _)) => labels.push(label),
             None => groups.push((vec![label], scope)),
         }
     }
-    if groups.is_empty() && LibraryVisibility::for_blueprint(blueprint).allows(HTTP_MODULE) {
+    if groups.is_empty() && http_visible {
         return "subject to policy; approval rules do not authorize execution automatically".into();
     }
     if groups.is_empty() {
@@ -477,11 +482,38 @@ fn same_scope(a: &HostScope, b: &HostScope) -> bool {
     }
 }
 
+/// `request`, with the methods its allowing rules pin when every one of them
+/// requires `method == "<METHOD>"` at its top level: `request (GET, HEAD)`. A
+/// lowercase method pins nothing, since the check reports methods uppercase.
+fn request_label(rules: Option<&Vec<submilli_blueprint::PermissionRule>>) -> String {
+    let allowing = rules
+        .into_iter()
+        .flatten()
+        .filter(|r| r.capability == "http.request" && r.action == Action::Allow);
+    let mut methods: Vec<&str> = Vec::new();
+    for rule in allowing {
+        let pinned = rule.filter.as_ref().and_then(|filter| {
+            filter
+                .conjuncts()
+                .into_iter()
+                .find_map(|term| term.equals_literal("method"))
+                .filter(|method| *method == method.to_ascii_uppercase())
+        });
+        let Some(method) = pinned else {
+            return "request".into();
+        };
+        if !methods.contains(&method) {
+            methods.push(method);
+        }
+    }
+    format!("request ({})", methods.join(", "))
+}
+
 /// `http.get` → `GET`; `http.download` keeps its verb-less name.
 fn method_label(capability: &str) -> String {
     let verb = capability.strip_prefix("http.").unwrap_or(capability);
     match verb {
-        "download" => "download".to_string(),
+        "download" | "request" => verb.to_string(),
         other => other.to_uppercase(),
     }
 }
@@ -490,6 +522,30 @@ fn method_label(capability: &str) -> String {
 mod tests {
     use super::*;
     use submilli_blueprint::VfsConfig;
+
+    fn phrase(blueprint: &Blueprint) -> String {
+        let http_visible = DocsScope::for_blueprint(blueprint, &[]).allows(HTTP_MODULE);
+        http_access_phrase(blueprint, http_visible)
+    }
+
+    #[test]
+    fn a_request_grant_names_the_methods_it_pins() {
+        let pinned = blueprint_with(
+            "    - capability: http.request\n      filter: method == \"GET\"\n      action: allow\n",
+        );
+        assert_eq!(phrase(&pinned), "request (GET) → any host");
+        let open = blueprint_with("    - capability: http.request\n      action: allow\n");
+        assert_eq!(phrase(&open), "request → any host");
+        // A method under `not` or `or` pins nothing.
+        let negated = blueprint_with(
+            "    - capability: http.request\n      filter: not method == \"DELETE\"\n      action: allow\n",
+        );
+        assert_eq!(phrase(&negated), "request → any host");
+        let lowercase = blueprint_with(
+            "    - capability: http.request\n      filter: method == \"get\"\n      action: allow\n",
+        );
+        assert_eq!(phrase(&lowercase), "request → any host");
+    }
 
     #[test]
     fn discovery_names_match_each_prompt_surface() {
@@ -626,18 +682,19 @@ mod tests {
     }
 
     #[test]
-    fn session_prompt_guidance_requires_read_and_write() {
+    fn session_prompt_guidance_follows_any_session_operation() {
         let rule =
             |capability: &str| format!("    - capability: {capability}\n      action: allow\n");
         for (policy, visible) in [
             (String::new(), false),
+            // Reading alone, or writing alone, is a usable subset.
             (
                 format!("permissions:\n  main:\n{}", rule("session.read")),
-                false,
+                true,
             ),
             (
                 format!("permissions:\n  main:\n{}", rule("session.write")),
-                false,
+                true,
             ),
             ("default: allow\n".into(), true),
             (
@@ -765,13 +822,13 @@ mod tests {
     #[test]
     fn no_http_rules_reads_as_blocked() {
         assert_eq!(
-            http_access_phrase(&Blueprint::default()),
+            phrase(&Blueprint::default()),
             "none — `submilli:http` is blocked by policy"
         );
         // Approval keeps discovery visible without promising runtime authorization.
         let bp = blueprint_with("    - capability: http.get\n      action: ask-human\n");
         assert_eq!(
-            http_access_phrase(&bp),
+            phrase(&bp),
             "subject to policy; approval rules do not authorize execution automatically"
         );
     }
@@ -779,7 +836,7 @@ mod tests {
     #[test]
     fn unfiltered_allow_is_any_host() {
         let bp = blueprint_with("    - capability: http.get\n      action: allow\n");
-        assert_eq!(http_access_phrase(&bp), "GET → any host");
+        assert_eq!(phrase(&bp), "GET → any host");
     }
 
     #[test]
@@ -787,12 +844,12 @@ mod tests {
         let star = blueprint_with(
             "    - capability: http.get\n      filter: host glob \"*\"\n      action: allow\n",
         );
-        assert_eq!(http_access_phrase(&star), "GET → any host");
+        assert_eq!(phrase(&star), "GET → any host");
         // a filter that constrains only the body size leaves the host unbounded
         let body_size_only = blueprint_with(
             "    - capability: http.post\n      filter: body_size < 1000\n      action: allow\n",
         );
-        assert_eq!(http_access_phrase(&body_size_only), "POST → any host");
+        assert_eq!(phrase(&body_size_only), "POST → any host");
     }
 
     #[test]
@@ -809,7 +866,7 @@ mod tests {
         );
         let bp = blueprint_with(&rules);
         assert_eq!(
-            http_access_phrase(&bp),
+            phrase(&bp),
             "GET, POST → api.example.com; download → cdn.example.com"
         );
     }

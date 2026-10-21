@@ -11,6 +11,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
+use crate::docs_view::{DocAvailability, Unscoped, project_declaration};
 use crate::runtime::prelude::declaration::prelude_package_declaration;
 use crate::stdlib::Stdlib;
 use crate::types::escape_string_literal;
@@ -53,52 +54,44 @@ pub fn search(query: &str) -> Vec<ModuleSummary> {
 /// Discovery over the modules of a [`Stdlib`]: what the free functions above do
 /// for [`Stdlib::core`], for any set.
 impl Stdlib {
+    /// The modules of this set as a reader sees them: each narrowed to what
+    /// `availability` allows, and a module with nothing left to call
+    /// left out.
+    pub fn view(self, availability: &dyn DocAvailability) -> StdlibView {
+        self.view_where(availability, |_, usable| usable)
+    }
+
+    /// [`Self::view`], with the host deciding which modules to keep: `keep`
+    /// gets each module's name and whether it is usable, for a module the
+    /// host shows on a condition of its own.
+    pub fn view_where(
+        self,
+        availability: &dyn DocAvailability,
+        keep: impl Fn(&str, bool) -> bool,
+    ) -> StdlibView {
+        let modules = user_modules(self)
+            .iter()
+            .filter_map(|defs| {
+                let projection = project_declaration(defs, availability);
+                keep(&defs.package_name, projection.usable).then_some(projection.declaration)
+            })
+            .collect();
+        StdlibView { modules }
+    }
+
     /// [`docs`] over the modules of this set.
     pub fn docs(self, name: &str) -> Option<ModuleDoc> {
-        user_modules(self)
-            .into_iter()
-            .find(|d| d.package_name == name)
-            .map(|defs| ModuleDoc {
-                name: defs.package_name.clone(),
-                description: module_description(&defs.package_name).to_string(),
-                declarations: render_declarations(&defs),
-            })
+        self.view(&Unscoped).docs(name)
     }
 
     /// [`search`] over the modules of this set.
     pub fn search(self, query: &str) -> Vec<ModuleSummary> {
-        let q = query.trim().to_lowercase();
-        user_modules(self)
-            .iter()
-            .filter(|defs| matches_query(defs, &q))
-            .map(|defs| ModuleSummary {
-                name: defs.package_name.clone(),
-                description: module_description(&defs.package_name).to_string(),
-            })
-            .collect()
+        self.view(&Unscoped).search(query)
     }
 
     /// [`resolve`] over the modules of this set.
     pub fn resolve(self, name: &str) -> Resolution {
-        if let Some(doc) = self.docs(name) {
-            return Resolution::Module(doc);
-        }
-        match builtin_lookup(name) {
-            BuiltinLookup::Found(declarations) => Resolution::Builtin {
-                name: name.to_string(),
-                declarations,
-            },
-            BuiltinLookup::UnknownMember {
-                path,
-                member,
-                members,
-            } => Resolution::UnknownMember {
-                path,
-                member,
-                members,
-            },
-            BuiltinLookup::Unknown => Resolution::Unknown,
-        }
+        self.view(&Unscoped).resolve(name)
     }
 
     /// [`suggest_filtered`] over the modules of this set.
@@ -108,54 +101,7 @@ impl Stdlib {
         extra: &[String],
         visible: impl Fn(&str) -> bool,
     ) -> Option<String> {
-        let mut candidates: Vec<String> = self.search("").into_iter().map(|m| m.name).collect();
-        let builtins = builtins();
-        candidates.extend(builtins.types);
-        candidates.extend(builtins.namespaces);
-        candidates.extend(extra.iter().cloned());
-        candidates.retain(|candidate| visible(candidate));
-
-        // Only the head segment is in question: `Temporel.Instant` misses because
-        // of `Temporel`, and the tail only inflates the distance past threshold.
-        let query = name.split('.').find(|s| !s.is_empty()).unwrap_or(name);
-        // `closest_match` floors its threshold at 2 edits, so a one- or two-character
-        // query sits within reach of an unrelated name. Below that length there is no
-        // signal to match on.
-        if query.len() < 3 {
-            return None;
-        }
-
-        if let Some((_, replacement)) = OMITTED_GLOBALS
-            .iter()
-            .find(|(omitted, _)| omitted.eq_ignore_ascii_case(name))
-        {
-            return Some((*replacement).to_string());
-        }
-
-        // Never offer the query back to the caller: a name that resolved nowhere is
-        // not its own repair, however it was spelled.
-        let is_self = |c: &String| c.eq_ignore_ascii_case(name);
-        if let Some(hit) = candidates
-            .iter()
-            .find(|c| !is_self(c) && name_tail(c).eq_ignore_ascii_case(query))
-        {
-            return Some(hit.clone());
-        }
-        // Match full names and scheme-stripped tails in one pass, so the globally
-        // closest key wins: `htp` should reach `submilli:http` (one edit from its
-        // tail) rather than whichever unrelated full name lands inside threshold.
-        let mut keys: Vec<(&str, &str)> = Vec::new();
-        for c in candidates.iter().filter(|c| !is_self(c)) {
-            keys.push((c.as_str(), c.as_str()));
-            let tail = name_tail(c);
-            if tail != c.as_str() {
-                keys.push((tail, c.as_str()));
-            }
-        }
-        let hit = crate::did_you_mean::closest_match(query, keys.iter().map(|(k, _)| *k))?;
-        keys.iter()
-            .find(|(k, _)| *k == hit)
-            .map(|(_, owner)| (*owner).to_string())
+        self.view(&Unscoped).suggest_filtered(name, extra, visible)
     }
 
     /// [`catalog_filtered`] over the modules of this set.
@@ -164,20 +110,7 @@ impl Stdlib {
         extra: Vec<CatalogEntry>,
         visible: impl Fn(&str) -> bool,
     ) -> Catalog {
-        let mut entries: Vec<CatalogEntry> = self
-            .search("")
-            .into_iter()
-            .map(|m| CatalogEntry {
-                name: m.name,
-                source: SOURCE_STDLIB.to_string(),
-                description: m.description,
-            })
-            .collect();
-        entries.extend(extra);
-        entries.retain(|entry| visible(&entry.name));
-        let remaining = entries.len().saturating_sub(CATALOG_LIMIT);
-        entries.truncate(CATALOG_LIMIT);
-        Catalog { entries, remaining }
+        self.view(&Unscoped).catalog_filtered(extra, visible)
     }
 
     /// [`render_stdlib_d_ts`] for the modules of this set.
@@ -233,6 +166,154 @@ impl Stdlib {
             let _ = writeln!(out, "}}\n");
         }
         out.trim_end().to_string()
+    }
+}
+
+/// The standard library modules one reader can use, from [`Stdlib::view`].
+/// Docs, search, suggestions and the catalog all read this one set, so none
+/// of them advertises what another leaves out.
+pub struct StdlibView {
+    modules: Vec<PackageDeclaration>,
+}
+
+impl StdlibView {
+    /// The names of the modules in the view.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.modules.iter().map(|defs| defs.package_name.as_str())
+    }
+
+    /// Whether the view has the module `name`.
+    pub fn contains(&self, name: &str) -> bool {
+        self.declaration(name).is_some()
+    }
+
+    /// The narrowed declaration of the module `name`.
+    pub fn declaration(&self, name: &str) -> Option<&PackageDeclaration> {
+        self.modules.iter().find(|defs| defs.package_name == name)
+    }
+
+    /// [`docs`] over the view.
+    pub fn docs(&self, name: &str) -> Option<ModuleDoc> {
+        self.declaration(name).map(|defs| ModuleDoc {
+            name: defs.package_name.clone(),
+            description: module_description(&defs.package_name).to_string(),
+            declarations: render_declarations(defs),
+        })
+    }
+
+    /// [`search`] over the view.
+    pub fn search(&self, query: &str) -> Vec<ModuleSummary> {
+        let q = query.trim().to_lowercase();
+        self.modules
+            .iter()
+            .filter(|defs| matches_query(defs, &q))
+            .map(|defs| ModuleSummary {
+                name: defs.package_name.clone(),
+                description: module_description(&defs.package_name).to_string(),
+            })
+            .collect()
+    }
+
+    /// [`resolve`] over the view.
+    pub fn resolve(&self, name: &str) -> Resolution {
+        if let Some(doc) = self.docs(name) {
+            return Resolution::Module(doc);
+        }
+        match builtin_lookup(name) {
+            BuiltinLookup::Found(declarations) => Resolution::Builtin {
+                name: name.to_string(),
+                declarations,
+            },
+            BuiltinLookup::UnknownMember {
+                path,
+                member,
+                members,
+            } => Resolution::UnknownMember {
+                path,
+                member,
+                members,
+            },
+            BuiltinLookup::Unknown => Resolution::Unknown,
+        }
+    }
+
+    /// [`suggest_filtered`] over the view.
+    pub fn suggest_filtered(
+        &self,
+        name: &str,
+        extra: &[String],
+        visible: impl Fn(&str) -> bool,
+    ) -> Option<String> {
+        let mut candidates: Vec<String> = self.search("").into_iter().map(|m| m.name).collect();
+        let builtins = builtins();
+        candidates.extend(builtins.types);
+        candidates.extend(builtins.namespaces);
+        candidates.extend(extra.iter().cloned());
+        candidates.retain(|candidate| visible(candidate));
+
+        // Only the head segment is in question: `Temporel.Instant` misses because
+        // of `Temporel`, and the tail only inflates the distance past threshold.
+        let query = name.split('.').find(|s| !s.is_empty()).unwrap_or(name);
+        // `closest_match` floors its threshold at 2 edits, so a one- or two-character
+        // query sits within reach of an unrelated name. Below that length there is no
+        // signal to match on.
+        if query.len() < 3 {
+            return None;
+        }
+
+        if let Some((_, replacement)) = OMITTED_GLOBALS
+            .iter()
+            .find(|(omitted, _)| omitted.eq_ignore_ascii_case(name))
+        {
+            return Some((*replacement).to_string());
+        }
+
+        // Never offer the query back to the caller: a name that resolved nowhere is
+        // not its own repair, however it was spelled.
+        let is_self = |c: &String| c.eq_ignore_ascii_case(name);
+        if let Some(hit) = candidates
+            .iter()
+            .find(|c| !is_self(c) && name_tail(c).eq_ignore_ascii_case(query))
+        {
+            return Some(hit.clone());
+        }
+        // Match full names and scheme-stripped tails in one pass, so the globally
+        // closest key wins: `htp` should reach `submilli:http` (one edit from its
+        // tail) rather than whichever unrelated full name lands inside threshold.
+        let mut keys: Vec<(&str, &str)> = Vec::new();
+        for c in candidates.iter().filter(|c| !is_self(c)) {
+            keys.push((c.as_str(), c.as_str()));
+            let tail = name_tail(c);
+            if tail != c.as_str() {
+                keys.push((tail, c.as_str()));
+            }
+        }
+        let hit = crate::did_you_mean::closest_match(query, keys.iter().map(|(k, _)| *k))?;
+        keys.iter()
+            .find(|(k, _)| *k == hit)
+            .map(|(_, owner)| (*owner).to_string())
+    }
+
+    /// [`catalog_filtered`] over the view.
+    pub fn catalog_filtered(
+        &self,
+        extra: Vec<CatalogEntry>,
+        visible: impl Fn(&str) -> bool,
+    ) -> Catalog {
+        let mut entries: Vec<CatalogEntry> = self
+            .search("")
+            .into_iter()
+            .map(|m| CatalogEntry {
+                name: m.name,
+                source: SOURCE_STDLIB.to_string(),
+                description: m.description,
+            })
+            .collect();
+        entries.extend(extra);
+        entries.retain(|entry| visible(&entry.name));
+        let remaining = entries.len().saturating_sub(CATALOG_LIMIT);
+        entries.truncate(CATALOG_LIMIT);
+        Catalog { entries, remaining }
     }
 }
 
@@ -896,11 +977,9 @@ fn module_description(name: &str) -> &'static str {
         "submilli:embedding" => {
             "Remote text embeddings: embed batches into sealed vectors, and models() to discover aliases."
         }
-        "submilli:fs" => "Sandbox filesystem: read/write/list/stat/remove/exists/info.",
-        "submilli:git" => {
-            "Capability-controlled VFS repositories: history, staging, commits, branches and HTTPS fetch."
-        }
-        "submilli:http" => "Outbound HTTP: get/post/put/patch/delete/head.",
+        "submilli:fs" => "Sandbox filesystem: files and directories under the VFS root.",
+        "submilli:git" => "Capability-controlled Git repositories in the VFS, with HTTPS remotes.",
+        "submilli:http" => "Outbound HTTP requests, and downloads into the filesystem.",
         "submilli:llm" => "Gated model calls: call/batch, and models() to discover them.",
         "submilli:secrets" => "Policy-gated access to Blueprint-declared secrets.",
         "submilli:session" => {
@@ -1189,11 +1268,48 @@ fn rendered_type_references(defs: &PackageDeclaration) -> Vec<TypeReference> {
         .iter()
         .map(|(name, symbol)| (name, public_surface(symbol)))
         .collect();
-    let rendered = [
+    collect_type_references(&[
         serde_json::to_value(&defs.values),
         serde_json::to_value(&types),
         serde_json::to_value(&defs.namespaces),
-    ];
+    ])
+}
+
+/// The mangled names of the by-name types in `rendered`, as
+/// [`rendered_type_references`] finds them.
+pub(crate) fn type_references(
+    rendered: &[Result<serde_json::Value, serde_json::Error>],
+) -> Vec<String> {
+    collect_type_references(rendered)
+        .into_iter()
+        .map(|reference| reference.mangled)
+        .collect()
+}
+
+/// The mangled names of the types `symbol`'s public surface mentions,
+/// including a class's parent and the interfaces it implements, which are not
+/// `Type`s.
+pub(crate) fn type_symbol_references(symbol: &TypeSymbol) -> Vec<String> {
+    let mut references = type_references(&[serde_json::to_value(public_surface(symbol))]);
+    if let TypeKind::Class {
+        extends,
+        implements,
+        ..
+    } = &symbol.kind
+    {
+        references.extend(
+            extends
+                .iter()
+                .map(|extends| extends.parent.as_str().to_string()),
+        );
+        references.extend(implements.iter().map(|name| name.as_str().to_string()));
+    }
+    references
+}
+
+fn collect_type_references(
+    rendered: &[Result<serde_json::Value, serde_json::Error>],
+) -> Vec<TypeReference> {
     // A part that won't serialize still renders; it just imports nothing.
     let mut pending: Vec<&serde_json::Value> = rendered.iter().flatten().collect();
     let mut references = Vec::new();

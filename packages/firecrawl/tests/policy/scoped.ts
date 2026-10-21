@@ -15,8 +15,9 @@ function reachesCredentialBoundary(action: () => void): void {
 function main(): string {
     deniedAt("firecrawl.dev/search", "main", () => { search("q", { limit: 3 }); });
     reachesCredentialBoundary(() => { search("q", { limit: 2 }); });
-    // An allowed domain filter and an ordinary host-scoped scrape grant do not authorize native search scraping.
-    deniedAt("firecrawl.dev/search.scrape", "main", () => { search("q", { limit: 2, includeDomains: ["example.com"], scrapeOptions: {} }); });
+    // The search grant covers native result scraping; its limit filter still applies.
+    reachesCredentialBoundary(() => { search("q", { limit: 2, scrapeOptions: {} }); });
+    deniedAt("firecrawl.dev/search", "main", () => { search("q", { limit: 3, scrapeOptions: {} }); });
     deniedAt("firecrawl.dev/scrape", "main", () => { scrape("https://blocked.example"); });
     reachesCredentialBoundary(() => { scrape("https://EXAMPLE.com/a"); });
     // A fully qualified host is the same host, so the same grant and the same denial apply.

@@ -1,7 +1,7 @@
 // Real network integration for read operations, gated on a token: Linear has no
 // anonymous tier, so this runs only when LINEAR_API_KEY is available (build test
 // bridges env vars / a .env to secrets.get). Without it, the test skips + passes.
-// Reads only — writes are covered by the pure unit tests in lib.test.ts.
+// Reads only.
 
 import { label } from "submilli:test";
 import secrets from "submilli:secrets";

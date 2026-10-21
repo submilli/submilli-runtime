@@ -166,6 +166,7 @@ fn docs_response(name: &str, lookup: DocLookup) -> axum::response::Response {
         | DocLookup::Registry { .. }
         | DocLookup::Builtin { .. } => StatusCode::OK,
         DocLookup::McpUnknown | DocLookup::Unknown { .. } => StatusCode::NOT_FOUND,
+        DocLookup::InvalidDocumentation { .. } => StatusCode::UNPROCESSABLE_ENTITY,
     };
     crate::metrics::docs(status == StatusCode::OK);
     // Same preference as the MCP tool: registry and `@mcp/<server>` packages
@@ -184,24 +185,35 @@ fn docs_response(name: &str, lookup: DocLookup) -> axum::response::Response {
 
 type BlueprintMiss = (StatusCode, Json<serde_json::Value>);
 
-/// The blueprint a nested discovery route names, with its MCP catalog.
+fn not_registered(name: &str) -> BlueprintMiss {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({
+            "error": "not_found",
+            "message": format!("blueprint '{name}' is not registered"),
+            "name": name,
+        })),
+    )
+}
+
+/// The MCP catalog of the blueprint a nested discovery route names, and the
+/// documentation it lets programs see.
 async fn registered_blueprint(
     state: &AppState,
     name: &str,
 ) -> Result<
     (
-        submilli_blueprint::Blueprint,
         std::sync::Arc<crate::mcp::McpCatalog>,
+        std::sync::Arc<submilli_shared::docs_scope::DocsScope>,
     ),
     BlueprintMiss,
 > {
     match state
-        .blueprints()
-        .get(name)
+        .docs_scope(name)
         .await
-        .map_err(crate::blueprint::store_failure_response)?
+        .map_err(crate::docs_scopes::DocsScopeError::response)?
     {
-        Some(blueprint) => {
+        Some((blueprint, scope)) => {
             let catalog = state.mcp_catalog(name, &blueprint).await.map_err(|error| {
                 tracing::error!(error = ?error, "MCP discovery initialization failed");
                 (
@@ -211,16 +223,9 @@ async fn registered_blueprint(
                     })),
                 )
             })?;
-            Ok((blueprint, catalog))
+            Ok((catalog, scope))
         }
-        None => Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": "not_found",
-                "message": format!("blueprint '{name}' is not registered"),
-                "name": name,
-            })),
-        )),
+        None => Err(not_registered(name)),
     }
 }
 
@@ -237,13 +242,12 @@ pub async fn blueprint_search(
     Path(name): Path<String>,
     Query(params): Query<BlueprintSearchParams>,
 ) -> Result<Json<serde_json::Value>, BlueprintMiss> {
-    let (blueprint, catalog) = registered_blueprint(&state, &name).await?;
+    let (catalog, scope) = registered_blueprint(&state, &name).await?;
     crate::metrics::search();
     Ok(Json(packages::search_json_with_blueprint(
         &params.q,
         &catalog,
-        &blueprint,
-        state.package_store(),
+        &scope,
         packages::Fetch::Rest(&name),
     )))
 }
@@ -260,26 +264,25 @@ pub async fn blueprint_docs(
     Path(name): Path<String>,
     Query(params): Query<BlueprintDocsParams>,
 ) -> Result<axum::response::Response, BlueprintMiss> {
-    let (blueprint, catalog) = registered_blueprint(&state, &name).await?;
-    let lookup =
-        packages::lookup_with_blueprint(&params.name, &catalog, &blueprint, state.package_store());
+    let (catalog, scope) = registered_blueprint(&state, &name).await?;
+    let lookup = packages::lookup_with_blueprint(&params.name, &catalog, &scope);
     Ok(docs_response(&params.name, lookup))
 }
 
 /// What a session's discovery routes answer from: its blueprint, the blueprint's
-/// MCP catalog, and the session's `@tools` package when programs may import it.
+/// MCP catalog and documentation, and the session's `@tools` package when
+/// programs may call it.
+struct RegisteredSession {
+    blueprint_name: String,
+    catalog: std::sync::Arc<crate::mcp::McpCatalog>,
+    scope: std::sync::Arc<submilli_shared::docs_scope::DocsScope>,
+    tools: Option<interpreter::PackageDeclaration>,
+}
+
 async fn registered_session(
     state: &AppState,
     session_id: &str,
-) -> Result<
-    (
-        String,
-        submilli_blueprint::Blueprint,
-        std::sync::Arc<crate::mcp::McpCatalog>,
-        Option<interpreter::PackageDeclaration>,
-    ),
-    BlueprintMiss,
-> {
+) -> Result<RegisteredSession, BlueprintMiss> {
     let unknown = || {
         (
             StatusCode::NOT_FOUND,
@@ -289,13 +292,11 @@ async fn registered_session(
         )
     };
     let manager = state.session_manager();
-    let Some(name) = manager.blueprint_name(session_id).await.ok().flatten() else {
+    let Some(blueprint_name) = manager.blueprint_name(session_id).await.ok().flatten() else {
         return Err(unknown());
     };
-    let (blueprint, catalog) = registered_blueprint(state, &name).await?;
-    let tools = if submilli_shared::library_visibility::LibraryVisibility::for_blueprint(&blueprint)
-        .tools()
-    {
+    let (catalog, scope) = registered_blueprint(state, &blueprint_name).await?;
+    let tools = if scope.tools().is_available() {
         manager
             .tools(session_id)
             .await
@@ -304,7 +305,12 @@ async fn registered_session(
     } else {
         None
     };
-    Ok((name, blueprint, catalog, tools))
+    Ok(RegisteredSession {
+        blueprint_name,
+        catalog,
+        scope,
+        tools,
+    })
 }
 
 /// `GET /v1/sessions/{session}/packages/search`: the session's blueprint search,
@@ -314,15 +320,14 @@ pub async fn session_search(
     Path(session_id): Path<String>,
     Query(params): Query<BlueprintSearchParams>,
 ) -> Result<Json<serde_json::Value>, BlueprintMiss> {
-    let (name, blueprint, catalog, tools) = registered_session(&state, &session_id).await?;
+    let session = registered_session(&state, &session_id).await?;
     crate::metrics::search();
     Ok(Json(packages::search_json_for_session(
         &params.q,
-        &catalog,
-        &blueprint,
-        state.package_store(),
-        packages::Fetch::Rest(&name),
-        tools.as_ref(),
+        &session.catalog,
+        &session.scope,
+        packages::Fetch::Rest(&session.blueprint_name),
+        session.tools.as_ref(),
     )))
 }
 
@@ -333,13 +338,12 @@ pub async fn session_docs(
     Path(session_id): Path<String>,
     Query(params): Query<BlueprintDocsParams>,
 ) -> Result<axum::response::Response, BlueprintMiss> {
-    let (_, blueprint, catalog, tools) = registered_session(&state, &session_id).await?;
+    let session = registered_session(&state, &session_id).await?;
     let lookup = packages::lookup_for_session(
         &params.name,
-        &catalog,
-        &blueprint,
-        state.package_store(),
-        tools.as_ref(),
+        &session.catalog,
+        &session.scope,
+        session.tools.as_ref(),
     );
     Ok(docs_response(&params.name, lookup))
 }
@@ -351,6 +355,7 @@ pub async fn blueprint_builtins(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<serde_json::Value>, BlueprintMiss> {
+    // Every nested route fails closed when the blueprint's MCP catalog does.
     registered_blueprint(&state, &name).await?;
     crate::metrics::builtins("list");
     Ok(Json(packages::builtins_list_json()))
@@ -364,7 +369,7 @@ pub async fn blueprint_builtin_docs(
     Path(name): Path<String>,
     RawQuery(query): RawQuery,
 ) -> Result<Json<serde_json::Value>, BlueprintMiss> {
-    let (blueprint, catalog) = registered_blueprint(&state, &name).await?;
+    let (catalog, scope) = registered_blueprint(&state, &name).await?;
     crate::metrics::builtins("docs");
     // `Query` keeps only one value of a repeated key, so read them all here.
     let names: Vec<String> = url::form_urlencoded::parse(query.unwrap_or_default().as_bytes())
@@ -375,7 +380,7 @@ pub async fn blueprint_builtin_docs(
         &names,
         &packages::mcp_package_names(&catalog),
         &packages::Fetch::Rest(&name),
-        submilli_shared::library_visibility::LibraryVisibility::for_blueprint(&blueprint),
+        &scope,
     )))
 }
 

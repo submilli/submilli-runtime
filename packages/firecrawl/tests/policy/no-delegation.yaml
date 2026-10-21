@@ -7,8 +7,6 @@ permissions:
   main:
     - capability: firecrawl.dev/search
       action: allow
-    - capability: firecrawl.dev/search.scrape
-      action: allow
     - capability: firecrawl.dev/scrape
       action: allow
     - capability: firecrawl.dev/map

@@ -22,7 +22,6 @@ use rmcp::{ErrorData, RoleServer, ServerHandler, schemars, tool, tool_router};
 use serde::{Deserialize, Serialize};
 use submilli_blueprint::{Blueprint, HarnessSecretBindings, VfsConfig, required_harness_secrets};
 use submilli_shared::PolicyCheck;
-use submilli_shared::library_visibility::LibraryVisibility;
 
 use crate::app::AppState;
 use crate::error::ExecuteError;
@@ -450,23 +449,17 @@ impl SubmilliMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let lookup = match self
             .state
-            .blueprints()
-            .get(&self.blueprint_name)
+            .docs_scope(&self.blueprint_name)
             .await
-            .map_err(blueprint_store_error)?
+            .map_err(crate::docs_scopes::DocsScopeError::tool_error)?
         {
-            Some(blueprint) => {
+            Some((blueprint, scope)) => {
                 let catalog = self
                     .state
                     .mcp_catalog(&self.blueprint_name, &blueprint)
                     .await
                     .map_err(mcp_discovery_error)?;
-                packages::lookup_with_blueprint(
-                    &args.name,
-                    &catalog,
-                    &blueprint,
-                    self.state.package_store(),
-                )
+                packages::lookup_with_blueprint(&args.name, &catalog, &scope)
             }
             None => packages::lookup(&args.name),
         };
@@ -491,12 +484,11 @@ impl SubmilliMcp {
         // the server name is already known.
         let value = match self
             .state
-            .blueprints()
-            .get(&self.blueprint_name)
+            .docs_scope(&self.blueprint_name)
             .await
-            .map_err(blueprint_store_error)?
+            .map_err(crate::docs_scopes::DocsScopeError::tool_error)?
         {
-            Some(blueprint) => {
+            Some((blueprint, scope)) => {
                 let catalog = self
                     .state
                     .mcp_catalog(&self.blueprint_name, &blueprint)
@@ -505,8 +497,7 @@ impl SubmilliMcp {
                 packages::search_json_with_blueprint(
                     &args.query,
                     &catalog,
-                    &blueprint,
-                    self.state.package_store(),
+                    &scope,
                     packages::Fetch::Mcp,
                 )
             }
@@ -525,31 +516,29 @@ impl SubmilliMcp {
     ) -> Result<CallToolResult, ErrorData> {
         // The bound blueprint's `@mcp/*` names, so a package name asked of this
         // tool gets the correcting call rather than a bare unknown.
-        let (mcp_packages, visibility) = match self
+        let (mcp_packages, scope) = match self
             .state
-            .blueprints()
-            .get(&self.blueprint_name)
+            .docs_scope(&self.blueprint_name)
             .await
-            .map_err(blueprint_store_error)?
+            .map_err(crate::docs_scopes::DocsScopeError::tool_error)?
         {
-            Some(blueprint) => {
+            Some((blueprint, scope)) => {
                 let catalog = self
                     .state
                     .mcp_catalog(&self.blueprint_name, &blueprint)
                     .await
                     .map_err(mcp_discovery_error)?;
-                (
-                    packages::mcp_package_names(&catalog),
-                    LibraryVisibility::for_blueprint(&blueprint),
-                )
+                (packages::mcp_package_names(&catalog), Some(scope))
             }
-            None => (Vec::new(), LibraryVisibility::unscoped()),
+            None => (Vec::new(), None),
         };
         Ok(CallToolResult::structured(packages::builtins_docs_json(
             &args.names,
             &mcp_packages,
             &packages::Fetch::Mcp,
-            visibility,
+            scope
+                .as_deref()
+                .unwrap_or_else(|| submilli_shared::docs_scope::DocsScope::unscoped_shared()),
         )))
     }
 

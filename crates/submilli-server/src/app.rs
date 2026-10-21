@@ -155,6 +155,8 @@ struct AppStateInner {
     /// store and only caches its result if no eviction happened in between:
     /// the artifacts it read may otherwise be the ones the eviction retired.
     prepared_generation: AtomicU64,
+    /// The documentation each blueprint revision lets programs see.
+    docs_scopes: crate::docs_scopes::DocsScopeCache,
     /// Signalled by `POST /v1/shutdown`; awaited by `serve` to drain gracefully.
     shutdown: Arc<Notify>,
     /// Bound address, set by `serve` once the listener is up. Reported by status.
@@ -446,6 +448,7 @@ impl AppState {
                 github_token_file: config.github_token_file,
                 prepared_packages: Mutex::new(HashMap::new()),
                 prepared_generation: AtomicU64::new(0),
+                docs_scopes: crate::docs_scopes::DocsScopeCache::default(),
                 shutdown: Arc::new(Notify::new()),
                 bind_addr: OnceLock::new(),
                 llm_dispatch: config.llm_dispatch,
@@ -860,6 +863,44 @@ impl AppState {
         &self.inner.package_store
     }
 
+    /// The blueprint `name` and the documentation it lets programs see:
+    /// built once per revision and set of declared package artifacts, then
+    /// shared. A declared package whose artifact does not load is left out.
+    pub(crate) async fn docs_scope(
+        &self,
+        name: &str,
+    ) -> Result<
+        Option<(
+            submilli_blueprint::Blueprint,
+            Arc<submilli_shared::docs_scope::DocsScope>,
+        )>,
+        crate::docs_scopes::DocsScopeError,
+    > {
+        let Some((blueprint, revision)) = self
+            .blueprints()
+            .get_with_revision(name)
+            .await
+            .map_err(crate::docs_scopes::DocsScopeError::Store)?
+        else {
+            return Ok(None);
+        };
+        // Loading reads each artifact whole, off the async runtime.
+        let store = self.package_store().clone();
+        let packages = blueprint.packages.clone();
+        let artifacts = tokio::task::spawn_blocking(move || {
+            submilli_shared::docs_scope::load_declared(&packages, &store)
+        })
+        .await
+        .map_err(crate::docs_scopes::DocsScopeError::Build)?;
+        let scope = self
+            .inner
+            .docs_scopes
+            .get_or_build(&blueprint, revision, artifacts)
+            .await
+            .map_err(crate::docs_scopes::DocsScopeError::Build)?;
+        Ok(Some((blueprint, scope)))
+    }
+
     pub(crate) fn github_token_file(&self) -> Option<&Path> {
         self.inner.github_token_file.as_deref()
     }
@@ -1006,6 +1047,9 @@ impl AppState {
             .prepared_generation
             .fetch_add(1, Ordering::AcqRel);
         cache.clear();
+        // Documentation keys on artifact fingerprints, so this only frees
+        // scopes no request will ask for again.
+        self.inner.docs_scopes.evict_all();
     }
 
     /// Drop the prepared package modules cached for blueprint `name`, so the next
@@ -1020,6 +1064,9 @@ impl AppState {
             .prepared_generation
             .fetch_add(1, Ordering::AcqRel);
         cache.retain(|key, _| !cache_key_belongs_to_blueprint(key, name));
+        // Documentation keys on the blueprint revision, so this only frees
+        // scopes no request will ask for again.
+        self.inner.docs_scopes.evict_blueprint(name);
     }
 
     pub(crate) async fn remove_blueprint(

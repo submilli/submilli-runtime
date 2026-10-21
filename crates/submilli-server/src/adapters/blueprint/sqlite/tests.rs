@@ -117,6 +117,15 @@ async fn failed_import_rolls_back_and_can_retry() {
 }
 
 #[tokio::test]
+async fn revisions_advance() {
+    let directory = tempfile::tempdir().unwrap();
+    let (database, store) = open(&directory.path().join("db"), None).await;
+    store.migrate().await.unwrap();
+    crate::adapters::blueprint::tests::assert_revisions_advance(&store).await;
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn independent_instances_serialize_revisions_and_keep_history_after_delete() {
     let directory = tempfile::tempdir().unwrap();
     let (database, store) = open(&directory.path().join("db"), None).await;

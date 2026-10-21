@@ -252,6 +252,11 @@ pub struct Artifact {
     pub metadata: ArtifactMetadata,
     pub documentation: String,
     pub sources: Vec<ArtifactSource>,
+    /// SHA-256 over the files documentation is made from: metadata,
+    /// capabilities, declaration and readme. Two loads of the same files give
+    /// the same fingerprint, so a cache of rendered documentation can key on it
+    /// even when a rebuild keeps the version. Not stored; computed on read.
+    pub fingerprint: [u8; 32],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -490,7 +495,8 @@ pub(crate) fn read_package_artifact_with_budget(
     // The version gate comes first: a schema bump can change the shape of the
     // other files, and decoding them against the current types would surface a
     // serde error about some interior field instead of "rebuild this package".
-    let metadata: ArtifactMetadata = read_json(&metadata_path, budget)?;
+    let metadata_bytes = read_bytes(metadata_path.clone(), budget)?;
+    let metadata: ArtifactMetadata = parse_json(&metadata_path, &metadata_bytes)?;
     if metadata.schema_version != ARTIFACT_SCHEMA_VERSION {
         return Err(ArtifactError::UnsupportedSchema {
             path: metadata_path,
@@ -499,10 +505,24 @@ pub(crate) fn read_package_artifact_with_budget(
     }
     let wasm = read_bytes(dir.join(WASM_FILE), budget)?;
     let type_info = read_json(dir.join(TYPE_INFO_FILE), budget)?;
-    let capabilities = read_yaml(dir.join(CAPABILITIES_FILE), budget)?;
-    let package_declaration = read_json(dir.join(PACKAGE_DECLARATION_FILE), budget)?;
+    let capabilities_path = dir.join(CAPABILITIES_FILE);
+    let capabilities_bytes = read_bytes(capabilities_path.clone(), budget)?;
+    let capabilities =
+        serde_yml::from_slice(&capabilities_bytes).map_err(|source| ArtifactError::Yaml {
+            path: capabilities_path,
+            source,
+        })?;
+    let declaration_path = dir.join(PACKAGE_DECLARATION_FILE);
+    let declaration_bytes = read_bytes(declaration_path.clone(), budget)?;
+    let package_declaration = parse_json(&declaration_path, &declaration_bytes)?;
     let documentation = read_optional_text(dir.join(DOCS_README_FILE), budget)?;
     let sources = read_optional_json(dir.join(SOURCES_FILE), budget)?.unwrap_or_default();
+    let fingerprint = fingerprint(&[
+        &metadata_bytes,
+        &capabilities_bytes,
+        &declaration_bytes,
+        documentation.as_bytes(),
+    ]);
 
     Ok(Artifact {
         wasm,
@@ -512,7 +532,20 @@ pub(crate) fn read_package_artifact_with_budget(
         metadata,
         documentation,
         sources,
+        fingerprint,
     })
+}
+
+/// SHA-256 over `parts`, each prefixed with its length so no two splits of the
+/// same bytes collide.
+fn fingerprint(parts: &[&[u8]]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update((part.len() as u64).to_le_bytes());
+        hasher.update(part);
+    }
+    hasher.finalize().into()
 }
 
 fn create_dir_all(path: &Path) -> Result<(), ArtifactError> {
@@ -659,7 +692,14 @@ where
 {
     let path = path.as_ref();
     let bytes = read_bytes(path.to_path_buf(), budget)?;
-    serde_json::from_slice(&bytes).map_err(|source| ArtifactError::Json {
+    parse_json(path, &bytes)
+}
+
+fn parse_json<T>(path: &Path, bytes: &[u8]) -> Result<T, ArtifactError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    serde_json::from_slice(bytes).map_err(|source| ArtifactError::Json {
         path: path.to_path_buf(),
         source,
     })
@@ -674,14 +714,6 @@ where
         source,
     })?;
     fs::write(&path, bytes).map_err(|source| ArtifactError::Io { path, source })
-}
-
-fn read_yaml<T>(path: PathBuf, budget: &mut ArtifactReadBudget) -> Result<T, ArtifactError>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let bytes = read_bytes(path.clone(), budget)?;
-    serde_yml::from_slice(&bytes).map_err(|source| ArtifactError::Yaml { path, source })
 }
 
 fn write_yaml<T>(path: PathBuf, value: &T) -> Result<(), ArtifactError>
@@ -887,6 +919,37 @@ mod tests {
                 ArtifactDependency::new("@z/last", "2.0.0"),
             ]
         );
+    }
+
+    #[test]
+    fn fingerprint_follows_what_documentation_is_made_from() {
+        let write = |dir: &Path, docs: &str| {
+            write_package_artifact_with_docs_and_sources(
+                dir,
+                b"\0asm\x01\0\0\0",
+                &sample_type_info(),
+                &sample_capabilities(),
+                &sample_declaration(),
+                &ArtifactMetadata::with_description(
+                    "@pied-piper/util",
+                    "1.2.3",
+                    "Utility helpers.",
+                    Vec::new(),
+                    Vec::new(),
+                ),
+                docs,
+                &[],
+            )
+            .expect("write artifact");
+            read_package_artifact(dir)
+                .expect("read artifact")
+                .fingerprint
+        };
+        let dir = tempdir().expect("tempdir");
+        let first = write(dir.path(), "# Utility\n");
+        assert_eq!(write(dir.path(), "# Utility\n"), first);
+        // A rebuild under the same version with other docs is another artifact.
+        assert_ne!(write(dir.path(), "# Utility, revised\n"), first);
     }
 
     #[test]

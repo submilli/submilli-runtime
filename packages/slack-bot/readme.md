@@ -22,7 +22,9 @@ is needed.
 
 Run `submilli blueprint add-package @submilli/slack-bot` to add the package and
 scaffold its permissions. Review the generated `slack.com/bot/*` grants and
-allow only the operations the program needs.
+allow only the operations the program needs. The namespace already identifies
+the bot context, so capability payloads contain only fields operators can
+meaningfully filter, currently conversation and user identifiers.
 
 Give the Slack app only the bot-token scopes required by those operations.
 Typical scopes include conversation read/history scopes, `users:read`,

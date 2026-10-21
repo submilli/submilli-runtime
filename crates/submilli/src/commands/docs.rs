@@ -36,14 +36,14 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
     }
     let scope = Scope::load(args.blueprint)?;
     match packages::resolve(&args.name) {
-        Resolution::Module(doc) if scope.allows(&doc.name) => {
+        Resolution::Module(doc) => {
+            let Some(doc) = scope.stdlib_docs(&doc.name) else {
+                eprintln!("{}", scope.hidden_message(&doc.name));
+                return Ok(ExitCode::FAILURE);
+            };
             println!("{} — {}\n", doc.name, doc.description);
             println!("{}", doc.declarations);
             Ok(ExitCode::SUCCESS)
-        }
-        Resolution::Module(doc) => {
-            eprintln!("{}", scope.hidden_message(&doc.name));
-            Ok(ExitCode::FAILURE)
         }
         // A built-in needs no `import`, so serving it here costs the caller
         // nothing — the same redirect `packages.docs` makes over MCP and REST.
@@ -55,19 +55,36 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         other => {
             // Installed packages come after the stdlib and the built-ins: a
             // `submilli:*` or built-in name can never be shadowed by a store entry.
-            let Ok(artifact) = PackageStore::default().load(&args.name) else {
-                discovery::report_miss(&args.name, other, &scope);
+            let shown = scope
+                .allows(&args.name)
+                .then(|| scope.installed_package(&args.name))
+                .flatten();
+            let Some(package) = shown else {
+                // An installed package the scope leaves out is hidden; any
+                // other name is unknown.
+                if PackageStore::default().load(&args.name).is_ok() {
+                    eprintln!("{}", scope.hidden_message(&args.name));
+                } else {
+                    discovery::report_miss(&args.name, other, &scope);
+                }
                 return Ok(ExitCode::FAILURE);
             };
-            if !scope.allows(&args.name) {
-                eprintln!("{}", scope.hidden_message(&args.name));
-                return Ok(ExitCode::FAILURE);
+            let documentation = match &package.documentation {
+                Ok(documentation) => documentation,
+                Err(errors) => {
+                    for error in errors {
+                        eprintln!("{}: docs/readme.md: {error}", package.name);
+                    }
+                    anyhow::bail!(submilli_shared::docs_scope::invalid_documentation_summary(
+                        &package.name
+                    ));
+                }
+            };
+            println!("{}\n", discovery::installed_summary(&package));
+            if !documentation.trim().is_empty() {
+                println!("{}\n", documentation.trim());
             }
-            println!("{}\n", discovery::installed_summary(&artifact));
-            println!(
-                "{}",
-                packages::render_declarations(&artifact.package_declaration)
-            );
+            println!("{}", package.declarations);
             Ok(ExitCode::SUCCESS)
         }
     }

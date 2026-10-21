@@ -376,3 +376,145 @@ fn docs_and_search_show_the_whole_library_unless_a_blueprint_is_passed() {
         stdout(&shown)
     );
 }
+
+/// A blueprint that allows only reading sees the reads of a package and the
+/// readme sections about them, from the CLI and from the server alike.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blueprint_scoped_docs_show_what_the_rules_allow_on_cli_and_server() {
+    use std::sync::Arc;
+    use submilli_server::{AppState, ServerConfig, app, blueprint::InMemoryBlueprintStore};
+    use tower::ServiceExt;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let home = temporary.path().join("home");
+    let project = temporary.path().join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::create_dir_all(project.join("docs")).unwrap();
+    std::fs::write(
+        project.join("submilli.toml"),
+        "[[package]]\nname = \"@pied-piper/notes\"\nversion = \"0.1.0\"\ndescription = \"Notes.\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("src/lib.ts"),
+        r#"
+            import { check } from "submilli:security";
+            export interface Note { id: string; text: string; }
+            export interface Draft { text: string; }
+            /** List notes.
+             * @capability notes.test/read */
+            export function listNotes(): Note[] { check("notes.test/read", {}); return []; }
+            /** Save a note.
+             * @capability notes.test/write */
+            export function saveNote(draft: Draft): Note { check("notes.test/write", {}); return { id: "1", text: draft.text }; }
+        "#,
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("docs/readme.md"),
+        "# Notes\n\nKeep notes.\n\n<!-- submilli:if capability=\"notes.test/write\" -->\n\n## Saving\n\nCall `saveNote`.\n\n<!-- submilli:endif -->\n",
+    )
+    .unwrap();
+    let built = Command::new(submilli_bin())
+        .args(["build", "publish-local"])
+        .current_dir(&project)
+        .env("SUBMILLI_HOME", &home)
+        .output()
+        .unwrap();
+    assert!(built.status.success(), "{}", stderr(&built));
+
+    let yaml = "name: reader\ndefault: deny\npackages:\n  - \"@pied-piper/notes\"\npermissions:\n  main:\n    - capability: notes.test/read\n      action: allow\n";
+    let blueprint_path = temporary.path().join("reader.yaml");
+    std::fs::write(&blueprint_path, yaml).unwrap();
+
+    let cli = {
+        let home = home.clone();
+        let blueprint_path = blueprint_path.clone();
+        tokio::task::spawn_blocking(move || {
+            Command::new(submilli_bin())
+                .args(["docs", "@pied-piper/notes", "--blueprint"])
+                .arg(&blueprint_path)
+                .env("SUBMILLI_HOME", &home)
+                .output()
+                .unwrap()
+        })
+        .await
+        .unwrap()
+    };
+    assert!(cli.status.success(), "{}", stderr(&cli));
+    let cli = stdout(&cli);
+    assert!(cli.contains("Keep notes."), "{cli}");
+    assert!(cli.contains("function listNotes("), "{cli}");
+    assert!(!cli.contains("saveNote"), "{cli}");
+    assert!(!cli.contains("Draft"), "{cli}");
+    assert!(!cli.contains("submilli:if"), "{cli}");
+
+    let state = AppState::new(ServerConfig {
+        blueprints: Some(Arc::new(
+            InMemoryBlueprintStore::seed([submilli_blueprint::parse(yaml).unwrap()])
+                .expect("seed blueprints"),
+        )),
+        package_store_root: Some(home.join("packages")),
+        ..in_memory_config::config()
+    })
+    .await
+    .unwrap();
+    let response = app(state)
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/v1/blueprints/reader/packages/docs?name=@pied-piper/notes")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let server = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(server.contains("Keep notes."), "{server}");
+    assert!(!server.contains("saveNote"), "{server}");
+    // Both render the same narrowed declarations.
+    let declarations = cli
+        .split_once("function listNotes(")
+        .map(|(_, rest)| rest)
+        .unwrap_or_default()
+        .trim();
+    assert!(
+        server.contains(declarations),
+        "server: {server}\ncli: {cli}"
+    );
+}
+
+/// The curated Linear package, as a blueprint that may only read issues and
+/// teams sees it: the reads and the readme sections about them, no writes.
+#[test]
+fn read_only_linear_docs_snapshot() {
+    let temporary = tempfile::tempdir().unwrap();
+    let home = temporary.path().join("home");
+    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let built = Command::new(submilli_bin())
+        .args(["build", "publish-local", "-p", "@submilli/linear"])
+        .current_dir(&repository)
+        .env("SUBMILLI_HOME", &home)
+        .output()
+        .unwrap();
+    assert!(built.status.success(), "{}", stderr(&built));
+    let blueprint = temporary.path().join("reader.yaml");
+    std::fs::write(
+        &blueprint,
+        "name: reader\ndefault: deny\npackages:\n  - \"@submilli/linear\"\npermissions:\n  main:\n    - capability: linear.app/getIssue\n      action: allow\n    - capability: linear.app/listIssues\n      action: allow\n    - capability: linear.app/listTeams\n      action: allow\n",
+    )
+    .unwrap();
+    let docs = Command::new(submilli_bin())
+        .args(["docs", "@submilli/linear", "--blueprint"])
+        .arg(&blueprint)
+        .env("SUBMILLI_HOME", &home)
+        .output()
+        .unwrap();
+    assert!(docs.status.success(), "{}", stderr(&docs));
+    let docs = stdout(&docs);
+    assert!(!docs.contains("function createIssue("), "{docs}");
+    insta::assert_snapshot!("read_only_linear_docs", docs);
+}

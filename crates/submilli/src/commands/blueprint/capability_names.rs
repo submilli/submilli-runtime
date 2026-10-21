@@ -1,6 +1,6 @@
 //! Which capability names a caller may hold a rule for. The policy engine
 //! matches names verbatim, so a rule for a name nothing lists for the caller
-//! never matches, except an HTTP method `http.request` gates.
+//! never matches.
 
 use interpreter::stdlib::capabilities;
 use submilli_blueprint::Blueprint;
@@ -15,16 +15,6 @@ pub(super) enum UnlistedName<'a> {
     DependencyOnly {
         dependency: &'a str,
         dependents: Vec<&'a str>,
-    },
-    /// `http.request` gates any method as `http.<method>`, lowercased, so a
-    /// name the catalog lacks still matches a call with that `method`.
-    UncatalogedHttpMethod { method: String },
-    /// An `http.<method>` name an edit or two from `intended`, a cataloged
-    /// HTTP operation: as written it matches only calls with `method`, which
-    /// a misspelled `deny` lets through.
-    MisspelledHttpOperation {
-        intended: &'static str,
-        method: String,
     },
     /// Nothing reachable provides it; `near` are known names it may misspell.
     Unknown { near: Vec<String> },
@@ -42,15 +32,6 @@ pub(super) fn unlisted_name<'a>(
     let known = known_capabilities(blueprint, packages, caller);
     if known.iter().any(|k| k == name) {
         return None;
-    }
-    // Ahead of the dependency check: a package may document an `http.<method>`
-    // name too, and `main` still reaches it through `http.request`.
-    if let Some(method) = capabilities::uncataloged_http_method(name) {
-        let method = method.to_ascii_uppercase();
-        return Some(match misspelled_http_operation(name) {
-            Some(intended) => UnlistedName::MisspelledHttpOperation { intended, method },
-            None => UnlistedName::UncatalogedHttpMethod { method },
-        });
     }
     if let Some(dependency) = dependency_providing(packages, name) {
         return Some(UnlistedName::DependencyOnly {
@@ -178,38 +159,6 @@ fn nearby_edit_distance(input: &str, candidate: &str) -> Option<usize> {
     row.last().copied().filter(|distance| *distance <= LIMIT)
 }
 
-/// What a rule for an `http.<method>` name the catalog lacks matches, worded
-/// to follow a reference to the rule.
-pub(super) fn http_method_scope(method: &str) -> String {
-    format!("matches only `http.request` calls with method `{method}`, through `http.<method>`")
-}
-
-/// Why a rule for a name [`UnlistedName::MisspelledHttpOperation`] reports is
-/// suspect, worded to follow a reference to the rule.
-pub(super) fn http_misspelling(intended: &str, method: &str) -> String {
-    format!(
-        "looks like a misspelling of `{intended}`; as written it {}",
-        http_method_scope(method)
-    )
-}
-
-/// The cataloged HTTP operation `name` is closest to, when at most two edits
-/// separate them. Every registered method the catalog lacks, such as `trace`
-/// or `propfind`, is further than that, except HTTP/2's connection-preface
-/// `PRI`, which no request sends.
-fn misspelled_http_operation(name: &str) -> Option<&'static str> {
-    capabilities::catalog()
-        .iter()
-        .flat_map(|group| group.capabilities)
-        .filter(|capability| capability.name.starts_with("http.") && !capability.is_template())
-        .filter_map(|capability| {
-            nearby_edit_distance(name, capability.name).map(|distance| (distance, capability.name))
-        })
-        .filter(|(distance, _)| *distance <= 2)
-        .min_by_key(|(distance, _)| *distance)
-        .map(|(_, intended)| intended)
-}
-
 /// A clause offering `near` as corrections, or nothing when there are none.
 pub(super) fn did_you_mean(near: &[String]) -> String {
     if near.is_empty() {
@@ -221,27 +170,6 @@ pub(super) fn did_you_mean(near: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn near_misses_of_cataloged_http_operations_are_misspellings() {
-        for (name, intended) in [
-            ("http.dlete", "http.delete"),
-            ("http.pots", "http.post"),
-            ("http.gte", "http.get"),
-            ("http.dowload", "http.download"),
-        ] {
-            assert_eq!(misspelled_http_operation(name), Some(intended), "{name}");
-        }
-        for name in [
-            "http.trace",
-            "http.propfind",
-            "http.connect",
-            "http.purge",
-            "http.lock",
-        ] {
-            assert_eq!(misspelled_http_operation(name), None, "{name}");
-        }
-    }
 
     #[test]
     fn suggestions_rank_catalog_typos_first() {

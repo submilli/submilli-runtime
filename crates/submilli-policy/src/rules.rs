@@ -13,7 +13,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::filter::{ComparisonFailure, FilterExpr, VarBindings};
+use crate::filter::{ComparisonFailure, FilterExpr, Truth, VarBindings};
 
 /// Rules per caller identifier, each list in evaluation order.
 pub type Permissions = BTreeMap<String, Vec<PermissionRule>>;
@@ -187,6 +187,25 @@ pub trait Rules {
             vars,
         )
     }
+
+    /// What a call by `caller` to `capability` could resolve to, before its
+    /// context is fully known: documentation decides from this whether to
+    /// show an operation. `known` holds the context fields known ahead of the
+    /// call.
+    fn possible_actions(
+        &self,
+        caller: &str,
+        capability: &str,
+        known: &serde_json::Value,
+    ) -> PossibleActions {
+        possible_actions(
+            self.permissions(),
+            self.default_action(),
+            caller,
+            capability,
+            known,
+        )
+    }
 }
 
 /// An owned, validated set of permission rules with its default action.
@@ -334,6 +353,79 @@ fn explain_resolution(
         action,
         cause,
         near_misses,
+    }
+}
+
+/// The actions a call could resolve to under partial knowledge, from
+/// [`Rules::possible_actions`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct PossibleActions {
+    /// Where the walk ends: the first rule whose filter holds, or the
+    /// default.
+    pub decided: Action,
+    /// Rules before that whose filter depends on what is not known yet, in
+    /// rule order: the first that holds decides instead. Trailing ones that
+    /// would decide the same as [`Self::decided`] are left out.
+    pub conditions: Vec<ActionCondition>,
+}
+
+impl PossibleActions {
+    /// Some call could proceed, possibly after a person approves it.
+    pub fn is_possible(&self) -> bool {
+        self.decided != Action::Deny
+            || self
+                .conditions
+                .iter()
+                .any(|condition| condition.action != Action::Deny)
+    }
+}
+
+/// A rule that applies only when its filter holds, as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionCondition {
+    pub action: Action,
+    pub filter: String,
+}
+
+/// First-match resolution where a filter may be unknown. A rule whose filter
+/// holds ends the walk; one whose filter is unknown may match, so its action
+/// is possible and the walk goes on; one whose filter fails is skipped. A walk
+/// no rule ends also reaches the default.
+fn possible_actions(
+    permissions: &Permissions,
+    default_action: DefaultAction,
+    caller: &str,
+    capability: &str,
+    known: &serde_json::Value,
+) -> PossibleActions {
+    let mut conditions = Vec::new();
+    let mut decided = Action::from(default_action);
+    let rules = permissions.get(caller).into_iter().flatten();
+    for rule in rules.filter(|rule| rule.capability == capability) {
+        let Some(filter) = &rule.filter else {
+            decided = rule.action;
+            break;
+        };
+        match filter.evaluate_partial(known) {
+            Truth::False => continue,
+            Truth::Unknown => conditions.push(ActionCondition {
+                action: rule.action,
+                filter: filter.to_string(),
+            }),
+            Truth::True => {
+                decided = rule.action;
+                break;
+            }
+        }
+    }
+    let relevant = conditions
+        .iter()
+        .rposition(|condition: &ActionCondition| condition.action != decided)
+        .map_or(0, |last| last + 1);
+    conditions.truncate(relevant);
+    PossibleActions {
+        decided,
+        conditions,
     }
 }
 
@@ -685,5 +777,133 @@ mod tests {
                 rule: None,
             }
         );
+    }
+
+    fn possible(
+        rules: Vec<PermissionRule>,
+        default_action: DefaultAction,
+        known: serde_json::Value,
+    ) -> PossibleActions {
+        let permissions = BTreeMap::from([("main".to_string(), rules)]);
+        possible_actions(&permissions, default_action, "main", "http.request", &known)
+    }
+
+    #[test]
+    fn possible_actions_follow_the_default_without_rules() {
+        let denied = possible(Vec::new(), DefaultAction::Deny, json!({}));
+        assert!(!denied.is_possible());
+        let allowed = possible(Vec::new(), DefaultAction::Allow, json!({}));
+        assert_eq!(allowed.decided, Action::Allow);
+        assert!(allowed.conditions.is_empty());
+        let asked = possible(Vec::new(), DefaultAction::AskHuman, json!({}));
+        assert_eq!(asked.decided, Action::AskHuman);
+        assert!(asked.is_possible());
+    }
+
+    #[test]
+    fn unknown_filter_makes_its_action_possible_with_a_condition() {
+        let get_only = possible(
+            vec![rule(
+                None,
+                "http.request",
+                Some("method == \"GET\""),
+                Action::Allow,
+            )],
+            DefaultAction::Deny,
+            json!({}),
+        );
+        assert!(get_only.is_possible());
+        assert_eq!(get_only.decided, Action::Deny);
+        assert_eq!(
+            get_only.conditions,
+            vec![ActionCondition {
+                action: Action::Allow,
+                filter: "method == \"GET\"".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn known_filter_decides_like_resolution() {
+        let rules = vec![rule(
+            None,
+            "http.request",
+            Some("method == \"GET\""),
+            Action::Allow,
+        )];
+        let get = possible(
+            rules.clone(),
+            DefaultAction::Deny,
+            json!({ "method": "GET" }),
+        );
+        assert_eq!(get.decided, Action::Allow);
+        assert!(get.conditions.is_empty());
+        let post = possible(rules, DefaultAction::Deny, json!({ "method": "POST" }));
+        assert!(!post.is_possible());
+    }
+
+    #[test]
+    fn earlier_unconditional_deny_shadows_a_grant() {
+        let shadowed = possible(
+            vec![
+                rule(None, "http.request", None, Action::Deny),
+                rule(None, "http.request", None, Action::Allow),
+            ],
+            DefaultAction::Allow,
+            json!({}),
+        );
+        assert!(!shadowed.is_possible());
+    }
+
+    #[test]
+    fn ask_human_rule_is_possible_and_other_callers_do_not_count() {
+        let asked = possible(
+            vec![rule(None, "http.request", None, Action::AskHuman)],
+            DefaultAction::Deny,
+            json!({}),
+        );
+        assert_eq!(asked.decided, Action::AskHuman);
+
+        let permissions = BTreeMap::from([(
+            "@acme/tools".to_string(),
+            vec![rule(None, "http.request", None, Action::Allow)],
+        )]);
+        let main = possible_actions(
+            &permissions,
+            DefaultAction::Deny,
+            "main",
+            "http.request",
+            &json!({}),
+        );
+        assert!(!main.is_possible());
+    }
+
+    #[test]
+    fn an_uncertain_deny_before_an_uncertain_grant_stays_a_condition() {
+        let narrowed = possible(
+            vec![
+                rule(
+                    None,
+                    "http.request",
+                    Some("host == \"internal\""),
+                    Action::Deny,
+                ),
+                rule(
+                    None,
+                    "http.request",
+                    Some("method == \"GET\""),
+                    Action::Allow,
+                ),
+                rule(None, "http.request", Some("path == \"/x\""), Action::Deny),
+            ],
+            DefaultAction::Deny,
+            json!({}),
+        );
+        let actions = narrowed
+            .conditions
+            .iter()
+            .map(|condition| condition.action)
+            .collect::<Vec<_>>();
+        assert_eq!(actions, [Action::Deny, Action::Allow]);
     }
 }

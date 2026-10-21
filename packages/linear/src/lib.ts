@@ -743,7 +743,7 @@ function buildEntityPageVars(id: string, page: PageOptions | undefined): EntityP
 }
 
 // ---------------------------------------------------------------------------
-// Pure variable builders (no network/secrets) — unit-tested directly.
+// Pure variable builders (no network/secrets).
 // ---------------------------------------------------------------------------
 
 // `Temporal.ZonedDateTime.toString()` appends a bracketed zone annotation
@@ -764,7 +764,7 @@ function stripZoneAnnotation(timestamp: string): string {
  * @param filter Curated issue filter; omit it for no filtering.
  * @returns Linear filter variable containing only the supplied constraints; empty when `filter` is omitted. Timestamps lose any bracketed zone annotation.
  */
-export function buildIssueFilter(filter?: IssueFilter): IssueFilterVar {
+function buildIssueFilter(filter?: IssueFilter): IssueFilterVar {
     const out: IssueFilterVar = {};
     if (filter === undefined) {
         return out;
@@ -815,7 +815,7 @@ const DEFAULT_PAGE_SIZE = 50;
  * @param page Optional pagination; omitting it or its `first` uses the default page size of 50.
  * @returns `first`/`after` variables; `after` is present only when a cursor was given.
  */
-export function buildPageVars(page?: PageOptions): PageVars {
+function buildPageVars(page?: PageOptions): PageVars {
     return { first: page?.first ?? DEFAULT_PAGE_SIZE, after: page?.after ?? undefined };
 }
 
@@ -825,7 +825,7 @@ export function buildPageVars(page?: PageOptions): PageVars {
  * @param page Optional pagination; omitting it or its `first` uses the default page size of 50.
  * @returns Variables for the issues query: `first`, optional `after`, and optional `filter`.
  */
-export function buildListIssuesVars(filter?: IssueFilter, page?: PageOptions): ListIssuesVars {
+function buildListIssuesVars(filter?: IssueFilter, page?: PageOptions): ListIssuesVars {
     const pagination = buildPageVars(page);
     return {
         first: pagination.first,
@@ -839,7 +839,7 @@ export function buildListIssuesVars(filter?: IssueFilter, page?: PageOptions): L
 // ---------------------------------------------------------------------------
 
 /** A GraphQL error-path segment: a field name or a list index. */
-export type GraphQlPathSegment = string | number;
+type GraphQlPathSegment = string | number;
 
 // Linear puts the actionable detail behind a generic top-level `message`
 // ("Argument Validation Error"): `extensions.code` carries the machine code,
@@ -848,8 +848,8 @@ export type GraphQlPathSegment = string | number;
 // *which* argument is wrong instead of just that *some* argument is. The dynamic
 // per-constraint messages (`constraints.<RuleName>`) can't be modelled in our
 // JSON.parse subset (object with dynamic keys), so we lift the property names.
-/** A Linear GraphQL error. Exported so the rendering helper's signature is nameable. */
-export interface GraphQlError {
+/** A Linear GraphQL error. */
+interface GraphQlError {
     /** The generic top-level message (often just "Argument Validation Error"). */
     message: string;
     /** Field path to the error, e.g. `["issues"]`. */
@@ -859,7 +859,7 @@ export interface GraphQlError {
 }
 
 /** The subset of Linear's GraphQL error `extensions` we surface. */
-export interface GraphQlErrorExtensions {
+interface GraphQlErrorExtensions {
     /** Machine code, e.g. "INVALID_INPUT". */
     code?: string | null;
     /** A human-readable detail Linear sometimes includes. */
@@ -869,7 +869,7 @@ export interface GraphQlErrorExtensions {
 }
 
 /** One class-validator failure inside `extensions.validationErrors`. */
-export interface ValidationErrorDetail {
+interface ValidationErrorDetail {
     /** The offending argument/field name, e.g. "after". */
     property?: string | null;
 }
@@ -878,8 +878,8 @@ export interface ValidationErrorDetail {
 // a runtime cast can't target an unconstrained generic, so the envelope is cast
 // with a concrete data type at each call site, then `requireData` does the
 // shared error/null unwrap generically (it only reads fields, never parses).
-/** A GraphQL response envelope. Exported so unit tests can cast response bodies to it. */
-export interface GraphQlResponse<T> {
+/** A GraphQL response envelope. */
+interface GraphQlResponse<T> {
     /** The operation result; an error response omits it or sends null. */
     data?: T | null;
     /** GraphQL errors; absent or null when the operation succeeded. */
@@ -887,7 +887,7 @@ export interface GraphQlResponse<T> {
 }
 
 /** Linear's nested issue-filter variable shape (built by `buildIssueFilter`). */
-export interface IssueFilterVar {
+interface IssueFilterVar {
     /** Team-id equality clause. */
     team?: { id: { eq: string } };
     /** Assignee-id equality clause. */
@@ -903,7 +903,7 @@ export interface IssueFilterVar {
 }
 
 /** Linear date comparator subset used by curated filters. */
-export interface DateComparatorVar {
+interface DateComparatorVar {
     /** Greater-than-or-equal bound. */
     gte?: string;
     /** Strict less-than bound. */
@@ -911,7 +911,7 @@ export interface DateComparatorVar {
 }
 
 /** Pagination variables (`first`/`after`) for a list call. */
-export interface PageVars {
+interface PageVars {
     /** Page size. */
     first?: number;
     /** Cursor. */
@@ -919,7 +919,7 @@ export interface PageVars {
 }
 
 /** Variables for `listIssues`: pagination plus an optional filter. */
-export interface ListIssuesVars {
+interface ListIssuesVars {
     /** Page size. */
     first?: number;
     /** Cursor. */
@@ -1094,13 +1094,13 @@ interface GraphQlErrorEnvelope {
 // variable-validation 400s), so render it instead of the bare status line —
 // the status alone tells a caller nothing actionable.
 /**
- * Render a non-2xx response into one actionable message. Exported for unit tests.
+ * Render a non-2xx response into one actionable message.
  * @param status HTTP status code of the failed response.
  * @param statusText HTTP status text, used in the fallback message.
  * @param body Raw response body; GraphQL `errors` in it are rendered when present.
  * @returns The rendered GraphQL errors, or `Linear request failed: HTTP <status> <statusText>` when the body has none.
  */
-export function httpFailureMessage(status: number, statusText: string, body: string): string {
+function httpFailureMessage(status: number, statusText: string, body: string): string {
     try {
         const envelope = JSON.parse(body) as GraphQlErrorEnvelope;
         const errors = envelope.errors;
@@ -1128,11 +1128,11 @@ function requireData<T>(envelope: GraphQlResponse<T>): T {
 }
 
 /**
- * Render Linear's GraphQL `errors` into one actionable message. Exported for unit tests.
+ * Render Linear's GraphQL `errors` into one actionable message.
  * @param errors GraphQL errors from a response.
  * @returns One message prefixed `Linear GraphQL error:` with each error's message, code, and details joined by `;`.
  */
-export function graphqlErrorMessage(errors: GraphQlError[]): string {
+function graphqlErrorMessage(errors: GraphQlError[]): string {
     const parts: string[] = [];
     for (const err of errors) {
         parts.push(describeGraphqlError(err));

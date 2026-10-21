@@ -101,6 +101,23 @@ impl BlueprintStore for SqliteBlueprintStore {
         self.current(name, |_, yaml| yaml).await
     }
 
+    async fn get_with_revision(&self, name: &str) -> Result<Option<(Blueprint, u64)>, StoreError> {
+        let name = name.to_owned();
+        self.database.read(move |connection| Box::pin(async move {
+            // One query, so the blueprint and its revision come from the same row.
+            let row: Option<(String, i64)> = sqlx::query_as(
+                "SELECT r.yaml, r.revision FROM blueprints b JOIN blueprint_revisions r ON r.name=b.name AND r.revision=b.current_revision WHERE b.name=?1"
+            ).bind(&name).fetch_optional(connection).await?;
+            Ok(row.and_then(|(yaml, revision)| {
+                let blueprint = parse_current(&name, &yaml).ok()?;
+                // Revisions count up from one, so this never drops a row the
+                // schema allows.
+                let revision = u64::try_from(revision).ok()?;
+                Some((blueprint, revision))
+            }))
+        })).await.map_err(Into::into)
+    }
+
     async fn unusable_reason(&self, name: &str) -> Result<Option<String>, StoreError> {
         Ok(self
             .current(name, |name, yaml| parse_current(name, &yaml).err())

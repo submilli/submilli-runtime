@@ -6,21 +6,74 @@ internally from `GITHUB_TOKEN`; never pass tokens as function arguments.
 - Pass repositories as `{ owner, name }`: one owner login and one repository name. A
   value with a space, a slash, or other syntax throws `GitHubError` with code
   `invalid_input`.
-- A policy may limit file reads by `ref` and pull requests by `head` and `base`. Name
-  the `ref` when reading a file under such a policy; an unnamed ref is the default
-  branch and is checked as null, as is any other field the operation does not name. These fields are compared as written, and one branch has
-  several spellings (`main`, `heads/main`, a commit SHA), so such rules are written as
-  allow rules that name the permitted values.
-- Prefer `searchCode`, `searchIssues`, and `searchPullRequests` for repository-scoped
-  discovery. They reject query syntax that could escape the repository policy.
+
+<!-- submilli:if any="github.com/contents.readFile github.com/contents.readTextFile github.com/contents.listDirectory" -->
+
+- A policy may limit file reads by `ref`. Name the `ref` when reading a file under such
+  a policy; an unnamed ref is the default branch and is checked as null.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if any="github.com/pulls.create github.com/pulls.update github.com/pulls.list" -->
+
+- A policy may limit pull requests by `head` and `base`.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if any="github.com/contents.readFile github.com/contents.readTextFile github.com/contents.listDirectory github.com/pulls.create github.com/pulls.update github.com/pulls.list" -->
+
+- Any other field the operation does not name is checked as null. These fields are
+  compared as written, and one branch has several spellings (`main`, `heads/main`, a
+  commit SHA).
+
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="github.com/code.search" -->
+- Prefer `searchCode` for repository-scoped code discovery.
+<!-- submilli:endif -->
+<!-- submilli:if capability="github.com/issues.search" -->
+- Prefer `searchIssues` for repository-scoped issue discovery.
+<!-- submilli:endif -->
+<!-- submilli:if capability="github.com/pulls.search" -->
+- Prefer `searchPullRequests` for repository-scoped pull request discovery.
+<!-- submilli:endif -->
+<!-- submilli:if any="github.com/code.search github.com/issues.search github.com/pulls.search" -->
+- The repository-scoped search functions reject query syntax that could escape the
+  repository policy.
+<!-- submilli:endif -->
+
 - Continue list calls with the opaque `nextPageToken`; do not interpret it.
-- `readFile` returns bytes and `readTextFile` requires valid UTF-8. File reads are capped
-  at 10 MiB.
-- `listDirectory` follows GitHub's 1,000-entry directory limit; use `getTree` for larger
-  directory walks.
+
+<!-- submilli:if capability="github.com/contents.readFile" -->
+- `readFile` returns bytes.
+<!-- submilli:endif -->
+<!-- submilli:if capability="github.com/contents.readTextFile" -->
+- `readTextFile` requires valid UTF-8.
+<!-- submilli:endif -->
+<!-- submilli:if any="github.com/contents.readFile github.com/contents.readTextFile" -->
+- File reads are capped at 10 MiB.
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="github.com/contents.listDirectory" -->
+
+- `listDirectory` follows GitHub's 1,000-entry directory limit.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if all="github.com/contents.listDirectory github.com/trees.get" -->
+
+- Use `getTree` for larger directory walks.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="github.com/commits.create" -->
+
 - Use `commitFiles` for atomic multi-file changes. Read the branch SHA first and pass it
   as `expectedHeadSha`; a concurrent branch update throws `GitHubError` with code
   `branch_moved`. Branch refs are never force-updated.
+
+<!-- submilli:endif -->
+
 - Missing read resources return `null`. Invalid input, authorization failures, mutations,
   and rate limits throw `GitHubError`.
 - The package does not retry automatically. Inspect `retryAfterSeconds`,
@@ -29,8 +82,14 @@ internally from `GITHUB_TOKEN`; never pass tokens as function arguments.
 - Results are curated stable models. There is intentionally no raw REST or GraphQL escape
   hatch.
 
+<!-- submilli:if capability="github.com/rateLimit.get" -->
+
 GitHub REST, search, and GraphQL have different rate-limit buckets. Call `getRateLimit`
 when an agent needs an explicit budget snapshot.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="github.com/commits.list" -->
 
 ## Example
 
@@ -57,6 +116,10 @@ function main(): string {
 }
 ```
 
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="github.com/issues.searchAcrossRepositories" -->
+
 ## Search issues across repositories
 
 Broad discovery requires `github.com/issues.searchAcrossRepositories`. Dates below
@@ -80,6 +143,10 @@ function main(): string {
     return lines.join("\n");
 }
 ```
+
+<!-- submilli:endif -->
+
+<!-- submilli:if all="github.com/pulls.searchAcrossRepositories github.com/pulls.get github.com/pulls.getReactions" -->
 
 ## A person's pull requests in a date window
 
@@ -107,6 +174,10 @@ function main(): string {
 }
 ```
 
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="github.com/issues.searchAcrossRepositories" -->
+
 ## Rank a topic page by engagement
 
 Ranking applies to this page only; unknown reactions are displayed separately
@@ -133,7 +204,13 @@ function main(): string {
 }
 ```
 
-Repository owners and names are lowercase in policy and requests. Update any
-mixed-case owner/repo literals in blueprints. Commit listing also exposes `sha`
-as `ref` and its path as `path`; these values retain their case. Ref rules should
-allow specific values because branches, tags and SHAs can name the same history.
+<!-- submilli:endif -->
+
+Repository owners and names are lowercase in policy and requests.
+
+<!-- submilli:if capability="github.com/commits.list" -->
+
+Commit listing also exposes `sha` as `ref` and its path as `path`; these values
+retain their case.
+
+<!-- submilli:endif -->
