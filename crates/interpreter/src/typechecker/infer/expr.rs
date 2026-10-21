@@ -1511,14 +1511,22 @@ impl Inferer<'_> {
             return Ok(folded);
         }
         let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
+        let fresh_reference = match fresh_reference_operand(self.ast, lhs)? {
+            Some(what) => Some(what),
+            None => fresh_reference_operand(self.ast, rhs)?,
+        };
         // Contextual types help literals and callbacks, but an equality
-        // operand is not an assignment into the other operand's type.
-        let contextual_rhs = is_context_typed_literal(self.ast, rhs)?;
+        // operand is not an assignment into the other operand's type: an
+        // arrow takes only a function type as its context.
+        let contextual_rhs = is_context_typed_literal(self.ast, rhs)?
+            && (!is_arrow(self.ast, rhs)? || has_function_member(&lt));
         let rhs_hint = contextual_rhs.then_some(&lt);
         let (typed_rhs, _) = self.infer_expr(rhs, rhs_hint)?;
         let lhs_operand = self.comparison_operand(lhs, typed_lhs)?;
         let rhs_operand = self.comparison_operand(rhs, typed_rhs)?;
-        if !super::comparison_operand::operands_comparable(
+        if let Some(what) = fresh_reference {
+            self.error_fresh_reference_comparison(op, what, span);
+        } else if !super::comparison_operand::operands_comparable(
             &lhs_operand,
             &rhs_operand,
             self.resolver(),
@@ -13495,6 +13503,40 @@ fn spread_source_context(ty: &Type, overwritten: &std::collections::BTreeSet<Str
 
 /// Whether `id` is a literal form that takes its type from context when it
 /// has one: an arrow, an object literal or an array literal.
+/// What a function expression or regular expression literal written as an
+/// equality operand is: it makes a new object, which equals nothing the other
+/// side can hold (tsc: TS2839). Unlike tsc, an object or array literal is left
+/// out, since `===` compares them by value. An arrow is left out and parentheses
+/// are not looked through, as in tsc.
+fn fresh_reference_operand(
+    ast: &crate::Ast,
+    id: ExprId,
+) -> Result<Option<&'static str>, CompilerFailure> {
+    Ok(match ast.try_expr(id).map_err(super::arena_failure)?.kind {
+        ExprKind::FunctionExpression { .. } => Some("a function expression makes a new function"),
+        ExprKind::Regex { .. } => Some("a regular expression literal makes a new object"),
+        _ => None,
+    })
+}
+
+fn is_arrow(ast: &crate::Ast, id: ExprId) -> Result<bool, CompilerFailure> {
+    Ok(
+        match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
+            ExprKind::Paren(inner) => is_arrow(ast, *inner)?,
+            ExprKind::Arrow { .. } => true,
+            _ => false,
+        },
+    )
+}
+
+fn has_function_member(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Function { .. } => true,
+        Type::Union(members) => members.iter().any(has_function_member),
+        _ => false,
+    }
+}
+
 fn is_context_typed_literal(ast: &crate::Ast, id: ExprId) -> Result<bool, CompilerFailure> {
     Ok(
         match &ast.try_expr(id).map_err(super::arena_failure)?.kind {

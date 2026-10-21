@@ -33,7 +33,6 @@ line 20: function () { if (true) { return ['']; } else { return [1]; } }
   ours: () => <error>
 
 errors:
-line 44: tsc TS2839: This condition will always return 'false' since JavaScript compares objects by reference, not value. (we accept)
 line 8: ours: return type `number` conflicts with earlier return `string`; annotate the closure's return type, or return one type on every path (tsc accepts)
 line 12: ours: return type `number` conflicts with earlier return `string`; annotate the closure's return type, or return one type on every path (tsc accepts)
 line 16: ours: return type `number` conflicts with earlier return `string`; annotate the closure's return type, or return one type on every path (tsc accepts)
