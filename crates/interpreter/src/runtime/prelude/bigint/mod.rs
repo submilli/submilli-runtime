@@ -46,7 +46,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("toString"),
         FuncType::new(&engine, [bigint_ref.clone(), ValType::F64], [s]),
-        true,
         |caller, params, results| {
             let (sign, limbs) = read_bigint_struct(caller, abi_arg(params, 0)?, "BigInt#toString")?;
             let radix = match *abi_arg(params, 1)? {
@@ -71,7 +70,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("toJson"),
         FuncType::new(&engine, [bigint_ref.clone()], [string_ref]),
-        true,
         |caller, params, results| {
             let (sign, limbs) = read_bigint_struct(caller, abi_arg(params, 0)?, "BigInt#toJson")?;
             let text = ops::format_bigint(caller, &limbs_to_bigint(sign, &limbs)?, 10)?;
@@ -95,7 +93,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::extend(&crate::mangle::prelude("BigIntConstructor"), "@call"),
         FuncType::new(&engine, [obj_param], [bigint_ref]),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? = bigint_ctor_call(caller, abi_arg(params, 0)?)?;
             Ok(())
@@ -286,7 +283,7 @@ mod tests {
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
-            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .store_async(&engine, StoreData::with_vfs("test-run".into(), Vfs::none()))
             .unwrap();
         let mut linker = Linker::new(&engine);
         install_runtime_async(&mut linker, &mut store)

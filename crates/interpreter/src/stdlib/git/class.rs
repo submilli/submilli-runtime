@@ -274,13 +274,12 @@ fn install_factories(
             "open",
         ),
         FuncType::new(engine, [string.clone()], [repository_result.clone()]),
-        false,
         {
             let class = class.clone();
             move |caller, params, results| {
                 let class = class.clone();
                 Box::pin(async move {
-                    let path = super::invoke(caller, "open", false, params).await?;
+                    let path = super::install::open_repository(caller, params).await?;
                     *abi_result(results, 0)? = new_instance(caller, &class, path)?;
                     Ok(())
                 })
@@ -299,13 +298,12 @@ fn install_factories(
             [string.clone(), options.clone()],
             [repository_result.clone()],
         ),
-        false,
         {
             let class = class.clone();
             move |caller, params, results| {
                 let class = class.clone();
                 Box::pin(async move {
-                    let path = super::invoke(caller, "init", false, params).await?;
+                    let path = super::install::init_repository(caller, params).await?;
                     *abi_result(results, 0)? = new_instance(caller, &class, path)?;
                     Ok(())
                 })
@@ -324,13 +322,12 @@ fn install_factories(
             [string.clone(), string.clone(), options.clone()],
             [repository_result.clone()],
         ),
-        false,
         {
             let class = class.clone();
             move |caller, params, results| {
                 let class = class.clone();
                 Box::pin(async move {
-                    let path = super::invoke(caller, "clone", false, params).await?;
+                    let path = super::install::clone_repository(caller, params).await?;
                     *abi_result(results, 0)? = new_instance(caller, &class, path)?;
                     Ok(())
                 })
@@ -360,11 +357,10 @@ fn install_constructor(
                 class.instance_type.clone().into(),
             ))],
         ),
-        false,
         move |caller, params, results| {
             let class = class.clone();
             Box::pin(async move {
-                let path = super::invoke(caller, "open", false, params).await?;
+                let path = super::install::open_repository(caller, params).await?;
                 *abi_result(results, 0)? = new_instance(caller, &class, path)?;
                 Ok(())
             })
@@ -382,10 +378,13 @@ fn install_constructor(
             ],
             [],
         ),
-        false,
         |caller, params, _results| {
             Box::pin(async move {
-                let path = super::invoke(caller, "open", false, &params[1..]).await?;
+                let path = super::install::open_repository(
+                    caller,
+                    std::slice::from_ref(abi_arg(params, 1)?),
+                )
+                .await?;
                 payload(caller, abi_arg(params, 0)?)?.set(&mut *caller, 0, path)?;
                 Ok(())
             })
@@ -441,7 +440,10 @@ mod tests {
         let engine = config.engine().unwrap();
         let intr = build_intrinsic_types(&engine).unwrap();
         let mut store = config
-            .store(&engine, StoreData::with_vfs(crate::runtime::Vfs::none()))
+            .store(
+                &engine,
+                StoreData::with_vfs("test-run".into(), crate::runtime::Vfs::none()),
+            )
             .unwrap();
         let error = make_field_names(&mut store, &intr).unwrap_err();
         assert!(error.is::<crate::runtime::host::FatalHostError>());

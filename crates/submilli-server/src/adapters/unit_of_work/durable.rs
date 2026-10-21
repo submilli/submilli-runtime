@@ -37,6 +37,53 @@ struct SqliteDurableUnitOfWork {
 
 #[async_trait::async_trait]
 impl UnitOfWork for SqliteDurableUnitOfWork {
+    async fn history_progress(
+        &mut self,
+        attempt: &submilli_durable::history::ExecutionAttempt,
+    ) -> Result<submilli_durable::history::HistoryProgress, DurableStoreError> {
+        let attempt = attempt.clone();
+        self.transaction
+            .query_recoverable(move |connection| {
+                Box::pin(
+                    async move { super::execution_history::progress(connection, &attempt).await },
+                )
+            })
+            .await
+            .map_err(durable_error)
+    }
+    async fn get_history_entry(
+        &mut self,
+        run_id: &RunId,
+        sequence: u64,
+    ) -> Result<Option<submilli_durable::history::HistoryEntry>, DurableStoreError> {
+        let run_id = run_id.clone();
+        let sealer = self.sealer.clone();
+        self.transaction
+            .query_recoverable(move |connection| {
+                Box::pin(async move {
+                    super::execution_history::get(connection, &sealer, &run_id, sequence).await
+                })
+            })
+            .await
+            .map_err(durable_error)
+    }
+    async fn append_history(
+        &mut self,
+        attempt: &submilli_durable::history::ExecutionAttempt,
+        entry: Arc<submilli_durable::history::HistoryEntry>,
+    ) -> Result<(), DurableStoreError> {
+        let attempt = attempt.clone();
+        let sealer = self.sealer.clone();
+        self.transaction
+            .query_recoverable(move |connection| {
+                Box::pin(async move {
+                    super::execution_history::append(connection, &sealer, &attempt, &entry).await
+                })
+            })
+            .await
+            .map_err(durable_error)
+    }
+
     async fn get_reader(
         &mut self,
         run_id: &RunId,

@@ -545,11 +545,11 @@ async fn lost_unkeyed_preparation_and_claim_acknowledgements_keep_one_identity()
     fault.lose_ack.store(true, Ordering::SeqCst);
     let guard = proceed(
         coordinator
-            .prepare("session", None, "code", "lost-ack", None, "mcp")
+            .prepare("session", None, "code", &"lost-ack".into(), None, "mcp")
             .await,
     );
     fault.lose_ack.store(true, Ordering::SeqCst);
-    coordinator.claim("lost-ack").await.unwrap();
+    coordinator.claim(&"lost-ack".into()).await.unwrap();
     guard.finish_unkeyed().await;
     let run = units
         .begin()
@@ -575,12 +575,12 @@ async fn early_storage_failure_cannot_authorize_a_repeated_claim() {
     let coordinator = Arc::new(Coordinator::new(units, database.generation().unwrap()));
     let guard = proceed(
         coordinator
-            .prepare("session", None, "code", "claimed", None, "mcp")
+            .prepare("session", None, "code", &"claimed".into(), None, "mcp")
             .await,
     );
-    coordinator.claim("claimed").await.unwrap();
+    coordinator.claim(&"claimed".into()).await.unwrap();
     fault.fail_begin.store(true, Ordering::SeqCst);
-    assert!(coordinator.claim("claimed").await.is_err());
-    assert!(coordinator.claim("claimed").await.is_err());
+    assert!(coordinator.claim(&"claimed".into()).await.is_err());
+    assert!(coordinator.claim(&"claimed".into()).await.is_err());
     guard.finish_unkeyed().await;
 }

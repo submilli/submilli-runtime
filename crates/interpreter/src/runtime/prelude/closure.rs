@@ -397,7 +397,6 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         length_key(),
         FuncType::new(&engine, [object], [ValType::F64]),
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let function = read_callback(caller, abi_arg(params, 0)?, "Function#length")?;
             let length = function.length(caller)?;
@@ -432,7 +431,7 @@ mod tests {
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
-            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .store_async(&engine, StoreData::with_vfs("test-run".into(), Vfs::none()))
             .unwrap();
         let mut linker = wasmtime::Linker::new(&engine);
         crate::runtime::install_runtime_async(&mut linker, &mut store)
@@ -482,7 +481,7 @@ mod tests {
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
-            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .store_async(&engine, StoreData::with_vfs("test-run".into(), Vfs::none()))
             .unwrap();
         let mut linker = wasmtime::Linker::new(&engine);
         crate::runtime::install_runtime_async(&mut linker, &mut store)

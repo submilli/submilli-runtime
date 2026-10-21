@@ -84,7 +84,6 @@ fn reg_plain_time_duration_op(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainTime", method),
         ty,
-        true,
         move |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let time = plain_time_from_struct(caller, st, 0, &label)?;
@@ -116,7 +115,6 @@ fn reg_plain_time_with(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainTime", "with"),
         ty,
-        true,
         |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainTime.with")?;
             let time = merge_time(
@@ -153,7 +151,6 @@ fn reg_plain_time_pair_op(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key("PlainTime", method),
         ty,
-        true,
         move |caller, params, results| {
             let a_st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let b_st = as_struct_val(caller, abi_arg(params, 1)?, &label)?;

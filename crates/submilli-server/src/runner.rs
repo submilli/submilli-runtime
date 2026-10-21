@@ -5,6 +5,7 @@
 //! module replicates the engine/store/linker/instantiate dance so the buffer
 //! is readable after `dispatch_main_async` returns in either branch.
 
+use interpreter::runtime::durable::RunId;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -32,7 +33,13 @@ use crate::compiler_thread;
 use crate::error::{DenialDetails, DiagnosticNote, DiagnosticPayload, ErrorKind, ExecuteError};
 use crate::mcp::McpCatalog;
 
+// Internal entry points are exercised before transport/startup integration.
+#[allow(dead_code)]
+pub(crate) mod durable;
+
 pub struct RunOutcome {
+    /// Internal interruptions retain a recorded run for a later attempt.
+    pub(crate) durable_completion: bool,
     pub usage: ExecutionUsage,
     /// Already-JSON-encoded `main` return.
     pub value: Option<String>,
@@ -83,6 +90,8 @@ pub(crate) fn parse(code: &str) -> Result<ParsedExecute, interpreter::source::So
 /// injection, the semantic-security policy, and the HTTP client. Grouped so the
 /// run signature stays readable as the set grows.
 pub struct HostServices {
+    pub effects: Option<Arc<dyn interpreter::runtime::effects::EffectHistory>>,
+    pub filesystem: Option<Arc<dyn interpreter::runtime::filesystem::Filesystem>>,
     pub(crate) session_manager: Option<Arc<crate::session_manager::SessionManager>>,
     pub(crate) audit: Option<Arc<crate::audit::ExecutionAudit>>,
     pub git: Result<Option<interpreter::stdlib::git::GitConfig>, String>,
@@ -136,6 +145,7 @@ pub(crate) struct ToolsPackage {
 }
 
 pub(crate) struct RunnerRuntime<'a> {
+    pub run_id: &'a RunId,
     pub blueprint: &'a str,
     pub session: &'a str,
     pub engine: &'a Engine,
@@ -157,6 +167,7 @@ pub(crate) async fn run(
     imports: RunnerImports<'_>,
 ) -> RunOutcome {
     let started = Instant::now();
+    let run_id = runtime.run_id.clone();
     let blueprint = runtime.blueprint.to_owned();
     let session = runtime.session.to_owned();
     let owned_code = code.to_owned();
@@ -194,6 +205,7 @@ pub(crate) async fn run(
             &owned_code,
             parsed,
             RunnerRuntime {
+                run_id: &run_id,
                 blueprint: &blueprint,
                 session: &session,
                 engine: &engine,
@@ -312,7 +324,12 @@ async fn run_inner(
     crate::metrics::compile_phases(&compiled.timings);
 
     let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let mut data = StoreData::with_vfs_and_cap(vfs, runtime.config.max_store_bytes);
+    let mut data =
+        StoreData::with_vfs_and_cap(runtime.run_id.clone(), vfs, runtime.config.max_store_bytes);
+    data.effects = services.effects;
+    if let Some(filesystem) = services.filesystem {
+        data.filesystem = filesystem;
+    }
     data.git = git;
     data.vfs_info = vfs_info;
     data.auth_proxy = services.auth_proxy;
@@ -414,6 +431,7 @@ async fn run_inner(
 
         match dispatch {
             Ok(value) => RunOutcome {
+                durable_completion: true,
                 usage: ExecutionUsage::default(),
                 value,
                 console_raw,
@@ -421,6 +439,9 @@ async fn run_inner(
                 discovery_warnings,
             },
             Err(err) => RunOutcome {
+                durable_completion: !err.is::<interpreter::runtime::host::FatalHostError>()
+                    && !err.is::<Trap>()
+                    && !is_memory_exhausted(&err),
                 usage: ExecutionUsage::default(),
                 value: None,
                 error: Some(classify_runtime_error(&err, &parsed.sources, parsed.file)),
@@ -466,6 +487,7 @@ fn record_worker_cleanup_failure(
     outcome: &mut RunOutcome,
     error: &interpreter::runtime::blocking::BlockingWorkDrainError,
 ) {
+    outcome.durable_completion = false;
     let secondary = format!("worker cleanup failure: {error}");
     if let Some(primary) = outcome.error.as_mut() {
         primary.message.push('\n');
@@ -528,6 +550,7 @@ fn compile_failure(
         message.push_str(interpreter::rendering::TRUNCATED);
     }
     RunOutcome {
+        durable_completion: true,
         usage: ExecutionUsage::default(),
         value: None,
         console_raw: String::new(),
@@ -806,6 +829,7 @@ fn sentry_extras(
 
 fn internal_failure(msg: &str) -> RunOutcome {
     RunOutcome {
+        durable_completion: false,
         usage: ExecutionUsage::default(),
         value: None,
         console_raw: String::new(),
@@ -1029,7 +1053,7 @@ mod tests {
     async fn cancelled_git_owner_retains_resources(panic_after_resume: bool) {
         let vfs = Vfs::tempdir().unwrap();
         let root = vfs.root().to_owned();
-        let defaults = StoreData::with_vfs(Vfs::none());
+        let defaults = StoreData::with_vfs("test-run".into(), Vfs::none());
         let (finish, cleanup) = std::sync::mpsc::channel();
         let security = Arc::new(PausedGit {
             panic_after_resume,
@@ -1038,6 +1062,8 @@ mod tests {
             finish: Mutex::new(cleanup),
         });
         let services = HostServices {
+            effects: None,
+            filesystem: None,
             session_manager: None,
             git: Ok(Some(interpreter::stdlib::git::GitConfig {
                 name: "Agent".into(),
@@ -1079,10 +1105,12 @@ mod tests {
                 fs.writeText("/continued", "must not run");
             }
         "#;
+        let run_id = "test-run".into();
         let mut request = Box::pin(run(
             code,
             parse(code).unwrap(),
             RunnerRuntime {
+                run_id: &run_id,
                 blueprint: "test",
                 session: "test-session",
                 engine: &engine,
@@ -1160,6 +1188,7 @@ mod worker_cleanup_tests {
             outcome.discovery_warnings = vec!["discovery warning".into()];
             let primary = outcome.error.as_ref().unwrap().message.clone();
             record_worker_cleanup_failure(&mut outcome, &cleanup);
+            assert!(!outcome.durable_completion);
             let error = outcome.error.unwrap();
             assert!(matches!(error.kind, ErrorKind::Timeout));
             assert_eq!(
@@ -1175,6 +1204,7 @@ mod worker_cleanup_tests {
     async fn cleanup_failure_suppresses_success_and_preserves_reporting_context() {
         let cleanup = injected_drain_failure().await;
         let mut outcome = RunOutcome {
+            durable_completion: true,
             usage: ExecutionUsage::default(),
             value: Some("42".into()),
             console_raw: "before\n".into(),
@@ -1182,6 +1212,7 @@ mod worker_cleanup_tests {
             discovery_warnings: vec!["discovery warning".into()],
         };
         record_worker_cleanup_failure(&mut outcome, &cleanup);
+        assert!(!outcome.durable_completion);
         assert!(outcome.value.is_none());
         let error = outcome.error.unwrap();
         assert!(matches!(error.kind, ErrorKind::RuntimeError));
@@ -1190,3 +1221,6 @@ mod worker_cleanup_tests {
         assert_eq!(outcome.discovery_warnings, ["discovery warning"]);
     }
 }
+
+#[cfg(test)]
+mod durable_tests;

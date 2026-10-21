@@ -30,6 +30,7 @@
 
 pub mod declaration;
 
+use crate::runtime::effects::{self, NativeError};
 use std::sync::Arc;
 
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
@@ -39,12 +40,12 @@ use crate::runtime::call_log::{ModelUsage, Payload, Side, record_payload, record
 use crate::runtime::decision::CallTicket;
 use crate::runtime::embedding::{
     EmbeddingBatch, EmbeddingBoundKind, EmbeddingError, EmbeddingLimits, EmbeddingMalformedReason,
-    EmbeddingModel, EmbeddingProvider, EmbeddingTokenBudget, Purpose,
+    EmbeddingModel, EmbeddingProvider, EmbeddingTokenBudget, Purpose, SubBatchSettlement,
 };
 use crate::runtime::fuel;
 use crate::runtime::host::{
     abi_arg, abi_result, fatal_host_error, quota_exceeded_error, range_error, read_string_arg,
-    register_host_fn, register_host_fn_async, type_error, write_boxed_number_struct,
+    register_host_fn, register_host_value_async, type_error, write_boxed_number_struct,
     write_submilli_array_struct_precharged, write_submilli_string_struct,
     write_submilli_uint8array_struct, write_uint8_array_precharged,
 };
@@ -80,6 +81,13 @@ const M_MAX_INPUT_TOKENS: usize = 4;
 const M_MAX_INPUT_BYTES: usize = 5;
 const M_IDENTITY: usize = 6;
 
+#[derive(serde::Serialize)]
+struct EmbedRequest {
+    model: String,
+    texts: Vec<String>,
+    purpose: Purpose,
+}
+
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
@@ -106,7 +114,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.object.clone()),
     ));
 
-    register_host_fn_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "embed"),
@@ -115,8 +123,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             [string.clone(), array.clone(), string.clone()],
             [nullable_object.clone()],
         ),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let model =
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "embedding.embed (model)")?;
@@ -125,25 +132,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     abi_arg(params, 2)?,
                     "embedding.embed (purpose)",
                 )?;
-                *abi_result(results, 0)? =
-                    embed(caller, &model, abi_arg(params, 1)?, &purpose).await?;
-                Ok(())
+                embed(caller, &model, abi_arg(params, 1)?, &purpose).await
             })
         },
     )?;
 
-    register_host_fn_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "models"),
         FuncType::new(&engine, [], [array.clone()]),
-        /* deterministic = */ false,
-        |caller, _params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = models(caller).await?;
-                Ok(())
-            })
-        },
+        |caller, _params| Box::pin(async move { models(caller).await }),
     )?;
 
     install_getters(linker, &engine, &receiver, string, nullable_object)?;
@@ -202,7 +201,6 @@ fn install_methods(
         MODULE_NAME,
         crate::mangle::extend(&embeddings_key, "vector"),
         FuncType::new(engine, [receiver.clone(), ValType::F64], [array]),
-        /* deterministic = */ true,
         |caller, params, results| {
             let row = read_row(
                 caller,
@@ -220,7 +218,6 @@ fn install_methods(
         MODULE_NAME,
         crate::mangle::extend(&embeddings_key, "bytes"),
         FuncType::new(engine, [receiver, ValType::F64], [uint8]),
-        /* deterministic = */ true,
         |caller, params, results| {
             let row = read_row(
                 caller,
@@ -277,6 +274,69 @@ async fn embed(
     });
     let purpose = parse_purpose(model, purpose)?;
 
+    let request = EmbedRequest {
+        model: model.to_owned(),
+        texts,
+        purpose,
+    };
+    let mut response = effects::execute(
+        caller,
+        "embedding.embed",
+        request,
+        move |caller, _, request| Box::pin(call_provider(caller, ticket, request)),
+    )
+    .await?;
+    // Charge even a partially failed batch before exposing its result or error.
+    if let Some(settlement) = &mut response.settlement {
+        settlement.charge();
+    } else {
+        budget.restore_spend(response.used, response.held, response.requests);
+    }
+    let batch = response.result.map_err(NativeError::into_error)?;
+    build_embeddings(caller, batch)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct EmbeddingResponse {
+    result: Result<EmbeddingBatch, NativeError>,
+    used: u64,
+    held: u64,
+    requests: u64,
+    #[serde(skip)]
+    settlement: Option<EmbeddingSettlement>,
+}
+
+/// Retain live reservation cleanup if storing the outcome fails. Replay has no
+/// live reservation and restores only the recorded per-run counters.
+struct EmbeddingSettlement {
+    budget: Option<Arc<EmbeddingTokenBudget>>,
+    reserved: u64,
+    settlements: Vec<SubBatchSettlement>,
+}
+
+impl EmbeddingSettlement {
+    fn charge(&mut self) {
+        if let Some(budget) = self.budget.take() {
+            budget.settle(self.reserved, &self.settlements);
+        }
+    }
+}
+
+impl Drop for EmbeddingSettlement {
+    fn drop(&mut self) {
+        self.charge();
+    }
+}
+
+async fn call_provider(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    ticket: Option<CallTicket>,
+    request: EmbedRequest,
+) -> wasmtime::Result<EmbeddingResponse> {
+    let model = request.model.as_str();
+    let texts = request.texts;
+    let purpose = request.purpose;
+    let budget = execution_budget(caller);
     let provider = provider(caller, model)?;
     check_inputs(caller, &*provider, model, &texts).await?;
 
@@ -287,21 +347,60 @@ async fn embed(
     budget
         .reserve(model, estimate)
         .map_err(|error| quota_throw(caller, ticket, model, error))?;
-
-    let batch = match provider.embed(model, &texts, purpose, &budget).await {
-        Ok(batch) => batch,
+    let requests_before = budget.requests();
+    let dispatched = provider.embed(model, &texts, purpose, &budget).await;
+    let requests = budget.requests().saturating_sub(requests_before);
+    let settlements = match &dispatched {
+        Ok(batch) => batch.settlements(),
+        Err(error) => error.settlements(),
+    };
+    let (used, held) = settlements.iter().fold((0u64, 0u64), |(used, held), part| {
+        (
+            used.saturating_add(part.reported)
+                .saturating_add(part.indeterminate),
+            held.saturating_add(part.indeterminate),
+        )
+    });
+    let settlement = EmbeddingSettlement {
+        budget: Some(budget),
+        reserved: estimate,
+        settlements: settlements.to_vec(),
+    };
+    let result = match dispatched {
+        Ok(batch) if batch.count() != texts.len() => Err(throw(EmbeddingError::Malformed {
+            alias: model.to_string(),
+            reason: EmbeddingMalformedReason::CountMismatch,
+            settlements: Vec::new(),
+        })),
+        Ok(batch) => {
+            let received = (batch.values().len() as u64).saturating_mul(4);
+            record_payload(&*caller, ticket, Side::Response, || {
+                Payload::meta(serde_json::json!({
+                    "count": batch.count(),
+                    "dimensions": batch.dimensions(),
+                    "identity": batch.identity(),
+                    "model": model,
+                    "inputTokens": batch.input_tokens(),
+                }))
+                .with_size(received)
+            });
+            record_usage(
+                &*caller,
+                ticket,
+                ModelUsage {
+                    input_tokens: batch.input_tokens(),
+                    output_tokens: None,
+                },
+            );
+            fuel::settle(&mut *caller, fuel::IO, received)?;
+            Ok(batch)
+        }
         Err(error) => {
-            // Settled before the error becomes a throw, or a fatal one, so the
-            // sent sub-batches stay charged either way.
-            budget.settle(estimate, error.settlements());
-            // What the sent sub-batches reported is real spend; record it, and
-            // nothing when no sub-batch reported any. Unlike success, which is
-            // all-or-nothing, this is a lower bound: unreported sub-batches
-            // add nothing to it.
-            let reported: u64 = error
+            // Some sub-batches may have completed before the provider failed.
+            let reported = error
                 .settlements()
                 .iter()
-                .fold(0, |sum, settlement| sum.saturating_add(settlement.reported));
+                .fold(0u64, |sum, part| sum.saturating_add(part.reported));
             if reported > 0 {
                 record_usage(
                     &*caller,
@@ -312,43 +411,20 @@ async fn embed(
                     },
                 );
             }
-            return Err(quota_throw(caller, ticket, model, error));
+            Err(quota_throw(caller, ticket, model, error))
         }
     };
-    budget.settle(estimate, batch.settlements());
-
-    // The provider owes one vector per text. Settlement is already applied, so
-    // a violation is a defect reported to the program, never a partial result.
-    if batch.count() != texts.len() {
-        return Err(throw(EmbeddingError::Malformed {
-            alias: model.to_string(),
-            reason: EmbeddingMalformedReason::CountMismatch,
-            settlements: Vec::new(),
-        }));
-    }
-
-    let received = (batch.values().len() as u64).saturating_mul(4);
-    // Metadata only: vectors are large and say nothing a call log can use.
-    record_payload(&*caller, ticket, Side::Response, || {
-        Payload::meta(serde_json::json!({
-            "count": batch.count(),
-            "dimensions": batch.dimensions(),
-            "identity": batch.identity(),
-            "model": model,
-            "inputTokens": batch.input_tokens(),
-        }))
-        .with_size(received)
-    });
-    record_usage(
-        &*caller,
-        ticket,
-        ModelUsage {
-            input_tokens: batch.input_tokens(),
-            output_tokens: None,
-        },
-    );
-    fuel::settle(&mut *caller, fuel::IO, received)?;
-    build_embeddings(caller, batch)
+    let result = match result {
+        Err(error) if crate::runtime::host::ends_the_run(&error) => return Err(error),
+        result => result.map_err(|error| NativeError::capture(&error)),
+    };
+    Ok(EmbeddingResponse {
+        result,
+        used,
+        held,
+        requests,
+        settlement: Some(settlement),
+    })
 }
 
 /// The capability check, run before any bytes leave the process. The context is
@@ -470,9 +546,10 @@ async fn available_aliases(
 /// refusal into a silently short listing.
 async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     preflight_models(caller, CAPABILITY, "input_count")?;
-    let provider = provider(caller, "")?;
-    let candidates = provider.models().await.map_err(throw)?;
-
+    let candidates = effects::execute(caller, "embedding.models", (), |caller, _, ()| {
+        Box::pin(async move { provider(caller, "")?.models().await.map_err(throw) })
+    })
+    .await?;
     let mut built = Vec::with_capacity(candidates.len());
     for candidate in candidates {
         if may_embed(caller, &candidate.name)? {
@@ -508,12 +585,12 @@ fn provider(
 
 /// The execution's budget, or an unmetered one in the pure-interpreter path. The
 /// per-call caps in its limits still apply there.
-fn execution_budget(caller: &wasmtime::Caller<'_, StoreData>) -> Arc<EmbeddingTokenBudget> {
+fn execution_budget(caller: &mut wasmtime::Caller<'_, StoreData>) -> Arc<EmbeddingTokenBudget> {
     caller
-        .data()
+        .data_mut()
         .embedding_budget
+        .get_or_insert_with(|| Arc::new(EmbeddingTokenBudget::unmetered()))
         .clone()
-        .unwrap_or_else(|| Arc::new(EmbeddingTokenBudget::unmetered()))
 }
 
 /// [`throw`] plus an audit record when the failure is a budget refusal.
@@ -597,8 +674,8 @@ fn model_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructTyp
 /// Seal `batch`: copy its vectors into a packed byte array in the GC heap and
 /// hand the guest a backing struct that holds it in a hidden field.
 ///
-/// The provider's call has already happened, so the copy is settled rather than
-/// refused: `count × dimensions × 4` bytes, charged once, before the encoding.
+/// Charge `count × dimensions × 4` bytes once, before encoding. A recorded
+/// native batch can be replayed if this conversion runs out of fuel.
 /// At most two host copies of the vectors are live at once (the encoded bytes
 /// and the engine's internal copy); the batch's own floats are gone before the
 /// array is allocated.
@@ -611,7 +688,7 @@ fn build_embeddings(
         .len()
         .checked_mul(4)
         .ok_or_else(|| fatal_host_error("embedding.embed: result size overflows"))?;
-    fuel::settle(&mut *caller, fuel::COPY, byte_count as u64)?;
+    fuel::charge(&mut *caller, fuel::COPY, byte_count as u64)?;
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(byte_count)
@@ -908,7 +985,7 @@ mod tests {
             .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.install_type_info(compiled.type_info.clone());
         data.embedding_provider = provider.map(|p| p as Arc<dyn EmbeddingProvider>);
         data.embedding_budget = budget;
@@ -1218,7 +1295,7 @@ mod tests {
         .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.install_type_info(compiled.type_info.clone());
         let mut store = cfg.store_async(&engine, data).expect("store");
         crate::runtime::install_tenant_limits(&mut store);
@@ -1277,7 +1354,7 @@ mod tests {
         .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.install_type_info(compiled.type_info.clone());
         data.embedding_provider = Some(provider);
         let budget = budget(EmbeddingLimits::default());

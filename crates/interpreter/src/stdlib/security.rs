@@ -5,15 +5,16 @@
 //! (the dispatch may run guest code for user classes), then handed to the
 //! embedder's policy engine.
 
-use crate::runtime::host::abi_arg;
+use crate::runtime::effects;
+use crate::runtime::host::{
+    abi_arg, permission_denied, permission_denied_invariant, read_string_arg,
+    register_host_fn_async,
+};
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
 use crate::runtime::decision::{CallSite, EntryPath};
 use crate::runtime::fuel;
-use crate::runtime::host::{
-    permission_denied, permission_denied_invariant, read_string_arg, register_host_fn_async,
-};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::vtable::dispatch_vtable_slot;
 use crate::{MangledName, PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
@@ -24,6 +25,13 @@ pub const MODULE_NAME: &str = "submilli:security";
 /// mangled name is what makes the answer independent of how the symbol was
 /// imported: a named, an aliased and a namespace import all carry it, while a
 /// user's own `check` never can.
+#[derive(serde::Serialize)]
+struct Check {
+    capability: String,
+    context: serde_json::Value,
+    who: String,
+}
+
 pub fn is_check(mangled: &MangledName) -> bool {
     *mangled == crate::mangle::package_symbol(MODULE_NAME, "check")
 }
@@ -74,7 +82,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "check"),
         ty,
-        /* deterministic = */ false,
         |caller, params, _results| {
             Box::pin(async move {
                 let capability = read_string_arg(
@@ -94,7 +101,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     serde_json::from_str(&context_json).map_err(|e| {
                         wasmtime::Error::msg(format!("security.check: malformed context JSON: {e}"))
                     })?;
-                fuel::charge_host_fuel(&mut *caller, fuel::GATE)?;
                 let who = consumer_of_running_package(&mut *caller, &capability).inspect_err(
                     |error| {
                         audit_consumer_failure(
@@ -105,20 +111,43 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         );
                     },
                 )?;
-                let policy = caller.data().security_check.clone();
-                let cwd = caller.data().vfs.cwd().to_owned();
-                let ticket =
-                    crate::stdlib::shared::begin_recorded_call(&*caller, &who, &capability);
-                let site = CallSite::new(ticket, EntryPath::PackageCheck);
-                crate::stdlib::shared::check_and_audit(
-                    policy.as_ref(),
-                    &who,
-                    &capability,
-                    &context,
-                    &cwd,
-                    site,
+
+                effects::execute(
+                    caller,
+                    "security.check",
+                    Check {
+                        capability,
+                        context,
+                        who,
+                    },
+                    |caller, _, request| {
+                        Box::pin(async move {
+                            fuel::charge_host_fuel(&mut *caller, fuel::GATE)?;
+                            let capability = request.capability;
+                            let context = request.context;
+                            let who = request.who;
+                            let policy = caller.data().security_check.clone();
+                            let cwd = caller.data().vfs.cwd().to_owned();
+                            let ticket = crate::stdlib::shared::begin_recorded_call(
+                                &*caller,
+                                &who,
+                                &capability,
+                            );
+                            let site = CallSite::new(ticket, EntryPath::PackageCheck);
+                            crate::stdlib::shared::check_and_audit(
+                                policy.as_ref(),
+                                &who,
+                                &capability,
+                                &context,
+                                &cwd,
+                                site,
+                            )
+                            .map_err(|reason| permission_denied(who, capability, reason))
+                        })
+                    },
                 )
-                .map_err(|reason| permission_denied(who, capability, reason))
+                .await?;
+                Ok(())
             })
         },
     )
@@ -328,7 +357,10 @@ mod tests {
         let config = crate::runtime::RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
-            .store_async(&engine, StoreData::with_vfs(crate::runtime::Vfs::none()))
+            .store_async(
+                &engine,
+                StoreData::with_vfs("test-run".into(), crate::runtime::Vfs::none()),
+            )
             .unwrap();
         let costs = Arc::new(Mutex::new(Vec::new()));
         let measured = Arc::clone(&costs);
@@ -415,8 +447,10 @@ mod tests {
         .expect("compile clean");
         let cfg = crate::runtime::RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data =
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         data.install_type_info(compiled.type_info.clone());
         data.security_check = std::sync::Arc::new(DenyAll);
         let mut store = cfg.store(&engine, data).expect("store");
@@ -464,8 +498,10 @@ mod tests {
         );
         let cfg = crate::runtime::RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data =
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         data.install_type_info(lib_type_info);
         let mut store = cfg.store(&engine, data).expect("store");
         let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
@@ -600,8 +636,10 @@ mod tests {
             "the fixture must genuinely lack a module name, or it proves nothing"
         );
 
-        let mut data =
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         data.install_type_info(compiled.type_info.clone());
         let mut store = cfg.store(&engine, data).expect("store");
         let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
@@ -646,8 +684,10 @@ mod tests {
         let cfg = crate::runtime::RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
         let module = wasmtime::Module::new(&engine, &stripped).expect("module validates");
-        let mut data =
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         data.install_type_info(compiled.type_info.clone());
         let mut store = cfg.store(&engine, data).expect("store");
         let mut linker = wasmtime::Linker::<StoreData>::new(&engine);
@@ -729,8 +769,10 @@ mod tests {
 
         let cfg = crate::runtime::RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data =
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         data.install_type_info(inner_ti);
         data.install_type_info(relay_ti);
         let mut store = cfg.store(&engine, data).expect("store");
@@ -832,8 +874,10 @@ mod tests {
             .expect("compile clean");
         let cfg = crate::runtime::RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data =
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         data.install_type_info(compiled.type_info.clone());
         data.security_check = std::sync::Arc::new(DenyAll);
         let mut store = cfg.store(&engine, data).expect("store");

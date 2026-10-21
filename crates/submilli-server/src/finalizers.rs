@@ -1,4 +1,5 @@
 //! Execute an installed package entry point in an independently bounded runtime.
+use interpreter::runtime::durable::RunId;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -239,7 +240,11 @@ async fn host_services(
         .finalizer_vfs(&invocation.session_id, blueprint, &variables)
         .await
         .map_err(|_| FinalizerFailure::Execution)?;
-    let mut data = StoreData::with_vfs_and_cap(vfs, state.runtime().max_store_bytes);
+    let mut data = StoreData::with_vfs_and_cap(
+        RunId::generate().map_err(|_| FinalizerFailure::Execution)?,
+        vfs,
+        state.runtime().max_store_bytes,
+    );
     data.vfs_info = vfs_info;
     data.finalizing = true;
     data.git = submilli_shared::resolve_git(blueprint, &variables)
@@ -266,11 +271,14 @@ async fn host_services(
         )
         .with_harness_secrets(secrets.clone()),
     ));
-    data.secret_provider = Arc::new(BlueprintSecretProvider::with_harness(
-        blueprint.clone(),
-        state.secret_store().cloned(),
-        secrets.clone(),
-    ));
+    data.secret_provider = Arc::new(
+        BlueprintSecretProvider::with_harness(
+            blueprint.clone(),
+            state.secret_store().cloned(),
+            secrets.clone(),
+        )
+        .with_cipher(state.secret_cipher()),
+    );
     data.auth_proxy = Arc::new(BlueprintAuthProxy::with_harness(
         blueprint.clone(),
         state.secret_store().cloned(),

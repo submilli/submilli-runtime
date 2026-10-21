@@ -4,11 +4,14 @@
 //! the linker resolves the user import (`submilli:secrets#get`) with no Wasm
 //! module.
 
-use crate::runtime::host::{abi_arg, abi_result};
+use crate::runtime::host::{
+    abi_arg, fatal_host_error, read_string_arg, register_host_value_async, throw_host_error,
+    write_submilli_string_struct,
+};
+use crate::runtime::{effects, fuel};
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
-use crate::runtime::host::{read_string_arg, register_host_fn_async, write_submilli_string_struct};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::stdlib::shared::check_security;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
@@ -45,13 +48,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     // `string | undefined` lowers to the erased `(ref null $Object)` in codegen.
     let nullable_object = ValType::Ref(RefType::new(true, HeapType::ConcreteStruct(intr.object)));
     let ty = FuncType::new(&engine, [string], [nullable_object]);
-    register_host_fn_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "get"),
         ty,
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let name =
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "secrets.get (secret)")?;
@@ -61,22 +63,61 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     serde_json::json!({ "name": name }),
                 )?;
 
-                let provider = caller.data().secret_provider.clone();
-                let Some(value) = provider
-                    .get(&name)
-                    .await
-                    .map_err(|msg| wasmtime::Error::msg(format!("secrets.get {name}: {msg}")))?
-                else {
-                    *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
-                    return Ok(());
+                let observation = resolve_secret(caller, name).await?;
+                let Some(value) = &observation else {
+                    return crate::runtime::prelude::undefined::value(caller);
                 };
 
-                let st = write_submilli_string_struct(caller, &value)?;
-                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
-                Ok(())
+                let st = write_submilli_string_struct(caller, value)?;
+                Ok(Val::AnyRef(Some(st.to_anyref())))
             })
         },
     )
+}
+
+async fn resolve_secret(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    name: String,
+) -> wasmtime::Result<Option<String>> {
+    let provider = caller.data().secret_provider.clone();
+    if caller.data().effects.is_none() {
+        return provider.get(&name).await.map_err(|message| {
+            throw_host_error(
+                caller,
+                wasmtime::Error::msg(format!("secrets.get {name}: {message}")),
+            )
+        });
+    }
+
+    let encrypted = effects::execute(
+        caller,
+        "secrets.getEncrypted",
+        name.clone(),
+        |caller, _, name| {
+            Box::pin(async move {
+                let secret = caller
+                    .data()
+                    .secret_provider
+                    .get_encrypted(&name)
+                    .await
+                    .map_err(fatal_host_error)?;
+                if let Some(secret) = &secret {
+                    fuel::settle(&mut *caller, fuel::HASH, secret.ciphertext.len() as u64)?;
+                }
+                Ok(secret)
+            })
+        },
+    )
+    .await?;
+    let Some(encrypted) = encrypted else {
+        return Ok(None);
+    };
+    // Decryption can be retried from this saved envelope without another lookup.
+    fuel::charge(&mut *caller, fuel::HASH, encrypted.ciphertext.len() as u64)?;
+    provider
+        .decrypt(&name, &encrypted)
+        .map(Some)
+        .map_err(fatal_host_error)
 }
 
 #[cfg(test)]
@@ -381,7 +422,7 @@ mod tests {
         .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.secret_provider = provider;
         if let Some(check) = security_check {
             data.security_check = check;

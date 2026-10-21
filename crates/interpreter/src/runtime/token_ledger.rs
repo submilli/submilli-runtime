@@ -119,6 +119,9 @@ pub enum LedgerRefusal {
 pub(super) struct TokenState {
     /// Tokens reserved against both this execution and the aggregate.
     used: u64,
+    /// Historical spend constrains this run but is not a new aggregate reservation.
+    replayed_used: u64,
+    replayed_held: u64,
     /// The part of `used` held for elements the provider reported no usage for.
     /// Tracked separately because it is bounded separately, and because it is
     /// the part that must *not* be returned to the aggregate on teardown.
@@ -161,12 +164,22 @@ impl TokenLedger {
 
     /// Tokens this execution currently holds against its ceiling.
     pub fn used(&self) -> u64 {
-        self.locked().used
+        let state = self.locked();
+        state.used.saturating_add(state.replayed_used)
     }
 
     /// The part of [`Self::used`] held for unreported usage.
     pub fn held(&self) -> u64 {
-        self.locked().held
+        let state = self.locked();
+        state.held.saturating_add(state.replayed_held)
+    }
+
+    /// Restore one committed native call's local spend without billing the shared
+    /// aggregate again. Only a fresh attempt consumes a history prefix.
+    pub fn restore_spend(&self, used: u64, held: u64) {
+        let mut state = self.locked();
+        state.replayed_used = state.replayed_used.saturating_add(used);
+        state.replayed_held = state.replayed_held.saturating_add(held);
     }
 
     fn locked(&self) -> MutexGuard<'_, TokenState> {
@@ -189,14 +202,18 @@ impl TokenLedger {
     pub fn reserve(&self, tokens: u64) -> Result<(), LedgerRefusal> {
         let mut state = self.locked();
 
-        if state.held > self.limits.max_held_tokens {
+        let held = state.held.saturating_add(state.replayed_held);
+        if held > self.limits.max_held_tokens {
             return Err(LedgerRefusal::HeldReserve {
-                held: state.held,
+                held,
                 limit: self.limits.max_held_tokens,
             });
         }
 
-        let next_used = state.used.saturating_add(tokens);
+        let next_used = state
+            .used
+            .saturating_add(state.replayed_used)
+            .saturating_add(tokens);
         if next_used > self.limits.per_execution_tokens {
             return Err(LedgerRefusal::PerExecution {
                 requested: next_used,
@@ -211,7 +228,7 @@ impl TokenLedger {
             });
         }
 
-        state.used = next_used;
+        state.used = state.used.saturating_add(tokens);
         Ok(())
     }
 
@@ -357,5 +374,49 @@ mod tests {
         let ledger = TokenLedger::new(limits(u64::MAX, 0), aggregate.clone());
         assert!(ledger.reserve(u64::MAX).is_err());
         assert_eq!(aggregate.used(), 0);
+    }
+}
+
+#[cfg(test)]
+mod replay_tests {
+    use super::*;
+    #[test]
+    fn restored_spend_limits_the_run_without_reserving_shared_tokens_twice() {
+        let aggregate = SharedTokenBudget::new(100);
+        let ledger = TokenLedger::new(
+            LedgerLimits {
+                per_execution_tokens: 10,
+                max_held_tokens: 5,
+            },
+            aggregate.clone(),
+        );
+        ledger.restore_spend(8, 2);
+        assert_eq!(ledger.used(), 8);
+        assert_eq!(aggregate.used(), 0);
+        assert!(ledger.reserve(3).is_err());
+        ledger.reserve(2).unwrap();
+        assert_eq!(ledger.used(), 10);
+        assert_eq!(aggregate.used(), 2);
+        ledger.reconcile(2, 1, 0);
+        assert_eq!(ledger.used(), 9);
+        assert_eq!(ledger.held(), 2);
+        assert_eq!(aggregate.used(), 1);
+        drop(ledger);
+        assert_eq!(aggregate.used(), 0);
+    }
+    #[test]
+    fn restored_uncertain_usage_preserves_the_held_ceiling() {
+        let ledger = TokenLedger::new(
+            LedgerLimits {
+                per_execution_tokens: 100,
+                max_held_tokens: 5,
+            },
+            SharedTokenBudget::new(100),
+        );
+        ledger.restore_spend(6, 6);
+        assert!(matches!(
+            ledger.reserve(1),
+            Err(LedgerRefusal::HeldReserve { .. })
+        ));
     }
 }

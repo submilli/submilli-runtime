@@ -1,5 +1,6 @@
 //! Best-effort server audit records, independent of tracing filters.
 
+use interpreter::runtime::durable::RunId;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
@@ -371,7 +372,7 @@ struct ExecutionState {
 }
 
 pub(crate) struct ExecutionAudit {
-    pub id: String,
+    pub id: RunId,
     /// The API token's name (never the token), or `unauthenticated`.
     pub principal: String,
     log: AuditLog,
@@ -386,7 +387,7 @@ impl ExecutionAudit {
         entry: &str,
         session: Option<&str>,
     ) -> Arc<Self> {
-        let id = Uuid::new_v4().to_string();
+        let id = RunId::from(Uuid::new_v4().to_string());
         let mut fields = Map::from_iter([
             ("execution_id".into(), json!(id)),
             ("principal".into(), json!(principal)),
@@ -796,8 +797,8 @@ pub(crate) fn execution() -> Option<Arc<ExecutionAudit>> {
     REQUEST.try_with(|r| r.execution.clone()).ok().flatten()
 }
 
-pub(crate) fn execution_id() -> String {
-    execution().map_or_else(|| Uuid::new_v4().to_string(), |e| e.id.clone())
+pub(crate) fn execution_id() -> RunId {
+    execution().map_or_else(|| Uuid::new_v4().to_string().into(), |e| e.id.clone())
 }
 
 pub(crate) fn mutation_owner() -> Option<Arc<MutationAudit>> {

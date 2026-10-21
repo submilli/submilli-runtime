@@ -1,25 +1,23 @@
 # Single-node durable execution protocol
 
-SUB-1797 checks the proposed
-single-node protocol before its implementation in
-SUB-1322. The model is executable
-with TLC. It does not change the runtime or enable durable execution.
+SUB-1797 introduced the bounded model; SUB-1837 aligns it with the native
+outcome history now implemented. Public enablement and startup scheduling remain
+SUB-1842. Each run retains its initial source, blueprint, variables and limits
+once. Recovery reruns that program from the beginning, using committed outcomes
+until it reaches new work.
 
-An accepted run belongs to one persistent logical node. Its code/input identity,
-admission key, history and budgets survive process restart. Recovery reruns the
-same program, supplies recorded observations and outcomes, then continues live.
-For an external call, the order is:
+    reconstruct arguments -> dispatch -> native outcome -> commit -> guest conversion
+                                                    replay ----^ (skip dispatch)
 
-    commit intent -> dispatch -> provider completes -> commit outcome -> consume
-                                                                  |
-                                            replay returns this outcome
-
-The provider can complete while our process is down. Retrying the same effect
-ID and immutable arguments resolves the same logical operation and outcome.
-That is an explicit provider assumption. Filesystem operations must establish
-it separately in SUB-1815, with
-implementation and real crash tests in
-SUB-1339.
+There is no persistent intent or pending effect row. A call's ID comes from the
+run ID and its ordered position. A missing outcome retries that call with the
+same ID and reconstructed arguments. The framework does not classify adapters
+as idempotent. A crash after an external mutation but before outcome commit can
+repeat that mutation. Provider deduplication is an explicit assumption only for
+`NoDuplicateMutation`; the matrix also checks non-idempotent providers and
+witnesses their duplicate mutation. Filesystem idempotency is verified separately
+in [the filesystem models](../filesystem/README.md). HTTP idempotency keys remain
+the caller's responsibility; code and Git idempotency are follow-up work.
 
 ## Run the checks
 
@@ -95,11 +93,17 @@ so incorrect replay changes the request. Each distinct call has its own ID.
 Pure computation, codecs, interpreter scheduling and arbitrary guest control
 flow are abstracted.
 
-Each fresh observation or external intent charges one logical unit. Replay and
-retry do not grant a new budget or charge that effect again. A short budget
-blocks the run and keeps its resources. Granting more fuel is outside this
-model. Compatible = FALSE represents a run whose pinned artifacts cannot be
-executed, and also blocks it.
+Each attempt starts with a fresh fuel allowance. Preparing an observation or
+starting an external action spends one abstract native-work unit; committing or
+consuming its outcome spends none. A crash clears this attempt-local spend, and
+replay skips native work for saved outcomes. An uncommitted retry spends fuel
+again when it actually runs. Pure Wasm computation, fingerprinting and replay
+decoding still cost fuel in Rust but are outside this abstract native-work model.
+A short budget blocks the run and retains its resources. Explicitly resuming a
+blocked run with extra fuel is future work. Compatible = FALSE also blocks a run.
+`FuelMatchesWork` checks that native spend matches actual work in this attempt.
+The negative replay-fuel check charges saved work again and must fail; the fresh
+attempt witness continues after a crash despite exhausting the first allowance.
 
 One session contains up to two admitted runs in the CI configurations. They
 must execute in admission order, including draining earlier in-flight work.
@@ -130,11 +134,11 @@ backup/restore and storage corruption are outside this model.
 | HistoryConsistent, EffectHistoryWellFormed, AppendOnly | Ordered immutable history, atomic sequence/accounting advancement and outcomes backed by the intended effects. |
 | ReplayMatches, StableEffectIdentity, ProviderArgumentsMatch | Replay preserves observations; retries preserve IDs and arguments. |
 | NoDuplicateMutation | Under provider deduplication, repeated requests cannot create two logical mutations. |
-| CommitBarriers, TerminalConsistent | Intent before dispatch, outcome before consumption, terminal result before acknowledgement, and atomic publication of the session's last result. |
+| CommitBarriers, TerminalConsistent | Outcome before consumption, terminal result before acknowledgement, and atomic publication of the session's last result. |
 | NoStaleWrites, SessionOrder, ResourcesProtected | Fenced commits, ordered execution and retention of resources needed by recoverable/draining work. |
 | RequestSetsDisjoint | A transport request cannot be both outstanding and completed; retry retires its previous completion. |
 | LegacyNotRecovered | No recovery of a reservation without a replay manifest/history. |
-| Progress | Admitted eligible work advances under the separately declared liveness assumptions. |
+| Progress | Admitted work advances or waits behind an earlier blocked run, under the separately declared liveness assumptions. |
 | CleanupProgress, ReleaseProgress | Terminal work drains, and lifecycle cleanup eventually releases its resource pins. |
 
 The standard safety configuration has one run, three logical calls, two
@@ -161,8 +165,13 @@ permanent outages, revoked authority, incompatible inputs or an expired provider
 deduplication window. Liveness does not assume another client submission.
 Deadlock detection is disabled because completed, blocked and quiescent states
 are valid; the progress properties check the work that should still advance.
-The two-run progress profile supplies enough fuel and compatible artifacts:
-an earlier blocked run intentionally prevents later runs in that session.
+Even an allowance sufficient for one successful pass can run out after an
+uncommitted retry. An earlier blocked run intentionally prevents later accepted
+runs in that session from starting. `Progress` allows this specific wait; it does
+not excuse waiting behind an eligible unfinished run. Once cancellation makes
+the predecessor terminal and it drains, the property requires queued work to
+advance. A witness demonstrates fuel exhaustion after a lost write with a second
+run waiting behind it.
 
 ## Counterexamples and reachability
 
@@ -173,8 +182,9 @@ Deliberately broken variants must violate a specific invariant:
 | Acknowledge before terminal commit | CommitBarriers | SUB-1322 must not return durable success before confirmed terminal persistence. |
 | Free the key when its response expires | AdmissionUnique | Preserve SUB-708 tombstones during SUB-1322 migration and retention. |
 | Replace a replayed value after restart | ReplayMatches | SUB-1322 reuses each recorded random/UUID/time result and outcome. |
+| Consume a native reply before its outcome commit | CommitBarriers | Never expose an uncommitted native outcome to the guest. |
 | Skip commit authorization after cancellation | NoStaleWrites | SUB-1322 checks generation and lifecycle at the SQL commit boundary. |
-| Put the startup generation in a provider key | NoDuplicateMutation | SUB-1322 retains the original logical effect key across recovery. |
+| Put the startup generation in a provider key | StableEffectIdentity | SUB-1322 retains the original logical effect key across recovery. |
 
 Negative checks select the named invariant so an earlier, different failure
 does not mask the intended counterexample. They must return TLC's safety
@@ -183,7 +193,7 @@ of a broken variant is a failure of this test.
 
 Reachability checks use the correct protocol and deliberately assert
 NeverWitness. Its counterexample must show the selected path: crash after
-intent, remote success, outcome or terminal commit; retry while an old request
+dispatch, remote success, outcome or terminal commit; retry while an old request
 remains in flight; consumption of history present before the recovered attempt
 launched; conflicting/expired retries; a refused
 legacy reservation; or cancellation with a prepared write. A completed search
@@ -194,22 +204,99 @@ UUID or time observation.
 
 ## Mapping to implementation
 
-These are proposed boundaries, not existing durable-run code. The shipped
-[idempotency use cases](../../crates/submilli-server/src/application/idempotency.rs)
-and [unit of work](../../crates/submilli-server/src/application/unit_of_work.rs)
-provide the current admission/transaction foundation. The existing recovery
-marks older unfinished reservations indeterminate; it does not replay programs.
+The interpreter's [native boundary](../../crates/interpreter/src/runtime/effects.rs)
+records Rust values and typed ordinary errors before Wasm conversion. Its
+[history implementation](../../crates/submilli-durable/src/history.rs) owns the
+replay cursor and stable IDs. The server supplies asynchronous SQL through the
+unit-of-work port.
 
-| Model action | Planned application/storage boundary | Required implementation fault test |
+| Model action | Implementation boundary | Fault coverage / remaining work |
 | --- | --- | --- |
-| Admit, Duplicate | SUB-1322 unifies admission, immutable manifest and keyed run identity in one transaction. | Concurrent same/different fingerprint requests; lost admission commit acknowledgement; SUB-708 tombstones. |
-| Claim, Launch, Restart | SUB-1322 supervisor claims local-origin runs using startup/attempt generations and persisted session order. | Restart with no client; crash after claim before launch; a second process must not acquire the store. |
-| Prepare, Commit, ForgetWrite | SUB-1322 commits an event, sequence and logical accounting with lifecycle/generation guards in one unit of work. | Abort and lost acknowledgement at each history boundary; cancellation races a queued commit. |
-| Dispatch, RemoteComplete, Receive | SUB-1322 effect adapter uses the durable intent's original key and immutable request. | Provider succeeds without delivering a reply; old and recovery requests overlap; duplicate replies. |
-| Consume | SUB-1322 validates replay position/arguments and reconstructs guest values from committed outcomes. | Crash after recording a random/UUID/time value or external outcome but before guest consumption. |
-| PrepareTerminal, Commit, Ack | SUB-1322/SUB-1331 atomically commit terminal evidence, exact response and last-result reference. | Crash or lost acknowledgement after completion; repeated observation returns the original response. |
-| Cancel, Drain, Release, ExpireSession | SUB-1322/SUB-1432 coordinate cancellation, resource pins and session cleanup. | Restart after session idle expiry with recoverable work; cleanup races in-flight work. |
-| ExpireResponse, legacy initialization | SUB-1322 preserves SUB-708 retention and legacy indeterminate keys. | Expiry never enables another execution; absent legacy manifests are never synthesized. |
+| Admit, Duplicate | Existing `PrepareRun` stores the immutable initial program with the optional admission key. | Existing admission/tombstone tests and recorded-run integration. |
+| Claim, Launch, Restart | Internal `runner::durable` and `reopen_run` reconstruct the program under a new attempt. | Explicit reopen tested; autonomous scheduling and transport enablement remain SUB-1842. |
+| Prepare, Commit, ForgetWrite | `append_history` inserts the outcome and advances position, bytes and run revision in one transaction, fenced by owner/attempt/state. | SQL rollback/reopen, stale attempt and mismatch tests. Lost acknowledgement is model-checked; SQL acknowledgement loss is not fault-injected. |
+| Dispatch, RemoteComplete, Receive | `effects::execute` calls the backend only for missing history, passing the stable EffectId. | Missing outcomes retry regardless of adapter idempotency. No persistent intent. |
+| Consume | Operation, codec version and argument fingerprint must match; native outcomes are decoded before guest conversion. | Saved observation and filesystem-resource replay, malformed data and encoded-size bounds. |
+| PrepareTerminal, Commit, Ack | `publish` verifies all history was consumed and uses `ResolveRun` for atomic terminal response and last-result publication. | Restart before terminal publication and stale-attempt refusal. Public handlers remain unchanged. |
+| Cancel, Drain, Release, ExpireSession | Existing cancellation/drain rules remain; caller must drain an old attempt before reopening its mounts. | Full recovery/cleanup orchestration remains SUB-1842. |
+| ExpireResponse, legacy initialization | Existing response retention preserves keys. Legacy runs without a manifest remain indeterminate. | Migration and legacy admission tests; no invented histories. |
+
+`durable_outcomes` stores sealed, versioned inline native results, one row per
+run/sequence. Initial arguments are never copied into these rows: only their
+fingerprint is retained. Native result encoding is bounded to 64 MiB and total
+run history to 1 GiB. Initial program encoding is limited to 16 MiB, decoded
+literal collections to 128 MiB, and recorded blueprints to 16 regex operators
+(across all permission filters). This conservative policy restriction bounds
+compiler multiplicity separately; 128 MiB is not a compiled-regex heap claim.
+The normal policy parser retains its per-pattern compilation limits. Other limits and available tenant memory can refuse earlier.
+`execute` returns the native Rust value directly using Serde bounds. It validates
+encoded size, lengths and nesting before decoding, but does not estimate or charge
+the transient decoded value's heap through guest conversion. Temporary history
+encoding, SQL, encryption and decoding buffers are infrastructure overhead and do
+not consume the run's memory budget. Encoded-size and structural limits remain;
+ordinary provider allocations and guest allocations retain their existing limits.
+This does not claim a total-memory bound for arbitrary Serde deserializers.
+The native codec is version 4 and runtime compatibility marker is version 7;
+older internal recordings are refused after the outcome, budget and code-operation
+identity/representation changes.
+
+HTTP downloads retain metadata and the destination reference, never the downloaded
+file body. Large-object storage is a later optimization.
+
+The internal path requires a matching runtime compatibility marker, saved limits,
+and unchanged package contents. Package pinning/retention is SUB-1881. Each attempt
+gets the configured timeout and fuel allowance afresh, including time spent replaying.
+Paused tool waits remain excluded from the timeout. Neither elapsed time nor native
+fuel is stored in outcomes or restored on replay. Fuel charges for native work sit
+inside the action, so only dispatched work pays them. Argument conversion, hashing,
+replay decoding and guest result conversion pay for the work actually performed.
+LLM/embedding token spend is still restored; these provider budgets are separate
+from CPU fuel and have not changed.
+
+The native boundary covers UUID, random bytes, Math.random, Temporal.Now,
+variables/secrets, filesystem operations and resources, HTTP/downloads, session
+KV/finalizers, LLM/embedding, MCP/tools/agents/skills, explicit security checks,
+and code/Git operations. Argument conversion and guest callbacks precede the
+boundary; pure operations have no history row. Console logging also stays outside
+the boundary: it writes normally on every attempt, including replay, and can
+publish duplicate console events. Output is retained with the finished run;
+incremental console persistence is deferred to SUB-1885.
+
+Secret lookups record `Option<EncryptedSecret>` under `secrets.getEncrypted`:
+only the ciphertext envelope and encryption key ID cross the history boundary.
+The secret provider encrypts before returning, independently of database sealing.
+Decryption happens after the effect commits and on every replay, using the
+recorded key ID; it never retrieves a replacement credential. Missing keys or
+failed decryption interrupt the run while preserving its envelope for retry.
+The current provider accepts one configured key and rejects an unknown key ID;
+selecting retained keys from a keyring is future rotation work. Direct execution
+still uses the provider's ordinary lookup. Custom providers must implement the
+encrypted interface before they can serve recorded secret lookups.
+
+
+Each filesystem-backed `submilli:code` method has its own `code.<method>` effect
+identity and native result. `diffText` stays pure. Saved code results replay without
+filesystem access; a missing result reruns the native operation. This adds no
+mutation idempotency: crash-safe code edits remain SUB-1857.
+Git also records each named native method’s typed result (JSON, text, bytes or
+unit), before converting it to a guest value. The runtime compatibility marker
+rejects histories containing the previous code/Git result formats.
+
+Reader, writer and listing values all require a run ID and serialize identity/options
+directly. Process-local handle state lives alongside these types in the filesystem
+interface and is skipped during serialization. The default backend receives a run ID
+but cannot restore resources without their local handles; recording requires a backend
+that explicitly supports resource replay. Resources hold no filesystem or unit-of-work
+reference; operations receive the resource through the active filesystem backend.
+Deserialization itself performs no I/O. The default backend retains its existing
+local handles; durable handle caching remains SUB-1883. Host return adapters own
+Wasm result slots and translate ordinary errors at the host boundary. Result
+conversion uses normal fuel checks after the native outcome is committed. If it
+runs out of fuel, replay retrieves the saved outcome without dispatching the
+operation again; conversion can succeed when the run has enough fuel. Ordinary
+execution without recording uses the same conversion checks but has no saved
+outcome to replay. Native work completed before the history commit still settles
+its fuel costs.
 
 Filesystem bytes, namespace changes and fsync are not modeled as atomic SQLite
 effects here; SUB-1815 owns that protocol. The [filesystem models](../filesystem/README.md)
@@ -221,9 +308,10 @@ are recorded; filesystem intents contain fingerprints and recovery metadata.
 Large-payload object placement is deferred and is not a prerequisite for SQLite
 history or filesystem recovery. Formal composition with this execution model
 remains separate work.
-Atomic database-local effects such as
-KV need the same event/sequence transaction contract, but their concrete mutation
-semantics and schema remain implementation work in SUB-989/SUB-1322.
+KV and other providers currently execute through the same native boundary; their
+mutation and outcome commits are separate. Therefore the same missing-outcome
+retry assumption applies. The framework does not claim exactly-once provider
+mutation or atomic composition of those two transactions.
 
 Keep this mapping current when protocol boundaries change. Update the model,
 run affected checks and review the corresponding fault tests. Real SQLite

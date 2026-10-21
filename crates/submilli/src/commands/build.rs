@@ -610,6 +610,7 @@ pub(super) fn render_manifest_diagnostics(
 /// error/trap fails the open one. A file with no `label()` calls is one
 /// anonymous test that passes iff `main()` returns cleanly.
 mod test_runner {
+    use interpreter::runtime::durable::RunId;
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::Path;
     use std::process::ExitCode;
@@ -1091,7 +1092,11 @@ mod test_runner {
             .map_err(|err| anyhow::anyhow!("compiling {filename}: {err}"))?;
 
         let outcome = rt.block_on(async {
-            let mut data = StoreData::with_vfs_and_cap(Vfs::tempdir()?, cfg.max_store_bytes);
+            let mut data = StoreData::with_vfs_and_cap(
+                RunId::generate()?,
+                Vfs::tempdir()?,
+                cfg.max_store_bytes,
+            );
             data.secret_provider = secret_provider.clone();
             let mut store = cfg.store_async(engine, data)?;
             install_tenant_limits(&mut store);

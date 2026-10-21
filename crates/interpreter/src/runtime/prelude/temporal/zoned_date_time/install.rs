@@ -33,7 +33,6 @@ fn install_construction(
             [types.string.clone()],
             [types.object.clone()],
         ),
-        true,
         |caller, params, results| {
             let input =
                 read_string_arg(caller, abi_arg(params, 0)?, "Temporal.ZonedDateTime.from")?;
@@ -57,7 +56,6 @@ fn install_construction(
             [types.object.clone(), types.object.clone()],
             [ValType::F64],
         ),
-        true,
         |caller, params, results| {
             let a = shared::zoned_date_time_timestamp_from_val(
                 caller,
@@ -81,7 +79,6 @@ fn install_getters(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
         MODULE_NAME,
         shared::prelude_key("ZonedDateTime", "epochMilliseconds"),
         FuncType::new(&types.engine, [types.object.clone()], [ValType::F64]),
-        true,
         |caller, params, results| {
             let timestamp = shared::zoned_date_time_timestamp_from_val(
                 caller,
@@ -123,7 +120,6 @@ fn install_getters(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
             MODULE_NAME,
             shared::prelude_key("ZonedDateTime", name),
             FuncType::new(&types.engine, [types.object.clone()], [ValType::F64]),
-            true,
             move |caller, params, results| {
                 let zoned =
                     shared::zoned_date_time_from_val(caller, abi_arg(params, 0)?, "ZonedDateTime")?;
@@ -142,7 +138,6 @@ fn install_getters(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
             [types.object.clone()],
             [types.string.clone()],
         ),
-        true,
         |caller, params, results| {
             let text = shared::zoned_date_time_time_zone_id_from_val(
                 caller,
@@ -169,7 +164,6 @@ fn install_getters(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
                 [types.object.clone()],
                 [types.string.clone()],
             ),
-            true,
             move |caller, params, results| {
                 let (zoned, tz_id) = shared::zoned_date_time_parts_from_val(
                     caller,
@@ -190,7 +184,6 @@ fn install_getters(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
         MODULE_NAME,
         shared::prelude_key("ZonedDateTime", "inLeapYear"),
         FuncType::new(&types.engine, [types.object.clone()], [ValType::I32]),
-        true,
         |caller, params, results| {
             let zoned =
                 shared::zoned_date_time_from_val(caller, abi_arg(params, 0)?, "ZonedDateTime")?;
@@ -203,7 +196,6 @@ fn install_getters(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
         MODULE_NAME,
         shared::prelude_key("ZonedDateTime", "hoursInDay"),
         FuncType::new(&types.engine, [types.object.clone()], [ValType::F64]),
-        true,
         |caller, params, results| {
             let zoned =
                 shared::zoned_date_time_from_val(caller, abi_arg(params, 0)?, "ZonedDateTime")?;
@@ -225,7 +217,6 @@ fn install_getters(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
         MODULE_NAME,
         shared::prelude_key("ZonedDateTime", "epochNanoseconds"),
         FuncType::new(&types.engine, [types.object.clone()], [bigint]),
-        true,
         |caller, params, results| {
             let timestamp = shared::zoned_date_time_timestamp_from_val(
                 caller,
@@ -259,7 +250,6 @@ fn install_arithmetic(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                 [types.object.clone(), types.object.clone()],
                 [types.object.clone()],
             ),
-            true,
             move |caller, params, results| {
                 let (zoned, tz_id) =
                     shared::zoned_date_time_parts_from_val(caller, abi_arg(params, 0)?, label)?;
@@ -295,7 +285,6 @@ fn install_arithmetic(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                 [types.object.clone(), types.object.clone(), options.clone()],
                 [types.object.clone()],
             ),
-            true,
             move |caller, params, results| {
                 let a = shared::zoned_date_time_from_val(caller, abi_arg(params, 0)?, label)?;
                 let b = shared::zoned_date_time_from_val(caller, abi_arg(params, 1)?, label)?;
@@ -333,7 +322,6 @@ fn install_updates(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
             [types.object.clone(), types.string.clone()],
             [types.object.clone()],
         ),
-        true,
         move |caller, params, results| {
             let zoned = shared::zoned_date_time_from_val(
                 caller,
@@ -360,7 +348,6 @@ fn install_updates(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
             [types.object.clone(), types.object.clone()],
             [types.object.clone()],
         ),
-        true,
         |caller, params, results| {
             let (zoned, tz_id) = shared::zoned_date_time_parts_from_val(
                 caller,
@@ -416,7 +403,6 @@ fn install_updates(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
             [types.object.clone(), types.object.clone()],
             [types.object.clone()],
         ),
-        true,
         move |caller, params, results| {
             let (zoned, tz_id) = shared::zoned_date_time_parts_from_val(
                 caller,
@@ -476,7 +462,6 @@ fn install_updates(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
             [types.object.clone()],
             [types.object.clone()],
         ),
-        true,
         move |caller, params, results| {
             let (zoned, tz_id) = shared::zoned_date_time_parts_from_val(
                 caller,
@@ -504,7 +489,6 @@ fn install_conversions(
             [types.object.clone()],
             [types.object.clone()],
         ),
-        true,
         |caller, params, results| {
             let timestamp = shared::zoned_date_time_timestamp_from_val(
                 caller,
@@ -525,7 +509,6 @@ fn install_conversions(
                 [types.object.clone()],
                 [types.object.clone()],
             ),
-            true,
             move |caller, params, results| {
                 let zoned =
                     shared::zoned_date_time_from_val(caller, abi_arg(params, 0)?, "ZonedDateTime")?;
@@ -577,7 +560,6 @@ fn install_strings(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
                 [types.object.clone()],
                 [types.string.clone()],
             ),
-            true,
             move |caller, params, results| {
                 let zoned =
                     shared::zoned_date_time_from_val(caller, abi_arg(params, 0)?, "ZonedDateTime")?;
@@ -597,7 +579,6 @@ fn install_strings(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
             [types.object.clone(), types.object.clone()],
             [ValType::I32],
         ),
-        true,
         |caller, params, results| {
             let (a, a_tz) = shared::zoned_date_time_identity_from_val(
                 caller,

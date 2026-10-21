@@ -681,7 +681,7 @@ All of these first call `primitive()` (`P/value.rs:286`) on each operand: a boxe
 
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
-| `submilli:prelude#Console#log` | toString hooks, rest-array snapshot, copy display units, UTF-8 conversion, counted write | `CALL + ELEM(rest) + COPY(display units) + SCAN(line units) + IO(bytes actually written)` + hooks | conversion before; IO and error marshalling settle after writing | Server retention is capped at 1 MiB including capacity, with RangeError on further output. Prior content survives. Old implementation omitted SCAN and IO entirely: 128/256 ASCII units cost 48/64 host fuel; corrected costs are 209/385. |
+| `submilli:prelude#Console#log` | toString hooks, rest-array snapshot, copy display units, UTF-8 conversion, counted write | `CALL + ELEM(rest) + COPY(display units) + SCAN(line units) + IO(bytes actually written)` + hooks | conversion before; IO settles after writing; error marshalling uses normal checks | Server retention is capped at 1 MiB including capacity, with RangeError on further output. Prior content survives. Old implementation omitted SCAN and IO entirely: 128/256 ASCII units cost 48/64 host fuel; corrected costs are 209/385. |
 
 ### Boolean
 
@@ -1119,12 +1119,12 @@ The Temporal linker functions are synchronous and charge CALL through register_h
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
 | `submilli:prelude#Temporal#Now#instant` | system clock read, allocate Instant (now/install.rs:14) | `CALL` | before |  |
-| `submilli:prelude#Temporal#Now#plainDateISO` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | The absent-zone branch has no name decode or TZ lookup; an explicit requested zone retains TZ.
-| `submilli:prelude#Temporal#Now#plainDateTimeISO` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | The absent-zone branch has no name decode or TZ lookup; an explicit requested zone retains TZ.
-| `submilli:prelude#Temporal#Now#plainTimeISO` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | The absent-zone branch has no name decode or TZ lookup; an explicit requested zone retains TZ.
+| `submilli:prelude#Temporal#Now#plainDateISO` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | Live execution resolves and charges TZ only for an explicit requested zone. Replay deserialization restores the recorded zone from the pinned database without another TZ charge.
+| `submilli:prelude#Temporal#Now#plainDateTimeISO` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | Live execution resolves and charges TZ only for an explicit requested zone. Replay deserialization restores the recorded zone from the pinned database without another TZ charge.
+| `submilli:prelude#Temporal#Now#plainTimeISO` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | Live execution resolves and charges TZ only for an explicit requested zone. Replay deserialization restores the recorded zone from the pinned database without another TZ charge.
 | `submilli:prelude#Temporal#Now#timeZoneId` | Read the initialized system-zone identifier and allocate its guest string | `CALL + SCAN(len(out)) + COPY(len(out))` | before | System detection happens during setup. Actual old code had no TZ charge here; output marshalling stays.
-| `submilli:prelude#Temporal#Now#zonedDateTime` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | The absent-zone branch has no name decode or TZ lookup; an explicit requested zone retains TZ.
-| `submilli:prelude#Temporal#Now#zonedDateTimeISO` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | The absent-zone branch has no name decode or TZ lookup; an explicit requested zone retains TZ.
+| `submilli:prelude#Temporal#Now#zonedDateTime` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | Live execution resolves and charges TZ only for an explicit requested zone. Replay deserialization restores the recorded zone from the pinned database without another TZ charge.
+| `submilli:prelude#Temporal#Now#zonedDateTimeISO` | Read optional requested zone; otherwise reuse the initialized system zone; project/allocate | `CALL + [explicit zone] SCAN(len(tz)) + COPY(len(tz)) + TZ + output marshalling` | before | Live execution resolves and charges TZ only for an explicit requested zone. Replay deserialization restores the recorded zone from the pinned database without another TZ charge.
 
 ### Temporal.PlainDate
 
@@ -1507,7 +1507,7 @@ The filesystem backend supplies its additional path admission cost through `File
 Filesystem dispatch uses `runtime::filesystem::Filesystem`. Default tree and
 writer algorithms live in `runtime/default_filesystem.rs`; `MutationBudget`
 preserves incremental admission and post-effect settlement. The formulas above
-remain at the host boundary. Iterators settle result construction after advancing.
+remain at the host boundary. Iterators charge result construction normally after recording their native outcome.
 Durable byte writes admit `IO(payload)` before creating and writing a fresh
 replacement file. They do not hash input or journal local progress. Appends admit
 `HASH(payload)` before fingerprinting and `IO(payload)` before their fixed-range
@@ -1570,9 +1570,25 @@ All are one `struct.get` on the backing struct through `install_field_getters` (
 | `submilli:fs#Stat#modifiedAt` | Field read | `CALL` | before | |
 | `submilli:fs#Stat#size` | Field read | `CALL` | before | |
 
+The filesystem `write`, `writeText`, `append`, and `appendText` registrations call
+separate native functions. Each decodes its declared content type without mode
+flags. Capability checks precede the effect; path/IO work is charged inside it
+and worker work is settled before recording completion. Text/binary variants
+retain their existing `fs.write` or `fs.append` history identities.
+
 ### `submilli:code`
 
-All nine share `invoke` (`stdlib/code/mod.rs:90`). Results other than the two diffs are built as `serde_json::Value`, serialized to a string, re-encoded as UTF-16 and parsed back into GC values (`encode`, `:137`): `PARSE(2 * len(json)) + ELEM(values)`, uncharged today. `F` = file bytes, `out` = result.
+Registrations and Wasm argument/result conversion live in `stdlib/code/install.rs`.
+Each filesystem operation has its own `code.<method>` effect boundary and calls
+its named native implementation in `mod.rs` or `walk.rs`. Native read, traversal,
+diff and edit work charges inside that boundary, only on execution; argument
+conversion and result marshalling remain outside and charge on every attempt.
+`diffText` is pure and runs directly, charging its work on every call. Mutations
+validate the native result size before writing; Wasm conversion follows the
+native operation and, for recorded runs, the committed outcome. Conversion can
+fail normally after publication. No adapter-level mutation idempotency is added.
+
+Results other than the two diffs are built as `serde_json::Value`. `install.rs::encode_json` serializes them to text and decodes UTF-16 into guest values through the metered session-value decoder. Diff results use the UTF-16 string writer directly. `F` = file bytes, `out` = result.
 
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
@@ -1588,21 +1604,24 @@ All nine share `invoke` (`stdlib/code/mod.rs:90`). Results other than the two di
 
 ### `submilli:git`
 
-SUB-1292 actual charging: `BASE` means existing host-call/gate, argument serialization, network-byte settlement and result-marshalling charges. An `AlgorithmWork` budget now refuses selected algorithm steps on the blocking worker before computation, then records them without refusal once an external effect/publication may have occurred. Aggregate work and network bytes settle on success and failure; post-effect result/error marshalling also settles. Tree/blob loading first charges `SYSCALL(1)` for each object header, then admits `PARSE(decoded bytes)` before body decoding and `COPY(blob bytes)` before copying; packed-header dependency traversal is not a claim that all gix internals are metered; file-set validation charges `SORT(file and ancestor entries) + SCAN(path-prefix bytes * comparison depth)`. Reference spelling uses one bounded name cache per native snapshot and invalidates it before mutations.
+SUB-1292 actual charging: `BASE` means existing host-call/gate, argument serialization, network-byte settlement and result-marshalling charges. An `AlgorithmWork` budget now refuses selected algorithm steps on the blocking worker before computation, then records them without refusal once an external effect/publication may have occurred. Aggregate work and network bytes settle on success and failure; native work settles before history completion; Wasm result/error conversion then uses normal fuel checks. Tree/blob loading first charges `SYSCALL(1)` for each object header, then admits `PARSE(decoded bytes)` before body decoding and `COPY(blob bytes)` before copying; packed-header dependency traversal is not a claim that all gix internals are metered; file-set validation charges `SORT(file and ancestor entries) + SCAN(path-prefix bytes * comparison depth)`. Reference spelling uses one bounded name cache per native snapshot and invalidates it before mutations.
 
 SUB-1129 has landed on the integration base: repository copies and whole-directory publication are gone. Keep its in-place reads, staged changes and existing meter. SUB-1292 adds selected algorithm admission to that same meter, so filesystem/object work and algorithm work share one ceiling and settle once. The selective-read and once-per-tree-validation code changes are already on main; this PR retains them and adds bounds and explicit algorithm charges.
 
-Every function calls `invoke` (`stdlib/git/mod.rs:369`). Three phases:
+Each method is registered explicitly in `stdlib/git/install.rs` and supplies its
+named native function from `mod.rs` to `GitCall::execute`. That shared runner
+handles effect recording, memory ownership, deadlines, worker cleanup and fuel
+settlement; it does not select an operation by name. Three phases:
 
-1. **Store thread, before dispatch.** Reserve memory, then `decode_arguments` (`:469`): each argument is serialized by calling the guest value's `toJSON` vtable slot (`stdlib/session/value.rs:32`; this re-enters guest code, which pays its own fuel), converted UTF-16 to UTF-8 and parsed with `serde_json`. Cost: `PARSE(len(args))`. Argument charges occur here; the remaining fuel is handed to the worker for admission of selected algorithm steps.
-2. **Blocking pool** (`worker::run`, `stdlib/git/worker.rs:19`), no access to the store. All real work.
-3. **Store thread, after the worker returns.** `encode_result` (`:503`): `Uint8Array` copy, string copy, or `serde_json::to_string` + `value::deserialize`.
+1. **Store thread, before dispatch.** Reserve memory, then `install.rs::read_argument`: each argument is serialized by calling the guest value's `toJSON` vtable slot (`stdlib/session/value.rs:32`; this re-enters guest code, which pays its own fuel), converted UTF-16 to UTF-8 and parsed with `serde_json`. Cost: `PARSE(len(args))`. Argument charges occur here; the remaining fuel is handed to the worker for admission of selected algorithm steps.
+2. **Blocking pool** (the selected native function in `stdlib/git/mod.rs`), no access to the store. All real work.
+3. **Store thread, after the worker returns.** the registration's explicit result conversion: `Uint8Array` copy, string copy, or `serde_json::to_string` + `value::deserialize`.
 
 Code tools, Git and HTTP downloads retain their existing native VFS execution and their existing fuel formulas; selecting a filesystem backend does not route these calls through it. Their durability adapters are separate work.
 
 Git and durable filesystem workers share `fuel::WorkBudget` for the remaining-fuel ceiling, admission, effect transition, cooperative cancellation of reported work, and final settlement. `fuel::remaining_fuel` subtracts pending host charges before dispatch. Git retains category counters and records only the change in each category's cumulative cost, preserving rounding across small chunks; its algorithm charges use the same budget. The default filesystem continues charging its caller directly. Its implementation, directory traversal, copy/move/remove helpers and writer publication live in `runtime/default_filesystem.rs`; guest handles in `stdlib/fs/handles.rs` retain host-memory accounting. Cost formulas and effect boundaries are unchanged.
 
-SUB-1292 algorithm admission shares the worker's existing meter. Before an externally visible creation, remote request or publication, it switches to settlement: later work cannot replace an effect's outcome with a fuel refusal. After the blocking worker drains, the combined meter settles on both success and failure; result and error conversion also run within settlement scope.
+SUB-1292 algorithm admission shares the worker's existing meter. Before an externally visible creation, remote request or publication, it switches to settlement: later work cannot replace an effect's outcome with a fuel refusal. After the blocking worker drains, the combined meter settles on both success and failure; guest result conversion runs afterward with normal fuel checks.
 
 **Index read**, when an operation reads it (`Snapshot::index`): `SYSCALL(2) + IO(i) + HASH(i) + PARSE(i)`, `i` = index bytes.
 
@@ -1659,9 +1678,9 @@ Other counted work:
 
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
-| fs `lines` iterator `next` (`reader_next`) | Backend reads one bounded logical line, strips BOM/CRLF and decodes UTF-8; interpreter marshals output | `CALL + IO(OS bytes including read-ahead) + SCAN(line bytes) + SCAN(text bytes) + COPY(output units)` plus result allocation | Backend settles read/scanned work even on errors; interpreter settles result marshalling | Backend owns buffering and logical progress. Errors leave the logical position unchanged; durable retries anchor at the saved before-state. Input/output allocations use current tenant limits. |
-| fs `bytes` iterator `next` (`reader_next`) | Backend allocates a chunk and reads to its bound; interpreter marshals bytes | `CALL + COPY(chunkSize) + IO(n) + COPY(n) + ELEM(1)` | Zero-fill admitted before allocation; IO and result marshalling settle after reading, including errors | Logical progress advances only after the full step; failed partial reads remain retryable. |
-| fs `list` iterator `next` (`list_next`) | Advance default walker or durable snapshot cursor; marshal entry | `CALL + SYSCALL(1) + backend work + string SCAN/COPY + result allocation`; durable backend adds `HASH(4S) + PARSE(4S)` for sealed snapshot transactions | Syscall and snapshot decoding before progress; marshalling settles after progress commit | `S` is encoded snapshot size. Restored snapshots admit bounded working memory before decoding; no fresh enumeration on replay. |
+| fs `lines` iterator `next` (`reader_next`) | Backend reads one bounded logical line, strips BOM/CRLF and decodes UTF-8; interpreter marshals output | `CALL + IO(OS bytes including read-ahead) + SCAN(line bytes) + SCAN(text bytes) + COPY(output units)` plus result allocation | Backend settles read/scanned work even on errors; interpreter charges result marshalling normally | Backend owns buffering and logical progress. Errors leave the logical position unchanged; durable retries anchor at the saved before-state. Input/output allocations use current tenant limits. |
+| fs `bytes` iterator `next` (`reader_next`) | Backend allocates a chunk and reads to its bound; interpreter marshals bytes | `CALL + COPY(chunkSize) + IO(n) + COPY(n) + ELEM(1)` | Zero-fill admitted before allocation; IO settles after reading, including errors; result marshalling charges normally | Logical progress advances only after the full step; failed partial reads remain retryable. |
+| fs `list` iterator `next` (`list_next`) | Advance default walker or durable snapshot cursor; marshal entry | `CALL + SYSCALL(1) + backend work + string SCAN/COPY + result allocation`; durable backend adds `HASH(4S) + PARSE(4S)` for sealed snapshot transactions | Syscall and snapshot decoding before progress; marshalling charges normally after outcome commit | `S` is encoded snapshot size. Restored snapshots admit bounded working memory before decoding; no fresh enumeration on replay. |
 | fs iterator `close` for all three kinds (`close_handle_of`, `stdlib/fs/mod.rs:1157`) | Drops the OS handle, refunds the memory charge, releases the quota hold | `CALL` | before | Idempotent. For `list`, drops up to 32 directory handles. |
 | git `Repository` vtable slots `toString` / `toJSON` / `equals` / `hash` (`stdlib/git/class.rs:158-164`) | Not new host functions: slots 0, 2, 3 are copied from the prelude's opaque vtable and slot 1 (`toJSON`) from the object vtable | priced by whoever owns those prelude functions | n/a | `toJSON` serializes the one `path` field. Nothing in `stdlib/git` creates a `Func::new`; the 14 method slots are the linker-registered functions above. |
 | git `new_instance` (`stdlib/git/class.rs:388`) | Helper, not a function: one array and one struct allocation | included as `ELEM(1)` in the constructor rows | n/a | |
@@ -1672,7 +1691,7 @@ Other counted work:
 
 1. **`code` diff, verified correction.** The old product check already preceded its quadratic charge. The overcharge and large-small-edit refusal reproduced. SUB-1292 uses incrementally metered linear-space Myers and a total-line admission bound, shared by all five callers.
 2. **`fs.copy` bounds.** SUB-1292 replaces native recursion with at most 64 iterator frames and 10,000 visited entries. Copy work is counted and settled on success or failure, including the cross-volume move caller. Per-file destination guards still have the ancestor-check overhead tracked separately.
-3. **`fs.lines` bounds.** SUB-1292 enforces `maxReadSize` on raw line bytes and accounts for the retained buffer and returned native text. Consumed input and output marshalling settle after the read, including failure paths.
+3. **`fs.lines` bounds.** SUB-1292 enforces `maxReadSize` on raw line bytes and accounts for the retained buffer and returned native text. Consumed input settles after the read, including failure paths. Output marshalling charges normally after the native outcome.
 4. **Recursive removal and rename, verified.** SUB-1292 combines protection and file identity/quota discovery in one bounded preflight, then replays recorded entries and releases confirmed effects without a failure rescan. Directory renames still require descendant protection; their adjusted charge includes visited entries, not just depth. The old gated-call charge underpriced both operations.
 5. **`code` ignore chains.** SUB-1292 stores matchers once in a flat arena and queues only two head indices. Inherited-handle cloning at 128/256 layers was 8,256/32,896; retained layers are now 128/256. Matching still depends on inherited rules actually consulted, with incremental `SCAN(rule count * path bytes)` before each matcher. Global `.ignore` precedence remains unchanged.
 6. **git** (resolved by SUB-1129): the per-call copy (`G`) and whole-`.git` publish (`PUB`) are gone; `show` and `diff` no longer load whole trees; `add` selects paths by range; checkout caches the directories it checks. SUB-1292 resumes cached log pages and shares one reference-directory name cache across branches/fetch checks.
@@ -1700,8 +1719,8 @@ Other counted work:
 - `read_contents` (`stdlib/code/mod.rs:308`): every `code` file read; already holds `Budget::work(len)`.
 - `diff`: five code functions share input admission, the total-line bound and incrementally charged Myers work; no line-product charge remains.
 - `walk` (`stdlib/code/walk.rs:213`): `tree`, `glob`, `search`. `WALK(e)` uses existing per-directory/per-entry syscall and capability terms, ignore-file reads and incremental `SCAN(consulted rules * path units)`. Glob/search sort visited results; tree uses bounded entry heaps and ordered pending-directory heaps.
-- `encode` (`stdlib/code/mod.rs:137`): JSON result for 7 `code` functions; same shape as git's `encode_result` (`stdlib/git/mod.rs:503`). Both end in `session::value::deserialize`, a natural single place for `PARSE(len) + ELEM`.
-- git `invoke` (`stdlib/git/mod.rs`): the single entry for all 19 git functions. Argument charge after `decode_arguments`; the worker meters its own work (`stdlib/git/meter.rs`) under a ceiling of the fuel left, settled after `finish_worker` and before `encode_result`.
+- `encode_json` in the code/Git `install.rs` modules converts native JSON results through `session::value::deserialize`, which charges for decoding and guest allocation.
+- Git `GitCall::execute` retains worker ownership and settles its meter before recording the native result. Registrations decode arguments and convert the typed result outside that effect boundary.
 
 #### (d) Not determined
 
@@ -1721,7 +1740,7 @@ String sizes are UTF-16 code units; byte sizes are named `bytes(...)`.
 Facts that apply to the whole slice:
 
 - **Strings round-trip through UTF-8.** `read_string_arg` (`runtime/host.rs:509`) converts UTF-16 to a Rust `String`; `write_submilli_string_struct` (`runtime/host.rs:795`) does `encode_utf16().collect()` and then copies into a GC array. So every string argument costs `SCAN(len)` and every string result costs `SCAN(len) + COPY(len)`. Only `submilli:session` keeps raw units (`stdlib/session/value.rs` `read_units`).
-- **Gated functions call `check_security`**. `running_package` now reads only the innermost module with the stopping visitor, without backtrace capture/symbolization. While a decision recorder is installed and still wants lines, `source_line`/`begin_recorded_call` (not `running_package`) capture at most one backtrace per gated host call (a git `invoke` captures once per git host call); that work is uncharged, for recorded/unrecorded fuel parity, bounded per run by the frame budget, and stops earlier once the log is full or has had to drop a record for bytes. The recorder's call records are uncharged for the same parity: the time a gated call ends, and for an outbound call a SHA-256 digest of what it sent and received plus a copy capped per payload and by the recorder's byte budget (`runtime/call_log.rs`). The digest walks bytes the host function already charges as `IO` or `SCAN`, so it adds no work the program has not paid for in kind. It calls the embedder's `SecurityCheck::check`, whose cost depends on the blueprint's rule count (`submilli-shared/src/host.rs:67`). In the formulas this is written `GATE`, meaning a second flat charge on top of `CALL`. It is not a new class: it is `CALL` with a larger constant, to be measured. See Findings (a) for the stack-depth part.
+- **Gated functions call `check_security`**. `running_package` now reads only the innermost module with the stopping visitor, without backtrace capture/symbolization. While a decision recorder is installed and still wants lines, `source_line`/`begin_recorded_call` (not `running_package`) capture at most one backtrace per gated host call (`GitCall::execute` captures once per live git host call); that work is uncharged, for recorded/unrecorded fuel parity, bounded per run by the frame budget, and stops earlier once the log is full or has had to drop a record for bytes. The recorder's call records are uncharged for the same parity: the time a gated call ends, and for an outbound call a SHA-256 digest of what it sent and received plus a copy capped per payload and by the recorder's byte budget (`runtime/call_log.rs`). The digest walks bytes the host function already charges as `IO` or `SCAN`, so it adds no work the program has not paid for in kind. It calls the embedder's `SecurityCheck::check`, whose cost depends on the blueprint's rule count (`submilli-shared/src/host.rs:67`). In the formulas this is written `GATE`, meaning a second flat charge on top of `CALL`. It is not a new class: it is `CALL` with a larger constant, to be measured. See Findings (a) for the stack-depth part.
 - **Async functions and the store's thread.** Every async host function here holds `&mut Caller` for the whole future, and none of the awaited futures (`HttpClient::send`, `HttpClient::download`, `LlmProvider::call`, `McpTransport::call`, `SecretProvider::get`, `AuthProxy::transform`) receive the caller. So fuel can be taken on the store's thread at exactly two kinds of points: before the `.await` and after it returns. There is no point inside the await today, so "per chunk" charging is not possible without a change (Findings (b)). Waiting inside the await costs nothing under this scheme, because nothing is charged for elapsed time.
 - **Property getters** all go through `install_field_getters` (`stdlib/abi.rs:103`): one `struct.get` on a backing struct. `CALL`.
 
@@ -1776,18 +1795,18 @@ What the shared verb path `perform_request` (`stdlib/http/mod.rs:340`) does, in 
 4. URL parsed for the capability context, and `check_security` (`GATE`). The URL is parsed again in `AuthProxy::transform` (`submilli-shared/src/host.rs:317`), again in `initial_hop` (`stdlib/http/transport.rs:292`) and again by `check_literal_ip`: about four `PARSE(u)` in total.
 5. `http_client.send(&req).await` (`stdlib/http/transport.rs:471`). Per hop, the headers are re-applied and the body is copied with `hop.body.to_vec()` (`stdlib/http/transport.rs:355`). A 307/308 redirect keeps the body, so the body can be copied and sent up to 11 times. Redirect response bodies are never read. Each hop runs `RedirectGuard::authorize`, which is another policy check.
 6. `read_response` (`stdlib/http/transport.rs:536`) reads the **whole body** into one `Vec<u8>`, chunk by chunk, stopping with `TooLarge` when it passes `max_response_size` (default 50 MiB, `runtime/mod.rs:167`). Headers are lowercased and copied (`collect_headers`, `:562`).
-7. `write_response`: borrow and validate response UTF-8, encode directly into the guest string, and build headers using native string hashing/insertion without guest vtable calls. Actual old code charged the GC copy only, not the research double copy; retain that output charge. IO, validation and all guest result/error construction settle after the request, including when remaining fuel is zero. The body is always text; there is no bytes or JSON form of a response at the host level. JSON decoding of a response is done by the program with `JSON.parse`.
+7. `write_response`: borrow and validate response UTF-8, encode directly into the guest string, and build headers using native string hashing/insertion without guest vtable calls. Actual old code charged the GC copy only, not the research double copy; retain that output charge. Native IO and scanning settle after the request. Guest result/error construction uses normal fuel checks after the recorded outcome. The body is always text; there is no bytes or JSON form of a response at the host level. JSON decoding of a response is done by the program with `JSON.parse`.
 
 Verb formula, written once:
 
 `VERB = CALL + GATE + PARSE(u) + ELEM(h) + SCAN(hu) + SCAN(B) + IO((B + hu + u) x (1 + r)) + IO(R + rhu) + SCAN(R) + COPY(R) + ELEM(rh)`
 
-Timeline: everything up to and including the first `IO(B + hu + u)` is charged before `auth_proxy.transform(...).await`. The redirect multiples and all response terms are charged after `send` returns and and all `write_response` guest construction settles after the effect. The await itself costs nothing.
+Timeline: everything up to and including the first `IO(B + hu + u)` is charged before `auth_proxy.transform(...).await`. The redirect multiples and all response terms are charged after `send` returns and and `write_response` guest construction uses normal fuel checks after the native outcome. The await itself costs nothing.
 
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
 | `submilli:http#delete` | `perform_request`, no body (`stdlib/http/mod.rs:135`) | `VERB` with `B = 0` | before + output | See the common notes after this table. |
-| `submilli:http#download` | validate bounded options, policy checks, stream into a quota-controlled temporary file, publish and marshal result | `CALL + gates + argument/options marshalling + IO(request bytes) + IO(W) + IO(D) + result marshalling` | request before; received/written bytes and result/error marshalling settle after effect on success or failure | `W` is observed wire bytes (including rejected chunks); `D` actual disk writes. Previous code charged `IO(2D)` on success only, not the more elaborate formula formerly listed here. `maxBytes` cannot exceed the operator response limit; timeout cannot exceed `http_max_download_timeout_ms` (default 60 s). Fractional/non-finite options throw RangeError before request. The built-in transport reports wire bytes before decoding; legacy embedded clients default to bytes accepted by the destination and can override `download_with_progress` for wire accuracy. |
+| `submilli:http#download` | validate bounded options, policy checks, stream into a quota-controlled temporary file, publish and marshal result | `CALL + gates + argument/options marshalling + IO(request bytes) + IO(W) + IO(D) + result marshalling` | request before; received/written bytes settle after effect on success or failure; result marshalling charges normally | `W` is observed wire bytes (including rejected chunks); `D` actual disk writes. Previous code charged `IO(2D)` on success only, not the more elaborate formula formerly listed here. `maxBytes` cannot exceed the operator response limit; timeout cannot exceed `http_max_download_timeout_ms` (default 60 s). Fractional/non-finite options throw RangeError before request. The built-in transport reports wire bytes before decoding; legacy embedded clients default to bytes accepted by the destination and can override `download_with_progress` for wire accuracy. |
 | `submilli:http#DownloadResult#bytesWritten` | Field read | `CALL` | before | |
 | `submilli:http#DownloadResult#contentType` | Field read | `CALL` | before | |
 | `submilli:http#DownloadResult#duration_ms` | Field read | `CALL` | before | |
@@ -1852,7 +1871,7 @@ The result holds its vectors as little-endian `f32` bytes in a hidden packed-`i8
 
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
-| `submilli:embedding#embed` | Read the text array and strings, gate, check bounds, reserve tokens, one provider request, settle, encode the vectors to bytes, allocate the GC array, build the result struct (`stdlib/embedding/mod.rs` `embed`, `build_embeddings`) | `CALL + GATE + IO(I) + IO(R) + COPY(R)` plus the input strings through `read_string_arg` and the result's identity and model strings through `write_submilli_string_struct` | `IO(I)` before the provider call; `IO(R)` and `COPY(R)` after it, `COPY(R)` before the encoding | The provider call is the effect, so `IO(R)` and `COPY(R)` use `settle` and never refuse. `COPY(R)` is charged once, up front, and the GC array is allocated without a second charge (`write_uint8_array_precharged`). `R` is known from the batch before any work. |
+| `submilli:embedding#embed` | Read the text array and strings, gate, check bounds, reserve tokens, one provider request, settle, encode the vectors to bytes, allocate the GC array, build the result struct (`stdlib/embedding/mod.rs` `embed`, `build_embeddings`) | `CALL + GATE + IO(I) + IO(R) + COPY(R)` plus the input strings through `read_string_arg` and the result's identity and model strings through `write_submilli_string_struct` | `IO(I)` before the provider call; `IO(R)` and `COPY(R)` after it, `COPY(R)` before the encoding | Native `IO(R)` uses `settle`; guest encoding uses an ordinary `COPY(R)` charge after the recorded outcome. `COPY(R)` is charged once, up front, and the GC array is allocated without a second charge (`write_uint8_array_precharged`). `R` is known from the batch before any work. |
 | `submilli:embedding#models` | Gate, list the models, run the policy check once per model, build `EmbeddingModel` structs and an array (`stdlib/embedding/mod.rs` `models`) | `CALL + (1 + m) x GATE + ELEM(m)` plus the strings through `write_submilli_string_struct` | before + output | `m` is known after `provider.models().await`. No bytes cross the wire. |
 | `submilli:embedding#Embeddings#vector` | Copy one row out of the hidden array, widen each `f32` to a boxed number, build a `number[]` (`read_row`, `build_number_array`) | `CALL + COPY(d x 4) + ELEM(d)` plus the boxed numbers and array through their writers | before | The row is charged before it is copied. `ELEM(d)` is charged once, before any element is boxed (`write_submilli_array_struct_precharged`). The whole result is never copied. |
 | `submilli:embedding#Embeddings#bytes` | Copy one row out of the hidden array into a new `Uint8Array` (`read_row`, `write_submilli_uint8array_struct`) | `CALL + COPY(d x 4) + COPY(d x 4)` | before | One `COPY` for the read out of the result and one for the new array, charged by `write_uint8_array`. |
@@ -1864,7 +1883,7 @@ Optional: installed only for an embedder that enables it. Variables: `I` = input
 
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
-| `submilli:agents#run` | Read the agent, input and schema, gate, one provider run, then build a string or, typed, parse the answer and allocate the value tree (`stdlib/agents/mod.rs` `run`) | `CALL + GATE + IO(I + S) + IO(T)`; untyped adds the answer string through `write_submilli_string_struct`, typed adds `PARSE(T) + ELEM(nodes)` | `IO(I + S)` before `provider.run(...).await`; `IO(T)` and the result after it | The run is the effect, so everything after it uses `settle` or `settle_result` and never refuses. Waiting on the run costs nothing; the provider bounds its time and tokens. |
+| `submilli:agents#run` | Read the agent, input and schema, gate, one provider run, then build a string or, typed, parse the answer and allocate the value tree (`stdlib/agents/mod.rs` `run`) | `CALL + GATE + IO(I + S) + IO(T)`; untyped adds the answer string through `write_submilli_string_struct`, typed adds `PARSE(T) + ELEM(nodes)` | `IO(I + S)` before `provider.run(...).await`; `IO(T)` and the result after it | Native `IO(T)` settles; answer parsing and guest allocation use normal checks after the recorded outcome. Waiting on the run costs nothing; the provider bounds its time and tokens. |
 | `submilli:agents#list` | Gate, list the agents, run the policy check once per agent, sanitize each description, build `AgentInfo` structs and an array (`stdlib/agents/mod.rs` `list`) | `CALL + (1 + m) x GATE + ELEM(m)` plus the strings through `write_submilli_string_struct` | before + output | `m` is known after `provider.agents().await`. |
 | `submilli:agents#AgentInfo#description` | Field read | `CALL` | before | |
 | `submilli:agents#AgentInfo#name` | Field read | `CALL` | before | |
@@ -1876,7 +1895,7 @@ Optional: installed only for an embedder that enables it. Variables: `T` = bytes
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
 | `submilli:skills#list` | Gate, list the skills, run the policy check once per skill, sanitize each description, build `SkillInfo` structs and an array (`stdlib/skills/mod.rs` `list`) | `CALL + (1 + m) x GATE + ELEM(m)` plus the strings through `write_submilli_string_struct` | before + output | `m` is known after `provider.list().await`. |
-| `submilli:skills#load` | Gate, check the name, one provider read, build the `Skill` struct (`stdlib/skills/mod.rs` `load`) | `CALL + GATE + IO(T)` plus the strings through `write_submilli_string_struct` | `IO(T)` and the result after the read | The read is the effect, so the result is built under `settle_result`. A name that is not one skill name is refused before the provider is asked. |
+| `submilli:skills#load` | Gate, check the name, one provider read, build the `Skill` struct (`stdlib/skills/mod.rs` `load`) | `CALL + GATE + IO(T)` plus the strings through `write_submilli_string_struct` | `IO(T)` and the result after the read | Native `IO(T)` settles; the guest result is built with normal fuel checks. A name that is not one skill name is refused before the provider is asked. |
 | `submilli:skills#readFile` | Gate, check the name and the path, one provider read, build the string (`stdlib/skills/mod.rs` `read_file`) | `CALL + GATE + IO(T)` plus the string through `write_submilli_string_struct` | `IO(T)` and the result after the read | A name or path outside the skills is refused before the provider is asked. |
 | `submilli:skills#Skill#content` | Field read | `CALL` | before | |
 | `submilli:skills#Skill#description` | Field read | `CALL` | before | |
@@ -1888,7 +1907,7 @@ Optional: installed only for an embedder that enables it. Variables: `T` = bytes
 
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
-| `submilli:mcp#call` | gated transport, admitted JSON tree converted directly to guest objects | `CALL + gate/argument terms + IO(request bytes) + IO(received bytes) + PARSE(received bytes + embedded text bytes parsed) + ELEM(validation nodes/keys + allocated nodes) + string SCAN/COPY` | request before; all result/error handling settles after the tool effect | 8 MiB HTTP body/per-event SSE bound before parsing; result tree limited to 100,000 nodes/keys, depth 128, and 8 MiB of string bytes plus 16 bytes per node/key. Transport returns an admitted owned tree, with no JSON serialization/reparse or intermediate guest string. Discovery uses the same bounded adapter. Limit/internal allocation failures never trigger OAuth replay. |
+| `submilli:mcp#call` | gated transport, admitted JSON tree converted directly to guest objects | `CALL + gate/argument terms + IO(request bytes) + IO(received bytes) + PARSE(received bytes + embedded text bytes parsed) + ELEM(validation nodes/keys + allocated nodes) + string SCAN/COPY` | request before; native IO/PARSE settles after the tool effect; guest ELEM and allocation charge normally | 8 MiB HTTP body/per-event SSE bound before parsing; result tree limited to 100,000 nodes/keys, depth 128, and 8 MiB of string bytes plus 16 bytes per node/key. Transport returns an admitted owned tree, with no JSON serialization/reparse or intermediate guest string. Discovery uses the same bounded adapter. Limit/internal allocation failures never trigger OAuth replay. |
 
 ### submilli:variables
 
@@ -1900,7 +1919,7 @@ Optional: installed only for an embedder that enables it. Variables: `T` = bytes
 
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
-| `submilli:secrets#get` | Read the name, gate, `provider.get(name).await`, allocate the value string (`stdlib/secrets.rs:47`) | `CALL + GATE + SCAN(len(secret)) + IO(len(value)) + COPY(len(value))` | before + output | Name before the await, value after. The provider may read a secret store (`submilli-shared/src/host.rs:252`); the value size is small and unknown up front. |
+| `submilli:secrets#get` | Read the name, gate, `provider.get(name).await`, allocate the value string (`stdlib/secrets.rs:47`) | `CALL + GATE + SCAN(len(secret)) + IO(len(value)) + COPY(len(value))` | before + output | Name before the await, value after. The provider may read a secret store; value size is unknown up front. Recorded mode adds HASH for encryption (settled inside the effect) and decryption (charged before work outside it), each measured by ciphertext bytes. |
 
 ### submilli:security
 
@@ -1956,14 +1975,14 @@ There is no `Func::new`, `Func::new_async`, `Func::wrap` or `func_new` call in a
 3. **Policy evaluation cost belongs to the embedder.** `SecurityCheck::check` runs blueprint rule matching whose cost depends on the number of rules and filter operands, not on the call's inputs. A flat `GATE` charge is the only practical option; it should be measured against a realistic blueprint.
 4. **HTTP request body resent per redirect.** A 307/308 chain copies and sends the body once per hop, up to 11 times (`stdlib/http/transport.rs:355`). The hop count is known only after the await.
 5. **Session cursor length is bounded (SUB-1292).** Reject before copying, base64 decoding or HMAC; the ceiling includes every cursor the configured key limit can produce. Full-length legitimate keys remain pageable.
-6. **Download limits and failure settlement (SUB-1292).** Both options are bounded by operator limits. A bounded mock receiving 0/128/256 bytes before interruption previously cost 1,195 host fuel in all three cases; it now adds exactly `IO(W) + IO(D)` (64/128 for 128/256 received and flushed bytes). Failure cleanup and quota refunds remain intact. Result and typed-error marshalling settle after the stream, so fuel cannot discard an effect.
+6. **Download limits and failure settlement (SUB-1292).** Both options are bounded by operator limits. A bounded mock receiving 0/128/256 bytes before interruption previously cost 1,195 host fuel in all three cases; it now adds exactly `IO(W) + IO(D)` (64/128 for 128/256 received and flushed bytes). Failure cleanup and quota refunds remain intact. Native progress settles after the stream. Result marshalling uses normal checks after the recorded outcome.
 
 #### (b) Size cannot be known before the work
 
-- **HTTP verbs:** response body and header size. Bounded by `http_max_response_size` (50 MiB default). The transport buffers the whole body before returning, so the charge lands after the read. Keep the operator size cap; settle received bytes and result/error construction after the effect.
+- **HTTP verbs:** response body and header size. Bounded by `http_max_response_size` (50 MiB default). The transport buffers the whole body before returning, so the charge lands after the read. Keep the operator size cap; settle received bytes after the effect, then charge guest construction normally.
 - **`http.download`:** additive progress reporting counts wire bytes before decoding and disk bytes actually written, surviving failure and timeout. Counts are settled after the await; operator byte and timeout ceilings bound the work between fuel checks. Decompression is bounded separately by the same byte ceiling; no placeholder rates are tuned here.
 - **`llm.call` / `llm.batch`:** completion size. Bounded by 32 MiB per element and by the output token cap.
-- **`mcp.call`:** raw response bytes are counted across connection, retries, timeout and cleanup, including failed bounded reads. Embedded JSON text parse attempts are counted separately from IO. IO/PARSE settle after the effect; tree admission and guest allocation also settle. No result is discarded solely because fuel is short. Transport decoders bound bytes and nesting before constructing their trees; the admitted result type retains only bounded trees.
+- **`mcp.call`:** raw response bytes are counted across connection, retries, timeout and cleanup, including failed bounded reads. Embedded JSON text parse attempts are counted separately from IO. Native IO/PARSE settle after the effect; guest tree construction uses normal fuel checks. A recorded outcome remains available if conversion exhausts fuel. Transport decoders bound bytes and nesting before constructing their trees; the admitted result type retains only bounded trees.
 - **`secrets.get`:** value size.
 - **`session.get`:** payload size, known when the store returns (bounded 1 MiB).
 - **`session.set`, `security.check`, HTTP object bodies:** the JSON size is known only after the guest's `toJson` returns.
@@ -2013,3 +2032,42 @@ Keys are local to the engine-attributed package. Registration metadata overhead
 is covered by `CALL`. Package code stays in the installed package store.
 Each finalization attempt receives fresh fuel independently of the originating
 execution.
+
+## Native outcome recording (SUB-1837)
+
+The following rows extend each affected host's existing formula when an execution
+history is installed. Ordinary mode keeps its existing charges. `HASH(encoded
+arguments)` is charged incrementally before dispatch; `COPY(encoded native outcome)`
+is settled after native work. Replay charges `PARSE(encoded native outcome)` for
+decoding; it does not deduct historical native fuel or run the provider again.
+Each attempt receives fresh configured fuel and timeout allowances.
+Guest argument conversion remains before the boundary; guest result conversion
+charges its existing formula normally after the outcome is committed. Insufficient
+fuel stops conversion, including construction of a guest exception for a native
+error; a recorded native outcome remains available for replay.
+Ordinary mode also uses normal conversion checks, without a replay guarantee. Database/network
+waiting costs no fuel. Backend work keeps its existing IO/SCAN/PARSE/SYSCALL costs.
+
+| Hosts | Boundary and charge timing |
+| --- | --- |
+| UUID v4/v7; Math.random; crypto.randomBytes; Temporal.Now.* | Record native observation before guest conversion; random-byte SCAN and the original timezone lookup stay inside the action. Replay deserialization restores the recorded zone from the pinned database without another TZ charge; conversion receives a resolved zone. |
+| variables.get | Record native optional value after lookup; conversion charges normally. |
+| secrets.get | Direct execution resolves normally. Recorded retrieval returns only ciphertext plus key ID; settle `HASH(ciphertext bytes)` for encryption inside the effect. Charge `HASH(ciphertext bytes)` before decryption outside the effect on every attempt, then convert the plaintext normally. |
+| fs read/write/append/size/exists/stat/mkdir/remove/move/copy; reader/listing/writer open/next/close | Fingerprint native arguments before backend; path/SYSCALL/IO admission and Work costs stay inside the action, settle after mutation. Rebuild resource handles from persistent IDs on replay. |
+| HTTP request verbs and download | Input costs before send; response IO/SCAN settles inside the boundary. Native response/metadata is committed before guest allocation. |
+| session get/has/set/remove/list and finalizer registration | Existing KV IO inside the boundary; parsing and guest values charge normally afterward. Guest serialization callbacks precede history allocation. |
+| LLM dispatch/models; embedding embed/models | Provider work and live reservations stay inside the boundary. LLM/embedding result types carry usage; their callers charge it after execute returns, before output conversion or error handling. Replay restores per-run spend without a second shared provider reservation. |
+| MCP, tools, agents, skills | Request IO and provider charges inside boundary; native outcome then guest conversion. |
+| security.check | Gate cost inside boundary. |
+| code read/search/glob/tree/diffFiles/edit/insertAt/applyPatch | Existing native scan/parse/walk/write costs inside boundary; diffText stays pure. Mutation validates result size before publication. |
+| Git worker operations | Existing native WorkingBudget/Work settlement inside boundary, guest encoding afterward. Worker ownership/draining is unchanged. |
+
+Console logging stays outside the native boundary and writes again on replay,
+paying its usual SCAN and IO costs on each attempt. Incremental console persistence
+is deferred to SUB-1885.
+
+Host registration no longer carries an unused determinism flag. Value-returning
+host adapters own ABI result slots; native outcome recording returns the Rust value
+and ordinary conversion code charges its marshalling work. Resource serialization
+skips native handles. The formulas and native-work settlement stay unchanged;
+post-outcome conversion can now refuse for insufficient fuel.

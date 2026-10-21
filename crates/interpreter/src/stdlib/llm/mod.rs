@@ -22,7 +22,11 @@
 //! the filter context, not in an error, not in a log. The context carries
 //! `model` and `prompt_count` — the numbers, never the payload.
 
-use crate::runtime::host::{abi_arg, abi_result};
+use crate::runtime::effects;
+use crate::runtime::host::{
+    abi_arg, quota_exceeded_error, range_error, read_string_arg, register_host_value_async,
+    type_error, write_submilli_string_struct,
+};
 pub mod declaration;
 
 use std::sync::Arc;
@@ -33,10 +37,6 @@ use crate::runtime::StoreData;
 use crate::runtime::call_log::{ModelUsage, Payload, Side, record_payload, record_usage};
 use crate::runtime::decision::CallTicket;
 use crate::runtime::fuel;
-use crate::runtime::host::{
-    quota_exceeded_error, range_error, read_string_arg, register_host_fn_async, type_error,
-    write_submilli_string_struct,
-};
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
 use crate::runtime::llm::{
     ExecutionTokenBudget, LlmCallError, LlmLimits, LlmModel, LlmOutcome, LlmProvider,
@@ -96,7 +96,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.array.clone()),
     ));
 
-    register_host_fn_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "call"),
@@ -105,8 +105,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             [string.clone(), string.clone(), nullable_object.clone()],
             [nullable_object.clone()],
         ),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let model = read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.call (model)")?;
                 let prompt =
@@ -116,17 +115,16 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let typed = schema.is_some();
                 let outcomes = dispatch(caller, "call", &model, vec![prompt], schema).await?;
                 let outcome = first_outcome(&model, outcomes)?;
-                *abi_result(results, 0)? = if typed {
-                    structured_value(caller, "llm.call", outcome)?
+                if typed {
+                    structured_value(caller, "llm.call", outcome)
                 } else {
-                    build_completion(caller, outcome)?
-                };
-                Ok(())
+                    build_completion(caller, outcome)
+                }
             })
         },
     )?;
 
-    register_host_fn_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "batch"),
@@ -140,8 +138,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             // the declared slot it travels in is wider.
             [nullable_object.clone()],
         ),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let model =
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.batch (model)")?;
@@ -158,24 +155,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         build_completion(caller, outcome)?
                     });
                 }
-                *abi_result(results, 0)? = build_array(caller, built)?;
-                Ok(())
+                build_array(caller, built)
             })
         },
     )?;
 
-    register_host_fn_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "models"),
         FuncType::new(&engine, [], [array]),
-        /* deterministic = */ false,
-        |caller, _params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = models(caller).await?;
-                Ok(())
-            })
-        },
+        |caller, _params| Box::pin(async move { models(caller).await }),
     )?;
 
     install_getters(linker, &engine, &intr, string, nullable_object)
@@ -250,7 +240,7 @@ fn install_getters(
 ///    releases its whole reservation.
 async fn dispatch(
     caller: &mut wasmtime::Caller<'_, StoreData>,
-    op: &str,
+    op: &'static str,
     model: &str,
     prompts: Vec<String>,
     schema: Option<String>,
@@ -260,6 +250,73 @@ async fn dispatch(
         request_payload(op, model, &prompts, schema.as_deref())
     });
 
+    let request = LlmRequest {
+        model: model.to_owned(),
+        prompts,
+        schema,
+    };
+    let operation = if op == "call" {
+        "llm.call"
+    } else {
+        "llm.batch"
+    };
+    let mut response = effects::execute(caller, operation, request, move |caller, _, request| {
+        Box::pin(call_provider(caller, op, ticket, request))
+    })
+    .await?;
+    // The live reservation is settled once; replay restores only this run's spend.
+    if let Some(settlement) = &mut response.settlement {
+        settlement.charge();
+    } else if let Some(budget) = budget(caller) {
+        budget.restore_spend(response.used, response.held);
+    }
+    Ok(response.outcomes)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LlmResponse {
+    outcomes: Vec<LlmOutcome>,
+    used: u64,
+    held: u64,
+    #[serde(skip)]
+    settlement: Option<LlmSettlement>,
+}
+
+/// A live reservation is not part of history. Keep its settlement until the
+/// outcome commits; dropping it also settles if persistence fails.
+struct LlmSettlement {
+    budget: Option<Arc<ExecutionTokenBudget>>,
+    reserved: u64,
+    reported: u64,
+    held: u64,
+}
+
+impl LlmSettlement {
+    fn charge(&mut self) {
+        if let Some(budget) = self.budget.take() {
+            budget.reconcile(self.reserved, self.reported, self.held);
+        }
+    }
+}
+
+impl Drop for LlmSettlement {
+    fn drop(&mut self) {
+        self.charge();
+    }
+}
+
+async fn call_provider(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    op: &'static str,
+    ticket: Option<CallTicket>,
+    request: LlmRequest,
+) -> wasmtime::Result<LlmResponse> {
+    let LlmRequest {
+        model,
+        prompts,
+        schema,
+    } = request;
+    let model = model.as_str();
     let budget = budget(caller);
     let limits = budget
         .as_ref()
@@ -286,10 +343,13 @@ async fn dispatch(
 
     match dispatched {
         Ok(outcomes) => {
-            if let Some(budget) = budget.as_deref() {
-                let (reported, indeterminate) = usage(&outcomes, reservation, prompts.len());
-                budget.reconcile(reservation, reported, indeterminate);
-            }
+            let (reported, held) = usage(&outcomes, reservation, prompts.len());
+            let settlement = budget.map(|budget| LlmSettlement {
+                budget: Some(budget),
+                reserved: reservation,
+                reported,
+                held,
+            });
             // The completions are here and billed: settled, not refused.
             let received: usize = outcomes
                 .iter()
@@ -317,7 +377,12 @@ async fn dispatch(
             });
             record_usage(&*caller, ticket, reported_usage(&outcomes));
             fuel::settle(&mut *caller, fuel::IO, received as u64)?;
-            Ok(outcomes)
+            Ok(LlmResponse {
+                outcomes,
+                used: reservation.min(reported.saturating_add(held)),
+                held,
+                settlement,
+            })
         }
         Err(error) => {
             // Nothing ran, so nothing was billed: the whole reservation goes
@@ -337,6 +402,13 @@ async fn dispatch(
             Err(throw(op, error))
         }
     }
+}
+
+#[derive(serde::Serialize)]
+struct LlmRequest {
+    model: String,
+    prompts: Vec<String>,
+    schema: Option<String>,
 }
 
 /// A call's request as the recorder keeps it.
@@ -448,19 +520,21 @@ fn gate(
 /// runtime configured with only those models would return.
 async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     preflight_models(caller, CAPABILITY, "prompt_count")?;
-    let provider = provider(caller, "models", "")?;
-    let candidates = provider.models().await.map_err(|e| throw("models", e))?;
+    let candidates = effects::execute(caller, "llm.models", (), |caller, _, ()| {
+        Box::pin(async move {
+            provider(caller, "models", "")?
+                .models()
+                .await
+                .map_err(|error| throw("models", error))
+        })
+    })
+    .await?;
 
-    let mut visible = Vec::new();
+    let mut built = Vec::new();
     for candidate in candidates {
         if may_call(caller, &candidate.name)? {
-            visible.push(candidate);
+            built.push(build_model(caller, candidate)?);
         }
-    }
-
-    let mut built = Vec::with_capacity(visible.len());
-    for model in visible {
-        built.push(build_model(caller, model)?);
     }
     build_array(caller, built)
 }
@@ -1030,7 +1104,7 @@ mod tests {
                 .expect("compile clean");
             let cfg = RuntimeConfig::default();
             let engine = cfg.engine().expect("engine");
-            let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+            let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
             data.install_type_info(compiled.type_info.clone());
             data.llm_provider = self.provider;
             data.llm_budget = self.budget;

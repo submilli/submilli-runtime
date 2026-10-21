@@ -640,6 +640,10 @@ mod tests {
             "src/stdlib/embedding/mod.rs",
             Some(crate::stdlib::embedding::MODULE_NAME),
         ),
+        (
+            "src/stdlib/fs/install.rs",
+            Some(crate::stdlib::fs::MODULE_NAME),
+        ),
         ("src/stdlib/fs/mod.rs", Some(crate::stdlib::fs::MODULE_NAME)),
         (
             "src/stdlib/git/mod.rs",

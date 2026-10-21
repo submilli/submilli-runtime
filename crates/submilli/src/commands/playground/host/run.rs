@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use interpreter::runtime::durable::RunId;
 use interpreter::runtime::limits::ExecutionUsage;
 use interpreter::runtime::session_finalizers::SessionFinalizers;
 use interpreter::runtime::{
@@ -991,6 +992,7 @@ impl RunHost {
             &code,
             parsed,
             Runtime {
+                run_id: execution_id.into(),
                 engine: &self.engine,
                 base_linker: &self.base_linker,
                 config: &self.runtime,
@@ -1200,7 +1202,11 @@ impl RunHost {
         secrets: &Arc<HarnessSecretBindings>,
     ) -> Result<StoreData, String> {
         let (vfs, vfs_info) = self.session_vfs(session_id, blueprint, variables).await?;
-        let mut data = StoreData::with_vfs_and_cap(vfs, self.runtime.max_store_bytes);
+        let mut data = StoreData::with_vfs_and_cap(
+            RunId::generate().map_err(|error| error.to_string())?,
+            vfs,
+            self.runtime.max_store_bytes,
+        );
         data.vfs_info = vfs_info;
         data.finalizing = true;
         data.git = submilli_shared::resolve_git(blueprint, variables)
@@ -1408,6 +1414,7 @@ struct Services {
 }
 
 struct Runtime<'a> {
+    run_id: RunId,
     engine: &'a Engine,
     base_linker: &'a Linker<StoreData>,
     config: &'a RuntimeConfig,
@@ -1426,6 +1433,7 @@ async fn dispatch(
     mcps: &Arc<McpCatalog>,
 ) -> RunOutcome {
     let owned_code = code.to_owned();
+    let run_id = runtime.run_id;
     let engine = runtime.engine.clone();
     let linker = runtime.base_linker.clone();
     let config = runtime.config.clone();
@@ -1456,6 +1464,7 @@ async fn dispatch(
             &owned_code,
             parsed,
             Runtime {
+                run_id,
                 engine: &engine,
                 base_linker: &linker,
                 config: &config,
@@ -1602,7 +1611,7 @@ async fn run_inner(
 
     let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
     // The file system is complete here: its filesystem is bound at construction.
-    let mut data = StoreData::with_vfs_and_cap(vfs, runtime.config.max_store_bytes);
+    let mut data = StoreData::with_vfs_and_cap(runtime.run_id, vfs, runtime.config.max_store_bytes);
     data.git = git;
     data.vfs_info = vfs_info;
     data.auth_proxy = inputs.auth_proxy;

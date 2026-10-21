@@ -128,7 +128,9 @@ fn run_on(root: &Path, src: &str) -> wasmtime::Result<Option<String>> {
     let cfg = RuntimeConfig::default();
     let engine = cfg.engine().expect("engine");
     let vfs = Vfs::external(root.to_path_buf()).expect("external vfs");
-    let mut store = cfg.store(&engine, StoreData::with_vfs(vfs)).expect("store");
+    let mut store = cfg
+        .store(&engine, StoreData::with_vfs("test-run".into(), vfs))
+        .expect("store");
     install_tenant_limits(&mut store);
     let module = Module::new(&engine, &compiled.wasm).expect("module");
     let mut linker = Linker::<StoreData>::new(&engine);

@@ -117,7 +117,6 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
         MCP_MODULE_NAME,
         crate::mangle::host(MCP_MODULE_NAME, "call"),
         ty,
-        /* deterministic = */ false,
         move |caller, params, results| {
             Box::pin(async move {
                 let params: &[Val; 3] = params.try_into().map_err(|_| {
@@ -142,39 +141,63 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                     request_payload(&server, &tool, &args_json)
                 });
 
-                let transport = caller.data().mcp_transport.clone().ok_or_else(|| {
-                    wasmtime::Error::msg(format!(
-                        "@mcp/{server}.{tool}: MCP transport not configured"
-                    ))
-                })?;
+                let request = ToolRequest {
+                    server,
+                    tool,
+                    args_json,
+                };
+                let response = super::effects::execute(
+                    caller,
+                    "mcp.call",
+                    request,
+                    move |caller, _, request| {
+                        Box::pin(async move {
+                            fuel::charge(&mut *caller, fuel::IO, request.args_json.len() as u64)?;
+                            let ToolRequest {
+                                server,
+                                tool,
+                                args_json,
+                            } = request;
+                            let transport =
+                                caller.data().mcp_transport.clone().ok_or_else(|| {
+                                    wasmtime::Error::msg(format!(
+                                        "@mcp/{server}.{tool}: MCP transport not configured"
+                                    ))
+                                })?;
 
-                fuel::charge(&mut *caller, fuel::IO, args_json.len() as u64)?;
-                let outcome = transport.call(&server, &tool, &args_json).await;
-                record_payload(&*caller, ticket, Side::Response, || {
-                    let payload = match &outcome.result {
-                        Ok(response) => Payload::meta(serde_json::Value::Null).with_owned_body(
-                            serde_json::to_vec(response.value()).unwrap_or_default(),
-                        ),
-                        Err(error) => Payload::meta(error.record()),
-                    };
-                    payload.with_size(outcome.received_bytes)
-                });
-                fuel::settle(&mut *caller, fuel::IO, outcome.received_bytes)?;
-                fuel::settle(&mut *caller, fuel::PARSE, outcome.parsed_bytes)?;
-                fuel::settle_result(caller, |caller| {
-                    let result = (|| {
-                        let response = outcome
-                            .result
-                            .map_err(|error| mcp_error_to_throw(&server, &tool, error))?;
-                        let value = allocate_response(caller, &response)?;
-                        *result_slot = value;
-                        Ok(())
-                    })();
-                    result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
-                })
+                            let outcome = transport.call(&server, &tool, &args_json).await;
+                            record_payload(&*caller, ticket, Side::Response, || {
+                                let payload = match &outcome.result {
+                                    Ok(response) => Payload::meta(serde_json::Value::Null)
+                                        .with_owned_body(
+                                            serde_json::to_vec(response.value())
+                                                .unwrap_or_default(),
+                                        ),
+                                    Err(error) => Payload::meta(error.record()),
+                                };
+                                payload.with_size(outcome.received_bytes)
+                            });
+                            fuel::settle(&mut *caller, fuel::IO, outcome.received_bytes)?;
+                            fuel::settle(&mut *caller, fuel::PARSE, outcome.parsed_bytes)?;
+                            outcome
+                                .result
+                                .map_err(|error| mcp_error_to_throw(&server, &tool, error))
+                        })
+                    },
+                )
+                .await?;
+                *result_slot = allocate_response(caller, &response)?;
+                Ok(())
             })
         },
     )
+}
+
+#[derive(serde::Serialize)]
+struct ToolRequest {
+    server: String,
+    tool: String,
+    args_json: String,
 }
 
 /// A call's request as the recorder keeps it.
@@ -193,12 +216,10 @@ pub(crate) fn allocate_response(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     response: &McpResponse,
 ) -> wasmtime::Result<Val> {
-    fuel::settle_result(caller, |caller| {
-        fuel::settle(&mut *caller, fuel::ELEM, response.visited_nodes())?;
-        let allocator = crate::runtime::json::JsonUnknownAllocator::new(caller)?;
-        let value = crate::runtime::json::JsonValue::from(response.value());
-        allocator.allocate(caller, &value)
-    })
+    fuel::charge(&mut *caller, fuel::ELEM, response.visited_nodes())?;
+    let allocator = crate::runtime::json::JsonUnknownAllocator::new(caller)?;
+    let value = crate::runtime::json::JsonValue::from(response.value());
+    allocator.allocate(caller, &value)
 }
 
 /// Codegen-facing definitions for the internal `submilli:mcp.call` host fn:
@@ -396,7 +417,7 @@ mod tests {
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().unwrap();
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let mut data = StoreData::with_vfs(Vfs::tempdir().unwrap());
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().unwrap());
         data.install_type_info(compiled.type_info.clone());
         data.mcp_transport = Some(Arc::new(MockTransport {
             result,
@@ -460,7 +481,7 @@ mod tests {
         .unwrap();
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().unwrap();
-        let mut data = StoreData::with_vfs(Vfs::none());
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::none());
         data.install_type_info(compiled.type_info.clone());
         data.mcp_transport = Some(Arc::new(FailingTransport { internal: true }));
         let mut store = cfg.store_async(&engine, data).unwrap();
@@ -496,12 +517,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completed_response_is_fully_allocated_before_exhausted_fuel_stops_execution() {
+    async fn response_allocation_obeys_the_fuel_budget() {
         use wasmtime::{Func, FuncType, Val, ValType};
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
-            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .store_async(&engine, StoreData::with_vfs("test-run".into(), Vfs::none()))
             .unwrap();
         let mut linker = Linker::new(&engine);
         install_runtime_async(&mut linker, &mut store)
@@ -543,15 +564,25 @@ mod tests {
             assert_eq!(result[0].i32(), Some(count));
         }
         store.set_fuel(1).unwrap();
+        let mut result = [Val::I32(-1), Val::F64(0)];
+        let error = complete
+            .call_async(&mut store, &[Val::I32(256)], &mut result)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<wasmtime::Trap>(),
+            Some(&wasmtime::Trap::OutOfFuel)
+        );
+        assert_eq!(result[0].i32(), Some(-1));
+        assert_eq!(store.get_fuel().unwrap(), 0);
+        assert!(!store.data().settling_host_result);
+        store.set_fuel(100_000).unwrap();
         complete
             .call_async(&mut store, &[Val::I32(256)], &mut result)
             .await
             .unwrap();
         assert_eq!(result[0].i32(), Some(256));
         assert_eq!(result[1].f64(), Some(255.0));
-        assert_eq!(store.get_fuel().unwrap(), 0);
-        assert!(!store.data().settling_host_result);
-        assert!(crate::runtime::fuel::charge_call(&mut store).is_err());
     }
 
     #[tokio::test]

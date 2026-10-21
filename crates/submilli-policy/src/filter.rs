@@ -1291,6 +1291,22 @@ pub(crate) fn parse(raw: &str) -> Result<FilterExpr, String> {
     Ok(expression)
 }
 
+impl FilterExpr {
+    /// Count regex operators without compiling them, for aggregate configuration
+    /// admission. Quoted occurrences of `matches` are ordinary string content.
+    /// This is a resource preflight; full parsing still validates the expression.
+    pub fn regex_count(raw: &str) -> Result<usize, String> {
+        if raw.len() > MAX_FILTER_BYTES {
+            return Err("filter exceeds byte limit".into());
+        }
+        Ok(tokenize(raw)
+            .map_err(|error| error.render(raw))?
+            .iter()
+            .filter(|token| matches!(token.token, Token::Op(CompareOp::Matches)))
+            .count())
+    }
+}
+
 impl std::str::FromStr for FilterExpr {
     /// The caret-annotated parse error, same as a YAML `filter:` would report.
     type Err = String;

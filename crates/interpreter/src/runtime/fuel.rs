@@ -455,7 +455,7 @@ mod tests {
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
-            .store(&engine, StoreData::with_vfs(Vfs::none()))
+            .store(&engine, StoreData::with_vfs("test-run".into(), Vfs::none()))
             .unwrap();
         store.set_fuel(100).unwrap();
         charge_host_fuel(&mut store, 20).unwrap();
@@ -475,7 +475,7 @@ mod tests {
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
-            .store(&engine, StoreData::with_vfs(Vfs::none()))
+            .store(&engine, StoreData::with_vfs("test-run".into(), Vfs::none()))
             .unwrap();
         let complete = Func::new(
             &mut store,
@@ -520,7 +520,7 @@ mod tests {
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
-            .store(&engine, StoreData::with_vfs(Vfs::none()))
+            .store(&engine, StoreData::with_vfs("test-run".into(), Vfs::none()))
             .unwrap();
         let settle = Func::new(
             &mut store,
@@ -578,7 +578,7 @@ mod tests {
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
-            .store(&engine, StoreData::with_vfs(Vfs::none()))
+            .store(&engine, StoreData::with_vfs("test-run".into(), Vfs::none()))
             .unwrap();
         let charge = Func::new(
             &mut store,

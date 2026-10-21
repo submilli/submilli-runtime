@@ -235,7 +235,7 @@ impl std::fmt::Display for SessionKvError {
 impl std::error::Error for SessionKvError {}
 
 /// Key plus retained payload size — what `list` may disclose. Never contents.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SessionKvEntry {
     pub key: Vec<u16>,
     pub size_bytes: u64,

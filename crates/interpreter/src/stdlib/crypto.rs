@@ -2,16 +2,17 @@
 //! compare. Pure Rust host functions registered directly under the package
 //! name; the `string | Uint8Array` union params are discriminated host-side.
 
-use crate::runtime::host::{abi_arg, abi_result};
+use crate::runtime::effects;
+use crate::runtime::host::{
+    abi_arg, abi_result, read_string_arg, read_uint8_array_arg, register_host_fn,
+    register_host_value_async, write_submilli_uint8array_struct,
+};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256, Sha512};
 use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
-use crate::runtime::host::{
-    read_string_arg, read_uint8_array_arg, register_host_fn, write_submilli_uint8array_struct,
-};
 use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
 use crate::runtime::prelude::collection::is_a;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
@@ -122,7 +123,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             crate::mangle::package_symbol(MODULE_NAME, name),
             FuncType::new(&engine, [object.clone()], [uint8.clone()]),
-            /* deterministic = */ true,
             move |caller, params, results| {
                 let input = read_string_or_bytes(caller, abi_arg(params, 0)?, &context)?;
                 fuel::charge(&mut *caller, fuel::HASH, input.len() as u64)?;
@@ -138,7 +138,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "hmacSha256"),
         FuncType::new(&engine, [uint8.clone(), object], [uint8.clone()]),
-        /* deterministic = */ true,
         |caller, params, results| {
             let key =
                 read_uint8_array_arg(&mut *caller, abi_arg(params, 0)?, "crypto.hmacSha256 (key)")?;
@@ -154,36 +153,43 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    register_host_fn(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "randomBytes"),
         FuncType::new(&engine, [ValType::F64], [uint8.clone()]),
-        /* deterministic = */ false,
-        |caller, params, results| {
-            let Val::F64(bits) = *abi_arg(params, 0)? else {
-                return Err(crate::runtime::host::type_error(
-                    "crypto.randomBytes: expected f64 length",
-                ));
-            };
-            let len = f64::from_bits(bits) as i32;
-            if len < 0 {
-                return Err(crate::runtime::host::range_error(format!(
-                    "crypto.randomBytes: length must be non-negative, got {len}"
-                )));
-            }
-            if len > MAX_RANDOM_BYTES {
-                return Err(crate::runtime::host::range_error(format!(
-                    "crypto.randomBytes: length {len} exceeds maximum {MAX_RANDOM_BYTES}"
-                )));
-            }
-            fuel::charge(&mut *caller, fuel::SCAN, len as u64)?;
-            let mut buf = vec![0u8; len as usize];
-            getrandom::getrandom(&mut buf)
-                .map_err(|e| wasmtime::Error::msg(format!("crypto.randomBytes: {e}")))?;
-            let arr = write_submilli_uint8array_struct(caller, &buf)?;
-            *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
-            Ok(())
+        |caller, params| {
+            Box::pin(async move {
+                let Val::F64(bits) = *abi_arg(params, 0)? else {
+                    return Err(crate::runtime::host::type_error(
+                        "crypto.randomBytes: expected f64 length",
+                    ));
+                };
+                let len = f64::from_bits(bits) as i32;
+                if len < 0 {
+                    return Err(crate::runtime::host::range_error(format!(
+                        "crypto.randomBytes: length must be non-negative, got {len}"
+                    )));
+                }
+                if len > MAX_RANDOM_BYTES {
+                    return Err(crate::runtime::host::range_error(format!(
+                        "crypto.randomBytes: length {len} exceeds maximum {MAX_RANDOM_BYTES}"
+                    )));
+                }
+                let buf = effects::execute(caller, "crypto.randomBytes", len, |caller, _, len| {
+                    Box::pin(async move {
+                        fuel::charge(&mut *caller, fuel::SCAN, len as u64)?;
+                        let mut bytes = vec![0u8; len as usize];
+                        getrandom::getrandom(&mut bytes).map_err(|e| {
+                            wasmtime::Error::msg(format!("crypto.randomBytes: {e}"))
+                        })?;
+                        Ok(effects::OutcomeBytes(bytes))
+                    })
+                })
+                .await?;
+                let arr = write_submilli_uint8array_struct(caller, &buf.0)?;
+                Ok(Val::AnyRef(Some(arr.to_anyref())))
+            })
         },
     )?;
 
@@ -193,7 +199,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "timingSafeEqual"),
         FuncType::new(&engine, [uint8.clone(), uint8], [ValType::I32]),
-        /* deterministic = */ true,
         |caller, params, results| {
             let a = read_uint8_array_arg(
                 &mut *caller,

@@ -711,7 +711,6 @@ pub(super) fn reg_plain_date_to_year_month(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key(iface, "toPlainYearMonth"),
         ty,
-        true,
         move |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, "toPlainYearMonth")?;
             let y = st_i32(caller, st, 1, "toPlainYearMonth")?;
@@ -732,7 +731,6 @@ pub(super) fn reg_plain_date_to_month_day(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key(iface, "toPlainMonthDay"),
         ty,
-        true,
         move |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, "toPlainMonthDay")?;
             let m = st_i32(caller, st, 2, "toPlainMonthDay")?;
@@ -764,7 +762,6 @@ pub(super) fn reg_plain_from(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key(ctor_iface, "from"),
         FuncType::new(engine, [string.clone()], [obj.clone()]),
-        true,
         move |caller, params, results| {
             let s = read_string_arg(caller, abi_arg(params, 0)?, label)?;
             *abi_result(results, 0)? = op(&s, caller)?;
@@ -788,7 +785,6 @@ pub(super) fn reg_plain_string(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key(iface, method),
         FuncType::new(engine, [obj.clone()], [string.clone()]),
-        true,
         move |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let out = op(caller, st)?;
@@ -812,7 +808,6 @@ pub(super) fn reg_plain_equals(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key(iface, "equals"),
         FuncType::new(engine, [obj.clone(), obj.clone()], [ValType::I32]),
-        true,
         move |caller, params, results| {
             let a = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let b = as_struct_val(caller, abi_arg(params, 1)?, &label)?;
@@ -835,7 +830,6 @@ pub(super) fn reg_plain_compare(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key(ctor_iface, "compare"),
         FuncType::new(engine, [obj.clone(), obj.clone()], [ValType::F64]),
-        true,
         move |caller, params, results| {
             let a = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let b = as_struct_val(caller, abi_arg(params, 1)?, &label)?;
@@ -868,7 +862,6 @@ pub(super) fn reg_plain_i32_getter(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key(iface, name),
         FuncType::new(engine, [obj.clone()], [ValType::F64]),
-        true,
         move |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             *abi_result(results, 0)? =
@@ -896,7 +889,6 @@ pub(super) fn reg_plain_time_getters(
             crate::runtime::prelude::MODULE_NAME,
             prelude_key(iface, name),
             FuncType::new(engine, [obj.clone()], [ValType::F64]),
-            true,
             move |caller, params, results| {
                 let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
                 let ns = st_i32(caller, st, ns_field, &label)?;
@@ -951,7 +943,6 @@ pub(super) fn reg_plain_date_derived_getters(
             crate::runtime::prelude::MODULE_NAME,
             prelude_key(iface, name),
             FuncType::new(engine, [obj.clone()], [ret]),
-            true,
             move |caller, params, results| {
                 let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
                 let y = i64::from(st_i32(caller, st, 1, &label)?);
@@ -1001,7 +992,6 @@ pub(super) fn reg_plain_month_code_getter(
         crate::runtime::prelude::MODULE_NAME,
         prelude_key(iface, "monthCode"),
         FuncType::new(engine, [obj.clone()], [string.clone()]),
-        true,
         move |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
             let month = st_i32(caller, st, month_field, &label)?;

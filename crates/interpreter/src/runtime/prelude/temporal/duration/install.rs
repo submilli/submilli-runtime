@@ -22,7 +22,6 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         MODULE_NAME,
         shared::prelude_key("DurationConstructor", "new"),
         FuncType::new(engine, [types.object_shape.clone()], object_result.clone()),
-        true,
         move |caller, params, results| {
             let span = shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration")?;
             *abi_result(results, 0)? = shared::make_duration(caller, &span)?;
@@ -35,7 +34,6 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         MODULE_NAME,
         shared::prelude_key("DurationConstructor", "from"),
         FuncType::new(engine, [object.clone()], object_result.clone()),
-        true,
         move |caller, params, results| {
             let span = if crate::runtime::prelude::collection::is_a(
                 caller,
@@ -69,7 +67,6 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                 [object.clone(), object.clone()],
                 object_result.clone(),
             ),
-            true,
             move |caller, params, results| {
                 let a = shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, label)?;
                 let b = shared::read_duration_like(caller, abi_arg(params, 1)?, &intr, label)?;
@@ -101,7 +98,6 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             MODULE_NAME,
             shared::prelude_key("Duration", method),
             FuncType::new(engine, [object.clone()], object_result.clone()),
-            true,
             move |caller, params, results| {
                 let span = shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, label)?;
                 *abi_result(results, 0)? = shared::make_duration(caller, &transform(span))?;
@@ -133,7 +129,6 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             MODULE_NAME,
             shared::prelude_key("Duration", field),
             FuncType::new(engine, [object.clone()], [ValType::F64]),
-            true,
             move |caller, params, results| {
                 let value =
                     shared::duration_field_from_val(caller, abi_arg(params, 0)?, index, label)?;
@@ -148,7 +143,6 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         MODULE_NAME,
         shared::prelude_key("Duration", "sign"),
         FuncType::new(engine, [object.clone()], [ValType::F64]),
-        true,
         |caller, params, results| {
             let sign =
                 shared::duration_sign_from_val(caller, abi_arg(params, 0)?, "Duration.sign")?;
@@ -161,7 +155,6 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         MODULE_NAME,
         shared::prelude_key("Duration", "blank"),
         FuncType::new(engine, [object.clone()], [ValType::I32]),
-        true,
         |caller, params, results| {
             let sign =
                 shared::duration_sign_from_val(caller, abi_arg(params, 0)?, "Duration.blank")?;
@@ -187,7 +180,6 @@ fn install_with(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmtime
             [types.object.clone(), types.object.clone()],
             [types.object.clone()],
         ),
-        true,
         move |caller, params, results| {
             let base =
                 shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration.with")?;
@@ -239,7 +231,6 @@ fn install_round_total_compare(
             [types.object.clone(), types.object.clone()],
             [types.object.clone()],
         ),
-        true,
         move |caller, params, results| {
             let span =
                 shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration.round")?;
@@ -310,7 +301,6 @@ fn install_round_total_compare(
             [types.object.clone(), types.object.clone()],
             [ValType::F64],
         ),
-        true,
         move |caller, params, results| {
             let span =
                 shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration.total")?;
@@ -351,7 +341,6 @@ fn install_round_total_compare(
             [types.object.clone(), types.object.clone(), options],
             [ValType::F64],
         ),
-        true,
         move |caller, params, results| {
             let a =
                 shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration.compare")?;
@@ -384,7 +373,6 @@ fn install_strings(
             [types.object.clone(), options],
             [types.string.clone()],
         ),
-        true,
         move |caller, params, results| {
             let span = shared::read_duration_like(
                 caller,
@@ -441,7 +429,6 @@ fn install_strings(
             [types.object.clone()],
             [types.string.clone()],
         ),
-        true,
         move |caller, params, results| {
             let span =
                 shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration.toJSON")?;

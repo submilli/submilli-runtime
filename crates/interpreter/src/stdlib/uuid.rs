@@ -3,13 +3,14 @@
 //! Pure Rust host functions registered directly under the package name; the
 //! linker resolves user imports (`submilli:uuid#v4`, …) with no Wasm module.
 
-use crate::runtime::host::{abi_arg, abi_result};
+use crate::runtime::effects;
+use crate::runtime::host::{
+    abi_arg, abi_result, intrinsic_string_type, read_string_arg, register_host_fn,
+    register_host_value_async, write_submilli_string_struct,
+};
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
-use crate::runtime::host::{
-    intrinsic_string_type, read_string_arg, register_host_fn, write_submilli_string_struct,
-};
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
 pub const MODULE_NAME: &str = "submilli:uuid";
@@ -66,29 +67,37 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     ));
 
     let gen_ty = FuncType::new(&engine, [], [string.clone()]);
-    register_host_fn(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "v4"),
         gen_ty.clone(),
-        /* deterministic = */ false,
-        |caller, _params, results| {
-            let st = write_submilli_string_struct(caller, &::uuid::Uuid::new_v4().to_string())?;
-            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
-            Ok(())
+        |caller, _params| {
+            Box::pin(async move {
+                let value = effects::execute(caller, "uuid.v4", (), |_, _, ()| {
+                    Box::pin(async { Ok(::uuid::Uuid::new_v4().to_string()) })
+                })
+                .await?;
+                let st = write_submilli_string_struct(caller, &value)?;
+                Ok(Val::AnyRef(Some(st.to_anyref())))
+            })
         },
     )?;
 
-    register_host_fn(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "v7"),
         gen_ty,
-        /* deterministic = */ false,
-        |caller, _params, results| {
-            let st = write_submilli_string_struct(caller, &::uuid::Uuid::now_v7().to_string())?;
-            *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
-            Ok(())
+        |caller, _params| {
+            Box::pin(async move {
+                let value = effects::execute(caller, "uuid.v7", (), |_, _, ()| {
+                    Box::pin(async { Ok(::uuid::Uuid::now_v7().to_string()) })
+                })
+                .await?;
+                let st = write_submilli_string_struct(caller, &value)?;
+                Ok(Val::AnyRef(Some(st.to_anyref())))
+            })
         },
     )?;
 
@@ -98,7 +107,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "validate"),
         validate_ty,
-        /* deterministic = */ true,
         |caller, params, results| {
             let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "uuid.validate")?;
             *abi_result(results, 0)? = Val::I32(i32::from(::uuid::Uuid::parse_str(&s).is_ok()));
@@ -157,7 +165,7 @@ mod tests {
             compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.security_check = recording.clone();
         let mut store = cfg.store(&engine, data).expect("store");
         let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");

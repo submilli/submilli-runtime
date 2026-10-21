@@ -7,6 +7,7 @@ use crate::application::unit_of_work::UnitOfWorkFactory;
 pub use crate::domain::idempotent_request::RecordedOutcome;
 use crate::domain::idempotent_request::{IdempotentRequest, RequestError};
 use axum::http::StatusCode;
+use interpreter::runtime::durable::RunId;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -23,7 +24,7 @@ pub enum Reservation {
     Replay(RecordedOutcome),
     /// The earlier request's run is still going, and may be waiting on the harness:
     /// answer with that run's current state. Nothing new runs.
-    Attached(String),
+    Attached(RunId),
     Refused(Refusal),
 }
 
@@ -113,7 +114,7 @@ impl Refusal {
 
 /// Runs that may suspend, by the reservation they execute under. A suspended run
 /// lives in this process's memory, so only this process can attach to it.
-type AttachedRuns = Arc<Mutex<HashMap<String, String>>>;
+type AttachedRuns = Arc<Mutex<HashMap<RunId, RunId>>>;
 
 pub(crate) struct Coordinator {
     units: Arc<dyn UnitOfWorkFactory>,
@@ -164,7 +165,7 @@ impl Coordinator {
             session,
             Some(key),
             code,
-            &uuid::Uuid::from_bytes(identity).to_string(),
+            &uuid::Uuid::from_bytes(identity).to_string().into(),
             None,
             "http_session",
         )
@@ -176,13 +177,13 @@ impl Coordinator {
         session: &str,
         key: Option<&str>,
         code: &str,
-        run_id: &str,
+        run_id: &RunId,
         principal: Option<&str>,
         entry: &str,
     ) -> Reservation {
         let fingerprint = format!("{:x}", Sha256::digest(code.as_bytes()));
         let identity = crate::domain::run::RunIdentity {
-            execution_id: Some(run_id.to_owned()),
+            execution_id: Some(run_id.clone()),
             principal: principal.map(str::to_owned),
             entry: entry.to_owned(),
             ..Default::default()
@@ -191,7 +192,7 @@ impl Coordinator {
             session.to_owned(),
             key.map(str::to_owned),
             fingerprint,
-            run_id.to_owned(),
+            run_id.clone(),
             self.generation.clone(),
             identity,
             SystemTime::now(),
@@ -255,12 +256,12 @@ impl Coordinator {
         }
     }
 
-    pub async fn claim(&self, run_id: &str) -> Result<(), RunFailure> {
+    pub async fn claim(&self, run_id: &RunId) -> Result<(), RunFailure> {
         crate::application::sessions::runs::claim_run(self.units.as_ref(), run_id, &self.generation)
             .await
     }
 
-    fn attached_run(&self, reservation_id: &str) -> Option<String> {
+    fn attached_run(&self, reservation_id: &str) -> Option<RunId> {
         lock_attached(&self.attached).get(reservation_id).cloned()
     }
 
@@ -395,8 +396,8 @@ impl<'a> LastRunFiles<'a> {
 }
 
 fn lock_attached(
-    attached: &Mutex<HashMap<String, String>>,
-) -> std::sync::MutexGuard<'_, HashMap<String, String>> {
+    attached: &Mutex<HashMap<RunId, RunId>>,
+) -> std::sync::MutexGuard<'_, HashMap<RunId, RunId>> {
     // A poisoned map may contain a partial update. AGENTS.md's poisoned-lock
     // exception accepts a panic instead of recovery.
     attached.lock().expect("attached runs poisoned")
@@ -417,7 +418,7 @@ fn database_has_closed(error: &RunFailure) -> bool {
 pub struct ReservationGuard {
     sender: Option<oneshot::Sender<(RunResolution, Option<Vec<u8>>)>>,
     completion: Option<oneshot::Receiver<()>>,
-    reservation_id: String,
+    reservation_id: RunId,
     attached: AttachedRuns,
     /// The run's last-run JSON, recorded with its end.
     last_run: Option<Vec<u8>>,
@@ -425,7 +426,7 @@ pub struct ReservationGuard {
 impl ReservationGuard {
     /// Name the run executing under this reservation, so a duplicate request is
     /// answered with that run's state instead of waiting for it to finish.
-    pub fn attach_run(&self, run_id: &str) {
+    pub fn attach_run(&self, run_id: &RunId) {
         lock_attached(&self.attached).insert(self.reservation_id.clone(), run_id.to_owned());
     }
 
@@ -714,14 +715,14 @@ mod tests {
     async fn a_duplicate_of_a_run_that_may_suspend_attaches_to_it_at_once() {
         let (_, _, coordinator) = fixture().await;
         let guard = proceed(coordinator.reserve("session", "key", "code").await);
-        guard.attach_run("run-1");
+        guard.attach_run(&"run-1".into());
         let attached = tokio::time::timeout(
             Duration::from_secs(1),
             coordinator.reserve("session", "key", "code"),
         )
         .await
         .expect("answered without waiting for the run");
-        assert!(matches!(attached, Reservation::Attached(run) if run == "run-1"));
+        assert!(matches!(attached, Reservation::Attached(run) if run.as_str() == "run-1"));
         guard.complete(200, "{}".into()).await;
         match coordinator.reserve("session", "key", "code").await {
             Reservation::Replay(outcome) => assert_eq!(outcome.body, "{}"),

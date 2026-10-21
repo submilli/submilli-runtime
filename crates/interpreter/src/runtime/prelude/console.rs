@@ -37,7 +37,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         log_key(),
         FuncType::new(&engine, [first_ty, rest_ty], []),
-        false,
         |caller, params, _results| {
             Box::pin(async move {
                 let [first, rest] = params else {
@@ -49,28 +48,22 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     units.extend(to_string_units(caller, &elem).await?);
                 }
                 fuel::charge(&mut *caller, fuel::SCAN, units.len() as u64)?;
-                let line = String::from_utf16_lossy(&units);
+                let mut line = String::from_utf16_lossy(&units);
+                line.push('\n');
                 let mut output = CountedWriter {
                     sink: &mut caller.data_mut().console,
                     written: 0,
                 };
-                let result = writeln!(output, "{line}");
+                let result = output.write_all(line.as_bytes());
                 let written = output.written;
                 fuel::settle(&mut *caller, fuel::IO, written)?;
-                fuel::settle_result(caller, |caller| {
-                    result.map_err(|error| {
-                        let error = match error.kind() {
-                            std::io::ErrorKind::FileTooLarge => {
-                                crate::runtime::host::range_error(error.to_string())
-                            }
-                            std::io::ErrorKind::OutOfMemory => {
-                                crate::runtime::host::fatal_host_error(error)
-                            }
-                            _ => fatal_host_error(error),
-                        };
-                        crate::runtime::host::throw_host_error(caller, error)
-                    })
-                })
+                match result {
+                    Ok(()) => Ok(()),
+                    Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
+                        Err(crate::runtime::host::range_error(error.to_string()))
+                    }
+                    Err(error) => Err(fatal_host_error(error)),
+                }
             })
         },
     )

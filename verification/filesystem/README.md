@@ -122,3 +122,27 @@ Plain byte writes now use a [separate protocol](writes/README.md): repeat atomic
 replacement while the outer effect is pending, then let execution history skip
 the completed effect. No local write journal or state machine is required. The
 namespace replacement model continues to cover writer close.
+
+## Native outcome history composition
+
+SUB-1837 supplies each filesystem call with a stable run/sequence EffectId. A
+committed native outcome skips the filesystem call; an absent outcome invokes
+it again with reconstructed arguments and the same ID. There is no outer durable
+intent row. Filesystem journals and reader/writer/listing cursors remain independent
+of `durable_outcomes`. Restored externrefs contain directly deserialized reader/writer/listing state;
+local handles are skipped by serialization. Resource values never retain a backend
+or unit-of-work factory. The active filesystem receives them for each operation.
+Durable calls currently reopen native files as needed; retaining them between calls
+is SUB-1883. Default resources keep their existing local handles. Closing/finalizing a local handle does not erase
+progress needed by a paused run. The execution-history integration test interrupts
+24 resource boundaries and checks replay against the same SQLite database.
+
+These models establish filesystem idempotency under their single-writer assumption.
+The execution model establishes outcome-before-consumption separately. Neither is
+a formal refinement proof of Rust or a proof of multi-node composition.
+
+This API change preserves the models' separation between persistent resource state
+and disposable native state. It adds no new protocol transition: serialization and
+deserialization replace descriptor conversion/restoration, and backend dependencies
+are supplied by the caller. Existing skipped-read, progress-before-history,
+writer-close and process-death tests now use the resource values directly.

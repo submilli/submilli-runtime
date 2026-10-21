@@ -501,7 +501,10 @@ mod tests {
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().unwrap();
         let mut store = cfg
-            .store_async(&engine, StoreData::with_vfs(Vfs::tempdir().unwrap()))
+            .store_async(
+                &engine,
+                StoreData::with_vfs("test-run".into(), Vfs::tempdir().unwrap()),
+            )
             .unwrap();
         let mut linker = Linker::new(&engine);
         install_runtime_async(&mut linker, &mut store)
@@ -513,7 +516,6 @@ mod tests {
             "test:cursor",
             name.clone(),
             FuncType::new(&engine, [wasmtime::ValType::I32], []),
-            true,
             |_, params, _| {
                 let failure = match params[0].i32().unwrap() {
                     0 => ciphertext_len(usize::MAX).map(|_| ()),
