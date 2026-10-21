@@ -231,33 +231,31 @@ impl Inferer<'_> {
             source: (source_label.to_string(), source_name.to_string()),
             direct: matches!(origin, ExportOrigin::Direct(_)),
         };
-        let namespaces = [
+        let namespaces: Vec<ExportNamespace> = [
             (ExportNamespace::Value, value.is_some()),
             (ExportNamespace::Type, ty.is_some()),
-        ];
-        let mut fresh = Vec::new();
-        for (namespace, present) in namespaces {
-            if !present {
-                continue;
-            }
-            match self
-                .current_export_seen
-                .get(&(namespace, public_name.to_string()))
-            {
-                Some(prev) if prev.is_same_export(&exported) => {}
-                Some(prev) => {
-                    self.diagnostics.push(crate::Diagnostic {
-                        severity: crate::Severity::Error,
-                        span,
-                        message: format!("duplicate public export `{public_name}`"),
-                        help: Vec::new(),
-                        notes: vec![(prev.span, "previously exported here".to_string())],
-                    });
-                    return;
-                }
-                None => fresh.push(namespace),
-            }
+        ]
+        .into_iter()
+        .filter_map(|(namespace, present)| present.then_some(namespace))
+        .collect();
+        if let Some(prev) = self.conflicting_export(public_name, &exported, origin, &namespaces) {
+            self.diagnostics.push(crate::Diagnostic {
+                severity: crate::Severity::Error,
+                span,
+                message: format!("duplicate public export `{public_name}`"),
+                help: Vec::new(),
+                notes: vec![(prev, "previously exported here".to_string())],
+            });
+            return;
         }
+        let fresh: Vec<ExportNamespace> = namespaces
+            .into_iter()
+            .filter(|namespace| {
+                !self
+                    .current_export_seen
+                    .contains_key(&(*namespace, public_name.to_string()))
+            })
+            .collect();
 
         for namespace in fresh {
             self.current_export_seen
@@ -275,6 +273,53 @@ impl Inferer<'_> {
                 }
             }
         }
+    }
+
+    /// Where `public_name` was already exported in a way `exported`, coming
+    /// from `origin` with the `namespaces` it exports, clashes with, as tsc
+    /// decides it. Two specifiers of one name clash (TS2300), and so does a
+    /// specifier with a direct export of a value (TS2323) or with direct
+    /// exports covering all it exports (TS2484). A specifier that adds a value
+    /// to a directly exported type is one export of both, and the same
+    /// declaration exported directly twice is one export.
+    fn conflicting_export(
+        &self,
+        public_name: &str,
+        exported: &ExportedName,
+        origin: ExportOrigin,
+        namespaces: &[ExportNamespace],
+    ) -> Option<crate::Span> {
+        let previous: Vec<(ExportNamespace, &ExportedName)> =
+            [ExportNamespace::Value, ExportNamespace::Type]
+                .into_iter()
+                .filter_map(|namespace| {
+                    self.current_export_seen
+                        .get(&(namespace, public_name.to_string()))
+                        .map(|prev| (namespace, prev))
+                })
+                .collect();
+        let clash = match origin {
+            ExportOrigin::Specifier => previous
+                .iter()
+                .find(|(namespace, prev)| !prev.direct || *namespace == ExportNamespace::Value)
+                .or_else(|| {
+                    namespaces
+                        .iter()
+                        .all(|namespace| previous.iter().any(|(seen, _)| seen == namespace))
+                        .then(|| previous.first())
+                        .flatten()
+                }),
+            ExportOrigin::Direct(own) => previous.iter().find(|(namespace, prev)| {
+                if prev.direct {
+                    return *namespace == own && prev.source != exported.source;
+                }
+                let specifier_covers_other = previous
+                    .iter()
+                    .any(|(other, seen)| *other != own && seen.span == prev.span);
+                own == ExportNamespace::Value || !specifier_covers_other
+            }),
+        };
+        clash.map(|(_, prev)| prev.span)
     }
 
     fn export_value(&mut self, sym: &crate::ValueSymbol, public_name: &str, span: crate::Span) {
@@ -377,14 +422,6 @@ pub(in crate::typechecker) struct ExportedName {
     /// The exporting module and the name it exports from.
     source: (String, String),
     direct: bool,
-}
-
-impl ExportedName {
-    /// `export type A = …; export { A };` exports the alias twice, which tsc
-    /// accepts; two specifiers of one name are a duplicate, as in tsc.
-    fn is_same_export(&self, other: &Self) -> bool {
-        self.source == other.source && (self.direct || other.direct)
-    }
 }
 
 /// The declared name of an exportable top-level declaration, or `None` for any

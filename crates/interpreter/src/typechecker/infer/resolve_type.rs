@@ -918,9 +918,8 @@ impl<'a> Inferer<'a> {
     }
 
     /// One field read for a `typeof a.b` path. Object types carry their fields
-    /// directly; an interface reference resolves through its declaring symbol.
-    /// The read type of `field` on `ty`, an interface's instantiated with the
-    /// type arguments `ty` gives it: `typeof x.p` on `x: I<"A">` is `"A"`.
+    /// directly; an interface's is instantiated with the type arguments `ty`
+    /// gives it: `typeof x.p` on `x: I<"A">` is `"A"`.
     fn field_type_of(
         &self,
         ty: &Type,

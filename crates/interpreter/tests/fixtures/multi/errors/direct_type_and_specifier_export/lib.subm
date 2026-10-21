@@ -1,0 +1,9 @@
+// expect-error: duplicate public export `Point`
+// A specifier that adds nothing to a directly exported type exports it twice,
+// as TypeScript reports it (TS2484).
+
+export interface Point {
+  x: number;
+}
+
+export { Point };

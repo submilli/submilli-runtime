@@ -10,6 +10,14 @@ function main(): void {
   })("abc");
   assert(length === 3, "a function expression");
 
+  const named = (function measure(s) {
+    return s.length;
+  })("abcd");
+  assert(named === 4, "a named function expression");
+
+  const deep = ((a) => a)(((b) => b)(((c) => c)(1)));
+  assert(deep === 1, "nested in arguments");
+
   const r = (({ r = 17 } = { r: 18 }) => r)({ r: 19 });
   assert(r === 19, "the argument, not the default");
 

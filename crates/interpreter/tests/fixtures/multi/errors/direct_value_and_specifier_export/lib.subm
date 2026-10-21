@@ -1,0 +1,10 @@
+// expect-error: duplicate public export `one`
+// A function exported directly and again by a specifier is exported twice, as
+// TypeScript reports it (TS2323).
+
+/** One. */
+export function one(): number {
+  return 1;
+}
+
+export { one };

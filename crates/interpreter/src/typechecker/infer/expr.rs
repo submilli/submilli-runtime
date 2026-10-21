@@ -7734,10 +7734,6 @@ impl Inferer<'_> {
         members: Vec<crate::ObjectLiteralMember>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        let (kind, ty) = self.infer_object_literal_expr(literal, members.clone(), None, span)?;
-        let Type::Object { index, mut fields } = ty.clone() else {
-            return Ok((kind, ty));
-        };
         let values: BTreeMap<String, ExprId> = members
             .iter()
             .filter_map(|member| match member {
@@ -7747,6 +7743,10 @@ impl Inferer<'_> {
                 _ => None,
             })
             .collect();
+        let (kind, ty) = self.infer_object_literal_expr(literal, members, None, span)?;
+        let Type::Object { index, mut fields } = ty.clone() else {
+            return Ok((kind, ty));
+        };
         let defaulted = self
             .ast
             .object_pattern_sources
@@ -7760,10 +7760,7 @@ impl Inferer<'_> {
             field.optional = true;
             if let Some(&value) = values.get(&name) {
                 let widened = field.ty.clone();
-                let kept = self.keep_default_context_literals(literal, default, value, widened)?;
-                if let Some(field) = fields.get_mut(&name) {
-                    field.ty = kept;
-                }
+                field.ty = self.keep_default_context_literals(literal, default, value, widened)?;
             }
         }
         let target = Type::Object { index, fields };
@@ -9579,6 +9576,7 @@ impl Inferer<'_> {
             _ => None,
         };
 
+        let invoked_types = self.take_invoked_parameter_types(span);
         self.scopes.push();
         let mut typed_params: Vec<TypedParam> = Vec::with_capacity(params.len());
         let mut params_reported = false;
@@ -9639,7 +9637,7 @@ impl Inferer<'_> {
                         Type::Error
                     }
                 }
-                (None, None) if let Some(ty) = self.invoked_parameter_type(span, i) => {
+                (None, None) if let Some(Some(ty)) = invoked_types.get(i).cloned() => {
                     self.parameters_typed_by_arguments.insert(p.name.span);
                     ty
                 }
@@ -13199,8 +13197,6 @@ pub(super) fn enum_variant_help<'a>(
     }
 }
 
-/// The member a string-literal key names: `o["content-type"]` reads field
-/// `content-type` wherever `o.name` would read `name`. `None` for any other key.
 /// `ty`, the widened type of `value`, with the literal types `context` admits
 /// put back: a literal keeps its own type where the context has a literal of
 /// its kind, and an object literal's fields recurse into the context's.
@@ -13268,6 +13264,8 @@ fn array_index_key(key: &str) -> Option<usize> {
     (index.to_string() == key).then_some(index)
 }
 
+/// The member a string-literal key names: `o["content-type"]` reads field
+/// `content-type` wherever `o.name` would read `name`. `None` for any other key.
 pub(super) fn string_key_name(
     ast: &crate::Ast,
     key: ExprId,

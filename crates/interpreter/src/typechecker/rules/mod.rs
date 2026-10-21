@@ -95,9 +95,8 @@ pub(in crate::typechecker) fn check_package<'a>(
         fatal: Some(fatal),
     })?;
     let exports = &typed_ast.exports;
-    let modules: Vec<PackageModuleSurface<'a>> = modules.into_iter().collect();
     let module_surfaces: Vec<_> = modules
-        .iter()
+        .into_iter()
         .map(|module| (module.symbols, module.exports))
         .collect();
     exported_signature_types::run_modules(package_name, "module", &module_surfaces, &mut diags);

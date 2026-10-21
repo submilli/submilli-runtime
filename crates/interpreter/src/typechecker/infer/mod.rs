@@ -172,6 +172,7 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         soft_context_function_spans: None,
         invoked_return_hint: None,
         invoked_parameter_types: None,
+        invoked_argument_memo: None,
         parameters_typed_by_arguments: Default::default(),
         cast_operand: None,
         invoked_body_exit: None,
@@ -470,6 +471,7 @@ pub fn infer_package_checked<'a>(
         soft_context_function_spans: None,
         invoked_return_hint: None,
         invoked_parameter_types: None,
+        invoked_argument_memo: None,
         parameters_typed_by_arguments: Default::default(),
         cast_operand: None,
         invoked_body_exit: None,
@@ -837,8 +839,12 @@ pub(super) struct Inferer<'a> {
     invoked_return_hint: Option<Type>,
     /// The span of the function literal a call is about to invoke in place
     /// with arguments, and the type each argument gives its unannotated
-    /// parameter there (see [`Inferer::invoked_argument_types`]).
+    /// parameter there (see `Inferer::invoked_argument_types`).
     invoked_parameter_types: Option<(Span, Vec<Option<Type>>)>,
+    /// The type each argument gave its parameter that way, while the
+    /// outermost such call is inferred (see
+    /// `Inferer::infer_call_typing_invoked_parameters`).
+    invoked_argument_memo: Option<std::collections::HashMap<crate::ExprId, Option<Type>>>,
     /// The name spans of the parameters typed from their arguments that way,
     /// whose defaults are typed against them.
     parameters_typed_by_arguments: std::collections::HashSet<Span>,

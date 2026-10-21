@@ -30,15 +30,9 @@ pub(super) fn immediately_invoked_arrow(
     if !args.is_empty() {
         return Ok(None);
     }
-    invoked_function(ast, callee)
-}
-
-/// The arrow `callee` is, through parentheses: an arrow, or the arrow of an
-/// anonymous function expression.
-fn invoked_function(ast: &Ast, callee: ExprId) -> Result<Option<ExprId>, CompilerFailure> {
     Ok(
         match &ast.try_expr(callee).map_err(super::arena_failure)?.kind {
-            ExprKind::Paren(inner) => invoked_function(ast, *inner)?,
+            ExprKind::Paren(inner) => immediately_invoked_arrow(ast, *inner, args)?,
             ExprKind::FunctionExpression {
                 name: None,
                 function,
@@ -128,7 +122,8 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(crate::TypedExprKind, Type), CompilerFailure> {
         let Some(arrow) = immediately_invoked_arrow(self.ast, callee, &args)? else {
-            return self.infer_call_typing_invoked_parameters(callee, type_args, args, expected, span);
+            return self
+                .infer_call_typing_invoked_parameters(callee, type_args, args, expected, span);
         };
         let arrow_span = self.ast.try_expr(arrow).map_err(super::arena_failure)?.span;
         self.immediately_invoked = Some(arrow_span);
@@ -155,7 +150,7 @@ impl Inferer<'_> {
         expected: Option<&Type>,
         span: Span,
     ) -> Result<(crate::TypedExprKind, Type), CompilerFailure> {
-        let Some(arrow) = invoked_function(self.ast, callee)? else {
+        let Some(arrow) = super::expr::function_literal(self.ast, callee)? else {
             return self.infer_call(callee, type_args, args, expected, span);
         };
         let arrow_expr = self.ast.try_expr(arrow).map_err(super::arena_failure)?;
@@ -164,12 +159,26 @@ impl Inferer<'_> {
             return self.infer_call(callee, type_args, args, expected, span);
         };
         let params = params.clone();
-        let types = self.invoked_argument_types(&params, &args)?;
-        if types.iter().any(Option::is_some) {
-            self.invoked_parameter_types = Some((arrow_span, types));
+        // Arguments that hold calls like this one are inferred both here and
+        // in the call; remembering each argument's type until the outermost
+        // such call is inferred keeps nested ones from doubling the work.
+        let outermost = self.invoked_argument_memo.is_none();
+        if outermost {
+            self.invoked_argument_memo = Some(Default::default());
         }
-        let inferred = self.infer_call(callee, type_args, args, expected, span);
-        self.invoked_parameter_types = None;
+        let types = self.invoked_argument_types(&params, &args);
+        let inferred = types.and_then(|types| {
+            let enclosing = self.invoked_parameter_types.take();
+            if types.iter().any(Option::is_some) {
+                self.invoked_parameter_types = Some((arrow_span, types));
+            }
+            let inferred = self.infer_call(callee, type_args, args, expected, span);
+            self.invoked_parameter_types = enclosing;
+            inferred
+        });
+        if outermost {
+            self.invoked_argument_memo = None;
+        }
         inferred
     }
 
@@ -190,7 +199,15 @@ impl Inferer<'_> {
             if param.ty.is_some() || self.is_context_sensitive_function(arg)? {
                 continue;
             }
-            types[index] = self.with_parameter_type_trial(|this| {
+            if let Some(known) = self
+                .invoked_argument_memo
+                .as_ref()
+                .and_then(|memo| memo.get(&arg))
+            {
+                types[index] = known.clone();
+                continue;
+            }
+            let ty = self.with_parameter_type_trial(|this| {
                 let errors_before = this.error_count();
                 let (typed, ty) = this.infer_expr(arg, None)?;
                 if this.error_count() != errors_before {
@@ -198,15 +215,25 @@ impl Inferer<'_> {
                 }
                 this.widen_fresh_literals(typed, &ty).map(Some)
             })?;
+            if let Some(memo) = self.invoked_argument_memo.as_mut() {
+                memo.insert(arg, ty.clone());
+            }
+            types[index] = ty;
         }
         Ok(types)
     }
 
-    /// The type the argument at `index` gives the unannotated parameter
-    /// there of the function literal at `span`, invoked in place.
-    pub(super) fn invoked_parameter_type(&self, span: Span, index: usize) -> Option<Type> {
-        let (invoked, types) = self.invoked_parameter_types.as_ref()?;
-        (*invoked == span).then(|| types.get(index).cloned().flatten())?
+    /// The types the arguments give the unannotated parameters of the
+    /// function literal at `span`, when a call invokes it in place, by
+    /// position. Taken once, so a function literal inside it sees none.
+    pub(super) fn take_invoked_parameter_types(&mut self, span: Span) -> Vec<Option<Type>> {
+        match self.invoked_parameter_types.take() {
+            Some((invoked, types)) if invoked == span => types,
+            other => {
+                self.invoked_parameter_types = other;
+                Vec::new()
+            }
+        }
     }
 
     /// What the immediately-invoked body being left hands to the code after

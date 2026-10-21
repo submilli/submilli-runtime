@@ -3192,7 +3192,8 @@ fn pins_type_parameters(want: &Type) -> bool {
     // `T | null` for `orNull(first(1, 2))`, or `a[]` for
     // `f2(Array.from([]), …)`) says nothing yet, and binding to it would
     // leak it into this call's result.
-    !matches!(want.peel(), Type::Error | Type::Unknown) && !super::expr::type_contains_type_var(want)
+    !matches!(want.peel(), Type::Error | Type::Unknown)
+        && !super::expr::type_contains_type_var(want)
 }
 
 /// Bind every type parameter inference left unsolved to `fallback`, so the call

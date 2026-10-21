@@ -1,0 +1,15 @@
+// expect-error: duplicate public export `Thing`
+// Two specifiers of one name clash, even naming a value and a type, as in
+// TypeScript (TS2300).
+
+/** Makes one. */
+function make(): number {
+  return 1;
+}
+
+interface Shape {
+  n: number;
+}
+
+export { make as Thing };
+export { Shape as Thing };

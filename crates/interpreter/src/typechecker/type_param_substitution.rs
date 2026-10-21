@@ -321,7 +321,11 @@ impl TypeParamSubstitution {
     /// `never` candidate is no hint for a later argument, which takes the
     /// binding instead (tsc drops `never` from the candidates).
     pub fn without_never_bindings(&self) -> Option<TypeParamSubstitution> {
-        if !self.bindings.values().any(|ty| matches!(ty.peel(), Type::Never)) {
+        if !self
+            .bindings
+            .values()
+            .any(|ty| matches!(ty.peel(), Type::Never))
+        {
             return None;
         }
         let mut loose = self.clone();
@@ -1289,8 +1293,12 @@ impl<'a> Unifier<'a> {
         if assignable(bound, arg, types) {
             return Some(unresolved_arg.clone());
         }
-        let structured =
-            |ty: &Type| matches!(ty.peel(), Type::Array(_) | Type::Object { .. } | Type::Tuple(_));
+        let structured = |ty: &Type| {
+            matches!(
+                ty.peel(),
+                Type::Array(_) | Type::Object { .. } | Type::Tuple(_)
+            )
+        };
         if (self.combines_literals && self.sub.literal_candidates.contains(name))
             || (self.unions_member_candidates && structured(bound) && structured(arg))
         {
@@ -1318,8 +1326,7 @@ impl<'a> Unifier<'a> {
             (Some(only), None) | (None, Some(only)) => only,
             (Some(bound), Some(arg)) if assignable(&arg, &bound, types) => bound,
             (Some(bound), Some(arg)) if assignable(&bound, &arg, types) => arg,
-            (Some(bound), Some(arg)) if share_literal_base(&bound, &arg) =>
-            {
+            (Some(bound), Some(arg)) if share_literal_base(&bound, &arg) => {
                 Type::union(vec![bound, arg])
             }
             _ => return None,
