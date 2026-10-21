@@ -85,8 +85,11 @@ impl Inferer<'_> {
         };
         // An unannotated parameter's type is its default's own, which an object
         // pattern shapes; typing the default against it again would lose that.
-        let shaped_by_pattern =
-            param.ty.is_none() && self.ast.object_pattern_sources.contains_key(&default);
+        let shaped_by_pattern = param.ty.is_none()
+            && self
+                .ast
+                .object_pattern_sources
+                .contains_key(&super::expr::peel_parens(self.ast, default)?);
         let expected = (!shaped_by_pattern).then_some(&declared);
         let (default_value, default_ty) = self.infer_expr(default, expected)?;
         let default_span = self.ast.try_expr(default).map_err(arena_failure)?.span;
@@ -349,7 +352,7 @@ impl Inferer<'_> {
     /// Keep speculative flow and parameter metadata out of the ordered pass.
     /// Arena work and type-budget charges remain accounted for; nested trials
     /// are disabled so nested default expressions do not multiply the work.
-    fn with_parameter_type_trial<T>(
+    pub(super) fn with_parameter_type_trial<T>(
         &mut self,
         infer: impl FnOnce(&mut Self) -> Result<T, CompilerFailure>,
     ) -> Result<T, CompilerFailure> {

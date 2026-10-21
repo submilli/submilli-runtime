@@ -7595,10 +7595,7 @@ impl Inferer<'_> {
             element_types.push(self.widen_fresh_literals(typed_id, &ty)?);
             typed_elements.push(typed_id);
         }
-        let padding = self.tuple_pattern_padding(literal)?;
-        let mut tuple = crate::types::TupleType::from(element_types.clone());
-        tuple.optional = padding.len();
-        tuple.elements.extend(padding);
+        let tuple = crate::types::TupleType::from(element_types.clone());
         Ok((
             TypedExprKind::TupleLiteral {
                 elements: typed_elements,
@@ -7608,22 +7605,71 @@ impl Inferer<'_> {
         ))
     }
 
+    /// The type an unannotated parameter takes from its `default`: the
+    /// default's type widened, padded as TypeScript pads it from the
+    /// parameter's pattern, so a caller may pass the slots and properties the
+    /// pattern gives defaults that the default lacks. The default's own type
+    /// stays unpadded.
+    pub(super) fn parameter_default_type(
+        &mut self,
+        default: ExprId,
+    ) -> Result<Type, CompilerFailure> {
+        let ty = self.infer_expr(default, None)?.1.widen_literal();
+        let literal = peel_parens(self.ast, default)?;
+        Ok(match ty {
+            Type::Tuple(mut tuple) => {
+                let padding = self.tuple_pattern_padding(literal)?;
+                tuple.optional += padding.len();
+                tuple.elements.extend(padding);
+                Type::Tuple(tuple)
+            }
+            Type::Object { index, mut fields } => {
+                for (name, ty) in self.object_pattern_padding(literal)? {
+                    fields
+                        .entry(name)
+                        .or_insert_with(|| crate::ObjectField::optional(ty));
+                }
+                Type::Object { index, fields }
+            }
+            ty => ty,
+        })
+    }
+
     /// The optional elements a parameter's tuple default gains for the
-    /// pattern's defaulted slots past its end, each typed as its default
-    /// widened, or `undefined`. Only literal defaults are typed here, before
-    /// the pattern infers them; with any other, the tuple keeps its length.
-    fn tuple_pattern_padding(&self, literal: ExprId) -> Result<Vec<Type>, CompilerFailure> {
-        let Some(defaults) = self.ast.tuple_pattern_pad_defaults.get(&literal) else {
+    /// pattern's slots past its end: each defaulted slot typed as its default
+    /// widened, or `undefined`, and a hole `unknown`, since it reads nothing.
+    /// With a default that can't be typed before the pattern binds, the tuple
+    /// keeps its length.
+    fn tuple_pattern_padding(&mut self, literal: ExprId) -> Result<Vec<Type>, CompilerFailure> {
+        let Some(defaults) = self.ast.tuple_pattern_pad_defaults.get(&literal).cloned() else {
             return Ok(Vec::new());
         };
         let mut padding = Vec::with_capacity(defaults.len());
-        for &default in defaults {
-            let Some(ty) = super::forward_globals::stated_literal_type(self.ast, default)? else {
+        for default in defaults {
+            let Some(default) = default else {
+                padding.push(Type::Unknown);
+                continue;
+            };
+            let Some(ty) = self.pattern_default_type(default)? else {
                 return Ok(Vec::new());
             };
-            padding.push(Type::union(vec![ty.widen_literal(), Type::Undefined]));
+            padding.push(Type::union(vec![ty, Type::Undefined]));
         }
         Ok(padding)
+    }
+
+    /// The widened type of a pattern default, inferred before the pattern
+    /// binds its names. A default that reads one of them, or is otherwise in
+    /// error there, has none; the pattern reports its errors when it infers it.
+    fn pattern_default_type(&mut self, default: ExprId) -> Result<Option<Type>, CompilerFailure> {
+        if let Some(ty) = super::forward_globals::stated_literal_type(self.ast, default)? {
+            return Ok(Some(ty.widen_literal()));
+        }
+        self.with_parameter_type_trial(|this| {
+            let errors_before = this.error_count();
+            let (_, ty) = this.infer_expr(default, None)?;
+            Ok((this.error_count() == errors_before).then(|| ty.widen_literal()))
+        })
     }
 
     /// An object literal an object pattern takes apart, typed as TypeScript
@@ -7660,6 +7706,27 @@ impl Inferer<'_> {
             },
             target,
         ))
+    }
+
+    /// The optional properties a parameter's object default gains for the
+    /// pattern's defaulted properties it lacks, each typed as its default
+    /// widened. With a default that can't be typed before the pattern binds,
+    /// the object gains none.
+    fn object_pattern_padding(
+        &mut self,
+        literal: ExprId,
+    ) -> Result<Vec<(String, Type)>, CompilerFailure> {
+        let Some(defaults) = self.ast.object_pattern_pad_defaults.get(&literal).cloned() else {
+            return Ok(Vec::new());
+        };
+        let mut padding = Vec::with_capacity(defaults.len());
+        for (name, default) in defaults {
+            let Some(ty) = self.pattern_default_type(default)? else {
+                return Ok(Vec::new());
+            };
+            padding.push((name, ty));
+        }
+        Ok(padding)
     }
 
     /// array-literal expression interpreted as a tuple. Caller
@@ -9506,7 +9573,7 @@ impl Inferer<'_> {
                     let default = p.default.ok_or_else(|| {
                         super::inference_failure("default parameter lost its initializer")
                     })?;
-                    self.infer_expr(default, None)?.1.widen_literal()
+                    self.parameter_default_type(default)?
                 }
                 (None, None) => {
                     self.error_with_help(

@@ -887,9 +887,15 @@ pub struct Ast {
     /// than the literal is a compile error (populated by `lower_patterns`).
     pub tuple_pattern_sources: std::collections::BTreeSet<ExprId>,
     /// For a parameter's tuple literal default shorter than its pattern, the
-    /// defaults of the slots past its end. TypeScript pads the default's type
-    /// with an optional element for each, so a caller may pass them.
-    pub tuple_pattern_pad_defaults: std::collections::BTreeMap<ExprId, Vec<ExprId>>,
+    /// defaults of the slots past its end (`None` for a hole). TypeScript pads
+    /// the default's type with an optional element for each, so a caller may
+    /// pass them.
+    pub tuple_pattern_pad_defaults: std::collections::BTreeMap<ExprId, Vec<Option<ExprId>>>,
+    /// For a parameter's object literal default, the properties its pattern
+    /// gives defaults that the literal lacks, with those defaults:
+    /// `{ a = 1 } = {}`. TypeScript adds each to the default's type as an
+    /// optional property, so a caller may pass it.
+    pub object_pattern_pad_defaults: std::collections::BTreeMap<ExprId, Vec<(String, ExprId)>>,
     /// Unannotated object literals an object pattern takes apart, with the
     /// properties the pattern gives defaults: `{ a, b = 0 } = { a: 1, b: 2 }`.
     /// TypeScript types such a literal from the pattern, so those properties

@@ -594,10 +594,24 @@ impl LowerCtx {
                 (None, Some(default)) => mark_literal_source(ast, &pattern, default)?,
                 _ => None,
             };
-            if let (Some(LiteralSource::Tuple(len)), Some(default)) = (literal, param.default)
-                && let Some(pad_defaults) = defaults_past_end(&pattern, len)
-            {
-                ast.tuple_pattern_pad_defaults.insert(default, pad_defaults);
+            if let Some(default) = param.default {
+                let literal_id = peel_parens(ast, default)?;
+                match &literal {
+                    Some(LiteralSource::Tuple(len)) => {
+                        if let Some(pad_defaults) = defaults_past_end(&pattern, *len) {
+                            ast.tuple_pattern_pad_defaults
+                                .insert(literal_id, pad_defaults);
+                        }
+                    }
+                    Some(LiteralSource::Object(names)) => {
+                        let pad_defaults = defaults_absent_from(&pattern, names);
+                        if !pad_defaults.is_empty() {
+                            ast.object_pattern_pad_defaults
+                                .insert(literal_id, pad_defaults);
+                        }
+                    }
+                    None => {}
+                }
             }
             let statements =
                 self.emit_decompose(ast, pattern, fresh, root, /*doc=*/ None, None)?;
@@ -899,6 +913,7 @@ fn mark_literal_source(
     binding: &Binding,
     value: ExprId,
 ) -> Result<Option<LiteralSource>, CompilerFailure> {
+    let value = peel_parens(ast, value)?;
     if let Some(len) = tuple_source_len(ast, binding, value)? {
         ast.tuple_pattern_sources.insert(value);
         return Ok(Some(LiteralSource::Tuple(len)));
@@ -938,20 +953,52 @@ pub(crate) const OBJECT_PROTOTYPE_MEMBERS: &[&str] = &[
 
 /// The defaults of an array pattern's slots from `len` on, when each is a
 /// named slot with a default.
-fn defaults_past_end(binding: &Binding, len: usize) -> Option<Vec<ExprId>> {
+fn defaults_past_end(binding: &Binding, len: usize) -> Option<Vec<Option<ExprId>>> {
     let Binding::Array {
         elems, defaults, ..
     } = binding
     else {
         return None;
     };
-    let past: Vec<ExprId> = elems
+    // A hole reads nothing, so it pads with no default. A named slot without a
+    // default leaves the tuple as it is: reading past its end is an error.
+    let past: Vec<Option<ExprId>> = elems
         .iter()
         .zip(defaults)
         .skip(len)
-        .map(|(slot, default)| slot.is_some().then_some(*default).flatten())
+        .map(|(slot, default)| match slot {
+            None => Some(None),
+            Some(_) => default.map(Some),
+        })
         .collect::<Option<_>>()?;
-    (!past.is_empty()).then_some(past)
+    past.iter().any(Option::is_some).then_some(past)
+}
+
+/// The properties an object pattern gives defaults that a literal with
+/// `names` lacks and doesn't inherit, with their defaults.
+fn defaults_absent_from(binding: &Binding, names: &BTreeSet<String>) -> Vec<(String, ExprId)> {
+    let Binding::Object { fields, .. } = binding else {
+        return Vec::new();
+    };
+    fields
+        .iter()
+        .filter(|field| {
+            !names.contains(&field.source.name)
+                && !OBJECT_PROTOTYPE_MEMBERS.contains(&field.source.name.as_str())
+        })
+        .filter_map(|field| Some((field.source.name.clone(), field.default?)))
+        .collect()
+}
+
+fn peel_parens(ast: &Ast, mut value: ExprId) -> Result<ExprId, CompilerFailure> {
+    while let ExprKind::Paren(inner) = &ast
+        .try_expr(value)
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+        .kind
+    {
+        value = *inner;
+    }
+    Ok(value)
 }
 
 /// An array literal the pattern may take apart as one operand of `value`, a
