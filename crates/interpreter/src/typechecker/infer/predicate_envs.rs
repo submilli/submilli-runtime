@@ -998,23 +998,6 @@ impl<'a> Inferer<'a> {
             crate::compiler_error::CompilerFailure,
         >,
     ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
-        let mut env = self.chain_reached_env(chain_id, result_facts, narrow_result)?;
-        self.forget_writes_in_chain(&mut env, chain_id)?;
-        Ok(env)
-    }
-
-    fn chain_reached_env(
-        &mut self,
-        chain_id: ExprId,
-        result_facts: narrowing::TypeFacts,
-        narrow_result: impl FnOnce(
-            &mut Self,
-            ExprId,
-        ) -> Result<
-            Option<narrowing::NarrowEnv>,
-            crate::compiler_error::CompilerFailure,
-        >,
-    ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
         let Some(ChainReceivers {
             mut env,
             result,
@@ -1024,6 +1007,7 @@ impl<'a> Inferer<'a> {
             return Ok(narrowing::NarrowEnv::new());
         };
         let Some(result) = result else {
+            self.forget_writes_in_chain(&mut env, chain_id)?;
             return Ok(env);
         };
         // The result is read where every receiver is present, so a test on
@@ -1031,14 +1015,16 @@ impl<'a> Inferer<'a> {
         self.push_narrow_frame(env.clone());
         let result_env = narrow_result(self, result);
         self.pop_narrow_frame()?;
-        match result_env? {
+        let mut env = match result_env? {
             // The test's own narrowing of the result is finer than presence.
             Some(result_env) => {
                 env.extend_env(result_env);
-                Ok(env)
+                env
             }
-            None => self.with_chain_result_present(env, result, null, result_facts),
-        }
+            None => self.with_chain_result_present(env, result, null, result_facts)?,
+        };
+        self.forget_writes_in_chain(&mut env, chain_id)?;
+        Ok(env)
     }
 
     /// `o?.foo instanceof C`, or a guard asserting a type without `undefined`,
@@ -1886,8 +1872,8 @@ impl<'a> Inferer<'a> {
         };
         let (matching, remaining) = match &disc_key_from_path {
             DiscriminantKey::Field(key_field) => {
-                let literal_ty = narrowing::literal_type(&literal);
-                let Some(split) = self.discriminant_split(members, key_field, &literal_ty) else {
+                let value_ty = narrowing::literal_type(&literal);
+                let Some(split) = self.discriminant_split(members, key_field, &value_ty) else {
                     return Ok(None);
                 };
                 split
@@ -1907,8 +1893,8 @@ impl<'a> Inferer<'a> {
                         let Some(element_tys) = discriminant_element_types(members, *pos) else {
                             return Ok(None);
                         };
-                        let literal_ty = narrowing::literal_type(&literal);
-                        self.split_by_key_types(members, element_tys, &literal_ty)
+                        let value_ty = narrowing::literal_type(&literal);
+                        self.split_by_key_types(members, element_tys, &value_ty)
                     }
                 }
             }

@@ -342,10 +342,11 @@ impl Inferer<'_> {
         let mut seen: BTreeMap<CaseKey, Span> = BTreeMap::new();
         let mut all_assigned: BTreeSet<narrowing::ReferencePath> = BTreeSet::new();
         let mut any_arm_reachable_exit = false;
-        // The expressions each label evaluated so far allocated. A clause's
-        // body runs after its own labels and every earlier clause's, matched
-        // or not, so what they write is no longer what the discriminant read.
-        let mut label_exprs: Vec<(ExprId, ExprId)> = Vec::new();
+        // What the labels evaluated so far write. A clause's body runs after
+        // its own labels and every earlier clause's, matched or not, and the
+        // no-match path after all of them, so what they write is no longer
+        // what the discriminant read.
+        let mut label_writes: Vec<narrowing::ReferencePath> = Vec::new();
         // Whether the `case`s, with no `default`, match every value.
         let mut covers_every_value = false;
         // The clause last in the source leaves the switch when it runs off
@@ -364,7 +365,7 @@ impl Inferer<'_> {
             for value_expr in &case.values {
                 let before = self.last_expr_id();
                 let inferred = self.infer_case_label(&case_discriminant, *value_expr, case_span)?;
-                label_exprs.push((before, self.last_expr_id()));
+                label_writes.extend(self.writes_between(before, self.last_expr_id())?);
                 let Some((label, label_ty)) = inferred else {
                     continue;
                 };
@@ -384,7 +385,7 @@ impl Inferer<'_> {
             }
 
             let mut true_env = self.case_true_env(typed_disc, disc_source_span, &labels)?;
-            self.forget_label_writes(&mut true_env, &label_exprs)?;
+            forget_writes(&mut true_env, &label_writes);
 
             let body_span = self
                 .ast
@@ -434,7 +435,7 @@ impl Inferer<'_> {
                 narrowed_before,
                 body_span,
             )?);
-            self.forget_label_writes(&mut env, &label_exprs)?;
+            forget_writes(&mut env, &label_writes);
             self.push_narrow_frame(env.clone());
             self.switch_depth += 1;
             self.reachable = entry_reachable;
@@ -487,6 +488,7 @@ impl Inferer<'_> {
                 narrowed_before,
                 switch_span,
             )?);
+            forget_writes(&mut natural, &label_writes);
             Some(natural)
         } else {
             None
@@ -659,8 +661,8 @@ impl Inferer<'_> {
             let Some(literals) = literal_members(&label_ty).and_then(|literals| {
                 literals
                     .into_iter()
-                    .map(|literal| {
-                        literal_switch_value(literal, *span).map(|value| (value, label_ty.clone()))
+                    .map(|(literal, member_ty)| {
+                        literal_switch_value(literal, *span).map(|value| (value, member_ty))
                     })
                     .collect::<Option<Vec<_>>>()
             }) else {
@@ -687,19 +689,6 @@ impl Inferer<'_> {
     fn last_expr_id(&self) -> ExprId {
         let len = u32::try_from(self.typed_ast.exprs_len()).unwrap_or(u32::MAX);
         ExprId(len.saturating_sub(1))
-    }
-
-    /// `env` without what the labels in `label_exprs`, each the range of
-    /// expressions it allocated, write.
-    fn forget_label_writes(
-        &self,
-        env: &mut narrowing::NarrowEnv,
-        label_exprs: &[(ExprId, ExprId)],
-    ) -> Result<(), CompilerFailure> {
-        for &(before, last) in label_exprs {
-            self.forget_later_writes(env, before, last)?;
-        }
-        Ok(())
     }
 
     /// The operand of a `switch (typeof x)` discriminant, written in place.
@@ -758,7 +747,8 @@ impl Inferer<'_> {
         for (label, label_ty) in labels {
             // A label that isn't a literal names the tags its type allows.
             let values = match label {
-                TypedSwitchValue::Expr { .. } => literal_members(label_ty),
+                TypedSwitchValue::Expr { .. } => literal_members(label_ty)
+                    .map(|members| members.into_iter().map(|(literal, _)| literal).collect()),
                 literal => narrowing::switch_value_literal(literal).map(|value| vec![value]),
             };
             let Some(values) = values else {
@@ -849,6 +839,12 @@ impl Inferer<'_> {
                     *span,
                 ),
             },
+        };
+        // A literal of an expression label's enum member keeps that type.
+        let ty = if label_ty.enum_member_value().is_some() {
+            label_ty.clone()
+        } else {
+            ty
         };
         self.typed_ast
             .try_push_expr(TypedExpr { kind, span, ty })
@@ -1429,12 +1425,24 @@ fn discriminant_temporary(switch_id: StmtId, span: Span) -> Ident {
     }
 }
 
-/// The literals `ty` is made of, or `None` if it holds any other value.
-fn literal_members(ty: &Type) -> Option<Vec<narrowing::LiteralValue>> {
-    match ty.peel() {
-        Type::Union(members) => members.iter().map(narrowing::unit_literal_value).collect(),
-        other => narrowing::unit_literal_value(other).map(|literal| vec![literal]),
-    }
+/// `env` without the views under a path in `written`.
+fn forget_writes(env: &mut narrowing::NarrowEnv, written: &[narrowing::ReferencePath]) {
+    env.retain(|path, _| !written.iter().any(|written| written.is_prefix_of(path)));
+}
+
+/// The literals `ty` is made of, each with the member type that holds it (an
+/// enum member keeps its enum), or `None` if it holds any other value.
+fn literal_members(ty: &Type) -> Option<Vec<(narrowing::LiteralValue, Type)>> {
+    let members = match ty.peel() {
+        Type::Union(members) => members.as_slice(),
+        _ => std::slice::from_ref(ty),
+    };
+    members
+        .iter()
+        .map(|member| {
+            narrowing::unit_literal_value(member).map(|literal| (literal, member.clone()))
+        })
+        .collect()
 }
 
 /// The literal `case` value a label of literal type compares as; a bigint has

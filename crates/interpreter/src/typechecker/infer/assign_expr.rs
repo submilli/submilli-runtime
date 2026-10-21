@@ -389,10 +389,24 @@ impl Inferer<'_> {
         read: ExprId,
         end: ExprId,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
-        if env.is_empty() || end.0 <= read.0 {
+        if env.is_empty() {
             return Ok(());
         }
-        for id in read.0 + 1..=end.0 {
+        for written in self.writes_between(read, end)? {
+            env.retain(|path, _| !written.is_prefix_of(path));
+        }
+        Ok(())
+    }
+
+    /// The paths the assignments among the typed expressions after `read` and
+    /// up to `end` write.
+    pub(super) fn writes_between(
+        &self,
+        read: ExprId,
+        end: ExprId,
+    ) -> Result<Vec<narrowing::ReferencePath>, crate::compiler_error::CompilerFailure> {
+        let mut written = Vec::new();
+        for id in read.0.saturating_add(1)..=end.0 {
             let TypedExprKind::Sequence { stmts, .. } = &self
                 .typed_ast
                 .try_expr(ExprId(id))
@@ -401,12 +415,9 @@ impl Inferer<'_> {
             else {
                 continue;
             };
-            let Some(written) = self.sequence_written_path(stmts)? else {
-                continue;
-            };
-            env.retain(|path, _| !written.is_prefix_of(path));
+            written.extend(self.sequence_written_path(stmts)?);
         }
-        Ok(())
+        Ok(written)
     }
 
     /// The path an assignment sequence writes, or the root it writes under

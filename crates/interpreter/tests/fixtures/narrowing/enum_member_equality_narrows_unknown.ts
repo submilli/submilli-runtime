@@ -24,6 +24,15 @@ function whole(u: unknown, e: StringEnum): string {
   }
   return "no";
 }
+function byLabel(u: unknown, k: StringEnum.C): string {
+  switch (u) {
+    case k: {
+      const c: StringEnum.C = u;
+      return c;
+    }
+  }
+  return "no";
+}
 function main(): void {
   assert(f(0) === "NA0");
   assert(f("B") === "B");
@@ -36,4 +45,6 @@ function main(): void {
   assert(whole("B", StringEnum.B) === "B");
   assert(whole("x", StringEnum.B) === "no");
   assert(g(5) === -1);
+  assert(byLabel("C", StringEnum.C) === "C");
+  assert(byLabel("A", StringEnum.C) === "no");
 }
