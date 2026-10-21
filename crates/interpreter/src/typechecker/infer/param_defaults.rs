@@ -356,8 +356,27 @@ impl Inferer<'_> {
     /// Keep speculative flow and parameter metadata out of the ordered pass.
     /// Arena work and type-budget charges remain accounted for; nested trials
     /// are disabled so nested default expressions do not multiply the work.
+    /// The trial sees no narrowing: a parameter is typed at its function's
+    /// start.
     pub(super) fn with_parameter_type_trial<T>(
         &mut self,
+        infer: impl FnOnce(&mut Self) -> Result<T, CompilerFailure>,
+    ) -> Result<T, CompilerFailure> {
+        self.with_trial(false, infer)
+    }
+
+    /// [`Self::with_parameter_type_trial`] for an expression inferred ahead
+    /// of where it stands, which sees the narrowing in effect there.
+    pub(super) fn with_expression_trial<T>(
+        &mut self,
+        infer: impl FnOnce(&mut Self) -> Result<T, CompilerFailure>,
+    ) -> Result<T, CompilerFailure> {
+        self.with_trial(true, infer)
+    }
+
+    fn with_trial<T>(
+        &mut self,
+        keeps_narrowing: bool,
         infer: impl FnOnce(&mut Self) -> Result<T, CompilerFailure>,
     ) -> Result<T, CompilerFailure> {
         let scopes = self.scopes.clone();
@@ -370,11 +389,32 @@ impl Inferer<'_> {
         let initializations = self.typed_ast.parameter_initializations.clone();
         let prologues = self.typed_ast.parameter_default_prologues.clone();
         let authored_types = self.typed_ast.authored_parameter_types.clone();
-        self.enter_function_declaration_narrow_boundary();
+        let flow = keeps_narrowing.then(|| {
+            (
+                self.narrow_scopes.clone(),
+                self.assigned_scopes.clone(),
+                self.clause_write_scopes.clone(),
+                self.tombstone_scopes.clone(),
+                self.pending_post_if_materializations.clone(),
+            )
+        });
+        if !keeps_narrowing {
+            self.enter_function_declaration_narrow_boundary();
+        }
         let was_prebinding = std::mem::replace(&mut self.prebinding_parameter_types, true);
         let result = infer(self);
         self.prebinding_parameter_types = was_prebinding;
-        let restored = self.exit_closure_narrow_boundary();
+        let restored = match flow {
+            Some((narrow, assigned, clause_writes, tombstones, pending)) => {
+                self.narrow_scopes = narrow;
+                self.assigned_scopes = assigned;
+                self.clause_write_scopes = clause_writes;
+                self.tombstone_scopes = tombstones;
+                self.pending_post_if_materializations = pending;
+                Ok(())
+            }
+            None => self.exit_closure_narrow_boundary(),
+        };
         self.scopes = scopes;
         self.reachable = reachable;
         self.pattern_sources = pattern_sources;

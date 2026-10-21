@@ -173,7 +173,7 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         invoked_return_hint: None,
         invoked_parameter_types: None,
         invoked_argument_memo: None,
-        resolving_function_literal_parameters: false,
+        type_queries_see_narrowing: false,
         parameters_typed_by_arguments: Default::default(),
         cast_operand: None,
         invoked_body_exit: None,
@@ -473,7 +473,7 @@ pub fn infer_package_checked<'a>(
         invoked_return_hint: None,
         invoked_parameter_types: None,
         invoked_argument_memo: None,
-        resolving_function_literal_parameters: false,
+        type_queries_see_narrowing: false,
         parameters_typed_by_arguments: Default::default(),
         cast_operand: None,
         invoked_body_exit: None,
@@ -847,10 +847,12 @@ pub(super) struct Inferer<'a> {
     /// outermost such call is inferred (see
     /// `Inferer::infer_call_typing_invoked_parameters`).
     invoked_argument_memo: Option<std::collections::HashMap<crate::ExprId, Option<Type>>>,
-    /// Whether a function literal's parameter annotations are being resolved,
-    /// where a type query takes its root's declared type: the literal may run
-    /// after a captured binding is reassigned.
-    resolving_function_literal_parameters: bool,
+    /// Whether a type query takes the narrowing in effect where it is
+    /// written, as in a `let` or `const` annotation or a cast (see
+    /// `Inferer::resolve_type_in_flow`). One in a signature takes its root's
+    /// declared type, as the function may run after a captured binding is
+    /// reassigned.
+    type_queries_see_narrowing: bool,
     /// The name spans of the parameters typed from their arguments that way,
     /// whose defaults are typed against them.
     parameters_typed_by_arguments: std::collections::HashSet<Span>,

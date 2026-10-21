@@ -262,6 +262,19 @@ impl<'a> Inferer<'a> {
         Ok(ty)
     }
 
+    /// [`Self::resolve_type`] for an annotation resolved where it runs, a
+    /// `let` or `const` declaration's or a cast's, whose type queries take
+    /// the narrowing in effect there, as in tsc.
+    pub(super) fn resolve_type_in_flow(
+        &mut self,
+        annot: &TypeAnnotation,
+    ) -> Result<Type, CompilerFailure> {
+        let outer = std::mem::replace(&mut self.type_queries_see_narrowing, true);
+        let resolved = self.resolve_type(annot);
+        self.type_queries_see_narrowing = outer;
+        resolved
+    }
+
     pub(super) fn resolve_type(&mut self, annot: &TypeAnnotation) -> Result<Type, CompilerFailure> {
         // Checks of the resolved type (index fields and callable signatures)
         // record limits they cannot return; report one met here at this
@@ -798,7 +811,7 @@ impl<'a> Inferer<'a> {
     /// The type a narrowing in scope gives `name.rest…`, which a type query
     /// takes as TypeScript does: `typeof x.p` under `x.p === "A"` is `"A"`.
     fn narrowed_query_type(&self, name: &str, rest: &[crate::Ident]) -> Option<Type> {
-        if self.resolving_function_literal_parameters {
+        if !self.type_queries_see_narrowing {
             return None;
         }
         let entry = self.scopes.get(name)?;

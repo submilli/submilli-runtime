@@ -207,7 +207,7 @@ impl Inferer<'_> {
                 types[index] = known.clone();
                 continue;
             }
-            let ty = self.speculative_expr_type(arg, false)?;
+            let ty = self.speculative_expr_type(arg, false, true)?;
             if let Some(memo) = self.invoked_argument_memo.as_mut() {
                 memo.insert(arg, ty.clone());
             }

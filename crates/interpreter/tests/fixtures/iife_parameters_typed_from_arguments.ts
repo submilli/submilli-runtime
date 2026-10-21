@@ -1,7 +1,16 @@
 // A function literal called in place types each unannotated parameter from
 // the argument passed to it, widened, as tsc does; a default is then typed
 // against that parameter.
+function pick(): string | number {
+  return "ab";
+}
+
 function main(): void {
+  const picked = pick();
+  if (typeof picked === "string") {
+    assert(((s) => s.length)(picked) === 2, "a narrowed argument");
+  }
+
   const next = ((x) => x + 1)(2);
   assert(next === 3, "a number argument");
 

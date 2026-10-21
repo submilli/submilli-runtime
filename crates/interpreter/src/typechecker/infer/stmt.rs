@@ -491,7 +491,10 @@ impl Inferer<'_> {
         doc: Option<crate::DocComment>,
         preserve_binding_literals: bool,
     ) -> Result<TypedStmtKind, CompilerFailure> {
-        let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
+        let hint = ty
+            .as_ref()
+            .map(|a| self.resolve_type_in_flow(a))
+            .transpose()?;
         if self.ast.implicit_initializers.contains(&value) {
             return self.infer_uninitialized_let(name, hint, value, doc);
         }
@@ -695,7 +698,10 @@ impl Inferer<'_> {
         // `x ?? "d"` adds `"d"`. The binding cannot be reassigned, so nothing
         // can invalidate them, and they are fresh, so a `let` copying it widens.
         // A computed value still widens (`const a = 1 + 1` is `number`).
-        let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
+        let hint = ty
+            .as_ref()
+            .map(|a| self.resolve_type_in_flow(a))
+            .transpose()?;
         let component_hint = self.destructuring_default_hint(hint.as_ref(), value)?;
         let (typed_value, value_ty) = self.infer_expr_keeping_literals(
             value,

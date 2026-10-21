@@ -287,8 +287,7 @@ impl Inferer<'_> {
     /// decides it. Two specifiers of one name clash (TS2300), and so does a
     /// specifier with a direct export of a value (TS2323) or with direct
     /// exports covering all it exports (TS2484). A specifier that adds a value
-    /// to a directly exported type is one export of both, and direct exports
-    /// of one name are one merged declaration.
+    /// to a directly exported type is one export of both.
     fn conflicting_export(
         &self,
         public_name: &str,
@@ -315,18 +314,10 @@ impl Inferer<'_> {
                         .then(|| previous.first())
                         .flatten()
                 }),
-            ExportOrigin::Direct(own) => previous.iter().find(|(namespace, prev)| {
-                if prev.direct {
-                    return false;
-                }
-                // A specifier that also exported the other namespace adds to
-                // this direct type export rather than repeating it.
-                let specifier_covers_other = *namespace != own
-                    || previous
-                        .iter()
-                        .any(|(other, seen)| *other != own && seen.span == prev.span);
-                own == ExportNamespace::Value || !specifier_covers_other
-            }),
+            // Direct exports are recorded as their declarations are inferred,
+            // before any specifier, and those of one name are one merged
+            // declaration.
+            ExportOrigin::Direct(_) => None,
         };
         clash.map(|(_, prev)| prev.span)
     }

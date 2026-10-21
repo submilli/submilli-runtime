@@ -7668,7 +7668,7 @@ impl Inferer<'_> {
                 padding.push(Type::Unknown);
                 continue;
             };
-            let Some(ty) = self.speculative_expr_type(default, false)? else {
+            let Some(ty) = self.speculative_expr_type(default, false, false)? else {
                 return Ok(Vec::new());
             };
             padding.push(Type::union(vec![ty, Type::Undefined]));
@@ -7679,12 +7679,15 @@ impl Inferer<'_> {
     /// The type of `default`, inferred ahead of where it is inferred for real,
     /// as a pattern default before the pattern binds its names or a call's
     /// argument before its callee, with its fresh literals widened unless
-    /// `keep_literals` (a `const` declaration's). An expression in error there
-    /// has none; it reports its errors when it is inferred for real.
+    /// `keep_literals` (a `const` declaration's). It sees the narrowing in
+    /// effect where it stands when `sees_narrowing`, and none as a parameter's
+    /// default. An expression in error there has none; it reports its errors
+    /// when it is inferred for real.
     pub(super) fn speculative_expr_type(
         &mut self,
         default: ExprId,
         keep_literals: bool,
+        sees_narrowing: bool,
     ) -> Result<Option<Type>, CompilerFailure> {
         if let Some(ty) = super::forward_globals::stated_literal_type(self.ast, default)? {
             return Ok(Some(if keep_literals {
@@ -7693,7 +7696,7 @@ impl Inferer<'_> {
                 ty.widen_literal()
             }));
         }
-        self.with_parameter_type_trial(|this| {
+        let infer = |this: &mut Self| {
             let errors_before = this.error_count();
             let (typed, ty) = this.infer_expr(default, None)?;
             if this.error_count() != errors_before {
@@ -7703,7 +7706,12 @@ impl Inferer<'_> {
                 return Ok(Some(ty));
             }
             this.widen_fresh_literals(typed, &ty).map(Some)
-        })
+        };
+        if sees_narrowing {
+            self.with_expression_trial(infer)
+        } else {
+            self.with_parameter_type_trial(infer)
+        }
     }
 
     /// The type a pattern source's element `value`, widened to `widened`, takes
@@ -7718,8 +7726,21 @@ impl Inferer<'_> {
         value: ExprId,
         widened: Type,
     ) -> Result<Type, CompilerFailure> {
+        // Only a stated literal or an object literal can keep a literal type.
+        let peeled = peel_parens(self.ast, value)?;
+        let can_keep = super::forward_globals::stated_literal_type(self.ast, peeled)?.is_some()
+            || matches!(
+                self.ast
+                    .try_expr(peeled)
+                    .map_err(super::arena_failure)?
+                    .kind,
+                ExprKind::ObjectLiteral { .. }
+            );
+        if !can_keep {
+            return Ok(widened);
+        }
         let keep_literals = self.ast.const_pattern_sources.contains(&literal);
-        let Some(context) = self.speculative_expr_type(default, keep_literals)? else {
+        let Some(context) = self.speculative_expr_type(default, keep_literals, true)? else {
             return Ok(widened);
         };
         contextual_literal_type(self.ast, value, widened, &context)
@@ -7788,7 +7809,7 @@ impl Inferer<'_> {
         };
         let mut padding = Vec::with_capacity(defaults.len());
         for (name, default) in defaults {
-            let Some(ty) = self.speculative_expr_type(default, false)? else {
+            let Some(ty) = self.speculative_expr_type(default, false, false)? else {
                 return Ok(Vec::new());
             };
             padding.push((name, ty));
@@ -9597,11 +9618,7 @@ impl Inferer<'_> {
         let mut typed_params: Vec<TypedParam> = Vec::with_capacity(params.len());
         let mut params_reported = false;
         for (i, p) in params.iter().enumerate() {
-            let resolving =
-                std::mem::replace(&mut self.resolving_function_literal_parameters, true);
-            let ann_ty = p.ty.as_ref().map(|t| self.resolve_type(t)).transpose();
-            self.resolving_function_literal_parameters = resolving;
-            let ann_ty = ann_ty?;
+            let ann_ty = p.ty.as_ref().map(|t| self.resolve_type(t)).transpose()?;
             let ty = match (&ann_ty, hint_owned.as_ref()) {
                 (Some(t), Some((hp, _))) => {
                     // Parameters are **contravariant**: the call site
@@ -12355,7 +12372,7 @@ impl Inferer<'_> {
         ty: TypeAnnotation,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        let target_ty = self.resolve_type(&ty)?;
+        let target_ty = self.resolve_type_in_flow(&ty)?;
         // An empty `[]` has no element type of its own, so it takes the target's
         // array element type, as under an annotation, also as a ternary branch or
         // nested in an array literal. Other operands infer unhinted: a hint is
