@@ -81,8 +81,29 @@ impl Inferer<'_> {
             &source_label,
             ExportOrigin::Direct(namespace),
         );
+        // A class or enum is a value too, as in TypeScript, so no specifier
+        // may export another value under its name.
+        if self.direct_export_is_class_or_enum(name)? {
+            self.current_export_seen
+                .entry((ExportNamespace::Value, name.to_string()))
+                .or_insert(ExportedName { span, direct: true });
+        }
 
         Ok(())
+    }
+
+    fn direct_export_is_class_or_enum(&self, name: &str) -> Result<bool, CompilerFailure> {
+        for ed in &self.ast.exported_decls {
+            let stmt = self.ast.try_stmt(ed.stmt).map_err(super::arena_failure)?;
+            if matches!(
+                stmt.kind,
+                StmtKind::ClassDecl { .. } | StmtKind::EnumDecl { .. }
+            ) && exported_decl_name(&stmt.kind).is_some_and(|exported| exported.name == name)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub(super) fn resolve_package_export_statements(&mut self) -> Result<(), CompilerFailure> {
@@ -228,7 +249,6 @@ impl Inferer<'_> {
 
         let exported = ExportedName {
             span,
-            source: (source_label.to_string(), source_name.to_string()),
             direct: matches!(origin, ExportOrigin::Direct(_)),
         };
         let namespaces: Vec<ExportNamespace> = [
@@ -238,7 +258,7 @@ impl Inferer<'_> {
         .into_iter()
         .filter_map(|(namespace, present)| present.then_some(namespace))
         .collect();
-        if let Some(prev) = self.conflicting_export(public_name, &exported, origin, &namespaces) {
+        if let Some(prev) = self.conflicting_export(public_name, origin, &namespaces) {
             self.diagnostics.push(crate::Diagnostic {
                 severity: crate::Severity::Error,
                 span,
@@ -275,17 +295,16 @@ impl Inferer<'_> {
         }
     }
 
-    /// Where `public_name` was already exported in a way `exported`, coming
-    /// from `origin` with the `namespaces` it exports, clashes with, as tsc
+    /// Where `public_name` was already exported in a way an export coming
+    /// from `origin` with the `namespaces` it exports clashes with, as tsc
     /// decides it. Two specifiers of one name clash (TS2300), and so does a
     /// specifier with a direct export of a value (TS2323) or with direct
     /// exports covering all it exports (TS2484). A specifier that adds a value
-    /// to a directly exported type is one export of both, and the same
-    /// declaration exported directly twice is one export.
+    /// to a directly exported type is one export of both, and direct exports
+    /// of one name are one merged declaration.
     fn conflicting_export(
         &self,
         public_name: &str,
-        exported: &ExportedName,
         origin: ExportOrigin,
         namespaces: &[ExportNamespace],
     ) -> Option<crate::Span> {
@@ -311,7 +330,7 @@ impl Inferer<'_> {
                 }),
             ExportOrigin::Direct(own) => previous.iter().find(|(namespace, prev)| {
                 if prev.direct {
-                    return *namespace == own && prev.source != exported.source;
+                    return false;
                 }
                 let specifier_covers_other = previous
                     .iter()
@@ -419,8 +438,6 @@ impl ExportOrigin {
 #[derive(Clone, Debug)]
 pub(in crate::typechecker) struct ExportedName {
     span: crate::Span,
-    /// The exporting module and the name it exports from.
-    source: (String, String),
     direct: bool,
 }
 

@@ -14,5 +14,9 @@ function main(): void {
   const tail: string = pair["1"];
   assert(tail === "x", "a tuple slot keeps its own type");
 
+  const either: string[] | number[] = s.length > 0 ? ["a"] : [1];
+  const firstOfEither: string | number = either["0"];
+  assert(firstOfEither === "a", "a union of arrays");
+
   assert(s["length"] === 5, "a non-numeric key is a property");
 }

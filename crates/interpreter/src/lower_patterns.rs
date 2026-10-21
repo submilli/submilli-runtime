@@ -1008,15 +1008,9 @@ fn defaults_absent_from(binding: &Binding, names: &BTreeSet<String>) -> Vec<(Str
         .collect()
 }
 
-fn peel_parens(ast: &Ast, mut value: ExprId) -> Result<ExprId, CompilerFailure> {
-    while let ExprKind::Paren(inner) = &ast
-        .try_expr(value)
-        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
-        .kind
-    {
-        value = *inner;
-    }
-    Ok(value)
+fn peel_parens(ast: &Ast, value: ExprId) -> Result<ExprId, CompilerFailure> {
+    ast.try_peel_parens(value)
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))
 }
 
 /// An array literal the pattern may take apart as one operand of `value`, a

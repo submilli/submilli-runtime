@@ -964,6 +964,14 @@ impl Ast {
         arena::get(&self.exprs, id.0, ArenaKind::Expressions)
     }
 
+    /// The expression `id` is through any parentheses around it.
+    pub fn try_peel_parens(&self, mut id: ExprId) -> Result<ExprId, ArenaError> {
+        while let ExprKind::Paren(inner) = &self.try_expr(id)?.kind {
+            id = *inner;
+        }
+        Ok(id)
+    }
+
     pub fn try_stmt(&self, id: StmtId) -> Result<&Stmt, ArenaError> {
         arena::get(&self.stmts, id.0, ArenaKind::Statements)
     }

@@ -8754,6 +8754,22 @@ impl Inferer<'_> {
                 Some(elem) => elem.clone(),
                 None => return Ok(None),
             },
+            // A union of arrays and tuples reads each member's element, as
+            // `infer_index_access` does with a numeric literal.
+            Type::Union(members) if receiver_ty.is_array_like_union() => {
+                let elements: Option<Vec<Type>> = members
+                    .iter()
+                    .map(|member| match member.peel() {
+                        Type::Array(elem) => Some((**elem).clone()),
+                        Type::Tuple(tuple) => tuple.elements.get(index).cloned(),
+                        _ => None,
+                    })
+                    .collect();
+                match elements {
+                    Some(elements) => Type::union(elements),
+                    None => return Ok(None),
+                }
+            }
             _ => return Ok(None),
         };
         let typed_index =
@@ -13578,13 +13594,8 @@ fn fields_written_after(
 }
 
 /// The expression inside any parentheses around `expr`.
-pub(super) fn peel_parens(ast: &crate::Ast, mut expr: ExprId) -> Result<ExprId, CompilerFailure> {
-    loop {
-        match &ast.try_expr(expr).map_err(super::arena_failure)?.kind {
-            ExprKind::Paren(inner) => expr = *inner,
-            _ => return Ok(expr),
-        }
-    }
+pub(super) fn peel_parens(ast: &crate::Ast, expr: ExprId) -> Result<ExprId, CompilerFailure> {
+    ast.try_peel_parens(expr).map_err(super::arena_failure)
 }
 
 /// The function literal `expr` is through parentheses: the arrow itself, or
