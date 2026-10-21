@@ -965,6 +965,14 @@ impl Ast {
         arena::get(&self.exprs, id.0, ArenaKind::Expressions)
     }
 
+    /// Every expression whose span lies within `span`, nested function bodies
+    /// included.
+    pub fn exprs_within(&self, span: Span) -> impl Iterator<Item = &Expr> {
+        self.exprs
+            .iter()
+            .filter(move |expr| span.encloses(expr.span))
+    }
+
     /// The expression `id` is through any parentheses around it.
     pub fn try_peel_parens(&self, mut id: ExprId) -> Result<ExprId, ArenaError> {
         while let ExprKind::Paren(inner) = &self.try_expr(id)?.kind {

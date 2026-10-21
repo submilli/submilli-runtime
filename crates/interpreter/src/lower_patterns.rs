@@ -576,6 +576,7 @@ impl LowerCtx {
         ast: &mut Ast,
         params: &mut [ParamDecl],
     ) -> Result<(), CompilerFailure> {
+        let mut pattern_names: BTreeSet<String> = BTreeSet::new();
         for param in params.iter_mut() {
             let Some(pattern) = param.pattern.take() else {
                 continue;
@@ -594,40 +595,40 @@ impl LowerCtx {
                 (None, Some(default)) => mark_literal_source(ast, &pattern, default, false)?,
                 _ => None,
             };
-            // A padding default typed ahead of the pattern must not read a
-            // name the pattern binds, which would resolve to an outer one.
-            let bound: BTreeSet<String> = bound_names(&pattern)
-                .into_iter()
-                .map(str::to_string)
-                .collect();
-            let pads_free = |ast: &Ast, defaults: Vec<ExprId>| -> Result<bool, CompilerFailure> {
-                let names: BTreeSet<&str> = bound.iter().map(String::as_str).collect();
-                for default in defaults {
-                    if !reads_none_of(ast, default, &names)? {
-                        return Ok(false);
-                    }
-                }
-                Ok(true)
-            };
+            // A padding default is typed before the patterns bind, so one that
+            // reads a name a pattern binds, its own or an earlier one's, would
+            // resolve to an outer binding: its slot and the tuple slots after
+            // it stay out of the padding. A plain parameter is already bound.
+            pattern_names.extend(bound_names(&pattern).into_iter().map(str::to_string));
             if let Some(default) = param.default {
                 let literal_id = peel_parens(ast, default)?;
                 match &literal {
                     Some(LiteralSource::Tuple(len)) => {
-                        if let Some(pad_defaults) = defaults_past_end(&pattern, *len)
-                            && pads_free(ast, pad_defaults.iter().flatten().copied().collect())?
-                        {
-                            ast.tuple_pattern_pad_defaults
-                                .insert(literal_id, pad_defaults);
+                        if let Some(mut pad_defaults) = defaults_past_end(&pattern, *len) {
+                            let mut kept = 0;
+                            for slot in &pad_defaults {
+                                if let Some(slot_default) = slot
+                                    && reads_any_of(ast, *slot_default, &pattern_names)?
+                                {
+                                    break;
+                                }
+                                kept += 1;
+                            }
+                            pad_defaults.truncate(kept);
+                            if !pad_defaults.is_empty() {
+                                ast.tuple_pattern_pad_defaults
+                                    .insert(literal_id, pad_defaults);
+                            }
                         }
                     }
                     Some(LiteralSource::Object(names)) => {
-                        let pad_defaults = defaults_absent_from(&pattern, names);
-                        if !pad_defaults.is_empty()
-                            && pads_free(
-                                ast,
-                                pad_defaults.iter().map(|(_, default)| *default).collect(),
-                            )?
-                        {
+                        let mut pad_defaults = Vec::new();
+                        for (name, pad_default) in defaults_absent_from(&pattern, names) {
+                            if !reads_any_of(ast, pad_default, &pattern_names)? {
+                                pad_defaults.push((name, pad_default));
+                            }
+                        }
+                        if !pad_defaults.is_empty() {
                             ast.object_pattern_pad_defaults
                                 .insert(literal_id, pad_defaults);
                         }
@@ -1031,47 +1032,20 @@ fn names_none_of(
     }
 }
 
-/// Whether evaluating `expr` reads none of `names`. A function literal, an
-/// object or array literal, or an optional chain counts as reading them, so
-/// the answer is `false` whenever it cannot be shown cheaply.
-fn reads_none_of(ast: &Ast, expr: ExprId, names: &BTreeSet<&str>) -> Result<bool, CompilerFailure> {
-    let kind = &ast
+/// Whether `expr` mentions any of `names`, inside a nested function too.
+/// Shadowing is not tracked, so a mention that resolves elsewhere counts.
+fn reads_any_of(
+    ast: &Ast,
+    expr: ExprId,
+    names: &BTreeSet<String>,
+) -> Result<bool, CompilerFailure> {
+    let span = ast
         .try_expr(expr)
         .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
-        .kind;
-    let operands: Vec<ExprId> = match kind {
-        ExprKind::Identifier(name) => return Ok(!names.contains(name.name.as_str())),
-        ExprKind::Number(_)
-        | ExprKind::BigInt(_)
-        | ExprKind::String(_)
-        | ExprKind::Boolean(_)
-        | ExprKind::Null
-        | ExprKind::Regex { .. } => return Ok(true),
-        ExprKind::Paren(operand)
-        | ExprKind::Unary { operand, .. }
-        | ExprKind::Void { operand }
-        | ExprKind::Typeof { operand }
-        | ExprKind::As { expr: operand, .. }
-        | ExprKind::FieldAccess {
-            receiver: operand, ..
-        } => vec![*operand],
-        ExprKind::Binary { lhs, rhs, .. } => vec![*lhs, *rhs],
-        ExprKind::IndexAccess { receiver, index } => vec![*receiver, *index],
-        ExprKind::Ternary { cond, then_, else_ } => vec![*cond, *then_, *else_],
-        ExprKind::Call { callee, args, .. } | ExprKind::New { callee, args, .. } => {
-            std::iter::once(*callee)
-                .chain(args.iter().copied())
-                .collect()
-        }
-        ExprKind::TemplateLiteral { exprs, .. } => exprs.clone(),
-        _ => return Ok(false),
-    };
-    for operand in operands {
-        if !reads_none_of(ast, operand, names)? {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+        .span;
+    Ok(ast.exprs_within(span).any(
+        |inner| matches!(&inner.kind, ExprKind::Identifier(name) if names.contains(&name.name)),
+    ))
 }
 
 /// The properties every object literal inherits from `Object.prototype`.

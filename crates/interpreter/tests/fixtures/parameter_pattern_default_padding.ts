@@ -33,14 +33,27 @@ function parenthesized([a, b = 5] = ([1])): number {
   return a + b;
 }
 
-// A padding default that reads a name the pattern binds reads the
-// pattern's own binding, not the outer one.
-const first = 10;
-function readsPattern([first, second = first]: [number, number?] = [1]): number {
-  return second;
+// A padding default may be any expression: a literal, a function or an
+// optional chain pads its slot as a plain value does.
+function arrayDefault([a, b = [0]] = [1]): number {
+  return a + b.length;
 }
-function readsObjectPattern({ x = 3, y = x }: { x?: number; y?: number } = {}): number {
-  return y;
+function arrowDefault({ x, f = () => 2 } = { x: 1 }): number {
+  return x + f();
+}
+function objectDefault({ x, o = { k: 1 } } = { x: 1 }): number {
+  return x + o.k;
+}
+const maybe: string | null = "s";
+function chainDefault([a, b = maybe?.length ?? 0] = [1]): number {
+  return a + b;
+}
+
+// A padding default that reads an earlier parameter reads that binding,
+// not the outer one of the same name.
+const first = "outer";
+function readsEarlierParameter(first: number, [a, b = first] = [1]): number {
+  return a + b;
 }
 
 function main(): void {
@@ -61,7 +74,11 @@ function main(): void {
   assert(skipped([1, 2, 3]) === 4, "a slot past a hole");
   assert(skipped() === 6, "a hole reads nothing");
   assert(parenthesized([1, 2]) === 3, "a parenthesized default");
-  assert(readsPattern() === 1, "a padding default reads its pattern");
-  assert(readsObjectPattern() === 3, "an object padding default reads its pattern");
-  assert(first === 10, "the outer name is untouched");
+  assert(arrayDefault([2, [1, 2]]) === 4, "an array literal default");
+  assert(arrowDefault({ x: 1, f: () => 3 }) === 4, "an arrow default");
+  assert(objectDefault({ x: 1, o: { k: 5 } }) === 6, "an object literal default");
+  assert(chainDefault([1, 4]) === 5, "an optional chain default");
+  assert(readsEarlierParameter(5) === 6, "a padding default reads an earlier parameter");
+  assert(readsEarlierParameter(5, [1, 2]) === 3, "its slot takes a number");
+  assert(first === "outer", "the outer name is untouched");
 }
