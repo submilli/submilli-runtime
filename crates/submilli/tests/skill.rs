@@ -237,7 +237,7 @@ fn documented_real_service_package_and_blueprint_agree() {
     fs::write(root.path().join("package/src/lib.ts"), source).unwrap();
     fs::write(
         root.path().join("package/tests/lib.test.ts"),
-        "import { buildPageQuery } from \"@pied-piper/orders\";\nfunction main(): void { assert(buildPageQuery() === \"?limit=50\"); }\n",
+        "import { expectException } from \"submilli:test\";\nimport { listOrders } from \"@pied-piper/orders\";\nfunction main(): void { expectException(() => { listOrders(\"pied_piper\", { limit: 101 }); }, \"RangeError\"); }\n",
     )
     .unwrap();
     let check = cli(&["build", "check"]);

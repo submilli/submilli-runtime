@@ -19,7 +19,7 @@ function main(): string {
     try { search("q", { limit: 2, scrapeOptions: {} }); } catch (error) {
         reached = error.name === "PermissionDeniedError" && error.message.includes("secrets.get") && error.message.includes("@submilli/firecrawl");
     }
-    assert(reached, "explicit broad search scraping grants reach the credential boundary");
+    assert(reached, "a search grant alone reaches the credential boundary with scrapeOptions");
     const tags = ["article"];
     const options: SearchOptions = { limit: 2, scrapeOptions: { includeTags: tags, maxAge: 0 } };
     const schema = new MutatingSchema(tags, options);

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "f8de6d1e49ae2b0117f748b5d0be73eb18af581075abc1a2cf88b3a13232ea04"
+  contentHash: "1209337fe8a428d24f6ef1b7d2f1da9ab64f4acd35406980cf7018a8e1c5fe73"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -21,7 +21,7 @@ and `Temporal`, are on [Built-ins](/docs/reference/built-ins).
 | Module | What it does | Gated by |
 | --- | --- | --- |
 | `submilli:fs` | The program's filesystem: read, write, list, stat, move, copy, remove | `fs.*` |
-| `submilli:http` | HTTP requests, and downloads into the filesystem | `http.<method>`, `http.download` |
+| `submilli:http` | HTTP requests, and downloads into the filesystem | `http.<verb>`, `http.request`, `http.download` |
 | `submilli:llm` | Model calls: `call`, `batch`, `models` | `llm.call` |
 | `submilli:embedding` | Text embeddings: `embed`, `models` | `embedding.embed` |
 | `submilli:session` | Key-value state that lasts for the session | `session.*` |
@@ -380,7 +380,7 @@ The sealed result of `embed`: vectors held by the runtime at 4 bytes per number,
 
 ## `submilli:fs`
 
-Sandbox filesystem: read/write/list/stat/remove/exists/info.
+Sandbox filesystem: files and directories under the VFS root.
 
 | Function | Capability | Description |
 | --- | --- | --- |
@@ -475,7 +475,7 @@ Filesystem metadata returned by `stat(path)`.
 
 ## `submilli:git`
 
-Capability-controlled VFS repositories: history, staging, commits, branches and HTTPS fetch.
+Capability-controlled Git repositories in the VFS, with HTTPS remotes.
 
 ### `Repository`
 
@@ -504,7 +504,7 @@ A repository under the VFS root.
 
 ## `submilli:http`
 
-Outbound HTTP: get/post/put/patch/delete/head.
+Outbound HTTP requests, and downloads into the filesystem.
 
 | Function | Capability | Description |
 | --- | --- | --- |
@@ -516,7 +516,7 @@ Outbound HTTP: get/post/put/patch/delete/head.
 | `patch(url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.patch { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP PATCH. |
 | `post(url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.post { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP POST. |
 | `put(url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.put { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP PUT. |
-| `request(method: string, url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.get { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.post { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.put { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.patch { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.delete { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.head { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.options { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue an HTTP request with a runtime-chosen verb. |
+| `request(method: string, url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.request { method: $method, host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue an HTTP request with a runtime-chosen verb. |
 
 ### `DownloadOptions`
 

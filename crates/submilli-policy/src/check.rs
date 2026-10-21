@@ -239,7 +239,7 @@ fn is_application_defined(capability: &str) -> bool {
     let every = OptionalPackage::ALL
         .iter()
         .fold(Stdlib::core(), |stdlib, package| stdlib.with(*package));
-    !capability.starts_with("mcp.") && capabilities::find_gating_for(every, capability).is_none()
+    !capability.starts_with("mcp.") && capabilities::find_for(every, capability).is_none()
 }
 
 /// The normalized VFS paths a denial was for, so a narrowed filter can be fixed

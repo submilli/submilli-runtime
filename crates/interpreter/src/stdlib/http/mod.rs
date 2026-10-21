@@ -43,7 +43,7 @@ use crate::stdlib::shared::{
     resolve_content_or_trap,
 };
 use redirect_guard::{
-    CapabilityGuard, DownloadTarget, GuardedRequest, host_and_path, verb_context,
+    CapabilityGuard, DownloadTarget, GuardedRequest, RequestForm, host_and_path, request_check,
 };
 use transport::{DownloadMeta, DownloadProgress, http_failure_outcome};
 
@@ -158,7 +158,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 Box::pin(async move {
                     let url = read_string_arg(&mut *caller, abi_arg(params, 0)?, "http (url)")?;
                     let body = crate::runtime::prelude::undefined::value(caller)?;
-                    perform_request(caller, &method, &url, &body, abi_arg(params, 1)?).await
+                    perform_request(
+                        caller,
+                        RequestForm::Verb,
+                        &method,
+                        &url,
+                        &body,
+                        abi_arg(params, 1)?,
+                    )
+                    .await
                 })
             },
         )?;
@@ -186,6 +194,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     let url = read_string_arg(&mut *caller, abi_arg(params, 0)?, "http (url)")?;
                     perform_request(
                         caller,
+                        RequestForm::Verb,
                         &method,
                         &url,
                         abi_arg(params, 1)?,
@@ -219,6 +228,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let url = read_string_arg(&mut *caller, abi_arg(params, 1)?, "http.request (url)")?;
                 perform_request(
                     caller,
+                    RequestForm::Request,
                     &method,
                     &url,
                     abi_arg(params, 2)?,
@@ -353,6 +363,7 @@ fn record_http_metric(
 /// `$ResponseBacking` the guest sees.
 async fn perform_request(
     caller: &mut Caller<'_, StoreData>,
+    form: RequestForm,
     method: &str,
     url: &str,
     body_val: &Val,
@@ -374,14 +385,16 @@ async fn perform_request(
     }
     let body = body.bytes();
 
-    // Capability is verb-shaped: http.get, http.post, etc.
-    let capability = format!("http.{}", method.to_ascii_lowercase());
     let (host_str, path_str) = url_host_and_path(url);
-    let ticket = check_security_call(
-        &mut *caller,
-        &capability,
-        verb_context(&host_str, &path_str, body.len() as u64, DEFAULT_TIMEOUT_MS),
-    )?;
+    let (capability, context) = request_check(
+        form,
+        method,
+        &host_str,
+        &path_str,
+        body.len() as u64,
+        DEFAULT_TIMEOUT_MS,
+    );
+    let ticket = check_security_call(&mut *caller, &capability, context)?;
     // The program's own request, before the auth proxy adds credentials.
     record_payload(&*caller, ticket, Side::Request, || {
         request_payload(method, url, &headers, &body)
@@ -390,7 +403,8 @@ async fn perform_request(
 
     let (who, guard) = request_principal(
         caller,
-        GuardedRequest::Verb {
+        GuardedRequest::Send {
+            form,
             timeout_ms: DEFAULT_TIMEOUT_MS,
         },
         ticket,
@@ -1785,6 +1799,7 @@ function main(): void {
 
     struct VerbContextCheck {
         capability: String,
+        method: Option<String>,
     }
 
     impl SecurityCheck for VerbContextCheck {
@@ -1796,26 +1811,40 @@ function main(): void {
         ) -> CheckOutcome {
             assert_eq!(caller, "main");
             assert_eq!(capability, self.capability);
-            assert_eq!(
-                context,
-                &serde_json::json!({
-                    "host": "example.test",
-                    "path": "/resource",
-                    "body_size": 0,
-                    "timeout_ms": super::DEFAULT_TIMEOUT_MS,
-                })
-            );
+            let mut expected = serde_json::json!({
+                "host": "example.test",
+                "path": "/resource",
+                "body_size": 0,
+                "timeout_ms": super::DEFAULT_TIMEOUT_MS,
+            });
+            if let Some(method) = &self.method {
+                expected["method"] = method.as_str().into();
+            }
+            assert_eq!(context, &expected);
             CheckOutcome::Allow { rule: None }
         }
     }
 
     #[tokio::test]
-    async fn direct_and_generic_requests_use_verb_capabilities_without_method_field() {
+    async fn verb_functions_check_their_verb_and_request_checks_its_method() {
         let tmp = tempfile::tempdir().expect("tempdir");
         for verb in ["get", "post", "put", "patch", "delete", "head", "options"] {
-            for call in [
-                format!("{verb}(\"https://example.test/resource\")"),
-                format!("request(\"{verb}\", \"https://example.test/resource\")"),
+            let upper = verb.to_ascii_uppercase();
+            for (call, check) in [
+                (
+                    format!("{verb}(\"https://example.test/resource\")"),
+                    VerbContextCheck {
+                        capability: format!("http.{verb}"),
+                        method: None,
+                    },
+                ),
+                (
+                    format!("request(\"{verb}\", \"https://example.test/resource\")"),
+                    VerbContextCheck {
+                        capability: "http.request".to_string(),
+                        method: Some(upper.clone()),
+                    },
+                ),
             ] {
                 let source = format!(
                     "import {{ {verb}, request }} from \"submilli:http\";\n\
@@ -1824,22 +1853,20 @@ function main(): void {
                 let (mock, result) = run_download_with_mock(
                     &source,
                     vec![ok_response(200, "")],
-                    Some(Arc::new(VerbContextCheck {
-                        capability: format!("http.{verb}"),
-                    })),
+                    Some(Arc::new(check)),
                     tmp.path(),
                 )
                 .await;
                 result.expect("request allowed");
                 let seen = mock.seen.lock().unwrap();
                 assert_eq!(seen.len(), 1);
-                assert_eq!(seen[0].method, verb.to_ascii_uppercase());
+                assert_eq!(seen[0].method, upper);
             }
         }
     }
 
     #[tokio::test]
-    async fn generic_request_checks_normalized_verb_before_transport() {
+    async fn generic_request_checks_its_capability_before_transport() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let source = r#"
             import { request } from "submilli:http";
@@ -1850,7 +1877,7 @@ function main(): void {
         let (mock, result) =
             run_download_with_mock(source, vec![], Some(Arc::new(DenyAllHttp)), tmp.path()).await;
         let error = result.expect_err("request denied");
-        assert!(error.contains("http.post"), "{error}");
+        assert!(error.contains("http.request"), "{error}");
         assert!(mock.seen.lock().unwrap().is_empty());
     }
 

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a613db0c3ae048809fb6c1dbd01a66a2411b3108ed32e1576e7615d568a83440"
+  contentHash: "97a4d1f9d41d2549d630362894b492bbc479e4a22dca9ac9774c3886f43207e5"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -145,6 +145,7 @@ Each error stops the build with exit code 1 and points at the manifest line.
 | Versioned dependency not in the store | ``failed to load external dependency `@submilli/jina`: package `@submilli/jina` was not found in …`` |
 | Stored version differs | ``external dependency `@submilli/jina` has version 0.2.0 in the store, but submilli.toml requires 0.1.0; …`` |
 | `docs/readme.md` missing | ``package `@pied-piper/demo` is missing documentation at …/docs/readme.md; create docs/readme.md: …`` |
+| Malformed directive in `docs/readme.md` | ``package `@pied-piper/demo` has malformed documentation directives:`` and a ``…/docs/readme.md:<line>: …`` line for each |
 
 ## submilli.lock
 
@@ -221,7 +222,9 @@ On a property, `@param` and `@returns` are warned about too.
 fields. `{}` is a capability with no fields. Text after the closing brace is
 the tag's description, with a leading `-` or `—` removed. `submilli docs`
 shows it on the tag's line, and `capabilities.yaml` doesn't contain it. A
-function may carry several `@capability` tags.
+function may carry several `@capability` tags. Documentation scoped to a
+blueprint shows the function only when the blueprint could allow every one
+of them for `main`.
 
 A field is written one of these ways:
 
@@ -364,7 +367,32 @@ depends on the session's working directory. A Package that calls
 `<path>/docs/readme.md` is required, and a Package without it fails to build. It
 is copied into the installed Package. The server's documentation tool and
 HTTP API return it, followed by a `## Declarations` section with
-the Package's declarations. `submilli docs` prints only the declarations.
+the Package's declarations. `submilli docs` prints it before the declarations.
+
+Directives mark a region shown only when the blueprint could allow its
+capabilities for `main`:
+
+| Directive | The region is shown when |
+| --- | --- |
+| `<!-- submilli:if capability="<name>" -->` | The blueprint could allow `<name>` |
+| `<!-- submilli:if all="<name> <name>" -->` | It could allow every name |
+| `<!-- submilli:if any="<name> <name>" -->` | It could allow at least one |
+| `<!-- submilli:endif -->` | Ends the innermost region |
+
+A directive is a line of its own, indented by at most three spaces, outside
+fenced code. Regions nest up to 8 deep, and a nested region is
+shown only when its parents are. The directive lines are removed from what
+readers get. `submilli docs` without `--blueprint` shows every region.
+
+The build fails on a malformed directive, an unmatched `if` or `endif`, an
+attribute other than `capability`, `all`, or `any`, and a name that neither
+the standard library, the Package, nor one of its dependencies provides. It
+also fails on a directive indented four or more spaces, one that shares its
+line with text, one whose `submilli:` is not lowercase, and a code fence left
+open with a directive after it, since each would show a region to every
+reader. A `docs/readme.md` larger than 4 MiB fails too. An
+installed Package whose readme has malformed directives is reported as an
+error rather than shown.
 
 `submilli build test` compiles every fenced block in it whose info string is
 exactly `ts` or `typescript`, against the Package and its dependencies, and

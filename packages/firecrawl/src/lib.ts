@@ -58,7 +58,7 @@ export interface SearchOptions {
     safe?: boolean;
     /** Provider timeout in milliseconds; the HTTP transport has its own timeout. */
     timeout?: number;
-    /** Explicit native result scraping; adds latency/credits and needs search.scrape plus delegatedFetch. */
+    /** Explicit native result scraping; adds latency/credits. The provider fetches every result host. */
     scrapeOptions?: ScrapeOptions;
 }
 
@@ -271,13 +271,11 @@ export class FirecrawlError extends Error {
     }
 }
 
-/** Search web sources. Native result scraping authorizes unknown hosts via an explicit separate grant.
+/** Search web sources. With `scrapeOptions`, the provider also fetches each result page, whatever its host.
  * @param query Web search query, at most 500 characters.
  * @param options Optional search controls (result limit, domain filters, geo/time filters); omit it to use the provider defaults, with up to 10 web results.
  * @returns Web results in provider order, each with title, description and URL; `content` is set only when `scrapeOptions` was requested. `results` is empty when nothing matched.
  * @capability firecrawl.dev/search { limit: number }
- * @capability firecrawl.dev/search.scrape {}
- * @capability firecrawl.dev/delegatedFetch {}
  */
 export function search(query: string, options: SearchOptions = {}): SearchResponse {
     const { limit, includeDomains, excludeDomains, tbs, location, country, safe, timeout, scrapeOptions } = options;
@@ -333,13 +331,9 @@ export function search(query: string, options: SearchOptions = {}): SearchRespon
         opts.scrapeOptions = snapshot;
     }
     const body = buildSearchBody(query, opts);
+    // Search results are unknown before submission, so a search grant also
+    // authorizes native extraction across result hosts when scrapeOptions asks for it.
     check("firecrawl.dev/search", { limit: limit ?? 10 });
-    if (scrapeOptions !== undefined) {
-        // Search results are unknown before submission. This grant deliberately
-        // authorizes native extraction across result hosts; it is not a host-scoped scrape grant.
-        check("firecrawl.dev/search.scrape", {});
-        check("firecrawl.dev/delegatedFetch", {});
-    }
     return normalizeSearchJson(requireOk(post(BASE + "/search", body, authHeaders())));
 }
 
@@ -355,7 +349,7 @@ function snapshotSchema(schema: unknown): unknown {
  * @param options Optional search controls; omit it to use the defaults, with a limit of 10.
  * @returns The JSON request body for the search endpoint.
  */
-export function buildSearchBody(query: string, options: SearchOptions = {}): string {
+function buildSearchBody(query: string, options: SearchOptions = {}): string {
     requireText(query, "query");
     if (query.length > 500) throw invalidArgument("query must be at most 500 characters");
     const { includeDomains, excludeDomains, tbs, location, country, safe, timeout, scrapeOptions } = options;
@@ -510,12 +504,12 @@ export function downloadJobPage(kind: JobKind, jobId: string, path: string, next
 }
 
 /**
- * Pure builder used by offline tests.
+ * Build a scrape request without network access.
  * @param url Absolute HTTP(S) URL of the page.
  * @param options Optional content controls (formats, selectors, caching); omit it for markdown only.
  * @returns The JSON request body for the scrape endpoint.
  */
-export function buildScrapeBody(url: string, options: ScrapeOptions = {}): string {
+function buildScrapeBody(url: string, options: ScrapeOptions = {}): string {
     urlHost(url);
     const fields = scrapeFields(options);
     fields.push(field("url", JSON.stringify(url)));
@@ -528,7 +522,7 @@ export function buildScrapeBody(url: string, options: ScrapeOptions = {}): strin
  * @param options Optional content controls (formats, selectors, caching); omit it for markdown only.
  * @returns The JSON request body for the batch-scrape endpoint.
  */
-export function buildBatchBody(urls: string[], options: ScrapeOptions = {}): string {
+function buildBatchBody(urls: string[], options: ScrapeOptions = {}): string {
     validateBatchUrls(urls);
     return batchBody(urls, scrapeFields(options));
 }
@@ -550,7 +544,7 @@ function batchBody(urls: string[], fields: string[]): string {
  * @param options Optional discovery controls; omit it to use the defaults, with a limit of 100.
  * @returns The JSON request body for the map endpoint.
  */
-export function buildMapBody(url: string, options: MapOptions = {}): string {
+function buildMapBody(url: string, options: MapOptions = {}): string {
     urlHost(url);
     const { search, sitemap, ignoreQueryParameters, ignoreCache } = options;
     const limit = options.limit ?? 100;
@@ -570,7 +564,7 @@ export function buildMapBody(url: string, options: MapOptions = {}): string {
  * @param options Crawl scope controls; `limit` is the required page ceiling, 1-10000.
  * @returns The JSON request body for the crawl endpoint.
  */
-export function buildCrawlBody(url: string, options: CrawlOptions): string {
+function buildCrawlBody(url: string, options: CrawlOptions): string {
     urlHost(url);
     integerRange(options.limit, 1, 10000, "limit");
     const fields = [field("url", JSON.stringify(url)), field("limit", JSON.stringify(options.limit)),
@@ -596,7 +590,7 @@ export function buildCrawlBody(url: string, options: CrawlOptions): string {
  * @param next Pagination URL from a previous page of the same job, or `null` for the first page.
  * @returns The API path (relative to the base URL) for the job, with the `skip`/`limit` query when `next` is given.
  */
-export function jobPagePath(kind: JobKind, jobId: string, next: string | null = null): string {
+function jobPagePath(kind: JobKind, jobId: string, next: string | null = null): string {
     if (kind !== "batch" && kind !== "crawl") throw invalidArgument("kind must be batch or crawl");
     if (!/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(jobId)) throw invalidArgument("Expected a Firecrawl UUID job ID");
     const path = (kind === "batch" ? "/batch/scrape/" : "/crawl/") + jobId;
@@ -614,7 +608,7 @@ export function jobPagePath(kind: JobKind, jobId: string, next: string | null = 
  * @param url Absolute HTTP(S) URL, without credentials or whitespace.
  * @returns The URL's host, as used in capability checks.
  */
-export function urlHost(url: string): string {
+function urlHost(url: string): string {
     try {
         if (url.length > 8192 || url.trim() !== url || /[\s\\]/.test(url)) throw invalidArgument("Invalid URL");
         if (!/^https?:\/\/[^/?#@]+([/?#]|$)/.test(url)) throw invalidArgument("Invalid URL");
@@ -636,7 +630,7 @@ interface ApiSearch { success: boolean; data: ApiSearchData; id?: string | null;
  * @param body Raw JSON body of the search response.
  * @returns The normalized search response.
  */
-export function normalizeSearchJson(body: string): SearchResponse {
+function normalizeSearchJson(body: string): SearchResponse {
     try {
         const data = JSON.parse(body) as ApiSearch;
         if (!data.success) throw invalidResponse();
@@ -693,7 +687,7 @@ interface ApiJobErrors { errors: ApiPageFailure[]; robotsBlocked: string[]; }
  * @param body Raw JSON body of the scrape response.
  * @returns The normalized page.
  */
-export function normalizeScrapeJson(body: string): Page {
+function normalizeScrapeJson(body: string): Page {
     try {
         const data = JSON.parse(body) as ApiScrape;
         if (!data.success) throw invalidResponse();
@@ -706,7 +700,7 @@ export function normalizeScrapeJson(body: string): Page {
  * @param limit The limit that was requested, echoed in the result.
  * @returns The discovered links and the requested limit.
  */
-export function normalizeMapJson(body: string, limit: number): MapResponse {
+function normalizeMapJson(body: string, limit: number): MapResponse {
     try {
         const data = JSON.parse(body) as ApiMap;
         if (!data.success) throw invalidResponse();
@@ -726,7 +720,7 @@ export function normalizeMapJson(body: string, limit: number): MapResponse {
  * @param body Raw JSON body of the batch or crawl submission response.
  * @returns The job ID and any URLs the provider rejected.
  */
-export function normalizeJobJson(body: string): Job {
+function normalizeJobJson(body: string): Job {
     try {
         const data = JSON.parse(body) as ApiJob;
         if (!data.success) throw invalidResponse();
@@ -742,7 +736,7 @@ export function normalizeJobJson(body: string): Job {
  * @param jobId ID of the job the request was made for; any `next` URL must belong to it.
  * @returns The job status with one page of results.
  */
-export function normalizeJobPageJson(body: string, kind: JobKind, jobId: string): JobPage {
+function normalizeJobPageJson(body: string, kind: JobKind, jobId: string): JobPage {
     try {
         const data = JSON.parse(body) as ApiJobPage;
         requireText(data.status, "status");
@@ -762,7 +756,7 @@ export function normalizeJobPageJson(body: string, kind: JobKind, jobId: string)
  * @param body Raw JSON body of the job errors response.
  * @returns The page failures and robots.txt-blocked URLs.
  */
-export function normalizeJobErrorsJson(body: string): JobErrors {
+function normalizeJobErrorsJson(body: string): JobErrors {
     try {
         const data = JSON.parse(body) as ApiJobErrors;
         const errors: PageFailure[] = [];
@@ -779,7 +773,7 @@ export function normalizeJobErrorsJson(body: string): JobErrors {
  * @param body Raw JSON body of the cancellation response.
  * @returns The cancellation acknowledgement.
  */
-export function normalizeCancellationJson(body: string): Cancellation {
+function normalizeCancellationJson(body: string): Cancellation {
     try {
         const data = JSON.parse(body) as Cancellation;
         if (data.status !== "cancelled") throw invalidResponse();
@@ -793,7 +787,7 @@ export function normalizeCancellationJson(body: string): Cancellation {
  * @param retryAfter The `retry-after` response header value, or `null` when absent.
  * @returns A `FirecrawlError` whose code is derived from the status.
  */
-export function firecrawlHttpError(status: number, retryAfter: string | null = null): FirecrawlError {
+function firecrawlHttpError(status: number, retryAfter: string | null = null): FirecrawlError {
     let code = "http_error";
     if (status === 400 || status === 422) code = "invalid_request";
     else if (status === 401) code = "unauthorized";

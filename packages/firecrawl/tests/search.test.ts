@@ -1,57 +1,39 @@
+// The search request builder is private: these tests reach it through `search`.
+// Invalid input fails with `invalid_argument` before the check, credential read or
+// HTTP. Valid input stops at the credential read with `missing_credentials`; that
+// segment is skipped when FIRECRAWL_API_KEY is bound, so no request is sent.
 import { label, expectException } from "submilli:test";
-import { buildSearchBody, normalizeSearchJson, FirecrawlError } from "@submilli/firecrawl";
+import secrets from "submilli:secrets";
+import { search, FirecrawlError } from "@submilli/firecrawl";
 
 function rejects(code: string, action: () => void): void {
     const error = expectException(action, "FirecrawlError");
     assert(error instanceof FirecrawlError && error.code === code, "error code");
 }
 function main(): void {
-    label("search defaults are discovery only");
-    assert(buildSearchBody("test") === '{"query":"test","limit":10,"sources":["web"],"highlights":false,"domainTools":false}', "minimal web search");
-    assert(buildSearchBody("test", {}) === buildSearchBody("test"), "empty options do not enable scraping");
-    const escaped = JSON.parse(buildSearchBody('a "quoted" query\nnext')) as { query: string };
-    assert(escaped.query === 'a "quoted" query\nnext', "query escaping");
-
-    label("supported filters and opt-in extraction map to v2");
-    const filtered = buildSearchBody("query", { limit: 100, includeDomains: ["EXAMPLE.com"], tbs: "sbd:1,qdr:w",
-        country: "uk", location: "London,England,United Kingdom", safe: true, timeout: 10000 });
-    assert(filtered.includes('"includeDomains":["example.com"]') && filtered.includes('"country":"UK"'), "normalized domains and country");
-    assert(filtered.includes('"tbs":"sbd:1,qdr:w"') && filtered.includes('"limit":100') && filtered.includes('"safe":true'), "filters");
-    assert(buildSearchBody("q", { excludeDomains: ["example.com"], safe: false }).includes('"excludeDomains":["example.com"]'), "exclusions");
-    assert(buildSearchBody("q", { scrapeOptions: {} }).includes('"scrapeOptions":{"formats":["markdown"]}'), "explicit empty scrape options enable markdown");
-    const content = buildSearchBody("q", { scrapeOptions: { formats: ["markdown", "html"], maxAge: 0, includeTags: ["article"] } });
-    assert(content.includes('"scrapeOptions":{"formats":["markdown","html"],"includeTags":["article"],"maxAge":0}'), "reuse scrape options");
-
     label("search validates request limits and mutually exclusive filters");
-    rejects("invalid_argument", () => { buildSearchBody(" "); });
-    rejects("invalid_argument", () => { buildSearchBody("q".repeat(501)); });
-    for (const limit of [0, 101, 1.5, NaN, Infinity]) rejects("invalid_argument", () => { buildSearchBody("q", { limit: limit }); });
-    rejects("invalid_argument", () => { buildSearchBody("q", { includeDomains: [], excludeDomains: [] }); });
+    rejects("invalid_argument", () => { search(" "); });
+    rejects("invalid_argument", () => { search("q".repeat(501)); });
+    for (const limit of [0, 101, 1.5, NaN, Infinity]) rejects("invalid_argument", () => { search("q", { limit: limit }); });
+    rejects("invalid_argument", () => { search("q", { includeDomains: [], excludeDomains: [] }); });
     for (const host of ["https://example.com", "example.com/path", "*.example.com", "example.com:443", "foo bar", "-example.com", "example..com"]) {
-        rejects("invalid_argument", () => { buildSearchBody("q", { includeDomains: [host] }); });
+        rejects("invalid_argument", () => { search("q", { includeDomains: [host] }); });
     }
-    rejects("invalid_argument", () => { buildSearchBody("q", { country: "USA" }); });
-    rejects("invalid_argument", () => { buildSearchBody("q", { scrapeOptions: { formats: [] } }); });
+    rejects("invalid_argument", () => { search("q", { country: "USA" }); });
+    rejects("invalid_argument", () => { search("q", { scrapeOptions: { formats: [] } }); });
+    rejects("invalid_argument", () => { search("q", { scrapeOptions: { json: { schema: "bad" } } }); });
 
-    label("discovery and optional content preserve attribution and partial failures");
-    const bare = normalizeSearchJson('{"success":true,"data":{"web":[{"url":"https://example.com","title":"Example","description":"Snippet"}]},"creditsUsed":2}');
-    assert(bare.results[0].content === null && bare.results[0].description === "Snippet" && bare.creditsUsed === 2, "bare result");
-    const result = normalizeSearchJson('{"success":true,"data":{"web":[{"url":"https://example.com/a","title":"Search title","description":"Snippet","markdown":"full text","html":"<p>full text</p>","json":{"x":1},"metadata":{"sourceURL":"https://example.com/a","url":"https://example.org/final","custom":42}},{"url":"https://example.com/b","metadata":{"error":"timeout","statusCode":408}},{"url":"https://example.com/c","error":"scrape failed"}]},"warning":"partial","warnings":[{"code":"partial"}]}');
-    assert(result.results.length === 3 && result.results[0].title === "Search title", "all search hits preserved");
-    const page = result.results[0].content!;
-    const metadataJson = JSON.stringify(page.metadata);
-    assert(page.markdown === "full text" && page.url === "https://example.org/final" && metadataJson !== undefined && metadataJson.includes('"custom":42'), "content and raw metadata");
-    assert(result.results[1].content!.error === "timeout" && result.results[2].error === "scrape failed", "partial failures");
-    const warningsJson = JSON.stringify(result.warnings);
-    assert(result.warning === "partial" && warningsJson !== undefined && warningsJson.includes("partial"), "warnings preserved");
-    assert(normalizeSearchJson('{"success":true,"data":{"web":[]}}').results.length === 0, "empty valid results");
-    assert(normalizeSearchJson('{"success":true,"data":{"web":[{"url":"https://example.com","markdown":"text"}]}}').results[0].content!.markdown === "text", "metadata optional");
-    const nullHit = normalizeSearchJson('{"success":true,"id":null,"creditsUsed":null,"warning":null,"data":{"web":[{"url":"https://example.com","title":null,"description":null,"position":null,"markdown":"text","metadata":{"title":null,"sourceURL":null,"statusCode":null},"error":null}]}}');
-    assert(nullHit.id === null && nullHit.results[0].title === "" && nullHit.results[0].position === null, "JSON null search fields");
-    assert(nullHit.results[0].content!.title === null && nullHit.results[0].content!.markdown === "text", "JSON null result metadata keeps content");
-
-    label("malformed search envelopes fail instead of appearing empty");
-    for (const body of ["null", "not json", "{}", '{"success":false,"data":{"web":[]}}', '{"success":true,"data":[]}', '{"success":true,"data":{}}', '{"success":true,"data":{"web":[{"url":3}]}}', '{"success":true,"data":{"web":[{"url":"u","markdown":4}]}}']) {
-        rejects("invalid_response", () => { normalizeSearchJson(body); });
+    const key = secrets.get("FIRECRAWL_API_KEY");
+    if (key !== undefined && key.trim().length > 0) {
+        label("skip: valid search reaches the credential read only when FIRECRAWL_API_KEY is not bound");
+        return;
     }
+    label("supported filters and opt-in extraction pass local validation");
+    rejects("missing_credentials", () => { search("test"); });
+    rejects("missing_credentials", () => { search('a "quoted" query\nnext', {}); });
+    rejects("missing_credentials", () => { search("query", { limit: 100, includeDomains: ["EXAMPLE.com"], tbs: "sbd:1,qdr:w",
+        country: "uk", location: "London,England,United Kingdom", safe: true, timeout: 10000 }); });
+    rejects("missing_credentials", () => { search("q", { excludeDomains: ["example.com"], safe: false }); });
+    rejects("missing_credentials", () => { search("q", { scrapeOptions: {} }); });
+    rejects("missing_credentials", () => { search("q", { scrapeOptions: { formats: ["markdown", "html"], maxAge: 0, includeTags: ["article"] } }); });
 }

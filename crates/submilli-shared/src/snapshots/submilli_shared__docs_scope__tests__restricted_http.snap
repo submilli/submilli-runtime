@@ -1,0 +1,80 @@
+---
+source: crates/submilli-shared/src/docs_scope.rs
+expression: "declarations(&scope, \"submilli:http\")"
+---
+/**
+ * Issue a synchronous HTTP GET. Returns the full response (status, headers, UTF-8-decoded body). Traps on transport failure (DNS, connect, TLS, timeout) — surfaced as a guest `Error`.
+ * Under this blueprint, `http.get` is allowed when `host == "api.example.com"`; otherwise denied.
+ * @param url Absolute URL. A path with a `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError` and sends nothing.
+ * @param headers Optional request headers. Omit or pass `undefined` to send no extra headers.
+ * @capability http.get { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }
+ */
+function get(url: string, headers?: Headers): Response;
+
+/**
+ * Issue a synchronous HTTP POST. Returns the full response (status, headers, UTF-8-decoded body). Traps on transport failure (DNS, connect, TLS, timeout) — surfaced as a guest `Error`.
+ * Under this blueprint, `http.post` needs a person's approval.
+ * @param url Absolute URL. A path with a `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError` and sends nothing.
+ * @param body Optional request body. `string` is UTF-8 encoded and auto-tagged `Content-Type: text/plain; charset=utf-8` unless the caller overrides; a structural object or array is JSON-encoded and auto-tagged `Content-Type: application/json` unless the caller overrides; `Uint8Array` sends the bytes verbatim with no defaulted Content-Type; `null` sends the JSON payload `null` with default `Content-Type: application/json`; `undefined` (or omitted) sends an empty body.
+ * @param headers Optional request headers. Omit or pass `undefined` to send no extra headers.
+ * @capability http.post { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }
+ */
+function post(url: string, body?: string | Uint8Array | { [key: string]: unknown } | unknown[] | null, headers?: Headers): Response;
+
+/**
+ * Issue an HTTP request with a runtime-chosen verb. Returns the full response (status, headers, UTF-8-decoded body). Traps on transport failure (DNS, connect, TLS, timeout) — surfaced as a guest `Error`.
+ * Under this blueprint, `http.request` is allowed when `method == "GET" or method == "HEAD"`; otherwise denied.
+ * @param method HTTP method (case-insensitive). Common verbs: `"GET"` / `"POST"` / `"PUT"` / `"PATCH"` / `"DELETE"` / `"HEAD"` / `"OPTIONS"`.
+ * @param url Absolute URL. A path with a `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError` and sends nothing.
+ * @param body Optional request body. `string` is UTF-8 encoded and auto-tagged `Content-Type: text/plain; charset=utf-8` unless the caller overrides; a structural object or array is JSON-encoded and auto-tagged `Content-Type: application/json` unless the caller overrides; `Uint8Array` sends the bytes verbatim with no defaulted Content-Type; `null` sends the JSON payload `null` with default `Content-Type: application/json`; `undefined` (or omitted) sends an empty body.
+ * @param headers Optional request headers. Omit or pass `undefined` to send no extra headers.
+ * @capability http.request { method, host: $url.host, path: $url.path, body_size: number, timeout_ms: number }
+ */
+function request(method: string, url: string, body?: string | Uint8Array | { [key: string]: unknown } | unknown[] | null, headers?: Headers): Response;
+
+/**
+ * HTTP header bag: `Map<string, string>` with names lowercased on the wire. Future slice may add case-insensitive lookup.
+ */
+type Headers = Map<string, string>;
+
+/**
+ * Result of an HTTP call — status, headers, body, and the final URL after any redirects. Constructed only by the verb-form helpers; user code reads fields via property access and calls `throwForStatus()` / `toString()`.
+ */
+interface Response {
+  /**
+   * Response body, decoded as UTF-8. For binary responses, a future `bytes()` method will return `Uint8Array` without lossy decoding.
+   */
+  readonly body: string;
+  /**
+   * Response headers. Keys lowercased on the wire so `headers.get("content-type")` works regardless of how the server cased them.
+   */
+  readonly headers: Headers;
+  /**
+   * `true` iff `status` is in the 2xx range.
+   */
+  readonly ok: boolean;
+  /**
+   * HTTP status code (e.g. `200`, `404`).
+   */
+  readonly status: number;
+  /**
+   * Reason phrase (e.g. `"OK"`, `"Not Found"`). Empty when the server doesn't supply one.
+   */
+  readonly statusText: string;
+  /**
+   * Final URL after any redirects. Equals the original URL if there were no redirects.
+   */
+  readonly url: string;
+  /**
+   * Parse the response body as JSON into `unknown`. Validate with `as`, for example `r.json() as User`.
+   */
+  json(): unknown;
+  /**
+   * Throw if `ok` is `false`. The error message includes the status code, reason phrase, and final URL; catch it with `try`/`catch` like any other `Error`.
+   */
+  throwForStatus(): void;
+  /**
+   * Concise description of the response — `"Response(200 OK, https://...)"`. Built host-side for efficiency.
+   */
+  toString(): string;
+}

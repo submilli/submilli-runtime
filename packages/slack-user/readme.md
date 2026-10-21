@@ -21,7 +21,10 @@ is needed.
 
 Run `submilli blueprint add-package @submilli/slack-user` to add the package
 and scaffold its permissions. Review the generated `slack.com/user/*` grants
-and allow only the operations the program needs.
+and allow only the operations the program needs. The namespace already
+identifies the user context, so capability payloads contain only fields
+operators can meaningfully filter, such as channel, user, file, and search
+identifiers.
 
 The Slack app needs user-token scopes matching the selected operations. A broad
 installation commonly includes search, conversation history/read, users,

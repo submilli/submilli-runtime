@@ -60,6 +60,7 @@ unicode-properties = { version = "0.1", default-features = false, features = ["g
 
 [dev-dependencies]
 rcgen.workspace = true
+insta = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
 tempfile = { workspace = true }
 wasm-encoder = { workspace = true }

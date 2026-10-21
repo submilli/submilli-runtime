@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "bf5100ea40db4f6cbfbc1d91ae78673278dfcae12367d6a8cc232daefdf141dd"
+  contentHash: "ab67ff7e2c134a96a9927096d1d71ecfcd857d6017022b895dec839897930aee"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -86,7 +86,9 @@ unit, and what the fields mean.
 `docs/readme.md` is returned to the model with the declarations. Say what
 the Package is for, what each operation takes and returns, when it
 throws, what a denial means and that the program should stop, and end
-with one complete `main`:
+with one complete `main`. Leave setup out: the model runs no install or
+grant command and cannot change its blueprint, so those belong in the
+Package's root `README.md`, which people read.
 
 ````markdown title="packages/billing/docs/readme.md"
 # @pied-piper/billing
@@ -115,6 +117,48 @@ function main(): string {
 }
 ```
 ````
+
+## Show each reader what it can call
+
+The model reads the Package's documentation as its blueprint allows. An
+operation the blueprint can't allow is left out of the declarations,
+together with the types only that operation uses. A function with several
+`@capability` tags is shown only when the blueprint could allow every one
+of them. An operation allowed only under a filter, or only after a person
+approves, is shown with a line that says so.
+
+The readme is yours to mark. Wrap a section about one operation in a region
+naming its capability, and a blueprint that can't allow it doesn't show the
+section:
+
+````markdown title="packages/billing/docs/readme.md"
+<!-- submilli:if capability="pied-piper.example/credits.apply" -->
+
+## applyCredit(customerId, amount)
+
+Adds a goodwill credit of `amount` cents to the customer's account.
+
+```ts
+import { applyCredit } from "@pied-piper/billing";
+
+function main(): string {
+    return `balance ${applyCredit("pied_piper", 1500).balance}`;
+}
+```
+
+<!-- submilli:endif -->
+````
+
+Use `all="<name> <name>"` for an example that calls several operations,
+and `any="<name> <name>"` for guidance shared by several. Text outside a
+region is shown to every blueprint, so keep it true for a reader who can
+call only some operations. The build checks every directive, and an
+example inside a region is compiled like any other:
+
+```text
+error: package `@pied-piper/billing` has malformed documentation directives:
+  …/packages/billing/docs/readme.md:1: `pied-piper.example/credit.apply` is not a capability the standard library, this package, or its dependencies provide
+```
 
 ## The examples are compiled
 

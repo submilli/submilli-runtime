@@ -25,6 +25,10 @@ scopes used by your program:
 - `event:read` for issues and events
 - `event:write` for `updateIssue`
 
+Project-scoped capability payloads contain only organization, project, and
+issue. Mutation values such as status, assignee, and priority are deliberately
+omitted, so a capability filter cannot restrict them.
+
 The package targets `https://sentry.io/api/0/`. It does not support self-hosted
 Sentry or regional base URLs.
 

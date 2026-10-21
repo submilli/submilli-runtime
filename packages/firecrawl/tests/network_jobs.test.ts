@@ -1,7 +1,7 @@
 import { label } from "submilli:test";
 import secrets from "submilli:secrets";
 import { readText } from "submilli:fs";
-import { startBatch, startCrawl, getJob, getJobErrors, cancelJob, downloadJobPage, normalizeJobPageJson, JobKind } from "@submilli/firecrawl";
+import { startBatch, startCrawl, getJob, getJobErrors, cancelJob, downloadJobPage, JobKind } from "@submilli/firecrawl";
 
 function inspectAndCancel(kind: JobKind, id: string): void {
     try {
@@ -15,8 +15,8 @@ function inspectAndCancel(kind: JobKind, id: string): void {
         assert(saved.status === 200 && saved.bytesWritten > 0, "VFS result envelope");
         const body = readText(saved.path);
         assert(body !== undefined, "download exists");
-        const downloaded = normalizeJobPageJson(body!, kind, id);
-        assert(downloaded.status.length > 0, "downloaded status and pagination validate");
+        const downloaded = JSON.parse(body!) as { status: string };
+        assert(downloaded.status.length > 0, "downloaded envelope has a status");
         const errors = getJobErrors(kind, id);
         assert(errors.errors.length >= 0 && errors.robotsBlocked.length >= 0, "failure lists");
     } finally {

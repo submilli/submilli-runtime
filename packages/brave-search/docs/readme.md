@@ -1,13 +1,27 @@
 # Brave Search
 
 Use `@submilli/brave-search` for web discovery and extracted research context.
-Use `search` for one page of titles, URLs, descriptions, and alternative snippets;
-use `context` for passages grouped by source URL. Use `@submilli/jina` to read a
-specific URL after discovering it.
+
+<!-- submilli:if capability="brave.com/search" -->
+
+Use `search` for one page of titles, URLs, descriptions, and alternative snippets.
+The caller needs `brave.com/search`.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="brave.com/context" -->
+
+Use `context` for passages grouped by source URL.
+The caller needs `brave.com/context`.
+
+<!-- submilli:endif -->
+
+Use `@submilli/jina` to read a specific URL after discovering it.
 
 Credentials are supplied internally through `BRAVE_SEARCH_API_KEY`. Never ask
-for or pass an API key in package calls. The caller needs `brave.com/search` or
-`brave.com/context`, respectively.
+for or pass an API key in package calls.
+
+<!-- submilli:if capability="brave.com/search" -->
 
 ```ts
 import brave from "@submilli/brave-search";
@@ -17,6 +31,10 @@ function main(): string {
     return JSON.stringify(page);
 }
 ```
+
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="brave.com/context" -->
 
 ```ts
 import { context } from "@submilli/brave-search";
@@ -31,20 +49,34 @@ function main(): string {
 }
 ```
 
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="brave.com/search" -->
+
 `search` defaults to 10 results with extra snippets and spellchecking enabled.
 `nextOffset` is a page number, not a result index. Pass it as `offset` with the
 same query and count; stop when it is `null`. Pages may overlap. The package
 never fetches another page automatically. `alteredQuery` records spellchecking.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if any="brave.com/search brave.com/context" -->
 
 Both operations accept `country`, `searchLanguage`, `freshness`, and `safeSearch`.
 Safe search defaults to `moderate`. Freshness accepts `pd`, `pw`, `pm`, `py`, or
 `YYYY-MM-DDtoYYYY-MM-DD`; it refers to Brave's best available page date.
 Unspecified locale and freshness use provider defaults.
 
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="brave.com/context" -->
+
 `context` defaults to 20 search candidates, 10 source URLs, 4096 total tokens,
 and 2048 tokens per URL. These are approximate provider-side budgets, not exact
 output sizes. Context returns extracted passages, not generated answers, and
 local/map results are disabled. Keep URLs with passages for attribution.
+
+<!-- submilli:endif -->
 
 Failures throw `BraveSearchError` with `code`, `status`, and nullable `retryAfter`
 (the raw HTTP Retry-After value, which may be seconds or a date). Local failures

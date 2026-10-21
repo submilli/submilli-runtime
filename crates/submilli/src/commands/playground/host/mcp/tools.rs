@@ -30,7 +30,7 @@ use submilli_blueprint::{
     Blueprint, HarnessSecretBindings, VarBindings, VfsConfig, required_harness_secrets,
 };
 use submilli_shared::PolicyCheck;
-use submilli_shared::library_visibility::LibraryVisibility;
+use submilli_shared::docs_scope::DocsScope;
 
 use super::super::blueprints::AppliedBlueprint;
 use super::super::run::{
@@ -381,12 +381,8 @@ impl SubmilliMcp {
         let lookup = match self.shared.blueprint(&self.blueprint_name).await {
             Some(applied) => {
                 let catalog = self.catalog(&applied.blueprint).await?;
-                packages::lookup_with_blueprint(
-                    &args.name,
-                    &catalog,
-                    &applied.blueprint,
-                    &self.shared.package_store,
-                )
+                let scope = self.docs_scope(&applied.blueprint);
+                packages::lookup_with_blueprint(&args.name, &catalog, &scope)
             }
             None => packages::lookup(&args.name),
         };
@@ -407,12 +403,8 @@ impl SubmilliMcp {
         let value = match self.shared.blueprint(&self.blueprint_name).await {
             Some(applied) => {
                 let catalog = self.catalog(&applied.blueprint).await?;
-                packages::search_json_with_blueprint(
-                    &args.query,
-                    &catalog,
-                    &applied.blueprint,
-                    &self.shared.package_store,
-                )
+                let scope = self.docs_scope(&applied.blueprint);
+                packages::search_json_with_blueprint(&args.query, &catalog, &scope)
             }
             None => packages::search_json(&args.query),
         };
@@ -427,20 +419,22 @@ impl SubmilliMcp {
     ) -> Result<CallToolResult, ErrorData> {
         // The bound blueprint's `@mcp/*` names, so a package name asked of this
         // tool gets the correcting call rather than a bare unknown.
-        let (mcp_packages, visibility) = match self.shared.blueprint(&self.blueprint_name).await {
+        let (mcp_packages, scope) = match self.shared.blueprint(&self.blueprint_name).await {
             Some(applied) => {
                 let catalog = self.catalog(&applied.blueprint).await?;
                 (
                     packages::mcp_package_names(&catalog),
-                    LibraryVisibility::for_blueprint(&applied.blueprint),
+                    Some(self.docs_scope(&applied.blueprint)),
                 )
             }
-            None => (Vec::new(), LibraryVisibility::unscoped()),
+            None => (Vec::new(), None),
         };
         Ok(CallToolResult::structured(packages::builtins_docs_json(
             &args.names,
             &mcp_packages,
-            visibility,
+            scope
+                .as_ref()
+                .unwrap_or_else(|| DocsScope::unscoped_shared()),
         )))
     }
 
@@ -574,6 +568,17 @@ impl SubmilliMcp {
             .blueprint_mcp_catalog(blueprint)
             .await
             .map_err(|message| ErrorData::internal_error(message, None))
+    }
+
+    /// What `blueprint` lets programs see, from the packages installed now.
+    /// The playground serves one author, so it builds this per call rather
+    /// than caching it.
+    fn docs_scope(&self, blueprint: &Blueprint) -> DocsScope {
+        let artifacts = submilli_shared::docs_scope::load_declared(
+            &blueprint.packages,
+            &self.shared.package_store,
+        );
+        DocsScope::for_blueprint(blueprint, &artifacts)
     }
 
     /// File tools act as the session's main program, including on isolated VFSs.

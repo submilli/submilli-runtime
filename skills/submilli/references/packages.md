@@ -265,8 +265,9 @@ for (const id of input.channelIds) send(id, input.text);
 
 The pattern below wraps a REST API. It reads the token by literal secret name
 inside the package, builds URLs from a top-level constant so the compiler can
-derive `host == "api.pied-piper.example"` into `requires`, separates pure builders from
-network code so they can be unit tested, and resolves ownership before a write.
+derive `host == "api.pied-piper.example"` into `requires`, validates input
+before any check or request so tests reach it offline, and resolves ownership
+before a write.
 
 ```typescript
 // Orders for one customer, wrapping the internal REST API at api.pied-piper.example.
@@ -345,11 +346,6 @@ export function cancelOrder(orderId: string, input?: CancelInput): Order {
     const body: CancelInput = reason === undefined ? {} : { reason: reason };
     const response = request("POST", "/orders/" + encodeComponent(orderId) + "/cancel", body);
     return JSON.parse(response.body) as Order;
-}
-
-/** Build the `?limit=&cursor=` suffix; exported so tests cover it without a token. */
-export function buildPageQuery(page?: PageOptions): string {
-    return pageQuery(page?.limit, page?.cursor);
 }
 
 function pageQuery(requested: number | undefined, cursor: string | undefined): string {
@@ -452,16 +448,40 @@ pasting them into chat or source control.
 
 ## Model-facing documentation
 
+A package has two readmes. The root `README.md` is for the people who install
+and grant it: install and secret commands, blueprint YAML, which capabilities
+to grant and how to filter them. `docs/readme.md` is for the agent writing a
+program, which can run none of that and cannot change its blueprint, so keep
+setup out of it. A capability name belongs there only where it explains a
+denial the agent will see.
+
 `docs/readme.md` is what the agent reads through the `packages.docs` tool. Its
 `ts`/`typescript` fences are compiled against the package by `build test`, so
 examples cannot rot; use `ts ignore` for illustrative fragments. Cover: what
-the package is for, every operation grouped by read and write, argument and
+the package is for, each operation's behavior in its own region, argument and
 return types, pagination and how to request the next page, error behavior and
-`null` returns, which fields are policy-visible and that a denial means the
-operation is forbidden rather than mis-called, and that credentials are
-supplied internally so no key is ever passed. End with one complete `main`
-example that returns a compact result. Write it for an agent choosing calls,
-not for a human onboarding.
+`null` returns, that a denial means the operation is forbidden rather than
+mis-called, and that credentials are supplied internally so no key is ever
+passed. End with one complete `main` example that returns a compact result,
+inside the region of the operations it calls.
+
+An agent reads only what its blueprint could let it call. Wrap each
+operation's section in a capability region, matching the `@capability` tags of
+the functions it describes:
+
+```markdown
+<!-- submilli:if capability="pied-piper.example/orders.cancel" -->
+## Cancel an order
+...
+<!-- submilli:endif -->
+```
+
+`all="a b"` needs every name and `any="a b"` at least one; a function with
+several tags needs `all`. Directive lines stand alone, unindented, outside
+fenced code, and may sit between list items or table rows. Do not list every
+operation in prose outside regions: make it a list with one region per item,
+or leave the listing to the declarations, which agents already get narrowed.
+The build rejects malformed directives and names nothing provides.
 
 ## Tests
 
@@ -475,18 +495,18 @@ normally:
 
 ```typescript
 import { label, expectException } from "submilli:test";
-import { buildPageQuery } from "@pied-piper/orders";
+import { listOrders } from "@pied-piper/orders";
 function main(): void {
-  label("defaults to a page of 50");
-  assert(buildPageQuery() === "?limit=50", "default page size");
-  label("rejects a limit above 100");
-  const error = expectException(() => { buildPageQuery({ limit: 101 }); }, "RangeError");
+  label("rejects a limit above 100 before any request");
+  const error = expectException(() => { listOrders("pied_piper", { limit: 101 }); }, "RangeError");
   assert(error.message.includes("limit"), "message names the argument");
 }
 ```
 
-- Unit-test pure builders (query strings, filter variables, error rendering)
-  without network or secrets. Export them for that purpose.
+- Export only the operations an agent calls: an exported helper is shown to
+  every agent, whatever its blueprint allows. Test input validation (limits,
+  required fields, formats) through those operations: it runs before `check()`
+  and `secrets.get`, so it needs no network or secret.
 - Tests receive no credentials by default. Use `--env-var NAME` (repeatable or
   comma-separated), `--env-file PATH` (relative to the current directory), or
   `--all-env`. Precedence is `--env-var` > `--env-file` > `--all-env`, regardless
@@ -503,8 +523,9 @@ function main(): void {
   `SUBMILLI_SKIP_HTTP_TESTS` has no effect on package-test selection.
 - In a CI job with an injected secret, run
   `submilli build test --deny-warnings -p @pied-piper/billing --env-var BILLING_API_KEY`.
-- Test that a write operation sends only the fields set, that a missing
-  resource yields `null`, and that a service error surfaces its detail.
+- In tests gated on the secret, check that a write operation sends only the
+  fields set, that a missing resource yields `null`, and that a service error
+  surfaces its detail.
 
 Package tests run with the package's own identity and an unrestricted policy.
 They do not prove that a `main` caller is constrained; the allowed and denied

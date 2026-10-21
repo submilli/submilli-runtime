@@ -42,27 +42,40 @@ domain inclusion/exclusion, provider time filters, location/country and
 SafeSearch. The current v2 endpoint has no documented pagination parameter.
 See the [agent guide](docs/readme.md) for compiled examples and result types.
 
-Grant `firecrawl.dev/search` for discovery. Native search with content also
-requires `firecrawl.dev/search.scrape` and `firecrawl.dev/delegatedFetch`:
-these explicitly authorize provider scraping of unknown result hosts. An
-ordinary host-filtered scrape grant does not authorize this mode. For per-host
-checks, discover first and use `scrape` on selected result URLs instead. Search
-domain filters are not an authorization boundary.
+Grant `firecrawl.dev/search` for search, with or without page content. With
+`scrapeOptions`, that grant also authorizes provider scraping of unknown result
+hosts. A role that needs per-host checks should not hold the search grant; give
+it host-filtered `scrape` instead. Search domain filters are not an
+authorization boundary.
 
 ## Authority
+
+| Operation | Caller capability and truthful fields |
+| --- | --- |
+| Search, with or without result content | `firecrawl.dev/search { limit }` |
+| Scrape | `firecrawl.dev/scrape { host }` |
+| Map | `firecrawl.dev/map { host, limit, includeSubdomains }` |
+| Batch submission | `firecrawl.dev/batch.start { host, count }`, checked for every URL |
+| Crawl submission | `firecrawl.dev/crawl.start { host, limit, allowSubdomains, allowExternalLinks, crawlEntireDomain }` |
+| Scrape, Map, Batch and Crawl submission | Also `firecrawl.dev/delegatedFetch {}` |
+| Read status/results/errors or download | `firecrawl.dev/jobs.read { kind, jobId }` |
+| Cancel | `firecrawl.dev/jobs.cancel { kind, jobId }` |
+| Download destination | Also caller `fs.write { path, max_bytes }` |
 
 Submitted-host grants authorize inputs, **not all downstream fetching**.
 Firecrawl controls redirects, subresources, discovery and crawling remotely.
 The additional `firecrawl.dev/delegatedFetch` grant explicitly accepts that
 boundary. Do not enable it for a role requiring strict downstream host isolation.
 This applies to Map and single-page Scrape as well as Crawl and Batch Scrape.
-Every batch URL's host is checked before submission.
+Crawl scope options narrow provider behavior. They are not enforced by Submilli
+on Firecrawl's servers. Every batch URL's host is checked before submission.
 
 Crawl grants can constrain the page ceiling and expansion flags. Job read and
 cancel grants use `{ kind, jobId }` independently of submission: no caller can
 claim a host to authorize an existing job. Broad job grants intentionally
-permit jobs accessible to the credential, including pre-existing jobs. For
-narrow roles have the harness grant only approved returned IDs.
+permit jobs accessible to the credential, including pre-existing jobs.
+Creating a job does not automatically grant access to it. For narrow roles have
+the harness grant only approved returned IDs.
 
 A bounded crawl grant can use:
 
@@ -76,6 +89,7 @@ check caller `fs.write` with path and byte cap. The package validates pagination
 against the exact HTTPS API origin, job family and job ID, and reconstructs the
 request URL. It does not download from arbitrary provider-supplied URLs.
 The standard transport removes Authorization on cross-origin redirects.
+Embedders supplying another transport must preserve this guarantee.
 
 ## Verification
 
@@ -83,9 +97,9 @@ The standard transport removes Authorization on cross-origin redirects.
 cargo run -p submilli -- build test -p @submilli/firecrawl
 ```
 
-Offline package tests cover mappings, optional extraction, full metadata,
-partial failures, malformed envelopes, pagination, lifecycle shapes, and
-cancellation. Documentation fences are compiled by the package test runner.
+Offline package tests cover input validation, which runs before any
+permission check, credential read, or request. Documentation fences are
+compiled by the package test runner.
 
 The TypeScript policy tests in `tests/policy/` run as a real `main` caller under
 restricted blueprints. They verify every batch host, submitted-host and scope

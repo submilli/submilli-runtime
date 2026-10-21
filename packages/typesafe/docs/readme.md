@@ -162,8 +162,8 @@ errors. Examples illustrate decomposition, not measured accuracy for your domain
 ## Credentials, permissions, and failures
 
 Credentials are read internally from `TYPESAFE_AI_KEY`; never pass a key in calls.
-The caller needs `typesafe.ai/systemone`. The package requests only
-`POST https://api.typesafe.ai/v1/systemone` and that secret.
+Every call checks the `typesafe.ai/systemone` capability. A permission denial
+means the call is forbidden, not mis-called.
 
 The default model is `jev-latest`. Set `model` to a versioned ID when reproducible
 threshold evaluation matters; batch responses report the model that answered.

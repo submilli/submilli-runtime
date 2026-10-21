@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "017c1118ab5862edef75dc3fe9200693f354dd819a59ffe6bd225c727bf34b2e"
+  contentHash: "7c24b237c9d538062ef6d23d0567acee54e118b802a13ec20ffd9f72b7b2d7a9"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -137,7 +137,8 @@ out, and a condition on a missing field is false.
   Reading history, staging, and branching aren't gated.
 - **HTTP redirects:** each redirect is checked before it is sent, with the
   new URL's `host` and `path`, under the same caller. A redirect that turns
-  the request into a `GET` is checked as `http.get`.
+  the request into a `GET` is checked as `http.get`, or for `request`, as
+  `http.request` with `method` `"GET"`.
 - **Models:** `prompt_count` is `1` for `call` and the number of prompts for
   `batch`. The prompt text is never in the context. `models()` lists only
   the models a rule allows.
@@ -190,8 +191,8 @@ read checks the requested alias name and grants no access to its target name.
 | `http.delete` | `host: string`, `path: string`, `body_size: number`, `timeout_ms: number` | HTTP DELETE | `host == "api.example.com"` |
 | `http.head` | `host: string`, `path: string`, `body_size: number`, `timeout_ms: number` | HTTP HEAD | `host == "api.example.com"` |
 | `http.options` | `host: string`, `path: string`, `body_size: number`, `timeout_ms: number` | HTTP OPTIONS | `host == "api.example.com"` |
+| `http.request` | `method: string`, `host: string`, `path: string`, `body_size: number`, `timeout_ms: number` | HTTP request with a method chosen at the call, through `http.request`. The per-method functions (`http.get`, …) check their own capability instead | `method == "GET" and host == "api.example.com"` |
 | `http.download` | `host: string`, `url_path: string`, `vfs_path: string`, `max_bytes: number`, `overwrite: boolean`, `decompress: boolean` | Download a URL straight to the VFS | `host == "cdn.example.com" and overwrite == false` |
-| `http.<method>` | `host: string`, `path: string`, `body_size: number`, `timeout_ms: number` | Any other HTTP method, through `http.request`: `http.trace` gates TRACE | `host == "api.example.com"` |
 
 ### `submilli:llm`
 
@@ -256,7 +257,6 @@ read checks the requested alias name and grants no access to its target name.
 - a rule for `secrets.get` or `variables.get` under `main`
 - a rule that an earlier unfiltered rule always decides first
 - a capability name nothing provides, with a suggestion
-- an `http.<method>` name that only `http.request` reaches
 - a Package rule that differs from what the Package requires
 - a Package list for a Package the Blueprint doesn't use
 

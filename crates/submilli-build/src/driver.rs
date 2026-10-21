@@ -111,6 +111,7 @@ pub fn build_packages_configured(
     let order = topo_order(&scoped)?;
 
     let mut built: BTreeMap<PackageName, PackageDeclaration> = BTreeMap::new();
+    let mut built_provides: BTreeMap<PackageName, Vec<String>> = BTreeMap::new();
     let mut external_cache: BTreeMap<PackageName, ExternalArtifact> = BTreeMap::new();
     let mut external_budget = ArtifactReadBudget::new(ArtifactReadLimits::default());
     let mut results = Vec::with_capacity(order.len());
@@ -182,6 +183,36 @@ pub fn build_packages_configured(
             &compiled.declaration,
             &schema_dependencies,
             &compiled.required_capabilities,
+        );
+        let dependency_names: Vec<PackageName> = package
+            .dependencies
+            .iter()
+            .map(|dep| dep.name.clone())
+            .chain(transitive_dependencies(package, &scoped, &external_cache))
+            .collect();
+        let provided_by_dependency = |name: &str| {
+            dependency_names.iter().any(|dependency| {
+                built_provides
+                    .get(dependency)
+                    .or_else(|| external_cache.get(dependency).map(|a| &a.provides))
+                    .is_some_and(|provides| provides.iter().any(|provided| provided == name))
+            })
+        };
+        check_documentation_directives(manifest_dir, package, &documentation, &|name| {
+            interpreter::stdlib::capabilities::find_any(name).is_some()
+                || capabilities
+                    .provides
+                    .iter()
+                    .any(|provided| provided.name == name)
+                || provided_by_dependency(name)
+        })?;
+        built_provides.insert(
+            package.name.clone(),
+            capabilities
+                .provides
+                .iter()
+                .map(|provided| provided.name.clone())
+                .collect(),
         );
         built.insert(package.name.clone(), compiled.declaration.clone());
         results.push(BuiltPackage {
@@ -374,6 +405,11 @@ pub enum DriverError {
         path: PathBuf,
         source: io::Error,
     },
+    DocumentationDirectives {
+        package: PackageName,
+        path: PathBuf,
+        errors: Vec<interpreter::doc_directives::DirectiveError>,
+    },
     NonUtf8ModulePath {
         path: PathBuf,
     },
@@ -503,6 +539,27 @@ impl fmt::Display for DriverError {
                 package.as_str(),
                 path.display()
             ),
+            DriverError::DocumentationDirectives {
+                package,
+                path,
+                errors,
+            } => {
+                write!(
+                    f,
+                    "package `{}` has malformed documentation directives:",
+                    package.as_str()
+                )?;
+                for error in errors {
+                    write!(
+                        f,
+                        "\n  {}:{}: {}",
+                        path.display(),
+                        error.line,
+                        error.message
+                    )?;
+                }
+                Ok(())
+            }
             DriverError::NonUtf8ModulePath { path } => write!(
                 f,
                 "package source path {} is not valid UTF-8; rename the file",
@@ -569,15 +626,19 @@ fn read_package_docs(
     manifest_dir: &Path,
     package: &PackageManifest,
 ) -> Result<String, DriverError> {
-    let path = manifest_dir
-        .join(package.path.as_path())
-        .join("docs")
-        .join("readme.md");
+    let path = package_docs_path(manifest_dir, package);
     fs::read_to_string(&path).map_err(|source| DriverError::DocumentationRead {
         package: package.name.clone(),
         path,
         source,
     })
+}
+
+fn package_docs_path(manifest_dir: &Path, package: &PackageManifest) -> PathBuf {
+    manifest_dir
+        .join(package.path.as_path())
+        .join("docs")
+        .join("readme.md")
 }
 
 /// The selected package and its sibling dependency closure.
@@ -699,6 +760,9 @@ fn visit(
 struct ExternalArtifact {
     declaration: PackageDeclaration,
     version: String,
+    /// The capabilities it provides, which its dependents' documentation may
+    /// name.
+    provides: Vec<String>,
     /// The artifact's own dependencies, for walking the closure. An installed
     /// artifact records them in its metadata; they are all in the store too,
     /// since `install` loads a closure.
@@ -755,6 +819,12 @@ fn load_external_dependencies(
             ExternalArtifact {
                 declaration: artifact.package_declaration,
                 version: artifact.metadata.package_version,
+                provides: artifact
+                    .capabilities
+                    .provides
+                    .into_iter()
+                    .map(|provided| provided.name)
+                    .collect(),
                 dependencies,
             },
         );
@@ -772,6 +842,25 @@ fn transitive_dependency_decls<'a>(
     built: &'a BTreeMap<PackageName, PackageDeclaration>,
     external_cache: &'a BTreeMap<PackageName, ExternalArtifact>,
 ) -> Vec<&'a PackageDeclaration> {
+    transitive_dependencies(package, scoped, external_cache)
+        .iter()
+        // A sibling is compiled before its dependents (topological order), so
+        // `built` holds it; anything else came from the store.
+        .filter_map(|name| {
+            built
+                .get(name)
+                .or_else(|| external_cache.get(name).map(|a| &a.declaration))
+        })
+        .collect()
+}
+
+/// The names in the rest of `package`'s dependency closure, as
+/// [`transitive_dependency_decls`] describes it.
+fn transitive_dependencies(
+    package: &PackageManifest,
+    scoped: &[&PackageManifest],
+    external_cache: &BTreeMap<PackageName, ExternalArtifact>,
+) -> Vec<PackageName> {
     let direct: BTreeSet<&PackageName> = package.dependencies.iter().map(|d| &d.name).collect();
     let deps_of = |name: &PackageName| -> Vec<PackageName> {
         if let Some(manifest) = scoped.iter().find(|p| &p.name == name) {
@@ -788,22 +877,53 @@ fn transitive_dependency_decls<'a>(
     };
     let mut queue: Vec<PackageName> = direct.iter().flat_map(|name| deps_of(name)).collect();
     let mut seen: BTreeSet<PackageName> = BTreeSet::new();
-    let mut decls = Vec::new();
+    let mut names = Vec::new();
     while let Some(name) = queue.pop() {
         if direct.contains(&name) || !seen.insert(name.clone()) {
             continue;
         }
         queue.extend(deps_of(&name));
-        // A sibling is compiled before its dependents (topological order), so
-        // `built` holds it; anything else came from the store.
-        if let Some(decl) = built
-            .get(&name)
-            .or_else(|| external_cache.get(&name).map(|a| &a.declaration))
-        {
-            decls.push(decl);
-        }
+        names.push(name);
     }
-    decls
+    names
+}
+
+/// Check the directives in `package`'s documentation: well formed, and naming
+/// only capabilities the standard library, the package, or its dependencies
+/// provide.
+fn check_documentation_directives(
+    manifest_dir: &Path,
+    package: &PackageManifest,
+    documentation: &str,
+    known: &dyn Fn(&str) -> bool,
+) -> Result<(), DriverError> {
+    let errors = match interpreter::doc_directives::parse_doc_directives(documentation) {
+        Ok(document) => document
+            .regions()
+            .into_iter()
+            .flat_map(|(line, condition)| {
+                condition
+                    .capabilities()
+                    .iter()
+                    .filter(|name| !known(name))
+                    .map(move |name| interpreter::doc_directives::DirectiveError {
+                        line,
+                        message: format!(
+                            "`{name}` is not a capability the standard library, this package, or its dependencies provide"
+                        ),
+                    })
+            })
+            .collect(),
+        Err(errors) => errors,
+    };
+    if errors.is_empty() {
+        return Ok(());
+    }
+    Err(DriverError::DocumentationDirectives {
+        package: package.name.clone(),
+        path: package_docs_path(manifest_dir, package),
+        errors,
+    })
 }
 
 /// A package source file: its import-facing module path (`lib`,

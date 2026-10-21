@@ -300,7 +300,7 @@ fn entrypoint_stub(name: &str) -> String {
 
 fn docs_readme_stub(name: &str) -> String {
     format!(
-        "# {name}\n\nDescribe what this package does, when to use it, and any important behavior an agent should know before importing it.\n"
+        "# {name}\n\nDescribe what this package does, when to use it, and any important behavior an agent should know before importing it.\n\nWrap a section about one operation between `<!-- submilli:if capability=\"<name>\" -->` and `<!-- submilli:endif -->` lines, each on its own line, so a blueprint that cannot allow the operation does not show it.\n"
     )
 }
 

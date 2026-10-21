@@ -357,10 +357,9 @@ whole caller list if it has one (lint reports what that list lacks). With
 each operation the program may call is then one explicit `capability add`.
 `--capabilities NAME,...` and `--all-capabilities` are the shortcuts.
 `capability add` refuses a name it does not know, or one only a dependency
-provides for `main` (which cannot import it), unless `--force` is given. It
-accepts any other HTTP method as `http.<method>` (`http.request("TRACE", …)`
-checks `http.trace`) and warns that the rule matches only that method, but
-refuses a near miss of a cataloged operation such as `http.dlete`. Add
+provides for `main` (which cannot import it), unless `--force` is given.
+`http.request(method, …)` checks `http.request` with an uppercase `method`
+field, so a rule for one method filters on it: `method == "TRACE"`. Add
 `variables`, `vfs`, `idle_timeout`, `llm` and `embedding` by editing the file; the CLI
 editors rewrite YAML and drop comments, so keep hand-written commentary
 elsewhere. Lint warns on the names `capability add` refuses or warns about (a
