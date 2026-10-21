@@ -4554,6 +4554,11 @@ impl<'a> Parser<'a> {
             self.error_at_peek("expected `=>` in arrow function");
             return None;
         }
+        // Like TypeScript, the arrow still parses, so later errors keep their spans.
+        if self.line_break_before_peek() {
+            let arrow_span = self.peek().span;
+            self.error_at(arrow_span, "a line break is not allowed before `=>`");
+        }
         self.advance();
 
         let (body, end_pos) = if matches!(self.peek().kind, TokenKind::LeftBrace) {
