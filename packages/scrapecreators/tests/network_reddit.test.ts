@@ -19,4 +19,11 @@ function main(): void {
     assert(post.id === id, "post identity");
     const comments = reddit.listComments({ url: url }).data;
     assert(comments.post !== undefined && comments.post !== null && comments.post.id === id, "thread identity");
+
+    label("live netsec subreddit searches accept native post metadata");
+    for (const query of ["prompt injection", "AI agent", "MCP", "sandbox"]) {
+        const result = reddit.searchSubreddit({ subreddit: "netsec", query: query, sort: "top", timeframe: "year" });
+        assert(result.data.success === true, "subreddit search succeeds for " + query);
+        assert(result.data.posts.length > 0, "subreddit search retains posts for " + query);
+    }
 }

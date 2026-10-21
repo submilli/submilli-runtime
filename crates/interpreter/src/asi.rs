@@ -19,10 +19,13 @@ enum BraceKind {
 struct BraceFrame {
     kind: BraceKind,
     bracket_base: u32,
+    /// Opened a class body, where a line break after `static` doesn't end a member.
+    class_body: bool,
 }
 
 /// Automatic Semicolon Insertion: strips `Newline` tokens, inserts `Semicolon` at statement boundaries.
 pub struct Asi<'a> {
+    source: &'a str,
     lexer: Lexer<'a>,
     buffered: Option<Token>,
     lookahead: std::collections::VecDeque<Token>,
@@ -50,6 +53,16 @@ pub struct Asi<'a> {
     /// A declaration header is not a statement, so it never ends inside one — which a
     /// token table cannot see, since the header's last token is an ordinary identifier.
     in_decl_header: bool,
+    /// While a class header is open, how many braces enclose it. A type literal in
+    /// the header (`implements Box<{ a: number }>`) opens a brace of its own; the
+    /// class body is the first brace back at this depth after a name or `>`.
+    class_header_depth: Option<usize>,
+    /// Has every token since the start of the current class member been a modifier
+    /// word (`private`, `static`, …)?
+    in_member_modifiers: bool,
+    /// Is `last_emitted` the word `static` among a class member's modifiers? It stays
+    /// a modifier across a line break when a member name follows, as in TypeScript.
+    last_is_member_static: bool,
     /// Did `last_emitted` follow a `.` / `?.`? Every clause and declaration keyword is
     /// also a legal property name, so `o.default`, `o.do`, and `o.class` reach the token
     /// tables spelled exactly like the statement forms. A member name ends an expression,
@@ -73,6 +86,7 @@ impl<'a> Asi<'a> {
     /// ASI over `source`, attributing every span to `file` (see [`Lexer::new`]).
     pub fn new(source: &'a str, file: FileId) -> Self {
         Self {
+            source,
             lexer: Lexer::new(source, file),
             buffered: None,
             lookahead: std::collections::VecDeque::new(),
@@ -86,6 +100,9 @@ impl<'a> Asi<'a> {
             in_case_label: false,
             after_case_label_colon: false,
             in_decl_header: false,
+            class_header_depth: None,
+            in_member_modifiers: false,
+            last_is_member_static: false,
             brace_opens_specifier_list: false,
             cast_angle_depth: 0,
             closed_cast_angle: false,
@@ -94,7 +111,7 @@ impl<'a> Asi<'a> {
 
     pub fn next_token(&mut self) -> Token {
         if let Some(tok) = self.buffered.take() {
-            self.track(&tok.kind);
+            self.track_token(&tok);
             return tok;
         }
 
@@ -112,7 +129,7 @@ impl<'a> Asi<'a> {
                     if self.needs_semi() {
                         return self.insert_semicolon_before(tok);
                     }
-                    self.track(&tok.kind);
+                    self.track_token(&tok);
                     return tok;
                 }
                 _ => {
@@ -127,11 +144,12 @@ impl<'a> Asi<'a> {
                     if boundary
                         && !self.inside_brackets()
                         && !self.can_continue_here(&tok.kind)
+                        && !(self.last_is_member_static && can_follow_modifier(&tok.kind))
                         && self.needs_semi()
                     {
                         return self.insert_semicolon_before(tok);
                     }
-                    self.track(&tok.kind);
+                    self.track_token(&tok);
                     return tok;
                 }
             }
@@ -257,7 +275,40 @@ impl<'a> Asi<'a> {
             BraceKind::Block | BraceKind::MemberList => self.bracket_depth,
             BraceKind::Value => self.braces.last().map_or(0, |frame| frame.bracket_base),
         };
-        self.braces.push(BraceFrame { kind, bracket_base });
+        let class_body = self.class_header_depth == Some(self.braces.len())
+            && matches!(
+                self.last_emitted,
+                Some(TokenKind::Identifier | TokenKind::GreaterThan)
+            );
+        if class_body {
+            self.class_header_depth = None;
+        }
+        self.braces.push(BraceFrame {
+            kind,
+            bracket_base,
+            class_body,
+        });
+    }
+
+    /// [`Asi::track`], plus the state that needs the token's text.
+    fn track_token(&mut self, tok: &Token) {
+        let at_member_start = self.braces.last().is_some_and(|frame| frame.class_body)
+            && !self.inside_brackets()
+            && matches!(
+                self.last_emitted,
+                Some(TokenKind::LeftBrace | TokenKind::RightBrace | TokenKind::Semicolon)
+            );
+        let word = match tok.kind {
+            TokenKind::Identifier => self
+                .source
+                .get(tok.span.start as usize..tok.span.end as usize),
+            _ => None,
+        };
+        let modifier = word.is_some_and(|word| CLASS_MEMBER_MODIFIERS.contains(&word));
+        let in_member_modifiers = modifier && (at_member_start || self.in_member_modifiers);
+        self.track(&tok.kind);
+        self.in_member_modifiers = in_member_modifiers;
+        self.last_is_member_static = in_member_modifiers && word == Some("static");
     }
 
     /// Advance every piece of state past `kind`.
@@ -275,6 +326,17 @@ impl<'a> Asi<'a> {
         self.after_case_label_colon = self.next_after_case_label_colon(kind);
         self.in_case_label = self.next_in_case_label(kind);
         self.in_decl_header = self.next_in_decl_header(kind);
+        match kind {
+            TokenKind::Class if self.in_decl_header => {
+                self.class_header_depth = Some(self.braces.len());
+            }
+            TokenKind::Semicolon if self.class_header_depth == Some(self.braces.len()) => {
+                self.class_header_depth = None;
+            }
+            _ => {}
+        }
+        self.in_member_modifiers = false;
+        self.last_is_member_static = false;
         self.brace_opens_specifier_list = self.next_brace_opens_specifier_list(kind);
         self.last_is_member_name = self.next_last_is_member_name();
         self.closed_header_paren = closed_header;
@@ -440,6 +502,34 @@ impl<'a> Asi<'a> {
 // `can_continue` classifies the token *ahead* of it. That is why `else` and `finally`
 // legitimately appear on both sides — they neither end the statement behind them nor
 // start a new one ahead.
+
+/// The words TypeScript reads as class member modifiers.
+const CLASS_MEMBER_MODIFIERS: &[&str] = &[
+    "public",
+    "private",
+    "protected",
+    "readonly",
+    "static",
+    "override",
+    "declare",
+    "abstract",
+    "accessor",
+];
+
+/// A token that may follow a modifier (TypeScript's `canFollowModifier`): a member
+/// name, or what opens a computed one or a static block.
+fn can_follow_modifier(kind: &TokenKind) -> bool {
+    crate::parser::is_property_name(kind)
+        || matches!(
+            kind,
+            TokenKind::StringLiteral(_)
+                | TokenKind::NumberLiteral(_)
+                | TokenKind::BigIntLiteral(_)
+                | TokenKind::LeftBracket
+                | TokenKind::LeftBrace
+                | TokenKind::Star
+        )
+}
 
 /// A statement cannot end on this token, so a following newline is mid-statement.
 /// `,` always sits inside a value list (object literal, pattern, import, argument or
@@ -993,6 +1083,49 @@ mod tests {
                 TokenKind::Eof,
             ]
         );
+    }
+
+    /// Whether ASI ends a statement right after the first `static` in `source`.
+    fn semicolon_after_static(source: &str) -> bool {
+        let offset = source.find("static").expect("the source holds `static`") as u32;
+        let mut asi = Asi::new(source, crate::FileId(0));
+        loop {
+            let tok = asi.next_token();
+            if tok.span.start == offset && tok.kind == TokenKind::Identifier {
+                return asi.next_token().kind == TokenKind::Semicolon;
+            }
+            assert_ne!(tok.kind, TokenKind::Eof);
+        }
+    }
+
+    #[test]
+    fn static_keeps_a_class_member_across_a_line_break() {
+        assert!(!semicolon_after_static(
+            "class C {\n  static\n  b: number = 2;\n}"
+        ));
+        assert!(!semicolon_after_static(
+            "class C {\n  x = 1\n  static\n  m() {}\n}"
+        ));
+        assert!(!semicolon_after_static(
+            "class C {\n  private static\n  b = 2\n}"
+        ));
+        assert!(!semicolon_after_static(
+            "class C {\n  static\n  [k]: number = 2\n}"
+        ));
+        // A type literal in the header doesn't take the place of the body.
+        assert!(!semicolon_after_static(
+            "class C implements Box<{ a: number }> {\n  static\n  b = 2\n}"
+        ));
+        // `static` not followed by a member name is itself the member's name.
+        assert!(semicolon_after_static("class C {\n  static\n}"));
+        // Outside a class body, or after a member name, the word is a name.
+        assert!(semicolon_after_static("let y = 1\nstatic\nx = 2"));
+        assert!(semicolon_after_static(
+            "const o = {\n  f() {\n    static\n    x\n  }\n}"
+        ));
+        assert!(semicolon_after_static(
+            "class C {\n  x = static\n  y = 2\n}"
+        ));
     }
 
     #[test]

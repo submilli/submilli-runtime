@@ -8,7 +8,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "118ce86aec07b979ce42a82ad7c3bd22c67bdd3fb19cc4c5765689752667504c"
+  contentHash: "bc7edc5d23f2486e68cb9c2e3ced3f60c56a1cbd879cfa627b7d7939fb07f989"
   confirmedAt: "2026-10-20T09:28:54Z"
 ---
 
@@ -65,7 +65,7 @@ Before you start:
 mkdir claude-agent-submilli && cd claude-agent-submilli
 npm init -y
 npm pkg set type=module
-npm install @anthropic-ai/claude-agent-sdk
+npm install @anthropic-ai/claude-agent-sdk @modelcontextprotocol/sdk
 npm install --save-dev tsx typescript @types/node
 ```
 
@@ -75,36 +75,75 @@ Create `agent.ts` in the project directory and paste the code below:
 
 ```typescript title="agent.ts"
 import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 const prompt = process.argv.slice(2).join(" ");
 if (!prompt.trim()) throw new Error("Usage: npx tsx agent.ts '<message>'");
 
 const server = process.env.SUBMILLI_SERVER ?? "http://127.0.0.1:8128";
 const blueprint = required("SUBMILLI_BLUEPRINT");
+const endpoint = new URL(`${server}/mcp/${encodeURIComponent(blueprint)}`);
+const requestInit = { headers: { Authorization: `Bearer ${required("SUBMILLI_SERVER_TOKEN")}` } };
+const transport = new StreamableHTTPClientTransport(endpoint, { requestInit });
+const client = new Client({ name: "claude-submilli", version: "1.0.0" });
 
-const options: Options = {
-  // Change this model ID to use another supported Claude model.
-  model: "claude-sonnet-5",
-  systemPrompt: "Use Submilli to do calculations in TypeScript. Return the execution result.",
-  mcpServers: {
-    submilli: {
-      type: "http",
-      url: `${server}/mcp/${encodeURIComponent(blueprint)}`,
-      headers: {
-        Authorization: `Bearer ${required("SUBMILLI_SERVER_TOKEN")}`,
-      },
-    },
-  },
-  strictMcpConfig: true,
-  allowedTools: ["mcp__submilli__*"],
-  tools: [],
-  settingSources: [],
-  maxTurns: 10,
-};
+try {
+  await client.connect(transport);
+  const catalog = await client.listTools();
+  if (!catalog.tools.some((tool) => tool.name === "submilli__typescript__execute")) {
+    throw new Error("Submilli's execute tool is unavailable");
+  }
 
-for await (const message of query({ prompt, options })) {
-  // Keep the SDK events visible so the tool call and its result can be checked.
-  console.dir(message, { depth: null });
+  const mcp = new McpServer(
+    { name: "submilli", version: "1.0.0" },
+    { capabilities: { tools: {} }, instructions: client.getInstructions() },
+  );
+  mcp.server.setRequestHandler(ListToolsRequestSchema, (request) => client.listTools(request.params));
+  mcp.server.setRequestHandler(CallToolRequestSchema, (request) => client.callTool(request.params));
+  const options: Options = {
+    // Change this model ID to use another supported Claude model.
+    model: "claude-sonnet-5",
+    systemPrompt: "Use Submilli to do calculations in TypeScript. Return the execution result.",
+    mcpServers: { submilli: { type: "sdk", name: "submilli", instance: mcp } },
+    strictMcpConfig: true,
+    allowedTools: ["mcp__submilli__*"],
+    tools: [],
+    settingSources: [],
+    maxTurns: 10,
+  };
+  const agent = query({ prompt, options });
+  try {
+    for await (const message of agent) {
+      // Keep the SDK events visible so the tool call and its result can be checked.
+      console.dir(message, { depth: null });
+      if (message.type === "result" && message.is_error) {
+        throw new Error("Claude reported an error; see the SDK result above");
+      }
+    }
+  } finally {
+    agent.close();
+    await mcp.close();
+  }
+} finally {
+  try {
+    if (transport.sessionId) {
+      // Initialization failures can auto-close the original transport.
+      const cleanup = new StreamableHTTPClientTransport(endpoint, {
+        requestInit, sessionId: transport.sessionId,
+      });
+      if (transport.protocolVersion) cleanup.setProtocolVersion(transport.protocolVersion);
+      try {
+        await cleanup.terminateSession();
+      } finally {
+        await cleanup.close();
+      }
+    }
+  } finally {
+    await client.close();
+  }
 }
 
 function required(name: string): string {
