@@ -372,10 +372,10 @@ mod tests {
 
     #[test]
     fn token_link_prefills_owner_and_contents_read() {
-        let link = token_link(Some("acme"));
+        let link = token_link(Some("pied-piper"));
         assert!(link.starts_with("https://github.com/settings/personal-access-tokens/new?"));
         assert!(link.contains("contents=read"), "{link}");
-        assert!(link.contains("target_name=acme"), "{link}");
+        assert!(link.contains("target_name=pied-piper"), "{link}");
         assert!(!token_link(None).contains("target_name"));
         // An owner that isn't a GitHub name can't add parameters to the form.
         assert!(!token_link(Some("a&contents=write")).contains("write"));
@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn not_found_without_a_token_suggests_authenticating() {
         let auth = GithubAuth::anonymous();
-        let message = auth.not_found_message("acme", "crm", None, false);
+        let message = auth.not_found_message("pied-piper", "crm", None, false);
         assert!(
             message.contains("if the repository is private"),
             "{message}"
@@ -395,7 +395,7 @@ mod tests {
         );
 
         let server = GithubAuth::new(None, TokenSource::ServerUnconfigured);
-        let message = server.not_found_message("acme", "crm", None, false);
+        let message = server.not_found_message("pied-piper", "crm", None, false);
         assert!(message.contains("github_token_file"), "{message}");
     }
 
@@ -403,7 +403,7 @@ mod tests {
     fn not_found_with_a_token_names_its_source() {
         let token = GithubToken::parse("ghp_x").unwrap();
         let auth = GithubAuth::new(Some(token), TokenSource::Env("GH_TOKEN"));
-        let message = auth.not_found_message("acme", "crm", None, true);
+        let message = auth.not_found_message("pied-piper", "crm", None, true);
         assert!(message.contains("`GH_TOKEN`"), "{message}");
         assert!(message.contains("Contents: Read-only"), "{message}");
     }

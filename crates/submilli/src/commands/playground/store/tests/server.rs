@@ -1,4 +1,4 @@
-//! Real programs through an in-process server whose run recorder is the store.
+//! Real programs through the host, whose run recorder is the store.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -6,19 +6,21 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
-use interpreter::runtime::{BodyCopy, DecisionLogConfig};
+use interpreter::runtime::{BodyCopy, DecisionLogConfig, NetworkPolicy};
 use serde_json::Value;
-use submilli_blueprint::{Blueprint, HarnessSecretBindings};
-use submilli_server::blueprint::InMemoryBlueprintStore;
-use submilli_server::record::{
-    EventKind, FinishedRun, ProgramRun, RecordedRun, RetryLink, RunRecorder, RunRecorderFactory,
-    RunStart, SessionEvent, TestMode, TestReport, TestRun, run_program, test_program,
-};
-use submilli_server::{AppState, ServerConfig};
+use submilli_blueprint::HarnessSecretBindings;
+use submilli_build::PackageStore;
 
 use super::super::events::EventBody;
 use super::super::{KnownSecrets, Recorder, Store};
 use super::SECRET;
+use crate::commands::playground::host::app::{App, ProgramRun};
+use crate::commands::playground::host::record::RecordedRun;
+use crate::commands::playground::host::record::events::EventKind;
+use crate::commands::playground::host::record::test_run::{TestMode, TestReport, TestRun};
+use crate::commands::playground::host::run::{
+    FinishedRun, RecordedRun as RunRecording, RunEvent, RunHostConfig, RunRecorder, RunStart,
+};
 use crate::commands::playground::labels;
 
 /// A loopback origin that answers each request with what `reply` makes of its head.
@@ -53,13 +55,13 @@ struct Tee {
 }
 
 struct TeeRun {
-    inner: Arc<dyn RunRecorder>,
+    inner: Arc<dyn RunRecording>,
     start: RunStart,
     recordings: Arc<Mutex<HashMap<String, RecordedRun>>>,
 }
 
-impl RunRecorderFactory for Tee {
-    fn start(&self, run: RunStart) -> Option<Arc<dyn RunRecorder>> {
+impl RunRecorder for Tee {
+    fn start(&self, run: RunStart) -> Option<Arc<dyn RunRecording>> {
         let inner = self.store.start(run.clone())?;
         Some(Arc::new(TeeRun {
             inner,
@@ -67,20 +69,14 @@ impl RunRecorderFactory for Tee {
             recordings: Arc::clone(&self.recordings),
         }))
     }
-    fn retried(&self, retry: RetryLink) {
-        self.store.retried(retry);
-    }
-    fn wants_events(&self) -> bool {
-        self.store.wants_events()
-    }
-    fn event(&self, event: SessionEvent) {
-        self.store.event(event);
-    }
 }
 
-impl RunRecorder for TeeRun {
+impl RunRecording for TeeRun {
     fn log_config(&self) -> DecisionLogConfig {
         self.inner.log_config()
+    }
+    fn event(&self, event: RunEvent<'_>) {
+        self.inner.event(event);
     }
     fn finish(&self, run: FinishedRun) {
         self.recordings.lock().unwrap().insert(
@@ -94,9 +90,9 @@ impl RunRecorder for TeeRun {
     }
 }
 
-/// A playground's server over the store in `dir`: what a start, or a restart, builds.
+/// A playground's host over the store in `dir`: what a start, or a restart, builds.
 struct Playground {
-    state: AppState,
+    app: App,
     store: Arc<Store>,
     recordings: Arc<Mutex<HashMap<String, RecordedRun>>>,
 }
@@ -109,51 +105,50 @@ impl Playground {
             store: Recorder::new(Arc::clone(&store), KnownSecrets::default()),
             recordings: Arc::clone(&recordings),
         };
-        let blueprint: Blueprint = submilli_blueprint::parse(yaml).unwrap();
-        let config = ServerConfig {
-            blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]).unwrap())),
-            volume_root: Some(dir.to_path_buf()),
-            network_policy: submilli_server::NetworkPolicy::deny_private().allow_localhost(true),
-            run_recorder: Some(Arc::new(tee)),
-            ..ServerConfig::default()
-        };
+        let mut config = RunHostConfig::new(PackageStore::new(dir.join("packages")));
+        config.network_policy = NetworkPolicy::deny_private().allow_localhost(true);
+        config.recorder = Some(Arc::new(tee));
+        let app = App::for_tests(&dir.join("project"), "demo", config).await;
+        app.blueprints.apply(yaml, "1").await.unwrap();
         Self {
-            state: AppState::new(config).await.unwrap(),
+            app,
             store,
             recordings,
         }
     }
 
+    /// Stops it as a playground stops, so the next start opens its database.
+    async fn stop(self) {
+        self.app.sessions.close_database().await.unwrap();
+    }
+
     async fn run(&self, code: &str, secrets: HarnessSecretBindings) -> String {
-        let response = run_program(
-            &self.state,
-            ProgramRun {
+        let response = self
+            .app
+            .run_program(ProgramRun {
                 label: labels::ASSISTANT.into(),
                 blueprint: "demo".into(),
                 code: code.into(),
-                variables: [("customerId".to_owned(), "cus_northwind".to_owned())].into(),
+                variables: [("customerId".to_owned(), "pied_piper".to_owned())].into(),
                 secrets,
-            },
-        )
-        .await;
+            })
+            .await;
         assert!(response.error.is_none(), "{:?}", response.error);
         response.execution_id
     }
 
     async fn test(&self, recorded: RecordedRun) -> TestReport {
-        test_program(
-            &self.state,
-            TestRun {
+        self.app
+            .test_program(TestRun {
                 label: labels::TEST.into(),
                 recorded,
                 bindings: Default::default(),
                 mode: TestMode::Recorded,
                 secrets: None,
-            },
-        )
-        .await
-        .expect("the test run starts")
-        .report
+            })
+            .await
+            .expect("the test run starts")
+            .report
     }
 }
 
@@ -199,7 +194,7 @@ async fn a_stored_run_loaded_after_a_restart_tests_as_the_in_memory_recording_do
         .await;
     let in_memory = first.recordings.lock().unwrap()[&execution_id].clone();
     let before = first.test(in_memory).await;
-    drop(first);
+    first.stop().await;
 
     let second = Playground::start(dir.path(), BLUEPRINT).await;
     let id = second
@@ -210,7 +205,7 @@ async fn a_stored_run_loaded_after_a_restart_tests_as_the_in_memory_recording_do
     assert_eq!(id, 1);
     let stored = second.store.load_run(id).unwrap().unwrap();
     assert_eq!(stored.label, labels::ASSISTANT);
-    assert_eq!(stored.recording.variables["customerId"], "cus_northwind");
+    assert_eq!(stored.recording.variables["customerId"], "pied_piper");
     let after = second.test(stored.recording).await;
 
     let comparable = |report: &TestReport| {

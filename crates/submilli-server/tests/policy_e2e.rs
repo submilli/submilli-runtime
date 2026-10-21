@@ -286,7 +286,7 @@ export function secretIsAbsent(name: string): boolean {
 
 fn write_secrets_package(store_root: &Path) {
     let package = compile_package(
-        "@acme/secrets",
+        "@pied-piper/secrets",
         ModulePath::from("lib"),
         &[PackageSourceModule {
             path: ModulePath::from("lib"),
@@ -294,9 +294,9 @@ fn write_secrets_package(store_root: &Path) {
         }],
         &[],
     )
-    .expect("compile @acme/secrets");
+    .expect("compile @pied-piper/secrets");
     write_package_artifact(
-        store_root.join("@acme").join("secrets"),
+        store_root.join("@pied-piper").join("secrets"),
         &package.wasm,
         &package.type_info,
         &submilli_build::derive_capability_schema(
@@ -305,9 +305,9 @@ fn write_secrets_package(store_root: &Path) {
             &package.required_capabilities,
         ),
         &package.declaration,
-        &ArtifactMetadata::new("@acme/secrets", "0.0.0-test", Vec::new()),
+        &ArtifactMetadata::new("@pied-piper/secrets", "0.0.0-test", Vec::new()),
     )
-    .expect("write @acme/secrets artifact");
+    .expect("write @pied-piper/secrets artifact");
 }
 
 #[tokio::test]
@@ -318,17 +318,17 @@ async fn a_package_still_resolves_a_declared_secret_and_gets_null_for_an_undecla
 name: policy
 default: deny
 packages:
-  - \"@acme/secrets\"
+  - \"@pied-piper/secrets\"
 secrets:
   TOKEN:
     harness: {}
 permissions:
-  \"@acme/secrets\":
+  \"@pied-piper/secrets\":
     - capability: secrets.get
       action: allow
 ";
     let script = r#"
-import { secretMatches, secretIsAbsent } from "@acme/secrets";
+import { secretMatches, secretIsAbsent } from "@pied-piper/secrets";
 function main(): string {
     const found = secretMatches("TOKEN", "tok-123");
     const absent = secretIsAbsent("MISSING");
@@ -359,13 +359,13 @@ export function op(): number { check("test.com/op", { amount: 100 }); return 1; 
 "#;
 
 const SDK_SCRIPT: &str = r#"
-import { op } from "@acme/sdk";
+import { op } from "@pied-piper/sdk";
 function main(): number { return op(); }
 "#;
 
 fn write_sdk_package(store_root: &Path) {
     let package = compile_package(
-        "@acme/sdk",
+        "@pied-piper/sdk",
         ModulePath::from("lib"),
         &[PackageSourceModule {
             path: ModulePath::from("lib"),
@@ -373,9 +373,9 @@ fn write_sdk_package(store_root: &Path) {
         }],
         &[],
     )
-    .expect("compile @acme/sdk");
+    .expect("compile @pied-piper/sdk");
     write_package_artifact(
-        store_root.join("@acme").join("sdk"),
+        store_root.join("@pied-piper").join("sdk"),
         &package.wasm,
         &package.type_info,
         &submilli_build::derive_capability_schema(
@@ -384,9 +384,9 @@ fn write_sdk_package(store_root: &Path) {
             &package.required_capabilities,
         ),
         &package.declaration,
-        &ArtifactMetadata::new("@acme/sdk", "0.0.0-test", Vec::new()),
+        &ArtifactMetadata::new("@pied-piper/sdk", "0.0.0-test", Vec::new()),
     )
-    .expect("write @acme/sdk artifact");
+    .expect("write @pied-piper/sdk artifact");
 }
 
 async fn execute_with_packages(
@@ -405,7 +405,7 @@ async fn package_api_check_uses_main_permission_block() {
 name: policy
 default: deny
 packages:
-  - \"@acme/sdk\"
+  - \"@pied-piper/sdk\"
 permissions:
   main:
     - capability: test.com/op
@@ -419,7 +419,7 @@ permissions:
 
 #[tokio::test]
 async fn package_permission_block_does_not_cover_package_api_checks() {
-    // Same capability, but granted to `@acme/sdk` only: the package API check is
+    // Same capability, but granted to `@pied-piper/sdk` only: the package API check is
     // attributed to `main`, whose absent rule falls through to `default: deny`.
     let store = tempfile::tempdir().expect("tempdir");
     write_sdk_package(store.path());
@@ -427,9 +427,9 @@ async fn package_permission_block_does_not_cover_package_api_checks() {
 name: policy
 default: deny
 packages:
-  - \"@acme/sdk\"
+  - \"@pied-piper/sdk\"
 permissions:
-  \"@acme/sdk\":
+  \"@pied-piper/sdk\":
     - capability: test.com/op
       action: allow
 ";
@@ -629,7 +629,7 @@ import { readText } from "submilli:fs";
 export const first: string | undefined = readText("/never.txt");
 "#;
     let package = compile_package(
-        "@acme/eager",
+        "@pied-piper/eager",
         ModulePath::from("lib"),
         &[PackageSourceModule {
             path: ModulePath::from("lib"),
@@ -637,9 +637,9 @@ export const first: string | undefined = readText("/never.txt");
         }],
         &[],
     )
-    .expect("compile @acme/eager");
+    .expect("compile @pied-piper/eager");
     write_package_artifact(
-        store_root.join("@acme").join("eager"),
+        store_root.join("@pied-piper").join("eager"),
         &package.wasm,
         &package.type_info,
         &submilli_build::derive_capability_schema(
@@ -648,9 +648,9 @@ export const first: string | undefined = readText("/never.txt");
             &package.required_capabilities,
         ),
         &package.declaration,
-        &ArtifactMetadata::new("@acme/eager", "0.0.0-test", Vec::new()),
+        &ArtifactMetadata::new("@pied-piper/eager", "0.0.0-test", Vec::new()),
     )
-    .expect("write @acme/eager artifact");
+    .expect("write @pied-piper/eager artifact");
 }
 
 #[tokio::test]
@@ -661,10 +661,10 @@ async fn a_denial_from_a_package_top_level_statement_names_the_package() {
 name: policy
 default: deny
 packages:
-  - \"@acme/eager\"
+  - \"@pied-piper/eager\"
 ";
     let script = r#"
-import { first } from "@acme/eager";
+import { first } from "@pied-piper/eager";
 function main(): string | undefined { return first; }
 "#;
     let (status, body) = execute_with_packages(policy, store.path(), script).await;
@@ -676,13 +676,13 @@ function main(): string | undefined { return first; }
     );
     assert_eq!(
         body["error"]["caller"],
-        json!("@acme/eager"),
+        json!("@pied-piper/eager"),
         "got: {body:#}"
     );
     assert!(
         body["error"]["message"]
             .as_str()
-            .is_some_and(|m| m.contains("package `@acme/eager` failed to initialize")),
+            .is_some_and(|m| m.contains("package `@pied-piper/eager` failed to initialize")),
         "got: {body:#}"
     );
 }

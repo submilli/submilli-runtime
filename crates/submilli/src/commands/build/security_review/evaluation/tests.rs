@@ -85,7 +85,7 @@ fn preparation_failure_happens_before_reviews() {
     fs::create_dir(fixture.path().join("src")).unwrap();
     fs::write(
         fixture.path().join("submilli.toml"),
-        "[[package]]\nname = \"@acme/example\"\nversion = \"0.1.0\"\ndescription = \"Example\"\n",
+        "[[package]]\nname = \"@pied-piper/example\"\nversion = \"0.1.0\"\ndescription = \"Example\"\n",
     )
     .unwrap();
     fs::write(

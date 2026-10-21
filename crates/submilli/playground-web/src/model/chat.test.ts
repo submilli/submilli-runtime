@@ -97,7 +97,7 @@ describe("the chat at the latest event", () => {
   });
 
   it("a new session's messages show while the agent answers", () => {
-    const fresh = { variables: { customerId: "cus_northwind" }, agent: "anthropic:claude-sonnet-5-5", settings: null, started: "2026-10-13T14:00:00Z", messages: ["Hi"] };
+    const fresh = { variables: { customerId: "pied_piper" }, agent: "anthropic:claude-sonnet-5-5", settings: null, started: "2026-10-13T14:00:00Z", messages: ["Hi"] };
     const f = frame({ ...data, sessionId: null, events: [] }, { ...INITIAL_UI, mode: "fresh", fresh });
     expect(chatItems(f)).toEqual([
       { kind: "message", who: "You", role: "user", text: "Hi" },

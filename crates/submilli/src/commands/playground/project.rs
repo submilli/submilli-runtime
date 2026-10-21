@@ -17,7 +17,8 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use submilli_server::config::{Access, VolumeSpec, VolumeTable, is_managed_name};
+use super::host::blueprints::is_managed_name;
+use super::host::volumes::{Access, VolumeSpec, VolumeTable};
 
 use super::log::warn;
 use super::state::StateDir;

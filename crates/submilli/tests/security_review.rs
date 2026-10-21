@@ -24,7 +24,7 @@ impl Project {
         project.write("docs/readme.md", "# Example\nA test package.\n");
         project.write(
             "submilli.toml",
-            "[[package]]\nname = \"@acme/test\"\nversion = \"0.1.0\"\ndescription = \"Example.\"\n",
+            "[[package]]\nname = \"@pied-piper/test\"\nversion = \"0.1.0\"\ndescription = \"Example.\"\n",
         );
         project
     }
@@ -341,7 +341,7 @@ fn source_symlinks_size_limits_and_existing_reports_are_rejected() {
 #[test]
 fn local_dependency_closure_is_reviewed_but_missing_external_source_is_incomplete() {
     let project = Project::new();
-    project.write("submilli.toml", "[dependencies]\n\"@remote/http\" = \"1.0.0\"\n[[package]]\nname = \"@acme/test\"\nversion = \"0.1.0\"\ndescription = \"Test.\"\npath = \"app\"\ndependencies = [\"@acme/helper\", \"@remote/http\"]\n[[package]]\nname = \"@acme/helper\"\nversion = \"0.1.0\"\ndescription = \"Helper.\"\npath = \"helper\"\n[[package]]\nname = \"@acme/unrelated\"\nversion = \"0.1.0\"\ndescription = \"Unrelated.\"\npath = \"unrelated\"\n");
+    project.write("submilli.toml", "[dependencies]\n\"@remote/http\" = \"1.0.0\"\n[[package]]\nname = \"@pied-piper/test\"\nversion = \"0.1.0\"\ndescription = \"Test.\"\npath = \"app\"\ndependencies = [\"@pied-piper/helper\", \"@remote/http\"]\n[[package]]\nname = \"@pied-piper/helper\"\nversion = \"0.1.0\"\ndescription = \"Helper.\"\npath = \"helper\"\n[[package]]\nname = \"@pied-piper/unrelated\"\nversion = \"0.1.0\"\ndescription = \"Unrelated.\"\npath = \"unrelated\"\n");
     for package in ["app", "helper", "unrelated"] {
         project.write(
             &format!("{package}/src/lib.ts"),
@@ -352,11 +352,17 @@ fn local_dependency_closure_is_reviewed_but_missing_external_source_is_incomplet
     response["reviewed_files"] = json!(["submilli.toml", "app/src/lib.ts", "helper/src/lib.ts"]);
     project.mock("codex", &response, "");
     assert_eq!(
-        project.run("codex", &["-p", "@acme/test"]).status.code(),
+        project
+            .run("codex", &["-p", "@pied-piper/test"])
+            .status
+            .code(),
         Some(2)
     );
     let report = project.report();
-    assert_eq!(report["packages"], json!(["@acme/helper", "@acme/test"]));
+    assert_eq!(
+        report["packages"],
+        json!(["@pied-piper/helper", "@pied-piper/test"])
+    );
     assert_eq!(report["files"].as_object().unwrap().len(), 3);
     assert!(
         report["coverage_gaps"]
@@ -383,9 +389,9 @@ fn compiler_evidence_is_deterministic_and_bound_to_captured_source() {
         r#"import { get } from "submilli:http";
 import { check } from "submilli:security";
 /** Fetch.
- * @capability acme.fetch {}
+ * @capability pied-piper.fetch {}
  */
-export function fetch(): string { check("acme.fetch", {}); return helper(); }
+export function fetch(): string { check("pied-piper.fetch", {}); return helper(); }
 function helper(): string { return get("https://example.com").body; }
 "#,
     );
@@ -401,7 +407,7 @@ function helper(): string { return get("https://example.com").body; }
     let callables = package["callables"].as_array().unwrap();
     assert!(callables.iter().any(|c| {
         c["checks"].as_array().unwrap().iter().any(|check| {
-            check["capability"] == "acme.fetch" && check["span"]["path"] == "src/lib.ts"
+            check["capability"] == "pied-piper.fetch" && check["span"]["path"] == "src/lib.ts"
         })
     }));
     assert!(callables.iter().any(|c| {
@@ -513,10 +519,10 @@ fn ambiguous_compiler_paths_never_reach_the_agent() {
 #[test]
 fn selected_local_dependencies_have_maps_from_the_same_snapshot() {
     let project = Project::new();
-    project.write("submilli.toml", "[[package]]\nname = \"@acme/test\"\nversion = \"0.1.0\"\ndescription = \"Test.\"\npath = \"app\"\ndependencies = [\"@acme/helper\"]\n[[package]]\nname = \"@acme/helper\"\nversion = \"0.1.0\"\ndescription = \"Helper.\"\npath = \"helper\"\n[[package]]\nname = \"@acme/unrelated\"\nversion = \"0.1.0\"\ndescription = \"Unrelated.\"\npath = \"unrelated\"\n");
+    project.write("submilli.toml", "[[package]]\nname = \"@pied-piper/test\"\nversion = \"0.1.0\"\ndescription = \"Test.\"\npath = \"app\"\ndependencies = [\"@pied-piper/helper\"]\n[[package]]\nname = \"@pied-piper/helper\"\nversion = \"0.1.0\"\ndescription = \"Helper.\"\npath = \"helper\"\n[[package]]\nname = \"@pied-piper/unrelated\"\nversion = \"0.1.0\"\ndescription = \"Unrelated.\"\npath = \"unrelated\"\n");
     project.write(
         "app/src/lib.ts",
-        "import { f } from \"@acme/helper\"; export function g(): number { return f(); }\n",
+        "import { f } from \"@pied-piper/helper\"; export function g(): number { return f(); }\n",
     );
     project.write(
         "helper/src/lib.ts",
@@ -535,7 +541,7 @@ fn selected_local_dependencies_have_maps_from_the_same_snapshot() {
         "helper/docs/readme.md"
     ]);
     project.mock("codex", &response, "");
-    let output = project.run("codex", &["-p", "@acme/test"]);
+    let output = project.run("codex", &["-p", "@pied-piper/test"]);
     assert!(
         output.status.success(),
         "{}",
@@ -544,8 +550,8 @@ fn selected_local_dependencies_have_maps_from_the_same_snapshot() {
     let snapshot = captured_evidence(&project);
     let maps = snapshot["authority"]["packages"].as_array().unwrap();
     assert_eq!(maps.len(), 2);
-    assert_eq!(maps[0]["name"], "@acme/helper");
-    assert_eq!(maps[1]["name"], "@acme/test");
+    assert_eq!(maps[0]["name"], "@pied-piper/helper");
+    assert_eq!(maps[1]["name"], "@pied-piper/test");
     assert!(
         maps[0]["callables"]
             .as_array()

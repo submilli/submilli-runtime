@@ -347,7 +347,7 @@ async fn package_variables_are_isolated_immutable_and_survive_restart() {
 
     let root = tempfile::tempdir().unwrap();
     let package = compile_package(
-        "@acme/browser",
+        "@pied-piper/browser",
         ModulePath::from("lib"),
         &[PackageSourceModule {
             path: ModulePath::from("lib"),
@@ -359,22 +359,22 @@ async fn package_variables_are_isolated_immutable_and_survive_restart() {
     )
     .unwrap();
     write_package_artifact(
-        root.path().join("packages/@acme/browser"),
+        root.path().join("packages/@pied-piper/browser"),
         &package.wasm,
         &package.type_info,
         &derive_capability_schema(&package.declaration, &[], &package.required_capabilities),
         &package.declaration,
-        &ArtifactMetadata::new("@acme/browser", "0.0.0-test", vec![]),
+        &ArtifactMetadata::new("@pied-piper/browser", "0.0.0-test", vec![]),
     )
     .unwrap();
     let policy = r#"
 name: variables
-packages: ["@acme/browser"]
+packages: ["@pied-piper/browser"]
 variables:
   USER_ID: { default: original }
   BROWSER_STORE_NAME: { alias: USER_ID, required: true }
 permissions:
-  '@acme/browser':
+  '@pied-piper/browser':
     - capability: variables.get
       filter: name == "BROWSER_STORE_NAME"
       action: allow
@@ -415,7 +415,7 @@ permissions:
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    let code = r#"import { store } from "@acme/browser";
+    let code = r#"import { store } from "@pied-piper/browser";
         import { set } from "submilli:session";
         function main(): string | undefined {
             set("BROWSER_STORE_NAME", "forged");

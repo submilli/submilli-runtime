@@ -169,14 +169,14 @@ order; each chapter assumes only the ones before it.
   so the skill commands, `submilli upgrade`, and the server start, status,
   and stop output are as the current `skill`, `quickstart`, and `server`
   chapters document them, not re-run here.
-- Packages: built `@acme/billing` (the `applyCredit` fragment plus a
+- Packages: built `@pied-piper/billing` (the `applyCredit` fragment plus a
   `lookUpClass` stub and a short readme) with CLI 0.1.6 in a scratch project
   under an isolated `SUBMILLI_HOME`; `submilli search billing` and
-  `submilli docs @acme/billing` output is copied from that run. Ran
-  `credit.ts` under a blueprint granting `acme.com/credits.apply` filtered on
+  `submilli docs @pied-piper/billing` output is copied from that run. Ran
+  `credit.ts` under a blueprint granting `pied-piper.example/credits.apply` filtered on
   `${vars.customerId}` and `customerClass == "premium"`: `credited 1500
-  cents` bound to `cus_northwind`, `PermissionDeniedError` bound to
-  `cus_initech`. Those two runs used the stub version of `applyCredit`
+  cents` bound to `pied_piper`, `PermissionDeniedError` bound to
+  `hooli`. Those two runs used the stub version of `applyCredit`
   that returned a literal; the page's fragment now makes the real call
   (`secrets.get`, `http.post` to `billing.internal.example.com`), which
   `build check` compiles and derives into `requires: http.post` on that host

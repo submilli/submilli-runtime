@@ -71,9 +71,9 @@ def verify_allowed(binary, fixture, home, root, probe, case):
     rules = ''.join(f'    - capability: {cap}\n      action: allow\n'
                     for cap in case['allowed_capabilities'])
     blueprint = root / 'allowed.yaml'
-    blueprint.write_text('kind: blueprint\nname: allowed-records\npackages: ["@acme/records"]\n'
+    blueprint.write_text('kind: blueprint\nname: allowed-records\npackages: ["@pied-piper/records"]\n'
                          'default: deny\npermissions:\n  main:\n' + rules +
-                         "  '@acme/records':\n    - capability: fs.write\n      action: allow\n"
+                         "  '@pied-piper/records':\n    - capability: fs.write\n      action: allow\n"
                          '    - capability: fs.read\n      action: allow\n')
     output = invoke(binary, fixture, home, 'run', script, '--blueprint', blueprint, '--vfs', vfs)
     if output.strip() != case['allowed_result']:

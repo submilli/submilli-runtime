@@ -43,10 +43,10 @@ function main(): void {
 
     label("an owner and a repository name are each exactly one name");
     for (const name of ["a b", "x repo:other/repo", "other/repo", ".", "..", "a\rb", "a\nb", "a\tb", "a%2Fb", "na\u00efve"]) {
-        assertError("invalid_input", () => getBranch({ owner: "acme", name: name }, "main"));
-        assertError("invalid_input", () => searchCode({ owner: "acme", name: name }, "needle"));
+        assertError("invalid_input", () => getBranch({ owner: "pied-piper", name: name }, "main"));
+        assertError("invalid_input", () => searchCode({ owner: "pied-piper", name: name }, "needle"));
     }
-    for (const owner of ["a b", "acme/other", ".", "..", "acme.inc", "acme\r", "repo:acme"]) {
+    for (const owner of ["a b", "pied-piper/other", ".", "..", "pied-piper.inc", "pied-piper\r", "repo:pied-piper"]) {
         assertError("invalid_input", () => getBranch({ owner: owner, name: "repo" }, "main"));
         assertError("invalid_input", () => searchCode({ owner: owner, name: "repo" }, "needle"));
     }

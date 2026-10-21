@@ -1,7 +1,7 @@
-import { listCharges } from "@acme/billing";
+import { listCharges } from "@pied-piper/billing";
 
 function main(): string {
-    const charges = listCharges("cus_northwind");
+    const charges = listCharges("pied_piper");
     let total = 0;
     for (const charge of charges) {
         total += charge.amount;

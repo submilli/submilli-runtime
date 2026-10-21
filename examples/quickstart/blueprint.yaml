@@ -7,16 +7,16 @@ variables:
     required: true
 
 packages:
-- '@acme/billing'
+- '@pied-piper/billing'
 
 default: deny
 
 permissions:
   # What generated code may do.
   main:
-  - capability: acme.com/charges.list
+  - capability: pied-piper.example/charges.list
     filter: customerId == ${vars.customerId}
     action: allow
 
   # What the package itself may do. Nothing: it reads a fixture.
-  '@acme/billing': []
+  '@pied-piper/billing': []

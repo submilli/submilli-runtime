@@ -819,7 +819,7 @@ mod tests {
     #[test]
     fn same_field_name_outside_the_catalog_stays_verbatim() {
         let (ta, tag, params, args) = first_doc_capability(
-            "/** @capability acme.com/open { path } */\n\
+            "/** @capability pied-piper.example/open { path } */\n\
              function callee(path: string): void { }\n\
              function main(): void { callee(\"repo\"); }\n",
         );

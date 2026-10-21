@@ -39,7 +39,7 @@ fn router() -> Router {
 }
 
 fn router_with_package_store(package_store_root: PathBuf) -> Router {
-    router_with_packages(package_store_root, &["@acme/util"])
+    router_with_packages(package_store_root, &["@pied-piper/util"])
 }
 
 fn router_with_packages(package_store_root: PathBuf, packages: &[&str]) -> Router {
@@ -149,21 +149,21 @@ async fn apply_blueprint_on(router: &Router, yaml: &str) -> (StatusCode, Value) 
     (status, parsed)
 }
 
-fn write_acme_util_package(store_root: &Path) {
-    write_acme_util_package_with_source(
+fn write_pied_piper_util_package(store_root: &Path) {
+    write_pied_piper_util_package_with_source(
         store_root,
         "export function answer(): number { return 41; }\nexport function plusOne(n: number): number { return n + 1; }\nexport function explode(): void { assert(false, \"pkg boom\"); }",
     );
 }
 
-fn write_acme_util_package_with_source(store_root: &Path, source: &str) {
-    write_acme_util_package_compiled_as(store_root, "@acme/util", source);
+fn write_pied_piper_util_package_with_source(store_root: &Path, source: &str) {
+    write_pied_piper_util_package_compiled_as(store_root, "@pied-piper/util", source);
 }
 
-/// Installs `source` as `@acme/util` with a module compiled under
+/// Installs `source` as `@pied-piper/util` with a module compiled under
 /// `module_name`; a different name makes a module that declares itself as
 /// another package, which the store's metadata checks do not see.
-fn write_acme_util_package_compiled_as(store_root: &Path, module_name: &str, source: &str) {
+fn write_pied_piper_util_package_compiled_as(store_root: &Path, module_name: &str, source: &str) {
     let compile = |name: &str| {
         compile_package(
             name,
@@ -177,10 +177,10 @@ fn write_acme_util_package_compiled_as(store_root: &Path, module_name: &str, sou
         .expect("compile synthetic package")
     };
     // Only the Wasm comes from `module_name`; everything the store checks
-    // describes `@acme/util`.
+    // describes `@pied-piper/util`.
     let installed_module = compile(module_name);
-    let declared_as_util = compile("@acme/util");
-    let dir = store_root.join("@acme").join("util");
+    let declared_as_util = compile("@pied-piper/util");
+    let dir = store_root.join("@pied-piper").join("util");
     write_package_artifact_with_docs_and_sources(
         &dir,
         &installed_module.wasm,
@@ -191,7 +191,7 @@ fn write_acme_util_package_compiled_as(store_root: &Path, module_name: &str, sou
             &declared_as_util.required_capabilities,
         ),
         &declared_as_util.declaration,
-        &ArtifactMetadata::new("@acme/util", "0.0.0-test", Vec::new()),
+        &ArtifactMetadata::new("@pied-piper/util", "0.0.0-test", Vec::new()),
         "",
         &[ArtifactSource {
             path: ModulePath::from("lib"),
@@ -302,10 +302,10 @@ async fn execute_without_mcp_import_skips_mcp_discovery() {
 async fn blueprint_package_dependency_runs() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let store_root = tmp.path().join("packages");
-    write_acme_util_package(&store_root);
+    write_pied_piper_util_package(&store_root);
     let router = router_with_package_store(store_root);
     let code = r#"
-        import { answer, plusOne } from "@acme/util";
+        import { answer, plusOne } from "@pied-piper/util";
         function main(): number { return plusOne(answer()); }
     "#;
 
@@ -321,11 +321,11 @@ async fn blueprint_package_resolves_from_the_fallback_store() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let owned = tmp.path().join("server-packages");
     let fallback = tmp.path().join("cli-packages");
-    write_acme_util_package(&fallback);
+    write_pied_piper_util_package(&fallback);
     let blueprints = Arc::new(
         InMemoryBlueprintStore::seed([Blueprint {
             name: BLUEPRINT_NAME.into(),
-            packages: ["@acme/util".to_string()].into_iter().collect(),
+            packages: ["@pied-piper/util".to_string()].into_iter().collect(),
             ..Default::default()
         }])
         .expect("seed blueprints"),
@@ -339,7 +339,7 @@ async fn blueprint_package_resolves_from_the_fallback_store() {
     .await
     .expect("build AppState"));
     let code = r#"
-        import { answer, plusOne } from "@acme/util";
+        import { answer, plusOne } from "@pied-piper/util";
         function main(): number { return plusOne(answer()); }
     "#;
 
@@ -358,10 +358,10 @@ async fn blueprint_package_resolves_from_the_fallback_store() {
 async fn package_error_renders_package_source_context() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let store_root = tmp.path().join("packages");
-    write_acme_util_package(&store_root);
+    write_pied_piper_util_package(&store_root);
     let router = router_with_package_store(store_root);
     let code = r#"
-        import { explode } from "@acme/util";
+        import { explode } from "@pied-piper/util";
         function main(): void { explode(); }
     "#;
 
@@ -372,7 +372,7 @@ async fn package_error_renders_package_source_context() {
     let message = body["error"]["message"].as_str().unwrap_or_default();
     assert!(message.contains("error: Error: pkg boom"), "got: {body:#}");
     assert!(
-        message.contains("(@acme/util/lib:"),
+        message.contains("(@pied-piper/util/lib:"),
         "missing package frame: {body:#}"
     );
     assert!(
@@ -389,13 +389,13 @@ async fn package_error_renders_package_source_context() {
 async fn package_top_level_throw_is_a_runtime_error_at_its_statement() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let store_root = tmp.path().join("packages");
-    write_acme_util_package_with_source(
+    write_pied_piper_util_package_with_source(
         &store_root,
         "const table: number[] = [1];\nconst picked: number = table[7];\nexport function answer(): number { return picked; }",
     );
     let router = router_with_package_store(store_root);
     let code = r#"
-        import { answer } from "@acme/util";
+        import { answer } from "@pied-piper/util";
         function main(): number { return answer(); }
     "#;
 
@@ -406,7 +406,7 @@ async fn package_top_level_throw_is_a_runtime_error_at_its_statement() {
     let message = body["error"]["message"].as_str().unwrap_or_default();
     assert!(
         message.starts_with(
-            "error: package `@acme/util` failed to initialize: RangeError: index out of range\n  at <top level> (@acme/util/lib:2:"
+            "error: package `@pied-piper/util` failed to initialize: RangeError: index out of range\n  at <top level> (@pied-piper/util/lib:2:"
         ),
         "got: {body:#}"
     );
@@ -423,14 +423,14 @@ async fn package_top_level_throw_is_a_runtime_error_at_its_statement() {
 async fn package_that_fails_to_link_is_an_internal_failure() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let store_root = tmp.path().join("packages");
-    write_acme_util_package_compiled_as(
+    write_pied_piper_util_package_compiled_as(
         &store_root,
-        "@acme/other",
+        "@pied-piper/other",
         "export function answer(): number { return 41; }",
     );
     let router = router_with_package_store(store_root);
     let code = r#"
-        import { answer } from "@acme/util";
+        import { answer } from "@pied-piper/util";
         function main(): number { return answer(); }
     "#;
 
@@ -449,13 +449,13 @@ async fn package_that_fails_to_link_is_an_internal_failure() {
 async fn package_top_level_statements_are_bounded_by_the_execution_timeout() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let store_root = tmp.path().join("packages");
-    write_acme_util_package_with_source(
+    write_pied_piper_util_package_with_source(
         &store_root,
         "let spins = 0;\nwhile (true) { spins = spins + 1; }\nexport function answer(): number { return spins; }",
     );
     let router = router_with_packages_and_runtime(
         store_root,
-        &["@acme/util"],
+        &["@pied-piper/util"],
         RuntimeConfig {
             fuel: u64::MAX,
             timeout: Some(std::time::Duration::from_millis(500)),
@@ -463,7 +463,7 @@ async fn package_top_level_statements_are_bounded_by_the_execution_timeout() {
         },
     );
     let code = r#"
-        import { answer } from "@acme/util";
+        import { answer } from "@pied-piper/util";
         function main(): number { return answer(); }
     "#;
 
@@ -478,7 +478,7 @@ async fn package_top_level_statements_are_bounded_by_the_execution_timeout() {
     assert_eq!(body["error"]["kind"], "timeout", "got: {body:#}");
     let message = body["error"]["message"].as_str().unwrap_or_default();
     assert!(
-        message.contains("at <top level> (@acme/util/lib:2:"),
+        message.contains("at <top level> (@pied-piper/util/lib:2:"),
         "got: {body:#}"
     );
     assert_serves_a_program_without_the_package(&router).await;
@@ -533,11 +533,11 @@ async fn closure_only_dependency_is_not_importable() {
 async fn prepared_package_cache_survives_store_removal() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let store_root = tmp.path().join("packages");
-    write_acme_util_package(&store_root);
-    let artifact_wasm = store_root.join("@acme").join("util").join("pkg.wasm");
+    write_pied_piper_util_package(&store_root);
+    let artifact_wasm = store_root.join("@pied-piper").join("util").join("pkg.wasm");
     let router = router_with_package_store(store_root);
     let code = r#"
-        import { answer, plusOne } from "@acme/util";
+        import { answer, plusOne } from "@pied-piper/util";
         function main(): number { return plusOne(answer()); }
     "#;
 
@@ -553,18 +553,18 @@ async fn prepared_package_cache_survives_store_removal() {
 async fn prepared_package_cache_evicts_on_every_blueprint_apply() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let store_root = tmp.path().join("packages");
-    write_acme_util_package(&store_root);
+    write_pied_piper_util_package(&store_root);
     write_dependent_packages(&store_root);
     let router = router_with_package_store(store_root.clone());
     let code = r#"
-        import { answer, plusOne } from "@acme/util";
+        import { answer, plusOne } from "@pied-piper/util";
         function main(): number { return plusOne(answer()); }
     "#;
 
     let (_, first) = execute_on(&router, code).await;
     // Registration needs valid artifacts; change the on-disk result to distinguish
     // reuse of the prepared module from reloading it after an apply.
-    write_acme_util_package_with_source(
+    write_pied_piper_util_package_with_source(
         &store_root,
         "export function answer(): number { return 99; } export function plusOne(n: number): number { return n + 1; }",
     );
@@ -574,7 +574,7 @@ async fn prepared_package_cache_evicts_on_every_blueprint_apply() {
         r#"
 name: test
 packages:
-  - "@acme/util"
+  - "@pied-piper/util"
 vfs: none
 "#,
     )
@@ -587,7 +587,7 @@ vfs: none
         r#"
 name: test
 packages:
-  - "@acme/util"
+  - "@pied-piper/util"
   - "@a/app"
 vfs: none
 "#,
@@ -613,10 +613,10 @@ vfs: none
 async fn uninstalling_a_package_takes_effect_on_the_next_execute() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let store_root = tmp.path().join("packages");
-    write_acme_util_package(&store_root);
+    write_pied_piper_util_package(&store_root);
     let router = router_with_package_store(store_root);
     let code = r#"
-        import { answer } from "@acme/util";
+        import { answer } from "@pied-piper/util";
         function main(): number { return answer(); }
     "#;
     let (_, before) = execute_on(&router, code).await;
@@ -624,7 +624,7 @@ async fn uninstalling_a_package_takes_effect_on_the_next_execute() {
 
     let req = Request::builder()
         .method("DELETE")
-        .uri("/v1/packages/@acme/util")
+        .uri("/v1/packages/@pied-piper/util")
         .body(Body::empty())
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
@@ -645,7 +645,7 @@ async fn missing_blueprint_package_returns_package_resolution_error() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let router = router_with_package_store(tmp.path().join("packages"));
     let code = r#"
-        import { answer } from "@acme/util";
+        import { answer } from "@pied-piper/util";
         function main(): number { return answer(); }
     "#;
 
@@ -657,7 +657,7 @@ async fn missing_blueprint_package_returns_package_resolution_error() {
         body["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("@acme/util"),
+            .contains("@pied-piper/util"),
         "got: {body:#}"
     );
 }
@@ -939,7 +939,7 @@ async fn git_configuration_controls_imports_and_resolves_identity_variables() {
 async fn git_transitive_imports_require_configuration_and_keep_package_attribution() {
     let directory = tempfile::tempdir().unwrap();
     let package = compile_package(
-        "@acme/util",
+        "@pied-piper/util",
         ModulePath::from("lib"),
         &[PackageSourceModule {
             path: ModulePath::from("lib"),
@@ -948,7 +948,7 @@ async fn git_transitive_imports_require_configuration_and_keep_package_attributi
         &[],
     ).unwrap();
     write_package_artifact(
-        directory.path().join("@acme/util"),
+        directory.path().join("@pied-piper/util"),
         &package.wasm,
         &package.type_info,
         &submilli_build::derive_capability_schema(
@@ -957,12 +957,12 @@ async fn git_transitive_imports_require_configuration_and_keep_package_attributi
             &package.required_capabilities,
         ),
         &package.declaration,
-        &ArtifactMetadata::new("@acme/util", "1.0.0", vec![]),
+        &ArtifactMetadata::new("@pied-piper/util", "1.0.0", vec![]),
     )
     .unwrap();
     let router = router_with_package_store(directory.path().to_owned());
     let code =
-        "import { answer } from \"@acme/util\"; function main(): string { return answer(); }";
+        "import { answer } from \"@pied-piper/util\"; function main(): string { return answer(); }";
     let (_, disabled) = execute_on(&router, code).await;
     assert!(
         disabled["error"]["message"]
@@ -971,22 +971,22 @@ async fn git_transitive_imports_require_configuration_and_keep_package_attributi
             .contains("blueprint git block"),
         "{disabled}"
     );
-    let yaml = "name: test\npackages: ['@acme/util']\ngit:\n  identity: {name: Agent, email: agent@example.com}\npermissions:\n  main:\n    - {capability: git.init, action: allow}\n  '@acme/util':\n    - {capability: git.init, action: deny}\n    - {capability: git.commit, action: deny}\n";
+    let yaml = "name: test\npackages: ['@pied-piper/util']\ngit:\n  identity: {name: Agent, email: agent@example.com}\npermissions:\n  main:\n    - {capability: git.init, action: allow}\n  '@pied-piper/util':\n    - {capability: git.init, action: deny}\n    - {capability: git.commit, action: deny}\n";
     let (status, applied) = apply_blueprint_on(&router, yaml).await;
     assert_eq!(status, StatusCode::OK, "{applied}");
     let (_, denied) = execute_on(&router, code).await;
     let message = denied["error"]["message"].as_str().unwrap();
     assert!(
-        message.contains("caller=@acme/util") && message.contains("git.init"),
+        message.contains("caller=@pied-piper/util") && message.contains("git.init"),
         "{denied}"
     );
-    let yaml = "name: test\npackages: ['@acme/util']\ngit:\n  identity: {name: Agent, email: agent@example.com}\npermissions:\n  main:\n    - {capability: git.commit, action: allow}\n  '@acme/util':\n    - {capability: git.init, action: allow}\n    - {capability: git.commit, action: deny}\n";
+    let yaml = "name: test\npackages: ['@pied-piper/util']\ngit:\n  identity: {name: Agent, email: agent@example.com}\npermissions:\n  main:\n    - {capability: git.commit, action: allow}\n  '@pied-piper/util':\n    - {capability: git.init, action: allow}\n    - {capability: git.commit, action: deny}\n";
     let (status, applied) = apply_blueprint_on(&router, yaml).await;
     assert_eq!(status, StatusCode::OK, "{applied}");
     let (_, denied) = execute_on(&router, code).await;
     let message = denied["error"]["message"].as_str().unwrap();
     assert!(
-        message.contains("caller=@acme/util") && message.contains("git.commit"),
+        message.contains("caller=@pied-piper/util") && message.contains("git.commit"),
         "{denied}"
     );
 }

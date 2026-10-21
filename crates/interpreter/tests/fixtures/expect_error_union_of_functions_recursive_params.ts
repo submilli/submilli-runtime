@@ -14,7 +14,7 @@ interface Dept {
 }
 
 class Org {
-  name: string = "acme";
+  name: string = "pied-piper";
   title: string = "root";
   boss: Org;
   constructor() {

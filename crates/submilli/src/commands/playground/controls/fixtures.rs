@@ -3,13 +3,13 @@
 
 use std::collections::BTreeMap;
 
+use super::super::host::record::RecordedRun;
 use interpreter::runtime::limits::ExecutionUsage;
 use interpreter::runtime::{
     CallOutcome, CallRecord, DecisionAction, DecisionCause, DecisionRecord, EntryPath,
     FailureReasonRecord, FailureRecord, NearMissRecord, RuleCitation,
 };
 use serde_json::{Value, json};
-use submilli_server::record::RecordedRun;
 
 use crate::commands::playground::packages::ClosureEntry;
 use crate::commands::playground::store::Store;
@@ -29,7 +29,7 @@ default: deny
 permissions:
   main:
   - name: charges-for-signed-in-customer
-    capability: acme.com/charges.list
+    capability: pied-piper.example/charges.list
     filter: customerId == ${vars.customerId}
     action: allow
 ";
@@ -144,7 +144,7 @@ impl RunSpec {
             label: "stand-in".into(),
             entry: "session".into(),
             session: Some("s-1".into()),
-            variables: BTreeMap::from([("customerId".into(), "cus_northwind".into())]),
+            variables: BTreeMap::from([("customerId".into(), "pied_piper".into())]),
             version: None,
             calls: decisions
                 .iter()
@@ -250,7 +250,7 @@ pub(crate) fn charges_allowed(call_index: u64, customer: &str) -> DecisionRecord
     allowed_by(
         call_index,
         "main",
-        "acme.com/charges.list",
+        "pied-piper.example/charges.list",
         json!({ "customerId": customer }),
         0,
         Some("charges-for-signed-in-customer"),
@@ -258,12 +258,12 @@ pub(crate) fn charges_allowed(call_index: u64, customer: &str) -> DecisionRecord
 }
 
 /// A charges listing for `customer` denied by the default, the starter rule a near miss
-/// that needed `cus_northwind`.
+/// that needed `pied_piper`.
 pub(crate) fn charges_denied(call_index: u64, customer: &str) -> DecisionRecord {
     let mut decision = record(
         call_index,
         "main",
-        "acme.com/charges.list",
+        "pied-piper.example/charges.list",
         json!({ "customerId": customer }),
     );
     decision.allowed = false;
@@ -278,7 +278,7 @@ pub(crate) fn charges_denied(call_index: u64, customer: &str) -> DecisionRecord 
         failures: vec![FailureRecord {
             comparison: "customerId == ${vars.customerId}".into(),
             actual: Some(json!(customer)),
-            expected: Some("cus_northwind".into()),
+            expected: Some("pied_piper".into()),
             reason: FailureReasonRecord::NotSatisfied,
             negated: false,
         }],

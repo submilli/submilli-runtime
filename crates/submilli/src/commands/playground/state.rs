@@ -4,8 +4,9 @@
 //! self-ignoring `.gitignore`, the lock and ready files, the tokens, the start
 //! lock that serializes concurrent starts, the instance lock the serving process
 //! holds for its whole life, the detached child's log, the remembered binding
-//! (variable values and secret names, never a secret's value), and the embedded
-//! server's blueprint, session, VFS, and volume directories, and the run store.
+//! (variable values and secret names, never a secret's value), the host's
+//! database and session directories, the volumes, and the run store. An embedded
+//! server's `server/` directory, from an earlier version, is left as it is.
 //!
 //! Nothing here is trusted as found: the directory and `.submilli` above it must
 //! be real directories (not symlinks) owned by this user, and a file the
@@ -18,11 +19,11 @@ use std::io::{self, Read};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use super::host::auth::{ApiToken, Role};
 use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
-use submilli_server::{ApiToken, Role};
 
 /// Every token the playground's server accepts, with its role. Names are what
 /// runs are labeled with (KTD5); none of them ever appears in output or a link.
@@ -48,6 +49,11 @@ pub(crate) struct InstanceRecord {
     pub(crate) server_port: u16,
     pub(crate) nonce: String,
 }
+
+/// Printed once, on the first start after sessions moved out of the embedded
+/// server's directory.
+pub(crate) const SESSIONS_LEFT_BEHIND: &str = "sessions from the previous playground version \
+     were left behind and start fresh; run records, the blueprint and egress grants are kept";
 
 pub(crate) struct StateDir {
     root: PathBuf,
@@ -201,20 +207,50 @@ impl StateDir {
         self.root.join("tokens").join(name)
     }
 
-    pub(crate) fn database_path(&self) -> PathBuf {
-        self.root.join("server").join("server.db")
+    /// The host's own state: its database, session directories and ephemeral
+    /// scratch. The embedded server's `server/` beside it is never read here.
+    pub(crate) fn host_dir(&self) -> PathBuf {
+        self.root.join("host")
     }
 
-    pub(crate) fn blueprints_dir(&self) -> PathBuf {
-        self.root.join("server").join("blueprints")
+    pub(crate) fn host_database_path(&self) -> PathBuf {
+        self.host_dir().join("host.db")
     }
 
-    pub(crate) fn sessions_dir(&self) -> PathBuf {
-        self.root.join("server").join("sessions")
+    /// One directory per session, named by its id.
+    pub(crate) fn host_sessions_dir(&self) -> PathBuf {
+        self.host_dir().join("sessions")
     }
 
-    /// The server's volume root: managed volumes, session workspaces and
-    /// ephemeral scratch.
+    /// One scratch directory per ephemeral run; any found at boot are leftovers.
+    pub(crate) fn host_ephemeral_dir(&self) -> PathBuf {
+        self.host_dir().join("ephemeral")
+    }
+
+    /// Managed volumes, which hold program data across sessions and so stay where
+    /// the embedded server kept them.
+    pub(crate) fn managed_volumes_dir(&self) -> PathBuf {
+        self.volume_root().join("managed-local")
+    }
+
+    /// [`Self::create`] with the host's own directories, and the one-line notice to
+    /// print when this is the first start since the embedded server kept sessions
+    /// here: `server/` is there and `host/` is not. Creating `host/` records that
+    /// the notice was shown.
+    pub(crate) fn create_noting_upgrade(&self) -> Result<Option<&'static str>> {
+        self.create()?;
+        let upgraded = self.root.join("server").is_dir() && !self.host_dir().exists();
+        for dir in [
+            self.host_dir(),
+            self.host_sessions_dir(),
+            self.host_ephemeral_dir(),
+        ] {
+            owned_private_dir(&dir)?;
+        }
+        Ok(upgraded.then_some(SESSIONS_LEFT_BEHIND))
+    }
+
+    /// The volume root: managed volumes.
     pub(crate) fn volume_root(&self) -> PathBuf {
         self.root.join("volumes")
     }
@@ -250,7 +286,6 @@ impl StateDir {
         for dir in [
             self.root.clone(),
             self.root.join("tokens"),
-            self.root.join("server"),
             self.volume_root(),
         ] {
             owned_private_dir(&dir)?;
@@ -692,8 +727,8 @@ mod tests {
         state.create().unwrap();
         assert_eq!(state.read_binding().unwrap(), None);
         let binding = RememberedBinding {
-            variables: BTreeMap::from([("customerId".into(), "cus_northwind".into())]),
-            last: BTreeMap::from([("customerId".into(), "cus_northwind".into())]),
+            variables: BTreeMap::from([("customerId".into(), "pied_piper".into())]),
+            last: BTreeMap::from([("customerId".into(), "pied_piper".into())]),
             secret_names: BTreeSet::from(["API_KEY".into()]),
         };
         let path = state.binding_path();
@@ -712,11 +747,11 @@ mod tests {
         // A field a newer playground added is ignored; the variables are kept.
         fs::write(
             &path,
-            "{\"variables\": {\"customerId\": \"cus_initech\"}, \"added_later\": true}",
+            "{\"variables\": {\"customerId\": \"hooli\"}, \"added_later\": true}",
         )
         .unwrap();
         let read = state.read_binding().unwrap().expect("a binding");
-        assert_eq!(read.variables["customerId"], "cus_initech");
+        assert_eq!(read.variables["customerId"], "hooli");
 
         fs::write(&path, "{\"variables\": 3}").unwrap();
         assert!(state.read_binding().is_err());

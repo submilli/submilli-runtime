@@ -1306,13 +1306,13 @@ permissions:   # who may do what
 
      # The generated program.
      main:
-         -   capability: acme.com/charges.list   # listing
+         -   capability: pied-piper.example/charges.list   # listing
              filter: customerId == ${vars.customerId}
              action: allow
 
 
          # Refunds always need a person.
-         -   capability: acme.com/refunds.create
+         -   capability: pied-piper.example/refunds.create
              action: ask-human
      # Package code.
      billing:
@@ -1325,7 +1325,7 @@ default: deny
 
     #[test]
     fn appends_at_end_of_block_keeping_every_line() {
-        let context = json!({ "host": "api.acme.com", "port": 443 });
+        let context = json!({ "host": "api.pied-piper.example", "port": 443 });
         let draft =
             draft(ODD_LAYOUT, "main", "http.get", context, &VarBindings::new()).expect("drafts");
         assert_only_inserted(ODD_LAYOUT, &draft, 0);
@@ -1334,7 +1334,7 @@ default: deny
             rule_lines(&draft),
             [
                 "         -   capability: http.get",
-                "             filter: host == \"api.acme.com\" and port == 443",
+                "             filter: host == \"api.pied-piper.example\" and port == 443",
                 "             action: allow",
             ]
         );
@@ -1348,7 +1348,7 @@ default: deny
     fn creates_a_missing_caller_block_at_the_end_of_permissions() {
         let draft = draft(
             ODD_LAYOUT,
-            "@acme/reports",
+            "@pied-piper/reports",
             "fs.read",
             json!({ "path": "/data/a.csv" }),
             &VarBindings::new(),
@@ -1360,7 +1360,7 @@ default: deny
         assert_eq!(
             created,
             [
-                "     '@acme/reports':",
+                "     '@pied-piper/reports':",
                 "         -   capability: fs.read",
                 "             filter: path == \"/data/a.csv\"",
                 "             action: allow",
@@ -1386,10 +1386,10 @@ default: deny
     #[test]
     fn fills_an_empty_flow_block() {
         let original = "name: q\npermissions:\n  main:\n  - capability: a\n    action: allow\n  \
-                        '@acme/billing': []  # nothing yet\n";
+                        '@pied-piper/billing': []  # nothing yet\n";
         let draft = draft(
             original,
-            "@acme/billing",
+            "@pied-piper/billing",
             "secrets.get",
             json!({ "name": "KEY" }),
             &VarBindings::new(),
@@ -1398,7 +1398,7 @@ default: deny
         assert_eq!(
             draft.text,
             "name: q\npermissions:\n  main:\n  - capability: a\n    action: allow\n  \
-             '@acme/billing':  # nothing yet\n  - capability: secrets.get\n    \
+             '@pied-piper/billing':  # nothing yet\n  - capability: secrets.get\n    \
              filter: name == \"KEY\"\n    action: allow\n"
         );
         assert_eq!(draft.lines, 7..=9);
@@ -1410,7 +1410,7 @@ default: deny
         let draft = draft(
             ODD_LAYOUT,
             "main",
-            "acme.com/charges.create",
+            "pied-piper.example/charges.create",
             json!({ "customerId": "cus_42", "currency": "eur" }),
             &bindings,
         )
@@ -1449,7 +1449,7 @@ permissions:
     # Staging data stays put.
     - name: no-staging
       capability: http.get
-      filter: host glob \"*.staging.acme.com\"
+      filter: host glob \"*.staging.pied-piper.example\"
       action: deny
     - capability: http.get
       action: allow
@@ -1457,7 +1457,7 @@ permissions:
 
     #[test]
     fn a_denied_call_is_drafted_above_the_deny_rule() {
-        let context = json!({ "host": "api.staging.acme.com" });
+        let context = json!({ "host": "api.staging.pied-piper.example" });
         let draft = draft(
             DENIES_STAGING,
             "main",
@@ -1496,7 +1496,7 @@ permissions:
             drafted.resolve_permission_with_rule(
                 "main",
                 "http.get",
-                &json!({ "host": "db.staging.acme.com" }),
+                &json!({ "host": "db.staging.pied-piper.example" }),
                 &VarBindings::new()
             ),
             (Action::Deny, Some(2))
@@ -1527,7 +1527,7 @@ permissions:
         let draft = draft(
             ODD_LAYOUT,
             "main",
-            "acme.com/charges.create",
+            "pied-piper.example/charges.create",
             context.clone(),
             &VarBindings::new(),
         )
@@ -1597,7 +1597,7 @@ permissions:
         let draft = draft_named(
             ODD_LAYOUT,
             "main",
-            "acme.com/refunds.create",
+            "pied-piper.example/refunds.create",
             context,
             &VarBindings::new(),
             Some("small-refunds"),
@@ -1607,7 +1607,7 @@ permissions:
             rule_lines(&draft),
             [
                 "         -   name: small-refunds",
-                "             capability: acme.com/refunds.create",
+                "             capability: pied-piper.example/refunds.create",
                 "             filter: amount == 1250",
                 "             action: allow",
             ]
@@ -1858,7 +1858,7 @@ permissions:
         let err = draft_under(
             ODD_LAYOUT,
             "name: s\n",
-            "acme.com/refunds.create",
+            "pied-piper.example/refunds.create",
             context.clone(),
         )
         .expect_err("refused");

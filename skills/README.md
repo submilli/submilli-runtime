@@ -53,7 +53,11 @@ next time their assistant runs the skill, whose first step is
 `submilli skill sync`. No CLI release is involved. Tagging is deliberately a
 separate act from merging: skill text reaches users' coding agents within a
 day, so a release should be read end to end, and a change documenting new CLI
-behaviour should be tagged only after that CLI ships. Anything merged to `main`
+behaviour should be tagged only after that CLI ships. Set the release builder's
+`--min-cli` in the workflow to the oldest runtime that supports the documented
+commands; older clients keep their current skill and receive an upgrade hint.
+Skill v11 requires CLI 0.4.3 for install-time Package configuration.
+Anything merged to `main`
 without a tag reaches users only inside the next CLI's embedded copy, so bump
 `VERSION` whenever that copy should outrank the last tag.
 

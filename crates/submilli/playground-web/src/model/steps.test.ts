@@ -78,8 +78,8 @@ describe("the step list", () => {
   it("reads each run's calls, their bytes, and which decision belongs to which call", () => {
     const { calls, returned } = readSession(chatSession().events);
     expect(calls[1].map((c) => [c.caller, c.capability, c.line, c.pkg?.line, c.outcome, c.bytes, c.check?.ref])).toEqual([
-      ["main", "acme.com/charges.list", 4, 28, "returned", 0, "1.1"],
-      ["@acme/billing", "fs.read", 4, 31, "returned", 21530, "1.2"],
+      ["main", "pied-piper.example/charges.list", 4, 28, "returned", 0, "1.1"],
+      ["@pied-piper/billing", "fs.read", 4, 31, "returned", 21530, "1.2"],
     ]);
     expect(returned).toEqual({ 1: 64, 2: 1061, 3: 361, 4: 103 });
   });

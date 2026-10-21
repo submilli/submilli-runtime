@@ -32,7 +32,7 @@ Sentry or regional base URLs.
 import { listIssues, getIssueEvent, updateIssue } from "@submilli/sentry";
 
 function main(): string {
-    const page = listIssues("acme", {
+    const page = listIssues("pied-piper", {
         projects: ["4500000000000000"],
         environments: ["production"],
         limit: 20,
@@ -40,9 +40,9 @@ function main(): string {
     if (page.items.length === 0) return "No unresolved issues";
 
     const issue = page.items[0];
-    const event = getIssueEvent("acme", issue.project.slug, issue.shortId);
+    const event = getIssueEvent("pied-piper", issue.project.slug, issue.shortId);
     if (event !== null && event.exceptions.length > 0) {
-        updateIssue("acme", issue.project.slug, issue.id, { priority: "high" });
+        updateIssue("pied-piper", issue.project.slug, issue.id, { priority: "high" });
     }
     return JSON.stringify({ issue: issue, event: event, nextCursor: page.nextCursor });
 }

@@ -234,7 +234,7 @@ test("a page-started chat is followed before its request returns, with no notice
     await started;
     const sent = store.chat("Hello", {
       model: "anthropic:claude-sonnet-5-5",
-      variables: { customerId: "cus_northwind" },
+      variables: { customerId: "pied_piper" },
     });
     expect(store.getSnapshot().pendingChat).toEqual({ message: "Hello", session: null });
     await expect.poll(() => store.getSnapshot().data.sessionId).toBe(SESSION(8));
@@ -243,7 +243,7 @@ test("a page-started chat is followed before its request returns, with no notice
     expect(agent?.body).toEqual({
       task: "Hello",
       model: "anthropic:claude-sonnet-5-5",
-      variables: { customerId: "cus_northwind" },
+      variables: { customerId: "pied_piper" },
     });
     expect(server.requests()).toContain(`GET /api/sessions/${SESSION(8)}/events`);
     expect(store.getSnapshot().newSession).toBeNull();
@@ -337,20 +337,20 @@ test("explains, versions and sources load once, and a missing source says why", 
   await Promise.all([store.loadExplain("2.1"), store.loadExplain("2.1")]);
   await store.loadVersion(1);
   await store.loadVersion(1);
-  await store.loadSource("@acme/billing", "lib");
-  await store.loadSource("@acme/billing", "nope");
+  await store.loadSource("@pied-piper/billing", "lib");
+  await store.loadSource("@pied-piper/billing", "nope");
   const once = (prefix: string) => server.requests().filter((r) => r.startsWith(prefix)).length;
   expect(once("GET /api/decisions/2.1")).toBe(1);
   expect(once("GET /api/changes?version=1")).toBe(1);
   const snap = store.getSnapshot();
   expect(snap.data.explains["2.1"].outcome).toBe("deny");
   expect(snap.data.versions[1].text).toContain("kind: blueprint");
-  expect(snap.data.sources["@acme/billing\u0000lib"].untrusted.text).toContain("listCharges");
-  expect(snap.sourceErrors["@acme/billing\u0000nope"]).toEqual({
+  expect(snap.data.sources["@pied-piper/billing\u0000lib"].untrusted.text).toContain("listCharges");
+  expect(snap.sourceErrors["@pied-piper/billing\u0000nope"]).toEqual({
     code: "unknown_module",
-    message: "package `@acme/billing` has no module `nope`",
+    message: "package `@pied-piper/billing` has no module `nope`",
   });
-  expect(server.requests()).toContain("GET /api/packages/source?package=%40acme%2Fbilling&module=lib");
+  expect(server.requests()).toContain("GET /api/packages/source?package=%40pied-piper%2Fbilling&module=lib");
 });
 
 test("opening another session stops the current feed and loads the other", async () => {
@@ -374,7 +374,7 @@ test("no request URL ever carries the token", async () => {
   const { store, started } = start(server, "#login=good&run=2");
   await started;
   await expect.poll(() => store.getSnapshot().data.events.length).toBe(43);
-  await store.loadSource("@acme/billing", "lib");
+  await store.loadSource("@pied-piper/billing", "lib");
   await store.test(2);
   await store.chat("again");
   expect(server.calls.length).toBeGreaterThan(10);

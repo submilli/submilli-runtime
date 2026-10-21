@@ -1,6 +1,6 @@
-namespace: acme
+namespace: pied-piper
 provides:
-- name: acme.com/charges.list
+- name: pied-piper.example/charges.list
   description: List the charges on one customer's account.
   fields:
     customerId:

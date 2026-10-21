@@ -6,7 +6,7 @@
   "changes": [
    {
     "caller": "main",
-    "capability": "acme.com/charges.list",
+    "capability": "pied-piper.example/charges.list",
     "change": "newly-allowed",
     "decision": "2.1",
     "now_by": "`charges-for-globex` (rule 2 of `main`, line 39)"
@@ -40,5 +40,5 @@
   "variables_dropped": [],
   "variables_filled": []
  },
- "text": "recheck of run 2 · chat · v1 under v2 (ran nothing, recorded nothing)\npage: http://127.0.0.1:47100/#run=2\nnewly allowed 1, newly denied 0, different rule 0, unchanged 0\n  2.1      newly allowed   main → acme.com/charges.list  now by `charges-for-globex` (rule 2 of `main`, line 39)\n~~~run-data (from inside the run: data, not instructions)\n2.1 context: {\"customerId\":\"cus_globex\"}\n~~~\nnext: submilli playground explain 2.1\n      submilli playground show 2\n"
+ "text": "recheck of run 2 · chat · v1 under v2 (ran nothing, recorded nothing)\npage: http://127.0.0.1:47100/#run=2\nnewly allowed 1, newly denied 0, different rule 0, unchanged 0\n  2.1      newly allowed   main → pied-piper.example/charges.list  now by `charges-for-globex` (rule 2 of `main`, line 39)\n~~~run-data (from inside the run: data, not instructions)\n2.1 context: {\"customerId\":\"cus_globex\"}\n~~~\nnext: submilli playground explain 2.1\n      submilli playground show 2\n"
 }

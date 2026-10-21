@@ -17,6 +17,7 @@ path = "src/main.rs"
 interpreter = { workspace = true }
 submilli-blueprint = { path = "../submilli-blueprint" }
 submilli-build = { path = "../submilli-build" }
+submilli-durable = { path = "../submilli-durable" }
 submilli-shared = { path = "../submilli-shared" }
 submilli-server = { path = "../submilli-server" }
 clap = { workspace = true }
@@ -32,9 +33,13 @@ libc.workspace = true
 base64 = { workspace = true }
 sentry = { workspace = true }
 sha2 = "0.10"
+subtle = "2.6"
 getrandom = "0.2"
 dialoguer = "0.11"
 tempfile = { workspace = true }
+sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
+uuid = { workspace = true }
+tokio-util = "0.7"
 
 rustls.workspace = true
 axum = { workspace = true }
@@ -42,6 +47,7 @@ tower = { workspace = true, features = ["util"] }
 ipnet = { workspace = true }
 hmac = "0.12"
 async-trait = { workspace = true }
+rmcp = { workspace = true }
 percent-encoding = { workspace = true }
 aho-corasick = "1"
 # The playground's blueprint watcher: one coalesced "something changed" per burst of
@@ -56,3 +62,4 @@ unicode-properties = { version = "0.1", default-features = false, features = ["g
 rcgen.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
 tempfile = { workspace = true }
+wasm-encoder = { workspace = true }

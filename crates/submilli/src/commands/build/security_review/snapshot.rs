@@ -309,7 +309,7 @@ mod configuration_tests {
     fn configuration_is_captured_for_siblings_before_isolated_review() {
         let project = tempfile::tempdir().unwrap();
         let root = project.path();
-        fs::write(root.join("submilli.toml"), "[[package]]\nname = '@acme/app'\nversion = '1.0.0'\ndescription = 'App.'\npath = 'app'\ndependencies = ['@acme/service']\n[[package]]\nname = '@acme/service'\nversion = '1.0.0'\ndescription = 'Service.'\npath = 'service'\n").unwrap();
+        fs::write(root.join("submilli.toml"), "[[package]]\nname = '@pied-piper/app'\nversion = '1.0.0'\ndescription = 'App.'\npath = 'app'\ndependencies = ['@pied-piper/service']\n[[package]]\nname = '@pied-piper/service'\nversion = '1.0.0'\ndescription = 'Service.'\npath = 'service'\n").unwrap();
         for name in ["app", "service"] {
             fs::create_dir_all(root.join(name).join("src")).unwrap();
             fs::create_dir_all(root.join(name).join("docs")).unwrap();
@@ -321,11 +321,11 @@ mod configuration_tests {
         )
         .unwrap();
         fs::write(root.join("service/src/lib.ts"), "import { baseUrl } from './config';\n/** Endpoint.\n * @returns Endpoint.\n */\nexport function endpoint(): string { return baseUrl; }").unwrap();
-        fs::write(root.join("app/src/lib.ts"), "import { endpoint } from '@acme/service';\n/** Read.\n * @returns Endpoint.\n */\nexport function read(): string { return endpoint(); }").unwrap();
+        fs::write(root.join("app/src/lib.ts"), "import { endpoint } from '@pied-piper/service';\n/** Read.\n * @returns Endpoint.\n */\nexport function read(): string { return endpoint(); }").unwrap();
         let manifest = submilli_build::load_manifest(&root.join("submilli.toml")).unwrap();
         let home = tempfile::tempdir().unwrap();
         let store = submilli_build::PackageStore::new(home.path());
-        let selected = submilli_build::PackageName::new("@acme/service");
+        let selected = submilli_build::PackageName::new("@pied-piper/service");
         let inputs = submilli_build::ConfigInputs::parse(
             &["baseUrl=https://captured.test".into()],
             &[],
@@ -342,17 +342,17 @@ mod configuration_tests {
         .unwrap();
         submilli_build::install_packages(&store, &built).unwrap();
         let (snapshot, manifest) =
-            collect_from_with_store(root, Some("@acme/app"), &store).unwrap();
+            collect_from_with_store(root, Some("@pied-piper/app"), &store).unwrap();
         assert_eq!(
-            snapshot.configuration["@acme/service"]["baseUrl"],
+            snapshot.configuration["@pied-piper/service"]["baseUrl"],
             "https://captured.test"
         );
-        assert!(!snapshot.configuration.contains_key("@acme/app"));
-        fs::remove_dir_all(home.path().join("@acme/service")).unwrap();
+        assert!(!snapshot.configuration.contains_key("@pied-piper/app"));
+        fs::remove_dir_all(home.path().join("@pied-piper/service")).unwrap();
         let evidence = super::super::authority::collect(
             &snapshot,
             &manifest,
-            Some("@acme/app"),
+            Some("@pied-piper/app"),
             &submilli_build::ConfigInputs::default(),
         )
         .unwrap();
@@ -361,7 +361,7 @@ mod configuration_tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|package| package["name"] == "@acme/service")
+            .find(|package| package["name"] == "@pied-piper/service")
             .unwrap();
         assert_eq!(
             service["config"]["values"]["baseUrl"],

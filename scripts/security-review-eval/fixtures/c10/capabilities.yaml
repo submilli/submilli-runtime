@@ -1,6 +1,6 @@
-namespace: acme
+namespace: pied-piper
 provides:
-- name: acme.replace
+- name: pied-piper.replace
   description: Replace a selected record.
   fields:
     id:

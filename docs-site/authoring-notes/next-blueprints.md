@@ -42,7 +42,7 @@ reuse one example blueprint, the support agent's, but each stands alone.
   inventory, allow a direct call, run a program, inject the credential and
   run it again, put the secret on the server and register, plain HTTP.
 - **Example:** GitHub's REST API, `/rate_limit`, replaces the fictional
-  `status.acme.com`: it is real, any reader with a token can run it, and
+  `status.pied-piper.example`: it is real, any reader with a token can run it, and
   its answer proves the injection (60 requests an hour anonymous, 5,000
   with a token) without the program changing. `User-Agent` is sent as a
   `Map` because `Headers` is a `Map<string, string>`; GitHub answers 403
@@ -55,7 +55,7 @@ reuse one example blueprint, the support agent's, but each stands alone.
   and a real token from `gh auth token`; the "51 of 60" remaining count
   is whatever that run saw. The server section ran for real too (see
   the server note below). The plain-HTTP example
-  (`legacy.internal.acme.com`) was run on a fresh scratch blueprint; the
+  (`legacy.internal.pied-piper.example`) was run on a fresh scratch blueprint; the
   top-level flag was added by hand and lint accepted it.
 
 ## Keep files and state
@@ -204,8 +204,8 @@ reuse one example blueprint, the support agent's, but each stands alone.
   on the first five pages is copied from that run, as is the whole file at
   the end of page 1. `add-package` now reports `http.post`, matching the
   package's real call.
-- Test runs: `cus_initech` denial and the missing-variable refusal are
-  from that run. The `cus_northwind` success line is from the earlier
+- Test runs: `hooli` denial and the missing-variable refusal are
+  from that run. The `pied_piper` success line is from the earlier
   stub version of the package; with the real call it fails on DNS for the
   fictional host.
 - `blueprint prompt` in 0.1.6 prints the whole execute-tool description

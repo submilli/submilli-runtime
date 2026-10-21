@@ -1,10 +1,10 @@
 import { parse, URL } from "submilli:url";
 
 function main(): void {
-  const url: URL = parse("https://api.acme.com:8443/v1/orders?status=paid&limit=10#section");
+  const url: URL = parse("https://api.pied-piper.example:8443/v1/orders?status=paid&limit=10#section");
 
   assert(url.protocol === "https", "protocol");
-  assert(url.host === "api.acme.com", "host");
+  assert(url.host === "api.pied-piper.example", "host");
   assert(url.path === "/v1/orders", "path");
 
   const port: number | undefined = url.port;

@@ -1,0 +1,159 @@
+[
+  {
+    "description": "List files in the session workspace (VFS). Use it to discover what an `execute` run wrote to disk before reading with `submilli__files__read`. Args: optional `path` (directory, default the working directory) and `recursive` (default false). Returns { entries: [{ path, kind, bytes }], count, truncated }, capped at 1000 entries. Files survive across calls under a per_session or named root and under a mounted volume; an ephemeral root is emptied after every execute. Requires fs.list as caller main with op list; policy checks the starting directory, including recursive listings. A denial or a missing directory returns { error: { kind, message } }.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "default": null,
+          "description": "Directory to list, e.g. `\"/workspace\"`. Defaults to the workspace root.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recursive": {
+          "default": null,
+          "description": "Recurse into subdirectories. Defaults to false (top level only).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "title": "ListFilesArgs",
+      "type": "object"
+    },
+    "name": "submilli__files__list"
+  },
+  {
+    "description": "Read a file from the session workspace (VFS) in line windows — the smart way to consume a large payload an `execute` run wrote to disk (e.g. via jina `downloadSearch`/`downloadRead`) without pulling it back through a single huge result. Args: `path`, optional `offset` (1-based line, default 1) and `limit` (lines, default 2000). Returns { content, line_start, line_end, has_more, next_offset, bytes }; pass `next_offset` back to page on. Files survive across calls under a per_session or named root and under a mounted volume; an ephemeral root is emptied after every execute. Requires fs.read as caller main with op readText. A denial or a missing file returns { error: { kind, message } }.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "default": null,
+          "description": "Maximum lines to return (clamped to 5000). Defaults to 2000.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "offset": {
+          "default": null,
+          "description": "1-based line to start at. Defaults to 1.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "VFS path to read, e.g. `\"/workspace/search.md\"`. Resolved under the session\nworkspace root; `..` segments that escape it are rejected.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "ReadFileArgs",
+      "type": "object"
+    },
+    "name": "submilli__files__read"
+  },
+  {
+    "description": "Return TypeScript `.d.ts`-style declarations for one or more language built-ins — the globals always in scope without an `import` (e.g. \"Array\", \"Map\", \"Temporal\", \"JSON\"). Their signatures are a strict subset and differ from Node/TS in places, so fetch the names you intend to use. A dotted member path (e.g. \"Temporal.Instant\") returns just that member — much smaller than the whole namespace, so prefer it when you know the member you want. Unknown names return an { error } entry rather than failing. A package name asked here returns an { error } naming the package-docs call to make; use that tool for importable modules.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "names": {
+          "description": "Built-in names to look up, e.g. `[\"Array\", \"Map\", \"Temporal\"]`. Each\nreturns its declarations; unknown names come back with an `error` entry.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "names"
+      ],
+      "title": "BuiltinsDocsArgs",
+      "type": "object"
+    },
+    "name": "submilli__typescript__builtins__docs"
+  },
+  {
+    "description": "List the language built-ins that are always in scope without an `import`, returning { types, namespaces }. Use this to discover names before fetching their declarations. Built-in namespaces such as Temporal and JSON must be used directly, not imported.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "submilli__typescript__builtins__list"
+  },
+  {
+    "description": "Run a submilli program — strict TypeScript subset compiled to\nWebAssembly.\n\nBitwise `&`, `|`, `^`, `~`, `<<`, `>>`, `>>>` and their compound\nassignments follow TypeScript: numbers use 32-bit integer conversion;\nbigints support all except `>>>`. Do not mix numbers and bigints.\n\nPrefer one coherent program over a sequence of one-call executions.\nBatch related API calls, follow data dependencies and pagination in\ncode, and reuse fetched data. An ID or path returned by one call can\nfeed the next call in the same program. Return to the model when\nresults require judgment, not merely to pass data between operations.\n\nPreserve the model's context window: execution output becomes part of\nthe conversation and is read again on later turns. Filter, search,\njoin, and aggregate inside the program; return only relevant fields,\ncounts, and excerpts needed for the answer or next decision. Include\nsource identifiers and material errors or gaps, and state when results\nare partial. Avoid dumping whole files or collections and repeatedly\nfetching a file just to return different slices. Batch focused work,\nnot an exhaustive investigation; stop once there is enough evidence\nto fulfill the request.\n\nYou do NOT have access to Node.js APIs, browser globals, or NPM\npackages. Submilli ships its own standard library — modules are:\n`submilli:url`, `submilli:crypto`, `submilli:uuid`. Submilli native\npackages and discovered `@mcp/<server>` packages may also be available;\nuse the `submilli__typescript__packages__search` and `submilli__typescript__packages__docs` tools to discover them before importing.\n\nBuilt-ins already in scope, no `import` needed: Array, BigInt, Boolean, Error, ErrorOptions, Map, Number, Object, PermissionDeniedError, QuotaExceededError, RangeError, ReadonlyMap, ReadonlySet, Record, ReferenceError, RegExp, Set, String, SyntaxError, TextDecoder, TextEncoder, TimeoutError, TypeError, URIError, Uint8Array; namespaces JSON, Math, Temporal. Their\nsignatures are a strict subset and differ from Node/TS in places (no\n`Date` — use the `Temporal` global, ISO 8601 + IANA timezones; `Math`\nincludes `Math.random()`; `JSON` is `stringify` / `parse`). Call the\n`submilli__typescript__builtins__docs` tool for each name you'll use to get their exact\n`.d.ts` declarations before relying on a method. It takes a dotted\nmember path too (`Temporal.Instant`), which returns just that member\ninstead of the whole namespace. Asking it for a package name returns\nthe `submilli__typescript__packages__docs` call to make, and asking `submilli__typescript__packages__docs` for a\nbuilt-in serves it — the two tools cross-check each other, so a name\nin the wrong one is never a dead end.\n\n\n\nDenials are final. A `permission denied … capability=…` error means\nthat operation is forbidden — for you and for every other route to the\nsame effect. Do not retry it, call the same service through\na different package, or change arguments to slip\npast the filter. Stop and report the denial. Most denials are the\noperator's policy; a few are runtime rules no policy can change, and\nthe message says which. Likewise an HTTP 401/403 or \"authentication\nrequired\" response means credentials are not configured for that host:\ndo not hunt for tokens or build auth headers — stop and report it.\n\nYou never handle secret values. `submilli:secrets` is not available to\nyou: calling `secrets.get` is refused whatever the policy says. When a\npackage API needs a credential, pass it the secret **name** and the\npackage resolves the value internally and never returns it — e.g.\n`notion.createPage(secretName, …)`, not `get(\"NOTION_TOKEN\")`. There is\nno route around this: not another package, not asking a package to\nfetch the value and hand it back, not raw HTTP.\n\nPackages own cleanup for session-owned remote resources. Do not call\n`registerFinalizer`, `unregisterFinalizer`, or a package's reserved `finalizer`\nentry point from generated programs. Removing session KV does not release a\nremote resource; use the package's explicit close operation when finished.\n\nBudget refusals (filesystem space, model tokens, and session state) throw\n`QuotaExceededError`, a catchable `Error`. Free space, reduce the request,\nor report the budget to the operator. Argument-size caps remain `RangeError`.\n\nLanguage deltas: no `async`/`await`, no `Symbol` /\n`Proxy`, no `any` (`unknown` requires narrowing), no `Date` (use the\n`Temporal` global), `==` aliases `===`, so `x == null` is a compile error:\nwrite `x === null`, `x === undefined`, or both. Truthiness and `&&` / `||` /\n`??` use JS/TS truthiness and short-circuit semantics (an `unknown` condition\nmust be narrowed first).\nPostfix `x!` is a runtime-checked non-null assertion: it\nremoves `null` and `undefined` from the type and throws `TypeError` for either.\nMissing properties, collection misses, and omitted optional parameters use\n`undefined`; `null` is distinct. Defaults apply to omission or `undefined`,\nnever `null`. Optional chains yield `undefined`; `??` handles both values.\n`arr[i]` out of range throws `RangeError`; probe with `arr.at(i)`, which\nreturns `undefined`. `let x: T;` needs an initializer unless `T` includes\n`undefined`. Template literals accept `null` and `undefined` and render them\nlike `String(x)`.\nReturn types are mandatory on function declarations (including `main`) and\nclass methods; arrow functions can infer them.\nNo runtime reflection: of `Object.prototype` only `.toString()` is\navailable — no `.hasOwnProperty()`. The type system tells you what\nfields a value has; narrow optional values with `obj.field !== undefined`.\n`\"field\" in obj` narrows `unknown` or unions distinguished by field presence;\na present optional field can still hold `undefined`.\nDynamic string keys also work with `key in obj`, without narrowing.\nIdentifiers follow TypeScript — `type`, `from`,\n`of`, `as`, and `is` are contextual and may name variables — with one\nexception: `namespace` is reserved here, so rename it (`ns`). Reserved\nwords are fine as object keys (`{ type: \"x\" }`, read back as\n`obj.type`); for keys that aren't valid identifiers, quote them and\nindex with a string literal (`{ \"content-length\": 5 }` →\n`obj[\"content-length\"]`). Use `Record<string, V>` or `{ [key: string]: V }`\nfor dynamic `obj[key]` reads and writes. Missing reads return `undefined`, so\ntheir read type is `V | undefined`; writes require `V`. `Record<\"a\" | \"b\", V>` requires\nboth keys and reads them as `V`. Computed literals (`{ [key]: value }`), spread,\nand readonly string index signatures are supported. Keys must be strings;\n`keyof` an open string-indexed type is `string`. General mapped types and\nunresolved generic Record keys are unsupported.\nEvery program needs `function main()`; its return\nvalue is the output, delivered as a string: a `string` is emitted\nverbatim (so don't `JSON.stringify` it yourself — that double-encodes),\n`number`/`boolean` use `toString`, and objects/arrays serialize to\nJSON. Returning `undefined` produces no result; returning `null` produces\nthe JSON text `null`. `console.log` is a separate debug stream.\n\n`JSON.stringify` omits undefined object fields, writes undefined array elements\nas null, and returns undefined for top-level undefined.\nReading JSON text: `JSON.parse(s)`\nreturns `unknown`. Validate and type the result with a runtime cast:\n`const x = JSON.parse(s) as T`. Do not write `JSON.parse<T>(s)` or\nrely on `const x: T = JSON.parse(s)`. A cast accepts a missing key for\n`x?: T` but rejects JSON `null`; declare a field the API may send as null\n`x?: T | null`.\n`T` can be a primitive (`string`, `number`, `boolean`), an object type,\nan array, or a data-only `interface` you declare (no methods) — and\ncombinations like `Issue[]`.\n\n\n\n\n\n\nOutput: success returns just `main()`'s value as a string (a `string`\nreturn verbatim; numbers/booleans via `toString`; objects/arrays as\nJSON; `undefined` produces no result). Failure returns result + console + error details inline.\n`console.log` output is dropped from a *successful* result — read it\nback with the last-run tool.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "description": "TypeScript-subset source with a `main()` entry point. Its return value\nis the tool result.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "title": "ExecuteArgs",
+      "type": "object"
+    },
+    "name": "submilli__typescript__execute"
+  },
+  {
+    "description": "Return the most recent execution's result and FULL console (un-suppressed) for this session. Use it to read debug output after a successful run, which the execute result omits. Takes no arguments.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "submilli__typescript__last_run"
+  },
+  {
+    "description": "Return the type declarations (a TypeScript `.d.ts`-style listing of every exported function and type) plus a one-line description for a package — an importable stdlib module (e.g. \"submilli:crypto\"), a registry package, or an @mcp/<server> package. Read these before importing a package: the signatures are the contract. A name that is a language built-in rather than a package (e.g. \"Temporal\") is served here too, tagged \"source\": \"builtin\" — use it directly, with no `import`. Unknown names return a structured { error }, carrying a did-you-mean candidate when a close one exists.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "name": {
+          "description": "Package name, e.g. `submilli:crypto`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "PackageDocsArgs",
+      "type": "object"
+    },
+    "name": "submilli__typescript__packages__docs"
+  },
+  {
+    "description": "Search available packages by name, description, or exported symbol name — stdlib modules (e.g. \"submilli:crypto\"), this blueprint's declared registry packages (e.g. \"@submilli/github\"), and its discovered @mcp/<server> packages (results tagged with a \"source\" of \"host\", \"registry\", or \"mcp\"). An empty query lists every available package. A query matching nothing returns the available-package catalog and a pointer to the built-ins tool rather than an empty list.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "query": {
+          "default": "",
+          "description": "Substring matched against module names, descriptions, and exported\nsymbols. Empty lists every available package.",
+          "type": "string"
+        }
+      },
+      "title": "PackageSearchArgs",
+      "type": "object"
+    },
+    "name": "submilli__typescript__packages__search"
+  }
+]

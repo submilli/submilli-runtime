@@ -25,9 +25,9 @@
 
 ## Verification
 
-- Built `@acme/billing` (two source files) and `@acme/support` (a sibling dependency) in a scratch project with an isolated `SUBMILLI_HOME`. The build, test, and publish output in the chapters is from those runs, with paths shortened.
+- Built `@pied-piper/billing` (two source files) and `@pied-piper/support` (a sibling dependency) in a scratch project with an isolated `SUBMILLI_HOME`. The build, test, and publish output in the chapters is from those runs, with paths shortened.
 - Ran a failing test, a failing readme example, an undeclared dependency, a compile error, and a host passed in a parameter, for the errors quoted.
-- Ran `credit.ts` under a blueprint before and after granting `acme.com/credits.apply`.
+- Ran `credit.ts` under a blueprint before and after granting `pied-piper.example/credits.apply`.
 - Declared `@submilli/jina` from the local store as a dependency and built. The GitHub dependency form and `submilli.lock` are from the source and were not run.
 - Ran `tsc -p .` over the project with `@submilli/jina` as a store dependency: no errors, after the fixes that added `submilli:security` and dependency declarations to the generated types.
 - The package-side `@capability`/`check` warnings and the rule that `check` sits directly in an exported function come from the check-discipline change in progress in `submilli-wt1` (SUB-1117). The chapter describes that behavior; on `main` before it lands, package builds don't report them.

@@ -894,12 +894,12 @@ mod tests {
         assert!(err.to_string().contains("unknown capability"), "{err}");
         assert!(err.to_string().contains("fs.read"), "{err}");
 
-        let mut forced = add_args("acme.com/charge", &path);
+        let mut forced = add_args("pied-piper.example/charge", &path);
         forced.force = true;
         add(&forced).unwrap();
         assert_eq!(
             reload(&path).permissions["main"][0].capability,
-            "acme.com/charge"
+            "pied-piper.example/charge"
         );
     }
 
@@ -1002,12 +1002,12 @@ mod tests {
     fn add_allows_the_same_capability_under_a_package_caller() {
         let (_tmp, path) = temp_blueprint("name: t\n");
         let mut package = add_args("secrets.get", &path);
-        package.caller = "@acme/sdk".into();
+        package.caller = "@pied-piper/sdk".into();
 
         add(&package).unwrap();
 
         assert_eq!(
-            reload(&path).permissions["@acme/sdk"][0].capability,
+            reload(&path).permissions["@pied-piper/sdk"][0].capability,
             "secrets.get"
         );
     }
@@ -1105,17 +1105,17 @@ mod tests {
     fn the_unreachable_warning_names_the_callers_remove_command() {
         let (_tmp, path) = temp_blueprint("name: t\n");
         let mut whole = add_args("fs.read", &path);
-        whole.caller = "@acme/x".into();
+        whole.caller = "@pied-piper/x".into();
         add(&whole).unwrap();
 
         let mut narrowed = add_args("fs.read", &path);
-        narrowed.caller = "@acme/x".into();
+        narrowed.caller = "@pied-piper/x".into();
         narrowed.filter = Some("path == \"/x\"".into());
         let message = add(&narrowed).unwrap();
 
         assert!(
             message.contains(&format!(
-                "`permissions.@acme/x` rule 1 for `fs.read` (`allow`, no filter) decides every call first, so this rule never matches; delete or narrow it in the file, or run `submilli blueprint capability remove fs.read --caller @acme/x --blueprint {}`",
+                "`permissions.@pied-piper/x` rule 1 for `fs.read` (`allow`, no filter) decides every call first, so this rule never matches; delete or narrow it in the file, or run `submilli blueprint capability remove fs.read --caller @pied-piper/x --blueprint {}`",
                 path.display()
             )),
             "{message}"

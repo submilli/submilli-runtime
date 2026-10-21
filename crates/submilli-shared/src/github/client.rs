@@ -45,7 +45,7 @@ pub(super) struct Target<'a> {
     pub(super) repo: &'a str,
     /// The commit fetched, when the request names one.
     pub(super) commit: Option<&'a str>,
-    /// For example "resolving acme/crm ref `main`".
+    /// For example "resolving pied-piper/crm ref `main`".
     pub(super) action: &'a str,
     /// Wraps a transport failure or an unexpected status.
     pub(super) fail: fn(String) -> GithubError,
