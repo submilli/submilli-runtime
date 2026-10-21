@@ -236,7 +236,7 @@ encoding, SQL, encryption and decoding buffers are infrastructure overhead and d
 not consume the run's memory budget. Encoded-size and structural limits remain;
 ordinary provider allocations and guest allocations retain their existing limits.
 This does not claim a total-memory bound for arbitrary Serde deserializers.
-The native codec is version 4 and runtime compatibility marker is version 6;
+The native codec is version 4 and runtime compatibility marker is version 7;
 older internal recordings are refused after the outcome, budget and code-operation
 identity/representation changes.
 
@@ -261,6 +261,18 @@ boundary; pure operations have no history row. Console logging also stays outsid
 the boundary: it writes normally on every attempt, including replay, and can
 publish duplicate console events. Output is retained with the finished run;
 incremental console persistence is deferred to SUB-1885.
+
+Secret lookups record `Option<EncryptedSecret>` under `secrets.getEncrypted`:
+only the ciphertext envelope and encryption key ID cross the history boundary.
+The secret provider encrypts before returning, independently of database sealing.
+Decryption happens after the effect commits and on every replay, using the
+recorded key ID; it never retrieves a replacement credential. Missing keys or
+failed decryption interrupt the run while preserving its envelope for retry.
+The current provider accepts one configured key and rejects an unknown key ID;
+selecting retained keys from a keyring is future rotation work. Direct execution
+still uses the provider's ordinary lookup. Custom providers must implement the
+encrypted interface before they can serve recorded secret lookups.
+
 
 Each filesystem-backed `submilli:code` method has its own `code.<method>` effect
 identity and native result. `diffText` stays pure. Saved code results replay without

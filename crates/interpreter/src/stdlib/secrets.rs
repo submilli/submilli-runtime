@@ -4,10 +4,11 @@
 //! the linker resolves the user import (`submilli:secrets#get`) with no Wasm
 //! module.
 
-use crate::runtime::effects;
 use crate::runtime::host::{
-    abi_arg, read_string_arg, register_host_value_async, write_submilli_string_struct,
+    abi_arg, fatal_host_error, read_string_arg, register_host_value_async, throw_host_error,
+    write_submilli_string_struct,
 };
+use crate::runtime::{effects, fuel};
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
@@ -62,20 +63,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     serde_json::json!({ "name": name }),
                 )?;
 
-                let observation =
-                    effects::execute(caller, "secrets.get", name, |caller, _, name| {
-                        Box::pin(async move {
-                            caller
-                                .data()
-                                .secret_provider
-                                .get(&name)
-                                .await
-                                .map_err(|message| {
-                                    wasmtime::Error::msg(format!("secrets.get {name}: {message}"))
-                                })
-                        })
-                    })
-                    .await?;
+                let observation = resolve_secret(caller, name).await?;
                 let Some(value) = &observation else {
                     return crate::runtime::prelude::undefined::value(caller);
                 };
@@ -85,6 +73,51 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             })
         },
     )
+}
+
+async fn resolve_secret(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    name: String,
+) -> wasmtime::Result<Option<String>> {
+    let provider = caller.data().secret_provider.clone();
+    if caller.data().effects.is_none() {
+        return provider.get(&name).await.map_err(|message| {
+            throw_host_error(
+                caller,
+                wasmtime::Error::msg(format!("secrets.get {name}: {message}")),
+            )
+        });
+    }
+
+    let encrypted = effects::execute(
+        caller,
+        "secrets.getEncrypted",
+        name.clone(),
+        |caller, _, name| {
+            Box::pin(async move {
+                let secret = caller
+                    .data()
+                    .secret_provider
+                    .get_encrypted(&name)
+                    .await
+                    .map_err(fatal_host_error)?;
+                if let Some(secret) = &secret {
+                    fuel::settle(&mut *caller, fuel::HASH, secret.ciphertext.len() as u64)?;
+                }
+                Ok(secret)
+            })
+        },
+    )
+    .await?;
+    let Some(encrypted) = encrypted else {
+        return Ok(None);
+    };
+    // Decryption can be retried from this saved envelope without another lookup.
+    fuel::charge(&mut *caller, fuel::HASH, encrypted.ciphertext.len() as u64)?;
+    provider
+        .decrypt(&name, &encrypted)
+        .map(Some)
+        .map_err(fatal_host_error)
 }
 
 #[cfg(test)]

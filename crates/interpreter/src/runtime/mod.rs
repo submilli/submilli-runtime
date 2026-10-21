@@ -82,7 +82,7 @@ pub use mcp::{
 pub use metrics::{HttpMetric, MetricsSink, NoopMetricsSink};
 pub use prelude::bigint::ops::BIGINT_MODULE_NAME;
 pub use prelude::temporal::shared::TEMPORAL_MODULE_NAME;
-pub use secrets::{NoopSecretProvider, SecretProvider};
+pub use secrets::{EncryptedSecret, NoopSecretProvider, SecretKeyId, SecretProvider};
 pub use security::{AllowAllCheck, AuditDecision, CheckOutcome, SecurityCheck};
 pub use session_kv::{
     CURSOR_KEY_ID_LEN, CursorKey, CursorKeys, InMemorySessionKv, SessionKvEntry, SessionKvError,

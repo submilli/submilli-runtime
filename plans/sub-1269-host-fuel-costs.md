@@ -1919,7 +1919,7 @@ Optional: installed only for an embedder that enables it. Variables: `T` = bytes
 
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
-| `submilli:secrets#get` | Read the name, gate, `provider.get(name).await`, allocate the value string (`stdlib/secrets.rs:47`) | `CALL + GATE + SCAN(len(secret)) + IO(len(value)) + COPY(len(value))` | before + output | Name before the await, value after. The provider may read a secret store (`submilli-shared/src/host.rs:252`); the value size is small and unknown up front. |
+| `submilli:secrets#get` | Read the name, gate, `provider.get(name).await`, allocate the value string (`stdlib/secrets.rs:47`) | `CALL + GATE + SCAN(len(secret)) + IO(len(value)) + COPY(len(value))` | before + output | Name before the await, value after. The provider may read a secret store; value size is unknown up front. Recorded mode adds HASH for encryption (settled inside the effect) and decryption (charged before work outside it), each measured by ciphertext bytes. |
 
 ### submilli:security
 
@@ -2051,7 +2051,8 @@ waiting costs no fuel. Backend work keeps its existing IO/SCAN/PARSE/SYSCALL cos
 | Hosts | Boundary and charge timing |
 | --- | --- |
 | UUID v4/v7; Math.random; crypto.randomBytes; Temporal.Now.* | Record native observation before guest conversion; random-byte SCAN and the original timezone lookup stay inside the action. Replay deserialization restores the recorded zone from the pinned database without another TZ charge; conversion receives a resolved zone. |
-| variables.get; secrets.get | Record native optional value after lookup; conversion charges normally. |
+| variables.get | Record native optional value after lookup; conversion charges normally. |
+| secrets.get | Direct execution resolves normally. Recorded retrieval returns only ciphertext plus key ID; settle `HASH(ciphertext bytes)` for encryption inside the effect. Charge `HASH(ciphertext bytes)` before decryption outside the effect on every attempt, then convert the plaintext normally. |
 | fs read/write/append/size/exists/stat/mkdir/remove/move/copy; reader/listing/writer open/next/close | Fingerprint native arguments before backend; path/SYSCALL/IO admission and Work costs stay inside the action, settle after mutation. Rebuild resource handles from persistent IDs on replay. |
 | HTTP request verbs and download | Input costs before send; response IO/SCAN settles inside the boundary. Native response/metadata is committed before guest allocation. |
 | session get/has/set/remove/list and finalizer registration | Existing KV IO inside the boundary; parsing and guest values charge normally afterward. Guest serialization callbacks precede history allocation. |

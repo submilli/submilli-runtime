@@ -706,11 +706,14 @@ async fn prepare_and_run(
             state.secret_store().cloned(),
             Arc::clone(&harness_secrets),
         )),
-        secret_provider: Arc::new(BlueprintSecretProvider::with_harness(
-            Arc::clone(&blueprint),
-            state.secret_store().cloned(),
-            Arc::clone(&harness_secrets),
-        )),
+        secret_provider: Arc::new(
+            BlueprintSecretProvider::with_harness(
+                Arc::clone(&blueprint),
+                state.secret_store().cloned(),
+                Arc::clone(&harness_secrets),
+            )
+            .with_cipher(state.secret_cipher()),
+        ),
         variables: Arc::clone(&variables),
         security_check,
         http_client,

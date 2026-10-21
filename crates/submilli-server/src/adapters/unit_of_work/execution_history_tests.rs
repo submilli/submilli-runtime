@@ -31,6 +31,192 @@ fn result(bytes: &[u8]) -> RecordedOutcome {
 }
 
 #[tokio::test]
+async fn execution_history_records_secret_envelopes_before_decryption() {
+    use interpreter::runtime::{EncryptedSecret, SecretProvider};
+    use submilli_shared::BlueprintSecretProvider;
+
+    // Deliberately fail after retrieval so the test can inspect exactly what the
+    // effect committed, before any plaintext was returned to guest code.
+    struct DecryptionUnavailable(BlueprintSecretProvider);
+    impl SecretProvider for DecryptionUnavailable {
+        fn get<'a>(
+            &'a self,
+            name: &'a str,
+        ) -> futures::future::BoxFuture<'a, Result<Option<String>, String>> {
+            self.0.get(name)
+        }
+        fn get_encrypted<'a>(
+            &'a self,
+            name: &'a str,
+        ) -> futures::future::BoxFuture<'a, Result<Option<EncryptedSecret>, String>> {
+            self.0.get_encrypted(name)
+        }
+        fn decrypt(&self, _: &str, _: &EncryptedSecret) -> Result<String, String> {
+            Err("decryption temporarily unavailable".into())
+        }
+    }
+    struct ReplayOnly(BlueprintSecretProvider);
+    impl SecretProvider for ReplayOnly {
+        fn get<'a>(
+            &'a self,
+            _: &'a str,
+        ) -> futures::future::BoxFuture<'a, Result<Option<String>, String>> {
+            Box::pin(async { panic!("replay must not retrieve secrets") })
+        }
+        fn decrypt(&self, name: &str, encrypted: &EncryptedSecret) -> Result<String, String> {
+            self.0.decrypt(name, encrypted)
+        }
+    }
+    fn provider(value: &str, key: u8) -> BlueprintSecretProvider {
+        BlueprintSecretProvider::with_harness(
+            Arc::new(
+                submilli_blueprint::parse("name: test\nsecrets:\n  TOKEN: { harness: {} }\n")
+                    .unwrap(),
+            ),
+            None,
+            Arc::new(std::collections::BTreeMap::from([(
+                "TOKEN".into(),
+                value.into(),
+            )])),
+        )
+        .with_cipher(Some(Arc::new(SecretCipher::from_key([key; 32]))))
+    }
+    async fn execute(
+        history: Arc<dyn EffectHistory>,
+        provider: Arc<dyn SecretProvider>,
+    ) -> wasmtime::Result<Option<String>> {
+        use interpreter::runtime::{
+            RuntimeConfig, StoreData, Vfs, dispatch_main_async, install_runtime_async,
+        };
+        let source = r#"
+            import { get } from "submilli:secrets";
+            function main(): string {
+                const secret = get("TOKEN");
+                assert(get("ABSENT") === undefined);
+                return secret ?? "missing";
+            }
+        "#;
+        // Production main code cannot read secrets; compile under a package's
+        // identity so this exercises the real package-only capability boundary.
+        let compiled = interpreter::compile::compile_script_owned_by(
+            "@test/secrets",
+            source,
+            "secrets.ts",
+            interpreter::FileId(0),
+            &[],
+            &[],
+        )
+        .unwrap();
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().unwrap());
+        data.effects = Some(history);
+        data.secret_provider = provider;
+        let mut store = config.store(&engine, data).unwrap();
+        let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
+        let mut linker = wasmtime::Linker::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let instance =
+            interpreter::runtime::instantiate_program_async(&linker, &mut store, &module)
+                .await
+                .unwrap();
+        dispatch_main_async(&mut store, &instance).await
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    let (database, units, attempt) = fixture(&path).await;
+    let original = "original-credential-canary";
+    let history = Arc::new(History::new(attempt.clone(), units.clone()));
+    let failure = execute(
+        history.clone(),
+        Arc::new(DecryptionUnavailable(provider(original, 3))),
+    )
+    .await
+    .unwrap_err();
+    assert!(failure.is::<interpreter::runtime::host::FatalHostError>());
+    assert!(
+        failure
+            .to_string()
+            .contains("decryption temporarily unavailable")
+    );
+    assert_eq!(history.position().await, 1);
+
+    let mut unit = units().await.unwrap();
+    let entry = unit
+        .get_history_entry(&attempt.run_id, 0)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.operation, "secrets.getEncrypted");
+    let bytes = entry.outcome.as_ref().unwrap();
+    // This is the decoded history entry, after removing SQL's outer encryption.
+    // The effect itself must contain no plaintext, regardless of its storage.
+    assert!(
+        !bytes
+            .0
+            .windows(original.len())
+            .any(|part| part == original.as_bytes())
+    );
+    let envelope: Option<EncryptedSecret> = rmp_serde::from_slice(&bytes.0).unwrap();
+    let envelope = envelope.unwrap();
+    let first_provider = provider(original, 3);
+    assert_eq!(
+        envelope.key_id,
+        first_provider
+            .get_encrypted("TOKEN")
+            .await
+            .unwrap()
+            .unwrap()
+            .key_id
+    );
+    assert_eq!(
+        first_provider.decrypt("TOKEN", &envelope).unwrap(),
+        original
+    );
+    drop(unit);
+    drop(history);
+    drop(units);
+    database.close().await.unwrap();
+    drop(database);
+
+    let (_database, units, attempt) = fixture(&path).await;
+    let history = Arc::new(History::new(attempt.clone(), units.clone()));
+    let wrong_key = execute(history, Arc::new(provider("rotated", 4)))
+        .await
+        .unwrap_err();
+    assert!(wrong_key.is::<interpreter::runtime::host::FatalHostError>());
+    assert!(wrong_key.to_string().contains("different encryption key"));
+
+    let history = Arc::new(History::new(attempt.clone(), units.clone()));
+    let replay = execute(history.clone(), Arc::new(provider("rotated", 3)))
+        .await
+        .unwrap();
+    assert_eq!(replay.as_deref(), Some(original));
+    assert_eq!(history.position().await, 2);
+    history.ensure_history_consumed().await.unwrap();
+    let mut unit = units().await.unwrap();
+    assert_eq!(
+        unit.get_history_entry(&attempt.run_id, 0)
+            .await
+            .unwrap()
+            .unwrap(),
+        entry
+    );
+    drop(unit);
+
+    // Once absence is recorded, replay needs no provider retrieval at all.
+    let history = Arc::new(History::new(attempt, units));
+    let replay = execute(history.clone(), Arc::new(ReplayOnly(provider("unused", 3))))
+        .await
+        .unwrap();
+    assert_eq!(replay.as_deref(), Some(original));
+    history.ensure_history_consumed().await.unwrap();
+}
+
+#[tokio::test]
 async fn execution_history_reopens_without_dispatching_saved_calls() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("history.db");

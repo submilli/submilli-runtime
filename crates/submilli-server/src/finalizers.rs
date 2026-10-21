@@ -271,11 +271,14 @@ async fn host_services(
         )
         .with_harness_secrets(secrets.clone()),
     ));
-    data.secret_provider = Arc::new(BlueprintSecretProvider::with_harness(
-        blueprint.clone(),
-        state.secret_store().cloned(),
-        secrets.clone(),
-    ));
+    data.secret_provider = Arc::new(
+        BlueprintSecretProvider::with_harness(
+            blueprint.clone(),
+            state.secret_store().cloned(),
+            secrets.clone(),
+        )
+        .with_cipher(state.secret_cipher()),
+    );
     data.auth_proxy = Arc::new(BlueprintAuthProxy::with_harness(
         blueprint.clone(),
         state.secret_store().cloned(),
