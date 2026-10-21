@@ -9965,11 +9965,11 @@ impl Inferer<'_> {
     ) -> Type {
         let returns_into_unknown =
             ret_hint.is_some_and(|hint| matches!(hint.peel(), Type::Unknown));
-        let context_takes_undefined = ret_hint.is_some_and(|hint| {
-            !hint.is_void()
-                && assignable(&Type::Undefined, hint, self.resolver())
-                && !matches!(hint.peel(), Type::Unknown)
-        });
+        // TypeScript 5.1 infers `undefined` for a body with no `return` only
+        // where the context's return type is `undefined` itself; a union such
+        // as `string | undefined` or `void | string` leaves it `void`.
+        let context_takes_undefined =
+            ret_hint.is_some_and(|hint| matches!(hint.peel(), Type::Undefined));
         if let Some(t) = annotated_ret {
             t.clone()
         } else if returns_into_unknown && !collected.is_empty() {

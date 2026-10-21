@@ -1,2 +1,1 @@
-line 31 type: bug SUB-1729 a closure with no `return` checked against a union of function types returns `undefined`, where tsc infers `void`
 line 38 extra: by-design spec §1.2 enums are nominal, so a `number` isn't assignable to a numeric enum
