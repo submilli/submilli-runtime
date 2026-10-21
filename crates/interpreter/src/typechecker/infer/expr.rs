@@ -8006,6 +8006,9 @@ impl Inferer<'_> {
         {
             return Ok(read);
         }
+        if let Some(read) = self.numeric_key_read(typed_receiver, &receiver_ty, &name)? {
+            return Ok(read);
+        }
         if name.name == "length"
             && let Some(arrays) = receiver_ty.string_or_array_union_arrays()
         {
@@ -8596,6 +8599,36 @@ impl Inferer<'_> {
         self.typed_ast
             .try_push_expr(TypedExpr { kind, span, ty })
             .map_err(crate::typechecker::arena_failure)
+    }
+
+    /// `s["0"]` on a string, array or tuple reads index 0, as in TypeScript,
+    /// where a numeric string key reads the number index signature.
+    fn numeric_key_read(
+        &mut self,
+        typed_receiver: ExprId,
+        receiver_ty: &Type,
+        name: &Ident,
+    ) -> Result<Option<(TypedExprKind, Type)>, CompilerFailure> {
+        let Some(index) = array_index_key(&name.name) else {
+            return Ok(None);
+        };
+        let elem_ty = match receiver_ty.peel() {
+            _ if receiver_ty.is_string_shaped() => Type::String,
+            Type::Array(elem) => (**elem).clone(),
+            Type::Uint8Array => Type::Number,
+            Type::Tuple(tuple) => match tuple.elements.get(index) {
+                Some(elem) => elem.clone(),
+                None => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+        let typed_index =
+            self.push_synthetic_expr(TypedExprKind::Number(index as f64), Type::Number, name.span)?;
+        let kind = TypedExprKind::IndexAccess {
+            receiver: typed_receiver,
+            index: typed_index,
+        };
+        self.narrowed_index_read(kind, elem_ty).map(Some)
     }
 
     fn infer_index_access(
@@ -13027,6 +13060,12 @@ pub(super) fn enum_variant_help<'a>(
 
 /// The member a string-literal key names: `o["content-type"]` reads field
 /// `content-type` wherever `o.name` would read `name`. `None` for any other key.
+/// The index a canonical array-index key names: `"0"`, `"12"`, not `"01"`.
+fn array_index_key(key: &str) -> Option<usize> {
+    let index: usize = key.parse().ok()?;
+    (index.to_string() == key).then_some(index)
+}
+
 pub(super) fn string_key_name(
     ast: &crate::Ast,
     key: ExprId,

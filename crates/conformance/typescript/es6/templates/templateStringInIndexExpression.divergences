@@ -1,4 +1,1 @@
-types: 1 of 5 tsc entries compared, 0 differ
-
-errors:
-line 2: ours: field `0` does not exist on `"abc0abc"` (tsc accepts)
+types: 2 of 5 tsc entries compared, 0 differ
