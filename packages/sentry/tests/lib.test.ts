@@ -61,9 +61,9 @@ function main(): void {
     assert(!isShortIssueId("BACKEND-"), "empty suffix is not a short ID");
 
     label("Link pagination honors the results flag");
-    const next = "<https://sentry.io/api/0/organizations/acme/issues/?cursor=0%3A100%3A0>; rel=\"next\"; results=\"true\"; cursor=\"0:100:0\"";
+    const next = "<https://sentry.io/api/0/organizations/pied-piper/issues/?cursor=0%3A100%3A0>; rel=\"next\"; results=\"true\"; cursor=\"0:100:0\"";
     assert(parseNextCursor(next) === "0:100:0", "next cursor parsed from metadata");
-    const last = "<https://sentry.io/api/0/organizations/acme/issues/?cursor=0%3A100%3A0>; rel=\"next\"; results=\"false\"; cursor=\"0:100:0\"";
+    const last = "<https://sentry.io/api/0/organizations/pied-piper/issues/?cursor=0%3A100%3A0>; rel=\"next\"; results=\"false\"; cursor=\"0:100:0\"";
     assert(parseNextCursor(last) === "", "false results marks final page");
     assert(parseNextCursor("") === "", "missing header marks final page");
 

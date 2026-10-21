@@ -1150,8 +1150,8 @@ function main(): string {
         let bp = declaring(
             "name: t\nvariables:\n  tenant: { required: true }\n  region: { default: eu }\n",
         );
-        let bound = bind_variables(&bp, &["tenant=acme".into()]).expect("binds");
-        assert_eq!(bound["tenant"], "acme");
+        let bound = bind_variables(&bp, &["tenant=pied-piper".into()]).expect("binds");
+        assert_eq!(bound["tenant"], "pied-piper");
         assert_eq!(bound["region"], "eu");
     }
 

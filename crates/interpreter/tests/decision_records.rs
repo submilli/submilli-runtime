@@ -590,7 +590,7 @@ export function fetchIt(): void { get("https://example.test/in"); }
 
 const MIXED_PROGRAM: &str = r#"
 import { get, post } from "submilli:http";
-import { fetchIt } from "@acme/core";
+import { fetchIt } from "@pied-piper/core";
 function main(): string {
   const a = get("https://example.test/ok");
   let denied = "no";
@@ -608,7 +608,7 @@ fn mixed(record: Option<DecisionLogConfig>) -> Setup {
             path: Some("/deny"),
         }],
         record,
-        packages: vec![("@acme/core", GET_IN_PACKAGE)],
+        packages: vec![("@pied-piper/core", GET_IN_PACKAGE)],
         ..Setup::default()
     }
 }
@@ -662,7 +662,7 @@ async fn a_failed_line_lookup_leaves_no_line_and_changes_nothing() {
         [
             (None, None),
             (None, None),
-            (None, Some(("@acme/core", "lib", Some("fetchIt"), 3))),
+            (None, Some(("@pied-piper/core", "lib", Some("fetchIt"), 3))),
         ]
     );
 }
@@ -698,21 +698,21 @@ async fn one_allowed_and_one_denied_call_record_default_and_rule_causes() {
 #[tokio::test]
 async fn a_dependency_packages_allowed_call_names_the_package_and_gated_op() {
     let source = r#"
-import { send } from "@acme/core";
+import { send } from "@pied-piper/core";
 function main(): string { send(); return "done"; }
 "#;
     let outcome = run(
         source,
         Setup {
             record: recording(),
-            packages: vec![("@acme/core", POST_IN_PACKAGE)],
+            packages: vec![("@pied-piper/core", POST_IN_PACKAGE)],
             ..Setup::default()
         },
     )
     .await;
     assert_eq!(outcome.result, Ok("done".to_owned()));
     let post = outcome.record("http.post");
-    assert_eq!(post.caller, "@acme/core");
+    assert_eq!(post.caller, "@pied-piper/core");
     assert!(post.allowed);
     assert_eq!(
         post.cause,
@@ -735,14 +735,14 @@ import { check } from "submilli:security";
 export function run(id: string): void { check("test.com/op", { id }); }
 "#;
     let source = r#"
-import { run } from "@acme/core";
+import { run } from "@pied-piper/core";
 function main(): string { run("7"); return "done"; }
 "#;
     let outcome = run(
         source,
         Setup {
             record: recording(),
-            packages: vec![("@acme/core", lib)],
+            packages: vec![("@pied-piper/core", lib)],
             ..Setup::default()
         },
     )
@@ -756,7 +756,7 @@ function main(): string { run("7"); return "done"; }
     // The check's call names where in the package it was made.
     assert_eq!(
         package_place(outcome.call("test.com/op")),
-        Some(("@acme/core", "lib", Some("run"), 8))
+        Some(("@pied-piper/core", "lib", Some("run"), 8))
     );
 }
 
@@ -1207,7 +1207,7 @@ function main(): string {{ get("https://example.test/{long}"); return "done"; }}
 #[tokio::test]
 async fn a_package_call_records_the_users_line_not_a_line_inside_the_package() {
     let source = r#"
-import { fetchIt } from "@acme/core";
+import { fetchIt } from "@pied-piper/core";
 
 function main(): string {
   fetchIt();
@@ -1219,20 +1219,20 @@ function main(): string {
         source,
         Setup {
             record: recording(),
-            packages: vec![("@acme/core", GET_IN_PACKAGE)],
+            packages: vec![("@pied-piper/core", GET_IN_PACKAGE)],
             ..Setup::default()
         },
     )
     .await;
     let get = outcome.record("http.get");
-    assert_eq!(get.caller, "@acme/core");
+    assert_eq!(get.caller, "@pied-piper/core");
     assert_eq!(get.line.map(|l| l.line), Some(5), "{get:#?}");
     // The call keeps the line inside the package too.
     let call = outcome.call("http.get");
     assert_eq!(call.line.map(|l| l.line), Some(5));
     assert_eq!(
         package_place(call),
-        Some(("@acme/core", "lib", Some("fetchIt"), 3)),
+        Some(("@pied-piper/core", "lib", Some("fetchIt"), 3)),
         "{call:#?}"
     );
     assert!(call.package_line.as_ref().unwrap().column.is_some());
@@ -1263,7 +1263,10 @@ async fn a_call_the_program_makes_itself_has_no_package_line() {
         [
             ("http.get", None),
             ("http.post", None),
-            ("http.get", Some(("@acme/core", "lib", Some("fetchIt"), 3))),
+            (
+                "http.get",
+                Some(("@pied-piper/core", "lib", Some("fetchIt"), 3))
+            ),
         ]
     );
 }
@@ -1399,7 +1402,7 @@ export function apply(f: () => void): void { f(); }
 "#;
     let source = r#"
 import { check } from "submilli:security";
-import { apply } from "@acme/core";
+import { apply } from "@pied-piper/core";
 function main(): string {
   check("x", { a: 1 });
   try { apply(() => { check("x", { a: 1 }); }); } catch (e: PermissionDeniedError) { return "refused"; }
@@ -1410,7 +1413,7 @@ function main(): string {
         source,
         Setup {
             record: recording(),
-            packages: vec![("@acme/core", lib)],
+            packages: vec![("@pied-piper/core", lib)],
             ..Setup::default()
         },
     )
@@ -1634,7 +1637,7 @@ fn body_text(copy: Option<&BodyCopy>) -> Option<&str> {
 async fn variable_reads_record_completed_calls_without_value_payloads() {
     let outcome = run(
         r#"
-            import { read } from "@acme/config";
+            import { read } from "@pied-piper/config";
             import { get } from "submilli:variables";
             function main(): string {
                 const value = read("CONFIG");
@@ -1652,7 +1655,7 @@ async fn variable_reads_record_completed_calls_without_value_payloads() {
             record: recording(),
             variables: vec![("CONFIG", "configured")],
             packages: vec![(
-                "@acme/config",
+                "@pied-piper/config",
                 r#"
                 import { get } from "submilli:variables";
                 export function read(name: string): string | undefined { return get(name); }
@@ -1681,7 +1684,7 @@ async fn variable_reads_record_completed_calls_without_value_payloads() {
             if expected == CallOutcome::Failed {
                 "main"
             } else {
-                "@acme/config"
+                "@pied-piper/config"
             }
         );
         assert!(call.request.is_none());
@@ -1714,7 +1717,7 @@ async fn every_gated_call_records_its_timing_and_outcome() {
         assert_eq!(call.call_index, record.call_index);
         assert_eq!(call.capability, record.capability);
     }
-    assert_eq!(calls[2].caller, "@acme/core");
+    assert_eq!(calls[2].caller, "@pied-piper/core");
 }
 
 #[tokio::test]
@@ -2062,7 +2065,7 @@ function main(): string {
 #[tokio::test]
 async fn a_secret_read_records_its_timing_and_never_its_value() {
     let source = r#"
-import { get } from "@acme/keys";
+import { get } from "@pied-piper/keys";
 function main(): string { return get().length.toString(); }
 "#;
     let keys = r#"
@@ -2073,7 +2076,7 @@ export function get(): string { return read("api-key") ?? ""; }
         source,
         Setup {
             record: recording(),
-            packages: vec![("@acme/keys", keys)],
+            packages: vec![("@pied-piper/keys", keys)],
             ..Setup::default()
         },
     )
@@ -2231,7 +2234,7 @@ import session from "submilli:session";
 import { get } from "submilli:http";
 import llm from "submilli:llm";
 import { read } from "submilli:code";
-import { run } from "@acme/core";
+import { run } from "@pied-piper/core";
 function main(): string {
   fs.writeText("/a.txt", "one\ntwo\n");
   session.set("k", "v");
@@ -2250,7 +2253,7 @@ function main(): string {
             record: recording(),
             session: true,
             llm: Some(LlmLimits::default()),
-            packages: vec![("@acme/core", lib)],
+            packages: vec![("@pied-piper/core", lib)],
             ..Setup::default()
         },
     )

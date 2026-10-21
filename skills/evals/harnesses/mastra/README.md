@@ -20,8 +20,8 @@ script can resolve the adapter from that dependency directory.
 
 Run `skills/evals/harnesses/serve_fixture.py --port 18128` first; it prints
 the `export` line with the token the script sends. The script asserts
-that a `cus_northwind` client can read its own balance, that the same client
-receives a `PermissionDeniedError` when its program requests `cus_initech`,
+that a `pied_piper` client can read its own balance, that the same client
+receives a `PermissionDeniedError` when its program requests `hooli`,
 that a missing binding fails for a reason other than authentication, that a
 client without the token is refused with HTTP 401 and no OAuth flow, and that
 every client is disconnected in a `finally` block.

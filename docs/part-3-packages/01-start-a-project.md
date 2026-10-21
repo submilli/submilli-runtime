@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "939582366bba28d8df2b805e6b855166c1759169bf9c24270310278072c27d25"
+  contentHash: "428d11f0fdd7bd8b7b084ab4776984369f7da69989f863fa8f77da9026833fec"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -32,22 +32,22 @@ runs its tests, and installs it where programs can import it. There is
 nothing else to install.
 
 This guide shows you how to create a Package project. The example is
-Acme's billing Package, `@acme/billing`. Substitute your scope and name.
+Pied Piper's billing Package, `@pied-piper/billing`. Substitute your scope and name.
 
 ## Scaffold it
 
 In the directory that will hold the project:
 
 ```sh
-submilli build init @acme/billing packages/billing
+submilli build init @pied-piper/billing packages/billing
 ```
 
 ```text
-created …/acme/submilli.toml
-created …/acme/packages/billing/src/lib.ts
-created …/acme/packages/billing/docs/readme.md
-created …/acme/packages/billing/README.md
-created …/acme/packages/billing/tests/lib.test.ts
+created …/pied-piper/submilli.toml
+created …/pied-piper/packages/billing/src/lib.ts
+created …/pied-piper/packages/billing/docs/readme.md
+created …/pied-piper/packages/billing/README.md
+created …/pied-piper/packages/billing/tests/lib.test.ts
 add packages with `submilli build new <@scope/name> <path>`; compile and install with `submilli build publish-local`; run tests with `submilli build test`
 ```
 
@@ -62,6 +62,7 @@ directory, and it holds one Package or several.
 | --- | --- |
 | `submilli.toml` | The manifest: one `[[package]]` block per Package |
 | `packages/billing/src/lib.ts` | The entry point. What it exports is the Package's API. |
+| `packages/billing/src/config.ts` | Optional [build configuration](/docs/reference/package-configuration), with defaults and required parameters |
 | `packages/billing/src/*.ts` | Other source files, imported with a relative path |
 | `packages/billing/docs/readme.md` | The documentation the model reads before it writes a program |
 | `packages/billing/README.md` | The readme for the person who installs and grants the Package |
@@ -76,9 +77,9 @@ readmes are placeholders. The next pages replace them.
 
 ```toml title="submilli.toml"
 [[package]]
-name = "@acme/billing"
+name = "@pied-piper/billing"
 version = "0.1.0"
-description = "Package @acme/billing."
+description = "Package @pied-piper/billing."
 keywords = []
 path = "packages/billing"
 ```
@@ -89,9 +90,9 @@ a job.
 
 ```toml title="submilli.toml"
 [[package]]
-name = "@acme/billing"
+name = "@pied-piper/billing"
 version = "0.1.0"
-description = "Goodwill credits for one customer of Acme's billing service."
+description = "Goodwill credits for one customer of Pied Piper's billing service."
 keywords = ["billing", "credits"]
 path = "packages/billing"
 ```
@@ -112,8 +113,8 @@ warning: exported symbol `hello` has no doc comment
   |
 1 | export function hello(): string {
   | ^^^^^^
-2 |     return "hello from @acme/billing";
-checked @acme/billing v0.1.0
+2 |     return "hello from @pied-piper/billing";
+checked @pied-piper/billing v0.1.0
 ```
 
 `check` compiles every Package in the project, in dependency order, and
@@ -138,19 +139,19 @@ If one project should hold several Packages, such as a Package per
 service, add the next one with `build new`:
 
 ```sh
-submilli build new @acme/support packages/support
+submilli build new @pied-piper/support packages/support
 ```
 
 ```text
-added @acme/support to …/acme/submilli.toml
-created …/acme/packages/support/src/lib.ts
-created …/acme/packages/support/docs/readme.md
-created …/acme/packages/support/README.md
-created …/acme/packages/support/tests/lib.test.ts
+added @pied-piper/support to …/pied-piper/submilli.toml
+created …/pied-piper/packages/support/src/lib.ts
+created …/pied-piper/packages/support/docs/readme.md
+created …/pied-piper/packages/support/README.md
+created …/pied-piper/packages/support/tests/lib.test.ts
 ```
 
 `check`, `test`, and `publish-local` then work on every Package. Add
-`-p @acme/billing` to work on one and the siblings it depends on.
+`-p @pied-piper/billing` to work on one and the siblings it depends on.
 
 ## Open it in your editor
 

@@ -1700,7 +1700,7 @@ fn a_branch_that_leaves_before_a_check_decides_whether_it_runs() {
          function doB(): void {{}}\n\
          export function send(input: Order): void {{\n\
            if (input.kind === \"a\") return;\n\
-           check(\"acme.com/b\", {{}});\n\
+           check(\"pied-piper.example/b\", {{}});\n\
            if (input.kind === \"a\") doA(); else doB();\n\
          }}\n"
     );
@@ -1765,12 +1765,12 @@ fn comparing_a_caller_value_itself_reaches_nothing() {
     };
     for body in [
         "if (input === null) throw new Error(\"no input\");\n\
-         check(\"acme.com/op\", { id: 1 });\n\
+         check(\"pied-piper.example/op\", { id: 1 });\n\
          keep(input);",
         "check(\"c\", { present: input !== null });\n\
          keep(input);",
         "if (!input) return;\n\
-         check(\"acme.com/op\", { id: typeof tree === \"object\" ? 1 : 2 });\n\
+         check(\"pied-piper.example/op\", { id: typeof tree === \"object\" ? 1 : 2 });\n\
          keep(input);\n\
          keep(tree);",
     ] {
@@ -1778,7 +1778,7 @@ fn comparing_a_caller_value_itself_reaches_nothing() {
     }
     let found = messages(&source(
         "if (tree.parent === null) return;\n\
-         check(\"acme.com/op\", { id: 1 });\n\
+         check(\"pied-piper.example/op\", { id: 1 });\n\
          keep(tree);",
     ));
     assert_eq!(
@@ -2001,17 +2001,17 @@ fn a_value_written_through_an_alias_is_examined() {
         "const a: Ctx = { id: \"\" };\n\
          const b = a;\n\
          b.id = input.id;\n\
-         check(\"acme.com/probe\", { id: a.id });\n\
+         check(\"pied-piper.example/probe\", { id: a.id });\n\
          send(input.id);",
         "const outer: Outer = { inner: { id: \"\" } };\n\
          const inner = outer.inner;\n\
          inner.id = input.id;\n\
-         check(\"acme.com/probe\", { id: outer.inner.id });\n\
+         check(\"pied-piper.example/probe\", { id: outer.inner.id });\n\
          send(input.id);",
         "const all: string[][] = [[]];\n\
          const first = all[0];\n\
          first.push(input.id);\n\
-         check(\"acme.com/probe\", { id: all[0][0] });\n\
+         check(\"pied-piper.example/probe\", { id: all[0][0] });\n\
          send(input.id);",
     ] {
         assert_eq!(probe(body), [ID_TWICE], "{body}");
@@ -2024,7 +2024,7 @@ fn a_call_that_may_store_into_an_argument_is_followed_or_examined() {
         probe(
             "const c: Ctx = { id: \"\" };\n\
              fill(c, input.id);\n\
-             check(\"acme.com/probe\", { id: c.id });\n\
+             check(\"pied-piper.example/probe\", { id: c.id });\n\
              send(input.id);"
         ),
         [ID_TWICE]
@@ -2032,7 +2032,7 @@ fn a_call_that_may_store_into_an_argument_is_followed_or_examined() {
     assert_read_again(
         "const ids: string[] = [];\n\
          collect(ids, input.items);\n\
-         check(\"acme.com/probe\", { id: ids.join(\",\") });\n\
+         check(\"pied-piper.example/probe\", { id: ids.join(\",\") });\n\
          for (const it of input.items) send(it.id);",
         "input.items",
     );
@@ -2042,13 +2042,13 @@ fn a_call_that_may_store_into_an_argument_is_followed_or_examined() {
 fn a_write_into_this_or_a_global_examines_the_whole_body() {
     for body in [
         "SCRATCH.id = input.id;\n\
-         check(\"acme.com/probe\", { id: SCRATCH.id });\n\
+         check(\"pied-piper.example/probe\", { id: SCRATCH.id });\n\
          send(input.id);",
         "CACHE.set(\"k\", input.id);\n\
-         check(\"acme.com/probe\", { id: CACHE.get(\"k\") ?? \"\" });\n\
+         check(\"pied-piper.example/probe\", { id: CACHE.get(\"k\") ?? \"\" });\n\
          send(input.id);",
         "lastId = input.id;\n\
-         check(\"acme.com/probe\", { id: lastId });\n\
+         check(\"pied-piper.example/probe\", { id: lastId });\n\
          send(input.id);",
     ] {
         assert_eq!(probe(body), [ID_TWICE], "{body}");
@@ -2060,7 +2060,7 @@ fn a_write_into_this_or_a_global_examines_the_whole_body() {
                id: string = \"\";\n\
                run(input: In): void {{\n\
                  this.id = input.id;\n\
-                 check(\"acme.com/probe\", {{ id: this.id }});\n\
+                 check(\"pied-piper.example/probe\", {{ id: this.id }});\n\
                  send(input.id);\n\
                }}\n\
              }}\n"
@@ -2078,14 +2078,14 @@ fn a_callback_that_feeds_check_examines_the_whole_body() {
         (
             "const ids: string[] = [];\n\
              input.items.forEach((it: Item) => { ids.push(it.id); });\n\
-             check(\"acme.com/probe\", { id: ids.join(\",\") });\n\
+             check(\"pied-piper.example/probe\", { id: ids.join(\",\") });\n\
              for (const it of input.items) send(it.id);",
             "input.items",
         ),
         (
             "const ids: string[] = [];\n\
              input.items.map((it: Item): number => ids.push(it.id));\n\
-             check(\"acme.com/probe\", { id: ids[0] });\n\
+             check(\"pied-piper.example/probe\", { id: ids[0] });\n\
              for (const it of input.items) send(it.id);",
             "input.items",
         ),
@@ -2093,7 +2093,7 @@ fn a_callback_that_feeds_check_examines_the_whole_body() {
             "const ids: string[] = [];\n\
              const add = (s: string): void => { ids.push(s); };\n\
              add(input.id);\n\
-             check(\"acme.com/probe\", { id: ids[0] });\n\
+             check(\"pied-piper.example/probe\", { id: ids[0] });\n\
              send(input.id);",
             "input.id",
         ),
@@ -2117,7 +2117,7 @@ fn a_long_chain_of_conditionals_settles_quickly_and_reports() {
          function keep(t: T): void {{}}\n\
          export function f(a0: T, c: boolean): void {{\n\
          {body}\
-           check(\"acme.com/probe\", {{ id: a40.id }});\n\
+           check(\"pied-piper.example/probe\", {{ id: a40.id }});\n\
            keep(a0.l);\n\
          }}\n"
     );
@@ -2140,7 +2140,7 @@ fn a_loop_exit_decides_whether_a_check_runs() {
         (
             "for (let i = 0; i < 1; i++) {\n\
                if (input.ok) break;\n\
-               check(\"acme.com/probe\", { id: \"x\" });\n\
+               check(\"pied-piper.example/probe\", { id: \"x\" });\n\
              }\n\
              if (input.ok) send(\"privileged\");",
             "input.ok",
@@ -2148,7 +2148,7 @@ fn a_loop_exit_decides_whether_a_check_runs() {
         (
             "for (let i = 0; i < 1; i++) {\n\
                if (input.ok) continue;\n\
-               check(\"acme.com/probe\", { id: \"x\" });\n\
+               check(\"pied-piper.example/probe\", { id: \"x\" });\n\
              }\n\
              if (input.ok) send(\"privileged\");",
             "input.ok",
@@ -2158,14 +2158,14 @@ fn a_loop_exit_decides_whether_a_check_runs() {
                if (input.ok) send(\"privileged\");\n\
                return;\n\
              }\n\
-             check(\"acme.com/probe\", { id: \"x\" });",
+             check(\"pied-piper.example/probe\", { id: \"x\" });",
             "input.ok",
         ),
         (
             "const targets: string[] = [];\n\
              for (const id of input.channelIds) targets.push(id);\n\
              for (const id of targets) {\n\
-               check(\"acme.com/messages.post\", { channelId: id });\n\
+               check(\"pied-piper.example/messages.post\", { channelId: id });\n\
                if (input.onlyFirst) break;\n\
              }\n\
              for (const id of targets) { send(id); if (input.onlyFirst) break; }",
@@ -2176,7 +2176,7 @@ fn a_loop_exit_decides_whether_a_check_runs() {
              for (const id of input.channelIds) targets.push(id);\n\
              for (const id of targets) {\n\
                if (input.onlyFirst) continue;\n\
-               check(\"acme.com/messages.post\", { channelId: id });\n\
+               check(\"pied-piper.example/messages.post\", { channelId: id });\n\
              }\n\
              if (!input.onlyFirst) { for (const id of targets) send(id); }",
             "input.onlyFirst",
@@ -2184,7 +2184,7 @@ fn a_loop_exit_decides_whether_a_check_runs() {
         (
             "let notify = false;\n\
              for (const x of [1]) { if (input.mentions === null) break; notify = true; }\n\
-             if (notify) check(\"acme.com/mentions.notify\", {});\n\
+             if (notify) check(\"pied-piper.example/mentions.notify\", {});\n\
              sendMentions(input.mentions);",
             "input.mentions",
         ),
@@ -2196,16 +2196,16 @@ fn a_loop_exit_decides_whether_a_check_runs() {
 #[test]
 fn an_array_length_and_its_elements_are_one_value() {
     for body in [
-        "check(\"acme.com/probe\", { count: input.channelIds.length });\n\
+        "check(\"pied-piper.example/probe\", { count: input.channelIds.length });\n\
          for (const id of input.channelIds) send(id);",
-        "for (const id of input.channelIds) check(\"acme.com/probe\", { id });\n\
+        "for (const id of input.channelIds) check(\"pied-piper.example/probe\", { id });\n\
          send(input.channelIds.length > 0 ? \"a\" : \"b\");",
     ] {
         assert_eq!(probe(body).len(), 1, "{body}");
     }
     assert!(
         probe(
-            "check(\"acme.com/probe\", { id: input.id });\n\
+            "check(\"pied-piper.example/probe\", { id: input.id });\n\
              send(input.channelIds.length > 0 ? \"a\" : \"b\");\n\
              for (const id of input.channelIds) send(id);"
         )
@@ -2218,49 +2218,49 @@ fn a_decision_survives_try_catch_collections_blocks_and_switch() {
     for (body, value) in [
         (
             "try { if (input.mentions !== null) throw new Error(\"m\"); }\n\
-             catch (e) { check(\"acme.com/mentions.notify\", {}); }\n\
+             catch (e) { check(\"pied-piper.example/mentions.notify\", {}); }\n\
              sendMentions(input.mentions);",
             "input.mentions",
         ),
         (
             "let notify = false;\n\
              try { if (input.mentions === null) throw new Error(\"m\"); notify = true; } catch (e) {}\n\
-             if (notify) check(\"acme.com/mentions.notify\", {});\n\
+             if (notify) check(\"pied-piper.example/mentions.notify\", {});\n\
              sendMentions(input.mentions);",
             "input.mentions",
         ),
         (
             "let notify = true;\n\
              try { if (input.mentions === null) throw new Error(\"none\"); } catch (e) { notify = false; }\n\
-             if (notify) check(\"acme.com/mentions.notify\", {});\n\
+             if (notify) check(\"pied-piper.example/mentions.notify\", {});\n\
              sendMentions(input.mentions);",
             "input.mentions",
         ),
         (
             "const flags = new Map<string, boolean>();\n\
              flags.set(\"n\", input.mentions !== null);\n\
-             if (flags.get(\"n\") === true) check(\"acme.com/mentions.notify\", {});\n\
+             if (flags.get(\"n\") === true) check(\"pied-piper.example/mentions.notify\", {});\n\
              sendMentions(input.mentions);",
             "input.mentions",
         ),
         (
             "const flags: boolean[] = [];\n\
              flags.push(input.mentions !== null);\n\
-             if (flags[0]) check(\"acme.com/mentions.notify\", {});\n\
+             if (flags[0]) check(\"pied-piper.example/mentions.notify\", {});\n\
              sendMentions(input.mentions);",
             "input.mentions",
         ),
         (
             "const state = { notify: false };\n\
              if (input.mentions !== null) state.notify = true;\n\
-             if (state.notify) check(\"acme.com/mentions.notify\", {});\n\
+             if (state.notify) check(\"pied-piper.example/mentions.notify\", {});\n\
              sendMentions(input.mentions);",
             "input.mentions",
         ),
         (
             "const on: boolean[] = [];\n\
              if (input.mentions !== null) { const yes = true; on.push(yes); }\n\
-             if (on.length > 0) check(\"acme.com/mentions.notify\", {});\n\
+             if (on.length > 0) check(\"pied-piper.example/mentions.notify\", {});\n\
              sendMentions(input.mentions);",
             "input.mentions",
         ),
@@ -2268,7 +2268,7 @@ fn a_decision_survives_try_catch_collections_blocks_and_switch() {
             "if (input.id.length > 0) {\n\
                if (input.mentions === null) return;\n\
              }\n\
-             check(\"acme.com/mentions.notify\", {});\n\
+             check(\"pied-piper.example/mentions.notify\", {});\n\
              sendMentions(input.mentions);",
             "input.mentions",
         ),
@@ -2276,14 +2276,14 @@ fn a_decision_survives_try_catch_collections_blocks_and_switch() {
             "for (const c of [\"a\"]) {\n\
                if (input.mentions === null) return;\n\
              }\n\
-             check(\"acme.com/mentions.notify\", {});\n\
+             check(\"pied-piper.example/mentions.notify\", {});\n\
              sendMentions(input.mentions);",
             "input.mentions",
         ),
         (
             "let notify = false;\n\
              switch (input.kind) { case \"mention\": notify = true; break; default: break; }\n\
-             if (notify) check(\"acme.com/mentions.notify\", {});\n\
+             if (notify) check(\"pied-piper.example/mentions.notify\", {});\n\
              if (input.kind === \"mention\") sendMentions(null);",
             "input.kind",
         ),
@@ -2302,7 +2302,7 @@ fn typeof_and_instanceof_of_a_property_rely_on_its_identity() {
         assert_eq!(
             probe(&format!(
                 "if ({test}) return;\n\
-                 check(\"acme.com/probe\", {{}});\n\
+                 check(\"pied-piper.example/probe\", {{}});\n\
                  keep(input.meta);"
             )),
             [meta_twice],
@@ -2313,7 +2313,7 @@ fn typeof_and_instanceof_of_a_property_rely_on_its_identity() {
             probe(&format!(
                 "const meta = input.meta;\n\
                  if ({once}) return;\n\
-                 check(\"acme.com/probe\", {{}});\n\
+                 check(\"pied-piper.example/probe\", {{}});\n\
                  keep(meta);"
             ))
             .is_empty(),
@@ -2510,7 +2510,7 @@ fn a_body_too_large_to_follow_is_examined_whole_and_quickly() {
          function send(x: string): void {{}}\n\
          export function f(a0: T, c: boolean, other: T): void {{\n\
          {body}\
-           check(\"acme.com/probe\", {{ id: a60.id }});\n\
+           check(\"pied-piper.example/probe\", {{ id: a60.id }});\n\
            send(other.id);\n\
            send(other.id);\n\
          }}\n"
@@ -2793,7 +2793,7 @@ fn a_wide_guard_before_many_locals_stays_within_the_budget() {
          function send(x: string): void {{}}\n\
          export function run(ids: string[], other: string[]): void {{\n\
          {body}\
-           check(\"acme.com/probe\", {{ id: \"c\" }});\n\
+           check(\"pied-piper.example/probe\", {{ id: \"c\" }});\n\
            send(other[0]);\n\
            send(other[0]);\n\
          }}\n"

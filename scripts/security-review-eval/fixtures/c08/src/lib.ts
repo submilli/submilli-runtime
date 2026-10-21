@@ -1,14 +1,14 @@
 import { check } from "submilli:security";
 import { writeText } from "submilli:fs";
 /** Save through primary or fallback authority.
- * @capability acme.primary { path: string }
- * @capability acme.fallback { path: string }
+ * @capability pied-piper.primary { path: string }
+ * @capability pied-piper.fallback { path: string }
  */
 export function save(path: string): void {
     if (path !== "/restricted") throw new Error("unsupported destination");
-    try { check("acme.primary", { path: path }); }
+    try { check("pied-piper.primary", { path: path }); }
     catch (error) {
-        check("acme.fallback", { path: path });
+        check("pied-piper.fallback", { path: path });
         writeText(path, "record");
         return;
     }

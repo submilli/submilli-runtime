@@ -492,7 +492,7 @@ async fn variables_are_kept_filled_or_dropped_and_the_filled_binding_is_used() {
         .run(
             "scoped",
             CHECK,
-            &[("customerId", "cus_northwind"), ("legacy", "x")],
+            &[("customerId", "pied_piper"), ("legacy", "x")],
         )
         .await;
     assert_eq!(source.response.result.as_deref(), Some("done"));
@@ -515,7 +515,7 @@ async fn variables_are_kept_filled_or_dropped_and_the_filled_binding_is_used() {
         .await;
     assert_eq!(result(&with), Some("done"), "{:?}", with.response.error);
     let variables = &with.report.variables;
-    assert_eq!(variables.kept["customerId"], "cus_northwind");
+    assert_eq!(variables.kept["customerId"], "pied_piper");
     assert_eq!(variables.filled["tenant"], "u_42");
     assert_eq!(variables.dropped, ["legacy"]);
 

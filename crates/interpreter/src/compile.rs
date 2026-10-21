@@ -382,13 +382,19 @@ fn parse_modules_past_errors(
                 return None;
             }
         };
-        let parsed = parse_script(module.source, file);
-        if let Some(error) = parsed.failure {
-            diagnostics.extend(error.into_diagnostics(file));
-            return None;
-        }
-        diagnostics.extend(parsed.diagnostics);
-        parsed_modules.push((module.path.clone(), file, parsed.ast));
+        let (ast, mut module_diagnostics) = match if module.path.as_str() == "config" {
+            parse_config_module(module.source, file, &BTreeMap::new())
+        } else {
+            parse_package_module(module.source, file)
+        } {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                diagnostics.extend(error.into_diagnostics(file));
+                return None;
+            }
+        };
+        diagnostics.append(&mut module_diagnostics);
+        parsed_modules.push((module.path.clone(), file, ast));
     }
     Some(parsed_modules)
 }
@@ -639,6 +645,34 @@ pub fn compile_package_with_transitive_checked_for(
     dependencies: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
 ) -> Result<CompiledPackage, CompileError> {
+    compile_package_configured(
+        stdlib,
+        package_name,
+        root_module,
+        modules,
+        dependencies,
+        transitive,
+        &BTreeMap::new(),
+    )
+}
+
+/// Compile a package with immutable overrides for its root config module.
+#[allow(clippy::too_many_arguments)]
+pub fn compile_package_configured(
+    stdlib: Stdlib,
+    package_name: &str,
+    root_module: ModulePath,
+    modules: &[PackageSourceModule<'_>],
+    dependencies: &[&PackageDeclaration],
+    transitive: &[&PackageDeclaration],
+    config: &BTreeMap<String, String>,
+) -> Result<CompiledPackage, CompileError> {
+    if !modules
+        .iter()
+        .any(|module| module.path.as_str() == "config")
+    {
+        crate::package_config::resolve(&[], config, FileId(0))?;
+    }
     let mut sources = Sources::new();
     let stdlib_defs = stdlib.package_declarations();
     compile_package_sources(
@@ -649,12 +683,14 @@ pub fn compile_package_with_transitive_checked_for(
         modules,
         dependencies,
         transitive,
+        config,
     )
     .map_err(|error| {
         error.with_limit_span_cut(|file| sources.get(file).map(crate::SourceFile::text))
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_package_sources(
     sources: &mut Sources,
     stdlib_defs: &[PackageDeclaration],
@@ -663,6 +699,7 @@ fn compile_package_sources(
     modules: &[PackageSourceModule<'_>],
     dependencies: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
+    config: &BTreeMap<String, String>,
 ) -> Result<CompiledPackage, CompileError> {
     // Public declarations may be constructed directly. Validate recursive
     // metadata before cloning them into the inference registries.
@@ -678,11 +715,15 @@ fn compile_package_sources(
                 CompileError::from(error.into_compiler_failure(CompilerStage::Parse))
                     .with_prior_diagnostics(&diagnostics)
             })?;
-        let (ast, mut module_diags) =
-            parse_package_module(module.source, file).map_err(|mut error| {
-                error.diagnostics.splice(0..0, diagnostics.clone());
-                error
-            })?;
+        let (ast, mut module_diags) = if module.path.as_str() == "config" {
+            parse_config_module(module.source, file, config)
+        } else {
+            parse_package_module(module.source, file)
+        }
+        .map_err(|mut error| {
+            error.diagnostics.splice(0..0, diagnostics.clone());
+            error
+        })?;
         diagnostics.append(&mut module_diags);
         parsed_modules.push((module.path.clone(), file, ast));
     }
@@ -787,6 +828,16 @@ fn compile_package_sources(
         authority_map,
         warnings: warnings_only(diagnostics),
     })
+}
+
+fn parse_config_module(
+    source: &str,
+    file: FileId,
+    config: &BTreeMap<String, String>,
+) -> Result<(Ast, Vec<Diagnostic>), CompileError> {
+    let tokens = crate::package_config::resolved_tokens(source, file, config)?;
+    let (ast, diagnostics) = crate::parser::parse_checked(source, tokens, file)?;
+    Ok((ast, diagnostics))
 }
 
 fn parse_package_module(
@@ -988,10 +1039,10 @@ mod parsed_script_tests {
         let parsed = parse_script(
             r#"
                 // import fake from "@mcp/commented";
-                const s: string = "import x from \"@acme/string\"";
+                const s: string = "import x from \"@pied-piper/string\"";
                 import { v4 } from "submilli:uuid";
                 import linear from "@mcp/linear";
-                import { answer } from "@acme/util";
+                import { answer } from "@pied-piper/util";
                 function main(): string { return v4(); }
             "#,
             FileId(0),
@@ -1006,7 +1057,7 @@ mod parsed_script_tests {
         assert_eq!(imports.mcp_servers, BTreeSet::from(["linear".to_string()]));
         assert_eq!(
             imports.registry_packages,
-            BTreeSet::from(["@acme/util".to_string()])
+            BTreeSet::from(["@pied-piper/util".to_string()])
         );
     }
 
@@ -1040,7 +1091,7 @@ mod importless_library_tests {
     use crate::{ObjectField, Package, PackageDeclaration, Span, Type, TypeSymbol, ValueSymbol};
 
     const SYNTH: &str = "submilli:synth";
-    const ACME: &str = "@acme/util";
+    const PIED_PIPER: &str = "@pied-piper/util";
 
     fn synth_package() -> PackageDeclaration {
         let mut defs = PackageDeclaration::with_package(SYNTH);
@@ -1185,13 +1236,13 @@ mod importless_library_tests {
         defs
     }
 
-    fn acme_package() -> PackageDeclaration {
-        let mut defs = PackageDeclaration::with_package(ACME);
+    fn pied_piper_package() -> PackageDeclaration {
+        let mut defs = PackageDeclaration::with_package(PIED_PIPER);
         defs.values.insert(
             "greet".to_string(),
             ValueSymbol {
                 name: "greet".to_string(),
-                mangled_name: package_symbol(ACME, "greet"),
+                mangled_name: package_symbol(PIED_PIPER, "greet"),
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: ValueKind::Function {
                     generics: Vec::new(),
@@ -1228,27 +1279,27 @@ mod importless_library_tests {
 
     #[test]
     fn package_declarations_passed_to_compile_are_importable() {
-        let acme = acme_package();
+        let pied_piper = pied_piper_package();
         let source = r#"
-            import { greet } from "@acme/util";
+            import { greet } from "@pied-piper/util";
             function main(): void {}
         "#;
-        super::compile_script(source, "main.subm", crate::FileId(0), &[&acme], &[])
+        super::compile_script(source, "main.subm", crate::FileId(0), &[&pied_piper], &[])
             .expect("package compiles");
     }
 
     #[test]
     fn package_not_passed_to_compile_uses_not_found_diagnostic() {
-        let acme = acme_package();
+        let pied_piper = pied_piper_package();
         let source = r#"
-            import { greet } from "@acme/util";
+            import { greet } from "@pied-piper/util";
             function main(): void {}
         "#;
-        let _package_not_supplied = acme;
+        let _package_not_supplied = pied_piper;
         let errs = compile_errors(source, &[]);
         assert!(
             errs.iter()
-                .any(|m| m.contains("package `@acme/util` not found")),
+                .any(|m| m.contains("package `@pied-piper/util` not found")),
             "expected not-found diagnostic, got: {errs:?}"
         );
     }
@@ -1256,13 +1307,13 @@ mod importless_library_tests {
     #[test]
     fn unknown_package_still_uses_not_found_diagnostic() {
         let source = r#"
-            import { greet } from "@acme/missing";
+            import { greet } from "@pied-piper/missing";
             function main(): void {}
         "#;
         let errs = compile_errors(source, &[]);
         assert!(
             errs.iter()
-                .any(|m| m.contains("package `@acme/missing` not found")),
+                .any(|m| m.contains("package `@pied-piper/missing` not found")),
             "expected not-found diagnostic, got: {errs:?}"
         );
     }

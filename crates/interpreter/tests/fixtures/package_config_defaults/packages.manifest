@@ -1,0 +1,2 @@
+@test/config service -
+main app @test/config root

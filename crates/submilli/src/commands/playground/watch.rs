@@ -25,6 +25,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use super::host::app::App;
+use super::host::blueprints::{LocalApplied, LocalApplyError};
 use anyhow::{Context, Result};
 use notify_debouncer_mini::notify::RecursiveMode;
 use serde::{Deserialize, Serialize};
@@ -32,7 +34,6 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use submilli_blueprint::Blueprint;
 use submilli_blueprint::diff::{self, BlueprintDiff};
-use submilli_server::{AppState, LocalApplyError};
 
 use super::log::{note, warn};
 use super::packages::{Freshness, ResolutionFailure};
@@ -141,9 +142,35 @@ impl Previous {
     }
 }
 
-/// Applies the playground's blueprint file through the server's trusted local path.
+/// Where the blueprint file is applied: the host's trusted local path.
+#[async_trait::async_trait]
+pub(crate) trait LocalBlueprints: Send + Sync {
+    /// What applying `yaml` would refuse, without changing anything.
+    async fn check(&self, yaml: &str) -> Result<Blueprint, LocalApplyError>;
+    /// Applies `yaml` as the blueprint in force, tagged `version_tag`.
+    async fn apply(&self, yaml: &str, version_tag: &str) -> Result<LocalApplied, LocalApplyError>;
+    /// Drops every prepared package set, so the next run links what the store holds.
+    fn evict_prepared_packages(&self);
+}
+
+#[async_trait::async_trait]
+impl LocalBlueprints for App {
+    async fn check(&self, yaml: &str) -> Result<Blueprint, LocalApplyError> {
+        self.check_local_blueprint(yaml).await
+    }
+
+    async fn apply(&self, yaml: &str, version_tag: &str) -> Result<LocalApplied, LocalApplyError> {
+        self.apply_local_blueprint(yaml, version_tag).await
+    }
+
+    fn evict_prepared_packages(&self) {
+        self.evict_all_prepared_packages();
+    }
+}
+
+/// Applies the playground's blueprint file through the host's trusted local path.
 pub(crate) struct Applier {
-    state: AppState,
+    state: Arc<dyn LocalBlueprints>,
     store: Arc<Store>,
     path: PathBuf,
     /// The name the playground serves; a save that changes it is refused.
@@ -163,7 +190,12 @@ pub(crate) struct Applier {
 }
 
 impl Applier {
-    pub(crate) fn new(state: AppState, store: Arc<Store>, path: PathBuf, name: String) -> Self {
+    pub(crate) fn new(
+        state: Arc<dyn LocalBlueprints>,
+        store: Arc<Store>,
+        path: PathBuf,
+        name: String,
+    ) -> Self {
         Self {
             state,
             store,
@@ -274,7 +306,7 @@ impl Applier {
         if let Err(failure) = self.prepare_packages(&yaml, previous.blueprint()).await {
             return self.refuse(package_refusal(&failure));
         }
-        let blueprint = match self.state.check_local_blueprint(&yaml).await {
+        let blueprint = match self.state.check(&yaml).await {
             Ok(blueprint) => blueprint,
             Err(error) => return self.refuse(Refusal::of(error)),
         };
@@ -306,7 +338,7 @@ impl Applier {
         if moment == Moment::Start {
             // Runs record the version's tag, which lives with the registration, not
             // on disk: register again under it.
-            if let Err(error) = self.state.apply_local_blueprint(&yaml, &tag(version)).await {
+            if let Err(error) = self.state.apply(&yaml, &tag(version)).await {
                 return Outcome::RegisterFailed {
                     version,
                     reason: error.message,
@@ -366,7 +398,7 @@ impl Applier {
                 ));
             }
         };
-        match self.state.apply_local_blueprint(&yaml, &tag(version)).await {
+        match self.state.apply(&yaml, &tag(version)).await {
             Ok(_) => {
                 self.set_status(|status| {
                     status.version = Some(version);
@@ -404,8 +436,13 @@ impl Applier {
         let Ok(blueprint) = submilli_blueprint::parse(yaml) else {
             return Ok(());
         };
+        let state = Arc::clone(&self.state);
         packages
-            .prepare_edit(&self.state, blueprint, in_force.cloned())
+            .prepare_edit(
+                move || state.evict_prepared_packages(),
+                blueprint,
+                in_force.cloned(),
+            )
             .await
     }
 

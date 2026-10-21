@@ -1495,14 +1495,14 @@ mod tests {
 
     #[test]
     fn string_interpolation_in_equality() {
-        let f = filter("host == \"api.${vars.tenant}.com\"");
+        let f = filter("host == \"api.${vars.tenant}.example\"");
         assert!(f.matches_with(
-            &json!({ "host": "api.acme.com" }),
-            &vars(&[("tenant", "acme")])
+            &json!({ "host": "api.pied-piper.example" }),
+            &vars(&[("tenant", "pied-piper")])
         ));
         assert!(!f.matches_with(
-            &json!({ "host": "api.evil.com" }),
-            &vars(&[("tenant", "acme")])
+            &json!({ "host": "api.evil.example" }),
+            &vars(&[("tenant", "pied-piper")])
         ));
     }
 
@@ -1846,12 +1846,12 @@ mod tests {
     fn explain_reports_bound_variable_value_and_negation() {
         let f = filter("customerId == ${vars.customerId}");
         let explained = f.explain_with(
-            &json!({ "customerId": "cus_initech" }),
-            &vars(&[("customerId", "cus_northwind")]),
+            &json!({ "customerId": "hooli" }),
+            &vars(&[("customerId", "pied_piper")]),
         );
         assert_eq!(
             explained.failures[0].expected.as_deref(),
-            Some("cus_northwind")
+            Some("pied_piper")
         );
         assert!(!explained.failures[0].negated);
 

@@ -8,7 +8,7 @@ const endpoint = base + "/mcp/support-read";
 // serve_fixture.py prints this. It is a `user`-role token, so a pass shows this surface needs no more.
 const token = process.env.SUBMILLI_SERVER_TOKEN;
 assert.ok(token, "SUBMILLI_SERVER_TOKEN is required");
-const code = 'import { readBalance } from "@acme/billing"; function main(): number { return readBalance("cus_northwind"); }';
+const code = 'import { readBalance } from "@pied-piper/billing"; function main(): number { return readBalance("pied_piper"); }';
 
 function usage(): object {
   return {
@@ -29,7 +29,7 @@ async function open(customerId?: string, bearer: string | null = token): Promise
 }
 
 async function main(): Promise<void> {
-  const client = await open("cus_northwind");
+  const client = await open("pied_piper");
   try {
     const tools = await client.tools();
     const execute = tools["submilli__typescript__execute"];
@@ -63,10 +63,10 @@ async function main(): Promise<void> {
     await client.close();
   }
 
-  const deniedClient = await open("cus_northwind");
+  const deniedClient = await open("pied_piper");
   try {
     const tools = await deniedClient.tools();
-    const denied = await tools["submilli__typescript__execute"].execute({ code: code.replace("cus_northwind", "cus_initech") }, {
+    const denied = await tools["submilli__typescript__execute"].execute({ code: code.replace("pied_piper", "hooli") }, {
         toolCallId: "cross-tenant",
         messages: [],
         abortSignal: new AbortController().signal,
@@ -82,7 +82,7 @@ async function main(): Promise<void> {
   // Without a token the server answers 401 before it reads the binding. The
   // client has no OAuth provider, so it reports the refusal rather than
   // starting a sign-in.
-  await assert.rejects(open("cus_northwind", null), /HTTP 401.*unauthorized/);
+  await assert.rejects(open("pied_piper", null), /HTTP 401.*unauthorized/);
   console.log("vercel MCP + mock model validation passed");
 }
 

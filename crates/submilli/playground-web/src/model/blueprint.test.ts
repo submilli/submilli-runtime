@@ -17,7 +17,7 @@ describe("the blueprint dialog", () => {
     const d = blueprintDialog(frame(data, INITIAL_UI));
     expect(d.version).toBe(2);
     expect(d.title).toBe("Blueprint billing · v2");
-    expect(d.summary).toBe("v2 (in force), Oct 13, 13:26 UTC, widens access. Widened: main gained an allow rule globex-support for acme.com/charges.list.");
+    expect(d.summary).toBe("v2 (in force), Oct 13, 13:26 UTC, widens access. Widened: main gained an allow rule globex-support for pied-piper.example/charges.list.");
     expect(d.versions).toEqual([
       { version: 1, name: "v1", on: false },
       { version: 2, name: "v2 · in force", on: true },
@@ -46,12 +46,12 @@ describe("the blueprint dialog", () => {
 
 describe("a package's own rules", () => {
   it("counts the rules in the package's block under permissions", () => {
-    expect(packageRules(v2, "@acme/billing")).toEqual({ line: 45, count: 2 });
+    expect(packageRules(v2, "@pied-piper/billing")).toEqual({ line: 45, count: 2 });
   });
 
   it("works for any package name and any list indent", () => {
     const text = "permissions:\n  main:\n    - name: a\n      action: allow\n  other-pkg:\n    - capability: fs.read\n      action: allow\n    # a comment\n    - capability: http.get\n      action: allow\nvfs: {}\n";
     expect(packageRules(text, "other-pkg")).toEqual({ line: 5, count: 2 });
-    expect(packageRules(text, "@acme/billing")).toBeNull();
+    expect(packageRules(text, "@pied-piper/billing")).toBeNull();
   });
 });

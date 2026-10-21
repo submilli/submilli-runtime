@@ -63,10 +63,10 @@ copies keep generated metadata and caches out of the committed corpus.
 | Case | Caller checks denied, package write allowed | Contract disposition |
 | --- | --- | --- |
 | unsafe | `/record` contains `record`; returns `handled` | Violates mandatory caller permission |
-| rethrow | `acme.write` denial propagates; no file | Safe |
+| rethrow | `pied-piper.write` denial propagates; no file | Safe |
 | return | Returns `handled`; no file | Safe |
-| fallback | `acme.fallback` denial propagates; no file | Safe; independent check outside candidate subset |
-| logging | `/audit` contains `denied`; `acme.write` denial propagates; no `/record` | Legitimate independently permitted audit write |
+| fallback | `pied-piper.fallback` denial propagates; no file | Safe; independent check outside candidate subset |
+| logging | `/audit` contains `denied`; `pied-piper.write` denial propagates; no `/record` | Legitimate independently permitted audit write |
 | optional | Same behavior as unsafe | Explicitly permitted by its different package contract |
 
 Every case also succeeds with primary caller permission, and fails without the

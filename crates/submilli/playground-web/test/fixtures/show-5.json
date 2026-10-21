@@ -19,7 +19,7 @@
  "denied": [],
  "session": "5e550000-0000-4000-8000-000000000003",
  "variables": {
-  "customerId": "cus_northwind"
+  "customerId": "pied_piper"
  },
  "test": {
   "source_run": 2,
@@ -40,7 +40,7 @@
    ],
    "outcome": "allow",
    "caller": "main",
-   "capability": "acme.com/charges.list",
+   "capability": "pied-piper.example/charges.list",
    "decided_by": "by `globex-support`",
    "filtered": false
   },
@@ -49,9 +49,9 @@
     "5.2"
    ],
    "outcome": "allow",
-   "caller": "@acme/billing",
+   "caller": "@pied-piper/billing",
    "capability": "fs.read",
-   "decided_by": "by rule 1 of `@acme/billing`, line 46",
+   "decided_by": "by rule 1 of `@pied-piper/billing`, line 46",
    "filtered": false
   }
  ],
@@ -85,6 +85,6 @@
    "served_keys": [],
    "went_live_keys": []
   },
-  "program": "import { listCharges } from \"@acme/billing\";\n\nfunction main(): number {\n    return listCharges(\"cus_globex\").length;\n}\n"
+  "program": "import { listCharges } from \"@pied-piper/billing\";\n\nfunction main(): number {\n    return listCharges(\"cus_globex\").length;\n}\n"
  }
 }

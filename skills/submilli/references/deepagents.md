@@ -6,7 +6,7 @@ In Python, connect with `langchain-submilli`: its `SubmilliMiddleware` adds Subm
 
 ## Before writing the harness
 
-For a new project, follow [setup](setup.md), then [packages](packages.md), then [blueprints](blueprints.md). The [shared harness setup](harnesses.md) builds the `@acme/billing` / `support-read` fixture these examples use. A useful first slice is a fixture package whose exported function has a `@capability` annotation and calls `check(...)`. Run `submilli build check`, `submilli build test`, and `submilli blueprint lint` before involving a model.
+For a new project, follow [setup](setup.md), then [packages](packages.md), then [blueprints](blueprints.md). The [shared harness setup](harnesses.md) builds the `@pied-piper/billing` / `support-read` fixture these examples use. A useful first slice is a fixture package whose exported function has a `@capability` annotation and calls `check(...)`. Run `submilli build check`, `submilli build test`, and `submilli blueprint lint` before involving a model.
 
 The middleware needs submilli-server 0.4.1 or later and Python 3.11 or later. It is async only: call the agent with `ainvoke` or `astream`. Use the versions the application already has; for a new project install the current releases. These examples were verified on 2026-10-15 with `langchain-submilli 0.1.0`, `deepagents 0.7.25`, `langchain 1.4.6` and submilli-server 0.4.1; if an import or signature differs, the installed version's official API wins over this text. The package README is the API reference: [langchain-submilli](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#readme). Deep Agents requires a tool-calling model.
 
@@ -65,7 +65,7 @@ agent = create_deep_agent(
 
 
 async def main() -> None:
-    customer_id = "cus_northwind"  # demo only: take it from the signed-in session
+    customer_id = "pied_piper"  # demo only: take it from the signed-in session
     config = {"configurable": {"thread_id": f"customer:{customer_id}"}}
     try:
         result = await agent.ainvoke(
@@ -85,7 +85,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-The model should call `submilli__typescript__execute` with a program that imports `@acme/billing`, and report `6150` (or the service's formatted equivalent). That is evidence of a live model run only when `OPENAI_API_KEY` is configured; a scripted model proves wiring only.
+The model should call `submilli__typescript__execute` with a program that imports `@pied-piper/billing`, and report `6150` (or the service's formatted equivalent). That is evidence of a live model run only when `OPENAI_API_KEY` is configured; a scripted model proves wiring only.
 
 What the middleware does, and the rules that follow from it:
 
@@ -123,8 +123,8 @@ def scripted(code: str) -> Scripted:
 
 Build a graph per case with `model = scripted(code)` and `create_deep_agent(model=model, middleware=[submilli], checkpointer=InMemorySaver(), context_schema=Context)`, `ainvoke` it with a `context` and a fresh `thread_id`, end the case with `await submilli.aclose_thread(graph, config)` so no session is left open, and assert on the tool message (`next(m.text for m in result["messages"] if m.type == "tool")`):
 
-1. Bound to `cus_northwind`, a program reading `cus_northwind` returns a result of `6150`.
-2. The same binding reading `cus_initech` returns a tool result containing `permission_denied` and `acme.com/balance.read`, with `"denied": true`; the agent does not raise.
+1. Bound to `pied_piper`, a program reading `pied_piper` returns a result of `6150`.
+2. The same binding reading `hooli` returns a tool result containing `permission_denied` and `pied-piper.example/balance.read`, with `"denied": true`; the agent does not raise.
 3. A context without `customer_id` raises `ValueError` from `customer_binding` before any session opens. To prove the server's own check, build a middleware with `variables={}`: the server refuses the session and `ainvoke` raises `submilli.BadRequestError`. A middleware built with a `token` the server does not know raises `submilli.AuthenticationError` (HTTP 401). Assert on the raised errors.
 4. `model.offered` records the model's real tool surface: the six Submilli tools and Deep Agents' `task`, and no `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep` or `execute`.
 
@@ -132,7 +132,7 @@ A scripted run is adapter and policy evidence, not a live model result.
 
 ## Alternative: MCP with langchain-mcp-adapters
 
-An application that already loads Submilli through `langchain-mcp-adapters` can keep doing so; the MCP endpoint is `http://127.0.0.1:8128/mcp/<blueprint-name>`. The middleware's rules then become the application's job. Every connection sends `Authorization: Bearer <token>`, read from `SUBMILLI_SERVER_TOKEN`. Bind identity from authenticated application state with the header `submilli-variables: customerId=cus_northwind`; validate the value and reject semicolon, carriage return, and line-feed characters. Never derive this header from chat. Make a new client/session for every identity and hold one session open for the entire agent run: tools loaded with `MultiServerMCPClient.get_tools()` open a new session per call, and each program would run in a separate session. This recipe was verified on 2026-10-15 with `deepagents 0.7.25` and `langchain-mcp-adapters 0.3.2`.
+An application that already loads Submilli through `langchain-mcp-adapters` can keep doing so; the MCP endpoint is `http://127.0.0.1:8128/mcp/<blueprint-name>`. The middleware's rules then become the application's job. Every connection sends `Authorization: Bearer <token>`, read from `SUBMILLI_SERVER_TOKEN`. Bind identity from authenticated application state with the header `submilli-variables: customerId=pied_piper`; validate the value and reject semicolon, carriage return, and line-feed characters. Never derive this header from chat. Make a new client/session for every identity and hold one session open for the entire agent run: tools loaded with `MultiServerMCPClient.get_tools()` open a new session per call, and each program would run in a separate session. This recipe was verified on 2026-10-15 with `deepagents 0.7.25` and `langchain-mcp-adapters 0.3.2`.
 
 ```python
 import asyncio
@@ -200,7 +200,7 @@ npm install deepagents @langchain/mcp-adapters @langchain/openai
 export OPENAI_API_KEY='...'
 export SUBMILLI_SERVER_URL='http://127.0.0.1:8128'
 export SUBMILLI_BLUEPRINT='support-read'
-export SUBMILLI_CUSTOMER_ID='cus_northwind'
+export SUBMILLI_CUSTOMER_ID='pied_piper'
 # SUBMILLI_SERVER_TOKEN must already hold the token the server was started with.
 ```
 

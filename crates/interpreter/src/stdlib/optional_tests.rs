@@ -580,7 +580,7 @@ fn a_package_compiles_against_an_enabling_set() {
     }];
     crate::compile::compile_package_with_transitive_checked_for(
         harness_stdlib(),
-        "@acme/fanout",
+        "@pied-piper/fanout",
         crate::ModulePath::from("lib"),
         &modules,
         &[],
@@ -589,7 +589,7 @@ fn a_package_compiles_against_an_enabling_set() {
     .expect("agents is importable");
     assert!(
         crate::compile::compile_package_with_transitive_checked(
-            "@acme/fanout",
+            "@pied-piper/fanout",
             crate::ModulePath::from("lib"),
             &modules,
             &[],

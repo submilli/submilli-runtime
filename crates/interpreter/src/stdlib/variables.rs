@@ -147,7 +147,7 @@ mod tests {
             capability: &str,
             context: &serde_json::Value,
         ) -> CheckOutcome {
-            assert_eq!(caller, "@acme/browser");
+            assert_eq!(caller, "@pied-piper/browser");
             assert_eq!(capability, "variables.get");
             self.seen.lock().unwrap().push(context.clone());
             if context["name"] == "DENIED" || context["name"] == "USER_ID" {
@@ -165,7 +165,7 @@ mod tests {
     async fn packages_read_strings_and_missing_names_with_dynamic_name_checks() {
         let policy = Arc::new(NamePolicy::default());
         run_as(
-            Some("@acme/browser"),
+            Some("@pied-piper/browser"),
             r#"
             import * as variables from "submilli:variables";
             function read(name: string): string | undefined { return variables.get(name); }

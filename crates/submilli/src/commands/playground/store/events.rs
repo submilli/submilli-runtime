@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
+use super::super::host::record::events::SessionEvent;
 use serde::{Deserialize, Serialize};
-use submilli_server::record::SessionEvent;
 
 use super::{Result, Store, StoreError, io_error, open_for_append, parse_record, read_lines};
 

@@ -20,6 +20,7 @@ pub mod lexer;
 pub(crate) mod literal_units;
 pub mod lower_patterns;
 pub mod mangle;
+pub mod package_config;
 pub mod package_declaration;
 pub mod packages;
 pub mod parser;

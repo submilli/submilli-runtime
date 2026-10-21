@@ -36,7 +36,7 @@ use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use submilli_server::{SecretStore, SecretStoreError};
+use submilli_shared::secret_store::{SecretStore, SecretStoreError};
 
 /// What a redacted secret reads as in the store.
 pub(crate) const REDACTED: &str = "[redacted]";

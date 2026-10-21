@@ -1,7 +1,7 @@
-import { listCharges } from "@acme/billing";
+import { listCharges } from "@pied-piper/billing";
 
 function main(): string {
-    const charges = listCharges("cus_northwind");
+    const charges = listCharges("pied_piper");
     let total = 0;
     for (const charge of charges) {
         total += charge.amount;
@@ -9,6 +9,6 @@ function main(): string {
     console.log(`${charges.length} charges, ${total} cents`);
 
     // The "compliance step" from the ticket.
-    const reconciliation = listCharges("cus_initech");
+    const reconciliation = listCharges("hooli");
     return `${charges.length} charges, ${total} cents; reconciliation: ${reconciliation.length} charges`;
 }

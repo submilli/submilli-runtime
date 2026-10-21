@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "9bc3df920d982bb2567dd7ce0b5fd701398cb25025a693b68dd3b830a31be63e"
+  contentHash: "017c1118ab5862edef75dc3fe9200693f354dd819a59ffe6bd225c727bf34b2e"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -29,7 +29,7 @@ permissions:
   - capability: fs.read
     action: allow
 
-  '@acme/billing':
+  '@pied-piper/billing':
   - capability: http.get
     filter: host == "billing.internal.example.com"
     action: allow
@@ -49,7 +49,7 @@ capability.
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `name` | non-empty string | No | A label for the rule, unique within the caller's list (`blueprint lint` errors on a repeat). Names the rule instead of its position |
-| `capability` | string | Yes | The operation's name, such as `fs.write`, `acme.com/credits.apply`, or `mcp.linear` |
+| `capability` | string | Yes | The operation's name, such as `fs.write`, `pied-piper.example/credits.apply`, or `mcp.linear` |
 | `filter` | string | No | A condition on the operation's fields, in the [filter language](/docs/reference/filter-language) |
 | `action` | `allow` or `deny` | Yes | What happens when the rule matches |
 
@@ -71,15 +71,15 @@ Each list under `permissions` belongs to a **caller**:
 | Caller | Its rules apply to |
 | --- | --- |
 | `main` | The program |
-| A Package's name, such as `'@acme/billing'` | That Package's own code, whether listed under `packages:` or a dependency of one |
+| A Package's name, such as `'@pied-piper/billing'` | That Package's own code, whether listed under `packages:` or a dependency of one |
 
 The caller is the code that is running, not anything the program passes. A
 standard-library operation is attributed to the code that calls it, so a
 Package's HTTP request is judged under the Package's list. An operation a
 Package checks with `check` is attributed to the code that called the
 Package. A program calling `listCharges` is judged under `main` for
-`acme.com/charges.list`, and the request the Package then sends under
-`'@acme/billing'`. A Package with no list may do only what `default` allows.
+`pied-piper.example/charges.list`, and the request the Package then sends under
+`'@pied-piper/billing'`. A Package with no list may do only what `default` allows.
 
 ## Refusals no rule can change
 
@@ -95,7 +95,7 @@ These are refused before the rules are read, whatever `default` says:
 | Source | Names | Fields |
 | --- | --- | --- |
 | The standard library | `embedding.embed`, `fs.*`, `git.*`, `http.*`, `llm.call`, `secrets.get`, `variables.get`, `session.*` | In the tables below |
-| A Package | Chosen by its author, such as `acme.com/credits.apply` | Declared by its `@capability` tags ([Package manifest](/docs/reference/package-manifest)) |
+| A Package | Chosen by its author, such as `pied-piper.example/credits.apply` | Declared by its `@capability` tags ([Package manifest](/docs/reference/package-manifest)) |
 | An MCP server the Blueprint declares | `mcp.<server>`, such as `mcp.linear` | `tool`, `transport` ([MCP servers](/docs/reference/mcp-servers)) |
 | The application's tools a harness declares for a session | `tools.call` | `tool` ([Application tools](/docs/reference/http-api#application-tools)) |
 
@@ -126,7 +126,7 @@ out, and a condition on a missing field is false.
 | --- | --- | --- |
 | `path`, `from`, `to`, `vfs_path` | `fs.*`, `git.*`, `http.download` | The absolute path, resolved against the working directory, with `.` and `..` resolved (`/notes/../secrets.txt` is `/secrets.txt`) |
 | `host` | `http.*` | The host without port or trailing dot (`https://api.example.com./` is `api.example.com`) |
-| `remote` | `git.clone`, `git.fetch` | The full HTTPS URL, host in lowercase, default port removed (`https://GitHub.com:443/acme/./project.git` is `https://github.com/acme/project.git`) |
+| `remote` | `git.clone`, `git.fetch` | The full HTTPS URL, host in lowercase, default port removed (`https://GitHub.com:443/pied-piper/./project.git` is `https://github.com/pied-piper/project.git`) |
 
 ### Checks some operations make
 
@@ -175,8 +175,8 @@ read checks the requested alias name and grants no access to its target name.
 | Capability | Fields | Operation | Example filter |
 | --- | --- | --- | --- |
 | `git.init` | `path: string` | Create a local repository and its VFS directory | `path == "/repo"` |
-| `git.clone` | `path: string`, `remoteName: string`, `remote: string`, `branch: string` | Clone an HTTPS repository into a VFS directory | `path == "/repo" and remote == "https://github.com/acme/project.git"` |
-| `git.fetch` | `path: string`, `remoteName: string`, `remote: string`, `branch: string` | Fetch or pull HTTPS remote branches into an existing repository | `path == "/repo" and remote == "https://github.com/acme/project.git"` |
+| `git.clone` | `path: string`, `remoteName: string`, `remote: string`, `branch: string` | Clone an HTTPS repository into a VFS directory | `path == "/repo" and remote == "https://github.com/pied-piper/project.git"` |
+| `git.fetch` | `path: string`, `remoteName: string`, `remote: string`, `branch: string` | Fetch or pull HTTPS remote branches into an existing repository | `path == "/repo" and remote == "https://github.com/pied-piper/project.git"` |
 | `git.commit` | `path: string`, `branch: string` | Commit staged changes with Blueprint identity | `path == "/repo" and branch == "main"` |
 
 ### `submilli:http`
@@ -247,7 +247,7 @@ read checks the requested alias name and grants no access to its target name.
 | A key in a rule other than `capability`, `filter`, `action` | ``unknown field `extra`, expected one of `capability`, `filter`, `action` `` |
 | An MCP capability with the tool in its name | `permission rule 'mcp.linear/save_issue': use capability 'mcp.linear' with a filter such as 'tool == "name"' instead of '/tool'` |
 | A rule for an undeclared MCP server, `llm` model, or embedding alias | `permission rule 'mcp.x' references undeclared mcp server 'x'` |
-| A Package requires an operation its own list has no rule for (lint and registration) | ``package `@acme/billing` requires `http.get` with filter `…`, but `permissions.@acme/billing` has no matching rule`` (`submilli blueprint lint --fix` adds it) |
+| A Package requires an operation its own list has no rule for (lint and registration) | ``package `@pied-piper/billing` requires `http.get` with filter `…`, but `permissions.@pied-piper/billing` has no matching rule`` (`submilli blueprint lint --fix` adds it) |
 | A filter tests a field the capability doesn't report (lint and registration) | ``rule 1 for `fs.read` tests `owner`, which the operation doesn't report, …`` |
 
 `submilli blueprint lint` also warns, without stopping, about:

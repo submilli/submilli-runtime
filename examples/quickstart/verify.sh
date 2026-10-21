@@ -154,7 +154,7 @@ cd "$WORK"
 step "the package"
 
 # --- reader journey ---
-$SUBMILLI build init @acme/billing package
+$SUBMILLI build init @pied-piper/billing package
 save package/src/lib.ts
 save package/tests/lib.test.ts
 $SUBMILLI build check --deny-warnings
@@ -168,7 +168,7 @@ $SUBMILLI blueprint lint --deny-warnings blueprint.yaml
 diff -u "$SRC/package/capabilities.yaml" package/capabilities.yaml \
   || fail "the derived capability schema no longer matches the one the chapter prints"
 
-# The chapter prints `checked @acme/billing v0.1.0` and nothing else.
+# The chapter prints `checked @pied-piper/billing v0.1.0` and nothing else.
 check_out="$($SUBMILLI build check --deny-warnings 2>&1)"
 expect_missing "$check_out" "warning:" "the package compiles without warnings"
 
@@ -203,12 +203,12 @@ expect_missing "$legit" "[denied]" "the legitimate run is not denied"
 injected="$(expect_failure node app.mjs total-injected.ts)"
 expect_contains "$injected" "[program] 2 charges, 6150 cents" "the injected run's legitimate work completes"
 expect_contains "$injected" "[denied]" "the injected run is denied"
-expect_contains "$injected" "acme.com/charges.list" "the denial names the capability"
+expect_contains "$injected" "pied-piper.example/charges.list" "the denial names the capability"
 expect_contains "$injected" "policy denied" "the denial names a reason"
 expect_missing "$injected" "[result]" "the injected run returns nothing to the caller"
 
 if [[ -n "${SUBMILLI_QUICKSTART_CHAPTER:-}" ]]; then
-  frame="$(grep -o 'at listCharges (@acme/billing/lib:[0-9]*:[0-9]*)' "$SUBMILLI_QUICKSTART_CHAPTER" | head -1)"
+  frame="$(grep -o 'at listCharges (@pied-piper/billing/lib:[0-9]*:[0-9]*)' "$SUBMILLI_QUICKSTART_CHAPTER" | head -1)"
   [[ -n "$frame" ]] || fail "could not find the chapter's denial frame to check"
   expect_contains "$injected" "$frame" "the chapter's printed denial frame still matches the runtime"
 fi
@@ -233,9 +233,9 @@ expect_contains "$unfiltered" "reconciliation: 1 charges" "without the filter th
 # Flip the binding and both outcomes invert. This is the assertion that ties the
 # denial to the value the application supplied: same blueprint, same programs,
 # only the client's binding changed.
-sed 's/"cus_northwind"/"cus_initech"/' app.mjs > app-flipped.mjs
+sed 's/"pied_piper"/"hooli"/' app.mjs > app-flipped.mjs
 flipped_legit="$(expect_failure node app-flipped.mjs total.ts)"
-expect_contains "$flipped_legit" "[denied]" "with cus_initech bound, the northwind call is denied"
+expect_contains "$flipped_legit" "[denied]" "with hooli bound, the Pied Piper call is denied"
 flipped_injected="$(expect_failure node app-flipped.mjs total-injected.ts)"
 expect_contains "$flipped_injected" "[denied]" "the flipped run still denies the first call it makes"
 

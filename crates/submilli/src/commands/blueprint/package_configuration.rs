@@ -72,16 +72,20 @@ mod tests {
         };
         let empty = submilli_blueprint::parse("name: test\n").unwrap();
         assert_eq!(
-            missing_package_configuration_warnings(&empty, "@acme/browser", &capabilities),
+            missing_package_configuration_warnings(&empty, "@pied-piper/browser", &capabilities),
             [
-                "package `@acme/browser` requires variable `BROWSER_STORE_NAME`, but `variables:` does not declare it"
+                "package `@pied-piper/browser` requires variable `BROWSER_STORE_NAME`, but `variables:` does not declare it"
             ]
         );
         for decl in ["{}", "{ alias: USER_ID, required: true }"] {
             let blueprint = submilli_blueprint::parse(&format!("name: test\nvariables:\n  USER_ID: {{ required: true }}\n  BROWSER_STORE_NAME: {decl}\n")).unwrap();
             assert!(
-                missing_package_configuration_warnings(&blueprint, "@acme/browser", &capabilities)
-                    .is_empty()
+                missing_package_configuration_warnings(
+                    &blueprint,
+                    "@pied-piper/browser",
+                    &capabilities
+                )
+                .is_empty()
             );
         }
     }
@@ -98,12 +102,12 @@ mod tests {
         };
 
         let warnings =
-            missing_package_configuration_warnings(&blueprint, "@acme/app", &capabilities);
+            missing_package_configuration_warnings(&blueprint, "@pied-piper/app", &capabilities);
 
         assert_eq!(
             warnings,
             vec![
-                "package `@acme/app` requires secret `STRIPE_API_KEY`, but `secrets:` does not declare it"
+                "package `@pied-piper/app` requires secret `STRIPE_API_KEY`, but `secrets:` does not declare it"
             ]
         );
     }
@@ -123,7 +127,7 @@ mod tests {
         };
 
         let warnings =
-            missing_package_configuration_warnings(&blueprint, "@acme/app", &capabilities);
+            missing_package_configuration_warnings(&blueprint, "@pied-piper/app", &capabilities);
 
         assert!(warnings.is_empty(), "{warnings:?}");
     }

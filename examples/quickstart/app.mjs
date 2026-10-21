@@ -4,7 +4,7 @@ const SUBMILLI_SERVER = (process.env.SUBMILLI_SERVER_URL || "http://127.0.0.1:81
 const BLUEPRINT_NAME = "quickstart";
 
 // In a real application: this customer ID would be something you fetch based on the signed-in user.
-const customerId = "cus_northwind";
+const customerId = "pied_piper";
 
 // In a real application, this code will be supplied by your code-writing agent
 const agentCodeToRun = process.argv[2];

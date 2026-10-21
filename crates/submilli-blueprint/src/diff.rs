@@ -1341,10 +1341,10 @@ mod tests {
     #[test]
     fn adding_a_package_widens_and_removing_one_narrows() {
         let without = bp("name: demo\n");
-        let with = bp("name: demo\npackages: ['@acme/billing']\n");
+        let with = bp("name: demo\npackages: ['@pied-piper/billing']\n");
         let added = diff(&without, &with);
         assert_eq!(added.classification, Classification::Widening);
-        assert!(only(&added).summary.contains("`@acme/billing`"));
+        assert!(only(&added).summary.contains("`@pied-piper/billing`"));
         assert_eq!(
             diff(&with, &without).classification,
             Classification::Narrowing
@@ -1364,7 +1364,7 @@ mod tests {
     #[test]
     fn an_optional_variable_declared_is_unknown_and_not_listed() {
         let before = bp("name: demo\n");
-        let after = bp("name: demo\nvariables:\n  tenant:\n    default: acme\n");
+        let after = bp("name: demo\nvariables:\n  tenant:\n    default: pied-piper\n");
         let diff = diff(&before, &after);
         assert_eq!(diff.classification, Classification::Unknown);
         assert!(diff.new_required_variables.is_empty());
@@ -1376,20 +1376,20 @@ mod tests {
             "name: demo\npermissions:\n  main:\n    - capability: http.get\n      action: allow\n",
         );
         let after = bp(
-            "name: demo\npermissions:\n  '@acme/billing':\n    - capability: http.get\n      action: allow\n",
+            "name: demo\npermissions:\n  '@pied-piper/billing':\n    - capability: http.get\n      action: allow\n",
         );
         let diff = diff(&before, &after);
         assert_eq!(diff.classification, Classification::Mixed);
         assert!(
             only(&diff)
                 .summary
-                .contains("moved from `main` to `@acme/billing`")
+                .contains("moved from `main` to `@pied-piper/billing`")
         );
     }
 
     #[test]
     fn changes_pulling_both_ways_are_mixed() {
-        let before = bp("name: demo\ndefault: deny\npackages: ['@acme/a']\n");
+        let before = bp("name: demo\ndefault: deny\npackages: ['@pied-piper/a']\n");
         let after = bp("name: demo\ndefault: allow\n");
         assert_eq!(diff(&before, &after).classification, Classification::Mixed);
     }
@@ -1397,7 +1397,7 @@ mod tests {
     #[test]
     fn unknown_beside_a_classified_change_is_unknown() {
         let before = bp("name: demo\n");
-        let after = bp("name: demo\nidle_timeout: 5m\npackages: ['@acme/a']\n");
+        let after = bp("name: demo\nidle_timeout: 5m\npackages: ['@pied-piper/a']\n");
         let diff = diff(&before, &after);
         assert_eq!(diff.classification, Classification::Unknown);
         assert_eq!(diff.changes.len(), 2);
@@ -1716,7 +1716,7 @@ mod tests {
 
         // One copy moved to another caller block is one move; the other stays.
         let moved = bp(&format!(
-            "name: demo\npermissions:\n  main:\n{ALLOW}  '@acme/billing':\n{ALLOW}"
+            "name: demo\npermissions:\n  main:\n{ALLOW}  '@pied-piper/billing':\n{ALLOW}"
         ));
         let diff = diff(&twice, &moved);
         assert_eq!(diff.classification, Classification::Mixed, "{diff:#?}");

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "6b24574ac5506c694f6a5e8b6331655274c54230b265c91cbe6a2b4879e6f8ea"
+  contentHash: "a5d5749a86263f25163b24f018ce34a96ec97d2efde1cf9b17dc7ba28d67875f"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -203,22 +203,22 @@ host and at the top level of the file. The top-level flag has no command:
 
 ```sh
 submilli blueprint secret add LEGACY_TOKEN --store legacy_token
-submilli blueprint capability add http.get --filter 'host == "legacy.internal.acme.com"'
-submilli blueprint auth-proxy add --host legacy.internal.acme.com --bearer LEGACY_TOKEN --allow-insecure-http
+submilli blueprint capability add http.get --filter 'host == "legacy.internal.pied-piper.example"'
+submilli blueprint auth-proxy add --host legacy.internal.pied-piper.example --bearer LEGACY_TOKEN --allow-insecure-http
 ```
 
 ```text
 ✓ declared secret 'LEGACY_TOKEN' (store: legacy_token) in blueprint.yaml
-✓ added allow http.get (filter: host == "legacy.internal.acme.com") to caller 'main' in blueprint.yaml
+✓ added allow http.get (filter: host == "legacy.internal.pied-piper.example") to caller 'main' in blueprint.yaml
   HTTP GET
   filter fields: host: string, path: string, body_size: number, timeout_ms: number
-✓ added auth_proxy rule for host 'legacy.internal.acme.com' (bearer auth) in blueprint.yaml
+✓ added auth_proxy rule for host 'legacy.internal.pied-piper.example' (bearer auth) in blueprint.yaml
 ```
 
 ```yaml title="blueprint.yaml (fragment)"
 allow_insecure_http: true
 auth_proxy:
-- host: legacy.internal.acme.com
+- host: legacy.internal.pied-piper.example
   allow_insecure_http: true
   auth:
     bearer: LEGACY_TOKEN

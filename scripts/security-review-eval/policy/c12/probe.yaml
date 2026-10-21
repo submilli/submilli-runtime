@@ -1,13 +1,13 @@
 kind: blueprint
 name: records-policy
-packages: ["@acme/records"]
+packages: ["@pied-piper/records"]
 default: deny
 permissions:
   main:
-    - capability: acme.write
+    - capability: pied-piper.write
       action: allow
       filter: path glob "/public/**"
-  '@acme/records':
+  '@pied-piper/records':
     - capability: fs.write
       action: allow
     - capability: fs.read

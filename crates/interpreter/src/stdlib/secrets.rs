@@ -378,7 +378,7 @@ mod tests {
         );
     }
 
-    const PACKAGE: &str = "@acme/sdk";
+    const PACKAGE: &str = "@pied-piper/sdk";
 
     const MAIN_READS_TOKEN: &str = r#"
         import { get } from "submilli:secrets";

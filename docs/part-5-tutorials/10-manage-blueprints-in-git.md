@@ -9,7 +9,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "f247fde266edd95a1381eb518cbe7223963bf2f1dcf27ce20f54af8c7d068707"
+  contentHash: "47711512524b7a7e217761125118349dd2be143b75dc48fcd970d34dacb329d4"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -59,19 +59,19 @@ variables:
     required: true
 
 packages:
-- '@submilli/acme-billing'
+- '@submilli/pied-piper-billing'
 
 default: deny
 
 permissions:
   # What generated code may do.
   main:
-  - capability: acme.com/charges.list
+  - capability: pied-piper.example/charges.list
     filter: customerId == ${vars.customerId}
     action: allow
 
   # What the package itself may do. Nothing: it reads a fixture.
-  '@submilli/acme-billing': []
+  '@submilli/pied-piper-billing': []
 ```
 
 `packages.txt` names each Package the Blueprints list, one per line, with
@@ -79,7 +79,7 @@ the GitHub repository it is installed from, the Package, and the commit to
 pin:
 
 ```text title="packages.txt"
-submilli/acme @submilli/acme-billing 88656b81c537
+submilli/pied-piper @submilli/pied-piper-billing c18d9a602bbb
 ```
 
 ## Test the policy as two sessions
@@ -89,10 +89,10 @@ refuses what it should, run a program under it, bound to the customer
 the rule should allow and then to one it should refuse:
 
 ```typescript title="blueprints/support/total.ts"
-import { listCharges } from "@submilli/acme-billing";
+import { listCharges } from "@submilli/pied-piper-billing";
 
 function main(): string {
-    const charges = listCharges("cus_northwind");
+    const charges = listCharges("pied_piper");
     let total = 0;
     for (const charge of charges) {
         total += charge.amount;
@@ -106,15 +106,15 @@ function main(): string {
 # Runs total.ts under this blueprint as two sessions: the customer it
 # should allow, and one it should refuse.
 set -eu
-submilli run --blueprint blueprint.yaml --var customerId=cus_northwind total.ts
-submilli run --blueprint blueprint.yaml --var customerId=cus_initech total.ts 2>&1 | grep PermissionDeniedError
+submilli run --blueprint blueprint.yaml --var customerId=pied_piper total.ts
+submilli run --blueprint blueprint.yaml --var customerId=hooli total.ts 2>&1 | grep PermissionDeniedError
 ```
 
 Install the pinned Package, lint, and run the test, as the pull-request
 job will:
 
 ```sh
-submilli install submilli/acme@88656b81c537 @submilli/acme-billing
+submilli install submilli/pied-piper@c18d9a602bbb @submilli/pied-piper-billing
 cd blueprints/support
 submilli blueprint lint blueprint.yaml
 chmod +x test.sh
@@ -122,15 +122,15 @@ chmod +x test.sh
 ```
 
 ```text
-installed @submilli/acme-billing v0.1.0 -> ~/.submilli/packages/@submilli/acme-billing
+installed @submilli/pied-piper-billing v0.1.0 -> ~/.submilli/packages/@submilli/pied-piper-billing
 ✓ blueprint.yaml is valid
 2 charges, 6150 cents
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "cus_northwind" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+error: PermissionDeniedError: permission denied: caller=main capability=pied-piper.example/charges.list: policy denied pied-piper.example/charges.list with customerId = "pied_piper" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
 ```
 
 The first line of the test is the program's result for the customer the
-session is for. The second is the test. Bound to Initech, the same
-program asks for Northwind's charges and is refused, and the `grep`
+session is for. The second is the test. Bound to Hooli, the same
+program asks for Pied Piper's charges and is refused, and the `grep`
 passes only when that denial appears. A run that fails for another
 reason, or that is allowed, fails the script.
 
@@ -235,7 +235,7 @@ request, and the job's log shows the server taking the Package and the
 Blueprint:
 
 ```text
-installed @submilli/acme-billing @ 88656b81c537
+installed @submilli/pied-piper-billing @ c18d9a602bbb
 Added blueprint 'support'
 ```
 
@@ -249,7 +249,7 @@ trigger to `release: types: [published]` and the job's condition to
 
 ```sh
 submilli server blueprint list
-submilli server run-code blueprints/support/total.ts --blueprint support --var customerId=cus_northwind
+submilli server run-code blueprints/support/total.ts --blueprint support --var customerId=pied_piper
 ```
 
 ```text

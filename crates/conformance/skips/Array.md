@@ -6,9 +6,8 @@ unshift/splice, at/slice/concat, indexOf/lastIndexOf/includes, the find
 family, map/filter/reduce/reduceRight/forEach/some/every, join/reverse/sort,
 fill/copyWithin, flat/flatMap, keys/values/entries, toReversed/toSorted/
 toSpliced/with) and the statics `Array.from`/`Array.of`/`Array.isArray` with
-at least one behavioral case each. 71 ported (64 passing, 4 `expect-fail`,
-3 `expect-error` incl. `cases/Array/divergence/`), plus the pre-existing
-`includes/using-fromindex`. Representative rejected originals under
+at least one behavioral case each. 73 ported (70 passing and 3 `expect-error`
+pins in `cases/Array/divergence/`), including `includes/using-fromindex`. Representative rejected originals under
 `rejected/Array/`.
 
 Blanket rules (SKIPS.md) cover `length.js`, `name.js`, `prop-desc.js`,
@@ -37,15 +36,13 @@ Porting adaptations used throughout (README rules):
   here); the absent-initial fold result is unchanged for the ported cases.
 - `IteratorResult.value` is read through a runtime-checked
   `as IteratorYieldResult<T>` cast in the keys/values/entries iteration
-  ports — `done` is typed `boolean`, not a literal, so it does not narrow
-  the union (see "Shim/type-system limitations" below).
+  ports. `done` now uses literal `false`/`true` types and narrows the union.
 
-## Known gaps (`expect-fail`)
-
-| Case | Gap |
-|:--|:--|
-| `prototype/push/S15.4.4.7_A1_T2` | Standard `push` is variadic; ours is `push(elem: T)` — a multi-argument push is a compile-time arity error. (`unshift` *is* variadic.) |
-| `prototype/concat/S15.4.4.4_A1_T2` | Standard `concat` appends non-array arguments as elements; ours is `concat(...others: T[][])` — a scalar argument is a compile-time type error. |
+The restored `prototype/push/S15.4.4.7_A1_T2` and
+`prototype/concat/S15.4.4.4_A1_T2` cases preserve the original mixed-type
+arguments through `unknown[]`. They check variadic push and concat of arrays
+and scalar arguments. The concat brand check uses `Array.isArray`; its object
+argument has a discriminator because object comparisons are structural.
 
 ## Rejected (design decisions)
 
@@ -77,7 +74,7 @@ Porting adaptations used throughout (README rules):
 |:--|:--|
 | The HOF bulk (`every`/`some`/`forEach`/`map`/`filter`/`reduce`/`reduceRight`, ~1600 files: `-7-b-*`/`-8-b-*` deleted/added-element visibility, `-7-c-i-*`/`-8-c-i-*` element-kind matrices, thisArg cases, callback-arity rows) | Per-method one strong order/short-circuit case is ported; the matrices vary receiver kind and coercion vehicle (rejected categories above), thisArg doesn't exist, and the callback-arity intent is pinned once by `find/predicate-call-parameters`. |
 | `indexOf`/`lastIndexOf`/`includes` remainder (~380 files: per-type found/not-found rows, fromIndex coercion vehicles) | StrictEquality/SameValueZero intent carried by the ported NaN/±0/fromIndex cases plus `includes/using-fromindex`; remaining rows differ only in element kind or coercion vehicle. |
-| `concat` remainder (Symbol.isConcatSpreadable, array-likes, large-index rows) | Spreadability is type-determined here (arrays spread, nothing else accepted); the scalar-argument gap is pinned by the expect-fail `S15.4.4.4_A1_T2`. |
+| `concat` remainder (Symbol.isConcatSpreadable, array-likes, large-index rows) | Spreadability is type-determined here: arrays spread and scalar arguments append as elements, covered by `S15.4.4.4_A1_T2`. Custom spreadability and array-like receivers remain excluded. |
 | `sort` remainder (other `stability-*` sizes, `bug_596_*` ToString-call counts, comparator-throws ordering) | `stability-5-elements` pins stability; default lexicographic order is pinned by `toSorted/comparefn-default` (ours matches JS); comparator-abrupt cases are getter/this-coercion territory. |
 | `splice`/`slice` Sputnik clamp tables (`S15.4.4.12_A1.*`, `S15.4.4.10_A1.*` remainder) | One-assert files repeating the same negative/clamp table; the ported start/negative/fractional/at-length cases plus `conformance_array.subm` cover the table corners. |
 | `join` separator-coercion rows (`S15.4.4.5_A2_T*`, `A3.*`, `join(true)`, `join(Infinity)`) | Separator is `string?` — non-string separators are type errors. Default/custom/empty-array rows are ported; the null-element row is `A1.3_T1`. |
@@ -87,10 +84,9 @@ Porting adaptations used throughout (README rules):
 
 ## Shim/type-system limitations observed
 
-- `IteratorResult<T>`'s `done` is typed `boolean` on both union members, so
-  `if (r.done === false)` does **not** narrow to expose `value` — contrary
-  to the prelude doc-comment ("discriminate on the `done` boolean"). Ports
-  use a runtime-checked `as IteratorYieldResult<T>` cast instead.
+- Older iteration ports retain runtime-checked `as IteratorYieldResult<T>`
+  casts. The current literal `done` discriminants allow narrowing with
+  `if (r.done === false)`.
 - A call nested directly in `assertSameValue(...)` receives an `unknown`
   expected-type hint that pins generic returns (`reduce`'s `U` infers as
   `unknown` and then conflicts); ports assign to a `const` first.

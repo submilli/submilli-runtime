@@ -19,6 +19,12 @@ use crate::commands::github::retry::{self, LazyAuth};
 
 #[derive(clap::Args)]
 pub struct Args {
+    /// Set a src/config.ts parameter of the selected package.
+    #[arg(long, value_name = "NAME=VALUE")]
+    config: Vec<String>,
+    /// Remove a saved override and use the source default.
+    #[arg(long, value_name = "NAME")]
+    reset_config: Vec<String>,
     /// GitHub repo to install from: `org/repo`, `github.com/org/repo`, or a full
     /// URL — optionally pinned with `@<ref>` (branch, tag, or commit SHA). A
     /// private repository needs a GitHub token: see `submilli github
@@ -29,7 +35,7 @@ pub struct Args {
     /// the repo declares.
     package: Option<String>,
 
-    /// Re-install over a package already in the store at a different commit.
+    /// Replace an installed package when its source or configuration changes.
     #[arg(long)]
     upgrade: bool,
 
@@ -48,10 +54,19 @@ impl Args {
 }
 
 pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
-    retry::with_authentication_retry(|auth| install(&args, auth))
+    let inputs = submilli_build::ConfigInputs::parse(
+        &args.config,
+        &args.reset_config,
+        args.package.is_some(),
+    )?;
+    retry::with_authentication_retry(|auth| install(&args, auth, &inputs))
 }
 
-fn install(args: &Args, auth: &LazyAuth) -> anyhow::Result<ExitCode> {
+fn install(
+    args: &Args,
+    auth: &LazyAuth,
+    inputs: &submilli_build::ConfigInputs,
+) -> anyhow::Result<ExitCode> {
     let fetched = match github::fetch(&args.url, auth.get()) {
         Ok(fetched) => fetched,
         Err(err) => {
@@ -100,8 +115,13 @@ fn install(args: &Args, auth: &LazyAuth) -> anyhow::Result<ExitCode> {
     let result = (|| {
         let mut preparation = InstallPreparation::new(&store)?;
         preparation.prepare_plan(&closure.plan, args.upgrade)?;
-        let report =
-            preparation.prepare_repo(fetched.dir.path(), only.as_ref(), &source, args.upgrade)?;
+        let report = preparation.prepare_repo_configured(
+            fetched.dir.path(),
+            only.as_ref(),
+            &source,
+            args.upgrade,
+            inputs,
+        )?;
         let warnings = preparation.warnings.clone();
         preparation.publish(args.deny_warnings || deny_warnings_from_env())?;
         Ok::<_, InstallError>((report, warnings))
@@ -133,6 +153,16 @@ fn install(args: &Args, auth: &LazyAuth) -> anyhow::Result<ExitCode> {
 
 pub(crate) fn render_install_error(err: &InstallError) {
     match err {
+        InstallError::ConfigurationInput(error) => eprintln!("error: {error}"),
+        InstallError::ConfigurationRequired { package, .. } => {
+            eprintln!(
+                "error: package `{}` requires configuration. Install it first, then retry this command:",
+                package.as_str()
+            );
+            if let Some(command) = err.configuration_command(false) {
+                eprintln!("  {command}");
+            }
+        }
         InstallError::WarningsDenied { warnings } => {
             for warning in warnings {
                 eprint!("{warning}");

@@ -1517,10 +1517,11 @@ function main(): void {
     /// would be handed the operator's credentials.
     #[tokio::test]
     async fn a_package_making_a_request_is_never_attributed_to_main() {
-        let (callers, _injected) = auth_proxy_callers_for(Some("@acme/sdk"), REQUESTS_A_URL).await;
+        let (callers, _injected) =
+            auth_proxy_callers_for(Some("@pied-piper/sdk"), REQUESTS_A_URL).await;
         assert_eq!(
             callers,
-            vec!["@acme/sdk".to_string()],
+            vec!["@pied-piper/sdk".to_string()],
             "package code must not borrow main's identity at the auth proxy",
         );
     }

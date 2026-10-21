@@ -7,11 +7,11 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "717f92c8888abcb1fcbd9dbaa3eb6511190e192d4c5471ead2f34348fd03679f"
+  contentHash: "692132e3caca59bea9b7417c154710ab5cf20bceb7ff96e9add046d413d16bb2"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
-A Package often builds on another. Acme's support Package apologizes to
+A Package often builds on another. Pied Piper's support Package apologizes to
 a customer with a credit, so it imports the billing Package and doesn't
 call Stripe again. A Package that reads a web page imports the curated
 Jina Package. The build has to know where each import comes from. The
@@ -19,8 +19,8 @@ Blueprint needs rules for every Package in the chain, including the ones
 the program doesn't import directly, and `add-package` writes them.
 
 This guide shows you how to make a Package import another, and what the
-dependency adds to the Blueprint. The example is `@acme/support`, which
-imports `@acme/billing`. Substitute your Packages.
+dependency adds to the Blueprint. The example is `@pied-piper/support`, which
+imports `@pied-piper/billing`. Substitute your Packages.
 
 Start with the billing Package from
 [Export a function](/docs/packages/export-a-function), including its Stripe
@@ -29,13 +29,13 @@ in the same test account.
 
 ## Import it
 
-`@acme/support` is the second Package of the project, added with
-`submilli build new @acme/support packages/support`, as shown in
+`@pied-piper/support` is the second Package of the project, added with
+`submilli build new @pied-piper/support packages/support`, as shown in
 [Start a project](/docs/packages/start-a-project#add-a-second-package).
 Its one operation credits the customer through the billing Package:
 
 ```typescript title="packages/support/src/lib.ts"
-import { applyCredit } from "@acme/billing";
+import { applyCredit } from "@pied-piper/billing";
 
 /**
  * Apologize to a customer with a goodwill credit, and say so in dollars.
@@ -51,14 +51,14 @@ export function apologize(customerId: string): string {
 An import `submilli.toml` doesn't declare stops the build:
 
 ```sh
-submilli build check -p @acme/support
+submilli build check -p @pied-piper/support
 ```
 
 ```text
-error: package `@acme/billing` not found
+error: package `@pied-piper/billing` not found
  --> packages/support/src/lib.ts:1:29
   |
-1 | import { applyCredit } from "@acme/billing";
+1 | import { applyCredit } from "@pied-piper/billing";
   |                             ^^^^^^^^^^^^^^^
 ```
 
@@ -76,20 +76,20 @@ block declares it:
 
 ```toml title="submilli.toml (fragment)"
 [[package]]
-name = "@acme/support"
+name = "@pied-piper/support"
 version = "0.1.0"
-description = "Goodwill credits through Acme's billing package."
+description = "Goodwill credits through Pied Piper's billing package."
 path = "packages/support"
-dependencies = ["@acme/billing"]
+dependencies = ["@pied-piper/billing"]
 ```
 
 ```sh
-submilli build check -p @acme/support
+submilli build check -p @pied-piper/support
 ```
 
 ```text
-checked @acme/billing v0.1.0
-checked @acme/support v0.1.0
+checked @pied-piper/billing v0.1.0
+checked @pied-piper/support v0.1.0
 ```
 
 `-p` builds the Package and the siblings it depends on, in order. A
@@ -99,25 +99,27 @@ Package from the local store or from GitHub is declared at the top of
 The following fragment illustrates those other sources. Keep the sibling-only
 declaration for this guide. To use the fragment in your own project, install
 `@submilli/jina` v0.1.0 in the local store and replace the CRM repository and
-commit with your own.
+commit with your own. `pied-piper/crm-package` is illustrative, not a
+published repository. Change `@pied-piper/crm` to match your GitHub owner
+everywhere it appears in the fragment.
 
 ```toml title="submilli.toml (fragment)"
 [dependencies]
 "@submilli/jina" = "0.1.0"
-"@acme/crm" = { github = "github.com/acme/crm-package", rev = "9c1f2e4a7d3b06e15a8c4f2d7b9e1a3c5f7d9b2e" }
+"@pied-piper/crm" = { github = "github.com/pied-piper/crm-package", rev = "9c1f2e4a7d3b06e15a8c4f2d7b9e1a3c5f7d9b2e" }
 
 [[package]]
-name = "@acme/support"
+name = "@pied-piper/support"
 version = "0.1.0"
-description = "Goodwill credits through Acme's billing package."
+description = "Goodwill credits through Pied Piper's billing package."
 path = "packages/support"
-dependencies = ["@acme/billing", "@submilli/jina", "@acme/crm"]
+dependencies = ["@pied-piper/billing", "@submilli/jina", "@pied-piper/crm"]
 ```
 
 A GitHub dependency is fetched into the local store by the build, which
 records the commits it used in `submilli.lock`. `rev` is the full
 40-character commit SHA. A branch, tag, or short SHA is refused. A private
-one, such as `@acme/crm` above, is fetched with the GitHub token of whoever
+one, such as `@pied-piper/crm` above, is fetched with the GitHub token of whoever
 builds or installs. That is your token on your machine
 (`submilli github authenticate`) and the server's token on a server, as
 [Install private
@@ -131,42 +133,42 @@ What a Package uses of another shows up in what it requires. The build
 derived this for the support Package:
 
 ```yaml title="packages/support/capabilities.yaml"
-namespace: acme
+namespace: pied-piper
 provides: []
 requires:
-- capability: acme.com/credits.apply
+- capability: pied-piper.example/credits.apply
 ```
 
-A Blueprint grants that to `@acme/support` as it would to a program. The
-billing Package makes its own calls, as the caller `@acme/billing`,
+A Blueprint grants that to `@pied-piper/support` as it would to a program. The
+billing Package makes its own calls, as the caller `@pied-piper/billing`,
 so it needs rules too, and so does the secret it reads. `add-package`
 adds rules for the chain. First publish the support Package and its sibling
 dependency to the local store. `build check` installs neither:
 
 ```sh
-submilli build publish-local -p @acme/support
+submilli build publish-local -p @pied-piper/support
 ```
 
 ```text
-installed @acme/billing v0.1.0 -> …/packages/@acme/billing
-installed @acme/support v0.1.0 -> …/packages/@acme/support
+installed @pied-piper/billing v0.1.0 -> …/packages/@pied-piper/billing
+installed @pied-piper/support v0.1.0 -> …/packages/@pied-piper/support
 ```
 
 Then create the Blueprint and add the Package:
 
 ```sh
 submilli blueprint init support
-submilli blueprint add-package @acme/support --no-capabilities
+submilli blueprint add-package @pied-piper/support --no-capabilities
 ```
 
 ```text
 ✓ created blueprint.yaml (name: support)
-warning: blueprint.yaml: package `@acme/billing` requires secret `BILLING_API_KEY`, but `secrets:` does not declare it
-✓ added @acme/support to blueprint.yaml
-  added 1 rules to caller `@acme/support` (default allow):
-    allow acme.com/credits.apply
-✓ added caller rules for @acme/billing, a dependency of @acme/support
-  added 3 rules to caller `@acme/billing` (default allow):
+warning: blueprint.yaml: package `@pied-piper/billing` requires secret `BILLING_API_KEY`, but `secrets:` does not declare it
+✓ added @pied-piper/support to blueprint.yaml
+  added 1 rules to caller `@pied-piper/support` (default allow):
+    allow pied-piper.example/credits.apply
+✓ added caller rules for @pied-piper/billing, a dependency of @pied-piper/support
+  added 3 rules to caller `@pied-piper/billing` (default allow):
     allow http.get (filter: host == "api.stripe.com")
     allow http.post (filter: host == "api.stripe.com")
     allow secrets.get (filter: name == "BILLING_API_KEY")
@@ -194,7 +196,7 @@ Create `apology.ts`. Replace the customer id with a customer from the
 Stripe test account that owns your key. Each run applies a $15 test credit:
 
 ```typescript title="apology.ts"
-import { apologize } from "@acme/support";
+import { apologize } from "@pied-piper/support";
 
 function main(): string {
     return apologize("cus_VMQR3azuTWVAWs");
@@ -220,10 +222,10 @@ secrets:
   BILLING_API_KEY:
     store: billing_api_key
 packages:
-- '@acme/support'
+- '@pied-piper/support'
 default: deny
 permissions:
-  '@acme/billing':
+  '@pied-piper/billing':
   - capability: http.get
     filter: host == "api.stripe.com"
     action: allow
@@ -233,8 +235,8 @@ permissions:
   - capability: secrets.get
     filter: name == "BILLING_API_KEY"
     action: allow
-  '@acme/support':
-  - capability: acme.com/credits.apply
+  '@pied-piper/support':
+  - capability: pied-piper.example/credits.apply
     action: allow
   main: []
 ```

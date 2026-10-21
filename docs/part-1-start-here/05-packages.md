@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c1b58411c3c0502a0a89571044e96fe4310fb7ead9e02dc84ff463b25fec5b59"
+  contentHash: "d102d557cce9cb4caa6a27ed5652621b4da1c4dc0e65342e462f9cbdaa868b6e"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -61,16 +61,16 @@ const BASE = "https://billing.internal.example.com/v1";
 
 /**
  * Add a goodwill credit to a customer's account.
- * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param customerId The customer's id in the billing system, such as `pied_piper`.
  * @param amount The credit, in cents; must be positive.
  * @returns The credit as recorded.
- * @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number }
+ * @capability pied-piper.example/credits.apply { customerId: string, customerClass: string, amount: number }
  */
 export function applyCredit(customerId: string, amount: number): Credit {
     // The call names a customer. Whether that customer is premium is a fact
     // about the account, so the package looks it up before asking.
     const customerClass = lookUpClass(customerId);
-    check("acme.com/credits.apply", { customerId, customerClass, amount });
+    check("pied-piper.example/credits.apply", { customerId, customerClass, amount });
 
     const key = secrets.get("BILLING_API_KEY");
     if (key === undefined) {
@@ -103,7 +103,7 @@ warning: payload key `customerClass` missing from `@capability` binding
   --> package/src/lib.ts:24:37
    |
 23 |     const customerClass = lookUpClass(customerId);
-24 |     check("acme.com/credits.apply", { customerId, customerClass, amount });
+24 |     check("pied-piper.example/credits.apply", { customerId, customerClass, amount });
    |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ```
 :::
@@ -126,21 +126,21 @@ submilli search billing
 ```
 
 ```text
-@acme/billing — Credits for one customer of Acme's billing service.
+@pied-piper/billing — Credits for one customer of Pied Piper's billing service.
 ```
 
 ```
-submilli docs @acme/billing
+submilli docs @pied-piper/billing
 ```
 
 ```typescript
-// @acme/billing — Credits for one customer of Acme's billing service.
+// @pied-piper/billing — Credits for one customer of Pied Piper's billing service.
 
 /**
  * Add a goodwill credit to a customer's account.
- * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param customerId The customer's id in the billing system, such as `pied_piper`.
  * @param amount The credit, in cents; must be positive.
- * @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number }
+ * @capability pied-piper.example/credits.apply { customerId: string, customerClass: string, amount: number }
  * @returns The credit as recorded.
  */
 function applyCredit(customerId: string, amount: number): Credit;
@@ -164,16 +164,16 @@ The agent's documentation tool returns the same declarations, doc comments
 included, together with the Package's readme. Then it writes the program:
 
 ```typescript title="credit.ts"
-import { applyCredit } from "@acme/billing";
+import { applyCredit } from "@pied-piper/billing";
 
 function main(): string {
-    const credit = applyCredit("cus_northwind", 1500);
+    const credit = applyCredit("pied_piper", 1500);
     return `credited ${credit.amount} cents`;
 }
 ```
 
 Calls are synchronous. There is no `await`, and the program gets the value back. Run
-under the previous chapter's Blueprint, bound to `cus_northwind`:
+under the previous chapter's Blueprint, bound to `pied_piper`:
 
 ```text
 credited 1500 cents

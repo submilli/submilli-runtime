@@ -23,8 +23,8 @@ don't touch these paths), each run under its own `SUBMILLI_HOME`:
 - `quickstart/` (home `home/`): the quickstart example copied from
   `examples/quickstart`, for Diagnose a denial. Every output on that page
   is from these runs, including the two filter variants.
-- `acme-repo/` (home `ci-home/`): the Part 3 Acme project trimmed to
-  `@acme/billing`, plus `blueprints/support.yaml` (the Publish page's
+- `pied-piper-repo/` (home `ci-home/`): the Part 3 Pied Piper project trimmed to
+  `@pied-piper/billing`, plus `blueprints/support.yaml` (the Publish page's
   blueprint), `policy/credit.ts`, and `policy/test.sh`, for Verify in CI.
   Every command in the workflow was run locally with the Stripe test key
   from the repo `.env`; the credits are real, in test mode. The workflow
@@ -35,7 +35,7 @@ don't touch these paths), each run under its own `SUBMILLI_HOME`:
   server for Manage blueprints in Git. `secret put`, the first and
   second `apply`, `list`, and `show` are real. `submilli server packages
   install … --sha` and `submilli install org/repo@sha` were not run (no
-  such repository); the `installed @acme/billing @ 3f9c2a1b7e40` line is
+  such repository); the `installed @pied-piper/billing @ 3f9c2a1b7e40` line is
   the one Register a blueprint uses, from the live chapter.
 - `harness/` then `harness2/` (home `harness-home2/`, port 8138): the
   server for the five harness tutorials. The first run used main d199f40's
@@ -91,12 +91,12 @@ Candidate issues found, filed on 2026-10-02 as SUB-1282 and SUB-1283:
   Rewritten on 2026-10-03 at Doron's request so the prerequisites stop
   sending the reader away: the first step now uses the curated
   `@submilli/jina` package, installed with one command, instead of
-  `@acme/billing` from Part 3, so the billing account (session-scoped
+  `@pied-piper/billing` from Part 3, so the billing account (session-scoped
   grant, both halves of the filter) is no longer on this page. A public
-  Acme repository was the other option Doron raised; `submilli install`
+  Pied Piper repository was the other option Doron raised; `submilli install`
   enforces that a package's scope equals the repository's GitHub owner
-  (`InstallError::ScopeMismatch`), so `@acme/billing` can only come from
-  an `acme` org, which isn't ours. The "Before you start" outputs
+  (`InstallError::ScopeMismatch`), so `@pied-piper/billing` can only come from
+  an `pied-piper` org, which isn't ours. The "Before you start" outputs
   (`blueprint init`, `install`, `secret put`, `capability list`) are
   real, on main 10da5c4, the install made against the private runtime
   repository with a GitHub token.
@@ -273,10 +273,10 @@ ran for real (`scratchpad/tutorials/ops2`, server on 8139 with a
 `secret put`, both applies, `list`, and `show`. Add the GitHub MCP server
 already started from scratch.
 
-## The Acme example repository (2026-10-03)
+## The Pied Piper example repository (2026-10-03)
 
-Doron's decision: readers get `@acme/billing` with one key-free line,
-`submilli install submilli/acme @acme/billing`, from a repository in our
+Doron's decision: readers get `@pied-piper/billing` with one key-free line,
+`submilli install submilli/pied-piper @pied-piper/billing`, from a repository in our
 org. That needs an exception to `install`'s scope rule (scope must equal
 the GitHub owner), filed as SUB-1306 with the repository. Diagnose a
 denial's setup now shows that line without an output and carries a
@@ -284,20 +284,20 @@ frontmatter note; everything after it is real (re-run in
 `scratchpad/tutorials/diag`). A Jina-based version of the page was
 captured in `scratchpad/tutorials/diag2` (denials and lint real, the
 allowed reads blocked by Jina's exhausted quota) and set aside in favour
-of the Acme route. Verify in CI keeps printing the package, since the
+of the Pied Piper route. Verify in CI keeps printing the package, since the
 repository under test is where it lives.
 
-## The Acme example repository, final (2026-10-03)
+## The Pied Piper example repository, final (2026-10-03)
 
 Doron decided against changing the CLI: the package in
-https://github.com/submilli/acme is named `@submilli/acme-billing`, which
+https://github.com/submilli/pied-piper is named `@submilli/pied-piper-billing`, which
 satisfies install's rule that a scope equal the GitHub owner. The
-capability stays `acme.com/charges.list`. Diagnose a denial installs it
-with `submilli install submilli/acme @submilli/acme-billing` (released CLI
+capability stays `pied-piper.example/charges.list`. Diagnose a denial installs it
+with `submilli install submilli/pied-piper @submilli/pied-piper-billing` (released CLI
 0.1.6, no token, real output) and every later output was re-run against
 it in `scratchpad/tutorials/diag4`; only the package name in the frames
 and the capability list changed. The scope-exception branch was deleted
-unmerged. Verify in CI still prints its own `@acme/billing`, since its
+unmerged. Verify in CI still prints its own `@pied-piper/billing`, since its
 repository is the one under test and `publish-local` has no scope rule.
 
 ## CI split by repository (2026-10-03)
@@ -305,13 +305,13 @@ repository is the one under test and `publish-local` has no scope rule.
 Doron: a reader rarely wants package and blueprint CI together, and the
 blueprint half belongs with Manage blueprints in Git. Page 9 is now
 Verify a package in CI (`09-verify-a-package-in-ci.md`, slug
-`next/tutorials/verify-a-package-in-ci`): the offline `@acme/billing`
+`next/tutorials/verify-a-package-in-ci`): the offline `@pied-piper/billing`
 built from scratch in the reader's repository, `submilli build test`, the
 workflow, a real failure (the customer comparison dropped: the `check`
 still passes and only the test catches it), and a short section on
 `network.test.ts` with `--env-var` from secrets and `--skip-network` for
 forks. Page 10 now carries the lint and the two-session policy test in
-its pull-request job, uses `@submilli/acme-billing` from `submilli/acme`
+its pull-request job, uses `@submilli/pied-piper-billing` from `submilli/pied-piper`
 pinned at 88656b81c537 (no key, unlike the earlier Jina reader), and
 folds the release trigger, `show`, and rollback into shorter sections.
 All outputs real (`scratchpad/tutorials/pkgci`, `ops3`, server on 8139).

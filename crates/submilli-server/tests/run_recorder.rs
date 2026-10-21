@@ -185,7 +185,7 @@ fn server_with(
     let blueprint = submilli_blueprint::parse(BLUEPRINT_YAML).expect("blueprint");
     // Declares a package the store does not hold.
     let with_package = submilli_blueprint::parse(
-        "name: withpkg\ndefault: deny\npackages:\n  - \"@acme/missing\"\n",
+        "name: withpkg\ndefault: deny\npackages:\n  - \"@pied-piper/missing\"\n",
     )
     .expect("blueprint");
     let blueprints =
@@ -403,7 +403,7 @@ async fn rest_session_and_mcp_execute_each_record_exactly_one_run() {
 async fn an_mcp_run_records_its_token_binding_and_client() {
     let server = recorded();
     let session = server
-        .mcp_session(json!({ "customerId": "cus_northwind" }))
+        .mcp_session(json!({ "customerId": "pied_piper" }))
         .await;
     server
         .mcp_tool(
@@ -419,7 +419,7 @@ async fn an_mcp_run_records_its_token_binding_and_client() {
     assert_eq!(run.start.session_id.as_deref(), Some(session.as_str()));
     assert_eq!(
         run.start.variables.get("customerId").map(String::as_str),
-        Some("cus_northwind")
+        Some("pied_piper")
     );
 }
 
@@ -459,7 +459,7 @@ async fn an_uninstalled_package_is_recorded_as_a_package_resolution_failure() {
     let body = server
         .execute_on(
             "withpkg",
-            "import { x } from \"@acme/missing\"; function main(): number { return x(); }",
+            "import { x } from \"@pied-piper/missing\"; function main(): number { return x(); }",
         )
         .await;
     assert_eq!(body["error"]["kind"], "package_resolution");
@@ -603,7 +603,7 @@ async fn run_program_records_a_run_under_the_label_it_was_given() {
             label: "example".into(),
             blueprint: BLUEPRINT.into(),
             code: ALLOWED.into(),
-            variables: BTreeMap::from([("customerId".into(), "cus_initech".into())]),
+            variables: BTreeMap::from([("customerId".into(), "hooli".into())]),
             secrets: Default::default(),
         },
     )
@@ -615,7 +615,7 @@ async fn run_program_records_a_run_under_the_label_it_was_given() {
     assert_eq!(run.start.execution_id, response.execution_id);
     assert_eq!(
         run.start.variables.get("customerId").map(String::as_str),
-        Some("cus_initech")
+        Some("hooli")
     );
 }
 
@@ -760,7 +760,7 @@ impl PreExecuteHook for Gate {
         ));
         if self.refuse {
             return Err(PreExecuteRefusal {
-                message: "package `@acme/billing` failed to build: expected `;`".into(),
+                message: "package `@pied-piper/billing` failed to build: expected `;`".into(),
             });
         }
         Ok(())
@@ -792,7 +792,7 @@ async fn every_entry_point_is_checked_before_compiling_and_a_refusal_is_a_record
             response["error"]["message"]
                 .as_str()
                 .unwrap()
-                .contains("`@acme/billing` failed to build"),
+                .contains("`@pied-piper/billing` failed to build"),
             "{response}"
         );
     }
@@ -807,7 +807,7 @@ async fn every_entry_point_is_checked_before_compiling_and_a_refusal_is_a_record
     assert!(
         tool["error"]["message"]
             .as_str()
-            .is_some_and(|message| message.contains("`@acme/billing` failed to build")),
+            .is_some_and(|message| message.contains("`@pied-piper/billing` failed to build")),
         "{tool}"
     );
     let program = run_program(
@@ -855,18 +855,18 @@ async fn the_hook_is_told_the_listed_packages_the_program_imports() {
     let body = server
         .execute_on(
             "withpkg",
-            "import { x } from \"@acme/missing\";\nfunction main(): string { return \"ran\"; }",
+            "import { x } from \"@pied-piper/missing\";\nfunction main(): string { return \"ran\"; }",
         )
         .await;
     assert_eq!(
         gate.seen.lock().unwrap().as_slice(),
-        [("withpkg".to_owned(), vec!["@acme/missing".to_owned()])]
+        [("withpkg".to_owned(), vec!["@pied-piper/missing".to_owned()])]
     );
     // The hook let it through; the store does not hold the package, and the failure
     // says how to install it rather than reading as a denial.
     assert_eq!(body["error"]["kind"], "package_resolution", "{body}");
     let message = body["error"]["message"].as_str().unwrap();
-    assert!(message.contains("`@acme/missing`"), "{message}");
+    assert!(message.contains("`@pied-piper/missing`"), "{message}");
     assert!(message.contains("submilli install"), "{message}");
     assert!(body["error"].get("capability").is_none(), "{body}");
     let ran = server.execute(ALLOWED).await;

@@ -19,14 +19,14 @@ variables:
   customerId:
     required: true
 packages:
-  - '@acme/billing'
+  - '@pied-piper/billing'
 default: deny
 permissions:
   main:
-    - capability: acme.com/balance.read
+    - capability: pied-piper.example/balance.read
       filter: customerId == ${vars.customerId}
       action: allow
-  '@acme/billing': []
+  '@pied-piper/billing': []
 ```
 
 Read it as a sentence: generated code may read a balance, only for the
@@ -36,9 +36,9 @@ list is empty only because the fixture makes no network or secret calls.
 A program the agent might write against it:
 
 ```typescript
-import { readBalance } from "@acme/billing";
+import { readBalance } from "@pied-piper/billing";
 function main(): number {
-    return readBalance("cus_northwind");
+    return readBalance("pied_piper");
 }
 ```
 
@@ -77,7 +77,7 @@ optional `name` that decisions cite (unique within a caller's list).
 
 Two kinds of capability, two homes:
 
-- **Business capabilities** a package provides (`acme.com/orders.list`) go
+- **Business capabilities** a package provides (`pied-piper.example/orders.list`) go
   under `main`. An explicit `check` inside a package gates the package's
   consumer, so these rules answer "may the program do this?"
 - **Infrastructure capabilities** a package requires (`http.post`,
@@ -115,7 +115,7 @@ means denied.
 | Numeric comparison | `amountCents <= 5000`, `count < 100` |
 | Shell glob | `channelId glob "C0*"`, `path glob "/v1/customers/*"` |
 | Regular expression | `path matches "^/v1/customers/[a-z_0-9]+$"` |
-| Array membership | `recipients contains "ops@acme.com"` |
+| Array membership | `recipients contains "ops@pied-piper.example"` |
 | Nested field path | `input.teamId == "T1"` |
 | Session variable | `customerId == ${vars.customerId}` |
 | Variable inside a string | `key glob "triage/${vars.customerId}/*"` |
@@ -159,25 +159,25 @@ secrets:
     store: ORDERS_API_TOKEN
 
 packages:
-  - '@acme/orders'
+  - '@pied-piper/orders'
 
 default: deny
 
 permissions:
   main:
-    - capability: acme.com/orders.list
+    - capability: pied-piper.example/orders.list
       filter: customerId == ${vars.customerId}
       action: allow
-    - capability: acme.com/orders.cancel
+    - capability: pied-piper.example/orders.cancel
       filter: customerId == ${vars.customerId} and totalCents <= 5000
       action: ask-human
 
-  '@acme/orders':
+  '@pied-piper/orders':
     - capability: http.get
-      filter: host == "api.acme.com"
+      filter: host == "api.pied-piper.example"
       action: allow
     - capability: http.post
-      filter: host == "api.acme.com"
+      filter: host == "api.pied-piper.example"
       action: allow
     - capability: secrets.get
       filter: name == "ORDERS_API_TOKEN"
@@ -250,7 +250,7 @@ secrets:
   ANTHROPIC_API_KEY:
     store: anthropic_api_key
 auth_proxy:
-  - host: status.acme.com
+  - host: status.pied-piper.example
     auth:
       bearer: STATUS_TOKEN
 llm:
@@ -266,7 +266,7 @@ default: deny
 permissions:
   main:
     - capability: http.get
-      filter: host == "status.acme.com"
+      filter: host == "status.pied-piper.example"
       action: allow
     - capability: llm.call
       filter: model glob "claude-*"
@@ -334,13 +334,13 @@ blueprint with a `server unavailable` warning, and imports of it don't compile.
 ```sh
 submilli blueprint init support-orders
 submilli blueprint secret add ORDERS_API_TOKEN --store ORDERS_API_TOKEN
-submilli blueprint add-package '@acme/orders' --no-capabilities   # list it; grant nothing yet
-submilli blueprint capability list '@acme/orders'                 # names and filterable fields
-submilli blueprint capability add acme.com/orders.list \
+submilli blueprint add-package '@pied-piper/orders' --no-capabilities   # list it; grant nothing yet
+submilli blueprint capability list '@pied-piper/orders'                 # names and filterable fields
+submilli blueprint capability add pied-piper.example/orders.list \
   --filter 'customerId == ${vars.customerId}'
-submilli blueprint capability add acme.com/orders.cancel \
+submilli blueprint capability add pied-piper.example/orders.cancel \
   --filter 'customerId == ${vars.customerId} and totalCents <= 5000' --action ask-human
-submilli blueprint auth-proxy add --host status.acme.com --bearer STATUS_TOKEN
+submilli blueprint auth-proxy add --host status.pied-piper.example --bearer STATUS_TOKEN
 submilli blueprint lint blueprint.yaml          # --fix adds rules packages require
 submilli blueprint capability list --unconfigured  # provided operations main has no rule for
 submilli blueprint prompt                       # what the model will be told
@@ -376,12 +376,12 @@ Register only after the server can resolve the blueprint's packages,
 dependencies, secrets, and named volumes. `add` and `apply` reject a missing
 package with `package_missing`; applying YAML does not install it.
 
-For the `support-orders` example, build and publish `@acme/orders` locally
+For the `support-orders` example, build and publish `@pied-piper/orders` locally
 from its project directory. A server on the same machine can use that local
 store when it has the same `SUBMILLI_HOME`. For a remote server, install the
 package from its actual GitHub repository with `submilli server packages
-install <org/repo> @acme/orders`. The curated `@submilli/*` packages live in
-`submilli/submilli-runtime`; they do not supply custom `@acme/*` operations.
+install <org/repo> @pied-piper/orders`. The curated `@submilli/*` packages live in
+`submilli/submilli-runtime`; they do not supply custom `@pied-piper/*` operations.
 
 Start an authenticated server with its encrypted secret store configured as
 in [setup](setup.md). Use its admin token in `SUBMILLI_SERVER_TOKEN` for the
@@ -390,7 +390,7 @@ secret. Populate it from the application's securely supplied environment
 variable before applying the blueprint:
 
 ```sh
-# From the @acme/orders project, sharing SUBMILLI_HOME with the local server.
+# From the @pied-piper/orders project, sharing SUBMILLI_HOME with the local server.
 submilli build publish-local --deny-warnings
 printf '%s' "$ORDERS_API_TOKEN" | submilli server secret put ORDERS_API_TOKEN
 submilli server blueprint apply blueprint.yaml
@@ -414,7 +414,7 @@ the response carries `result`, `console`, and on failure `error.kind` and
 `error.message`. A missing required variable is rejected as `invalid_request`
 before compilation. MCP clients bind variables in the `submilli-variables`
 header or `initialize` `_meta.variables`; see [harnesses](harnesses.md).
-Locally, `submilli run --blueprint file.yaml --var customerId=cus_northwind
+Locally, `submilli run --blueprint file.yaml --var customerId=pied_piper
 program.ts` applies the policy with that binding, the way an application binds
 it; `--var` repeats, and a required variable left out is refused. No server is
 needed, so run the verification matrix below this way first.
@@ -425,8 +425,8 @@ Prove the boundary with deterministic calls, not a model ignoring bait:
 
 | Case | Expect |
 | --- | --- |
-| Bind `customerId=cus_northwind`, program reads that customer | Result returned |
-| Same binding, program passes `cus_initech` | `permission denied ... capability=acme.com/...`, not a network error or empty list |
+| Bind `customerId=pied_piper`, program reads that customer | Result returned |
+| Same binding, program passes `hooli` | `permission denied ... capability=pied-piper.example/...`, not a network error or empty list |
 | Omit the required variable | `invalid_request` naming the variable; program never runs |
 | Call an unlisted capability or a raw `http.get` from `main` | Denied |
 | A write under `ask-human` | `PermissionDeniedError`, no side effect, and no built-in approval or resume flow |

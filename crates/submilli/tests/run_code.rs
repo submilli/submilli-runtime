@@ -251,7 +251,7 @@ async fn unreachable_server() {
 }
 
 const REMEMBER: &str = r#"import * as session from "submilli:session";
-function main(): string { session.set("progress", "cus_initech"); return "saved"; }"#;
+function main(): string { session.set("progress", "hooli"); return "saved"; }"#;
 const RECALL: &str = r#"import * as session from "submilli:session";
 function main(): string { const v = session.get<string | null>("progress"); return v ?? "nothing"; }"#;
 
@@ -279,7 +279,7 @@ async fn opened_session_keeps_state_between_runs_until_closed() {
 
         let recalled = run_in_session(&server, &session, "session_recall", RECALL);
         assert!(recalled.status.success(), "stderr: {}", stderr(&recalled));
-        assert_eq!(stdout(&recalled), "cus_initech\n");
+        assert_eq!(stdout(&recalled), "hooli\n");
 
         let close = submilli(&["server", "session", "close", "--server", &server, &session]);
         assert!(close.status.success(), "stderr: {}", stderr(&close));

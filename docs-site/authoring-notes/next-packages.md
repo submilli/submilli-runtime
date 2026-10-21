@@ -6,7 +6,7 @@ guide: one paragraph on why the reader needs it, then "This guide shows
 you how to…" with the steps, the example named as substitutable, the
 commands in the order they are run with what each prints. Explanation
 stays beside the output it explains; options go to the reference by a
-"Refer to…" link. One thread runs through the part: `@acme/billing`,
+"Refer to…" link. One thread runs through the part: `@pied-piper/billing`,
 the package Parts 1 and 2 granted, built from the scaffold up, with the
 support package as its dependent.
 
@@ -18,8 +18,8 @@ use. `applyCredit` reads the customer's `metadata.class` from Stripe
 (`GET /v1/customers/{id}`), checks `{ customerId, customerClass,
 amount }`, and posts a negative customer balance transaction (`POST
 /v1/customers/{id}/balance_transactions`), which Stripe records as a
-credit. Two test customers were created for the book: Northwind
-(`cus_VMQR3azuTWVAWs`, class premium) and Initech (`cus_VMQRgpQKYgN52y`,
+credit. Two test customers were created for the book: Pied Piper
+(`cus_VMQR3azuTWVAWs`, class premium) and Hooli (`cus_VMQRgpQKYgN52y`,
 class standard). The key is `STRIPE_SECRET_KEY` in the repository's
 `.env`, loaded into the scratch store and the scratch project's `.env`
 without being printed. Part 2 page 1 still shows the fictional
@@ -40,7 +40,7 @@ revisited.
   Doron's request: both commands now scaffold `README.md` beside
   `docs/readme.md` and report every file they create (the released
   0.1.6 prints only the manifest, the entry point, and the test). Paths
-  are shortened to `…/acme/`. The
+  are shortened to `…/pied-piper/`. The
   compile error is real: a `broken()` function with a wrong return type
   appended to the support package's source for one run.
 
@@ -92,8 +92,8 @@ revisited.
 - **Evidence:** `package-anatomy` ("Dependencies"). Real: the
   not-found error (0.1.6 says "package … not found", not the old
   chapter's "declare dependency…"), the sibling build, support's
-  `capabilities.yaml`, `add-package @acme/support`, the denial inside
-  the billing package, `add-package @acme/billing`, "credited $15", the
+  `capabilities.yaml`, `add-package @pied-piper/support`, the denial inside
+  the billing package, `add-package @pied-piper/billing`, "credited $15", the
   whole file. Not run: the local-store and GitHub forms (the runtime
   repository is private, so an unauthenticated fetch of `@submilli/jina`
   at the v0.1.6 commit answers 404; `submilli.lock` was never written).
@@ -107,12 +107,12 @@ revisited.
 - **Findings:** (1) `add-package` for a package with a dependency adds
   only that package's rules; the dependency's own `requires` are not
   added and lint passes, so the first run is refused inside the
-  dependency (`caller=@acme/billing capability=secrets.get`). Doron
+  dependency (`caller=@pied-piper/billing capability=secrets.get`). Doron
   called it a bug (one `add-package` should add the tree); filed as
   SUB-1235 in the launch project on 2026-10-01. At Doron's request the
-  page is written for the fixed behavior: one `add-package @acme/support`
+  page is written for the fixed behavior: one `add-package @pied-piper/support`
   writes both caller lists. The SUB-1235 fix (2026-10-02) made it so,
-  listing only `@acme/support` under `packages:` (Doron's call: a listed
+  listing only `@pied-piper/support` under `packages:` (Doron's call: a listed
   dependency would be importable by programs, bypassing the dependent's
   checks); its `add-package` output and the resulting
   `blueprint.yaml` were re-captured from the development build against
@@ -137,7 +137,7 @@ revisited.
   `--skip-network` leaves it out (path shortened). The live test has no
   `secrets.get` guard (Doron: a test that passes without its key hides
   configuration mistakes). The merged build prints stack frames as
-  `@acme/billing/lib:62:25`; the page's frames follow it, context lines
+  `@pied-piper/billing/lib:62:25`; the page's frames follow it, context lines
   trimmed.
   The "What to test without the service" section (export request
   builders so tests can reach them) was dropped on 2026-10-01: Doron
@@ -153,7 +153,7 @@ revisited.
   context line), the
   live run against Stripe with the `[security]` lines (two duplicated
   `secrets.get` lines were dropped), the skip line (path shortened). The
-  live test credits 100 cents to Northwind in test mode on every run.
+  live test credits 100 cents to Pied Piper in test mode on every run.
 
 ## Publish a package
 
@@ -185,7 +185,7 @@ revisited.
 
 ## Verification
 
-- CLI 0.1.6 in a scratch project `acme/` under an isolated
+- CLI 0.1.6 in a scratch project `pied-piper/` under an isolated
   `SUBMILLI_HOME`, with the Stripe key in the scratch store and the
   project's `.env`. Every command output on the six pages is from those
   runs unless the page's note above says otherwise.

@@ -6,7 +6,7 @@
    "at_micros": 1791898017400543,
    "at": "2026-10-13T13:26:57Z",
    "classification": "widening",
-   "summary": "Widened: `main` gained an allow rule `globex-support` for `acme.com/charges.list`.",
+   "summary": "Widened: `main` gained an allow rule `globex-support` for `pied-piper.example/charges.list`.",
    "pin_removals": [],
    "current": true,
    "after_run": 4,
@@ -15,7 +15,7 @@
      "caller": "main",
      "classification": "widening",
      "rule": "`globex-support`",
-     "summary": "Widened: `main` gained an allow rule `globex-support` for `acme.com/charges.list`."
+     "summary": "Widened: `main` gained an allow rule `globex-support` for `pied-piper.example/charges.list`."
     }
    ]
   },

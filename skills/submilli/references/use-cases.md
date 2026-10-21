@@ -33,14 +33,14 @@ the local trial must execute the actual runtime and report its own results.
 
 ### API workflows
 
-Use `@acme/billing.listCharges(customerId)` guarded by
-`acme.com/charges.list`, with a `customerId` field in both the capability
-schema and `check(...)`. Bind `customerId=cus_northwind` in the trusted demo
+Use `@pied-piper/billing.listCharges(customerId)` guarded by
+`pied-piper.example/charges.list`, with a `customerId` field in both the capability
+schema and `check(...)`. Bind `customerId=pied_piper` in the trusted demo
 application and filter the main grant by `${vars.customerId}`. Return fixture
 charges with integer-cent amounts, and have the runtime program total them.
 Assert the count and total computed from those records. Show the records
 processed by code and the compact result returned to the caller without
-claiming measured token, latency, or cost savings. Deny `cus_initech` under
+claiming measured token, latency, or cost savings. Deny `hooli` under
 the unchanged binding, and reject a missing binding.
 
 The public [quickstart](https://submilli.ai/docs/quickstart) provides the
@@ -50,13 +50,13 @@ when following it; do not combine them with the `readBalance` fixture in
 
 ### Customer support
 
-Create an offline `@acme/support` fixture with
+Create an offline `@pied-piper/support` fixture with
 `getCustomerProfile(customerId)` guarded by
-`acme.com/customer.profile.read`. Check the requested `customerId` before
-reading a profile. Bind `cus_northwind` in the demo application and permit
+`pied-piper.example/customer.profile.read`. Check the requested `customerId` before
+reading a profile. Bind `pied_piper` in the demo application and permit
 only that customer's record. Use explicitly fictional profile fields such as
 name, contact, plan, and status. Return a short account summary, then verify
-that requesting `cus_initech` with the same binding is denied before its
+that requesting `hooli` with the same binding is denied before its
 record is returned. Reject a missing binding too.
 
 Explain the two limits the site calls out: the application authenticates the
@@ -70,7 +70,7 @@ Reuse the charge-listing fixture with an additional fictional `cus_parent`
 account. Under the original customer-only rule, request that account and
 observe its denial. Show the requested resource and the rule that excludes it.
 
-Propose a second narrowly scoped `acme.com/charges.list` allow rule against
+Propose a second narrowly scoped `pied-piper.example/charges.list` allow rule against
 `${vars.parentCustomerId}`, with `parentCustomerId` declared required and
 bound by the trusted demo application. Retain the original customer rule and
 `default: deny`. Show the diff before applying it. If the developer already

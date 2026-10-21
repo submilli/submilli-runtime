@@ -81,7 +81,7 @@ fn single_package_builds_installs_and_runs() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+        "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
     );
     write_file(
         &project.join("src/lib.ts"),
@@ -91,9 +91,9 @@ fn single_package_builds_installs_and_runs() {
     let out = build(&project, tmp.path(), &[]);
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    assert!(artifact_files_exist(tmp.path(), "@acme/util"));
+    assert!(artifact_files_exist(tmp.path(), "@pied-piper/util"));
     assert!(
-        stderr(&out).contains("installed @acme/util v0.1.0"),
+        stderr(&out).contains("installed @pied-piper/util v0.1.0"),
         "stderr: {}",
         stderr(&out)
     );
@@ -102,14 +102,14 @@ fn single_package_builds_installs_and_runs() {
     write_file(
         &script,
         r#"
-            import { answer } from "@acme/util";
+            import { answer } from "@pied-piper/util";
             function main(): number { return answer(); }
         "#,
     );
     let blueprint = tmp.path().join("blueprint.yaml");
     write_file(
         &blueprint,
-        "name: build-test\npackages:\n  - \"@acme/util\"\n",
+        "name: build-test\npackages:\n  - \"@pied-piper/util\"\n",
     );
 
     let out = run_with_home(
@@ -134,14 +134,14 @@ fn ts_and_subm_packages_build_and_run_together() {
         &project.join("submilli.toml"),
         r#"
 [[package]]
-name = "@acme/app"
+name = "@pied-piper/app"
 version = "0.1.0"
 description = "Test package."
 path = "app"
-dependencies = ["@acme/util"]
+dependencies = ["@pied-piper/util"]
 
 [[package]]
-name = "@acme/util"
+name = "@pied-piper/util"
 version = "0.1.0"
 description = "Test package."
 path = "util"
@@ -154,7 +154,7 @@ path = "util"
     write_file(
         &project.join("app/src/wrap.ts"),
         r#"
-            import { forty } from "@acme/util";
+            import { forty } from "@pied-piper/util";
             export function fortyTwo(): number { return forty() + 2; }
         "#,
     );
@@ -173,14 +173,14 @@ path = "util"
     write_file(
         &script,
         r#"
-            import { fortyTwo } from "@acme/app";
+            import { fortyTwo } from "@pied-piper/app";
             function main(): number { return fortyTwo(); }
         "#,
     );
     let blueprint = tmp.path().join("blueprint.yaml");
     write_file(
         &blueprint,
-        "name: build-test\npackages:\n  - \"@acme/app\"\n",
+        "name: build-test\npackages:\n  - \"@pied-piper/app\"\n",
     );
 
     let out = run_with_home(
@@ -411,20 +411,20 @@ fn package_flag_scopes_to_the_dependency_closure() {
         &project.join("submilli.toml"),
         r#"
 [[package]]
-name = "@acme/app"
+name = "@pied-piper/app"
 version = "0.1.0"
 description = "Test package."
 path = "app"
-dependencies = ["@acme/util"]
+dependencies = ["@pied-piper/util"]
 
 [[package]]
-name = "@acme/util"
+name = "@pied-piper/util"
 version = "0.1.0"
 description = "Test package."
 path = "util"
 
 [[package]]
-name = "@acme/other"
+name = "@pied-piper/other"
 version = "0.1.0"
 description = "Test package."
 path = "other"
@@ -436,19 +436,19 @@ path = "other"
     );
     write_file(
         &project.join("app/src/lib.subm"),
-        "import { u } from \"@acme/util\";\nexport const a: number = u;",
+        "import { u } from \"@pied-piper/util\";\nexport const a: number = u;",
     );
     write_file(
         &project.join("other/src/lib.subm"),
         "export const o: number = 1;",
     );
 
-    let out = build(&project, tmp.path(), &["-p", "@acme/app"]);
+    let out = build(&project, tmp.path(), &["-p", "@pied-piper/app"]);
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    assert!(artifact_files_exist(tmp.path(), "@acme/app"));
-    assert!(artifact_files_exist(tmp.path(), "@acme/util"));
-    assert!(!artifact_files_exist(tmp.path(), "@acme/other"));
+    assert!(artifact_files_exist(tmp.path(), "@pied-piper/app"));
+    assert!(artifact_files_exist(tmp.path(), "@pied-piper/util"));
+    assert!(!artifact_files_exist(tmp.path(), "@pied-piper/other"));
 }
 
 #[test]
@@ -473,18 +473,18 @@ fn dependency_cycle_fails_the_build() {
         &project.join("submilli.toml"),
         r#"
 [[package]]
-name = "@acme/a"
+name = "@pied-piper/a"
 version = "0.1.0"
 description = "Test package."
 path = "a"
-dependencies = ["@acme/b"]
+dependencies = ["@pied-piper/b"]
 
 [[package]]
-name = "@acme/b"
+name = "@pied-piper/b"
 version = "0.1.0"
 description = "Test package."
 path = "b"
-dependencies = ["@acme/a"]
+dependencies = ["@pied-piper/a"]
 "#,
     );
     write_file(&project.join("a/src/lib.subm"), "export const x = 1;");
@@ -506,7 +506,7 @@ fn compile_errors_render_with_caret() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+        "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
     );
     write_file(
         &project.join("src/lib.subm"),
@@ -528,7 +528,7 @@ fn ambiguous_ts_and_subm_module_fails_check() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+        "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
     );
     write_file(
         &project.join("src/lib.ts"),
@@ -581,13 +581,13 @@ fn authority_map_prints_deterministic_full_graph_json() {
         &project.join("submilli.toml"),
         r#"
 [[package]]
-name = "@acme/authority"
+name = "@pied-piper/authority"
 version = "0.1.0"
 description = "Test package."
 path = "authority"
 
 [[package]]
-name = "@acme/other"
+name = "@pied-piper/other"
 version = "0.1.0"
 description = "Other package."
 path = "other"
@@ -611,7 +611,7 @@ path = "other"
     let value: serde_json::Value = serde_json::from_slice(&first.stdout).expect("authority JSON");
     assert_eq!(value["schema_version"], 2);
     assert_eq!(value["packages"].as_array().map(Vec::len), Some(2));
-    assert_eq!(value["packages"][0]["name"], "@acme/authority");
+    assert_eq!(value["packages"][0]["name"], "@pied-piper/authority");
     assert!(
         value["packages"][0]["callables"]
             .as_array()
@@ -646,13 +646,13 @@ path = "other"
         "authority-map",
         &project,
         tmp.path(),
-        &["--package", "@acme/authority"],
+        &["--package", "@pied-piper/authority"],
     );
     assert!(selected.status.success(), "stderr: {}", stderr(&selected));
     let selected: serde_json::Value =
         serde_json::from_slice(&selected.stdout).expect("selected authority JSON");
     assert_eq!(selected["packages"].as_array().map(Vec::len), Some(1));
-    assert_eq!(selected["packages"][0]["name"], "@acme/authority");
+    assert_eq!(selected["packages"][0]["name"], "@pied-piper/authority");
 }
 
 #[test]
@@ -675,7 +675,7 @@ fn check_walks_up_to_find_the_manifest() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\npath = \"util\"\n",
+        "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\npath = \"util\"\n",
     );
     write_file(
         &project.join("util/src/lib.subm"),
@@ -686,7 +686,7 @@ fn check_walks_up_to_find_the_manifest() {
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(
-        stderr(&out).contains("checked @acme/util v0.1.0"),
+        stderr(&out).contains("checked @pied-piper/util v0.1.0"),
         "stderr: {}",
         stderr(&out)
     );
@@ -714,7 +714,7 @@ fn check_compiles_without_installing() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+        "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
     );
     write_file(
         &project.join("src/lib.subm"),
@@ -725,11 +725,11 @@ fn check_compiles_without_installing() {
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(
-        stderr(&out).contains("checked @acme/util v0.1.0"),
+        stderr(&out).contains("checked @pied-piper/util v0.1.0"),
         "stderr: {}",
         stderr(&out)
     );
-    assert!(!artifact_files_exist(tmp.path(), "@acme/util"));
+    assert!(!artifact_files_exist(tmp.path(), "@pied-piper/util"));
 }
 
 #[test]
@@ -738,7 +738,7 @@ fn check_refreshes_generated_editor_declarations() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+        "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
     );
     write_file(
         &project.join("src/lib.ts"),
@@ -763,7 +763,7 @@ fn check_refreshes_generated_editor_declarations() {
     assert!(lib.contains("interface Array<"));
 }
 
-/// Publish `@acme/leaf`, which exports `Page`, and `@acme/mid`, which returns
+/// Publish `@pied-piper/leaf`, which exports `Page`, and `@pied-piper/mid`, which returns
 /// leaf's `Page`, into `home`'s store.
 fn publish_leaf_and_mid(root: &Path, home: &Path) {
     let leaf = root.join("store-leaf");
@@ -775,20 +775,20 @@ fn publish_leaf_and_mid(root: &Path, home: &Path) {
     let mid = root.join("store-mid");
     write_file(
         &mid.join("submilli.toml"),
-        "[dependencies]\n\"@acme/leaf\" = \"0.1.0\"\n\n\
-         [[package]]\nname = \"@acme/mid\"\nversion = \"0.1.0\"\ndescription = \"Mid.\"\n\
-         dependencies = [\"@acme/leaf\"]\n",
+        "[dependencies]\n\"@pied-piper/leaf\" = \"0.1.0\"\n\n\
+         [[package]]\nname = \"@pied-piper/mid\"\nversion = \"0.1.0\"\ndescription = \"Mid.\"\n\
+         dependencies = [\"@pied-piper/leaf\"]\n",
     );
     write_file(
         &mid.join("src/lib.ts"),
-        "import { first, Page } from \"@acme/leaf\";\n\
+        "import { first, Page } from \"@pied-piper/leaf\";\n\
          /** The first page, from the leaf. */\nexport function page(): Page { return first(); }\n",
     );
     let published = build(&mid, home, &[]);
     assert!(published.status.success(), "stderr: {}", stderr(&published));
 }
 
-const LEAF_MANIFEST: &str = "[[package]]\nname = \"@acme/leaf\"\nversion = \"0.1.0\"\n\
+const LEAF_MANIFEST: &str = "[[package]]\nname = \"@pied-piper/leaf\"\nversion = \"0.1.0\"\n\
     description = \"Leaf.\"\npath = \"leaf\"\n";
 
 const LEAF_SOURCE: &str = "/** A page of items. */\nexport interface Page {\n    /** Items. */\n    \
@@ -802,34 +802,34 @@ fn check_declares_store_dependencies_for_the_editor() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[dependencies]\n\"@acme/mid\" = \"0.1.0\"\n\"@acme/missing\" = \"0.1.0\"\n\n\
-         [[package]]\nname = \"@acme/app\"\nversion = \"0.1.0\"\ndescription = \"App.\"\n\
-         dependencies = [\"@acme/mid\", \"@acme/missing\"]\n",
+        "[dependencies]\n\"@pied-piper/mid\" = \"0.1.0\"\n\"@pied-piper/missing\" = \"0.1.0\"\n\n\
+         [[package]]\nname = \"@pied-piper/app\"\nversion = \"0.1.0\"\ndescription = \"App.\"\n\
+         dependencies = [\"@pied-piper/mid\", \"@pied-piper/missing\"]\n",
     );
     write_file(
         &project.join("src/lib.ts"),
         "/** Nothing. */\nexport function nothing(): number { return 0; }\n",
     );
 
-    // `@acme/missing` fails the build, but not the other dependencies' types.
+    // `@pied-piper/missing` fails the build, but not the other dependencies' types.
     let out = build_subcommand("check", &project, &home, &[]);
 
     assert!(!out.status.success());
     let packages =
         fs::read_to_string(project.join(".submilli/types/packages.d.ts")).expect("read packages");
     assert!(
-        packages.contains("declare module \"@acme/mid\" {"),
+        packages.contains("declare module \"@pied-piper/mid\" {"),
         "{packages}"
     );
     assert!(
-        packages.contains("declare module \"@acme/leaf\" {"),
+        packages.contains("declare module \"@pied-piper/leaf\" {"),
         "{packages}"
     );
     assert!(
-        packages.contains("  import type { Page } from \"@acme/leaf\";"),
+        packages.contains("  import type { Page } from \"@pied-piper/leaf\";"),
         "{packages}"
     );
-    assert!(!packages.contains("@acme/missing"), "{packages}");
+    assert!(!packages.contains("@pied-piper/missing"), "{packages}");
 }
 
 #[test]
@@ -837,14 +837,14 @@ fn a_project_package_in_a_dependencys_closure_is_left_to_its_source() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let home = tmp.path().join("home");
     publish_leaf_and_mid(tmp.path(), &home);
-    // The project has its own `@acme/leaf`, which `@acme/mid` also depends on.
+    // The project has its own `@pied-piper/leaf`, which `@pied-piper/mid` also depends on.
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
         &format!(
-            "[dependencies]\n\"@acme/mid\" = \"0.1.0\"\n\n{LEAF_MANIFEST}\n\
-             [[package]]\nname = \"@acme/app\"\nversion = \"0.1.0\"\ndescription = \"App.\"\n\
-             path = \"app\"\ndependencies = [\"@acme/leaf\", \"@acme/mid\"]\n"
+            "[dependencies]\n\"@pied-piper/mid\" = \"0.1.0\"\n\n{LEAF_MANIFEST}\n\
+             [[package]]\nname = \"@pied-piper/app\"\nversion = \"0.1.0\"\ndescription = \"App.\"\n\
+             path = \"app\"\ndependencies = [\"@pied-piper/leaf\", \"@pied-piper/mid\"]\n"
         ),
     );
     write_file(&project.join("leaf/src/lib.ts"), LEAF_SOURCE);
@@ -859,15 +859,15 @@ fn a_project_package_in_a_dependencys_closure_is_left_to_its_source() {
     let packages =
         fs::read_to_string(project.join(".submilli/types/packages.d.ts")).expect("read packages");
     assert!(
-        packages.contains("declare module \"@acme/mid\" {"),
+        packages.contains("declare module \"@pied-piper/mid\" {"),
         "{packages}"
     );
     assert!(
-        !packages.contains("declare module \"@acme/leaf\""),
+        !packages.contains("declare module \"@pied-piper/leaf\""),
         "{packages}"
     );
     assert!(
-        packages.contains("  import type { Page } from \"@acme/leaf\";"),
+        packages.contains("  import type { Page } from \"@pied-piper/leaf\";"),
         "{packages}"
     );
 }
@@ -878,7 +878,7 @@ fn check_reports_compile_errors_with_caret() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+        "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
     );
     write_file(
         &project.join("src/lib.subm"),
@@ -900,7 +900,7 @@ fn init_then_new_then_publish_installs_both_packages() {
     fs::create_dir_all(&project).expect("create project dir");
 
     let out = Command::new(submilli_bin())
-        .args(["build", "init", "@acme/app", "app"])
+        .args(["build", "init", "@pied-piper/app", "app"])
         .current_dir(&project)
         .output()
         .expect("invoke submilli");
@@ -914,7 +914,7 @@ fn init_then_new_then_publish_installs_both_packages() {
     assert!(project.join(".vscode/tasks.json").is_file());
 
     let out = Command::new(submilli_bin())
-        .args(["build", "new", "@acme/util", "util"])
+        .args(["build", "new", "@pied-piper/util", "util"])
         .current_dir(&project)
         .output()
         .expect("invoke submilli");
@@ -923,8 +923,8 @@ fn init_then_new_then_publish_installs_both_packages() {
 
     let out = build(&project, tmp.path(), &[]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    assert!(artifact_files_exist(tmp.path(), "@acme/app"));
-    assert!(artifact_files_exist(tmp.path(), "@acme/util"));
+    assert!(artifact_files_exist(tmp.path(), "@pied-piper/app"));
+    assert!(artifact_files_exist(tmp.path(), "@pied-piper/util"));
 }
 
 #[test]
@@ -945,7 +945,7 @@ fn init_prompts_for_name_on_stdin() {
         .stdin
         .take()
         .expect("child stdin")
-        .write_all(b"@acme/app\n")
+        .write_all(b"@pied-piper/app\n")
         .expect("write name to stdin");
     let out = child.wait_with_output().expect("wait for submilli");
 
@@ -956,7 +956,10 @@ fn init_prompts_for_name_on_stdin() {
         stderr(&out)
     );
     let manifest = fs::read_to_string(project.join("submilli.toml")).expect("read manifest");
-    assert!(manifest.contains("name = \"@acme/app\""), "got: {manifest}");
+    assert!(
+        manifest.contains("name = \"@pied-piper/app\""),
+        "got: {manifest}"
+    );
 }
 
 #[test]
@@ -997,7 +1000,7 @@ fn new_without_manifest_names_the_fix() {
     fs::create_dir_all(&project).expect("create project dir");
 
     let out = Command::new(submilli_bin())
-        .args(["build", "new", "@acme/util", "util"])
+        .args(["build", "new", "@pied-piper/util", "util"])
         .current_dir(&project)
         .output()
         .expect("invoke submilli");
@@ -1020,7 +1023,7 @@ fn build_commands_report_unresolved_http_hosts() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/http\"\nversion = \"0.1.0\"\ndescription = \"HTTP client.\"\n",
+        "[[package]]\nname = \"@pied-piper/http\"\nversion = \"0.1.0\"\ndescription = \"HTTP client.\"\n",
     );
     for prefix in ["https://api.example.com", "https://api.example.com/"] {
         write_file(
@@ -1075,7 +1078,7 @@ fn build_test_runs_segments_and_reports_summary() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+        "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
     );
     write_file(
         &project.join("src/lib.ts"),
@@ -1086,7 +1089,7 @@ fn build_test_runs_segments_and_reports_summary() {
         &project.join("tests/basic.test.ts"),
         r#"
             import { label, expectException } from "submilli:test";
-            import { answer } from "@acme/util";
+            import { answer } from "@pied-piper/util";
             function main(): void {
                 label("answer is 42");
                 assert(answer() === 42, "answer");
@@ -1119,7 +1122,7 @@ fn build_test_reports_a_top_level_failure_as_the_files_failure() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+        "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
     );
     write_file(
         &project.join("src/lib.ts"),
@@ -1128,7 +1131,7 @@ fn build_test_reports_a_top_level_failure_as_the_files_failure() {
     write_file(
         &project.join("tests/setup.test.ts"),
         r#"
-            import { answer } from "@acme/util";
+            import { answer } from "@pied-piper/util";
             if (answer() === 42) { throw new RangeError("set-up refused"); }
             function main(): void { }
         "#,
@@ -1156,7 +1159,7 @@ fn build_test_reports_a_package_initializer_failure_with_its_statement() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+        "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
     );
     write_file(
         &project.join("src/lib.ts"),
@@ -1164,7 +1167,7 @@ fn build_test_reports_a_package_initializer_failure_with_its_statement() {
     );
     write_file(
         &project.join("tests/setup.test.ts"),
-        "import { answer } from \"@acme/util\";\nfunction main(): void { assert(answer() === 1); }",
+        "import { answer } from \"@pied-piper/util\";\nfunction main(): void { assert(answer() === 1); }",
     );
 
     let out = build_test(&project, tmp.path(), &[]);
@@ -1177,7 +1180,7 @@ fn build_test_reports_a_package_initializer_failure_with_its_statement() {
     let err = stderr(&out);
     assert!(
         err.contains(
-            "error: package `@acme/util` failed to initialize: RangeError: index out of range\n  at <top level> (@acme/util/lib:2:"
+            "error: package `@pied-piper/util` failed to initialize: RangeError: index out of range\n  at <top level> (@pied-piper/util/lib:2:"
         ),
         "stderr: {err}"
     );
@@ -1195,8 +1198,8 @@ fn build_test_package_frames_show_their_own_packages_source() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/base\"\nversion = \"0.1.0\"\ndescription = \"Base.\"\npath = \"packages/base\"\n\n\
-         [[package]]\nname = \"@acme/app\"\nversion = \"0.1.0\"\ndescription = \"App.\"\ndependencies = [\"@acme/base\"]\npath = \"packages/app\"\n",
+        "[[package]]\nname = \"@pied-piper/base\"\nversion = \"0.1.0\"\ndescription = \"Base.\"\npath = \"packages/base\"\n\n\
+         [[package]]\nname = \"@pied-piper/app\"\nversion = \"0.1.0\"\ndescription = \"App.\"\ndependencies = [\"@pied-piper/base\"]\npath = \"packages/app\"\n",
     );
     write_file(
         &project.join("packages/base/src/lib.ts"),
@@ -1204,25 +1207,25 @@ fn build_test_package_frames_show_their_own_packages_source() {
     );
     write_file(
         &project.join("packages/app/src/lib.ts"),
-        "import { refuse } from \"@acme/base\";\nconst x: number = refuse();\n/** The value. */\nexport function value(): number { return x; }",
+        "import { refuse } from \"@pied-piper/base\";\nconst x: number = refuse();\n/** The value. */\nexport function value(): number { return x; }",
     );
     write_file(
         &project.join("packages/app/tests/value.test.ts"),
-        "import { value } from \"@acme/app\";\nfunction main(): void { assert(value() === 1); }",
+        "import { value } from \"@pied-piper/app\";\nfunction main(): void { assert(value() === 1); }",
     );
 
-    let out = build_test(&project, tmp.path(), &["-p", "@acme/app"]);
+    let out = build_test(&project, tmp.path(), &["-p", "@pied-piper/app"]);
     assert!(!out.status.success(), "stdout: {}", stdout(&out));
     let err = stderr(&out);
     assert!(
-        err.contains("  at refuse (@acme/base/lib:3:")
+        err.contains("  at refuse (@pied-piper/base/lib:3:")
             && err.contains(
                 "3 | export function refuse(): number { throw new Error(\"from base\"); }"
             ),
         "the dependency's frame and source: {err}"
     );
     assert!(
-        err.contains("  at <top level> (@acme/app/lib:2:")
+        err.contains("  at <top level> (@pied-piper/app/lib:2:")
             && err.contains("2 | const x: number = refuse();"),
         "the tested package's frame and source: {err}"
     );
@@ -1302,7 +1305,7 @@ fn http_skip_project(home: &Path) -> PathBuf {
     let project = home.join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+        "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
     );
     write_file(
         &project.join("src/lib.ts"),
@@ -1333,7 +1336,7 @@ fn build_test_compiles_doc_examples() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+        "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
     );
     write_file(
         &project.join("src/lib.ts"),
@@ -1341,7 +1344,7 @@ fn build_test_compiles_doc_examples() {
     );
     write_file(
         &project.join("docs/readme.md"),
-        "# Util\n\n```ts\nimport { answer } from \"@acme/util\";\nfunction main(): number {\n    return answer();\n}\n```\n",
+        "# Util\n\n```ts\nimport { answer } from \"@pied-piper/util\";\nfunction main(): number {\n    return answer();\n}\n```\n",
     );
 
     let out = build_test(&project, tmp.path(), &[]);
@@ -1359,7 +1362,7 @@ fn build_test_fails_a_broken_doc_example_at_its_readme_line() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+        "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
     );
     write_file(
         &project.join("src/lib.ts"),
@@ -1391,7 +1394,7 @@ fn build_test_ignores_non_ts_doc_fences() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+        "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
     );
     write_file(
         &project.join("src/lib.ts"),
@@ -1417,7 +1420,7 @@ fn build_test_failing_assert_fails_only_its_segment() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+        "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
     );
     write_file(&project.join("src/lib.ts"), "export const u: number = 1;");
     write_file(
@@ -1462,7 +1465,7 @@ fn build_test_uncaught_throw_fails_file_and_others_still_run() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+        "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
     );
     write_file(&project.join("src/lib.ts"), "export const u: number = 1;");
     // Alphabetical discovery: a_throws runs before b_passes.
@@ -1505,7 +1508,7 @@ fn build_test_anonymous_file_with_bare_asserts() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
+        "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n",
     );
     write_file(&project.join("src/lib.ts"), "export const u: number = 1;");
     write_file(
@@ -1530,13 +1533,13 @@ fn build_test_package_flag_scopes_to_one_package() {
         &project.join("submilli.toml"),
         r#"
 [[package]]
-name = "@acme/app"
+name = "@pied-piper/app"
 version = "0.1.0"
 description = "Test package."
 path = "app"
 
 [[package]]
-name = "@acme/other"
+name = "@pied-piper/other"
 version = "0.1.0"
 description = "Test package."
 path = "other"
@@ -1559,7 +1562,7 @@ path = "other"
         "function main(): void { assert(true, \"other\"); }",
     );
 
-    let out = build_test(&project, tmp.path(), &["-p", "@acme/app"]);
+    let out = build_test(&project, tmp.path(), &["-p", "@pied-piper/app"]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let stdout = stdout(&out);
     assert!(stdout.contains("app.test.subm"), "stdout: {stdout}");
@@ -1610,14 +1613,14 @@ fn cross_package_const_import_links_and_runs() {
         &project.join("submilli.toml"),
         r#"
 [[package]]
-name = "@acme/app"
+name = "@pied-piper/app"
 version = "0.1.0"
 description = "Test package."
 path = "app"
-dependencies = ["@acme/util"]
+dependencies = ["@pied-piper/util"]
 
 [[package]]
-name = "@acme/util"
+name = "@pied-piper/util"
 version = "0.1.0"
 description = "Test package."
 path = "util"
@@ -1630,7 +1633,7 @@ path = "util"
     write_file(
         &project.join("app/src/lib.ts"),
         r#"
-            import { SEVEN } from "@acme/util";
+            import { SEVEN } from "@pied-piper/util";
             export function plusOne(): number { return SEVEN + 1; }
         "#,
     );
@@ -1642,12 +1645,12 @@ path = "util"
     write_file(
         &script,
         r#"
-            import { plusOne } from "@acme/app";
+            import { plusOne } from "@pied-piper/app";
             function main(): number { return plusOne(); }
         "#,
     );
     let blueprint = tmp.path().join("blueprint.yaml");
-    write_file(&blueprint, "name: t\npackages:\n  - \"@acme/app\"\n");
+    write_file(&blueprint, "name: t\npackages:\n  - \"@pied-piper/app\"\n");
 
     let out = run_with_home(
         &[
@@ -1702,7 +1705,7 @@ fn credential_project(home: &Path, assertions: &str) -> PathBuf {
     for name in ["credentials.test.ts", "nested/credentials.test.ts"] {
         write_file(
             &project.join("tests").join(name),
-            "import { verify } from \"@acme/util\"; function main(): void { verify(); }",
+            "import { verify } from \"@pied-piper/util\"; function main(): void { verify(); }",
         );
     }
     project
@@ -2015,7 +2018,7 @@ fn build_test_credentials_preserve_package_identity_for_test_main() {
         .expect("run");
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
-        stderr(&out).contains("caller=@acme/util capability=secrets.get"),
+        stderr(&out).contains("caller=@pied-piper/util capability=secrets.get"),
         "{}",
         stderr(&out)
     );
@@ -2040,7 +2043,7 @@ fn docs_render_destructured_parameter_names() {
     let home = tmp.path().join("home");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/patterns\"\nversion = \"0.1.0\"\ndescription = \"Pattern documentation.\"\n",
+        "[[package]]\nname = \"@pied-piper/patterns\"\nversion = \"0.1.0\"\ndescription = \"Pattern documentation.\"\n",
     );
     write_file(
         &project.join("src/lib.ts"),
@@ -2062,7 +2065,10 @@ export interface Svc {
     );
     let built = build(&project, &home, &[]);
     assert!(built.status.success(), "{}", stderr(&built));
-    let docs = run_with_home(&[OsStr::new("docs"), OsStr::new("@acme/patterns")], &home);
+    let docs = run_with_home(
+        &[OsStr::new("docs"), OsStr::new("@pied-piper/patterns")],
+        &home,
+    );
     assert!(docs.status.success(), "{}", stderr(&docs));
     let text = stdout(&docs);
     assert!(text.contains("function add(pair:"), "{text}");
@@ -2078,9 +2084,9 @@ fn deny_warnings_build_commands_reject_code_warnings_without_installing() {
             r#"import { check } from "submilli:security";
 /** Check a request.
  * @param customer Customer ID.
- * @capability acme.com/op { customer }
+ * @capability pied-piper.example/op { customer }
  */
-export function op(customer: string): void { check("acme.com/op", {}); }
+export function op(customer: string): void { check("pied-piper.example/op", {}); }
 "#,
         ),
         (
@@ -2088,10 +2094,10 @@ export function op(customer: string): void { check("acme.com/op", {}); }
             r#"import { check } from "submilli:security";
 /** Check a request.
  * @param customer Customer ID.
- * @capability acme.com/op { customer }
+ * @capability pied-piper.example/op { customer }
  */
 export function op(customer: string): void {
- const approve = (): void => { check("acme.com/op", { customer }); };
+ const approve = (): void => { check("pied-piper.example/op", { customer }); };
  approve();
 }
 "#,
@@ -2111,7 +2117,7 @@ export function op(path: string): string { return get("https://api.example.com" 
         let project = tmp.path().join("project");
         write_file(
             &project.join("submilli.toml"),
-            "[[package]]\nname = \"@acme/strict\"\nversion = \"0.1.0\"\ndescription = \"Strict fixture.\"\n",
+            "[[package]]\nname = \"@pied-piper/strict\"\nversion = \"0.1.0\"\ndescription = \"Strict fixture.\"\n",
         );
         write_file(&project.join("src/lib.ts"), source);
         for command in ["check", "test", "publish-local"] {
@@ -2131,7 +2137,7 @@ export function op(path: string): string { return get("https://api.example.com" 
             assert!(stderr(&out).contains(&format!(
                 "error: {count} warning(s) treated as errors (--deny-warnings)"
             )));
-            assert!(!home.join("packages/@acme/strict").exists());
+            assert!(!home.join("packages/@pied-piper/strict").exists());
             let permissive = build_subcommand(command, &project, &home, &[]);
             assert!(
                 permissive.status.success(),
@@ -2149,7 +2155,7 @@ fn deny_warnings_accepts_dynamic_filesystem_arguments() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/dynamic\"\nversion = \"0.1.0\"\ndescription = \"Dynamic fixture.\"\n",
+        "[[package]]\nname = \"@pied-piper/dynamic\"\nversion = \"0.1.0\"\ndescription = \"Dynamic fixture.\"\n",
     );
     write_file(
         &project.join("src/lib.ts"),
@@ -2178,7 +2184,7 @@ fn deny_warnings_environment_matches_flag_and_clean_package_passes() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/strict\"\nversion = \"0.1.0\"\ndescription = \"Strict fixture.\"\n",
+        "[[package]]\nname = \"@pied-piper/strict\"\nversion = \"0.1.0\"\ndescription = \"Strict fixture.\"\n",
     );
     write_file(
         &project.join("src/lib.ts"),
@@ -2214,13 +2220,13 @@ fn deny_warnings_checks_test_sources_and_documentation_examples() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/strict\"\nversion = \"0.1.0\"\ndescription = \"Strict fixture.\"\n",
+        "[[package]]\nname = \"@pied-piper/strict\"\nversion = \"0.1.0\"\ndescription = \"Strict fixture.\"\n",
     );
     write_file(
         &project.join("src/lib.ts"),
         "/** Describe the answer.\n * @returns The answer.\n */\nexport function answer(): number { return 42; }\n",
     );
-    let example = "import { check } from \"submilli:security\";\n/** Run the example.\n * @capability acme.com/extra\n */\nfunction main(): void { }\n";
+    let example = "import { check } from \"submilli:security\";\n/** Run the example.\n * @capability pied-piper.example/extra\n */\nfunction main(): void { }\n";
     write_file(&project.join("tests/lib.test.ts"), example);
     let out = build_test(&project, tmp.path(), &["--deny-warnings"]);
     assert_eq!(out.status.code(), Some(1));
@@ -2246,11 +2252,11 @@ fn deny_warnings_preserves_existing_capability_payload_error() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/strict\"\nversion = \"0.1.0\"\ndescription = \"Strict fixture.\"\n",
+        "[[package]]\nname = \"@pied-piper/strict\"\nversion = \"0.1.0\"\ndescription = \"Strict fixture.\"\n",
     );
     write_file(
         &project.join("src/lib.ts"),
-        "import { check } from \"submilli:security\";\n/** Check an operation.\n * @param customer Customer ID.\n * @capability acme.com/op {}\n */\nexport function op(customer: string): void { check(\"acme.com/op\", { customer }); }\n",
+        "import { check } from \"submilli:security\";\n/** Check an operation.\n * @param customer Customer ID.\n * @capability pied-piper.example/op {}\n */\nexport function op(customer: string): void { check(\"pied-piper.example/op\", { customer }); }\n",
     );
     for flags in [&[][..], &["--deny-warnings"][..]] {
         let out = build_subcommand("check", &project, tmp.path(), flags);
@@ -2269,7 +2275,7 @@ fn deny_warnings_respects_package_selection_and_skipped_network_files() {
     let project = tmp.path().join("project");
     write_file(
         &project.join("submilli.toml"),
-        "[[package]]\nname = \"@acme/clean\"\nversion = \"0.1.0\"\ndescription = \"Clean package.\"\npath = \"clean\"\n\n[[package]]\nname = \"@acme/warned\"\nversion = \"0.1.0\"\ndescription = \"Warned package.\"\npath = \"warned\"\n",
+        "[[package]]\nname = \"@pied-piper/clean\"\nversion = \"0.1.0\"\ndescription = \"Clean package.\"\npath = \"clean\"\n\n[[package]]\nname = \"@pied-piper/warned\"\nversion = \"0.1.0\"\ndescription = \"Warned package.\"\npath = \"warned\"\n",
     );
     write_file(
         &project.join("clean/src/lib.ts"),
@@ -2281,19 +2287,24 @@ fn deny_warnings_respects_package_selection_and_skipped_network_files() {
     );
     write_file(
         &project.join("clean/tests/nested/network_warning.test.ts"),
-        "/** Run.\n * @capability acme.com/extra\n */\nfunction main(): void { assert(false, \"must not execute\"); }\n",
+        "/** Run.\n * @capability pied-piper.example/extra\n */\nfunction main(): void { assert(false, \"must not execute\"); }\n",
     );
     let out = build_test(
         &project,
         tmp.path(),
-        &["-p", "@acme/clean", "--skip-network", "--deny-warnings"],
+        &[
+            "-p",
+            "@pied-piper/clean",
+            "--skip-network",
+            "--deny-warnings",
+        ],
     );
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).contains("network test files skipped"));
     let out = build_test(
         &project,
         tmp.path(),
-        &["-p", "@acme/clean", "--deny-warnings"],
+        &["-p", "@pied-piper/clean", "--deny-warnings"],
     );
     assert_eq!(out.status.code(), Some(1));
     assert!(
@@ -2307,4 +2318,71 @@ fn deny_warnings_respects_package_selection_and_skipped_network_files() {
         stderr(&out)
     );
     assert!(!stdout(&out).contains("warned/src"));
+}
+
+#[test]
+fn package_configuration_build_inputs_reach_runtime_and_documentation_checks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = '@pied-piper/search'\nversion = '0.1.0'\ndescription = 'Search.'\n",
+    );
+    write_file(
+        &project.join("src/config.ts"),
+        "export declare const baseUrl: string;\nexport const timeoutMs = 5000;\nexport const zero = -0;\nexport const tag = '';\n",
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        "import { baseUrl, timeoutMs, zero, tag } from './config';\nimport { get } from 'submilli:http';\n/** Endpoint.\n * @returns Endpoint.\n */\nexport function endpoint(): string { return baseUrl; }\n/** Timeout.\n * @returns Timeout.\n */\nexport function timeout(): number { return timeoutMs; }\n/** Zero.\n * @returns Zero.\n */\nexport function signedZero(): number { return zero; }\n/** Tag.\n * @returns Tag.\n */\nexport function configuredTag(): string { return tag; }\n/** Fetch.\n * @returns Text.\n */\nexport function fetchText(): string { return get(baseUrl).body; }",
+    );
+    write_file(
+        &project.join("docs/readme.md"),
+        "# Search\n```ts\nimport { endpoint } from '@pied-piper/search';\nfunction main(): void { const url: string = endpoint(); }\n```\n",
+    );
+    write_file(
+        &project.join("tests/config.test.ts"),
+        "import { endpoint, timeout, signedZero, configuredTag } from '@pied-piper/search';\nfunction main(): void { assert(endpoint() === 'https://configured.test/?a=b'); assert(timeout() === 42); assert(1 / signedZero() < 0); assert(configuredTag() === '\\u{10fffe}\\u{100000}'); }",
+    );
+    let flags = [
+        "-p",
+        "@pied-piper/search",
+        "--config",
+        "baseUrl=https://configured.test/?a=b",
+        "--config",
+        "timeoutMs=42",
+        "--config",
+        "zero=-0",
+        "--config",
+        "tag=\u{10fffe}\u{100000}",
+    ];
+    for command in ["check", "test", "publish-local", "authority-map"] {
+        let output = build_subcommand(command, &project, tmp.path(), &flags);
+        assert!(output.status.success(), "{command}: {}", stderr(&output));
+        let capabilities = fs::read_to_string(project.join("capabilities.yaml")).unwrap();
+        assert!(
+            capabilities.contains("host == \"configured.test\""),
+            "{command}: {capabilities}"
+        );
+    }
+    let missing = build_subcommand("check", &project, tmp.path(), &["-p", "@pied-piper/search"]);
+    assert!(!missing.status.success());
+    assert!(stderr(&missing).contains("missing required configuration parameter `baseUrl`"));
+    let no_selection = build_subcommand("check", &project, tmp.path(), &["--config", "baseUrl=x"]);
+    assert!(!no_selection.status.success());
+    let unknown = build_subcommand(
+        "check",
+        &project,
+        tmp.path(),
+        &[
+            "-p",
+            "@pied-piper/search",
+            "--config",
+            "baseUrl=x",
+            "--config",
+            "typo=x",
+        ],
+    );
+    assert!(!unknown.status.success());
+    assert!(stderr(&unknown).contains("unknown configuration parameter `typo`"));
 }

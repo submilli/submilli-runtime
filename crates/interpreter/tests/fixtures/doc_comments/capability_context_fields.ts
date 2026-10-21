@@ -8,10 +8,10 @@ type ContextAlias = Context;
  * Validates the statically declared context.
  * @param context Purchase context.
  * @returns The serialized context.
- * @capability acme.com/v { customer: string, total: number }
+ * @capability pied-piper.example/v { customer: string, total: number }
  */
 function validate(context: ContextAlias): string {
-  check("acme.com/v", context);
+  check("pied-piper.example/v", context);
   return JSON.stringify(context);
 }
 

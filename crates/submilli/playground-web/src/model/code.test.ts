@@ -24,17 +24,17 @@ describe("the code pane while stepping", () => {
     expect(pane.sub).toBe("program 1 · run 1");
     expect(active(pane)).toBe(4);
     expect(pane.isPackage).toBe(false);
-    expect(pane.stepNote).toBe("Line 4 calls into @acme/billing (listCharges). Step → to follow it into the package’s code.");
+    expect(pane.stepNote).toBe("Line 4 calls into @pied-piper/billing (listCharges). Step → to follow it into the package’s code.");
   });
 
   it("then the package's own line, asking on the program's behalf", () => {
     const pane = at(data, 4);
-    expect(pane.sub).toBe("@acme/billing · lib · called from program 1, line 4");
+    expect(pane.sub).toBe("@pied-piper/billing · lib · called from program 1, line 4");
     expect(pane.isPackage).toBe(true);
     expect(active(pane)).toBe(28);
-    expect(pane.lines[27].text).toBe('    check("acme.com/charges.list", { customerId });');
+    expect(pane.lines[27].text).toBe('    check("pied-piper.example/charges.list", { customerId });');
     expect(pane.stepNote).toBe(
-      "Inside @acme/billing, listCharges(), line 28 asks the blueprint whether the program may use acme.com/charges.list. Allowed (check 1.1).",
+      "Inside @pied-piper/billing, listCharges(), line 28 asks the blueprint whether the program may use pied-piper.example/charges.list. Allowed (check 1.1).",
     );
     expect(pane.codeNote).toBe("The package’s source as installed now, which may differ from the build this run used.");
   });
@@ -43,14 +43,14 @@ describe("the code pane while stepping", () => {
     const pane = at(data, 5);
     expect(active(pane)).toBe(31);
     expect(pane.stepNote).toBe(
-      "Inside @acme/billing, listCharges(), line 31 makes the package’s own call, fs.read, under the blueprint’s rules for @acme/billing. Allowed (check 1.2), 21.5 kB fetched.",
+      "Inside @pied-piper/billing, listCharges(), line 31 makes the package’s own call, fs.read, under the blueprint’s rules for @pied-piper/billing. Allowed (check 1.2), 21.5 kB fetched.",
     );
   });
 
   it("names a refusal inside the package", () => {
     const pane = at(data, 9);
     expect(pane.stepNote).toBe(
-      "Inside @acme/billing, listCharges(), line 28 asks the blueprint whether the program may use acme.com/charges.list. Denied (check 2.1).",
+      "Inside @pied-piper/billing, listCharges(), line 28 asks the blueprint whether the program may use pied-piper.example/charges.list. Denied (check 2.1).",
     );
   });
 
@@ -77,8 +77,8 @@ describe("the code pane while stepping", () => {
     missing.sources = {};
     const pane = at(missing, 4);
     expect(pane.lines).toEqual([]);
-    expect(pane.empty).toBe("@acme/billing · lib: its source isn’t available.");
-    expect(pane.stepNote).toContain("Inside @acme/billing, listCharges(), line 28");
+    expect(pane.empty).toBe("@pied-piper/billing · lib: its source isn’t available.");
+    expect(pane.stepNote).toContain("Inside @pied-piper/billing, listCharges(), line 28");
   });
 
   it("a plain call is one step on the program's line", () => {

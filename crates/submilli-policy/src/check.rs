@@ -366,7 +366,7 @@ permissions:
       action: allow
     - capability: fs.write
       action: ask-human
-  "@acme/core": []
+  "@pied-piper/core": []
 "#,
             )
             .unwrap(),
@@ -429,13 +429,22 @@ permissions:
         );
         assert_eq!(near.failures[0].reason, FailureReasonRecord::NotSatisfied);
 
-        let empty_block =
-            assert_explains(&policy, "@acme/core", "http.get", &serde_json::json!({}));
+        let empty_block = assert_explains(
+            &policy,
+            "@pied-piper/core",
+            "http.get",
+            &serde_json::json!({}),
+        );
         assert_eq!(
             empty_block.cause,
             DecisionCause::Default { caller_block: true }
         );
-        let no_block = assert_explains(&policy, "@acme/other", "http.get", &serde_json::json!({}));
+        let no_block = assert_explains(
+            &policy,
+            "@pied-piper/other",
+            "http.get",
+            &serde_json::json!({}),
+        );
         assert_eq!(
             no_block.cause,
             DecisionCause::Default {
@@ -690,30 +699,30 @@ permissions:
         };
         assert_eq!(
             reason(
-                "acme.com/charges.list",
+                "pied-piper.example/charges.list",
                 serde_json::json!({ "customerId": "cus_globex" })
             ),
-            "policy denied acme.com/charges.list with customerId = \"cus_globex\" for main"
+            "policy denied pied-piper.example/charges.list with customerId = \"cus_globex\" for main"
         );
         // Scalars only, a few of them, each cut short.
         let long = "x".repeat(70);
         assert_eq!(
             reason(
-                "acme.com/refund",
+                "pied-piper.example/refund",
                 serde_json::json!({
                     "a": 1, "b": true, "c": { "nested": 1 }, "d": [1],
                     "e": long, "f": "y", "g": "z"
                 })
             ),
             format!(
-                "policy denied acme.com/refund with a = 1, b = true, e = \"{}…\", f = \"y\", … \
+                "policy denied pied-piper.example/refund with a = 1, b = true, e = \"{}…\", f = \"y\", … \
                  for main",
                 "x".repeat(64)
             )
         );
         assert_eq!(
-            reason("acme.com/ping", serde_json::json!({})),
-            "policy denied acme.com/ping for main"
+            reason("pied-piper.example/ping", serde_json::json!({})),
+            "policy denied pied-piper.example/ping for main"
         );
         // A built-in capability's values can come from the runtime rather than the
         // program, and an MCP tool's are its whole arguments: neither is named.

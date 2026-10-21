@@ -1,11 +1,11 @@
-namespace: acme
+namespace: pied-piper
 provides:
-- name: acme.read
+- name: pied-piper.read
   description: Read the cached record.
   fields:
     path:
       type: string
-- name: acme.refresh
+- name: pied-piper.refresh
   description: Refresh a record without disclosing it.
   fields:
     path:

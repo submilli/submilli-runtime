@@ -21,7 +21,7 @@
  ],
  "session": "5e550000-0000-4000-8000-000000000004",
  "variables": {
-  "customerId": "cus_northwind"
+  "customerId": "pied_piper"
  },
  "reruns": [
   {
@@ -49,8 +49,8 @@
    ],
    "outcome": "deny",
    "caller": "main",
-   "capability": "acme.com/charges.list",
-   "decided_by": "by the default; near misses: `charges-for-signed-in-customer` (rule 1 of `main`), `acme-support` (rule 3 of `main`)",
+   "capability": "pied-piper.example/charges.list",
+   "decided_by": "by the default; near misses: `charges-for-signed-in-customer` (rule 1 of `main`), `pied-piper-support` (rule 3 of `main`)",
    "near_misses": [
     {
      "caller": "main",
@@ -65,7 +65,7 @@
      "caller": "main",
      "index": 2,
      "position": 3,
-     "name": "acme-support",
+     "name": "pied-piper-support",
      "line": 35,
      "column": 3,
      "end_line": 38
@@ -97,7 +97,7 @@
     "customerId": "cus_globex"
    }
   },
-  "error": "error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = \"cus_globex\" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.\n  fields: caller = \"main\", capability = \"acme.com/charges.list\", reason = \"policy denied acme.com/charges.list with customerId = \\\"cus_globex\\\" for main\"\n  at listCharges (@acme/billing/lib:28:38)  [thrown here]\n27 | export function listCharges(customerId: string): Charge[] {\n28 |     check(\"acme.com/charges.list\", { customerId });\n   |                                      ^\n29 | \n  at main (<execute>:4:24)  [entry]\n3 | function main(): number {\n4 |     return listCharges(\"cus_globex\").length;\n  |                        ^\n5 | }\n",
-  "program": "import { listCharges } from \"@acme/billing\";\n\nfunction main(): number {\n    return listCharges(\"cus_globex\").length;\n}\n"
+  "error": "error: PermissionDeniedError: permission denied: caller=main capability=pied-piper.example/charges.list: policy denied pied-piper.example/charges.list with customerId = \"cus_globex\" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.\n  fields: caller = \"main\", capability = \"pied-piper.example/charges.list\", reason = \"policy denied pied-piper.example/charges.list with customerId = \\\"cus_globex\\\" for main\"\n  at listCharges (@pied-piper/billing/lib:28:48)  [thrown here]\n27 | export function listCharges(customerId: string): Charge[] {\n28 |     check(\"pied-piper.example/charges.list\", { customerId });\n   |                                                ^\n29 | \n  at main (<execute>:4:24)  [entry]\n3 | function main(): number {\n4 |     return listCharges(\"cus_globex\").length;\n  |                        ^\n5 | }\n",
+  "program": "import { listCharges } from \"@pied-piper/billing\";\n\nfunction main(): number {\n    return listCharges(\"cus_globex\").length;\n}\n"
  }
 }

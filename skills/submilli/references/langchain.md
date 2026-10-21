@@ -56,7 +56,7 @@ agent = create_agent(
 
 
 async def main() -> None:
-    customer_id = "cus_northwind"  # demo only: take it from the signed-in session
+    customer_id = "pied_piper"  # demo only: take it from the signed-in session
     config = {"configurable": {"thread_id": f"customer:{customer_id}"}}
     try:
         result = await agent.ainvoke(
@@ -211,8 +211,8 @@ def build_graph(tools: list[Any], checkpointer: InMemorySaver):
             tool_calls=[{
                 "name": tools[0].name,
                 "args": {
-                    "code": 'import { readBalance } from "@acme/billing"; '
-                            'function main(): number { return readBalance("cus_northwind"); }',
+                    "code": 'import { readBalance } from "@pied-piper/billing"; '
+                            'function main(): number { return readBalance("pied_piper"); }',
                 },
                 "id": "balance-call",
                 "type": "tool_call",
@@ -234,7 +234,7 @@ def build_graph(tools: list[Any], checkpointer: InMemorySaver):
 async def run_with_resume(customer_id: str) -> dict[str, Any]:
     # customer_id is obtained from the authenticated request, not checkpoint
     # messages. Validate it before putting it in a request header.
-    if customer_id != "cus_northwind":
+    if customer_id != "pied_piper":
         raise ValueError("demo only: customer must be authorized by the host")
     endpoint = "http://127.0.0.1:8128/mcp/support-read"
     headers = {
@@ -269,7 +269,7 @@ async def run_with_resume(customer_id: str) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    result = asyncio.run(run_with_resume("cus_northwind"))
+    result = asyncio.run(run_with_resume("pied_piper"))
     print(result["messages"][-1].content)
 ```
 
@@ -289,8 +289,8 @@ node that returns an `AIMessage` with one `tool_calls` entry for
 
 1. Discovery returns `submilli__typescript__execute` (plus Submilli's docs,
    search, files and last-run tools) and the allowed program returns `6150`.
-2. The same session requesting `cus_initech` gets a tool result containing
-   `permission denied` and `acme.com/balance.read`. With the adapter default
+2. The same session requesting `hooli` gets a tool result containing
+   `permission denied` and `pied-piper.example/balance.read`. With the adapter default
    `handle_tool_errors=True` this is returned content, not an exception.
    `handle_tool_errors` is an argument of `MultiServerMCPClient(...)` and
    `load_mcp_tools(...)`, not a key of the connection dict.

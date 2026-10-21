@@ -1,6 +1,6 @@
-namespace: acme
+namespace: pied-piper
 provides:
-- name: acme.deliver
+- name: pied-piper.deliver
   description: Deliver a record to an outbox.
   fields:
     destination:

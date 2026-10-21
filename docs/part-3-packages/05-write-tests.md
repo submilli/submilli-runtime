@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1f3cf011146ef21d9790f3cc3eef9834eeeaf5e1e16ee6933d73631a3d81f36c"
+  contentHash: "b450e2a21d29d91de979232f7914bbf7e4d0c28e61ac081a364aeb03c3b37603"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -16,7 +16,7 @@ Tests are how it stays correct as the service and the Package change.
 `submilli build test` compiles the project, runs every test file, and
 compiles the examples in each readme.
 
-This guide shows you how to test a Package. The example is Acme's
+This guide shows you how to test a Package. The example is Pied Piper's
 billing Package on Stripe. Substitute your Package and its credential.
 
 ## A test file
@@ -27,17 +27,17 @@ would, and has a `main` that returns nothing. Replace the scaffold's
 
 ```typescript title="packages/billing/tests/lib.test.ts"
 import { label, expectException } from "submilli:test";
-import { applyCredit } from "@acme/billing";
+import { applyCredit } from "@pied-piper/billing";
 
 function main(): void {
     label("refuses a zero amount");
-    const error = expectException(() => { applyCredit("cus_northwind", 0); }, "RangeError");
+    const error = expectException(() => { applyCredit("pied_piper", 0); }, "RangeError");
     assert(error.message.includes("positive"), "message says what is wrong");
 }
 ```
 
 ```sh
-submilli build test -p @acme/billing
+submilli build test -p @pied-piper/billing
 ```
 
 ```text
@@ -75,7 +75,7 @@ ok   packages/billing/tests/lib.test.ts :: refuses a zero amount
 FAIL packages/billing/tests/lib.test.ts :: refuses a negative amount
 error: Error: message says negative
   at main (packages/billing/tests/lib.test.ts:10:48)  [thrown here]
- 9 |     const error = expectException(() => { applyCredit("cus_northwind", -500); }, "RangeError");
+ 9 |     const error = expectException(() => { applyCredit("pied_piper", -500); }, "RangeError");
 10 |     assert(error.message.includes("negative"), "message says negative");
    |                                                ^
 ok   packages/billing/docs/readme.md :: example 1 (compile)
@@ -94,7 +94,7 @@ connections `network.test.ts` or `network_<something>.test.ts`, and
 write it like any other test:
 
 ```typescript title="packages/billing/tests/network.test.ts"
-import { applyCredit } from "@acme/billing";
+import { applyCredit } from "@pied-piper/billing";
 
 function main(): void {
     const credit = applyCredit("cus_VMQR3azuTWVAWs", 100);
@@ -107,24 +107,24 @@ test fails and says which secret it lacked:
 
 ```text
 ok   packages/billing/tests/lib.test.ts :: refuses a zero amount
-[security] caller=@acme/billing capability=secrets.get context={"name":"BILLING_API_KEY"}
+[security] caller=@pied-piper/billing capability=secrets.get context={"name":"BILLING_API_KEY"}
 FAIL packages/billing/tests/network.test.ts
 error: Error: BILLING_API_KEY is not configured for this blueprint
-  at requestHeaders (@acme/billing/lib:73:25)  [thrown here]
+  at requestHeaders (@pied-piper/billing/lib:73:25)  [thrown here]
 72 |     if (key === undefined) {
 73 |         throw new Error("BILLING_API_KEY is not configured for this blueprint");
    |                         ^
 74 |     }
-  at lookUpClass (@acme/billing/lib:60:74)  [caller]
+  at lookUpClass (@pied-piper/billing/lib:60:74)  [caller]
 59 | function lookUpClass(customerId: string): string {
 60 |     const response = get(BASE + customerPath(customerId), requestHeaders(false));
    |                                                                          ^
 61 |     if (response.status === 404) {
-  at applyCredit (@acme/billing/lib:30:39)  [caller]
+  at applyCredit (@pied-piper/billing/lib:30:39)  [caller]
 29 |     const id = customerId.trim();
 30 |     const customerClass = lookUpClass(id);
    |                                       ^
-31 |     check("acme.com/credits.apply", { customerId: id, customerClass, amount });
+31 |     check("pied-piper.example/credits.apply", { customerId: id, customerClass, amount });
   at main (packages/billing/tests/network.test.ts:4:54)  [entry]
 3 | function main(): void {
 4 |     const credit = applyCredit("cus_VMQR3azuTWVAWs", 100);
@@ -149,15 +149,15 @@ BILLING_API_KEY=sk_test_…
 ```
 
 ```sh
-submilli build test -p @acme/billing --env-file .env
+submilli build test -p @pied-piper/billing --env-file .env
 ```
 
 ```text
 ok   packages/billing/tests/lib.test.ts :: refuses a zero amount
-[security] caller=@acme/billing capability=secrets.get context={"name":"BILLING_API_KEY"}
-[security] caller=@acme/billing capability=http.get context={"body_size":0,"host":"api.stripe.com","path":"/v1/customers/cus_VMQR3azuTWVAWs","timeout_ms":30000}
-[security] caller=main capability=acme.com/credits.apply context={"amount":100,"customerClass":"premium","customerId":"cus_VMQR3azuTWVAWs"}
-[security] caller=@acme/billing capability=http.post context={"body_size":54,"host":"api.stripe.com","path":"/v1/customers/cus_VMQR3azuTWVAWs/balance_transactions","timeout_ms":30000}
+[security] caller=@pied-piper/billing capability=secrets.get context={"name":"BILLING_API_KEY"}
+[security] caller=@pied-piper/billing capability=http.get context={"body_size":0,"host":"api.stripe.com","path":"/v1/customers/cus_VMQR3azuTWVAWs","timeout_ms":30000}
+[security] caller=main capability=pied-piper.example/credits.apply context={"amount":100,"customerClass":"premium","customerId":"cus_VMQR3azuTWVAWs"}
+[security] caller=@pied-piper/billing capability=http.post context={"body_size":54,"host":"api.stripe.com","path":"/v1/customers/cus_VMQR3azuTWVAWs/balance_transactions","timeout_ms":30000}
 ok   packages/billing/tests/network.test.ts
 ok   packages/billing/docs/readme.md :: example 1 (compile)
 
@@ -173,7 +173,7 @@ fail the run. `--skip-network` leaves out every file named
 says so:
 
 ```sh
-submilli build test -p @acme/billing --skip-network
+submilli build test -p @pied-piper/billing --skip-network
 ```
 
 ```text
@@ -192,7 +192,7 @@ the `[security]` lines above show. Read the line for the Package's
 operation, because a rule would see the same thing:
 
 ```text
-[security] caller=main capability=acme.com/credits.apply context={"amount":100,"customerClass":"premium","customerId":"cus_VMQR3azuTWVAWs"}
+[security] caller=main capability=pied-piper.example/credits.apply context={"amount":100,"customerClass":"premium","customerId":"cus_VMQR3azuTWVAWs"}
 ```
 
 The customer's class is there, looked up from the account, and so is the
@@ -201,3 +201,9 @@ requests it made. But a passing test says nothing about what a program
 is refused. For that, publish the Package and run programs under a
 Blueprint, one that should be allowed and one that shouldn't, as
 [Publish a Package](/docs/packages/publish-a-package) shows.
+
+## Configuration reference
+
+| Task | Reference |
+| --- | --- |
+| Supply required Package values, override defaults, or configure a dependency | [Package configuration](/docs/reference/package-configuration) |

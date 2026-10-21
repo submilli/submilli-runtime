@@ -2,13 +2,14 @@
 
 use std::collections::BTreeMap;
 
+use super::super::host::record::RecordedRun;
+use super::super::host::record::events::entry_name;
+use super::super::host::record::test_run::TestReport;
+use super::super::host::run::{ErrorKind, FinishedRun, RunStart};
+use super::FORMAT;
 use interpreter::runtime::limits::ExecutionUsage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use submilli_server::error::ErrorKind;
-use submilli_server::record::{FinishedRun, RecordedRun, RunEntry, RunStart, TestReport};
-
-use super::FORMAT;
 
 /// One run as the store keeps it: who ran it and how, how it ended, and its recording,
 /// which loads back as the [`RecordedRun`] a test run takes.
@@ -52,7 +53,7 @@ pub(crate) struct StoredRun {
     pub(crate) test_report: Option<StoredTestReport>,
 }
 
-/// A test run's report as the store keeps it: the server's [`TestReport`], read back.
+/// A test run's report as the store keeps it: the host's [`TestReport`], read back.
 /// Keys, stop details, and the nearest recording come from inside the run.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -171,7 +172,7 @@ impl StoredRun {
             entry: entry_name(&start.entry),
             client: start.client.clone(),
             tool_call_id: start.tool_call_id.clone(),
-            idempotency_key: start.idempotency_key.clone(),
+            idempotency_key: None,
             test_of,
             started_at_micros,
             wall_ms: u64::try_from(finished.wall.as_millis()).unwrap_or(u64::MAX),
@@ -202,18 +203,6 @@ impl StoredRun {
     /// The `n`th decision, counting from 1, as `<run>.<n>` names it.
     pub(crate) fn decision(&self, n: usize) -> Option<&interpreter::runtime::DecisionRecord> {
         self.recording.decisions.get(n.checked_sub(1)?)
-    }
-}
-
-/// How a run's entry reads in the store and its events.
-pub(crate) fn entry_name(entry: &RunEntry) -> String {
-    match entry {
-        RunEntry::Http => "http".into(),
-        RunEntry::Session => "session".into(),
-        RunEntry::Mcp => "mcp".into(),
-        RunEntry::McpFileTool { tool } => format!("mcp:{tool}"),
-        RunEntry::Program => "program".into(),
-        RunEntry::Test => "test".into(),
     }
 }
 
@@ -267,16 +256,6 @@ impl RunSummary {
             test_of: run.test_of.clone(),
         }
     }
-}
-
-/// An idempotent retry answered from the ledger, linked to the run it repeated.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct RetryRecord {
-    pub(crate) format: u32,
-    pub(crate) at_micros: u64,
-    pub(crate) session_id: String,
-    pub(crate) idempotency_key: String,
-    pub(crate) original: Option<RunLink>,
 }
 
 /// A decision named as `<run>.<n>`: the run's id and the decision's position, from 1.
