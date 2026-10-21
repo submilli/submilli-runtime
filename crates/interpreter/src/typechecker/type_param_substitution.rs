@@ -1099,11 +1099,15 @@ impl<'a> Unifier<'a> {
                         .iter()
                         .all(|member| matches!(member.peel(), Type::Tuple(_))) =>
             {
+                let snap = self.snapshot();
                 let outer = std::mem::replace(&mut self.unions_member_candidates, true);
                 let unified = members
                     .iter()
                     .try_for_each(|member| self.unify(param_ty, member));
                 self.unions_member_candidates = outer;
+                if unified.is_err() {
+                    self.restore(snap);
+                }
                 unified
             }
             // Union param against a single (non-union) arg: try each member.

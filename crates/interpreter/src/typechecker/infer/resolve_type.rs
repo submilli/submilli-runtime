@@ -798,6 +798,9 @@ impl<'a> Inferer<'a> {
     /// The type a narrowing in scope gives `name.rest…`, which a type query
     /// takes as TypeScript does: `typeof x.p` under `x.p === "A"` is `"A"`.
     fn narrowed_query_type(&self, name: &str, rest: &[crate::Ident]) -> Option<Type> {
+        if self.resolving_function_literal_parameters {
+            return None;
+        }
         let entry = self.scopes.get(name)?;
         let path = super::narrowing::ReferencePath {
             root: super::narrowing::BindingId::Local {

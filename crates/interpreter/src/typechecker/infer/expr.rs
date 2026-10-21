@@ -7668,7 +7668,7 @@ impl Inferer<'_> {
                 padding.push(Type::Unknown);
                 continue;
             };
-            let Some(ty) = self.pattern_default_type(default, false)? else {
+            let Some(ty) = self.speculative_expr_type(default, false)? else {
                 return Ok(Vec::new());
             };
             padding.push(Type::union(vec![ty, Type::Undefined]));
@@ -7676,12 +7676,12 @@ impl Inferer<'_> {
         Ok(padding)
     }
 
-    /// The type of a pattern default, inferred before the pattern binds its
-    /// names, with its fresh literals widened unless `keep_literals` (a `const`
-    /// declaration's). A default that reads one of the pattern's names, or is
-    /// otherwise in error there, has none; the pattern reports its errors when
-    /// it infers it.
-    fn pattern_default_type(
+    /// The type of `default`, inferred ahead of where it is inferred for real,
+    /// as a pattern default before the pattern binds its names or a call's
+    /// argument before its callee, with its fresh literals widened unless
+    /// `keep_literals` (a `const` declaration's). An expression in error there
+    /// has none; it reports its errors when it is inferred for real.
+    pub(super) fn speculative_expr_type(
         &mut self,
         default: ExprId,
         keep_literals: bool,
@@ -7719,7 +7719,7 @@ impl Inferer<'_> {
         widened: Type,
     ) -> Result<Type, CompilerFailure> {
         let keep_literals = self.ast.const_pattern_sources.contains(&literal);
-        let Some(context) = self.pattern_default_type(default, keep_literals)? else {
+        let Some(context) = self.speculative_expr_type(default, keep_literals)? else {
             return Ok(widened);
         };
         contextual_literal_type(self.ast, value, widened, &context)
@@ -7788,7 +7788,7 @@ impl Inferer<'_> {
         };
         let mut padding = Vec::with_capacity(defaults.len());
         for (name, default) in defaults {
-            let Some(ty) = self.pattern_default_type(default, false)? else {
+            let Some(ty) = self.speculative_expr_type(default, false)? else {
                 return Ok(Vec::new());
             };
             padding.push((name, ty));
@@ -9597,7 +9597,11 @@ impl Inferer<'_> {
         let mut typed_params: Vec<TypedParam> = Vec::with_capacity(params.len());
         let mut params_reported = false;
         for (i, p) in params.iter().enumerate() {
-            let ann_ty = p.ty.as_ref().map(|t| self.resolve_type(t)).transpose()?;
+            let resolving =
+                std::mem::replace(&mut self.resolving_function_literal_parameters, true);
+            let ann_ty = p.ty.as_ref().map(|t| self.resolve_type(t)).transpose();
+            self.resolving_function_literal_parameters = resolving;
+            let ann_ty = ann_ty?;
             let ty = match (&ann_ty, hint_owned.as_ref()) {
                 (Some(t), Some((hp, _))) => {
                     // Parameters are **contravariant**: the call site

@@ -207,14 +207,7 @@ impl Inferer<'_> {
                 types[index] = known.clone();
                 continue;
             }
-            let ty = self.with_parameter_type_trial(|this| {
-                let errors_before = this.error_count();
-                let (typed, ty) = this.infer_expr(arg, None)?;
-                if this.error_count() != errors_before {
-                    return Ok(None);
-                }
-                this.widen_fresh_literals(typed, &ty).map(Some)
-            })?;
+            let ty = self.speculative_expr_type(arg, false)?;
             if let Some(memo) = self.invoked_argument_memo.as_mut() {
                 memo.insert(arg, ty.clone());
             }

@@ -67,7 +67,7 @@ impl Inferer<'_> {
         if !self.package_inference {
             return Ok(());
         }
-        let Some(span) = self.direct_export_span(name, namespace)? else {
+        let Some((span, class_or_enum)) = self.direct_export(name, namespace)? else {
             return Ok(());
         };
         let declarations = self.current_module_symbols.clone();
@@ -83,27 +83,13 @@ impl Inferer<'_> {
         );
         // A class or enum is a value too, as in TypeScript, so no specifier
         // may export another value under its name.
-        if self.direct_export_is_class_or_enum(name)? {
+        if class_or_enum {
             self.current_export_seen
                 .entry((ExportNamespace::Value, name.to_string()))
                 .or_insert(ExportedName { span, direct: true });
         }
 
         Ok(())
-    }
-
-    fn direct_export_is_class_or_enum(&self, name: &str) -> Result<bool, CompilerFailure> {
-        for ed in &self.ast.exported_decls {
-            let stmt = self.ast.try_stmt(ed.stmt).map_err(super::arena_failure)?;
-            if matches!(
-                stmt.kind,
-                StmtKind::ClassDecl { .. } | StmtKind::EnumDecl { .. }
-            ) && exported_decl_name(&stmt.kind).is_some_and(|exported| exported.name == name)
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
     }
 
     pub(super) fn resolve_package_export_statements(&mut self) -> Result<(), CompilerFailure> {
@@ -180,25 +166,26 @@ impl Inferer<'_> {
         Ok(())
     }
 
-    fn direct_export_span(
+    /// The span of the direct export of `name` in `namespace`, and whether it
+    /// exports a class or an enum.
+    fn direct_export(
         &self,
         name: &str,
         namespace: ExportNamespace,
-    ) -> Result<Option<crate::Span>, CompilerFailure> {
-        self.ast
-            .exported_decls
-            .iter()
-            .map(|ed| {
-                let stmt = self.ast.try_stmt(ed.stmt).map_err(super::arena_failure)?;
-                Ok::<_, CompilerFailure>(
-                    (exported_decl_namespace(&stmt.kind) == Some(namespace)
-                        && exported_decl_name(&stmt.kind)
-                            .is_some_and(|exported| exported.name == name))
-                    .then_some(ed.export_span),
-                )
-            })
-            .find_map(Result::transpose)
-            .transpose()
+    ) -> Result<Option<(crate::Span, bool)>, CompilerFailure> {
+        for ed in &self.ast.exported_decls {
+            let stmt = self.ast.try_stmt(ed.stmt).map_err(super::arena_failure)?;
+            if exported_decl_namespace(&stmt.kind) == Some(namespace)
+                && exported_decl_name(&stmt.kind).is_some_and(|exported| exported.name == name)
+            {
+                let class_or_enum = matches!(
+                    stmt.kind,
+                    StmtKind::ClassDecl { .. } | StmtKind::EnumDecl { .. }
+                );
+                return Ok(Some((ed.export_span, class_or_enum)));
+            }
+        }
+        Ok(None)
     }
 
     /// Exports what `source_name` names in the namespaces `origin` allows. A
@@ -332,9 +319,12 @@ impl Inferer<'_> {
                 if prev.direct {
                     return false;
                 }
-                let specifier_covers_other = previous
-                    .iter()
-                    .any(|(other, seen)| *other != own && seen.span == prev.span);
+                // A specifier that also exported the other namespace adds to
+                // this direct type export rather than repeating it.
+                let specifier_covers_other = *namespace != own
+                    || previous
+                        .iter()
+                        .any(|(other, seen)| *other != own && seen.span == prev.span);
                 own == ExportNamespace::Value || !specifier_covers_other
             }),
         };

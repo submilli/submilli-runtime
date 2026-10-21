@@ -173,6 +173,7 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         invoked_return_hint: None,
         invoked_parameter_types: None,
         invoked_argument_memo: None,
+        resolving_function_literal_parameters: false,
         parameters_typed_by_arguments: Default::default(),
         cast_operand: None,
         invoked_body_exit: None,
@@ -472,6 +473,7 @@ pub fn infer_package_checked<'a>(
         invoked_return_hint: None,
         invoked_parameter_types: None,
         invoked_argument_memo: None,
+        resolving_function_literal_parameters: false,
         parameters_typed_by_arguments: Default::default(),
         cast_operand: None,
         invoked_body_exit: None,
@@ -845,6 +847,10 @@ pub(super) struct Inferer<'a> {
     /// outermost such call is inferred (see
     /// `Inferer::infer_call_typing_invoked_parameters`).
     invoked_argument_memo: Option<std::collections::HashMap<crate::ExprId, Option<Type>>>,
+    /// Whether a function literal's parameter annotations are being resolved,
+    /// where a type query takes its root's declared type: the literal may run
+    /// after a captured binding is reassigned.
+    resolving_function_literal_parameters: bool,
     /// The name spans of the parameters typed from their arguments that way,
     /// whose defaults are typed against them.
     parameters_typed_by_arguments: std::collections::HashSet<Span>,
@@ -1158,6 +1164,7 @@ impl<'a> Inferer<'a> {
         self.current_module_symbols = ModuleSymbols::default();
         self.current_module_exports.clear();
         self.current_export_seen.clear();
+        self.parameters_typed_by_arguments.clear();
         self.inferred_modules = inferred_modules.clone();
         self.top_symbols.clear();
         self.imported_values.clear();
