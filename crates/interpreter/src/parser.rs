@@ -1079,7 +1079,20 @@ impl<'a> Parser<'a> {
                     self.error_at(name.span, "a setter must declare exactly one parameter");
                     return None;
                 }
-                Some(Box::new(params.remove(0)))
+                let param = params.remove(0);
+                // An assignment always passes the value, so a setter's parameter
+                // can't be omitted or collect several.
+                if param.rest {
+                    self.error_at(
+                        param.name.span,
+                        "a setter's parameter can't be a rest parameter",
+                    );
+                } else if param.default.is_some() {
+                    self.error_at(name.span, "a setter's parameter can't have a default value");
+                } else if param.optional {
+                    self.error_at(param.name.span, "a setter's parameter can't be optional");
+                }
+                Some(Box::new(param))
             }
         };
         let return_type = if matches!(self.peek().kind, TokenKind::Colon) {
