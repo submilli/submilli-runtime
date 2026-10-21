@@ -6332,7 +6332,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-fn is_property_name(kind: &TokenKind) -> bool {
+pub(crate) fn is_property_name(kind: &TokenKind) -> bool {
     matches!(
         kind,
         TokenKind::Identifier
