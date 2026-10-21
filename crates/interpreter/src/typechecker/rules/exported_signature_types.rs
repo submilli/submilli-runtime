@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::typechecker::infer::module_symbols::ModuleSymbols;
 use crate::{
     Diagnostic, ExportEntry, MangledName, Package, PackageDeclaration, Severity, Type, TypeKind,
     TypeSymbol, ValueKind, ValueSymbol,
@@ -12,31 +13,40 @@ pub(crate) fn run(
     exports: &[ExportEntry],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let exported_types = exported_type_mangles(surface.types.values(), exports);
     run_symbols(
         package_name,
         level,
         surface.values.values(),
         surface.types.values(),
-        exports,
+        &exported_types,
         diagnostics,
     );
 }
 
-pub(in crate::typechecker) fn run_module(
+/// Checks each module's exported signatures. A type any module of the package
+/// exports is public to every module: an importer's callers can import it from
+/// where it is declared.
+pub(in crate::typechecker) fn run_modules(
     package_name: &str,
     level: &str,
-    surface: &crate::typechecker::infer::module_symbols::ModuleSymbols,
-    exports: &[ExportEntry],
+    modules: &[(&ModuleSymbols, &[ExportEntry])],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    run_symbols(
-        package_name,
-        level,
-        surface.exported_values(),
-        surface.exported_types(),
-        exports,
-        diagnostics,
-    );
+    let exported_anywhere: BTreeSet<MangledName> = modules
+        .iter()
+        .flat_map(|(surface, exports)| exported_type_mangles(surface.exported_types(), exports))
+        .collect();
+    for (surface, _) in modules {
+        run_symbols(
+            package_name,
+            level,
+            surface.exported_values(),
+            surface.exported_types(),
+            &exported_anywhere,
+            diagnostics,
+        );
+    }
 }
 
 fn run_symbols<'a>(
@@ -44,10 +54,9 @@ fn run_symbols<'a>(
     level: &str,
     values: impl Iterator<Item = &'a ValueSymbol> + Clone,
     types: impl Iterator<Item = &'a TypeSymbol> + Clone,
-    exports: &[ExportEntry],
+    exported_types: &BTreeSet<MangledName>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let exported_types = exported_type_mangles(types.clone(), exports);
     for value in values {
         let mut used = BTreeMap::new();
         let (noun, usage) = match &value.kind {
@@ -77,7 +86,7 @@ fn run_symbols<'a>(
         };
 
         diagnose_private_types(
-            &exported_types,
+            exported_types,
             used,
             ExportUse {
                 noun,
@@ -147,7 +156,7 @@ fn run_symbols<'a>(
         }
 
         diagnose_private_types(
-            &exported_types,
+            exported_types,
             used,
             ExportUse {
                 noun: "type",

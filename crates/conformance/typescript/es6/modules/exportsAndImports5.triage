@@ -1,1 +1,1 @@
-line 9 extra: bug SUB-1734 an exported function whose signature names an imported type is rejected as using a private type
+line 9 extra: by-design spec §2.4 a package's exported signatures name only types the package exports (here the case's last file is the package root, and it doesn't re-export `A`)
