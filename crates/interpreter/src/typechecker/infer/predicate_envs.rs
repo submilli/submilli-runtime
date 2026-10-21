@@ -921,9 +921,7 @@ impl<'a> Inferer<'a> {
         chain_id: ExprId,
         result_facts: narrowing::TypeFacts,
     ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
-        let mut env = self.chain_present_env(chain_id, result_facts)?;
-        self.forget_writes_in_chain(&mut env, chain_id)?;
-        Ok(env)
+        self.optional_chain_reached_env(chain_id, result_facts, |_, _| Ok(None))
     }
 
     /// A chain's views read its receivers as the chain does, so a write a
@@ -942,22 +940,6 @@ impl<'a> Inferer<'a> {
             return Ok(());
         };
         self.forget_later_writes(env, base, chain_id)
-    }
-
-    fn chain_present_env(
-        &mut self,
-        chain_id: ExprId,
-        result_facts: narrowing::TypeFacts,
-    ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
-        let Some(receivers) = self.optional_chain_receivers_env(chain_id)? else {
-            return Ok(narrowing::NarrowEnv::new());
-        };
-        match receivers.result {
-            Some(result) => {
-                self.with_chain_result_present(receivers.env, result, receivers.null, result_facts)
-            }
-            None => Ok(receivers.env),
-        }
     }
 
     /// `env` with the chain's `result` read narrowed to `result_facts`.
@@ -1085,9 +1067,7 @@ impl<'a> Inferer<'a> {
     }
 
     /// The [`ChainReceivers`] of a chain. The result is a reference when every
-    /// step is a property or element read of a field. `None` when the chain
-    /// holds a property step that reads a getter, whose value a second read
-    /// may not repeat.
+    /// step is a property or element read of a field.
     fn optional_chain_receivers_env(
         &mut self,
         chain_id: ExprId,
@@ -1117,12 +1097,12 @@ impl<'a> Inferer<'a> {
             let kind = match part {
                 TypedChainPart::Field { name, .. }
                 | TypedChainPart::InterfaceProperty { name, .. } => {
-                    if self.receiver_type_has_getter(receiver_expr, &name.name)? {
-                        return Ok(None);
-                    }
-                    // A primitive's property (`s?.length`) is no field path: a
-                    // view on it would read `s` as an object.
-                    if !reads_fields(&receiver_expr.ty) {
+                    // A getter's value, like a call's, may change between
+                    // reads. A primitive's property (`s?.length`) is no field
+                    // path: a view on it would read `s` as an object.
+                    if self.receiver_type_has_getter(receiver_expr, &name.name)?
+                        || !reads_fields(&receiver_expr.ty)
+                    {
                         return Ok(Some(ChainReceivers {
                             env,
                             result: None,
@@ -1409,7 +1389,7 @@ impl<'a> Inferer<'a> {
 
     /// Whether the reference `path_id` reads is written while `other_id` runs.
     /// An optional chain reads its base and everything below it.
-    fn is_written_within(
+    pub(super) fn is_written_within(
         &self,
         path_id: ExprId,
         other_id: ExprId,

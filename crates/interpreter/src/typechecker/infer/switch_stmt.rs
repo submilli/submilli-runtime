@@ -692,12 +692,20 @@ impl Inferer<'_> {
         if *target_ty != super::expr::typeof_result_type() {
             return Ok(None);
         }
-        let TypedExprKind::Sequence { stmts, .. } = &expr(*value)?.kind else {
+        let TypedExprKind::Sequence { stmts, result } = &expr(*value)?.kind else {
             return Ok(None);
         };
         let [binding] = stmts.as_slice() else {
             return Ok(None);
         };
+        // `typeof` lowers to a chain of tag tests on the held value; another
+        // lowering of the same outer shape is no `typeof`.
+        let TypedExprKind::Ternary { cond, .. } = &expr(*result)?.kind else {
+            return Ok(None);
+        };
+        if !matches!(expr(*cond)?.kind, TypedExprKind::TypeofTag { .. }) {
+            return Ok(None);
+        }
         Ok(
             match &self
                 .typed_ast
@@ -722,6 +730,15 @@ impl Inferer<'_> {
     ) -> Result<narrowing::NarrowEnv, CompilerFailure> {
         let mut tags = Vec::new();
         for (label, label_ty) in labels {
+            // A label that writes the operand leaves the tag a fact about a
+            // value it no longer holds.
+            if let TypedSwitchValue::Expr {
+                label: label_id, ..
+            } = label
+                && self.is_written_within(operand, *label_id)?
+            {
+                return Ok(narrowing::NarrowEnv::new());
+            }
             // A label that isn't a literal names the tags its type allows.
             let values = match label {
                 TypedSwitchValue::Expr { .. } => literal_members(label_ty),
