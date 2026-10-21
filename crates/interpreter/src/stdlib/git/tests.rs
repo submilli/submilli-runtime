@@ -3,6 +3,7 @@ use crate::runtime::{
     CheckOutcome, RuntimeConfig, Vfs, dispatch_main_async, install_runtime_async,
 };
 use serde_json::json;
+use wasmtime::Linker;
 
 #[tokio::test]
 async fn repositories_use_selected_volume_subdirectories() {
@@ -1162,7 +1163,7 @@ async fn worker_panic_after_deadline_remains_fatal() {
 }
 
 #[tokio::test]
-async fn failed_remote_preserves_its_error_after_settlement_exhausts_fuel() {
+async fn failed_remote_conversion_can_exhaust_fuel_after_worker_settlement() {
     let vfs = Vfs::tempdir().unwrap();
     let repo = vfs.root().join("repo");
     std::fs::create_dir(&repo).unwrap();
@@ -1184,15 +1185,14 @@ async fn failed_remote_preserves_its_error_after_settlement_exhausts_fuel() {
     for fuel in [None, Some(50_000)] {
         let mut data = test_data(vfs.clone());
         data.http_client = http.clone();
-        errors.push(
-            run_source_fuel(source, data, fuel)
-                .await
-                .unwrap_err()
-                .to_string(),
-        );
+        errors.push(run_source_fuel(source, data, fuel).await.unwrap_err());
     }
-    assert!(errors[0].contains("IO error"), "{}", errors[0]);
-    assert_eq!(errors[0], errors[1]);
+    assert!(errors[0].to_string().contains("IO error"), "{}", errors[0]);
+    // Exception construction is outside the effect and uses normal fuel checks.
+    assert_eq!(
+        errors[1].downcast_ref::<wasmtime::Trap>(),
+        Some(&wasmtime::Trap::OutOfFuel)
+    );
     run_source(
         r#"
         import { Repository } from "submilli:git";

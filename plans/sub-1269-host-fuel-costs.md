@@ -1570,9 +1570,25 @@ All are one `struct.get` on the backing struct through `install_field_getters` (
 | `submilli:fs#Stat#modifiedAt` | Field read | `CALL` | before | |
 | `submilli:fs#Stat#size` | Field read | `CALL` | before | |
 
+The filesystem `write`, `writeText`, `append`, and `appendText` registrations call
+separate native functions. Each decodes its declared content type without mode
+flags. Capability checks precede the effect; path/IO work is charged inside it
+and worker work is settled before recording completion. Text/binary variants
+retain their existing `fs.write` or `fs.append` history identities.
+
 ### `submilli:code`
 
-All nine share `invoke` (`stdlib/code/mod.rs:90`). Results other than the two diffs are built as `serde_json::Value`, serialized to a string, re-encoded as UTF-16 and parsed back into GC values (`encode`, `:137`): `PARSE(2 * len(json)) + ELEM(values)`, uncharged today. `F` = file bytes, `out` = result.
+Registrations and Wasm argument/result conversion live in `stdlib/code/install.rs`.
+Each filesystem operation has its own `code.<method>` effect boundary and calls
+its named native implementation in `mod.rs` or `walk.rs`. Native read, traversal,
+diff and edit work charges inside that boundary, only on execution; argument
+conversion and result marshalling remain outside and charge on every attempt.
+`diffText` is pure and runs directly, charging its work on every call. Mutations
+validate the native result size before writing; Wasm conversion follows the
+native operation and, for recorded runs, the committed outcome. Conversion can
+fail normally after publication. No adapter-level mutation idempotency is added.
+
+Results other than the two diffs are built as `serde_json::Value`. `install.rs::encode_json` serializes them to text and decodes UTF-16 into guest values through the metered session-value decoder. Diff results use the UTF-16 string writer directly. `F` = file bytes, `out` = result.
 
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
@@ -1588,15 +1604,18 @@ All nine share `invoke` (`stdlib/code/mod.rs:90`). Results other than the two di
 
 ### `submilli:git`
 
-SUB-1292 actual charging: `BASE` means existing host-call/gate, argument serialization, network-byte settlement and result-marshalling charges. An `AlgorithmWork` budget now refuses selected algorithm steps on the blocking worker before computation, then records them without refusal once an external effect/publication may have occurred. Aggregate work and network bytes settle on success and failure; post-effect result/error marshalling also settles. Tree/blob loading first charges `SYSCALL(1)` for each object header, then admits `PARSE(decoded bytes)` before body decoding and `COPY(blob bytes)` before copying; packed-header dependency traversal is not a claim that all gix internals are metered; file-set validation charges `SORT(file and ancestor entries) + SCAN(path-prefix bytes * comparison depth)`. Reference spelling uses one bounded name cache per native snapshot and invalidates it before mutations.
+SUB-1292 actual charging: `BASE` means existing host-call/gate, argument serialization, network-byte settlement and result-marshalling charges. An `AlgorithmWork` budget now refuses selected algorithm steps on the blocking worker before computation, then records them without refusal once an external effect/publication may have occurred. Aggregate work and network bytes settle on success and failure; native work settles before history completion; Wasm result/error conversion then uses normal fuel checks. Tree/blob loading first charges `SYSCALL(1)` for each object header, then admits `PARSE(decoded bytes)` before body decoding and `COPY(blob bytes)` before copying; packed-header dependency traversal is not a claim that all gix internals are metered; file-set validation charges `SORT(file and ancestor entries) + SCAN(path-prefix bytes * comparison depth)`. Reference spelling uses one bounded name cache per native snapshot and invalidates it before mutations.
 
 SUB-1129 has landed on the integration base: repository copies and whole-directory publication are gone. Keep its in-place reads, staged changes and existing meter. SUB-1292 adds selected algorithm admission to that same meter, so filesystem/object work and algorithm work share one ceiling and settle once. The selective-read and once-per-tree-validation code changes are already on main; this PR retains them and adds bounds and explicit algorithm charges.
 
-Every function calls `invoke` (`stdlib/git/mod.rs:369`). Three phases:
+Each method is registered explicitly in `stdlib/git/install.rs` and supplies its
+named native function from `mod.rs` to `GitCall::execute`. That shared runner
+handles effect recording, memory ownership, deadlines, worker cleanup and fuel
+settlement; it does not select an operation by name. Three phases:
 
-1. **Store thread, before dispatch.** Reserve memory, then `decode_arguments` (`:469`): each argument is serialized by calling the guest value's `toJSON` vtable slot (`stdlib/session/value.rs:32`; this re-enters guest code, which pays its own fuel), converted UTF-16 to UTF-8 and parsed with `serde_json`. Cost: `PARSE(len(args))`. Argument charges occur here; the remaining fuel is handed to the worker for admission of selected algorithm steps.
-2. **Blocking pool** (`worker::run`, `stdlib/git/worker.rs:19`), no access to the store. All real work.
-3. **Store thread, after the worker returns.** `encode_result` (`:503`): `Uint8Array` copy, string copy, or `serde_json::to_string` + `value::deserialize`.
+1. **Store thread, before dispatch.** Reserve memory, then `install.rs::read_argument`: each argument is serialized by calling the guest value's `toJSON` vtable slot (`stdlib/session/value.rs:32`; this re-enters guest code, which pays its own fuel), converted UTF-16 to UTF-8 and parsed with `serde_json`. Cost: `PARSE(len(args))`. Argument charges occur here; the remaining fuel is handed to the worker for admission of selected algorithm steps.
+2. **Blocking pool** (the selected native function in `stdlib/git/mod.rs`), no access to the store. All real work.
+3. **Store thread, after the worker returns.** the registration's explicit result conversion: `Uint8Array` copy, string copy, or `serde_json::to_string` + `value::deserialize`.
 
 Code tools, Git and HTTP downloads retain their existing native VFS execution and their existing fuel formulas; selecting a filesystem backend does not route these calls through it. Their durability adapters are separate work.
 
@@ -1700,8 +1719,8 @@ Other counted work:
 - `read_contents` (`stdlib/code/mod.rs:308`): every `code` file read; already holds `Budget::work(len)`.
 - `diff`: five code functions share input admission, the total-line bound and incrementally charged Myers work; no line-product charge remains.
 - `walk` (`stdlib/code/walk.rs:213`): `tree`, `glob`, `search`. `WALK(e)` uses existing per-directory/per-entry syscall and capability terms, ignore-file reads and incremental `SCAN(consulted rules * path units)`. Glob/search sort visited results; tree uses bounded entry heaps and ordered pending-directory heaps.
-- `encode` (`stdlib/code/mod.rs:137`): JSON result for 7 `code` functions; same shape as git's `encode_result` (`stdlib/git/mod.rs:503`). Both end in `session::value::deserialize`, a natural single place for `PARSE(len) + ELEM`.
-- git `invoke` (`stdlib/git/mod.rs`): the single entry for all 19 git functions. Argument charge after `decode_arguments`; the worker meters its own work (`stdlib/git/meter.rs`) under a ceiling of the fuel left, settled after `finish_worker` and before `encode_result`.
+- `encode_json` in the code/Git `install.rs` modules converts native JSON results through `session::value::deserialize`, which charges for decoding and guest allocation.
+- Git `GitCall::execute` retains worker ownership and settles its meter before recording the native result. Registrations decode arguments and convert the typed result outside that effect boundary.
 
 #### (d) Not determined
 
@@ -1721,7 +1740,7 @@ String sizes are UTF-16 code units; byte sizes are named `bytes(...)`.
 Facts that apply to the whole slice:
 
 - **Strings round-trip through UTF-8.** `read_string_arg` (`runtime/host.rs:509`) converts UTF-16 to a Rust `String`; `write_submilli_string_struct` (`runtime/host.rs:795`) does `encode_utf16().collect()` and then copies into a GC array. So every string argument costs `SCAN(len)` and every string result costs `SCAN(len) + COPY(len)`. Only `submilli:session` keeps raw units (`stdlib/session/value.rs` `read_units`).
-- **Gated functions call `check_security`**. `running_package` now reads only the innermost module with the stopping visitor, without backtrace capture/symbolization. While a decision recorder is installed and still wants lines, `source_line`/`begin_recorded_call` (not `running_package`) capture at most one backtrace per gated host call (a git `invoke` captures once per git host call); that work is uncharged, for recorded/unrecorded fuel parity, bounded per run by the frame budget, and stops earlier once the log is full or has had to drop a record for bytes. The recorder's call records are uncharged for the same parity: the time a gated call ends, and for an outbound call a SHA-256 digest of what it sent and received plus a copy capped per payload and by the recorder's byte budget (`runtime/call_log.rs`). The digest walks bytes the host function already charges as `IO` or `SCAN`, so it adds no work the program has not paid for in kind. It calls the embedder's `SecurityCheck::check`, whose cost depends on the blueprint's rule count (`submilli-shared/src/host.rs:67`). In the formulas this is written `GATE`, meaning a second flat charge on top of `CALL`. It is not a new class: it is `CALL` with a larger constant, to be measured. See Findings (a) for the stack-depth part.
+- **Gated functions call `check_security`**. `running_package` now reads only the innermost module with the stopping visitor, without backtrace capture/symbolization. While a decision recorder is installed and still wants lines, `source_line`/`begin_recorded_call` (not `running_package`) capture at most one backtrace per gated host call (`GitCall::execute` captures once per live git host call); that work is uncharged, for recorded/unrecorded fuel parity, bounded per run by the frame budget, and stops earlier once the log is full or has had to drop a record for bytes. The recorder's call records are uncharged for the same parity: the time a gated call ends, and for an outbound call a SHA-256 digest of what it sent and received plus a copy capped per payload and by the recorder's byte budget (`runtime/call_log.rs`). The digest walks bytes the host function already charges as `IO` or `SCAN`, so it adds no work the program has not paid for in kind. It calls the embedder's `SecurityCheck::check`, whose cost depends on the blueprint's rule count (`submilli-shared/src/host.rs:67`). In the formulas this is written `GATE`, meaning a second flat charge on top of `CALL`. It is not a new class: it is `CALL` with a larger constant, to be measured. See Findings (a) for the stack-depth part.
 - **Async functions and the store's thread.** Every async host function here holds `&mut Caller` for the whole future, and none of the awaited futures (`HttpClient::send`, `HttpClient::download`, `LlmProvider::call`, `McpTransport::call`, `SecretProvider::get`, `AuthProxy::transform`) receive the caller. So fuel can be taken on the store's thread at exactly two kinds of points: before the `.await` and after it returns. There is no point inside the await today, so "per chunk" charging is not possible without a change (Findings (b)). Waiting inside the await costs nothing under this scheme, because nothing is charged for elapsed time.
 - **Property getters** all go through `install_field_getters` (`stdlib/abi.rs:103`): one `struct.get` on a backing struct. `CALL`.
 

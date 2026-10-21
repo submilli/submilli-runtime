@@ -51,8 +51,8 @@ pub trait EffectHistory: Send + Sync {
         call: &EffectCall,
         outcome: RecordedOutcome,
     ) -> Result<(), HistoryError>;
-    /// Refuse an execution which ended before consuming all its recorded calls.
-    async fn finish(&self) -> Result<(), HistoryError>;
+    /// Verify that no effect is pending and all recorded calls have been consumed.
+    async fn ensure_history_consumed(&self) -> Result<(), HistoryError>;
 }
 
 /// Execute one native action, or return its committed native outcome.

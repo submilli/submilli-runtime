@@ -279,7 +279,7 @@ fn install_factories(
             move |caller, params, results| {
                 let class = class.clone();
                 Box::pin(async move {
-                    let path = super::invoke(caller, "open", false, params).await?;
+                    let path = super::install::open_repository(caller, params).await?;
                     *abi_result(results, 0)? = new_instance(caller, &class, path)?;
                     Ok(())
                 })
@@ -303,7 +303,7 @@ fn install_factories(
             move |caller, params, results| {
                 let class = class.clone();
                 Box::pin(async move {
-                    let path = super::invoke(caller, "init", false, params).await?;
+                    let path = super::install::init_repository(caller, params).await?;
                     *abi_result(results, 0)? = new_instance(caller, &class, path)?;
                     Ok(())
                 })
@@ -327,7 +327,7 @@ fn install_factories(
             move |caller, params, results| {
                 let class = class.clone();
                 Box::pin(async move {
-                    let path = super::invoke(caller, "clone", false, params).await?;
+                    let path = super::install::clone_repository(caller, params).await?;
                     *abi_result(results, 0)? = new_instance(caller, &class, path)?;
                     Ok(())
                 })
@@ -360,7 +360,7 @@ fn install_constructor(
         move |caller, params, results| {
             let class = class.clone();
             Box::pin(async move {
-                let path = super::invoke(caller, "open", false, params).await?;
+                let path = super::install::open_repository(caller, params).await?;
                 *abi_result(results, 0)? = new_instance(caller, &class, path)?;
                 Ok(())
             })
@@ -380,7 +380,11 @@ fn install_constructor(
         ),
         |caller, params, _results| {
             Box::pin(async move {
-                let path = super::invoke(caller, "open", false, &params[1..]).await?;
+                let path = super::install::open_repository(
+                    caller,
+                    std::slice::from_ref(abi_arg(params, 1)?),
+                )
+                .await?;
                 payload(caller, abi_arg(params, 0)?)?.set(&mut *caller, 0, path)?;
                 Ok(())
             })

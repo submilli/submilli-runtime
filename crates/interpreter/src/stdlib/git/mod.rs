@@ -1,14 +1,12 @@
 //! Capability-controlled Git operations. No subprocesses or guest-visible credentials.
 use crate::runtime::effects;
-use crate::runtime::host::{
-    abi_arg, permission_denied, read_string_arg, register_host_value_async,
-    write_submilli_string_struct, write_submilli_uint8array_struct,
-};
+use crate::runtime::host::permission_denied;
 pub(crate) mod class;
 pub mod declaration;
 mod diff;
 mod history;
 mod index_limits;
+mod install;
 mod location;
 mod lock;
 pub(crate) mod log_cache;
@@ -24,22 +22,24 @@ mod transport;
 mod work;
 mod worker;
 
+use crate::runtime::Vfs;
 use crate::runtime::decision::{CallOrigin, CallSite, EntryPath};
 use crate::runtime::fuel;
-use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
 use crate::runtime::{HttpClient, SecretProvider, SecurityCheck, StoreData};
-use crate::stdlib::{session::value, shared::running_package};
+use crate::stdlib::shared::running_package;
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::sync::{
     Arc, Mutex, OnceLock,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
-use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Result, Val, ValType, bail};
+use wasmtime::{Caller, Result, bail};
 
 static WORKERS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
 
 pub const MODULE_NAME: &str = "submilli:git";
 pub use declaration::package_declaration;
+pub use install::install;
 pub(crate) use transport::canonical_url;
 
 #[derive(Clone, Debug)]
@@ -149,374 +149,326 @@ impl Drop for CancelOnDrop {
     }
 }
 
-#[derive(serde::Serialize)]
-struct GitRequest {
+fn open(vfs: &Vfs, job: &Job, (): ()) -> Result<()> {
+    let (_permit, _snapshot) = worker::open_repository(vfs, job)?;
+    Ok(())
+}
+
+fn status(vfs: &Vfs, job: &Job, (): ()) -> Result<Value> {
+    let (_permit, snapshot) = worker::open_repository(vfs, job)?;
+    operations::status(&snapshot)
+}
+
+fn branches(vfs: &Vfs, job: &Job, (): ()) -> Result<Value> {
+    let (_permit, snapshot) = worker::open_repository(vfs, job)?;
+    operations::branches(&snapshot)
+}
+
+fn remotes(vfs: &Vfs, job: &Job, (): ()) -> Result<Value> {
+    let (_permit, snapshot) = worker::open_repository(vfs, job)?;
+    operations::remotes(&snapshot)
+}
+
+fn log(vfs: &Vfs, job: &Job, arguments: Value) -> Result<Value> {
+    worker::validate_branch_options(&arguments)?;
+    let (_permit, snapshot) = worker::open_repository(vfs, job)?;
+    operations::log(&snapshot, &arguments)
+}
+
+fn diff(vfs: &Vfs, job: &Job, arguments: Value) -> Result<Value> {
+    worker::validate_branch_options(&arguments)?;
+    let (_permit, snapshot) = worker::open_repository(vfs, job)?;
+    diff::read(&snapshot, &arguments)
+}
+
+fn show(vfs: &Vfs, job: &Job, arguments: ShowArguments) -> Result<effects::OutcomeBytes> {
+    let (_permit, snapshot) = worker::open_repository(vfs, job)?;
+    operations::show(&snapshot, &arguments.revision, &arguments.path).map(effects::OutcomeBytes)
+}
+
+fn init(vfs: &Vfs, job: &Job, arguments: Value) -> Result<()> {
+    let branch = worker::requested_branch(&arguments, "main")?;
+    job.check("git.init", serde_json::json!({"path":job.path}))?;
+    let (_permit, snapshot) = worker::create_repository(vfs, job, branch)?;
+    job.check_cancelled()?;
+    job.algorithm_fuel.before_effect();
+    snapshot.publish()?;
+    Ok(())
+}
+
+fn clone_repository(vfs: &Vfs, job: &Job, arguments: CloneArguments) -> Result<()> {
+    let branch = worker::requested_branch(&arguments.options, "")?;
+    let url = transport::canonical_url(&arguments.url)?;
+    job.check(
+        "git.clone",
+        serde_json::json!({"path":job.path,"remote":url,"remoteName":"origin","branch":branch}),
+    )?;
+    let (_permit, mut snapshot) = worker::create_clone_repository(vfs, job, branch)?;
+    worker::clone_repository(&mut snapshot, job, &arguments.url, branch)?;
+    job.check_cancelled()?;
+    job.algorithm_fuel.before_effect();
+    snapshot.publish()?;
+    Ok(())
+}
+
+fn add(vfs: &Vfs, job: &Job, arguments: Vec<String>) -> Result<()> {
+    let (_permit, snapshot) = worker::open_repository_for_write(vfs, job)?;
+    operations::add(&snapshot, &arguments)?;
+    job.check_cancelled()?;
+    job.algorithm_fuel.before_effect();
+    snapshot.publish()?;
+    Ok(())
+}
+
+fn commit(vfs: &Vfs, job: &Job, arguments: String) -> Result<String> {
+    let (_permit, snapshot) = worker::open_repository_for_write(vfs, job)?;
+    job.check(
+        "git.commit",
+        serde_json::json!({"path":job.path,"branch":operations::current_branch(&snapshot)?}),
+    )?;
+    let id = operations::commit(&snapshot, &arguments, &job.config)?;
+    job.check_cancelled()?;
+    job.algorithm_fuel.before_effect();
+    snapshot.publish()?;
+    Ok(id)
+}
+
+fn create_branch(vfs: &Vfs, job: &Job, arguments: BranchArguments) -> Result<()> {
+    let (_permit, snapshot) = worker::open_repository_for_write(vfs, job)?;
+    operations::create_branch(&snapshot, &arguments.name, &arguments.start)?;
+    job.check_cancelled()?;
+    job.algorithm_fuel.before_effect();
+    snapshot.publish()?;
+    Ok(())
+}
+
+fn switch_branch(vfs: &Vfs, job: &Job, arguments: String) -> Result<()> {
+    let (_permit, snapshot) = worker::open_repository_for_write(vfs, job)?;
+    operations::checkout(&snapshot, &arguments)?;
+    job.check_cancelled()?;
+    job.algorithm_fuel.before_effect();
+    snapshot.publish()?;
+    Ok(())
+}
+
+fn add_remote(vfs: &Vfs, job: &Job, arguments: RemoteArguments) -> Result<()> {
+    let (_permit, mut snapshot) = worker::open_repository_for_write(vfs, job)?;
+    operations::add_remote(&mut snapshot, &arguments.name, &arguments.url)?;
+    job.check_cancelled()?;
+    job.algorithm_fuel.before_effect();
+    snapshot.publish()?;
+    Ok(())
+}
+
+fn set_remote_url(vfs: &Vfs, job: &Job, arguments: RemoteArguments) -> Result<()> {
+    let (_permit, mut snapshot) = worker::open_repository_for_write(vfs, job)?;
+    operations::set_remote_url(&mut snapshot, &arguments.name, &arguments.url)?;
+    job.check_cancelled()?;
+    job.algorithm_fuel.before_effect();
+    snapshot.publish()?;
+    Ok(())
+}
+
+fn fetch(vfs: &Vfs, job: &Job, arguments: FetchArguments) -> Result<Value> {
+    let (_permit, snapshot) = worker::open_repository_for_write(vfs, job)?;
+    let branches = transport::fetch(&snapshot, job, &arguments.remote, &arguments.branch)?;
+    job.check_cancelled()?;
+    job.algorithm_fuel.before_effect();
+    snapshot.publish()?;
+    Ok(serde_json::json!({"branches":branches.branches}))
+}
+
+fn pull(vfs: &Vfs, job: &Job, arguments: FetchArguments) -> Result<Value> {
+    let (_permit, snapshot) = worker::open_repository_for_write(vfs, job)?;
+    let result = transport::pull(&snapshot, job, &arguments.remote, &arguments.branch)?;
+    job.check_cancelled()?;
+    job.algorithm_fuel.before_effect();
+    snapshot.publish()?;
+    Ok(result)
+}
+
+#[derive(Serialize)]
+struct ShowArguments {
+    revision: String,
+    path: String,
+}
+#[derive(Serialize)]
+struct CloneArguments {
+    url: String,
+    options: Value,
+}
+#[derive(Serialize)]
+struct BranchArguments {
+    name: String,
+    start: String,
+}
+#[derive(Serialize)]
+struct RemoteArguments {
+    name: String,
+    url: String,
+}
+#[derive(Serialize)]
+struct FetchArguments {
+    remote: String,
+    branch: String,
+}
+
+#[derive(Serialize)]
+struct GitRequest<A> {
     operation: &'static str,
     path: String,
-    arguments: Vec<Value>,
+    arguments: A,
 }
 
-pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
-    let engine = linker.engine().clone();
-    let intr = build_intrinsic_types(&engine)?;
-    install_repository_reads(linker, &engine, &intr)?;
-    install_repository_writes(linker, &engine, &intr)
+/// A single call's deadline and native-memory reservation. The blocking worker
+/// retains the reservation if the awaiting guest is cancelled.
+struct GitCall {
+    operation: &'static str,
+    config: GitConfig,
+    deadline: tokio::time::Instant,
+    budget: Arc<WorkingBudget>,
+    max_bytes: u64,
 }
-
-fn install_repository_reads(
-    linker: &mut Linker<StoreData>,
-    engine: &wasmtime::Engine,
-    intr: &IntrinsicTypes,
-) -> Result<()> {
-    let argument = ValType::Ref(RefType::new(
-        true,
-        HeapType::ConcreteStruct(intr.object.clone()),
-    ));
-    let receiver = ValType::Ref(RefType::new(
-        false,
-        HeapType::ConcreteStruct(intr.object.clone()),
-    ));
-    let object = ValType::Ref(RefType::new(
-        false,
-        HeapType::ConcreteStruct(intr.object_shape.clone()),
-    ));
-    let bytes = ValType::Ref(RefType::new(
-        false,
-        HeapType::ConcreteStruct(intr.uint8_array.clone()),
-    ));
-    let array = ValType::Ref(RefType::new(
-        false,
-        HeapType::ConcreteStruct(intr.array.clone()),
-    ));
-    let repository = crate::mangle::package_symbol(MODULE_NAME, "Repository");
-    register_host_value_async(
-        linker,
-        MODULE_NAME,
-        crate::mangle::extend(&repository, "status"),
-        FuncType::new(engine, [receiver.clone()], [object.clone()]),
-        |caller, params| Box::pin(async move { invoke(caller, "status", true, params).await }),
-    )?;
-    register_host_value_async(
-        linker,
-        MODULE_NAME,
-        crate::mangle::extend(&repository, "log"),
-        FuncType::new(
-            engine,
-            [receiver.clone(), argument.clone()],
-            [object.clone()],
-        ),
-        |caller, params| Box::pin(async move { invoke(caller, "log", true, params).await }),
-    )?;
-    register_host_value_async(
-        linker,
-        MODULE_NAME,
-        crate::mangle::extend(&repository, "diff"),
-        FuncType::new(
-            engine,
-            [receiver.clone(), argument.clone()],
-            [object.clone()],
-        ),
-        |caller, params| Box::pin(async move { invoke(caller, "diff", true, params).await }),
-    )?;
-    register_host_value_async(
-        linker,
-        MODULE_NAME,
-        crate::mangle::extend(&repository, "show"),
-        FuncType::new(
-            engine,
-            [receiver.clone(), argument.clone(), argument.clone()],
-            [bytes.clone()],
-        ),
-        |caller, params| Box::pin(async move { invoke(caller, "show", true, params).await }),
-    )?;
-    register_host_value_async(
-        linker,
-        MODULE_NAME,
-        crate::mangle::extend(&repository, "branches"),
-        FuncType::new(engine, [receiver.clone()], [array.clone()]),
-        |caller, params| Box::pin(async move { invoke(caller, "branches", true, params).await }),
-    )?;
-    register_host_value_async(
-        linker,
-        MODULE_NAME,
-        crate::mangle::extend(&repository, "remotes"),
-        FuncType::new(engine, [receiver.clone()], [array.clone()]),
-        |caller, params| Box::pin(async move { invoke(caller, "remotes", true, params).await }),
-    )?;
-    Ok(())
-}
-
-fn install_repository_writes(
-    linker: &mut Linker<StoreData>,
-    engine: &wasmtime::Engine,
-    intr: &IntrinsicTypes,
-) -> Result<()> {
-    let argument = ValType::Ref(RefType::new(
-        true,
-        HeapType::ConcreteStruct(intr.object.clone()),
-    ));
-    let receiver = ValType::Ref(RefType::new(
-        false,
-        HeapType::ConcreteStruct(intr.object.clone()),
-    ));
-    let object = ValType::Ref(RefType::new(
-        false,
-        HeapType::ConcreteStruct(intr.object_shape.clone()),
-    ));
-    // Class method slots carry a value even when their source return type is void.
-    let completion = argument.clone();
-    let repository = crate::mangle::package_symbol(MODULE_NAME, "Repository");
-    register_host_value_async(
-        linker,
-        MODULE_NAME,
-        crate::mangle::extend(&repository, "add"),
-        FuncType::new(
-            engine,
-            [receiver.clone(), argument.clone()],
-            [completion.clone()],
-        ),
-        |caller, params| {
-            Box::pin(async move {
-                invoke(caller, "add", true, params).await?;
-                crate::runtime::prelude::undefined::value(caller)
-            })
-        },
-    )?;
-    register_host_value_async(
-        linker,
-        MODULE_NAME,
-        crate::mangle::extend(&repository, "commit"),
-        FuncType::new(
-            engine,
-            [receiver.clone(), argument.clone()],
-            [ValType::Ref(RefType::new(
-                false,
-                intr.string.clone().into(),
-            ))],
-        ),
-        |caller, params| Box::pin(async move { invoke(caller, "commit", true, params).await }),
-    )?;
-    register_host_value_async(
-        linker,
-        MODULE_NAME,
-        crate::mangle::extend(&repository, "createBranch"),
-        FuncType::new(
-            engine,
-            [receiver.clone(), argument.clone(), argument.clone()],
-            [completion.clone()],
-        ),
-        |caller, params| {
-            Box::pin(async move {
-                invoke(caller, "createBranch", true, params).await?;
-                crate::runtime::prelude::undefined::value(caller)
-            })
-        },
-    )?;
-    register_host_value_async(
-        linker,
-        MODULE_NAME,
-        crate::mangle::extend(&repository, "switchBranch"),
-        FuncType::new(
-            engine,
-            [receiver.clone(), argument.clone()],
-            [completion.clone()],
-        ),
-        |caller, params| {
-            Box::pin(async move {
-                invoke(caller, "switchBranch", true, params).await?;
-                crate::runtime::prelude::undefined::value(caller)
-            })
-        },
-    )?;
-    register_host_value_async(
-        linker,
-        MODULE_NAME,
-        crate::mangle::extend(&repository, "addRemote"),
-        FuncType::new(
-            engine,
-            [receiver.clone(), argument.clone(), argument.clone()],
-            [completion.clone()],
-        ),
-        |caller, params| {
-            Box::pin(async move {
-                invoke(caller, "addRemote", true, params).await?;
-                crate::runtime::prelude::undefined::value(caller)
-            })
-        },
-    )?;
-    register_host_value_async(
-        linker,
-        MODULE_NAME,
-        crate::mangle::extend(&repository, "setRemoteUrl"),
-        FuncType::new(
-            engine,
-            [receiver.clone(), argument.clone(), argument.clone()],
-            [completion.clone()],
-        ),
-        |caller, params| {
-            Box::pin(async move {
-                invoke(caller, "setRemoteUrl", true, params).await?;
-                crate::runtime::prelude::undefined::value(caller)
-            })
-        },
-    )?;
-    register_host_value_async(
-        linker,
-        MODULE_NAME,
-        crate::mangle::extend(&repository, "fetch"),
-        FuncType::new(
-            engine,
-            [receiver.clone(), argument.clone(), argument.clone()],
-            [object.clone()],
-        ),
-        |caller, params| Box::pin(async move { invoke(caller, "fetch", true, params).await }),
-    )?;
-    register_host_value_async(
-        linker,
-        MODULE_NAME,
-        crate::mangle::extend(&repository, "pull"),
-        FuncType::new(
-            engine,
-            [receiver.clone(), argument.clone(), argument.clone()],
-            [object.clone()],
-        ),
-        |caller, params| Box::pin(async move { invoke(caller, "pull", true, params).await }),
-    )?;
-    Ok(())
-}
-
-async fn invoke(
-    caller: &mut Caller<'_, StoreData>,
-    op: &'static str,
-    method: bool,
-    params: &[Val],
-) -> Result<Val> {
-    let deadline = tokio::time::Instant::now()
-        .checked_add(std::time::Duration::from_secs(60))
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("git deadline is out of range"))?;
-    let config = caller.data().git.clone().ok_or_else(|| {
-        wasmtime::Error::msg("submilli:git is disabled; configure the blueprint git block")
-    })?;
-    if op == "log" && caller.data().git_history.is_none() {
-        let cache = log_cache::Cache::new(&caller.data().tenant_limits)?;
-        caller.data_mut().git_history = Some(Arc::new(cache));
-    }
-    if matches!(
-        op,
-        "init" | "clone" | "add" | "commit" | "createBranch" | "switchBranch" | "fetch" | "pull"
-    ) && let Some(cache) = &caller.data().git_history
-    {
-        cache.invalidate()?;
-    }
-    let budget = Arc::new(WorkingBudget::reserve(&caller.data().tenant_limits, op)?);
-    let max_bytes = budget.max_bytes(op);
-    let (args, path) = before_deadline(
-        deadline,
-        decode_arguments(caller, op, method, params, max_bytes),
-    )
-    .await??;
-
-    let request = GitRequest {
-        operation: op,
-        path: path.clone(),
-        arguments: args,
-    };
-    // The worker retains this reservation if the awaiting guest is cancelled.
-    let worker_budget = Arc::clone(&budget);
-    let outcome = effects::execute(caller, "git", request, move |caller, _, request| {
-        Box::pin(async move {
-            let path = request.path;
-            let args = request.arguments;
-            let budget = worker_budget;
-            let principal = running_package(&*caller).map_err(|_| {
-                crate::runtime::host::fatal_host_error("git: cannot identify caller")
+impl GitCall {
+    fn new(caller: &Caller<'_, StoreData>, operation: &'static str) -> Result<Self> {
+        let deadline = tokio::time::Instant::now()
+            .checked_add(std::time::Duration::from_secs(60))
+            .ok_or_else(|| {
+                crate::runtime::host::fatal_host_error("git deadline is out of range")
             })?;
-            let cancelled = Arc::new(AtomicBool::new(false));
-            let cancel_guard = CancelOnDrop(cancelled.clone());
-            // The worker stops itself once its work passes what the run has left.
-            let meter = Arc::new(meter::Meter::new(
-                fuel::remaining_fuel(&mut *caller)?,
-                Some(cancelled.clone()),
-            ));
-            let job = Job {
-                op: op.to_owned(),
-                path: path.clone(),
-                caller: principal,
-                config,
-                security: caller.data().security_check.clone(),
-                secrets: caller.data().secret_provider.clone(),
-                http: caller.data().http_client.clone(),
-                runtime: tokio::runtime::Handle::try_current().map_err(|_| {
-                    crate::runtime::host::fatal_host_error("git worker requires a Tokio runtime")
-                })?,
-                deadline,
-                cancelled,
-                max_bytes,
-                transferred: Arc::new(AtomicU64::new(0)),
-                meter: Arc::clone(&meter),
-                algorithm_fuel: Arc::new(work::AlgorithmWork::with_meter(Arc::clone(&meter))),
-                denial: Arc::new(Mutex::new(None)),
-                history_cache: caller.data().git_history.clone(),
-                origin: crate::stdlib::shared::call_origin(&*caller),
-            };
-            let vfs = caller.data().vfs.clone();
-            let op = op.to_owned();
-            let denial = job.denial.clone();
-            let principal = job.caller.clone();
-            let worker = async {
-                caller
-                    .data_mut()
-                    .blocking_work
-                    .spawn(move || {
-                        job.check_cancelled()?;
-                        let _budget = budget;
-                        worker::run(&vfs, &job, &op, &args)
-                    })
-                    .await
-                    .map_err(blocking_worker_failure)?
-            };
-            let outcome = finish_worker(worker, &cancel_guard.0, deadline).await;
-            // The work is done, and may be published, whether or not it succeeded:
-            // it is settled, not refused.
-            meter.settle(&mut *caller)?;
-            if let Err(error) = &outcome
-                && meter.is_exhausted()
-                && !crate::runtime::host::ends_the_run(error)
-                && !error.is::<stage::NeedsHostRecovery>()
-            {
-                // Stopped for fuel before publishing: the run ends as a Wasm loop
-                // out of fuel would, and the program cannot catch it. A host failure,
-                // or a publication that needs recovery, says more and goes first.
-                return Err(wasmtime::Trap::OutOfFuel.into());
-            }
-
-            let outcome = match outcome {
-                Err(error)
-                    if crate::runtime::host::ends_the_run(&error)
-                        || error.is::<stage::NeedsHostRecovery>() =>
-                {
-                    if error.is::<stage::NeedsHostRecovery>() {
-                        return Err(crate::runtime::host::fatal_host_error(error));
-                    }
-                    return Err(error);
-                }
-                other => other,
-            };
-            // Poison may leave denial attribution partly updated by the worker. AGENTS.md
-            // permits this poisoned-lock panic instead of recovery, including after worker
-            // cleanup; it does not permit the panic that caused poisoning.
-            let denial = denial.lock().expect("git: denial lock poisoned").take();
-            drop(cancel_guard);
-            if let Some((capability, reason)) = denial {
-                return Err(permission_denied(&principal, &capability, reason));
-            }
-            outcome
+        let config = caller.data().git.clone().ok_or_else(|| {
+            wasmtime::Error::msg("submilli:git is disabled; configure the blueprint git block")
+        })?;
+        let budget = Arc::new(WorkingBudget::reserve(
+            &caller.data().tenant_limits,
+            operation,
+        )?);
+        let max_bytes = budget.max_bytes(operation);
+        Ok(Self {
+            operation,
+            config,
+            deadline,
+            budget,
+            max_bytes,
         })
-    })
-    .await?;
-    encode_result(caller, outcome, &path, !method, op == "commit", max_bytes)
-}
+    }
 
+    async fn execute<A, T, F>(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        path: String,
+        arguments: A,
+        operation: F,
+    ) -> Result<T>
+    where
+        A: Serialize + Send + 'static,
+        T: Serialize + DeserializeOwned + Send + 'static,
+        F: FnOnce(&Vfs, &Job, A) -> Result<T> + Send + 'static,
+    {
+        let op = self.operation;
+        let config = self.config.clone();
+        let deadline = self.deadline;
+        let max_bytes = self.max_bytes;
+        let worker_budget = Arc::clone(&self.budget);
+        let request = GitRequest {
+            operation: op,
+            path,
+            arguments,
+        };
+        effects::execute(caller, "git", request, move |caller, _, request| {
+            Box::pin(async move {
+                let path = request.path;
+                let args = request.arguments;
+                let budget = worker_budget;
+                let principal = running_package(&*caller).map_err(|_| {
+                    crate::runtime::host::fatal_host_error("git: cannot identify caller")
+                })?;
+                let cancelled = Arc::new(AtomicBool::new(false));
+                let cancel_guard = CancelOnDrop(cancelled.clone());
+                // The worker stops itself once its work passes what the run has left.
+                let meter = Arc::new(meter::Meter::new(
+                    fuel::remaining_fuel(&mut *caller)?,
+                    Some(cancelled.clone()),
+                ));
+                let job = Job {
+                    op: op.to_owned(),
+                    path: path.clone(),
+                    caller: principal,
+                    config,
+                    security: caller.data().security_check.clone(),
+                    secrets: caller.data().secret_provider.clone(),
+                    http: caller.data().http_client.clone(),
+                    runtime: tokio::runtime::Handle::try_current().map_err(|_| {
+                        crate::runtime::host::fatal_host_error(
+                            "git worker requires a Tokio runtime",
+                        )
+                    })?,
+                    deadline,
+                    cancelled,
+                    max_bytes,
+                    transferred: Arc::new(AtomicU64::new(0)),
+                    meter: Arc::clone(&meter),
+                    algorithm_fuel: Arc::new(work::AlgorithmWork::with_meter(Arc::clone(&meter))),
+                    denial: Arc::new(Mutex::new(None)),
+                    history_cache: caller.data().git_history.clone(),
+                    origin: crate::stdlib::shared::call_origin(&*caller),
+                };
+                let vfs = caller.data().vfs.clone();
+                let denial = job.denial.clone();
+                let principal = job.caller.clone();
+                let worker = async {
+                    caller
+                        .data_mut()
+                        .blocking_work
+                        .spawn(move || {
+                            job.check_cancelled()?;
+                            let _budget = budget;
+                            operation(&vfs, &job, args)
+                        })
+                        .await
+                        .map_err(blocking_worker_failure)?
+                };
+                let outcome = finish_worker(worker, &cancel_guard.0, deadline).await;
+                // The work is done, and may be published, whether or not it succeeded:
+                // it is settled, not refused.
+                meter.settle(&mut *caller)?;
+                if let Err(error) = &outcome
+                    && meter.is_exhausted()
+                    && !crate::runtime::host::ends_the_run(error)
+                    && !error.is::<stage::NeedsHostRecovery>()
+                {
+                    // Stopped for fuel before publishing: the run ends as a Wasm loop
+                    // out of fuel would, and the program cannot catch it. A host failure,
+                    // or a publication that needs recovery, says more and goes first.
+                    return Err(wasmtime::Trap::OutOfFuel.into());
+                }
+
+                let outcome = match outcome {
+                    Err(error)
+                        if crate::runtime::host::ends_the_run(&error)
+                            || error.is::<stage::NeedsHostRecovery>() =>
+                    {
+                        if error.is::<stage::NeedsHostRecovery>() {
+                            return Err(crate::runtime::host::fatal_host_error(error));
+                        }
+                        return Err(error);
+                    }
+                    other => other,
+                };
+                // Poison may leave denial attribution partly updated by the worker. AGENTS.md
+                // permits this poisoned-lock panic instead of recovery, including after worker
+                // cleanup; it does not permit the panic that caused poisoning.
+                let denial = denial.lock().expect("git: denial lock poisoned").take();
+                drop(cancel_guard);
+                if let Some((capability, reason)) = denial {
+                    return Err(permission_denied(&principal, &capability, reason));
+                }
+                outcome
+            })
+        })
+        .await
+    }
+}
 async fn before_deadline<T>(
     deadline: tokio::time::Instant,
     future: impl std::future::Future<Output = T>,
@@ -556,98 +508,6 @@ async fn finish_worker<T>(
 
 fn blocking_worker_failure(error: crate::runtime::blocking::BlockingWorkError) -> wasmtime::Error {
     crate::runtime::host::fatal_host_error("git blocking worker failed").context(error)
-}
-
-async fn decode_arguments(
-    caller: &mut Caller<'_, StoreData>,
-    op: &str,
-    method: bool,
-    params: &[Val],
-    max_bytes: u64,
-) -> Result<(Vec<Value>, String)> {
-    let mut args = Vec::new();
-    let offset = usize::from(method);
-    for (index, param) in params
-        .get(offset..)
-        .ok_or_else(|| crate::runtime::host::invariant_trap("git ABI: missing arguments"))?
-        .iter()
-        .enumerate()
-    {
-        if crate::runtime::prelude::undefined::is_undefined(caller, param)? {
-            args.push(undefined_argument(op, index)?);
-            continue;
-        }
-        let units = value::serialize(caller, param).await?;
-        if units.len() as u64 * 2 > max_bytes {
-            bail!("git: argument size limit exceeded");
-        }
-        fuel::charge(&mut *caller, fuel::PARSE, units.len() as u64)?;
-        let text = String::from_utf16(&units)
-            .map_err(|_| wasmtime::Error::msg("git: arguments must be valid Unicode"))?;
-        args.push(serde_json::from_str::<Value>(&text)?);
-    }
-    let path = if method {
-        let field = class::path(caller, abi_arg(params, 0)?)?;
-        read_string_arg(&mut *caller, &field, "git repository")?
-    } else {
-        operations::text_arg(&args, usize::from(op == "clone"))?.to_owned()
-    };
-    let path = crate::runtime::fs::guest_normalize(caller.data().vfs.cwd(), &path)?;
-    if path
-        .split('/')
-        .any(|part| part.eq_ignore_ascii_case(".git") || stage::is_reserved_stage_name(part))
-    {
-        bail!("git: repository path targets protected metadata");
-    }
-    Ok((args, path))
-}
-
-// Virtual calls apply defaults in the selected method, just as guest classes do.
-fn undefined_argument(op: &str, index: usize) -> Result<Value> {
-    match (op, index) {
-        ("init", 1) | ("clone", 2) | ("log" | "diff", 0) => {
-            Ok(Value::Object(serde_json::Map::new()))
-        }
-        ("createBranch", 1) => Ok(Value::String("HEAD".into())),
-        ("fetch" | "pull", 0) => Ok(Value::String("origin".into())),
-        ("fetch" | "pull", 1) => Ok(Value::String(String::new())),
-        _ => bail!("git: undefined is not accepted for this argument to {op}"),
-    }
-}
-
-fn encode_result(
-    caller: &mut Caller<'_, StoreData>,
-    result: worker::Output,
-    path: &str,
-    is_constructor: bool,
-    returns_string: bool,
-    max_bytes: u64,
-) -> Result<Val> {
-    if is_constructor {
-        let path = write_submilli_string_struct(caller, path)?;
-        return Ok(Val::AnyRef(Some(path.to_anyref())));
-    }
-    let result = match result {
-        worker::Output::Bytes(bytes) => {
-            let value = write_submilli_uint8array_struct(caller, &bytes)?;
-            return Ok(Val::AnyRef(Some(value.to_anyref())));
-        }
-        worker::Output::Json(value) => value,
-    };
-    if returns_string {
-        let text = result
-            .as_str()
-            .ok_or_else(|| wasmtime::Error::msg("git: invalid string result"))?;
-        let value = write_submilli_string_struct(caller, text)?;
-        return Ok(Val::AnyRef(Some(value.to_anyref())));
-    }
-    let text = serde_json::to_string(&result)?;
-    if text.len() > max_bytes as usize {
-        bail!("git: result limit exceeded");
-    }
-    // Charge for the serialized representation and its guest-side decoding.
-    fuel::charge(&mut *caller, fuel::PARSE, 2 * text.len() as u64)?;
-    value::deserialize(caller, &text.encode_utf16().collect::<Vec<_>>())
 }
 
 /// The least Git works with: what opening a repository and a fetch's index

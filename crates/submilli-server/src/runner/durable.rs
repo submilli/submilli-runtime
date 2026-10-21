@@ -14,7 +14,7 @@ use submilli_durable::history::{ExecutionAttempt, History};
 /// Bump this contract when compiler, host ABI, codecs or deterministic semantics
 /// change incompatibly. Package content retention is a separate prerequisite for
 /// replay across package changes; this version assumes unchanged package contents.
-pub(crate) const COMPATIBILITY: &str = concat!("durable-v5/wasmgc/", env!("CARGO_PKG_VERSION"));
+pub(crate) const COMPATIBILITY: &str = concat!("durable-v6/wasmgc/", env!("CARGO_PKG_VERSION"));
 
 pub(crate) fn capture_program(
     source: String,
@@ -92,7 +92,10 @@ pub(crate) async fn run(
     if !outcome.durable_completion {
         return Err("recorded execution was interrupted; retain its history and resources".into());
     }
-    history.finish().await.map_err(|error| error.to_string())?;
+    history
+        .ensure_history_consumed()
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(outcome)
 }
 
@@ -105,7 +108,7 @@ pub(crate) async fn publish(
     resolution: &RunResolution,
     last_run: Option<&StagedLastRun>,
 ) -> Result<Option<String>, RunFailure> {
-    history.finish().await.map_err(|error| {
+    history.ensure_history_consumed().await.map_err(|error| {
         RunFailure::Store(crate::application::error::StoreError::Io(error.to_string()))
     })?;
     ResolveRun::new(units)

@@ -43,18 +43,18 @@ async fn execution_history_reopens_without_dispatching_saved_calls() {
         .complete(&call, result(b"secret-native-output"))
         .await
         .unwrap();
-    history.finish().await.unwrap();
+    history.ensure_history_consumed().await.unwrap();
     drop(history);
     drop(units);
     database.close().await.unwrap();
     drop(database);
     let (_database, units, attempt) = fixture(&path).await;
     let history = History::new(attempt, units);
-    assert!(history.finish().await.is_err());
+    assert!(history.ensure_history_consumed().await.is_err());
     let call = history.begin("test.native", [3; 32]).await.unwrap();
     assert_eq!(call.id, id);
     assert_eq!(call.recorded.unwrap(), result(b"secret-native-output"));
-    history.finish().await.unwrap();
+    history.ensure_history_consumed().await.unwrap();
 }
 
 #[tokio::test]
@@ -222,7 +222,7 @@ async fn try_run_script_with(
         .unwrap();
     let result = dispatch_main_async(&mut store, &instance).await;
     if result.is_ok() {
-        history.finish().await.unwrap();
+        history.ensure_history_consumed().await.unwrap();
     }
     store.data_mut().blocking_work.finish().await.unwrap();
     result
@@ -360,8 +360,10 @@ impl EffectHistory for InterruptHistory {
         }
         self.history.complete(call, outcome).await
     }
-    async fn finish(&self) -> Result<(), interpreter::runtime::effects::HistoryError> {
-        self.history.finish().await
+    async fn ensure_history_consumed(
+        &self,
+    ) -> Result<(), interpreter::runtime::effects::HistoryError> {
+        self.history.ensure_history_consumed().await
     }
 }
 
@@ -395,7 +397,7 @@ async fn run_filesystem_script(
     let result = dispatch_main_async(&mut store, &instance).await;
     store.data_mut().blocking_work.finish().await?;
     let value = result?;
-    history.finish().await?;
+    history.ensure_history_consumed().await?;
     Ok(value)
 }
 
@@ -522,7 +524,7 @@ async fn execution_history_replays_after_result_conversion_runs_out_of_fuel() {
                 Some(&wasmtime::Trap::OutOfFuel)
             );
         }
-        history.finish().await.unwrap();
+        history.ensure_history_consumed().await.unwrap();
         let mut unit = units().await.unwrap();
         assert!(
             unit.get_history_entry(&attempt.run_id, 0)
@@ -583,6 +585,130 @@ impl interpreter::stdlib::http::HttpClient for CountedHttp {
         panic!("download is not used by this fixture")
     }
 }
+#[tokio::test]
+async fn execution_history_replays_each_code_filesystem_operation() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("files");
+    std::fs::create_dir(&root).unwrap();
+    for (name, content) in [
+        ("a.txt", "before\n"),
+        ("b.txt", "other\n"),
+        ("c.txt", "old\n"),
+    ] {
+        std::fs::write(root.join(name), content).unwrap();
+    }
+    let path = directory.path().join("db");
+    let (database, units, attempt) = fixture(&path).await;
+    let source = r#"
+        import { read, search, glob, tree, edit, insertAt, diffText, diffFiles, applyPatch } from "submilli:code";
+        function main(): string {
+            const window = read("/a.txt", 1, 1);
+            const matches = search("before", { include: ["*.txt"] });
+            const files = glob("*.txt");
+            const listing = tree("/", 1);
+            const comparison = diffFiles("/a.txt", "/b.txt");
+            const edited = edit("/a.txt", "before", "after");
+            const inserted = insertAt("/b.txt", 1, "head\n");
+            const patched = applyPatch("/c.txt", "--- a\n+++ b\n@@ -1,1 +1,1 @@\n-old\n+new\n");
+            const pure = diffText("\ud800a", "\ud800b");
+            assert(window.lines[0].text === "before");
+            assert(matches.matches.length === 1);
+            assert(files.entries.length === 3 && listing.entries.length === 3);
+            assert(comparison.includes("before") && comparison.includes("other"));
+            assert(edited.changed && inserted.changed && patched.changed);
+            assert(pure.includes("\ud800"));
+            return JSON.stringify({ window, matches, files, listing, comparison, edited, inserted, patched, pure }) ?? "";
+        }
+    "#;
+    let history = Arc::new(History::new(attempt, units.clone()));
+    let original = run_script(source, history.clone(), &root).await;
+    // The eight filesystem calls are recorded; pure diffText creates no effect.
+    assert_eq!(history.position().await, 8);
+    for (name, content) in [
+        ("a.txt", "after\n"),
+        ("b.txt", "head\nother\n"),
+        ("c.txt", "new\n"),
+    ] {
+        assert_eq!(std::fs::read_to_string(root.join(name)).unwrap(), content);
+        std::fs::remove_file(root.join(name)).unwrap();
+    }
+    std::fs::write(root.join("sentinel"), "untouched").unwrap();
+    drop(history);
+    drop(units);
+    database.close().await.unwrap();
+    drop(database);
+
+    let (_database, units, attempt) = fixture(&path).await;
+    let history = Arc::new(History::new(attempt, units));
+    let replay = run_script(source, history.clone(), &root).await;
+    assert_eq!(original, replay);
+    assert_eq!(history.position().await, 8);
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    assert_eq!(
+        std::fs::read_to_string(root.join("sentinel")).unwrap(),
+        "untouched"
+    );
+}
+
+#[tokio::test]
+async fn execution_history_replays_git_results_without_reopening_the_repository() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("files");
+    std::fs::create_dir(&root).unwrap();
+    let path = directory.path().join("db");
+    let (database, units, attempt) = fixture(&path).await;
+    let source = r#"
+        import { Repository } from "submilli:git";
+        import { writeText } from "submilli:fs";
+        function main(): string {
+            const repo = Repository.init("/repo");
+            writeText("/repo/file.txt", "hello\n");
+            repo.add(["file.txt"]);
+            const commit = repo.commit("initial");
+            const status = repo.status();
+            const history = repo.log();
+            const comparison = repo.diff();
+            const contents = repo.show("HEAD", "file.txt");
+            const branches = repo.branches();
+            repo.createBranch("topic");
+            repo.switchBranch("topic");
+            repo.addRemote("origin", "https://example.com/repo.git");
+            repo.setRemoteUrl("origin", "https://example.com/other.git");
+            const remotes = repo.remotes();
+            const reopened = Repository.open("/repo");
+            const reopenedStatus = reopened.status();
+            assert(contents[0] === 104);
+            return JSON.stringify({ commit, status, history, comparison, branches, remotes, reopenedStatus }) ?? "";
+        }
+    "#;
+    let configure = |data: &mut interpreter::runtime::StoreData| {
+        data.git = Some(interpreter::stdlib::git::GitConfig {
+            name: "Test".into(),
+            email: "test@example.com".into(),
+            username: None,
+        });
+    };
+    let history = Arc::new(History::new(attempt, units.clone()));
+    let original = run_script_with(source, history.clone(), &root, configure).await;
+    assert_eq!(history.position().await, 16);
+    assert_eq!(
+        std::fs::read_to_string(root.join("repo/file.txt")).unwrap(),
+        "hello\n"
+    );
+    std::fs::remove_dir_all(root.join("repo")).unwrap();
+    drop(history);
+    drop(units);
+    database.close().await.unwrap();
+    drop(database);
+
+    let (_database, units, attempt) = fixture(&path).await;
+    let history = Arc::new(History::new(attempt, units));
+    let replay = run_script_with(source, history.clone(), &root, configure).await;
+    assert_eq!(original, replay);
+    assert_eq!(history.position().await, 16);
+    assert!(!root.join("repo").exists());
+}
+
 #[tokio::test]
 async fn execution_history_replays_native_http_errors_session_values_and_code_mutation() {
     let directory = tempfile::tempdir().unwrap();
@@ -667,8 +793,10 @@ impl EffectHistory for InspectSpendHistory {
         }
         self.history.complete(call, outcome).await
     }
-    async fn finish(&self) -> Result<(), interpreter::runtime::effects::HistoryError> {
-        self.history.finish().await
+    async fn ensure_history_consumed(
+        &self,
+    ) -> Result<(), interpreter::runtime::effects::HistoryError> {
+        self.history.ensure_history_consumed().await
     }
 }
 
@@ -1089,7 +1217,7 @@ async fn execution_history_error_conversion_can_stop_for_fuel_without_losing_the
         }
         if mode != Attempt::Direct {
             // This also proves the low-fuel replay consumed its history entry.
-            history.finish().await.unwrap();
+            history.ensure_history_consumed().await.unwrap();
             let mut unit = units().await.unwrap();
             let entry = unit
                 .get_history_entry(&attempt.run_id, 0)

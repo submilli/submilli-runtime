@@ -1,8 +1,9 @@
 //! Ignore-aware traversal uses VFS handles only; ignore matchers see virtual paths.
 use super::{
-    argument,
     budget::{Budget, OutputBudget},
-    gate, normalize, read_contents, read_file, text,
+    gate,
+    install::argument,
+    normalize, read_contents, read_file, text,
 };
 use crate::runtime::fs::resolve_link;
 use crate::runtime::fuel;

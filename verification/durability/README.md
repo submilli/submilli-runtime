@@ -236,8 +236,9 @@ encoding, SQL, encryption and decoding buffers are infrastructure overhead and d
 not consume the run's memory budget. Encoded-size and structural limits remain;
 ordinary provider allocations and guest allocations retain their existing limits.
 This does not claim a total-memory bound for arbitrary Serde deserializers.
-The native codec is version 3 and runtime compatibility marker is version 4;
-older internal recordings are refused after the outcome and budget contract change.
+The native codec is version 4 and runtime compatibility marker is version 6;
+older internal recordings are refused after the outcome, budget and code-operation
+identity/representation changes.
 
 HTTP downloads retain metadata and the destination reference, never the downloaded
 file body. Large-object storage is a later optimization.
@@ -260,6 +261,14 @@ boundary; pure operations have no history row. Console logging also stays outsid
 the boundary: it writes normally on every attempt, including replay, and can
 publish duplicate console events. Output is retained with the finished run;
 incremental console persistence is deferred to SUB-1885.
+
+Each filesystem-backed `submilli:code` method has its own `code.<method>` effect
+identity and native result. `diffText` stays pure. Saved code results replay without
+filesystem access; a missing result reruns the native operation. This adds no
+mutation idempotency: crash-safe code edits remain SUB-1857.
+Git also records each named native method’s typed result (JSON, text, bytes or
+unit), before converting it to a guest value. The runtime compatibility marker
+rejects histories containing the previous code/Git result formats.
 
 Reader, writer and listing values all require a run ID and serialize identity/options
 directly. Process-local handle state lives alongside these types in the filesystem

@@ -1,4 +1,6 @@
 //! Repository jobs run on the blocking pool and retain their VFS through cleanup.
+//! Acquire each repository lock before a worker permit, so calls waiting for one
+//! busy repository do not occupy workers needed by other repositories.
 use super::{Job, location::Location, lock::RepositoryLock, operations, storage, transport};
 
 use crate::runtime::fs::{ContainError, check_repository_clear_of_mounts};
@@ -9,118 +11,95 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use wasmtime::{Result, bail};
 
-#[derive(serde::Serialize, serde::Deserialize)]
-pub(super) enum Output {
-    Json(Value),
-    Bytes(#[serde(with = "crate::runtime::effects::binary")] Vec<u8>),
-}
-
-pub(super) fn run(
+pub(super) fn open_repository(
     vfs: &crate::runtime::Vfs,
     job: &Job,
-    op: &str,
-    args: &[Value],
-) -> Result<Output> {
+) -> Result<(tokio::sync::OwnedSemaphorePermit, storage::Snapshot)> {
     let (root, relative, placement) = locate_repository(vfs, job)?;
-    let branch = requested_branch(op, args)?;
-    authorize_operation(job, op, args, branch)?;
-    let creates = matches!(op, "init" | "clone");
-    // A change stages inside the repository, so a read-only volume refuses it
-    // before anything is written.
-    if writes(op) {
-        refuse_read_only_repository(job, op, &placement)?;
+    reject_symlink_components(&root, &relative)?;
+    let location = open_directory(&root, &relative, &placement)?;
+    let lock = RepositoryLock::acquire(location.identity, &job.cancelled)?;
+    let permit = job.worker_permit()?;
+    let mut snapshot = storage::Snapshot::open(&location, lock, opening(job, &placement), false)?;
+    snapshot.algorithm_fuel = Arc::clone(&job.algorithm_fuel);
+    snapshot.history_cache = job.history_cache.clone();
+    Ok((permit, snapshot))
+}
+
+pub(super) fn open_repository_for_write(
+    vfs: &crate::runtime::Vfs,
+    job: &Job,
+) -> Result<(tokio::sync::OwnedSemaphorePermit, storage::Snapshot)> {
+    let (root, relative, placement) = locate_repository(vfs, job)?;
+    refuse_read_only_repository(job, &job.op, &placement)?;
+    reject_symlink_components(&root, &relative)?;
+    let location = open_directory(&root, &relative, &placement)?;
+    storage::reject_in_progress(&location.dir)?;
+    let lock = RepositoryLock::acquire(location.identity, &job.cancelled)?;
+    let permit = job.worker_permit()?;
+    let mut snapshot = storage::Snapshot::open(&location, lock, opening(job, &placement), true)?;
+    snapshot.algorithm_fuel = Arc::clone(&job.algorithm_fuel);
+    snapshot.history_cache = job.history_cache.clone();
+    Ok((permit, snapshot))
+}
+
+pub(super) fn create_repository(
+    vfs: &crate::runtime::Vfs,
+    job: &Job,
+    branch: &str,
+) -> Result<(tokio::sync::OwnedSemaphorePermit, storage::Snapshot)> {
+    let (root, relative, placement) = locate_repository(vfs, job)?;
+    refuse_read_only_repository(job, &job.op, &placement)?;
+    job.algorithm_fuel.before_effect();
+    reject_symlink_components(&root, &relative)?;
+    root.create_dir_all(&relative)?;
+    let location = open_directory(&root, &relative, &placement)?;
+    initialize_repository(&location, &placement, job, branch)
+}
+
+pub(super) fn create_clone_repository(
+    vfs: &crate::runtime::Vfs,
+    job: &Job,
+    branch: &str,
+) -> Result<(tokio::sync::OwnedSemaphorePermit, storage::Snapshot)> {
+    let (root, relative, placement) = locate_repository(vfs, job)?;
+    refuse_read_only_repository(job, &job.op, &placement)?;
+    job.algorithm_fuel.before_effect();
+    reject_symlink_components(&root, &relative)?;
+    root.create_dir_all(&relative)?;
+    let location = open_directory(&root, &relative, &placement)?;
+    if location.dir.entries()?.next().is_some() {
+        bail!("git.clone: destination must be empty");
     }
-    if creates {
-        job.algorithm_fuel.before_effect();
+    initialize_repository(&location, &placement, job, branch)
+}
+
+fn initialize_repository(
+    location: &Location,
+    placement: &crate::runtime::vfs::Placement,
+    job: &Job,
+    branch: &str,
+) -> Result<(tokio::sync::OwnedSemaphorePermit, storage::Snapshot)> {
+    let lock = RepositoryLock::acquire(location.identity, &job.cancelled)?;
+    let permit = job.worker_permit()?;
+    let mut snapshot = storage::Snapshot::init(
+        location,
+        lock,
+        if branch.is_empty() { "main" } else { branch },
+        opening(job, placement),
+    )?;
+    snapshot.algorithm_fuel = Arc::clone(&job.algorithm_fuel);
+    snapshot.history_cache = job.history_cache.clone();
+    Ok((permit, snapshot))
+}
+
+fn opening(job: &Job, placement: &crate::runtime::vfs::Placement) -> storage::Opening {
+    storage::Opening {
+        cancelled: job.cancelled.clone(),
+        max_bytes: job.max_bytes,
+        quota: placement.quota().cloned(),
+        meter: Arc::clone(&job.meter),
     }
-    // Declared first, the permit is released last, after the snapshot's cleanup.
-    let (_permit, mut snapshot) =
-        open_snapshot(&root, &relative, &placement, job, op, creates, branch)?;
-    let mut changed = op == "init";
-    let result = match op {
-        "open" | "init" => Value::Null,
-        "clone" => {
-            clone_repository(&mut snapshot, job, operations::text_arg(args, 0)?, branch)?;
-            changed = true;
-            Value::Null
-        }
-        "add" => {
-            let paths = args.first().ok_or_else(|| {
-                crate::runtime::host::fatal_host_error("git.add worker is missing decoded paths")
-            })?;
-            let paths = serde_json::from_value::<Vec<String>>(paths.clone())?;
-            operations::add(&snapshot, &paths)?;
-            changed = true;
-            Value::Null
-        }
-        "commit" => {
-            job.check(
-                "git.commit",
-                json!({"path":job.path,"branch":operations::current_branch(&snapshot)?}),
-            )?;
-            let id = operations::commit(&snapshot, operations::text_arg(args, 0)?, &job.config)?;
-            changed = true;
-            json!(id)
-        }
-        "createBranch" => {
-            operations::create_branch(
-                &snapshot,
-                operations::text_arg(args, 0)?,
-                operations::text_arg(args, 1)?,
-            )?;
-            changed = true;
-            Value::Null
-        }
-        "switchBranch" => {
-            operations::checkout(&snapshot, operations::text_arg(args, 0)?)?;
-            changed = true;
-            Value::Null
-        }
-        "addRemote" | "setRemoteUrl" => {
-            operations::set_remote(
-                &mut snapshot,
-                operations::text_arg(args, 0)?,
-                operations::text_arg(args, 1)?,
-                op == "addRemote",
-            )?;
-            changed = true;
-            Value::Null
-        }
-        "fetch" => {
-            let branches = transport::fetch(
-                &snapshot,
-                job,
-                operations::text_arg(args, 0)?,
-                operations::text_arg(args, 1)?,
-            )?;
-            changed = true;
-            json!({"branches":branches.branches})
-        }
-        "pull" => {
-            let value = transport::pull(
-                &snapshot,
-                job,
-                operations::text_arg(args, 0)?,
-                operations::text_arg(args, 1)?,
-            )?;
-            changed = true;
-            value
-        }
-        "show" => {
-            return Ok(Output::Bytes(operations::show(
-                &snapshot,
-                operations::text_arg(args, 0)?,
-                operations::text_arg(args, 1)?,
-            )?));
-        }
-        _ => operations::read(&snapshot, op, args)?,
-    };
-    if changed {
-        job.check_cancelled()?;
-        job.algorithm_fuel.before_effect();
-        snapshot.publish()?;
-    }
-    Ok(Output::Json(result))
 }
 
 /// The volume holding the repository at `job.path`, the repository's path within
@@ -172,49 +151,22 @@ fn refuse_read_only_repository(
     ))
 }
 
-fn requested_branch<'a>(op: &str, args: &'a [Value]) -> Result<&'a str> {
-    let branch = args
-        .last()
-        .and_then(|o| o.get("branch"))
+pub(super) fn requested_branch<'a>(options: &'a Value, default: &'a str) -> Result<&'a str> {
+    validate_branch_options(options)?;
+    Ok(options
+        .get("branch")
         .and_then(Value::as_str)
-        .unwrap_or(if op == "clone" { "" } else { "main" });
-    if let Some(explicit) = args
-        .last()
-        .and_then(|options| options.get("branch"))
-        .and_then(Value::as_str)
-    {
-        storage::validate_branch(explicit)?;
-    }
-    Ok(branch)
+        .unwrap_or(default))
 }
 
-fn authorize_operation(job: &Job, op: &str, args: &[Value], branch: &str) -> Result<()> {
-    match op {
-        "init" => job.check("git.init", json!({"path":job.path})),
-        "clone" => {
-            let url = transport::canonical_url(operations::text_arg(args, 0)?)?;
-            job.check(
-                "git.clone",
-                json!({"path":job.path,"remote":url,"remoteName":"origin","branch":branch}),
-            )
-        }
-        _ => Ok(()),
+pub(super) fn validate_branch_options(options: &Value) -> Result<()> {
+    if let Some(branch) = options.get("branch").and_then(Value::as_str) {
+        storage::validate_branch(branch)?;
     }
+    Ok(())
 }
 
-/// `relative` is the repository's path within the volume `root` holds, `.` for
-/// the volume's own root. The repository is held first, then one of the
-/// workers Git shares, so calls waiting on a busy repository don't keep
-/// others from working.
-fn open_snapshot(
-    root: &cap_std::fs::Dir,
-    relative: &std::path::Path,
-    placement: &crate::runtime::vfs::Placement,
-    job: &Job,
-    op: &str,
-    create: bool,
-    branch: &str,
-) -> Result<(tokio::sync::OwnedSemaphorePermit, storage::Snapshot)> {
+fn reject_symlink_components(root: &Dir, relative: &std::path::Path) -> Result<()> {
     let mut prefix = std::path::PathBuf::new();
     for component in relative.components() {
         prefix.push(component);
@@ -227,9 +179,14 @@ fn open_snapshot(
             Err(error) => return Err(error.into()),
         }
     }
-    if create {
-        root.create_dir_all(relative)?;
-    }
+    Ok(())
+}
+
+fn open_directory(
+    root: &Dir,
+    relative: &std::path::Path,
+    placement: &crate::runtime::vfs::Placement,
+) -> Result<Location> {
     let canonical = root.canonicalize(relative)?;
     if canonical != relative
         && !(relative == std::path::Path::new(".") && canonical.as_os_str().is_empty())
@@ -237,60 +194,16 @@ fn open_snapshot(
         bail!("git: repository paths must not contain symlinks; use the canonical VFS path");
     }
     let dir = Arc::new(root.open_dir(relative)?);
-    let location = Location::new(Arc::clone(&dir), placement, relative)?;
-    if op == "clone" && dir.entries()?.next().is_some() {
-        bail!("git.clone: destination must be empty");
-    }
-    if writes(op) && !create {
-        storage::reject_in_progress(&dir)?;
-    }
-    let lock = RepositoryLock::acquire(location.identity, &job.cancelled)?;
-    let permit = job.worker_permit()?;
-    let opening = storage::Opening {
-        cancelled: job.cancelled.clone(),
-        max_bytes: job.max_bytes,
-        quota: placement.quota().cloned(),
-        meter: Arc::clone(&job.meter),
-    };
-    let mut snapshot = if create {
-        storage::Snapshot::init(
-            &location,
-            lock,
-            if branch.is_empty() { "main" } else { branch },
-            opening,
-        )?
-    } else {
-        storage::Snapshot::open(&location, lock, opening, writes(op))?
-    };
-    snapshot.algorithm_fuel = Arc::clone(&job.algorithm_fuel);
-    snapshot.history_cache = job.history_cache.clone();
-    Ok((permit, snapshot))
+    Location::new(dir, placement, relative)
 }
 
-/// Whether `op` changes the repository, and so needs a stage.
-fn writes(op: &str) -> bool {
-    matches!(
-        op,
-        "init"
-            | "clone"
-            | "add"
-            | "commit"
-            | "createBranch"
-            | "switchBranch"
-            | "addRemote"
-            | "setRemoteUrl"
-            | "fetch"
-            | "pull"
-    )
-}
-
-fn clone_repository(
+pub(super) fn clone_repository(
     snapshot: &mut storage::Snapshot,
     job: &Job,
     url: &str,
     branch: &str,
 ) -> Result<()> {
-    operations::set_remote(snapshot, "origin", url, true)?;
+    operations::add_remote(snapshot, "origin", url)?;
     let fetched = transport::fetch(snapshot, job, "origin", branch)?;
     let branch = if branch.is_empty() {
         fetched.default_branch.as_deref().ok_or_else(|| {
@@ -309,4 +222,86 @@ fn clone_repository(
     operations::replace_worktree(snapshot, &next)?;
     operations::create_branch(snapshot, branch, &format!("refs/remotes/origin/{branch}"))?;
     snapshot.write_head(branch)
+}
+
+#[cfg(test)]
+pub(super) fn run(vfs: &crate::runtime::Vfs, job: &Job, op: &str, args: &[Value]) -> Result<()> {
+    let text = |index| operations::text_arg(args, index).map(str::to_owned);
+    match op {
+        "open" => super::open(vfs, job, ()),
+        "init" => super::init(vfs, job, args.last().cloned().unwrap_or(Value::Null)),
+        "clone" => super::clone_repository(
+            vfs,
+            job,
+            super::CloneArguments {
+                url: text(0)?,
+                options: args.last().cloned().unwrap_or(Value::Null),
+            },
+        ),
+        "status" => super::status(vfs, job, ()).map(|_| ()),
+        "branches" => super::branches(vfs, job, ()).map(|_| ()),
+        "remotes" => super::remotes(vfs, job, ()).map(|_| ()),
+        "log" => super::log(vfs, job, args.first().cloned().unwrap_or(Value::Null)).map(|_| ()),
+        "diff" => super::diff(vfs, job, args.first().cloned().unwrap_or(Value::Null)).map(|_| ()),
+        "show" => super::show(
+            vfs,
+            job,
+            super::ShowArguments {
+                revision: text(0)?,
+                path: text(1)?,
+            },
+        )
+        .map(|_| ()),
+        "add" => {
+            let paths = args.first().ok_or_else(|| {
+                crate::runtime::host::fatal_host_error("git.add worker is missing decoded paths")
+            })?;
+            super::add(vfs, job, serde_json::from_value(paths.clone())?)
+        }
+        "commit" => super::commit(vfs, job, text(0)?).map(|_| ()),
+        "createBranch" => super::create_branch(
+            vfs,
+            job,
+            super::BranchArguments {
+                name: text(0)?,
+                start: text(1)?,
+            },
+        ),
+        "switchBranch" => super::switch_branch(vfs, job, text(0)?),
+        "addRemote" => super::add_remote(
+            vfs,
+            job,
+            super::RemoteArguments {
+                name: text(0)?,
+                url: text(1)?,
+            },
+        ),
+        "setRemoteUrl" => super::set_remote_url(
+            vfs,
+            job,
+            super::RemoteArguments {
+                name: text(0)?,
+                url: text(1)?,
+            },
+        ),
+        "fetch" => super::fetch(
+            vfs,
+            job,
+            super::FetchArguments {
+                remote: text(0)?,
+                branch: text(1)?,
+            },
+        )
+        .map(|_| ()),
+        "pull" => super::pull(
+            vfs,
+            job,
+            super::FetchArguments {
+                remote: text(0)?,
+                branch: text(1)?,
+            },
+        )
+        .map(|_| ()),
+        _ => panic!("unknown test operation {op}"),
+    }
 }

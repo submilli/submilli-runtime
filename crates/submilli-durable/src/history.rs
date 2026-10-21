@@ -207,7 +207,7 @@ impl EffectHistory for History {
         Ok(())
     }
 
-    async fn finish(&self) -> Result<(), HistoryError> {
+    async fn ensure_history_consumed(&self) -> Result<(), HistoryError> {
         let cursor = self.cursor.lock().await;
         let mut unit = (self.units)().await.map_err(history_error)?;
         let progress = unit
