@@ -554,7 +554,11 @@ impl Inferer<'_> {
             return Ok(Some(literal));
         }
         // A template of constants is the string it spells, as `tsc` has it.
-        if let Some(value) = super::comparison_operand::constant_template(self.ast, value_expr)? {
+        if let Some(value) = super::comparison_operand::constant_template(
+            self.ast,
+            value_expr,
+            self.global_numbers(),
+        )? {
             return Ok(Some(TypedSwitchValue::String {
                 value,
                 span: value_span,
@@ -563,11 +567,14 @@ impl Inferer<'_> {
         // Adding `0.0` makes `-0` the same label as `0`, which `===` can't tell
         // apart either.
         Ok(
-            super::comparison_operand::constant_number(self.ast, value_expr)?.map(|value| {
-                TypedSwitchValue::Number {
-                    value: value + 0.0,
-                    span: value_span,
-                }
+            super::comparison_operand::constant_number(
+                self.ast,
+                value_expr,
+                self.global_numbers(),
+            )?
+            .map(|value| TypedSwitchValue::Number {
+                value: value + 0.0,
+                span: value_span,
             }),
         )
     }

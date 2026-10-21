@@ -5101,7 +5101,11 @@ impl Inferer<'_> {
         typed: ExprId,
         ty: &Type,
     ) -> Result<Option<String>, CompilerFailure> {
-        if let Some(text) = super::comparison_operand::constant_substitution(self.ast, source)? {
+        if let Some(text) = super::comparison_operand::constant_substitution(
+            self.ast,
+            source,
+            self.global_numbers(),
+        )? {
             return Ok(Some(text));
         }
         let kind = &self
