@@ -1,0 +1,67 @@
+namespace: submilli
+provides:
+- name: linear-agent.action
+  description: Publish an action and, optionally, its completed result.
+  fields:
+    sessionId:
+      type: string
+- name: linear-agent.addExternalLinks
+  description: Add session links without replacing the existing list.
+  fields:
+    sessionId:
+      type: string
+- name: linear-agent.ask
+  description: Ask a question; Linear waits for user input, but local execution continues.
+  fields:
+    sessionId:
+      type: string
+- name: linear-agent.askAccountConnection
+  description: Ask the user to connect an account over HTTPS; does not suspend local execution.
+  fields:
+    sessionId:
+      type: string
+- name: linear-agent.askChoice
+  description: Ask the user to select a labeled choice; free-text replies remain possible.
+  fields:
+    sessionId:
+      type: string
+- name: linear-agent.fail
+  description: Publish a failure as an error activity.
+  fields:
+    sessionId:
+      type: string
+- name: linear-agent.getSession
+  description: Read a session snapshot.
+  fields:
+    sessionId:
+      type: string
+- name: linear-agent.listActivities
+  description: Read one page of history, including user prompts and their signals.
+  fields:
+    sessionId:
+      type: string
+- name: linear-agent.removeExternalLinks
+  description: Remove specific URLs from the session links.
+  fields:
+    sessionId:
+      type: string
+- name: linear-agent.respond
+  description: Publish a completed answer; local execution is controlled by the caller.
+  fields:
+    sessionId:
+      type: string
+- name: linear-agent.setExternalLinks
+  description: Replace all session links; an empty array clears them.
+  fields:
+    sessionId:
+      type: string
+- name: linear-agent.thought
+  description: Publish a short, user-visible progress update.
+  fields:
+    sessionId:
+      type: string
+requires:
+- capability: linear.app/createAgentActivity
+- capability: linear.app/getAgentSession
+- capability: linear.app/listAgentActivities
+- capability: linear.app/updateAgentSession

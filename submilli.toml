@@ -13,6 +13,14 @@ keywords = ["linear", "graphql", "issues", "project-management", "api"]
 path = "packages/linear"
 
 [[package]]
+name = "@submilli/linear-agent"
+version = "0.1.0"
+description = "Typed outbound progress, actions, questions, responses, and session history for Linear agents."
+keywords = ["linear", "agents", "sessions", "activities"]
+path = "packages/linear-agent"
+dependencies = ["@submilli/linear"]
+
+[[package]]
 name = "@submilli/slack-user"
 version = "0.1.0"
 description = "User-token Slack client for agent search, messages, channels, users, files, and reactions."
