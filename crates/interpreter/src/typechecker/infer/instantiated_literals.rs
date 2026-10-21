@@ -1,5 +1,5 @@
-//! The literal types an argument's array and tuple literals keep once a
-//! generic call is inferred.
+//! The literal types an argument's array, tuple and object literals keep once
+//! a generic call is inferred.
 //!
 //! An argument is inferred against its parameter with the call's type
 //! parameters still open, so a literal in it widens against a bare `V`. tsc
@@ -9,8 +9,8 @@
 //! `boolean`, so the tuple is `[string, true]`.
 //!
 //! Only the types of the literal nodes change. The binding already happened,
-//! and codegen builds arrays and tuples from their element types, which stay.
-//! Object literals are left alone: codegen lays them out from their type.
+//! codegen builds arrays and tuples from their element types, and lays object
+//! literals out from their field origins' declared types, all of which stay.
 
 use crate::compiler_error::CompilerFailure;
 use crate::{ExprId, Type, TypedArrayElement, TypedExprKind};
@@ -67,6 +67,10 @@ impl Inferer<'_> {
                     None => None,
                 }
             }
+            TypedExprKind::ObjectLiteral { fields, .. } => {
+                let fields = fields.clone();
+                self.retype_object(&fields, &current, slot)?
+            }
             _ => None,
         };
         if let Some(ty) = &retyped {
@@ -103,6 +107,53 @@ impl Inferer<'_> {
             }
         }
         Ok(changed.then_some(Type::Tuple(retyped)))
+    }
+
+    fn retype_object(
+        &mut self,
+        fields: &[crate::TypedObjectFieldOrigin],
+        current: &Type,
+        slot: &Type,
+    ) -> Result<Option<Type>, CompilerFailure> {
+        let (
+            Type::Object {
+                fields: own_fields, ..
+            },
+            Some(Type::Object {
+                fields: slot_fields,
+                ..
+            }),
+        ) = (
+            current,
+            sole_member(slot, |member| matches!(member, Type::Object { .. })),
+        )
+        else {
+            return Ok(None);
+        };
+        let mut retyped = current.clone();
+        let Type::Object {
+            fields: retyped_fields,
+            ..
+        } = &mut retyped
+        else {
+            return Ok(None);
+        };
+        let mut changed = false;
+        for origin in fields {
+            let crate::TypedObjectFieldSource::Literal(value) = origin.source else {
+                continue;
+            };
+            let name = &origin.name.name;
+            let (Some(own), Some(field_slot)) = (own_fields.get(name), slot_fields.get(name))
+            else {
+                continue;
+            };
+            if let Some(ty) = self.retype_literal(value, &field_slot.ty)? {
+                retyped_fields.insert(name.clone(), crate::ObjectField { ty, ..own.clone() });
+                changed = true;
+            }
+        }
+        Ok(changed.then_some(retyped))
     }
 
     fn retype_array(
@@ -177,6 +228,21 @@ mod tests {
              function main(): void {}",
         );
         assert_eq!(types, ["[string, true]", "[string, true][]"]);
+    }
+
+    #[test]
+    fn object_argument_literals_keep_what_the_instantiated_parameter_names() {
+        let ta = run_clean(
+            "function id<V>(z: V): V { return z; }\n\
+             const r = id({ n: 1, s: \"a\", b: true });\n\
+             function main(): void {}",
+        );
+        let types: Vec<String> = (0..ta.exprs_len())
+            .map(|index| ta.try_expr(ExprId(index as u32)).unwrap())
+            .filter(|expr| matches!(expr.kind, TypedExprKind::ObjectLiteral { .. }))
+            .map(|expr| expr.ty.to_string())
+            .collect();
+        assert_eq!(types, ["{ b: true; n: number; s: string }"]);
     }
 
     #[test]

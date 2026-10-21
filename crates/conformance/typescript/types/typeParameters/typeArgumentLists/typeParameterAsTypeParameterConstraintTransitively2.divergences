@@ -1,9 +1,1 @@
-types: 34 of 72 tsc entries compared, 2 differ
-
-line 17: { x: 2, y: 2, z: true }
-  tsc:  { x: number; y: number; z: true; }
-  ours: { x: number; y: number; z: boolean }
-
-line 19: { foo: 1, bar: '', hm: true }
-  tsc:  { foo: number; bar: string; hm: true; }
-  ours: { bar: string; foo: number; hm: boolean }
+types: 34 of 72 tsc entries compared, 0 differ
