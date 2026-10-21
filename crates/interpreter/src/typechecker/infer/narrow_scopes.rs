@@ -182,11 +182,7 @@ impl<'a> Inferer<'a> {
     /// Mutable roots must have no later assignments in the enclosing function
     /// and no writes in nested functions. Declaration identities keep shadowed
     /// bindings separate; statement ends account for branches and loops.
-    pub(super) fn narrowing_survives_closure(
-        &self,
-        path: &narrowing::ReferencePath,
-        closure: Span,
-    ) -> bool {
+    fn narrowing_survives_closure(&self, path: &narrowing::ReferencePath, closure: Span) -> bool {
         if !path.chain.is_empty() {
             return false;
         }

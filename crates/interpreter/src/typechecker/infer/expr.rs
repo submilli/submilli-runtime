@@ -7696,6 +7696,29 @@ impl Inferer<'_> {
                 ty.widen_literal()
             }));
         }
+        // A local read where it stands needs no trial: its type is the
+        // narrowing in effect or its declared type.
+        if sees_narrowing
+            && let ExprKind::Identifier(name) = &self
+                .ast
+                .try_expr(peel_parens(self.ast, default)?)
+                .map_err(super::arena_failure)?
+                .kind
+            && let Some(entry) = self.scopes.get(&name.name)
+        {
+            let path = super::narrowing::ReferencePath {
+                root: super::narrowing::BindingId::Local {
+                    name: name.name.clone(),
+                    decl_scope: entry.decl_scope,
+                },
+                chain: Vec::new(),
+            };
+            let declared = entry.ty.clone();
+            return Ok(Some(
+                self.narrowed_read(path)
+                    .map_or(declared, |(_, narrowed)| narrowed),
+            ));
+        }
         let infer = |this: &mut Self| {
             let errors_before = this.error_count();
             let (typed, ty) = this.infer_expr(default, None)?;

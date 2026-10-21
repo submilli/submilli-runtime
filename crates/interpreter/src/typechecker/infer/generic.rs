@@ -328,7 +328,7 @@ impl Inferer<'_> {
         annot: &TypeAnnotation,
         subject: &str,
     ) -> Result<Type, CompilerFailure> {
-        let resolved = self.resolve_type(annot)?;
+        let resolved = self.resolve_type_in_flow(annot)?;
         if let Some(offender) = super::value_operand::valueless_within_type_argument(&resolved) {
             let offender = offender.clone();
             self.error(

@@ -263,8 +263,8 @@ impl<'a> Inferer<'a> {
     }
 
     /// [`Self::resolve_type`] for an annotation resolved where it runs, a
-    /// `let` or `const` declaration's or a cast's, whose type queries take
-    /// the narrowing in effect there, as in tsc.
+    /// `let` or `const` declaration's, a cast's or a call's type argument,
+    /// whose type queries take the narrowing in effect there, as in tsc.
     pub(super) fn resolve_type_in_flow(
         &mut self,
         annot: &TypeAnnotation,
@@ -793,26 +793,34 @@ impl<'a> Inferer<'a> {
             .ok_or_else(|| super::inference_failure("empty typeof path"))?;
         let name = root_span.name.clone();
 
-        let Some(mut ty) = self.lookup_value_type(&name) else {
+        let Some(declared) = self.lookup_value_type(&name) else {
             return Ok(self.typeof_type_name(root_span, rest));
         };
 
-        for seg in rest {
+        // Each step reads the narrowed type of the path so far, so a root
+        // narrowed to one member of a union reads that member's field.
+        let mut ty = self.narrowed_query_type(root_span, &[]).unwrap_or(declared);
+        for (index, seg) in rest.iter().enumerate() {
             let field = seg.name.clone();
             let Some(next) = self.field_type_of(&ty, &field, seg.span)? else {
                 self.error(seg.span, format!("`{field}` is not a field of `{ty}`"));
                 return Ok(Type::Error);
             };
-            ty = next;
+            ty = self
+                .narrowed_query_type(root_span, &rest[..=index])
+                .unwrap_or(next);
         }
-        Ok(self.narrowed_query_type(root_span, rest).unwrap_or(ty))
+        Ok(ty)
     }
 
     /// The type a narrowing in scope gives `root.rest…`, which a type query
-    /// takes as TypeScript does: `typeof x.p` under `x.p === "A"` is `"A"`.
-    /// In a signature, only a narrowing that would survive into the function
-    /// applies, as the function may run after its root is reassigned.
+    /// takes as TypeScript does where it runs: `typeof x.p` under
+    /// `x.p === "A"` is `"A"`. A signature's takes none, as its function may
+    /// run elsewhere.
     fn narrowed_query_type(&self, root: &crate::Ident, rest: &[crate::Ident]) -> Option<Type> {
+        if !self.type_queries_see_narrowing {
+            return None;
+        }
         let entry = self.scopes.get(&root.name)?;
         let path = super::narrowing::ReferencePath {
             root: super::narrowing::BindingId::Local {
@@ -824,9 +832,6 @@ impl<'a> Inferer<'a> {
                 .map(|segment| super::narrowing::PathElem::Field(segment.name.clone()))
                 .collect(),
         };
-        if !self.type_queries_see_narrowing && !self.narrowing_survives_closure(&path, root.span) {
-            return None;
-        }
         self.narrowed_read(path).map(|(_, ty)| ty)
     }
 

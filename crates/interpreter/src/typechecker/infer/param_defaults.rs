@@ -95,13 +95,24 @@ impl Inferer<'_> {
                 .object_pattern_sources
                 .contains_key(&super::expr::peel_parens(self.ast, default)?);
         let expected = (!shaped_by_pattern).then_some(&declared);
+        let errors_before = self.error_count();
         let (default_value, default_ty) = self.infer_expr(default, expected)?;
         let default_span = self.ast.try_expr(default).map_err(arena_failure)?.span;
         // Replace only the outer contextual mismatch with the parameter
         // diagnostic; keep errors from inside the initializer intact.
         self.drop_contextual_mismatch(default_span, &declared, &default_ty);
-        self.check_parameter_default(param, &declared, &default_ty, default_span);
-        let body_ty = self.initialized_parameter_type(input_ty, &default_ty);
+        // A parameter typed from its argument is typed as an annotated one is:
+        // a default that doesn't fit was reported against it, once, and the
+        // body sees the parameter's type.
+        let typed_by_argument = self.parameters_typed_by_arguments.contains(&span);
+        if !typed_by_argument || self.error_count() == errors_before {
+            self.check_parameter_default(param, &declared, &default_ty, default_span);
+        }
+        let body_ty = if typed_by_argument {
+            target.clone()
+        } else {
+            self.initialized_parameter_type(input_ty, &default_ty)
+        };
         let write_ty = self.parameter_write_type(param, input_ty)?;
         self.record_authored_parameter_type(span, &write_ty);
         let incoming = self.parameter_input(param, input_ty)?;

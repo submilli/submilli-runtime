@@ -117,7 +117,8 @@ impl Inferer<'_> {
     ) -> Result<Option<Type>, CompilerFailure> {
         let (
             Type::Object {
-                fields: own_fields, ..
+                fields: own_fields,
+                index,
             },
             Some(Type::Object {
                 fields: slot_fields,
@@ -130,14 +131,7 @@ impl Inferer<'_> {
         else {
             return Ok(None);
         };
-        let mut retyped = current.clone();
-        let Type::Object {
-            fields: retyped_fields,
-            ..
-        } = &mut retyped
-        else {
-            return Ok(None);
-        };
+        let mut retyped_fields = own_fields.clone();
         let mut changed = false;
         for origin in fields {
             let crate::TypedObjectFieldSource::Literal(value) = origin.source else {
@@ -153,7 +147,10 @@ impl Inferer<'_> {
                 changed = true;
             }
         }
-        Ok(changed.then_some(retyped))
+        Ok(changed.then(|| Type::Object {
+            fields: retyped_fields,
+            index: index.clone(),
+        }))
     }
 
     fn retype_array(
