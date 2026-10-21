@@ -13326,16 +13326,14 @@ fn admits_literal_of(context: &Type, literal: &Type) -> bool {
 /// element at an integer `slot`, none past its end, and with no slot
 /// (`"-1"`, `"1.5"`, `"NaN"`) any element, its number index.
 fn tuple_key_element(tuple: &crate::types::TupleType, slot: Option<usize>) -> Option<Type> {
-    match slot {
-        Some(slot) => tuple.elements.get(slot).cloned(),
-        None => {
-            let mut elements = tuple.elements.clone();
-            if tuple.optional > 0 {
-                elements.push(Type::Undefined);
-            }
-            Some(Type::union(elements))
-        }
+    if let Some(slot) = slot {
+        return tuple.elements.get(slot).cloned();
     }
+    let mut elements = tuple.elements.clone();
+    if tuple.optional > 0 {
+        elements.push(Type::Undefined);
+    }
+    Some(Type::union(elements))
 }
 
 /// The number a numeric key names, as tsc reads one: a key that is a
