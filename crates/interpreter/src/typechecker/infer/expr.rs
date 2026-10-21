@@ -7656,8 +7656,8 @@ impl Inferer<'_> {
     /// The optional elements a parameter's tuple default gains for the
     /// pattern's slots past its end: each defaulted slot typed as its default
     /// widened, or `undefined`, and a hole `unknown`, since it reads nothing.
-    /// With a default that can't be typed before the pattern binds, the tuple
-    /// keeps its length.
+    /// A default that can't be typed before the pattern binds ends the
+    /// padding there.
     fn tuple_pattern_padding(&mut self, literal: ExprId) -> Result<Vec<Type>, CompilerFailure> {
         let Some(defaults) = self.ast.tuple_pattern_pad_defaults.get(&literal).cloned() else {
             return Ok(Vec::new());
@@ -7669,7 +7669,7 @@ impl Inferer<'_> {
                 continue;
             };
             let Some(ty) = self.speculative_expr_type(default, false, false)? else {
-                return Ok(Vec::new());
+                break;
             };
             padding.push(Type::union(vec![ty, Type::Undefined]));
         }
@@ -7788,8 +7788,8 @@ impl Inferer<'_> {
 
     /// The optional properties a parameter's object default gains for the
     /// pattern's defaulted properties it lacks, each typed as its default
-    /// widened. With a default that can't be typed before the pattern binds,
-    /// the object gains none.
+    /// widened. A default that can't be typed before the pattern binds adds
+    /// no property.
     fn object_pattern_padding(
         &mut self,
         literal: ExprId,
@@ -7800,7 +7800,7 @@ impl Inferer<'_> {
         let mut padding = Vec::with_capacity(defaults.len());
         for (name, default) in defaults {
             let Some(ty) = self.speculative_expr_type(default, false, false)? else {
-                return Ok(Vec::new());
+                continue;
             };
             padding.push((name, ty));
         }

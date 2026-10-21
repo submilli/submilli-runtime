@@ -48,4 +48,17 @@ function main(): void {
     return x;
   })(one);
   assert(reassigned === 2, "a literal argument types its parameter widened");
+
+  // Inside a loop that a later pass retypes, an argument takes the type the
+  // last pass gives it.
+  const looped = ((k: string) => {
+    let y: string | number = 1;
+    let out = k;
+    for (let i = 0; i < 2; i++) {
+      out += ((z) => String(z))(y);
+      y = "ab";
+    }
+    return out;
+  })("");
+  assert(looped === "1ab", "an argument retyped by a loop pass");
 }

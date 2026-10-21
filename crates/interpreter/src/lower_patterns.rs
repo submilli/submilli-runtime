@@ -576,8 +576,25 @@ impl LowerCtx {
         ast: &mut Ast,
         params: &mut [ParamDecl],
     ) -> Result<(), CompilerFailure> {
-        let mut pattern_names: BTreeSet<String> = BTreeSet::new();
-        for param in params.iter_mut() {
+        // A padding default is typed before the patterns bind and before any
+        // later parameter does, so one that reads such a name would resolve
+        // to an outer binding: its slot and the tuple slots after it stay out
+        // of the padding. An earlier plain parameter is already bound.
+        let pattern_names: BTreeSet<String> = params
+            .iter()
+            .filter_map(|param| param.pattern.as_ref())
+            .flat_map(|pattern| bound_names(pattern).into_iter().map(str::to_string))
+            .collect();
+        let mut unbound_by_param = Vec::with_capacity(params.len());
+        let mut unbound = pattern_names;
+        for param in params.iter().rev() {
+            unbound_by_param.push(unbound.clone());
+            if param.pattern.is_none() {
+                unbound.insert(param.name.name.clone());
+            }
+        }
+        unbound_by_param.reverse();
+        for (param, unbound) in params.iter_mut().zip(unbound_by_param) {
             let Some(pattern) = param.pattern.take() else {
                 continue;
             };
@@ -595,11 +612,6 @@ impl LowerCtx {
                 (None, Some(default)) => mark_literal_source(ast, &pattern, default, false)?,
                 _ => None,
             };
-            // A padding default is typed before the patterns bind, so one that
-            // reads a name a pattern binds, its own or an earlier one's, would
-            // resolve to an outer binding: its slot and the tuple slots after
-            // it stay out of the padding. A plain parameter is already bound.
-            pattern_names.extend(bound_names(&pattern).into_iter().map(str::to_string));
             if let Some(default) = param.default {
                 let literal_id = peel_parens(ast, default)?;
                 match &literal {
@@ -608,7 +620,7 @@ impl LowerCtx {
                             let mut kept = 0;
                             for slot in &pad_defaults {
                                 if let Some(slot_default) = slot
-                                    && reads_any_of(ast, *slot_default, &pattern_names)?
+                                    && reads_any_of(ast, *slot_default, &unbound)?
                                 {
                                     break;
                                 }
@@ -624,7 +636,7 @@ impl LowerCtx {
                     Some(LiteralSource::Object(names)) => {
                         let mut pad_defaults = Vec::new();
                         for (name, pad_default) in defaults_absent_from(&pattern, names) {
-                            if !reads_any_of(ast, pad_default, &pattern_names)? {
+                            if !reads_any_of(ast, pad_default, &unbound)? {
                                 pad_defaults.push((name, pad_default));
                             }
                         }
@@ -1032,8 +1044,9 @@ fn names_none_of(
     }
 }
 
-/// Whether `expr` mentions any of `names`, inside a nested function too.
-/// Shadowing is not tracked, so a mention that resolves elsewhere counts.
+/// Whether `expr` mentions any of `names`, inside a nested function too,
+/// other than where a nested function's parameter or own name shadows it.
+/// A nested `let` or `const` of the name still counts as a mention.
 fn reads_any_of(
     ast: &Ast,
     expr: ExprId,
@@ -1043,9 +1056,31 @@ fn reads_any_of(
         .try_expr(expr)
         .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
         .span;
-    Ok(ast.exprs_within(span).any(
-        |inner| matches!(&inner.kind, ExprKind::Identifier(name) if names.contains(&name.name)),
-    ))
+    let mut shadowing: Vec<(Span, &str)> = Vec::new();
+    for inner in ast.exprs_within(span) {
+        match &inner.kind {
+            ExprKind::Arrow { params, .. } => {
+                for param in params {
+                    let declared = match &param.pattern {
+                        Some(pattern) => bound_names(pattern),
+                        None => BTreeSet::from([param.name.name.as_str()]),
+                    };
+                    shadowing.extend(declared.into_iter().map(|name| (inner.span, name)));
+                }
+            }
+            ExprKind::FunctionExpression {
+                name: Some(name), ..
+            } => shadowing.push((inner.span, name.name.as_str())),
+            _ => {}
+        }
+    }
+    Ok(ast.exprs_within(span).any(|inner| {
+        matches!(&inner.kind, ExprKind::Identifier(name)
+        if names.contains(&name.name)
+            && !shadowing.iter().any(|(region, shadowed)| {
+                *shadowed == name.name && region.encloses(inner.span)
+            }))
+    }))
 }
 
 /// The properties every object literal inherits from `Object.prototype`.

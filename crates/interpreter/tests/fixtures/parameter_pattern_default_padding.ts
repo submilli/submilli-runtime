@@ -56,6 +56,17 @@ function readsEarlierParameter(first: number, [a, b = first] = [1]): number {
   return a + b;
 }
 
+// A closure in a padding default may read a later parameter; the slots
+// before it still pad.
+function readsLaterTuple([a, b = 2, g = () => later] = [1], later = "s"): number {
+  return a + b + g().length;
+}
+
+// A closure parameter that shadows a pattern's name reads its own.
+function shadowsPattern({ x, g = (x: number) => x * 2 } = { x: 1 }): number {
+  return g(x);
+}
+
 function main(): void {
   assert(offset() === 0, "the default");
   assert(offset({ x: 1 }) === 1, "the property's default");
@@ -81,4 +92,7 @@ function main(): void {
   assert(readsEarlierParameter(5) === 6, "a padding default reads an earlier parameter");
   assert(readsEarlierParameter(5, [1, 2]) === 3, "its slot takes a number");
   assert(first === "outer", "the outer name is untouched");
+  assert(readsLaterTuple([1, 5]) === 7, "a slot before a later parameter's reader");
+  assert(shadowsPattern({ x: 2, g: (n: number) => n + 1 }) === 3, "a shadowing closure");
+  assert(shadowsPattern() === 2, "a shadowing closure as the default");
 }

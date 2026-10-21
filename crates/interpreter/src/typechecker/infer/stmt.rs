@@ -3205,6 +3205,11 @@ impl Inferer<'_> {
                 return Ok(outcome);
             }
             self.widen_outer_into_entry(&mut entry_env, outer_falsified, &outcome, &mut widened)?;
+            // An argument typed on the pass before saw narrowing that no
+            // longer holds.
+            if let Some(memo) = self.invoked_argument_memo.as_mut() {
+                memo.clear();
+            }
             // Discard speculative diagnostics and exits before retyping under
             // the widened state.
             self.diagnostics.truncate(diag_len);
