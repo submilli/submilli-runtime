@@ -161,7 +161,8 @@ impl Inferer<'_> {
         let params = params.clone();
         // Arguments that hold calls like this one are inferred both here and
         // in the call; remembering each argument's type until the outermost
-        // such call is inferred keeps nested ones from doubling the work.
+        // such call is inferred keeps nested ones from doubling the work. A
+        // function body starts afresh, since a loop in it may retype it.
         let outermost = self.invoked_argument_memo.is_none();
         if outermost {
             self.invoked_argument_memo = Some(Default::default());

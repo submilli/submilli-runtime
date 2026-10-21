@@ -9533,6 +9533,34 @@ impl Inferer<'_> {
         keeps_returned_literals: bool,
         span: Span,
     ) -> Result<(TypedExprKind, Type, bool), CompilerFailure> {
+        // Remembered argument types hold only for the arguments of the calls
+        // being inferred; a body is typed under its own narrowing, which a
+        // loop may type more than once.
+        let memo = self.invoked_argument_memo.take();
+        let inferred = self.infer_arrow_with_fresh_memo(
+            params,
+            return_ty_ann,
+            type_predicate,
+            body,
+            expected,
+            keeps_returned_literals,
+            span,
+        );
+        self.invoked_argument_memo = memo;
+        inferred
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn infer_arrow_with_fresh_memo(
+        &mut self,
+        params: Vec<ParamDecl>,
+        return_ty_ann: Option<TypeAnnotation>,
+        type_predicate: Option<crate::TypePredicateAnnotation>,
+        body: ArrowBody,
+        expected: Option<&Type>,
+        keeps_returned_literals: bool,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type, bool), CompilerFailure> {
         if let Some(spans) = self.soft_context_function_spans.as_mut() {
             spans.push(span);
         }

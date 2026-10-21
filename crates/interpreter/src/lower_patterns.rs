@@ -1057,8 +1057,12 @@ fn reads_any_of(
         .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
         .span;
     let mut shadowing: Vec<(Span, &str)> = Vec::new();
+    let mut mentions: Vec<(Span, &str)> = Vec::new();
     for inner in ast.exprs_within(span) {
         match &inner.kind {
+            ExprKind::Identifier(name) if names.contains(&name.name) => {
+                mentions.push((inner.span, name.name.as_str()));
+            }
             ExprKind::Arrow { params, .. } => {
                 for param in params {
                     let declared = match &param.pattern {
@@ -1074,12 +1078,10 @@ fn reads_any_of(
             _ => {}
         }
     }
-    Ok(ast.exprs_within(span).any(|inner| {
-        matches!(&inner.kind, ExprKind::Identifier(name)
-        if names.contains(&name.name)
-            && !shadowing.iter().any(|(region, shadowed)| {
-                *shadowed == name.name && region.encloses(inner.span)
-            }))
+    Ok(mentions.iter().any(|(at, name)| {
+        !shadowing
+            .iter()
+            .any(|(region, shadowed)| shadowed == name && region.encloses(*at))
     }))
 }
 

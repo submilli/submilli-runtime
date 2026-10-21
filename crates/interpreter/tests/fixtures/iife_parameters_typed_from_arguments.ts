@@ -61,4 +61,14 @@ function main(): void {
     return out;
   })("");
   assert(looped === "1ab", "an argument retyped by a loop pass");
+
+  // A loop condition's argument takes the type of each pass too.
+  const conditioned = ((z: number) => {
+    let v: string | number = "a";
+    while (((q) => q !== 1)(v)) {
+      v = 1;
+    }
+    return v === 1 ? z : -1;
+  })(0);
+  assert(conditioned === 0, "a loop condition's argument");
 }
