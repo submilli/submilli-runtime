@@ -786,13 +786,30 @@ impl<'a> Inferer<'a> {
 
         for seg in rest {
             let field = seg.name.clone();
-            let Some(next) = self.field_type_of(&ty, &field) else {
+            let Some(next) = self.field_type_of(&ty, &field, seg.span)? else {
                 self.error(seg.span, format!("`{field}` is not a field of `{ty}`"));
                 return Ok(Type::Error);
             };
             ty = next;
         }
-        Ok(ty)
+        Ok(self.narrowed_query_type(&name, rest).unwrap_or(ty))
+    }
+
+    /// The type a narrowing in scope gives `name.rest…`, which a type query
+    /// takes as TypeScript does: `typeof x.p` under `x.p === "A"` is `"A"`.
+    fn narrowed_query_type(&self, name: &str, rest: &[crate::Ident]) -> Option<Type> {
+        let entry = self.scopes.get(name)?;
+        let path = super::narrowing::ReferencePath {
+            root: super::narrowing::BindingId::Local {
+                name: name.to_string(),
+                decl_scope: entry.decl_scope,
+            },
+            chain: rest
+                .iter()
+                .map(|segment| super::narrowing::PathElem::Field(segment.name.clone()))
+                .collect(),
+        };
+        self.narrowed_read(path).map(|(_, ty)| ty)
     }
 
     /// `typeof` whose root names no value. An enum member reads as its enum, as
@@ -902,24 +919,30 @@ impl<'a> Inferer<'a> {
 
     /// One field read for a `typeof a.b` path. Object types carry their fields
     /// directly; an interface reference resolves through its declaring symbol.
-    fn field_type_of(&self, ty: &Type, field: &str) -> Option<Type> {
-        match ty.peel() {
+    /// The read type of `field` on `ty`, an interface's instantiated with the
+    /// type arguments `ty` gives it: `typeof x.p` on `x: I<"A">` is `"A"`.
+    fn field_type_of(
+        &self,
+        ty: &Type,
+        field: &str,
+        span: crate::Span,
+    ) -> Result<Option<Type>, CompilerFailure> {
+        Ok(match ty.peel() {
             Type::Object { fields, index } => fields
                 .get(field)
                 .map(crate::types::ObjectField::read_ty)
                 .or_else(|| index.as_ref().map(crate::IndexSignature::read_ty)),
             Type::InterfaceRef { .. } => {
-                let (mangled, _package, name, _args) = ty.interface_routing()?;
-                let sym = self.lookup_structural_type(&mangled, name)?;
-                let TypeKind::Interface { properties, .. } = &sym.kind else {
-                    return None;
+                let Some((sig, bindings, _, _)) = self.lookup_interface_property(ty, field) else {
+                    return Ok(None);
                 };
-                properties
-                    .get(field)
-                    .map(|p| crate::ObjectField::widen_optional(p.optional, p.ty.clone()))
+                let declared =
+                    super::generic::substitute_typevars(&sig.ty, &bindings, &self.type_limits)
+                        .map_err(super::type_limit_at(span))?;
+                Some(crate::ObjectField::widen_optional(sig.optional, declared))
             }
             _ => None,
-        }
+        })
     }
 
     /// `keyof T` as the union of `T`'s member names, resolved eagerly to string literal
