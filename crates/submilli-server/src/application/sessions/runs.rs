@@ -41,8 +41,8 @@ impl<'a> PrepareRun<'a> {
             .get_session(request.session_id())
             .await?
             .ok_or(RunFailure::SessionUnavailable)?;
-        session
-            .require_available(SystemTime::now())
+        super::execution::require_available(unit.as_mut(), &session, SystemTime::now())
+            .await
             .map_err(|_| RunFailure::SessionUnavailable)?;
         let existing = match request.optional_key() {
             Some(key) => unit.run_for_key(request.session_id(), key).await?,
@@ -163,7 +163,8 @@ impl ResolveRun {
             RunResolution::Completed(outcome) => {
                 request.complete(reservation.reservation_id(), outcome.clone(), now)?;
                 if let Some(mut session) = unit.get_session(session_id).await?
-                    && session.require_available(now).is_ok()
+                    && (session.require_available(now).is_ok()
+                        || (request.program().is_some() && session.require_active().is_ok()))
                 {
                     session
                         .record_execution_completed(now)
@@ -298,18 +299,18 @@ impl<'a> ExpireResponses<'a> {
         for session in sessions {
             let mut unit = self.units.begin().await?;
             let completed = unit.completed_responses(&session).await?;
-            let keys: Vec<String> = self
+            let run_ids: Vec<String> = self
                 .retention
                 .expired(&completed, now)
                 .into_iter()
                 .map(str::to_owned)
                 .collect();
-            if keys.is_empty() {
+            if run_ids.is_empty() {
                 // The session changed since the listing; nothing was written,
                 // so dropping the unit rolls back a read.
                 continue;
             }
-            expired += unit.expire_responses(&session, keys).await?;
+            expired += unit.expire_responses(&session, run_ids).await?;
             unit.commit().await?;
         }
         Ok(expired)
@@ -329,8 +330,8 @@ pub(crate) async fn claim_run(
         .get_session(run.session_id())
         .await?
         .ok_or(RunFailure::SessionUnavailable)?;
-    session
-        .require_available(SystemTime::now())
+    super::execution::require_available(unit.as_mut(), &session, SystemTime::now())
+        .await
         .map_err(|_| RunFailure::SessionUnavailable)?;
     run.claim(startup)?;
     let expected_revision = run.revision();
@@ -358,12 +359,33 @@ pub(crate) async fn cancel_session_runs(
     unit: &mut dyn UnitOfWork,
     session_id: &str,
 ) -> Result<(), StoreError> {
-    for mut run in unit.active_session_runs(session_id).await? {
-        run.cancel()
-            .map_err(|error| StoreError::Io(error.to_string()))?;
-        unit.save_run(run).await?;
+    use super::recovery::{RunQuery, RunStatus};
+    let mut after = None;
+    loop {
+        let page = unit
+            .list_runs(RunQuery {
+                session: Some(session_id.into()),
+                after,
+                limit: 100,
+                ..Default::default()
+            })
+            .await?;
+        let more = page.len() == 100;
+        after = page.last().map(|run| run.id.clone());
+        for mut run in page {
+            if matches!(
+                run.status,
+                RunStatus::Queued | RunStatus::Running | RunStatus::Stuck
+            ) {
+                run.cancel()
+                    .map_err(|error| StoreError::Io(error.to_string()))?;
+                unit.save_run_lifecycle(run).await?;
+            }
+        }
+        if !more {
+            return Ok(());
+        }
     }
-    Ok(())
 }
 
 /// Internal resume; the caller has exclusively acquired the local store and
@@ -381,8 +403,8 @@ pub(crate) async fn reopen_run(
         .get_session(run.session_id())
         .await?
         .ok_or(RunFailure::SessionUnavailable)?;
-    session
-        .require_available(SystemTime::now())
+    super::execution::require_available(unit.as_mut(), &session, SystemTime::now())
+        .await
         .map_err(|_| RunFailure::SessionUnavailable)?;
     let program = run.program().ok_or(RunFailure::Indeterminate)?;
     if program.compatibility != compatibility {

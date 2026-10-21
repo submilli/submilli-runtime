@@ -354,6 +354,36 @@ impl SubmilliMcp {
             }
         };
 
+        if self.state.durable_execution()
+            && let Some(session_id) = session_id.as_deref()
+        {
+            let id = crate::recovery::admit(
+                &self.state,
+                ExecuteInputs {
+                    session_id,
+                    code: &args.code,
+                    blueprint_name: &self.blueprint_name,
+                    blueprint,
+                    variables,
+                    harness_secrets,
+                    audit: Some(audit),
+                    vfs_source: VfsSource::Rest,
+                    run_entry: "mcp",
+                    idempotency_key: None,
+                    tools: None,
+                },
+            )
+            .await
+            .map_err(|message| ErrorData::invalid_request(message, None))?;
+            let response = crate::handlers::durable_runs::wait(&self.state, &id)
+                .await
+                .map_err(|message| ErrorData::internal_error(message, None))?;
+            let response = response
+                .into_json()
+                .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+            return Ok(CallToolResult::structured(response));
+        }
+
         // The file area opens under this tool's rules (a `per_session` root needs
         // the session id), ahead of the shared core, which does the rest.
         let (vfs, vfs_info) = self
@@ -377,7 +407,7 @@ impl SubmilliMcp {
                 variables,
                 harness_secrets,
                 audit: Some(audit),
-                vfs_source: VfsSource::Mcp { vfs, vfs_info },
+                vfs_source: VfsSource::Opened { vfs, vfs_info },
                 run_entry: "mcp",
                 idempotency_key: None,
                 // MCP's `tools/call` cannot suspend: no application tools here.

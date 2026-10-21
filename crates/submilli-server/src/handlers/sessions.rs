@@ -283,6 +283,28 @@ pub async fn execute(
             Some(&session_id),
         )
     });
+    if state.durable_execution() {
+        // Observation needs an active session, but not today's credentials,
+        // blueprint, or external discovery. Its original manifest is retained.
+        if let Err(error) = state.session_manager().get(&session_id).await {
+            return session_state_response(error);
+        }
+        if let Some(key) = idempotency_key(&headers) {
+            let key = match key {
+                Ok(key) => key,
+                Err(refusal) => return refusal_response(&session_id, &refusal),
+            };
+            match durable_retry(&state, &session_id, &key, &req.code).await {
+                Ok(Some(response)) => {
+                    audit.replay();
+                    audit.finish(true);
+                    return response;
+                }
+                Ok(None) => {}
+                Err(refusal) => return refusal_response(&session_id, &refusal),
+            }
+        }
+    }
     let bound = match bound_for_run(
         &state,
         &session_id,
@@ -309,6 +331,41 @@ pub async fn execute(
         Some(Err(refusal)) => return refusal_response(&session_id, &refusal),
         Some(Ok(key)) => Some(key),
     };
+    if state.durable_execution() {
+        if tools.is_some() {
+            return (
+                StatusCode::BAD_REQUEST,
+                "durable application-tool waits are not supported yet",
+            )
+                .into_response();
+        }
+        let BoundSession {
+            blueprint_name,
+            blueprint,
+            variables,
+            harness_secrets,
+        } = bound;
+        let inputs = ExecuteInputs {
+            session_id: &session_id,
+            code: &req.code,
+            blueprint_name: &blueprint_name,
+            blueprint: Arc::new(blueprint),
+            variables,
+            harness_secrets,
+            audit: Some(audit),
+            vfs_source: execute::VfsSource::Rest,
+            run_entry: "session",
+            idempotency_key: key.as_deref(),
+            tools: None,
+        };
+        return match crate::recovery::admit(&state, inputs).await {
+            Ok(id) => match super::durable_runs::wait(&state, &id).await {
+                Ok(response) => durable_wait_response(&session_id, response),
+                Err(message) => (StatusCode::SERVICE_UNAVAILABLE, message).into_response(),
+            },
+            Err(message) => (StatusCode::CONFLICT, message).into_response(),
+        };
+    }
     let guard = match &key {
         None => None,
         Some(key) => match reserve(&state, &session_id, key, &req.code, &audit).await {
@@ -341,6 +398,59 @@ pub async fn execute(
         settle(guard, &outcome, &finished, outcome_recordable).await;
     }
     stored_body_response(&session_id, StatusCode::OK, finished.body)
+}
+
+/// Observe the original reservation without reopening its execution environment.
+async fn durable_retry(
+    state: &AppState,
+    session: &str,
+    key: &str,
+    code: &str,
+) -> Result<Option<axum::response::Response>, Refusal> {
+    use crate::application::sessions::recovery::RunStatus;
+    use sha2::{Digest, Sha256};
+    crate::domain::run::Run::validate_key(key)
+        .map_err(|_| Refusal::InvalidKey("invalid idempotency key"))?;
+    let summary = {
+        let mut unit = state
+            .units()
+            .begin()
+            .await
+            .map_err(|e| Refusal::Unavailable(e.to_string()))?;
+        unit.run_summary_for_key(session, key)
+            .await
+            .map_err(|e| Refusal::Unavailable(e.to_string()))?
+    };
+    let Some(run) = summary else {
+        return Ok(None);
+    };
+    if run.fingerprint != format!("{:x}", Sha256::digest(code.as_bytes())) {
+        return Err(Refusal::Conflict);
+    }
+    match run.status {
+        RunStatus::Expired => return Err(Refusal::Expired),
+        RunStatus::Indeterminate => return Err(Refusal::Indeterminate),
+        RunStatus::Queued | RunStatus::Running if !run.recorded => return Err(Refusal::InProgress),
+        _ => {}
+    }
+    let response = super::durable_runs::wait(state, &run.id)
+        .await
+        .map_err(Refusal::Unavailable)?;
+    Ok(Some(durable_wait_response(session, response)))
+}
+
+fn durable_wait_response(
+    session: &str,
+    response: super::durable_runs::WaitResponse,
+) -> axum::response::Response {
+    match response {
+        super::durable_runs::WaitResponse::Completed(outcome) => {
+            recorded_response(session, &outcome)
+        }
+        super::durable_runs::WaitResponse::Metadata(value) => {
+            stored_body_response(session, StatusCode::OK, value.to_string())
+        }
+    }
 }
 
 /// Settle the key a run held: record `finished` when the program ran and its

@@ -473,9 +473,30 @@ impl Vfs {
     }
 
     pub fn with_mount_subpath(
+        self,
+        spec: MountSpec,
+        sub_path: Option<&str>,
+    ) -> Result<Self, MountError> {
+        let access = spec.access;
+        let root_access = self.access;
+        self.open_mount(spec, sub_path, root_access, access)
+    }
+
+    /// Reopen an existing mount without creating its target or placeholders.
+    pub fn reopen_mount_subpath(
+        self,
+        spec: MountSpec,
+        sub_path: Option<&str>,
+    ) -> Result<Self, MountError> {
+        self.open_mount(spec, sub_path, Access::ReadOnly, Access::ReadOnly)
+    }
+
+    fn open_mount(
         mut self,
         spec: MountSpec,
         sub_path: Option<&str>,
+        root_preparation: Access,
+        volume_preparation: Access,
     ) -> Result<Self, MountError> {
         let root = self.dir.as_ref().ok_or(MountError::RootDisabled)?;
         if self.mounts.len() >= MAX_MOUNTS {
@@ -497,11 +518,11 @@ impl Vfs {
             };
             return Err(MountError::Nested { outer, inner });
         }
-        let placeholders = prepare_mount_point(root, &rel, self.access, &spec.guest_path)?;
+        let placeholders = prepare_mount_point(root, &rel, root_preparation, &spec.guest_path)?;
         let (dir, ancestors) = select_directory(
             open_volume(&spec.host).map_err(MountError::Io)?,
             sub_path,
-            spec.access,
+            volume_preparation,
         )
         .map_err(MountError::Io)?;
         let mount = Mount {
@@ -652,12 +673,22 @@ impl Vfs {
     }
 
     /// Select a directory through the volume handle, without ambient reopening.
-    pub fn with_subpath(mut self, sub_path: Option<&str>) -> io::Result<Self> {
+    pub fn with_subpath(self, sub_path: Option<&str>) -> io::Result<Self> {
+        let access = self.access;
+        self.select_subpath(sub_path, access)
+    }
+
+    /// Reopen the selected directory without provisioning a missing path.
+    pub fn reopen_subpath(self, sub_path: Option<&str>) -> io::Result<Self> {
+        self.select_subpath(sub_path, Access::ReadOnly)
+    }
+
+    fn select_subpath(mut self, sub_path: Option<&str>, preparation: Access) -> io::Result<Self> {
         let root = self
             .dir
             .clone()
             .ok_or_else(|| io::Error::other("filesystem disabled"))?;
-        let (dir, ancestors) = select_directory(root, sub_path, self.access)?;
+        let (dir, ancestors) = select_directory(root, sub_path, preparation)?;
         self.dir = Some(dir);
         if let Some(path) = sub_path {
             self.root.push(path);

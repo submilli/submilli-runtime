@@ -387,7 +387,22 @@ impl ExecutionAudit {
         entry: &str,
         session: Option<&str>,
     ) -> Arc<Self> {
-        let id = RunId::from(Uuid::new_v4().to_string());
+        Self::for_run(
+            log,
+            RunId::from(Uuid::new_v4().to_string()),
+            principal,
+            entry,
+            session,
+        )
+    }
+
+    pub(crate) fn for_run(
+        log: AuditLog,
+        id: RunId,
+        principal: &str,
+        entry: &str,
+        session: Option<&str>,
+    ) -> Arc<Self> {
         let mut fields = Map::from_iter([
             ("execution_id".into(), json!(id)),
             ("principal".into(), json!(principal)),
@@ -581,6 +596,18 @@ impl ExecutionAudit {
     }
 
     /// The run, not the request, finishes this record from now on.
+    pub(crate) fn accepted(&self) {
+        let Ok(mut state) = self.state.lock() else {
+            report("audit execution lock poisoned");
+            return;
+        };
+        state.finished = true;
+        state.handed_off = true;
+        let mut fields = state.fields.clone();
+        fields.insert("event".into(), json!("accepted"));
+        self.log.emit("execution", fields);
+    }
+
     pub(crate) fn hand_off(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.handed_off = true;

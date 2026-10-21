@@ -599,7 +599,7 @@ pub(crate) struct Entry {
 
 // A retry must resolve the same guest paths against the same configured roots.
 // Keep only a fingerprint in each record, not a second persisted mount catalog.
-pub(crate) fn filesystem_config_fingerprint(vfs: &Vfs) -> Result<[u8; 32], FilesystemError> {
+pub fn filesystem_config_fingerprint(vfs: &Vfs) -> Result<[u8; 32], FilesystemError> {
     let root = vfs
         .dir()
         .ok_or(RecoveryError::Unsupported("filesystem disabled"))?;
@@ -627,6 +627,35 @@ pub(crate) fn filesystem_config_fingerprint(vfs: &Vfs) -> Result<[u8; 32], Files
     ))
     .map_err(|e| StoreError::Io(e.to_string()))?;
     Ok(Sha256::digest(bytes).into())
+}
+
+/// Remove only this run's private artifacts. The execution owner must first
+/// commit a terminal state and drain every worker and resource handle.
+pub fn retire_filesystem(vfs: &Vfs, run_id: &RunId) -> Result<(), RecoveryError> {
+    validate_id(run_id)?;
+    let roots = vfs
+        .dir()
+        .filter(|_| vfs.access() == Access::ReadWrite)
+        .into_iter()
+        .chain(
+            vfs.mounts()
+                .iter()
+                .filter(|mount| mount.access() == Access::ReadWrite)
+                .map(interpreter::runtime::vfs::Mount::dir),
+        );
+    for root in roots {
+        let private = match root.open_dir_nofollow(PRIVATE) {
+            Ok(private) => private,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        match private.remove_dir_all(run_id.as_str()) {
+            Ok(()) => sync(&private)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
 }
 
 pub(crate) type SharedQuotas = HashMap<FileIdentity, Weak<DiskQuota>>;

@@ -26,7 +26,9 @@ impl<'a> ExpireSessions<'a> {
         let mut expired = Vec::new();
         let sessions = unit.sessions_due_for_expiry(now).await?;
         for mut session in sessions {
-            if busy.contains(session.id().as_str()) {
+            if busy.contains(session.id().as_str())
+                || unit.has_retained_run(session.id().as_str()).await?
+            {
                 continue;
             }
             if session.expire(now) {

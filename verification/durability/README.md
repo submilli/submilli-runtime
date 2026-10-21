@@ -333,3 +333,6 @@ SUB-1836 adds run-backed preparation and compatibility admission for every
 server program entry point. The [admission mapping](../admission/README.md)
 describes its separate bounded model, migration, optional-key behavior and the
 remaining gates before the complete recovery protocol can be enabled.
+
+The [single-node recovery model](recovery/README.md) composes admission, restart
+scheduling, explicit resume, and resource retention with this native-effect protocol.

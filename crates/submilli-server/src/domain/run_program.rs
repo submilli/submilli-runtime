@@ -10,6 +10,10 @@ pub struct RunProgram {
     pub limits: RunLimits,
     /// Compatibility is checked before compilation or any native action.
     pub compatibility: String,
+    /// The declarations the compiler saw; recovery never rediscovers them.
+    pub mcp_catalog: std::sync::Arc<submilli_shared::mcp::McpCatalog>,
+    /// Configured root identities and access modes, checked before replay.
+    pub filesystem_config_fingerprint: Option<[u8; 32]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

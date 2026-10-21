@@ -30,7 +30,7 @@ pub use super::run::{RequestError, Run as IdempotentRequest};
 /// A completed response, without its body.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompletedResponse {
-    pub key: String,
+    pub run_id: String,
     pub completed_at: SystemTime,
 }
 
@@ -60,13 +60,13 @@ impl ResponseRetention {
         newest_first.sort_by(|a, b| {
             b.completed_at
                 .cmp(&a.completed_at)
-                .then_with(|| b.key.cmp(&a.key))
+                .then_with(|| b.run_id.cmp(&a.run_id))
         });
         newest_first
             .into_iter()
             .skip(self.keep_last)
             .filter(|response| self.outlived(response.completed_at, now))
-            .map(|response| response.key.as_str())
+            .map(|response| response.run_id.as_str())
             .collect()
     }
 
@@ -97,7 +97,7 @@ mod tests {
 
     fn response(key: &str, hours: u64) -> CompletedResponse {
         CompletedResponse {
-            key: key.into(),
+            run_id: key.into(),
             completed_at: at(hours),
         }
     }

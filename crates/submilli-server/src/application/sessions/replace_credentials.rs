@@ -27,7 +27,7 @@ impl<'a> ReplaceCredentials<'a> {
             .await?
             .ok_or(SessionError::UnknownSession)?;
         let now = std::time::SystemTime::now();
-        session.require_available(now)?;
+        super::execution::require_available(unit.as_mut(), &session, now).await?;
         session.replace_credentials(credentials)?;
         unit.save_session(session).await?;
         unit.commit().await?;

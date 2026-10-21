@@ -9,6 +9,7 @@ pub mod docs;
 pub mod mcp;
 pub mod packages;
 pub mod run_code;
+pub mod runs;
 pub mod secret;
 pub mod session;
 pub mod status;
@@ -17,6 +18,9 @@ pub mod trust;
 
 #[derive(Subcommand)]
 pub enum ServerCmd {
+    /// Inspect executions and resume stuck runs.
+    #[command(subcommand)]
+    Runs(runs::RunsCmd),
     /// Apply blueprint YAML documents to a running submilli-server.
     Apply(apply::Args),
     /// Manage approved HTTPS server public keys.
@@ -50,6 +54,7 @@ pub enum ServerCmd {
 
 pub fn execute(cmd: ServerCmd) -> Result<ExitCode> {
     match cmd {
+        ServerCmd::Runs(cmd) => runs::execute(cmd),
         ServerCmd::Apply(args) => apply::execute(args),
         ServerCmd::Trust(cmd) => trust::execute(cmd),
         ServerCmd::Docs(args) => docs::execute(args),

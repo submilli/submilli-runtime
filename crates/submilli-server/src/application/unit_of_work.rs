@@ -27,6 +27,31 @@ pub(crate) trait UnitOfWork: Send {
     async fn save_session(&mut self, session: Session) -> Result<(), StoreError>;
     async fn blueprint_exists(&mut self, name: &str) -> Result<bool, StoreError>;
     async fn remove_blueprint(&mut self, name: &str) -> Result<bool, StoreError>;
+    async fn run_summary_for_key(
+        &mut self,
+        session: &str,
+        key: &str,
+    ) -> Result<Option<super::sessions::recovery::RunSummary>, StoreError>;
+    async fn run_summary(
+        &mut self,
+        id: &str,
+    ) -> Result<Option<super::sessions::recovery::RunSummary>, StoreError>;
+    async fn list_runs(
+        &mut self,
+        query: super::sessions::recovery::RunQuery,
+    ) -> Result<Vec<super::sessions::recovery::RunSummary>, StoreError>;
+    async fn has_retained_run(&mut self, session: &str) -> Result<bool, StoreError>;
+    async fn has_run_predecessor(&mut self, id: &str) -> Result<bool, StoreError>;
+    async fn save_run_lifecycle(
+        &mut self,
+        run: crate::domain::run_status::RunSummary,
+    ) -> Result<(), StoreError>;
+    /// Caller has drained all work. Refuse nonterminal runs.
+    async fn retire_run_resources(&mut self, id: &str) -> Result<(), StoreError>;
+    async fn run_result(
+        &mut self,
+        id: &str,
+    ) -> Result<Option<crate::domain::idempotent_request::RecordedOutcome>, StoreError>;
     async fn get_run(&mut self, id: &str) -> Result<Option<crate::domain::run::Run>, StoreError>;
     async fn run_for_key(
         &mut self,
@@ -34,10 +59,7 @@ pub(crate) trait UnitOfWork: Send {
         key: &str,
     ) -> Result<Option<crate::domain::run::Run>, StoreError>;
     async fn save_run(&mut self, request: crate::domain::run::Run) -> Result<(), StoreError>;
-    async fn active_session_runs(
-        &mut self,
-        session_id: &str,
-    ) -> Result<Vec<crate::domain::run::Run>, StoreError>;
+
     async fn unfinished_runs(&mut self) -> Result<Vec<crate::domain::run::Run>, StoreError>;
     /// The sessions holding more than `kept` completed responses, at least one
     /// of them completed at or before `cutoff`.
@@ -51,14 +73,14 @@ pub(crate) trait UnitOfWork: Send {
         &mut self,
         session_id: &str,
     ) -> Result<Vec<crate::domain::idempotent_request::CompletedResponse>, StoreError>;
-    /// Drop the bodies of `keys`, leaving tombstones; a request that is no longer
+    /// Drop the bodies of `run_ids`, leaving tombstones; a request that is no longer
     /// completed is left alone. Returns how many expired. A bulk transition in
     /// storage, deliberately: loading the requests would read the very bodies
     /// this drops.
     async fn expire_responses(
         &mut self,
         session_id: &str,
-        keys: Vec<String>,
+        run_ids: Vec<String>,
     ) -> Result<u64, StoreError>;
     async fn get_secret(&mut self, name: &SecretName) -> Result<Option<Secret>, StoreError>;
     async fn save_secret(&mut self, secret: Secret, now: SystemTime) -> Result<(), StoreError>;

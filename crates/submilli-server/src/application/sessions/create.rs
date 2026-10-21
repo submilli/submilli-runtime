@@ -58,10 +58,14 @@ impl<'a> CreateSession<'a> {
             )?
             .with_tools(tools)
         };
-        session.rebind(binding, root, credentials, now)?;
+        super::execution::require_available(unit.as_mut(), &session, now).await?;
+        session.rebind(binding, root, credentials)?;
+        let retained = unit.has_retained_run(id).await?;
         unit.save_session(session).await?;
-        self.workspaces
-            .provision(id, blueprint, &variables, existed)?;
+        if !retained {
+            self.workspaces
+                .provision(id, blueprint, &variables, existed)?;
+        }
         unit.commit().await?;
         let event = if existed {
             super::ports::SessionEvent::Rebound {
@@ -103,7 +107,12 @@ impl<'a> EnsureSession<'a> {
     pub async fn execute(&self, id: &str, blueprint: &Blueprint) -> Result<(), SessionError> {
         let mut unit = self.unit_of_work.begin().await?;
         if let Some(session) = unit.get_session(id).await? {
-            session.require_available(std::time::SystemTime::now())?;
+            super::execution::require_available(
+                unit.as_mut(),
+                &session,
+                std::time::SystemTime::now(),
+            )
+            .await?;
             session
                 .verify_blueprint(&blueprint.name)
                 .map_err(|_| SessionError::UnknownSession)?;

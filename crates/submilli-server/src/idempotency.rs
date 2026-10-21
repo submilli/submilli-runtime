@@ -126,6 +126,9 @@ pub(crate) struct Coordinator {
 }
 
 impl Coordinator {
+    pub fn generation(&self) -> &str {
+        &self.generation
+    }
     pub fn new(units: Arc<dyn UnitOfWorkFactory>, generation: String) -> Self {
         Self {
             units,
@@ -349,7 +352,7 @@ async fn resolve_until_recorded(
 /// The spill files a run's end may leave no record naming: the one the
 /// session's last run was in before the run ended, the one the end replaced
 /// (another run's may have come between), and the one staged for this run.
-struct LastRunFiles<'a> {
+pub(crate) struct LastRunFiles<'a> {
     last_runs: &'a dyn LastRunStaging,
     session_id: &'a str,
     before: Option<String>,
@@ -357,7 +360,7 @@ struct LastRunFiles<'a> {
 }
 
 impl<'a> LastRunFiles<'a> {
-    async fn before(last_runs: &'a dyn LastRunStaging, session_id: &'a str) -> Self {
+    pub(crate) async fn before(last_runs: &'a dyn LastRunStaging, session_id: &'a str) -> Self {
         // If this read fails, the only file lost track of is one replaced by
         // an end whose acknowledgement was lost; the startup sweep deletes it.
         let before = last_runs.spill_file(session_id).await.ok().flatten();
@@ -371,7 +374,7 @@ impl<'a> LastRunFiles<'a> {
 
     /// Seal the run's last-run JSON once, so a retry records the same spill
     /// file. One that cannot be staged leaves the session with no last run.
-    async fn stage(&mut self, json: Vec<u8>) -> Option<StagedLastRun> {
+    pub(crate) async fn stage(&mut self, json: Vec<u8>) -> Option<StagedLastRun> {
         match self.last_runs.stage(self.session_id, json).await {
             Ok(staged) => {
                 self.staged = staged.spill_file().map(str::to_owned);
@@ -386,7 +389,7 @@ impl<'a> LastRunFiles<'a> {
 
     /// Delete those no record names now that the run's end is settled, however
     /// it settled: replaced, never written, or written and then lost.
-    async fn release(self, replaced: Option<String>) {
+    pub(crate) async fn release(self, replaced: Option<String>) {
         let files = [self.before, replaced, self.staged]
             .into_iter()
             .flatten()
@@ -817,7 +820,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod fault_tests;
+pub(crate) mod fault_tests;
 
 #[cfg(test)]
 mod admission_tests;

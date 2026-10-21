@@ -109,6 +109,9 @@ struct AppStateInner {
     runtime: RuntimeConfig,
     blueprints: Arc<dyn BlueprintStore>,
     unit_of_work: Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory>,
+    durable_execution: bool,
+    max_durable_runs: usize,
+    recovery_wakeup: Arc<Notify>,
     secret_store: Option<Arc<dyn SecretStore>>,
     secret_cipher: Option<Arc<submilli_shared::secret_store::SecretCipher>>,
     /// A pre-database secret-store directory startup imports.
@@ -217,6 +220,15 @@ impl AppState {
         embedding_dispatch_factory: EmbeddingDispatchFactory,
     ) -> Result<Self> {
         let database = config.resolve_database().await?;
+        if config.durable_execution && (database.is_ephemeral() || config.session_cipher.is_none())
+        {
+            anyhow::bail!(
+                "durable_execution requires a persistent database and session encryption key"
+            );
+        }
+        if config.max_durable_runs == Some(0) {
+            anyhow::bail!("max_durable_runs must be positive");
+        }
         // An embedder's own store keeps its secrets; only the database imports.
         let legacy_secrets_present = match (&config.secret_store_dir, &config.secret_store) {
             (Some(directory), None) => {
@@ -277,9 +289,8 @@ impl AppState {
             .unwrap_or_else(|| crate::audit::AuditLog::new(config.audit, None));
         let runtime = config.runtime;
         let engine = server_engine(&runtime)?;
-        if runtime.timeout.is_some_and(|timeout| !timeout.is_zero()) {
-            crate::execution_timeout::start_ticker(&engine)?;
-        }
+        // Retained runs can have deadlines even when new runs do not.
+        crate::execution_timeout::start_ticker(&engine)?;
         let mut base_linker = Linker::<StoreData>::new(&engine);
         install_runtime_host_functions(&mut base_linker)?;
         // One HTTP client (connection pool) is built per session for isolation —
@@ -428,6 +439,9 @@ impl AppState {
                 runtime,
                 blueprints,
                 unit_of_work,
+                durable_execution: config.durable_execution,
+                max_durable_runs: config.max_durable_runs.unwrap_or(4),
+                recovery_wakeup: Arc::new(Notify::new()),
                 secret_store,
                 secret_cipher: config.session_cipher.clone(),
                 legacy_secrets,
@@ -488,8 +502,31 @@ impl AppState {
             .sweep()
             .await
             .map_err(crate::session_manager::BootError::LastRuns)?;
-        self.inner.session_manager.volume_registry().prepare();
+        let retained = {
+            let mut unit = self.units().begin().await.map_err(|error| {
+                crate::session_manager::BootError::Idempotency(crate::blueprint::StoreError::Io(
+                    error.to_string(),
+                ))
+            })?;
+            unit.list_runs(crate::application::sessions::recovery::RunQuery {
+                recovery: true,
+                limit: 1,
+                ..Default::default()
+            })
+            .await
+            .map_err(|error| {
+                crate::session_manager::BootError::Idempotency(crate::blueprint::StoreError::Io(
+                    error.to_string(),
+                ))
+            })?
+        };
+        // Lost managed roots must remain missing until recovery has checked them.
+        // New sessions still provision their volumes on first use.
+        if retained.is_empty() {
+            self.inner.session_manager.volume_registry().prepare();
+        }
         self.start_reaper();
+        self.start_run_recovery();
         self.inner.booted.store(true, Ordering::Release);
         Ok(())
     }
@@ -542,6 +579,12 @@ impl AppState {
     }
 
     async fn ready_for_router(&self) -> Result<(), crate::session_manager::BootError> {
+        if self
+            .database()
+            .is_some_and(|database| !database.is_ephemeral())
+        {
+            self.boot().await?;
+        }
         if self.inner.router_ready.load(Ordering::Acquire) {
             return Ok(());
         }
@@ -556,6 +599,36 @@ impl AppState {
         }
         self.inner.router_ready.store(true, Ordering::Release);
         Ok(())
+    }
+
+    pub(crate) fn durable_execution(&self) -> bool {
+        self.inner.durable_execution
+    }
+    pub(crate) fn units(&self) -> Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory> {
+        self.inner.unit_of_work.clone()
+    }
+    pub(crate) fn wake_recovery(&self) {
+        self.inner.recovery_wakeup.notify_one();
+    }
+
+    fn start_run_recovery(&self) {
+        let weak = Arc::downgrade(&self.inner);
+        let wakeup = self.inner.recovery_wakeup.clone();
+        let capacity = self.inner.max_durable_runs;
+        let shutdown = self.graceful_shutdown();
+        let Some(token) = shutdown.admit() else {
+            return;
+        };
+        tokio::spawn(async move {
+            let _token = token;
+            crate::recovery::supervise(
+                move || weak.upgrade().map(|inner| AppState { inner }),
+                wakeup,
+                capacity,
+                shutdown.draining(),
+            )
+            .await;
+        });
     }
 
     fn start_reaper(&self) {
@@ -1301,6 +1374,16 @@ fn routes(auth: Arc<AuthConfig>, audit: crate::audit::AuditLog) -> Routes {
             "/v1/sessions/{session_id}/packages/docs",
             Access::User,
             get(packages::session_docs),
+        )
+        .route(
+            "/v1/runs",
+            Access::User,
+            get(crate::handlers::durable_runs::list),
+        )
+        .route(
+            "/v1/runs/{run_id}/recover",
+            Access::User,
+            post(crate::handlers::durable_runs::recover),
         )
         .route("/v1/runs/{run_id}", Access::User, get(runs::get))
         .route("/v1/runs/{run_id}/resume", Access::User, post(runs::resume))

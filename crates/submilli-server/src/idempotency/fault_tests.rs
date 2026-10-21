@@ -7,16 +7,16 @@ use crate::domain::session::Session;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Default)]
-pub(super) struct CommitFault {
-    pub(super) lose_ack: AtomicBool,
+pub(crate) struct CommitFault {
+    pub(crate) lose_ack: AtomicBool,
     fail_begin: AtomicBool,
     pause_after_commit: AtomicBool,
     committed: tokio::sync::Notify,
     release: tokio::sync::Notify,
 }
-pub(super) struct FaultFactory {
-    pub(super) inner: Arc<dyn UnitOfWorkFactory>,
-    pub(super) fault: Arc<CommitFault>,
+pub(crate) struct FaultFactory {
+    pub(crate) inner: Arc<dyn UnitOfWorkFactory>,
+    pub(crate) fault: Arc<CommitFault>,
 }
 struct FaultUnit {
     inner: Box<dyn UnitOfWork>,
@@ -60,6 +60,46 @@ impl UnitOfWork for FaultUnit {
     async fn remove_blueprint(&mut self, name: &str) -> Result<bool, StoreError> {
         self.inner.remove_blueprint(name).await
     }
+    async fn run_summary_for_key(
+        &mut self,
+        session: &str,
+        key: &str,
+    ) -> Result<Option<crate::application::sessions::recovery::RunSummary>, StoreError> {
+        self.inner.run_summary_for_key(session, key).await
+    }
+    async fn run_summary(
+        &mut self,
+        id: &str,
+    ) -> Result<Option<crate::application::sessions::recovery::RunSummary>, StoreError> {
+        self.inner.run_summary(id).await
+    }
+    async fn list_runs(
+        &mut self,
+        query: crate::application::sessions::recovery::RunQuery,
+    ) -> Result<Vec<crate::application::sessions::recovery::RunSummary>, StoreError> {
+        self.inner.list_runs(query).await
+    }
+    async fn has_retained_run(&mut self, session: &str) -> Result<bool, StoreError> {
+        self.inner.has_retained_run(session).await
+    }
+    async fn has_run_predecessor(&mut self, id: &str) -> Result<bool, StoreError> {
+        self.inner.has_run_predecessor(id).await
+    }
+    async fn save_run_lifecycle(
+        &mut self,
+        run: crate::domain::run_status::RunSummary,
+    ) -> Result<(), StoreError> {
+        self.inner.save_run_lifecycle(run).await
+    }
+    async fn retire_run_resources(&mut self, id: &str) -> Result<(), StoreError> {
+        self.inner.retire_run_resources(id).await
+    }
+    async fn run_result(
+        &mut self,
+        id: &str,
+    ) -> Result<Option<crate::domain::idempotent_request::RecordedOutcome>, StoreError> {
+        self.inner.run_result(id).await
+    }
     async fn get_run(&mut self, id: &str) -> Result<Option<crate::domain::run::Run>, StoreError> {
         self.inner.get_run(id).await
     }
@@ -73,12 +113,7 @@ impl UnitOfWork for FaultUnit {
     async fn save_run(&mut self, request: crate::domain::run::Run) -> Result<(), StoreError> {
         self.inner.save_run(request).await
     }
-    async fn active_session_runs(
-        &mut self,
-        session_id: &str,
-    ) -> Result<Vec<crate::domain::run::Run>, StoreError> {
-        self.inner.active_session_runs(session_id).await
-    }
+
     async fn unfinished_runs(&mut self) -> Result<Vec<crate::domain::run::Run>, StoreError> {
         self.inner.unfinished_runs().await
     }
@@ -100,9 +135,9 @@ impl UnitOfWork for FaultUnit {
     async fn expire_responses(
         &mut self,
         session_id: &str,
-        keys: Vec<String>,
+        run_ids: Vec<String>,
     ) -> Result<u64, StoreError> {
-        self.inner.expire_responses(session_id, keys).await
+        self.inner.expire_responses(session_id, run_ids).await
     }
     async fn get_secret(
         &mut self,

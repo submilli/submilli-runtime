@@ -3397,3 +3397,47 @@ async fn unkeyed_mcp_programs_persist_distinct_run_identities() {
             .all(|r| r.1 == "finished" && r.2 == "mcp" && r.3.is_none())
     );
 }
+
+#[tokio::test]
+async fn durable_session_execute_retains_an_observable_run() {
+    let root = tempfile::tempdir().unwrap();
+    let blueprint =
+        submilli_blueprint::parse("name: durable\ndefault: allow\nvfs: none\n").unwrap();
+    let state = AppState::new(ServerConfig {
+        durable_execution: true,
+        blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]).unwrap())),
+        database_path: Some(root.path().join("server.db")),
+        volume_root: Some(root.path().to_owned()),
+        package_store_root: Some(root.path().join("packages")),
+        session_cipher: Some(Arc::new(
+            submilli_shared::secret_store::SecretCipher::from_key([37; 32]),
+        )),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let h = Harness {
+        state,
+        session_root: root.path().join("sessions"),
+        _owned_volume_root: Some(root),
+        _package_store_root: None,
+    };
+    let session = h.handshake("durable").await;
+    let (status, _, rpc) = h.post("durable", tools_call(2, SUM), Some(&session)).await;
+    assert_eq!(status, StatusCode::OK, "{rpc}");
+    let result = output(&rpc);
+    assert_eq!(result["result"], "2", "{rpc}");
+    let run_id = result["execution_id"].as_str().unwrap();
+    let (status, _, observed) = h
+        .send(
+            Request::get(format!("/v1/runs/{run_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(observed["durable"], true);
+    assert_eq!(observed["session_id"], session);
+    assert_eq!(observed["status"], "completed");
+    assert_eq!(observed["response"]["result"], "2");
+}

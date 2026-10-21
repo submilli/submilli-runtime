@@ -243,14 +243,3 @@ fn write_domain(record: &mut SessionRecord, session: &Session) {
 fn rule_error(error: SessionRuleError) -> StoreError {
     StoreError::Io(error.to_string())
 }
-
-#[async_trait::async_trait]
-impl crate::application::sessions::ports::SessionRepository for SessionPersistence {
-    async fn get(&self, id: &str) -> Result<Option<Session>, StoreError> {
-        self.store
-            .load(id)
-            .await?
-            .map(|record| restore_domain(&record, &self.session_root))
-            .transpose()
-    }
-}

@@ -16,7 +16,8 @@ impl<'a> StartExecution<'a> {
             .await?
             .ok_or(SessionError::UnknownSession)?;
         let now = std::time::SystemTime::now();
-        session.record_execution_started(now)?;
+        require_available(unit.as_mut(), &session, now).await?;
+        session.record_activity(now)?;
         unit.save_session(session).await?;
         unit.commit().await?;
         Ok(())
@@ -37,12 +38,28 @@ impl<'a> CompleteExecution<'a> {
             return Ok(false);
         };
         let now = std::time::SystemTime::now();
-        if session.require_available(now).is_err() {
-            return Ok(false);
+        match require_available(unit.as_mut(), &session, now).await {
+            Ok(()) => {}
+            Err(error @ SessionError::Storage(_)) => return Err(error),
+            Err(_) => return Ok(false),
         }
         session.record_execution_completed(now)?;
         unit.save_session(session).await?;
         unit.commit().await?;
         Ok(true)
     }
+}
+
+/// Accepted work retains its session across idle deadlines. Closure still wins.
+pub(crate) async fn require_available(
+    unit: &mut dyn crate::application::unit_of_work::UnitOfWork,
+    session: &crate::domain::session::Session,
+    now: std::time::SystemTime,
+) -> Result<(), SessionError> {
+    if unit.has_retained_run(session.id().as_str()).await? {
+        session.require_active()?;
+    } else {
+        session.require_available(now)?;
+    }
+    Ok(())
 }

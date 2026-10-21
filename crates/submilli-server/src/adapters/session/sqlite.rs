@@ -316,7 +316,9 @@ pub(crate) async fn write_record(
             Duration::from_millis(records::millis(idle_timeout)?),
             records::timestamp(last_activity)?,
         );
-        if lifetime.expired_at(records::timestamp(now)?) {
+        if lifetime.expired_at(records::timestamp(now)?)
+            && !crate::adapters::run_recovery::retained(connection, &record.session_id).await?
+        {
             return Err(DatabaseError::SessionConflict);
         }
     }

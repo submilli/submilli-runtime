@@ -53,6 +53,8 @@ struct ProgramRecord {
     #[serde(with = "LimitsRecord")]
     limits: RunLimits,
     compatibility: String,
+    mcp_catalog: std::sync::Arc<submilli_shared::mcp::McpCatalog>,
+    filesystem_config_fingerprint: Option<[u8; 32]>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "RunLimits")]
@@ -233,6 +235,8 @@ mod tests {
             blueprint: submilli_blueprint::parse("name: test\ndefault: allow\n").unwrap(),
             variables: Default::default(),
             compatibility: "test-v1".into(),
+            mcp_catalog: std::sync::Arc::new(submilli_shared::mcp::McpCatalog::empty()),
+            filesystem_config_fingerprint: None,
             limits: RunLimits {
                 fuel: config.fuel,
                 max_wasm_stack: config.max_wasm_stack,

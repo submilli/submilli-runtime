@@ -25,7 +25,7 @@ pub(crate) async fn unfinished(
     connection: &mut SqliteConnection,
     sealer: &Sealer,
 ) -> Result<Vec<Run>, DatabaseError> {
-    sqlx::query("SELECT run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,history_position,recovery_mode,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms,CASE WHEN length(execution_manifest)<=16777344 THEN execution_manifest ELSE NULL END AS execution_manifest FROM runs WHERE state IN ('reserved','running')")
+    sqlx::query("SELECT run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,history_position,recovery_mode,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms,CASE WHEN length(execution_manifest)<=16777344 THEN execution_manifest ELSE NULL END AS execution_manifest FROM runs WHERE recovery_mode='unrecorded' AND state IN ('reserved','running')")
         .fetch_all(connection)
         .await?
         .into_iter()
@@ -112,32 +112,34 @@ pub(crate) async fn completed_responses(
     connection: &mut SqliteConnection,
     session: &str,
 ) -> Result<Vec<CompletedResponse>, DatabaseError> {
-    sqlx::query("SELECT request_key,completed_at_unix_ms FROM runs WHERE session_id=? AND state='completed'")
-        .bind(session)
-        .fetch_all(connection)
-        .await?
-        .into_iter()
-        .map(|row| {
-            Ok(CompletedResponse {
-                key: row.try_get("request_key")?,
-                completed_at: from_unix_ms(row.try_get("completed_at_unix_ms")?)?,
-            })
+    sqlx::query(
+        "SELECT run_id,completed_at_unix_ms FROM runs WHERE session_id=? AND state='completed'",
+    )
+    .bind(session)
+    .fetch_all(connection)
+    .await?
+    .into_iter()
+    .map(|row| {
+        Ok(CompletedResponse {
+            run_id: row.try_get("run_id")?,
+            completed_at: from_unix_ms(row.try_get("completed_at_unix_ms")?)?,
         })
-        .collect()
+    })
+    .collect()
 }
 
-/// Drop the bodies of `keys`, keeping each as an expired tombstone. A request
+/// Drop the bodies of `run_ids`, keeping each as an expired tombstone. A request
 /// that is no longer completed is left as it is.
 pub(crate) async fn expire_responses(
     connection: &mut SqliteConnection,
     session: &str,
-    keys: &[String],
+    run_ids: &[String],
 ) -> Result<u64, DatabaseError> {
     let mut expired = 0;
-    for key in keys {
-        expired += sqlx::query("UPDATE runs SET state='expired',revision=revision+1,response_status=NULL,response_body=NULL WHERE session_id=? AND request_key=? AND state='completed'")
+    for run_id in run_ids {
+        expired += sqlx::query("UPDATE runs SET state='expired',revision=revision+1,response_status=NULL,response_body=NULL WHERE session_id=? AND run_id=? AND state='completed'")
             .bind(session)
-            .bind(key)
+            .bind(run_id)
             .execute(&mut *connection)
             .await?
             .rows_affected();
@@ -242,20 +244,4 @@ pub(crate) async fn get_run(
         .await?
         .map(|row| decode(row, sealer))
         .transpose()
-}
-
-pub(crate) async fn active_for_session(
-    connection: &mut SqliteConnection,
-    sealer: &Sealer,
-    session: &str,
-) -> Result<Vec<Run>, DatabaseError> {
-    sqlx::query(
-        "SELECT run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,history_position,recovery_mode,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms,CASE WHEN length(execution_manifest)<=16777344 THEN execution_manifest ELSE NULL END AS execution_manifest FROM runs WHERE session_id=? AND state IN ('reserved','running','blocked')",
-    )
-    .bind(session)
-    .fetch_all(connection)
-    .await?
-    .into_iter()
-    .map(|row| decode(row, sealer))
-    .collect()
 }

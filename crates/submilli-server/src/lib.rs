@@ -49,3 +49,5 @@ pub use serve::{prepare_blueprint_store, runtime, serve};
 pub use submilli_shared::mcp_token::{McpTokenError, OAuthTokenManager};
 pub use submilli_shared::secret_store::{FileSecretStore, KeySource};
 pub use submilli_shared::secret_store::{SecretStore, SecretStoreError};
+
+mod recovery;
