@@ -2553,7 +2553,7 @@ export interface RedditSearchSubredditData {
         "nsfw"?: boolean | null;
         "spoiler"?: boolean | null;
         "is_crosspost"?: boolean | null;
-        "subreddit"?: {
+        "subreddit"?: string | {
             "id"?: string | null;
             "name"?: string | null;
             "nsfw"?: boolean | null;
@@ -2564,6 +2564,21 @@ export interface RedditSearchSubredditData {
             "weekly_visitors"?: number | null;
             "weekly_contributions"?: number | null;
         } | null;
+        "author"?: string | null;
+        "author_fullname"?: string | null;
+        "selftext"?: string | null;
+        "selftext_html"?: string | null;
+        "downs"?: number | null;
+        "name"?: string | null;
+        "upvote_ratio"?: number | null;
+        "ups"?: number | null;
+        "total_awards_received"?: number | null;
+        "score"?: number | null;
+        "created"?: number | null;
+        "created_utc"?: number | null;
+        "subreddit_subscribers"?: number | null;
+        "is_video"?: boolean | null;
+        "over_18"?: boolean | null;
         "votes"?: number | null;
         "num_comments"?: number | null;
         "created_at"?: string | null;
