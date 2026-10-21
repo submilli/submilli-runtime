@@ -317,13 +317,13 @@ impl TypeParamSubstitution {
         loose
     }
 
-    /// This substitution without its `never` candidates, when it has any: a
-    /// `never` candidate is no hint for a later argument, which takes the
-    /// binding instead (tsc drops `never` from the candidates).
+    /// This substitution without its `never` and `never[]` candidates, when
+    /// it has any: such a candidate is no hint for a later argument, which
+    /// takes or widens the binding instead (tsc drops `never` from the
+    /// candidates, and `never[]` is a subtype of every array).
     pub fn without_never_bindings(&self) -> Option<TypeParamSubstitution> {
-        let is_never_candidate = |name: &str, ty: &Type| {
-            self.widenable.contains(name) && matches!(ty.peel(), Type::Never)
-        };
+        let is_never_candidate =
+            |name: &str, ty: &Type| self.widenable.contains(name) && holds_nothing(ty);
         if !self
             .bindings
             .iter()
@@ -626,6 +626,15 @@ impl TypeParamSubstitution {
             return Ok(());
         }
         unified
+    }
+}
+
+/// Whether `ty` is `never`, or an array that can hold nothing.
+fn holds_nothing(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Never => true,
+        Type::Array(element) => holds_nothing(element),
+        _ => false,
     }
 }
 
@@ -1308,8 +1317,11 @@ impl<'a> Unifier<'a> {
                 Type::Array(_) | Type::Object { .. } | Type::Tuple(_)
             )
         };
-        if (self.combines_literals && self.sub.literal_candidates.contains(name))
-            || (self.unions_member_candidates && structured(bound) && structured(arg))
+        // A literal's candidates form their union; so do an array literal's
+        // tuple members', which tsc unions as the literal's element type.
+        if self.combines_literals
+            && (self.sub.literal_candidates.contains(name)
+                || (self.unions_member_candidates && structured(bound) && structured(arg)))
         {
             return Some(Type::union(vec![bound.clone(), unresolved_arg.clone()]));
         }

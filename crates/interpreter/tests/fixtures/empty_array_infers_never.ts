@@ -5,6 +5,10 @@ function merge<a>(as1: a[], as2: a[], cmp: (a1: a, a2: a) => number): a[] {
   return [...as1, ...as2].sort(cmp);
 }
 
+function either<T>(a: T, b: T): T {
+  return b;
+}
+
 function main(): void {
   const merged = merge(Array.from([]), [2, 1], (a1, a2) => a1 - a2);
   assert(merged.length === 2, "both elements");
@@ -12,4 +16,6 @@ function main(): void {
   const none: never[] = [];
   const more: number[] = merge(none, [3], (x, y) => x - y);
   assert(more[0] === 3, "a never candidate gives way");
+  const widened = either(Array.from([]), [1]);
+  assert(widened.length === 1, "a never[] candidate is no hint for a literal");
 }

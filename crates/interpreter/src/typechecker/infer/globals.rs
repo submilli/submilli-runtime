@@ -55,7 +55,10 @@ impl<'a> Inferer<'a> {
                         self.forget_later_global(&name.name);
                         continue;
                     }
-                    let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
+                    let hint = ty
+                        .as_ref()
+                        .map(|a| self.resolve_type_in_flow(a))
+                        .transpose()?;
                     let (typed_value, value_ty) =
                         self.infer_expr_keeping_literals(value, hint.as_ref(), true)?;
                     // Reassignable, so a fresh literal widens, except for an
@@ -115,7 +118,10 @@ impl<'a> Inferer<'a> {
                     }
                     // Keeps the literal types its value passes through; see the
                     // block-scoped `Const` arm in `stmt.rs`.
-                    let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
+                    let hint = ty
+                        .as_ref()
+                        .map(|a| self.resolve_type_in_flow(a))
+                        .transpose()?;
                     let (typed_value, value_ty) =
                         self.infer_expr_keeping_literals(value, hint.as_ref(), hint.is_none())?;
                     let origin =

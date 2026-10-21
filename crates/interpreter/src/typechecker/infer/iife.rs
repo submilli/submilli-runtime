@@ -162,7 +162,7 @@ impl Inferer<'_> {
         // Arguments that hold calls like this one are inferred both here and
         // in the call; remembering each argument's type until the outermost
         // such call is inferred keeps nested ones from doubling the work. A
-        // loop starts afresh, since it may type its body again.
+        // loop starts afresh (see `without_argument_memo`).
         let outermost = self.invoked_argument_memo.is_none();
         if outermost {
             self.invoked_argument_memo = Some(Default::default());
@@ -180,6 +180,16 @@ impl Inferer<'_> {
         if outermost {
             self.invoked_argument_memo = None;
         }
+        inferred
+    }
+
+    /// Runs `infer` without the argument types remembered so far: a loop types
+    /// its condition and body again under the narrowing a pass leaves, where
+    /// those types no longer hold.
+    pub(super) fn without_argument_memo<T>(&mut self, infer: impl FnOnce(&mut Self) -> T) -> T {
+        let memo = self.invoked_argument_memo.take();
+        let inferred = infer(self);
+        self.invoked_argument_memo = memo;
         inferred
     }
 

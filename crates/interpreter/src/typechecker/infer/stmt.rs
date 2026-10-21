@@ -56,33 +56,6 @@ impl Inferer<'_> {
         stmt_id: StmtId,
         preserve_binding_literals: bool,
     ) -> Result<Option<StmtId>, CompilerFailure> {
-        let is_loop = matches!(
-            self.ast
-                .try_stmt(stmt_id)
-                .map_err(super::arena_failure)?
-                .kind,
-            StmtKind::While { .. }
-                | StmtKind::DoWhile { .. }
-                | StmtKind::For { .. }
-                | StmtKind::ForOf { .. }
-                | StmtKind::ForOfPattern { .. }
-        );
-        if !is_loop {
-            return self.infer_stmt_kind(stmt_id, preserve_binding_literals);
-        }
-        // A loop types its body and condition again under the narrowing a
-        // pass leaves, so argument types remembered before it no longer hold.
-        let memo = self.invoked_argument_memo.take();
-        let inferred = self.infer_stmt_kind(stmt_id, preserve_binding_literals);
-        self.invoked_argument_memo = memo;
-        inferred
-    }
-
-    fn infer_stmt_kind(
-        &mut self,
-        stmt_id: StmtId,
-        preserve_binding_literals: bool,
-    ) -> Result<Option<StmtId>, CompilerFailure> {
         let stmt = self
             .ast
             .try_stmt(stmt_id)
@@ -121,51 +94,52 @@ impl Inferer<'_> {
                 then_block,
                 else_block,
             } => self.infer_if_statement(condition, then_block, else_block, span),
-            StmtKind::While { condition, body } => {
+            StmtKind::While { condition, body } => self.without_argument_memo(|this| {
                 let (condition, _, body) =
-                    self.infer_condition_first_loop(Some(condition), None, body, span)?;
+                    this.infer_condition_first_loop(Some(condition), None, body, span)?;
                 Ok(TypedStmtKind::While {
                     condition: condition.ok_or_else(|| {
                         super::inference_failure("missing inferred while condition")
                     })?,
                     body,
                 })
-            }
+            }),
             StmtKind::For {
                 init,
                 condition,
                 update,
                 body,
-            } => {
-                self.check_for_pattern_init_captures(stmt_id, span);
-                self.scopes.push();
-                let typed_init = init.map(|id| self.infer_stmt(id)).transpose()?.flatten();
+            } => self.without_argument_memo(|this| {
+                this.check_for_pattern_init_captures(stmt_id, span);
+                this.scopes.push();
+                let typed_init = init.map(|id| this.infer_stmt(id)).transpose()?.flatten();
                 // Init-scope bindings persist across iterations, so the body's
                 // scope floor, taken in `infer_condition_first_loop`, sits
                 // above them.
                 let (typed_cond, typed_update, typed_body) =
-                    self.infer_condition_first_loop(condition, update, body, span)?;
-                self.scopes.pop();
+                    this.infer_condition_first_loop(condition, update, body, span)?;
+                this.scopes.pop();
                 // The init scope is popped after the fold, so anything the fold
                 // installed that is rooted in it is now unreadable.
-                self.drop_out_of_scope_narrowings();
+                this.drop_out_of_scope_narrowings();
                 Ok(TypedStmtKind::For {
                     init: typed_init,
                     condition: typed_cond,
                     update: typed_update,
                     body: typed_body,
                 })
-            }
+            }),
             StmtKind::ForOf {
                 binding_kind,
                 name,
                 ty: ann,
                 iter,
                 body,
-            } => self.infer_for_of_statement(binding_kind, name, ann, iter, body, span),
-            StmtKind::DoWhile { body, condition } => {
-                self.infer_do_while_statement(body, condition, span)
-            }
+            } => self.without_argument_memo(|this| {
+                this.infer_for_of_statement(binding_kind, name, ann, iter, body, span)
+            }),
+            StmtKind::DoWhile { body, condition } => self
+                .without_argument_memo(|this| this.infer_do_while_statement(body, condition, span)),
             StmtKind::Switch {
                 discriminant,
                 cases,
