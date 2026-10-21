@@ -70,6 +70,24 @@ function generic<T>(o: { x: T } | undefined): T | undefined {
   return undefined;
 }
 
+// A label that is a constant names its tags.
+const NUMBER = "number";
+function byConstantTag(o: Thing | undefined): number {
+  switch (typeof o?.foo) {
+    case NUMBER:
+      return typeof o.foo === "number" ? o.foo + 1 : 0;
+  }
+  return -1;
+}
+
+// A tuple already narrowed still narrows by a position's truthiness.
+type Triple = [null, string] | [true, number] | ["s", boolean];
+function triple(v: Triple): string {
+  if (v[0] === "s") return "s";
+  if (!v[0]) return "falsy";
+  return String(v[1] + 1);
+}
+
 function main(): void {
   assert(sum(undefined, 1, null) === 0);
   assert(sum({ foo: 1, bar: () => 1, baz: {}, n: null }, 1, { b: new Box(5) }) === 111);
@@ -85,5 +103,10 @@ function main(): void {
   assert(nested(undefined, "a") === 0);
   assert(generic({ x: "a" }) === "a");
   assert(generic(undefined) === undefined);
+  assert(byConstantTag({ foo: 1, bar: () => 0, baz: {}, n: null }) === 2);
+  assert(byConstantTag(undefined) === -1);
+  assert(triple(["s", true]) === "s");
+  assert(triple([null, "y"]) === "falsy");
+  assert(triple([true, 4]) === "5");
   assert(keepsNull({ foo: 0, bar: () => 0, baz: {}, n: null }, null));
 }

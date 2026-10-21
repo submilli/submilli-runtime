@@ -720,14 +720,28 @@ impl Inferer<'_> {
         disc_source_span: Span,
         labels: &[(TypedSwitchValue, Type)],
     ) -> Result<narrowing::NarrowEnv, CompilerFailure> {
+        let mut tags = Vec::new();
+        for (label, label_ty) in labels {
+            // A label that isn't a literal names the tags its type allows.
+            let values = match label {
+                TypedSwitchValue::Expr { .. } => literal_members(label_ty),
+                literal => narrowing::switch_value_literal(literal).map(|value| vec![value]),
+            };
+            let Some(values) = values else {
+                return Ok(narrowing::NarrowEnv::new());
+            };
+            for value in values {
+                let narrowing::LiteralValue::String(tag) = value else {
+                    return Ok(narrowing::NarrowEnv::new());
+                };
+                let Some(tag) = super::expr::typeof_tag_kind(&tag) else {
+                    return Ok(narrowing::NarrowEnv::new());
+                };
+                tags.push(tag);
+            }
+        }
         let mut joined: Option<narrowing::NarrowEnv> = None;
-        for (label, _) in labels {
-            let TypedSwitchValue::String { value, .. } = label else {
-                return Ok(narrowing::NarrowEnv::new());
-            };
-            let Some(tag) = super::expr::typeof_tag_kind(value) else {
-                return Ok(narrowing::NarrowEnv::new());
-            };
+        for tag in tags {
             let test = self
                 .typed_ast
                 .try_push_expr(TypedExpr {

@@ -17,6 +17,13 @@ function g(n: number): number {
   if (n === NumberEnum.B) { const b: NumberEnum.B = n; return b; }
   return -1;
 }
+function whole(u: unknown, e: StringEnum): string {
+  if (u === e) {
+    const s: StringEnum = u;
+    return s;
+  }
+  return "no";
+}
 function main(): void {
   assert(f(0) === "NA0");
   assert(f("B") === "B");
@@ -26,5 +33,7 @@ function main(): void {
   assert(f(2) === "N2");
   assert(f("x") === "other");
   assert(g(1) === 1);
+  assert(whole("B", StringEnum.B) === "B");
+  assert(whole("x", StringEnum.B) === "no");
   assert(g(5) === -1);
 }

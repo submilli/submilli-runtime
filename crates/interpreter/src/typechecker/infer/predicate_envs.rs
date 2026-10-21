@@ -896,12 +896,13 @@ impl<'a> Inferer<'a> {
             return Ok(none);
         };
         let split = self.split_by_key_types(members, key_tys, compared_ty);
+        let root_kind = self.discriminant_root_source(&root)?;
         self.root_discriminant_envs(
             crate::BinOp::Eq,
             root.path,
             root.ty,
             root.span,
-            root.kind,
+            root_kind,
             split,
         )
     }
@@ -916,6 +917,34 @@ impl<'a> Inferer<'a> {
     }
 
     fn optional_chain_present_env(
+        &mut self,
+        chain_id: ExprId,
+        result_facts: narrowing::TypeFacts,
+    ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
+        let mut env = self.chain_present_env(chain_id, result_facts)?;
+        self.forget_writes_in_chain(&mut env, chain_id)?;
+        Ok(env)
+    }
+
+    /// A chain's views read its receivers as the chain does, so a write a
+    /// later step makes (`o?.f(o = undefined)`) drops what it replaced.
+    fn forget_writes_in_chain(
+        &self,
+        env: &mut narrowing::NarrowEnv,
+        chain_id: ExprId,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let crate::TypedExprKind::OptionalChain { base, .. } = self
+            .typed_ast
+            .try_expr(chain_id)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        else {
+            return Ok(());
+        };
+        self.forget_later_writes(env, base, chain_id)
+    }
+
+    fn chain_present_env(
         &mut self,
         chain_id: ExprId,
         result_facts: narrowing::TypeFacts,
@@ -976,6 +1005,23 @@ impl<'a> Inferer<'a> {
     /// `result_facts`, or narrows as `narrow_result` narrows it where that
     /// narrows it at all. Empty when the chain isn't one we follow.
     fn optional_chain_reached_env(
+        &mut self,
+        chain_id: ExprId,
+        result_facts: narrowing::TypeFacts,
+        narrow_result: impl FnOnce(
+            &mut Self,
+            ExprId,
+        ) -> Result<
+            Option<narrowing::NarrowEnv>,
+            crate::compiler_error::CompilerFailure,
+        >,
+    ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
+        let mut env = self.chain_reached_env(chain_id, result_facts, narrow_result)?;
+        self.forget_writes_in_chain(&mut env, chain_id)?;
+        Ok(env)
+    }
+
+    fn chain_reached_env(
         &mut self,
         chain_id: ExprId,
         result_facts: narrowing::TypeFacts,
@@ -1067,6 +1113,7 @@ impl<'a> Inferer<'a> {
                 .try_expr(receiver)
                 .map_err(crate::typechecker::arena_failure)?;
             let (span, ty) = (part.span(), part.result_ty().clone());
+            let is_index = matches!(part, TypedChainPart::Index { .. });
             let kind = match part {
                 TypedChainPart::Field { name, .. }
                 | TypedChainPart::InterfaceProperty { name, .. } => {
@@ -1120,6 +1167,7 @@ impl<'a> Inferer<'a> {
             // An element read by a constant key names a field, which may be a getter.
             let read_getter = match self.expr_to_reference_path(read)? {
                 None => true,
+                Some(_) if !is_index => false,
                 Some(path) => match path.chain.last() {
                     Some(narrowing::PathElem::Field(name)) => {
                         let previous = self
@@ -1747,16 +1795,14 @@ impl<'a> Inferer<'a> {
                 };
                 let receiver_ty = receiver_expr.ty.clone();
                 let receiver_span = receiver_expr.span;
-                let fallback_kind = receiver_expr.kind.clone();
-                let root_kind = self
-                    .synthesize_unnarrowed_source(&root_path, receiver_span)?
-                    .unwrap_or(fallback_kind);
+                let receiver_kind = receiver_expr.kind.clone();
                 DiscriminantRoot {
                     path: root_path,
                     ty: receiver_ty,
                     span: receiver_span,
-                    kind: root_kind,
+                    kind: receiver_kind,
                     key: DiscriminantKey::Field(name.name.clone()),
+                    read_unnarrowed: true,
                 }
             }
             TypedExprKind::IndexAccess { receiver, index } => {
@@ -1769,10 +1815,7 @@ impl<'a> Inferer<'a> {
                 };
                 let receiver_ty = receiver_expr.ty.clone();
                 let receiver_span = receiver_expr.span;
-                let fallback_kind = receiver_expr.kind.clone();
-                let root_kind = self
-                    .synthesize_unnarrowed_source(&root_path, receiver_span)?
-                    .unwrap_or(fallback_kind);
+                let receiver_kind = receiver_expr.kind.clone();
                 let Some(position) = index_position(
                     &self
                         .typed_ast
@@ -1786,8 +1829,9 @@ impl<'a> Inferer<'a> {
                     path: root_path,
                     ty: receiver_ty,
                     span: receiver_span,
-                    kind: root_kind,
+                    kind: receiver_kind,
                     key: DiscriminantKey::Position(position),
+                    read_unnarrowed: true,
                 }
             }
             TypedExprKind::LocalNarrowRef { .. } => {
@@ -1815,10 +1859,25 @@ impl<'a> Inferer<'a> {
                     span: path_span,
                     kind: root_kind,
                     key: disc_key,
+                    read_unnarrowed: false,
                 }
             }
             _ => return Ok(None),
         }))
+    }
+
+    /// A source that reads `root`'s object. Building it adds expressions to
+    /// the typed AST, so it waits until the root is known to narrow.
+    fn discriminant_root_source(
+        &mut self,
+        root: &DiscriminantRoot,
+    ) -> Result<crate::TypedExprKind, crate::compiler_error::CompilerFailure> {
+        if !root.read_unnarrowed {
+            return Ok(root.kind.clone());
+        }
+        Ok(self
+            .synthesize_unnarrowed_source(&root.path, root.span)?
+            .unwrap_or_else(|| root.kind.clone()))
     }
 
     fn narrow_literal_discriminant(
@@ -1834,16 +1893,11 @@ impl<'a> Inferer<'a> {
         Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
         crate::compiler_error::CompilerFailure,
     > {
-        let Some(DiscriminantRoot {
-            path: root_path,
-            ty: root_ty,
-            span: root_span,
-            kind: root_kind,
-            key: disc_key_from_path,
-        }) = self.discriminant_root(&path, &path_kind, path_span)?
-        else {
+        let Some(root) = self.discriminant_root(&path, &path_kind, path_span)? else {
             return Ok(None);
         };
+        let (root_path, root_ty, root_span) = (root.path.clone(), root.ty.clone(), root.span);
+        let disc_key_from_path = &root.key;
 
         // Peel aliases so `type Shape = A | B` pattern-matches as union.
         let Type::Union(members) = root_ty.peel() else {
@@ -1867,6 +1921,7 @@ impl<'a> Inferer<'a> {
                 split
             }
         };
+        let root_kind = self.discriminant_root_source(&root)?;
         let (mut true_env, mut false_env) = self.root_discriminant_envs(
             op,
             root_path,
@@ -2697,7 +2752,7 @@ impl<'a> Inferer<'a> {
             return Ok(envs);
         }
 
-        let root_envs = self.truthiness_discriminant_envs(&fallback_kind)?;
+        let root_envs = self.truthiness_discriminant_envs(&path, &fallback_kind, span)?;
 
         let true_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::TRUTHY);
         let false_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::FALSY);
@@ -2773,45 +2828,24 @@ impl<'a> Inferer<'a> {
     /// truthy, and `!x.error` to those whose `error` can be falsy.
     fn truthiness_discriminant_envs(
         &mut self,
+        path: &narrowing::ReferencePath,
         path_kind: &crate::TypedExprKind,
+        path_span: Span,
     ) -> Result<
         Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
         crate::compiler_error::CompilerFailure,
     > {
-        let (receiver, key) = match path_kind {
-            crate::TypedExprKind::FieldAccess { receiver, name } => {
-                (*receiver, DiscriminantKey::Field(name.name.clone()))
-            }
-            crate::TypedExprKind::IndexAccess { receiver, index } => {
-                let Some(position) = index_position(
-                    &self
-                        .typed_ast
-                        .try_expr(*index)
-                        .map_err(crate::typechecker::arena_failure)?
-                        .kind,
-                ) else {
-                    return Ok(None);
-                };
-                (*receiver, DiscriminantKey::Position(position))
-            }
-            _ => return Ok(None),
-        };
-        let receiver_expr = self
-            .typed_ast
-            .try_expr(receiver)
-            .map_err(crate::typechecker::arena_failure)?
-            .clone();
-        let Some(root_path) = self.expr_to_reference_path(&receiver_expr)? else {
+        let Some(root) = self.discriminant_root(path, path_kind, path_span)? else {
             return Ok(None);
         };
-        let Type::Union(members) = receiver_expr.ty.peel() else {
+        let Type::Union(members) = root.ty.peel() else {
             return Ok(None);
         };
         let mut is_discriminant = false;
         let mut truthy = Vec::new();
         let mut falsy = Vec::new();
         for member in members {
-            let Some(field_ty) = self.discriminant_read_ty(member, &key) else {
+            let Some(field_ty) = self.discriminant_read_ty(member, &root.key) else {
                 return Ok(None);
             };
             is_discriminant |= narrowing::has_unit_member(&field_ty);
@@ -2831,14 +2865,12 @@ impl<'a> Inferer<'a> {
         if !is_discriminant || (truthy.len() == members.len() && falsy.len() == members.len()) {
             return Ok(None);
         }
-        let root_kind = self
-            .synthesize_unnarrowed_source(&root_path, receiver_expr.span)?
-            .unwrap_or_else(|| receiver_expr.kind.clone());
+        let root_kind = self.discriminant_root_source(&root)?;
         self.root_discriminant_envs(
             crate::BinOp::Eq,
-            root_path,
-            receiver_expr.ty.clone(),
-            receiver_expr.span,
+            root.path,
+            root.ty.clone(),
+            root.span,
             root_kind,
             (truthy, falsy),
         )
@@ -3378,6 +3410,9 @@ struct DiscriminantRoot {
     span: Span,
     kind: crate::TypedExprKind,
     key: DiscriminantKey,
+    /// `kind` is the receiver as read, which a narrowing must replace with
+    /// one that bypasses the receiver's own narrowed views.
+    read_unnarrowed: bool,
 }
 
 /// `compared` with the type parameters among `ty`'s members, which equality
@@ -3401,9 +3436,9 @@ fn with_type_parameters_of(ty: &Type, compared: Type) -> Type {
 }
 
 /// What an `unknown` equal to a value of type `value_ty` holds, as TypeScript
-/// narrows it: a primitive or `object` value's own type, and `object` for any
-/// other object type. A union says too little to narrow by, so it stays
-/// `unknown`.
+/// narrows it: a primitive (an enum included) or `object` value's own type,
+/// and `object` for any other object type. A union says too little to narrow
+/// by, so it stays `unknown`.
 fn unknown_equal_to(value_ty: &Type) -> Type {
     match value_ty.peel() {
         Type::Number
@@ -3415,7 +3450,7 @@ fn unknown_equal_to(value_ty: &Type) -> Type {
         | Type::Boolean
         | Type::BooleanLiteral(_)
         | Type::NonPrimitive => value_ty.clone(),
-        ty if ty.is_enum_member() => value_ty.clone(),
+        Type::NumberEnum { .. } | Type::StringEnum { .. } => value_ty.clone(),
         // `{}` holds primitives too.
         ty if ty.is_empty_object() => Type::Unknown,
         Type::Object { .. }
