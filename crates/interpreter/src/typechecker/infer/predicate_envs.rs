@@ -6,6 +6,16 @@ use crate::{ExprId, Ident, Span, Type, TypedExpr};
 use super::assignable::{literal_to_type, literal_value_of};
 use super::{Inferer, narrowing};
 
+/// What testing an optional chain's result can say about the chain: `env`
+/// proves each optional receiver present, and `result` is the chain's result
+/// written as a plain read (`o?.a.b` as `o.a.b`) when that is a reference.
+/// `null` is a `null` literal to compare receivers with.
+struct ChainReceivers {
+    env: narrowing::NarrowEnv,
+    result: Option<ExprId>,
+    null: ExprId,
+}
+
 pub(super) struct ReferencePathState {
     pub path: narrowing::ReferencePath,
     pub contains_getter: bool,
@@ -910,22 +920,25 @@ impl<'a> Inferer<'a> {
         chain_id: ExprId,
         result_facts: narrowing::TypeFacts,
     ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
-        let Some((env, result)) = self.optional_chain_receivers_env(chain_id)? else {
+        let Some(receivers) = self.optional_chain_receivers_env(chain_id)? else {
             return Ok(narrowing::NarrowEnv::new());
         };
-        self.with_chain_result_present(env, result, result_facts)
+        match receivers.result {
+            Some(result) => {
+                self.with_chain_result_present(receivers.env, result, receivers.null, result_facts)
+            }
+            None => Ok(receivers.env),
+        }
     }
 
     /// `env` with the chain's `result` read narrowed to `result_facts`.
     fn with_chain_result_present(
         &mut self,
         mut env: narrowing::NarrowEnv,
-        result: Option<ExprId>,
+        result: ExprId,
+        null: ExprId,
         result_facts: narrowing::TypeFacts,
     ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
-        let Some(result) = result else {
-            return Ok(env);
-        };
         let result_path = {
             let result_expr = self
                 .typed_ast
@@ -933,7 +946,6 @@ impl<'a> Inferer<'a> {
                 .map_err(crate::typechecker::arena_failure)?;
             self.expr_to_reference_path(result_expr)?
         };
-        let null = self.null_literal_at(result)?;
         let mut result_env = self
             .predicate_envs_eq_nullish(crate::BinOp::NotEq, result, null)?
             .0;
@@ -975,24 +987,29 @@ impl<'a> Inferer<'a> {
             crate::compiler_error::CompilerFailure,
         >,
     ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
-        let Some((mut receivers, result)) = self.optional_chain_receivers_env(chain_id)? else {
+        let Some(ChainReceivers {
+            mut env,
+            result,
+            null,
+        }) = self.optional_chain_receivers_env(chain_id)?
+        else {
             return Ok(narrowing::NarrowEnv::new());
         };
         let Some(result) = result else {
-            return Ok(receivers);
+            return Ok(env);
         };
         // The result is read where every receiver is present, so a test on
         // `o?.n.kind` narrows `o.n` as one on `o.n.kind` would.
-        self.push_narrow_frame(receivers.clone());
+        self.push_narrow_frame(env.clone());
         let result_env = narrow_result(self, result);
         self.pop_narrow_frame()?;
         match result_env? {
             // The test's own narrowing of the result is finer than presence.
             Some(result_env) => {
-                receivers.extend_env(result_env);
-                Ok(receivers)
+                env.extend_env(result_env);
+                Ok(env)
             }
-            None => self.with_chain_result_present(receivers, Some(result), result_facts),
+            None => self.with_chain_result_present(env, result, null, result_facts),
         }
     }
 
@@ -1021,17 +1038,14 @@ impl<'a> Inferer<'a> {
         Ok(Some((reached, narrowing::NarrowEnv::new())))
     }
 
-    /// The views proving each optional receiver of a chain present, and the
-    /// chain's result written as a plain read (`o?.a.b` as `o.a.b`) when every
-    /// step is a property or element read. `None` when the chain holds a step
-    /// that reads a getter, whose value a second read may not repeat.
+    /// The [`ChainReceivers`] of a chain. The result is a reference when every
+    /// step is a property or element read of a field. `None` when the chain
+    /// holds a property step that reads a getter, whose value a second read
+    /// may not repeat.
     fn optional_chain_receivers_env(
         &mut self,
         chain_id: ExprId,
-    ) -> Result<
-        Option<(narrowing::NarrowEnv, Option<ExprId>)>,
-        crate::compiler_error::CompilerFailure,
-    > {
+    ) -> Result<Option<ChainReceivers>, crate::compiler_error::CompilerFailure> {
         use crate::{TypedChainPart, TypedExprKind};
         let chain = self
             .typed_ast
@@ -1062,13 +1076,21 @@ impl<'a> Inferer<'a> {
                     // A primitive's property (`s?.length`) is no field path: a
                     // view on it would read `s` as an object.
                     if !reads_fields(&receiver_expr.ty) {
-                        return Ok(Some((env, None)));
+                        return Ok(Some(ChainReceivers {
+                            env,
+                            result: None,
+                            null,
+                        }));
                     }
                     TypedExprKind::FieldAccess { receiver, name }
                 }
                 TypedChainPart::Index { idx, .. } => {
                     if !reads_fields(&receiver_expr.ty) {
-                        return Ok(Some((env, None)));
+                        return Ok(Some(ChainReceivers {
+                            env,
+                            result: None,
+                            null,
+                        }));
                     }
                     TypedExprKind::IndexAccess {
                         receiver,
@@ -1078,8 +1100,15 @@ impl<'a> Inferer<'a> {
                 // A call's result is no reference, so nothing after it narrows.
                 TypedChainPart::Call { .. }
                 | TypedChainPart::MethodCall { .. }
-                | TypedChainPart::NonNull { .. } => return Ok(Some((env, None))),
+                | TypedChainPart::NonNull { .. } => {
+                    return Ok(Some(ChainReceivers {
+                        env,
+                        result: None,
+                        null,
+                    }));
+                }
             };
+            let previous_receiver = receiver;
             receiver = self
                 .typed_ast
                 .try_push_expr(TypedExpr { kind, span, ty })
@@ -1088,11 +1117,33 @@ impl<'a> Inferer<'a> {
                 .typed_ast
                 .try_expr(receiver)
                 .map_err(crate::typechecker::arena_failure)?;
-            if self.expr_to_reference_path(read)?.is_none() {
-                return Ok(Some((env, None)));
+            // An element read by a constant key names a field, which may be a getter.
+            let read_getter = match self.expr_to_reference_path(read)? {
+                None => true,
+                Some(path) => match path.chain.last() {
+                    Some(narrowing::PathElem::Field(name)) => {
+                        let previous = self
+                            .typed_ast
+                            .try_expr(previous_receiver)
+                            .map_err(crate::typechecker::arena_failure)?;
+                        self.receiver_type_has_getter(previous, name)?
+                    }
+                    _ => false,
+                },
+            };
+            if read_getter {
+                return Ok(Some(ChainReceivers {
+                    env,
+                    result: None,
+                    null,
+                }));
             }
         }
-        Ok(Some((env, Some(receiver))))
+        Ok(Some(ChainReceivers {
+            env,
+            result: Some(receiver),
+            null,
+        }))
     }
 
     /// `receiver` narrowed to neither `null` nor `undefined`.
@@ -1309,15 +1360,25 @@ impl<'a> Inferer<'a> {
     }
 
     /// Whether the reference `path_id` reads is written while `other_id` runs.
+    /// An optional chain reads its base and everything below it.
     fn is_written_within(
         &self,
         path_id: ExprId,
         other_id: ExprId,
     ) -> Result<bool, crate::compiler_error::CompilerFailure> {
-        let path_expr = self
+        let mut path_expr = self
             .typed_ast
             .try_expr(path_id)
             .map_err(crate::typechecker::arena_failure)?;
+        let is_chain = if let crate::TypedExprKind::OptionalChain { base, .. } = &path_expr.kind {
+            path_expr = self
+                .typed_ast
+                .try_expr(*base)
+                .map_err(crate::typechecker::arena_failure)?;
+            true
+        } else {
+            false
+        };
         let Some(path) = self.expr_to_reference_path(path_expr)? else {
             return Ok(false);
         };
@@ -1327,7 +1388,8 @@ impl<'a> Inferer<'a> {
             .map_err(crate::typechecker::arena_failure)?
             .span;
         Ok(self.last_write_spans.iter().any(|(written, write_span)| {
-            written.is_prefix_of(&path) && other_span.encloses(*write_span)
+            (written.is_prefix_of(&path) || (is_chain && path.is_prefix_of(written)))
+                && other_span.encloses(*write_span)
         }))
     }
 
@@ -1587,9 +1649,11 @@ impl<'a> Inferer<'a> {
             if !narrowing::union_members(&chain_ty)
                 .into_iter()
                 .any(|member| {
-                    self.split_by_literal(member, &literal, &literal_ty, &no_exclusions)
-                        .0
-                        .is_some()
+                    narrowing::has_type_parameter_member(member)
+                        || self
+                            .split_by_literal(member, &literal, &literal_ty, &no_exclusions)
+                            .0
+                            .is_some()
                 })
             {
                 return Ok(None);
@@ -2788,17 +2852,7 @@ impl<'a> Inferer<'a> {
             DiscriminantKey::Field(name) => self
                 .member_shape(member)
                 .and_then(|shape| shape.get(name).map(crate::ObjectField::read_ty)),
-            DiscriminantKey::Position(position) => {
-                let Type::Tuple(elements) = member.peel() else {
-                    return None;
-                };
-                Some(elements.get(*position).map_or(Type::Undefined, |element| {
-                    crate::ObjectField::widen_optional(
-                        *position >= elements.required_len(),
-                        element.clone(),
-                    )
-                }))
-            }
+            DiscriminantKey::Position(position) => tuple_element_read_ty(member, *position),
         }
     }
 
@@ -3298,15 +3352,9 @@ pub(super) fn discriminant_element_types(
     members: &[Type],
     position: usize,
 ) -> Option<Vec<Option<Type>>> {
-    // A tuple shorter than `position` reads `undefined` there, as a pattern does.
     let element_tys: Vec<Type> = members
         .iter()
-        .map(|member| match member.peel() {
-            Type::Tuple(elements) => {
-                Some(elements.get(position).cloned().unwrap_or(Type::Undefined))
-            }
-            _ => None,
-        })
+        .map(|member| tuple_element_read_ty(member, position))
         .collect::<Option<_>>()?;
     if element_tys.iter().any(narrowing::has_type_parameter_member) {
         return None;
@@ -3387,4 +3435,16 @@ fn reads_fields(ty: &Type) -> bool {
     narrowing::union_members(&narrowing::strip_nullish(ty))
         .into_iter()
         .all(Inferer::is_field_bearing)
+}
+
+/// What a tuple `member` reads at `position`: its element, with `undefined`
+/// when the element is optional, and `undefined` past its end, as a pattern
+/// reads it.
+fn tuple_element_read_ty(member: &Type, position: usize) -> Option<Type> {
+    let Type::Tuple(elements) = member.peel() else {
+        return None;
+    };
+    Some(elements.get(position).map_or(Type::Undefined, |element| {
+        crate::ObjectField::widen_optional(position >= elements.required_len(), element.clone())
+    }))
 }

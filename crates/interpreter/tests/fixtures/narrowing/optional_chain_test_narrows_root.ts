@@ -64,6 +64,12 @@ function nested(o: Holds | undefined, k: "a" | "c"): number {
   return 0;
 }
 
+// A generic result may hold any literal.
+function generic<T>(o: { x: T } | undefined): T | undefined {
+  if (o?.x === "a") return o.x;
+  return undefined;
+}
+
 function main(): void {
   assert(sum(undefined, 1, null) === 0);
   assert(sum({ foo: 1, bar: () => 1, baz: {}, n: null }, 1, { b: new Box(5) }) === 111);
@@ -77,5 +83,7 @@ function main(): void {
   assert(nested({ shape: { kind: "circle", r: 3 }, tag: 1 }, "a") === 3);
   assert(nested({ shape: { kind: "square", side: 2 }, tag: "a" }, "a") === 1);
   assert(nested(undefined, "a") === 0);
+  assert(generic({ x: "a" }) === "a");
+  assert(generic(undefined) === undefined);
   assert(keepsNull({ foo: 0, bar: () => 0, baz: {}, n: null }, null));
 }
