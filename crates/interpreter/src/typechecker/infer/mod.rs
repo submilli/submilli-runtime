@@ -849,9 +849,9 @@ pub(super) struct Inferer<'a> {
     invoked_argument_memo: Option<std::collections::HashMap<crate::ExprId, Option<Type>>>,
     /// Whether a type query takes the narrowing in effect where it is
     /// written, as in a `let` or `const` annotation or a cast (see
-    /// `Inferer::resolve_type_in_flow`). One in a signature takes its root's
-    /// declared type, as the function may run after a captured binding is
-    /// reassigned.
+    /// `Inferer::resolve_type_in_flow`). One in a signature takes only a
+    /// narrowing that survives into a closure, as the function may run after
+    /// a captured binding is reassigned.
     type_queries_see_narrowing: bool,
     /// The name spans of the parameters typed from their arguments that way,
     /// whose defaults are typed against them.

@@ -915,19 +915,24 @@ fn mark_literal_source(
     is_const: bool,
 ) -> Result<Option<LiteralSource>, CompilerFailure> {
     let value = peel_parens(ast, value)?;
+    let bound = bound_names(binding);
+    let context_free =
+        |default: ExprId| -> Result<bool, CompilerFailure> { names_none_of(ast, default, &bound) };
     if let Some(len) = tuple_source_len(ast, binding, value)? {
-        ast.tuple_pattern_sources.insert(value);
         if let Binding::Array { defaults, .. } = binding {
-            let filled: BTreeMap<usize, ExprId> = defaults
-                .iter()
-                .take(len)
-                .enumerate()
-                .filter_map(|(index, default)| Some((index, (*default)?)))
-                .collect();
+            let mut filled: BTreeMap<usize, ExprId> = BTreeMap::new();
+            for (index, default) in defaults.iter().take(len).enumerate() {
+                if let Some(default) = *default
+                    && context_free(default)?
+                {
+                    filled.insert(index, default);
+                }
+            }
             if !filled.is_empty() {
                 ast.tuple_pattern_defaults.insert(value, filled);
             }
         }
+        ast.tuple_pattern_sources.insert(value);
         if is_const {
             ast.const_pattern_sources.insert(value);
         }
@@ -936,11 +941,16 @@ fn mark_literal_source(
     if let Binding::Object { fields, .. } = binding
         && let Some(names) = object_literal_names(ast, value)?
     {
-        let defaulted: BTreeMap<String, ExprId> = fields
+        let mut defaulted: BTreeMap<String, Option<ExprId>> = BTreeMap::new();
+        for field in fields
             .iter()
             .filter(|field| names.contains(&field.source.name))
-            .filter_map(|field| Some((field.source.name.clone(), field.default?)))
-            .collect();
+        {
+            if let Some(default) = field.default {
+                let context = context_free(default)?.then_some(default);
+                defaulted.insert(field.source.name.clone(), context);
+            }
+        }
         if !defaulted.is_empty() {
             ast.object_pattern_sources.insert(value, defaulted);
         }
@@ -951,6 +961,52 @@ fn mark_literal_source(
     }
     mark_operand_tuple_sources(ast, binding, value)?;
     Ok(None)
+}
+
+/// The names `binding` declares.
+fn bound_names(binding: &Binding) -> BTreeSet<&str> {
+    match binding {
+        Binding::Object { fields, rest, .. } => fields
+            .iter()
+            .map(|field| field.local.name.as_str())
+            .chain(rest.iter().map(|rest| rest.name.as_str()))
+            .collect(),
+        Binding::Array { elems, rest, .. } => elems
+            .iter()
+            .flatten()
+            .chain(rest.iter())
+            .map(|name| name.name.as_str())
+            .collect(),
+    }
+}
+
+/// Whether `default` can be typed before its pattern binds `names`, as the
+/// context of the pattern source's literal: a literal, or a reference whose
+/// root is none of them. Any other default may read a name the pattern binds,
+/// which a trial ahead of the pattern would resolve to an outer binding.
+fn names_none_of(
+    ast: &Ast,
+    default: ExprId,
+    names: &BTreeSet<&str>,
+) -> Result<bool, CompilerFailure> {
+    let mut expr = peel_parens(ast, default)?;
+    loop {
+        let kind = &ast
+            .try_expr(expr)
+            .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+            .kind;
+        match kind {
+            ExprKind::Identifier(name) => return Ok(!names.contains(name.name.as_str())),
+            ExprKind::FieldAccess { receiver, .. } => expr = peel_parens(ast, *receiver)?,
+            ExprKind::Unary { operand, .. } | ExprKind::As { expr: operand, .. } => {
+                expr = peel_parens(ast, *operand)?;
+            }
+            ExprKind::Number(_) | ExprKind::String(_) | ExprKind::Boolean(_) | ExprKind::Null => {
+                return Ok(true);
+            }
+            _ => return Ok(false),
+        }
+    }
 }
 
 /// The properties every object literal inherits from `Object.prototype`.

@@ -7726,17 +7726,7 @@ impl Inferer<'_> {
         value: ExprId,
         widened: Type,
     ) -> Result<Type, CompilerFailure> {
-        // Only a stated literal or an object literal can keep a literal type.
-        let peeled = peel_parens(self.ast, value)?;
-        let can_keep = super::forward_globals::stated_literal_type(self.ast, peeled)?.is_some()
-            || matches!(
-                self.ast
-                    .try_expr(peeled)
-                    .map_err(super::arena_failure)?
-                    .kind,
-                ExprKind::ObjectLiteral { .. }
-            );
-        if !can_keep {
+        if !may_keep_literal(self.ast, value)? {
             return Ok(widened);
         }
         let keep_literals = self.ast.const_pattern_sources.contains(&literal);
@@ -7779,7 +7769,7 @@ impl Inferer<'_> {
                 continue;
             };
             field.optional = true;
-            if let Some(&value) = values.get(&name) {
+            if let (Some(default), Some(&value)) = (default, values.get(&name)) {
                 let widened = field.ty.clone();
                 field.ty = self.keep_default_context_literals(literal, default, value, widened)?;
             }
@@ -13279,6 +13269,19 @@ fn contextual_literal_type(
         slot.ty = contextual_literal_type(ast, field.value, slot.ty.clone(), &context_field.ty)?;
     }
     Ok(Type::Object { index, fields })
+}
+
+/// Whether [`contextual_literal_type`] may put a literal type back into
+/// `value`'s: a stated literal's, or an object literal's fields'.
+fn may_keep_literal(ast: &crate::Ast, value: ExprId) -> Result<bool, CompilerFailure> {
+    let value = peel_parens(ast, value)?;
+    Ok(
+        super::forward_globals::stated_literal_type(ast, value)?.is_some()
+            || matches!(
+                ast.try_expr(value).map_err(super::arena_failure)?.kind,
+                ExprKind::ObjectLiteral { .. }
+            ),
+    )
 }
 
 /// Whether `context` has a literal of `literal`'s kind, so a value of that

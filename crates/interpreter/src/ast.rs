@@ -900,9 +900,10 @@ pub struct Ast {
     /// properties the pattern gives defaults and their defaults:
     /// `{ a, b = 0 } = { a: 1, b: 2 }`. TypeScript types such a literal from
     /// the pattern, so those properties are optional in its type (populated by
-    /// `lower_patterns`).
+    /// `lower_patterns`). A default that may read a name the pattern binds is
+    /// `None`: it can't be typed ahead of the pattern as the property's context.
     pub object_pattern_sources:
-        std::collections::BTreeMap<ExprId, std::collections::BTreeMap<String, ExprId>>,
+        std::collections::BTreeMap<ExprId, std::collections::BTreeMap<String, Option<ExprId>>>,
     /// For a tuple pattern source, the defaults of the pattern's slots the
     /// literal fills, by index: `[a = 1] = [2]`.
     pub tuple_pattern_defaults:

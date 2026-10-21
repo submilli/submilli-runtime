@@ -805,19 +805,18 @@ impl<'a> Inferer<'a> {
             };
             ty = next;
         }
-        Ok(self.narrowed_query_type(&name, rest).unwrap_or(ty))
+        Ok(self.narrowed_query_type(root_span, rest).unwrap_or(ty))
     }
 
-    /// The type a narrowing in scope gives `name.rest…`, which a type query
+    /// The type a narrowing in scope gives `root.rest…`, which a type query
     /// takes as TypeScript does: `typeof x.p` under `x.p === "A"` is `"A"`.
-    fn narrowed_query_type(&self, name: &str, rest: &[crate::Ident]) -> Option<Type> {
-        if !self.type_queries_see_narrowing {
-            return None;
-        }
-        let entry = self.scopes.get(name)?;
+    /// In a signature, only a narrowing that would survive into the function
+    /// applies, as the function may run after its root is reassigned.
+    fn narrowed_query_type(&self, root: &crate::Ident, rest: &[crate::Ident]) -> Option<Type> {
+        let entry = self.scopes.get(&root.name)?;
         let path = super::narrowing::ReferencePath {
             root: super::narrowing::BindingId::Local {
-                name: name.to_string(),
+                name: root.name.clone(),
                 decl_scope: entry.decl_scope,
             },
             chain: rest
@@ -825,6 +824,9 @@ impl<'a> Inferer<'a> {
                 .map(|segment| super::narrowing::PathElem::Field(segment.name.clone()))
                 .collect(),
         };
+        if !self.type_queries_see_narrowing && !self.narrowing_survives_closure(&path, root.span) {
+            return None;
+        }
         self.narrowed_read(path).map(|(_, ty)| ty)
     }
 

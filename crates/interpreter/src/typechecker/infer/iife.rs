@@ -207,7 +207,12 @@ impl Inferer<'_> {
                 types[index] = known.clone();
                 continue;
             }
-            let ty = self.speculative_expr_type(arg, false, true)?;
+            // An argument in error reports itself; its parameter takes the
+            // error rather than asking for an annotation too.
+            let ty = Some(
+                self.speculative_expr_type(arg, false, true)?
+                    .unwrap_or(Type::Error),
+            );
             if let Some(memo) = self.invoked_argument_memo.as_mut() {
                 memo.insert(arg, ty.clone());
             }

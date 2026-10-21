@@ -389,15 +389,7 @@ impl Inferer<'_> {
         let initializations = self.typed_ast.parameter_initializations.clone();
         let prologues = self.typed_ast.parameter_default_prologues.clone();
         let authored_types = self.typed_ast.authored_parameter_types.clone();
-        let flow = keeps_narrowing.then(|| {
-            (
-                self.narrow_scopes.clone(),
-                self.assigned_scopes.clone(),
-                self.clause_write_scopes.clone(),
-                self.tombstone_scopes.clone(),
-                self.pending_post_if_materializations.clone(),
-            )
-        });
+        let flow = keeps_narrowing.then(|| self.copy_narrowing());
         if !keeps_narrowing {
             self.enter_function_declaration_narrow_boundary();
         }
@@ -405,12 +397,8 @@ impl Inferer<'_> {
         let result = infer(self);
         self.prebinding_parameter_types = was_prebinding;
         let restored = match flow {
-            Some((narrow, assigned, clause_writes, tombstones, pending)) => {
-                self.narrow_scopes = narrow;
-                self.assigned_scopes = assigned;
-                self.clause_write_scopes = clause_writes;
-                self.tombstone_scopes = tombstones;
-                self.pending_post_if_materializations = pending;
+            Some(saved) => {
+                self.restore_narrowing(saved);
                 Ok(())
             }
             None => self.exit_closure_narrow_boundary(),
