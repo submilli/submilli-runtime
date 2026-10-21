@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "662dfae5f1a474fd99a792381bcafb255e9879a21bc052158325593945f48532"
+  contentHash: "ce0142d58059facad7727f2226be007d411dd524baf98a74fe5a31993029dd1a"
   confirmedAt: "2026-10-06T09:57:24.184Z"
 ---
 
@@ -84,10 +84,7 @@ with filters, but it can't raise them.
 
 ## When a program fails
 
-Every run shares the server process, so a run that fails must end alone.
-Two things make sure it does.
-
-First, WebAssembly contains the failure. A program's memory belongs to its
+WebAssembly contains the failure. A program's memory belongs to its
 instance, and the program can't address anything outside it. When a run
 does something it can't continue from, such as allocating past its memory
 limit, recursing past its stack, burning its fuel, or any other WebAssembly
@@ -101,15 +98,6 @@ another:
 | Recurses without end | `call stack exhausted` |
 | Loops without end | `fuel exhausted` |
 | Returns a string | `still serving` |
-
-Second, the server doesn't panic. Submilli's runtime is written so that no
-program can crash it. The parser, the compiler, the runtime, and every
-function a program can call return an error instead of panicking, even for
-a state that "can't happen", and input size and nesting are bounded before
-they can exhaust the process. A program that breaks one of the runtime's
-own assumptions gets an error, and the server keeps running. Every change to the
-runtime is held to this rule, and the path a program takes through
-the server has been reviewed against it.
 
 ## MCP
 
