@@ -585,18 +585,6 @@ impl AppState {
         &self.inner.audit
     }
 
-    /// Cancels a run that may suspend at an application tool call. The run ends with
-    /// a `cancelled` outcome once its workers have drained. `false` when no unfinished
-    /// run with that id is known.
-    pub fn cancel_run(&self, execution_id: &str) -> bool {
-        let Some(run) = self.session_manager().runs().get(execution_id) else {
-            return false;
-        };
-        let unfinished = !matches!(run.current(), crate::runs::RunState::Finished(_));
-        run.cancel();
-        unfinished
-    }
-
     pub fn database(&self) -> Option<Arc<crate::database::ServerDatabase>> {
         self.inner.database.clone()
     }

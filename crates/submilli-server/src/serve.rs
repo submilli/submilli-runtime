@@ -397,51 +397,33 @@ async fn forced_stop(
 /// before the server starts accepting rather than on first poll.
 #[cfg(unix)]
 struct ShutdownSignals {
-    terminate: WatchedSignal,
-    interrupt: WatchedSignal,
+    terminate: tokio::signal::unix::Signal,
+    interrupt: tokio::signal::unix::Signal,
 }
 
 #[cfg(unix)]
 impl ShutdownSignals {
     fn install() -> Result<Self> {
-        use tokio::signal::unix::SignalKind;
+        use tokio::signal::unix::{SignalKind, signal};
         Ok(Self {
-            terminate: WatchedSignal::always(SignalKind::terminate())?,
-            interrupt: WatchedSignal::always(SignalKind::interrupt())?,
+            terminate: signal(SignalKind::terminate())?,
+            interrupt: signal(SignalKind::interrupt())?,
         })
     }
 
     async fn recv(&mut self, shutdown: Arc<Notify>) {
         tokio::select! {
             () = shutdown.notified() => tracing::info!("shutdown requested via /v1/shutdown"),
-            () = self.terminate.next() => tracing::info!("SIGTERM received"),
-            () = self.interrupt.next() => tracing::info!("SIGINT received"),
+            _ = self.terminate.recv() => tracing::info!("SIGTERM received"),
+            _ = self.interrupt.recv() => tracing::info!("SIGINT received"),
         }
     }
 
     async fn recv_signal(&mut self) {
         tokio::select! {
-            () = self.terminate.next() => {},
-            () = self.interrupt.next() => {},
+            _ = self.terminate.recv() => {},
+            _ = self.interrupt.recv() => {},
         }
-    }
-}
-
-/// One signal, held as a stream registered when it is made.
-#[cfg(unix)]
-struct WatchedSignal(tokio::signal::unix::Signal);
-
-#[cfg(unix)]
-impl WatchedSignal {
-    /// Watch `kind`, replacing whatever handling the process had for it. Needs a
-    /// Tokio runtime with signal support.
-    fn always(kind: tokio::signal::unix::SignalKind) -> Result<Self> {
-        Ok(Self(tokio::signal::unix::signal(kind)?))
-    }
-
-    /// The next delivery of the signal.
-    async fn next(&mut self) {
-        self.0.recv().await;
     }
 }
 

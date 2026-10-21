@@ -3,62 +3,38 @@ use crate::blueprint::StoredBlueprint;
 use crate::config::ServerConfig;
 use crate::handlers::sessions::{self, end_session_with_finalizers, session_finalizers};
 
-/// A session to start as `POST /v1/sessions` would, with no application tools.
-struct SessionStart {
-    blueprint: String,
-    variables: std::collections::BTreeMap<String, String>,
-    secrets: submilli_blueprint::HarnessSecretBindings,
-}
-
+/// Starts a `finalizers` session as `POST /v1/sessions` would, with no variables
+/// or application tools.
 async fn start_session(
     state: &crate::AppState,
-    start: SessionStart,
+    secrets: submilli_blueprint::HarnessSecretBindings,
 ) -> Result<String, sessions::SessionStartError> {
     sessions::start(
         state,
-        &start.blueprint,
-        &start.variables,
-        &start.secrets,
+        "finalizers",
+        &Default::default(),
+        &secrets,
         Vec::new(),
     )
     .await
     .map(|started| started.session_id)
 }
 
-/// Code to run in a started session, as `POST /v1/sessions/{id}/execute` without an
-/// `Idempotency-Key` runs it.
-struct SessionProgram {
-    label: String,
-    session_id: String,
-    code: String,
-}
-
+/// Runs `code` in a started session, as `POST /v1/sessions/{id}/execute` without
+/// an `Idempotency-Key` runs it.
 async fn run_in_session(
     state: &crate::AppState,
-    program: SessionProgram,
+    session_id: &str,
+    code: &str,
 ) -> Result<crate::handlers::execute::ExecuteResponse, sessions::SessionRunError> {
-    let SessionProgram {
-        label,
-        session_id,
-        code,
-    } = program;
     let audit = crate::audit::ExecutionAudit::new(
         state.audit().clone(),
-        &label,
+        "test",
         "session",
-        Some(&session_id),
+        Some(session_id),
     );
-    let bound = sessions::bound_for_run(state, &session_id, &code, Some(&audit)).await?;
-    let outcome = sessions::run(
-        state,
-        &session_id,
-        bound,
-        &code,
-        None,
-        Some(audit.clone()),
-        None,
-    )
-    .await;
+    let bound = sessions::bound_for_run(state, session_id, code, Some(&audit)).await?;
+    let outcome = sessions::run(state, session_id, bound, code, None, audit.clone(), None).await;
     audit.finish(outcome.response.error.is_none());
     Ok(outcome.response)
 }
@@ -98,28 +74,12 @@ impl Server {
         Self { state, root }
     }
     async fn start(&self) -> String {
-        start_session(
-            &self.state,
-            SessionStart {
-                blueprint: "finalizers".into(),
-                variables: Default::default(),
-                secrets: Default::default(),
-            },
-        )
-        .await
-        .unwrap()
+        start_session(&self.state, Default::default())
+            .await
+            .unwrap()
     }
     async fn run(&self, id: &str, code: &str) -> crate::handlers::execute::ExecuteResponse {
-        run_in_session(
-            &self.state,
-            SessionProgram {
-                label: "test".into(),
-                session_id: id.into(),
-                code: code.into(),
-            },
-        )
-        .await
-        .unwrap()
+        run_in_session(&self.state, id, code).await.unwrap()
     }
 }
 
@@ -832,11 +792,7 @@ secrets:
     assert_eq!(canary.len(), 32);
     let id = start_session(
         &state,
-        SessionStart {
-            blueprint: "finalizers".into(),
-            variables: Default::default(),
-            secrets: std::collections::BTreeMap::from([("TOKEN".into(), canary.into())]),
-        },
+        std::collections::BTreeMap::from([("TOKEN".into(), canary.into())]),
     )
     .await
     .unwrap();

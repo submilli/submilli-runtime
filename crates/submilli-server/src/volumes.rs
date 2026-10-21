@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use interpreter::runtime::{DiskQuota, measure_host_dir};
 use tokio::sync::OnceCell;
@@ -25,16 +25,14 @@ use crate::config::{
 use crate::session_manager::SessionError;
 
 pub struct VolumeRegistry {
-    /// Fixed at startup. Poison means a panic interrupted a reader; AGENTS.md permits
-    /// the poisoned-lock panic.
-    table: RwLock<VolumeTable>,
+    /// Fixed at startup.
+    table: VolumeTable,
     /// The volume root's `managed-local/`, created at startup and never again:
     /// a missing one means its mount is gone.
     managed_root: PathBuf,
     /// One cell per volume with a byte limit, so concurrent first users
-    /// measure it once and share the result. Grows with the table, under the
-    /// same poisoning rule.
-    quotas: RwLock<BTreeMap<String, Arc<OnceCell<Arc<DiskQuota>>>>>,
+    /// measure it once and share the result. Fixed at startup with the table.
+    quotas: BTreeMap<String, Arc<OnceCell<Arc<DiskQuota>>>>,
 }
 
 impl Default for VolumeRegistry {
@@ -103,23 +101,19 @@ impl VolumeRegistry {
             .map(|(name, _)| (name.clone(), Arc::new(OnceCell::new())))
             .collect();
         Self {
-            table: RwLock::new(table),
+            table,
             managed_root,
-            quotas: RwLock::new(quotas),
+            quotas,
         }
     }
 
     fn spec(&self, volume: &str) -> Option<VolumeSpec> {
-        self.table
-            .read()
-            .expect("volume table poisoned")
-            .get(volume)
-            .cloned()
+        self.table.get(volume).cloned()
     }
 
-    /// The declarations, by name, as they are now.
+    /// The declarations, by name.
     pub fn table(&self) -> VolumeTable {
-        self.table.read().expect("volume table poisoned").clone()
+        self.table.clone()
     }
 
     /// Whether a blueprint may name `volume` with `requested` access: the
@@ -130,11 +124,7 @@ impl VolumeRegistry {
         volume: &str,
         requested: Option<Access>,
     ) -> Result<(), ReferenceError> {
-        check_reference(
-            &self.table.read().expect("volume table poisoned"),
-            volume,
-            requested,
-        )
+        check_reference(&self.table, volume, requested)
     }
 
     /// Where `volume` lives and the access a program gets: what the blueprint
@@ -206,12 +196,7 @@ impl VolumeRegistry {
         let SizeLimit::Bytes(limit) = spec.size_limit else {
             return Ok(None);
         };
-        let cell = self
-            .quotas
-            .read()
-            .expect("volume quotas poisoned")
-            .get(volume)
-            .cloned();
+        let cell = self.quotas.get(volume).cloned();
         let Some(cell) = cell else {
             return Err(SessionError::UnknownVolume(volume.to_string()));
         };

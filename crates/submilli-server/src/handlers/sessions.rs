@@ -33,7 +33,7 @@ use crate::session_manager::SessionError;
 
 /// Why a session was not started.
 #[derive(Debug)]
-pub enum SessionStartError {
+pub(crate) enum SessionStartError {
     /// No runnable blueprint has that name; `message` says whether it was never
     /// registered or is registered in a form this binary can no longer parse.
     UnknownBlueprint { name: String, message: String },
@@ -65,67 +65,21 @@ impl std::fmt::Display for SessionStartError {
     }
 }
 
-impl std::error::Error for SessionStartError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Store(error) => Some(error),
-            Self::Session(error) => Some(error),
-            _ => None,
-        }
-    }
-}
-
 /// Why a session could not run a program. A refused run never started.
 #[derive(Debug)]
-pub enum SessionRunError {
+pub(crate) enum SessionRunError {
     /// No session has that id, or it has ended or expired.
-    UnknownSession { session_id: String },
+    UnknownSession,
     /// The session's blueprint is no longer runnable; `message` says whether it was
     /// removed or is held in a form this binary can no longer parse.
     BlueprintMissing { name: String, message: String },
     /// The blueprint requires harness secrets the session no longer holds, as after a
     /// restart that could not recover them; rebind them to run again.
-    SecretsRequired {
-        session_id: String,
-        required: Vec<String>,
-    },
+    SecretsRequired { required: Vec<String> },
     /// The blueprint could not be read.
     Store(StoreError),
     /// The session's state could not be read.
     Session(SessionError),
-}
-
-impl std::fmt::Display for SessionRunError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UnknownSession { session_id } => {
-                write!(f, "unknown, ended, or expired session: {session_id}")
-            }
-            Self::BlueprintMissing { message, .. } => {
-                write!(f, "the session's blueprint no longer exists: {message}")
-            }
-            Self::SecretsRequired {
-                session_id,
-                required,
-            } => write!(
-                f,
-                "session {session_id} requires harness secrets it does not hold: {}",
-                required.join(", ")
-            ),
-            Self::Store(_) => f.write_str("blueprint store unavailable"),
-            Self::Session(error) => error.fmt(f),
-        }
-    }
-}
-
-impl std::error::Error for SessionRunError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Store(error) => Some(error),
-            Self::Session(error) => Some(error),
-            _ => None,
-        }
-    }
 }
 
 /// Opt-in replay guard on the session execute endpoint. Named to match the
@@ -375,7 +329,7 @@ pub async fn execute(
         bound,
         &req.code,
         key.as_deref(),
-        Some(audit),
+        audit,
         None,
     )
     .await;
@@ -607,7 +561,7 @@ impl Supervised {
             self.bound,
             &self.code,
             self.key.as_deref(),
-            Some(Arc::clone(&self.audit)),
+            Arc::clone(&self.audit),
             Some(self.tools),
         )
         .await;
@@ -708,9 +662,7 @@ pub(crate) async fn bound_for_run(
         .await
         .map_err(SessionRunError::Session)?
     else {
-        return Err(SessionRunError::UnknownSession {
-            session_id: session_id.to_owned(),
-        });
+        return Err(SessionRunError::UnknownSession);
     };
     let Some(blueprint) = state
         .blueprints()
@@ -745,7 +697,6 @@ pub(crate) async fn bound_for_run(
     });
     let Some(harness_secrets) = harness_secrets else {
         return Err(SessionRunError::SecretsRequired {
-            session_id: session_id.to_owned(),
             required: required_harness_secrets(&blueprint.secrets),
         });
     };
@@ -760,7 +711,7 @@ pub(crate) async fn bound_for_run(
 /// The `POST /v1/sessions/{id}/execute` response for a session that cannot run.
 fn run_refusal_response(session_id: &str, error: SessionRunError) -> axum::response::Response {
     match error {
-        SessionRunError::UnknownSession { .. } => (
+        SessionRunError::UnknownSession => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "execution_id": crate::audit::execution_id(), "error": "unknown session", "session_id": session_id })),
         )
@@ -776,7 +727,7 @@ fn run_refusal_response(session_id: &str, error: SessionRunError) -> axum::respo
             ),
         )
             .into_response(),
-        SessionRunError::SecretsRequired { required, .. } => (
+        SessionRunError::SecretsRequired { required } => (
             StatusCode::CONFLICT,
             Json(
                 serde_json::json!({ "execution_id": crate::audit::execution_id(),
@@ -800,7 +751,7 @@ pub(crate) async fn run(
     bound: BoundSession,
     code: &str,
     idempotency_key: Option<&str>,
-    audit: Option<Arc<crate::audit::ExecutionAudit>>,
+    audit: Arc<crate::audit::ExecutionAudit>,
     tools: Option<execute::RunTools>,
 ) -> execute::ExecuteOutcome {
     let BoundSession {
@@ -818,7 +769,7 @@ pub(crate) async fn run(
             blueprint: Arc::new(blueprint),
             variables,
             harness_secrets,
-            audit,
+            audit: Some(audit),
             vfs_source: execute::VfsSource::Rest,
             run_entry: "session",
             idempotency_key,
@@ -1038,7 +989,7 @@ pub async fn finalizers(
 
 /// Cleanup status remains inspectable after session termination. Arguments and
 /// credentials are never included.
-pub async fn session_finalizers(
+pub(crate) async fn session_finalizers(
     state: &AppState,
     session_id: &str,
 ) -> Result<Vec<FinalizerDiagnostic>, SessionError> {
@@ -1051,13 +1002,13 @@ pub async fn session_finalizers(
 }
 
 #[derive(Debug, serde::Serialize)]
-pub struct SessionCloseReport {
-    pub closed: bool,
-    pub finalizers: Vec<FinalizerDiagnostic>,
+pub(crate) struct SessionCloseReport {
+    pub(crate) closed: bool,
+    pub(crate) finalizers: Vec<FinalizerDiagnostic>,
 }
 
 /// Close and wait for cleanup, returning every sanitized finalizer outcome.
-pub async fn end_session_with_finalizers(
+pub(crate) async fn end_session_with_finalizers(
     state: &AppState,
     session_id: &str,
 ) -> Result<SessionCloseReport, SessionError> {
