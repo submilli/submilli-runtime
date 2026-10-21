@@ -1,5 +1,1 @@
-types: 20 of 66 tsc entries compared, 1 differ
-
-line 26: new Map([ [AppType.Standard, [AppStyle.Standard, AppStyle.MiniApp]], [AppType.Relationship, [AppStyle.Standard, AppStyle.Tree, AppStyle.TreeEntity]], [AppType.AdvancedList, [AppStyle.Standard, AppStyle.MiniApp]] ])
-  tsc:  Map<AppType.AdvancedList | AppType.Standard | AppType.Relationship, (AppStyle.Standard | AppStyle.MiniApp)[] | (AppStyle.Tree | AppStyle.TreeEntity | AppStyle.Standard)[]>
-  ours: Map<AppType, AppStyle[]>
+types: 20 of 66 tsc entries compared, 0 differ

@@ -622,6 +622,15 @@ impl TypeParamSubstitution {
     }
 }
 
+/// Whether `a` and `b` are literals of one primitive, or members of one enum.
+fn share_literal_base(a: &Type, b: &Type) -> bool {
+    if a.literal_base().is_some() {
+        return a.literal_base() == b.literal_base();
+    }
+    let is_enum_member = |ty: &Type| ty.all_members(&Type::is_enum_member);
+    is_enum_member(a) && is_enum_member(b) && a.widen_literal() == b.widen_literal()
+}
+
 /// A [`Unifier`]'s state before a speculative attempt.
 struct Snapshot {
     bindings: BTreeMap<String, Type>,
@@ -657,6 +666,10 @@ struct Unifier<'a> {
     /// Whether the argument is an object or array literal, which widens a
     /// binding other literals gave to the union of the two.
     combines_literals: bool,
+    /// Whether this unifies the members of an argument's union of tuples in
+    /// turn, whose array and object candidates form their union, as tsc
+    /// unions an array literal's element candidates.
+    unions_member_candidates: bool,
     /// Whether the walk is inside a function type's result, where a
     /// candidate never takes over literal candidates (see `takes_over` in
     /// [`Self::unify`]).
@@ -1071,6 +1084,24 @@ impl<'a> Unifier<'a> {
                 }
                 Ok(())
             }
+            // An argument's union of tuples (`[["a", 1], ["b", 2]]` kept as
+            // `["a", 1] | ["b", 2]`) infers from each member, as tsc infers
+            // from each member of a union source: its candidates form the
+            // binding.
+            (Type::Tuple(_), Type::Union(members))
+                if self.is_argument
+                    && !self.contravariant
+                    && members
+                        .iter()
+                        .all(|member| matches!(member.peel(), Type::Tuple(_))) =>
+            {
+                let outer = std::mem::replace(&mut self.unions_member_candidates, true);
+                let unified = members
+                    .iter()
+                    .try_for_each(|member| self.unify(param_ty, member));
+                self.unions_member_candidates = outer;
+                unified
+            }
             // Union param against a single (non-union) arg: try each member.
             (Type::Union(pa), _) => self.unify_into_union_members(param_ty, pa, unpeeled_arg),
             // A param slot resolving to `unknown` accepts any argument — the top
@@ -1169,6 +1200,7 @@ impl<'a> Unifier<'a> {
             is_argument: false,
             contravariant: false,
             combines_literals: false,
+            unions_member_candidates: false,
             inside_function_result: false,
             field_path: Vec::new(),
         }
@@ -1257,12 +1289,16 @@ impl<'a> Unifier<'a> {
         if assignable(bound, arg, types) {
             return Some(unresolved_arg.clone());
         }
-        if self.combines_literals && self.sub.literal_candidates.contains(name) {
+        let structured =
+            |ty: &Type| matches!(ty.peel(), Type::Array(_) | Type::Object { .. } | Type::Tuple(_));
+        if (self.combines_literals && self.sub.literal_candidates.contains(name))
+            || (self.unions_member_candidates && structured(bound) && structured(arg))
+        {
             return Some(Type::union(vec![bound.clone(), unresolved_arg.clone()]));
         }
-        // Literal candidates of one primitive form their union, as tsc infers
-        // where they are kept: `pick(1, 2)` is a `1 | 2`.
-        if bound.literal_base().is_some() && bound.literal_base() == arg.literal_base() {
+        // Literal candidates of one primitive or enum form their union, as
+        // tsc infers where they are kept: `pick(1, 2)` is a `1 | 2`.
+        if share_literal_base(bound, arg) {
             return Some(Type::union(vec![bound.clone(), arg.clone()]));
         }
         // tsc sets `null` and `undefined` candidates aside and adds them back
@@ -1282,8 +1318,7 @@ impl<'a> Unifier<'a> {
             (Some(only), None) | (None, Some(only)) => only,
             (Some(bound), Some(arg)) if assignable(&arg, &bound, types) => bound,
             (Some(bound), Some(arg)) if assignable(&bound, &arg, types) => arg,
-            (Some(bound), Some(arg))
-                if bound.literal_base().is_some() && bound.literal_base() == arg.literal_base() =>
+            (Some(bound), Some(arg)) if share_literal_base(&bound, &arg) =>
             {
                 Type::union(vec![bound, arg])
             }
