@@ -108,6 +108,37 @@ fn first_party_packages_build_without_check_warnings() {
     assert!(warnings.is_empty(), "{}", warnings.join("\n"));
 }
 
+/// The agent reads `docs/readme.md` while writing a program. It can run no
+/// CLI command and cannot change its blueprint, so setup belongs in the root
+/// `readme.md`, which people read.
+#[test]
+fn agent_docs_carry_no_setup() {
+    const COMMANDS: &[&str] = &["submilli install", "submilli secret", "submilli blueprint"];
+    // Blueprint YAML keys, starting a line after its indentation.
+    const YAML_KEYS: &[&str] = &["secrets:", "harness:"];
+    let packages = repository_root().join("packages");
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(&packages).expect("packages directory") {
+        let readme = entry.expect("package entry").path().join("docs/readme.md");
+        let Ok(text) = std::fs::read_to_string(&readme) else {
+            continue;
+        };
+        for (number, line) in (1..).zip(text.lines()) {
+            let trimmed = line.trim_start();
+            if COMMANDS.iter().any(|command| line.contains(command))
+                || YAML_KEYS.iter().any(|key| trimmed.starts_with(key))
+            {
+                found.push(format!("{}:{number}: {line}", readme.display()));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "setup in agent docs:\n{}",
+        found.join("\n")
+    );
+}
+
 /// Every `<name>.ts` with a `<name>.yaml` beside it under the package's `tests/policy/`.
 fn policy_scripts(package: &str) -> Vec<PathBuf> {
     let directory = repository_root()

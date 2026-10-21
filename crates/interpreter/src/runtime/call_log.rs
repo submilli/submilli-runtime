@@ -525,7 +525,7 @@ mod tests {
     /// capability added to the catalog fails [`every_capability_has_a_recording_class`]
     /// until it is placed here, so a new kind of call cannot skip the call log unnoticed.
     ///
-    /// A redirect hop (`redirect_guard`) begins its own `http.<verb>` call with no
+    /// A redirect hop (`redirect_guard`) begins its own `http.<verb>` or `http.request` call with no
     /// payloads: hops are timing-only calls whose decisions carry the hop, so the class
     /// of `http.*` holds for the request's own call, not for its hops.
     const REQUEST_AND_RESPONSE: &[&str] = &[
@@ -536,6 +536,7 @@ mod tests {
         "http.delete",
         "http.head",
         "http.options",
+        "http.request",
         "http.download",
         "llm.call",
         "embedding.embed",

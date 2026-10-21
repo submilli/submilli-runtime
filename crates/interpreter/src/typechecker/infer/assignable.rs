@@ -321,14 +321,26 @@ impl<'a> TypeResolver<'a> {
         iface_name: &str,
         iface_args: &[Type],
     ) -> Vec<ImplementsFailure> {
-        let (Some(class_form), Some(iface_form)) = (
-            self.class_full_form(class_mangled, class_args),
-            self.interface_full_form(iface_mangled, iface_name, iface_args),
-        ) else {
+        let Some(iface_form) = self.interface_full_form(iface_mangled, iface_name, iface_args)
+        else {
+            return Vec::new();
+        };
+        self.implements_form_failures(class_mangled, class_args, &iface_form)
+    }
+
+    /// The members of `class_mangled` at `class_args` that fail an `implements`
+    /// target's members, `iface_form`: an interface's or an object type's.
+    pub(super) fn implements_form_failures(
+        &self,
+        class_mangled: &MangledName,
+        class_args: &[Type],
+        iface_form: &BTreeMap<String, ObjectField>,
+    ) -> Vec<ImplementsFailure> {
+        let Some(class_form) = self.class_full_form(class_mangled, class_args) else {
             return Vec::new();
         };
         let mut failures = Vec::new();
-        for (member, exp) in &iface_form {
+        for (member, exp) in iface_form {
             match class_form.get(member) {
                 Some(act) => {
                     let mut seen = Vec::new();

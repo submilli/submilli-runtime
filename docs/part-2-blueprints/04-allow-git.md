@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "9b1060a12efb9f2a96a1fa1c2ff6d109e060fcae980ff7cb2dcbdcacaa389d97"
+  contentHash: "a7bfe25e6d00ced5277b44a29e7d368ea4d1b8008afa5df075a9ab158b591850"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -91,7 +91,7 @@ submilli docs submilli:git
 ```
 
 ```text
-submilli:git — Capability-controlled VFS repositories: history, staging, commits, branches and HTTPS fetch.
+submilli:git — Capability-controlled Git repositories in the VFS, with HTTPS remotes.
 …
 class Repository {
   static clone(url: string, path: string, options?: { branch?: string }): Repository;

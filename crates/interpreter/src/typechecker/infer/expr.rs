@@ -1511,14 +1511,22 @@ impl Inferer<'_> {
             return Ok(folded);
         }
         let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
+        let fresh_reference = match fresh_reference_operand(self.ast, lhs)? {
+            Some(what) => Some(what),
+            None => fresh_reference_operand(self.ast, rhs)?,
+        };
         // Contextual types help literals and callbacks, but an equality
-        // operand is not an assignment into the other operand's type.
-        let contextual_rhs = is_context_typed_literal(self.ast, rhs)?;
+        // operand is not an assignment into the other operand's type: an
+        // arrow takes only a function type as its context.
+        let contextual_rhs = is_context_typed_literal(self.ast, rhs)?
+            && (!is_arrow(self.ast, rhs)? || has_function_member(&lt));
         let rhs_hint = contextual_rhs.then_some(&lt);
         let (typed_rhs, _) = self.infer_expr(rhs, rhs_hint)?;
         let lhs_operand = self.comparison_operand(lhs, typed_lhs)?;
         let rhs_operand = self.comparison_operand(rhs, typed_rhs)?;
-        if !super::comparison_operand::operands_comparable(
+        if let Some(what) = fresh_reference {
+            self.error_fresh_reference_comparison(op, what, span);
+        } else if !super::comparison_operand::operands_comparable(
             &lhs_operand,
             &rhs_operand,
             self.resolver(),
@@ -1803,7 +1811,11 @@ impl Inferer<'_> {
                         _ => "+",
                     };
                     let mut help = Vec::new();
-                    if peeled.contains_string() {
+                    if matches!(op, UnOp::Pos) && peeled.is_bigint() {
+                        help.push(
+                            "unary `+` throws on a bigint; `Number(b)` converts it".to_string(),
+                        );
+                    } else if peeled.contains_string() {
                         help.push(
                             "convert first: `Number(s)` parses the text (`NaN` if it \
                              isn't a number), and `-Number(s)` negates the result"
@@ -13785,6 +13797,40 @@ fn spread_source_context(ty: &Type, overwritten: &std::collections::BTreeSet<Str
 
 /// Whether `id` is a literal form that takes its type from context when it
 /// has one: an arrow, an object literal or an array literal.
+/// What a function expression or regular expression literal written as an
+/// equality operand is: it makes a new object, which equals nothing the other
+/// side can hold (tsc: TS2839). Unlike tsc, an object or array literal is left
+/// out, since `===` compares them by value. An arrow is left out and parentheses
+/// are not looked through, as in tsc.
+fn fresh_reference_operand(
+    ast: &crate::Ast,
+    id: ExprId,
+) -> Result<Option<&'static str>, CompilerFailure> {
+    Ok(match ast.try_expr(id).map_err(super::arena_failure)?.kind {
+        ExprKind::FunctionExpression { .. } => Some("a function expression makes a new function"),
+        ExprKind::Regex { .. } => Some("a regular expression literal makes a new object"),
+        _ => None,
+    })
+}
+
+fn is_arrow(ast: &crate::Ast, id: ExprId) -> Result<bool, CompilerFailure> {
+    Ok(
+        match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
+            ExprKind::Paren(inner) => is_arrow(ast, *inner)?,
+            ExprKind::Arrow { .. } => true,
+            _ => false,
+        },
+    )
+}
+
+fn has_function_member(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Function { .. } => true,
+        Type::Union(members) => members.iter().any(has_function_member),
+        _ => false,
+    }
+}
+
 fn is_context_typed_literal(ast: &crate::Ast, id: ExprId) -> Result<bool, CompilerFailure> {
     Ok(
         match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
@@ -14090,6 +14136,8 @@ fn unary_arith_result(op: UnOp, ty: &Type) -> Option<Type> {
         return bitnot_result(ty);
     }
     match ty.primitive_behavior() {
+        // JavaScript's `+` throws on a bigint (tsc: TS2736); `-` negates it.
+        Type::BigInt | Type::BigIntLiteral(_) if matches!(op, UnOp::Pos) => None,
         Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
         Type::Number | Type::NumberLiteral(_) | Type::Never | Type::Error => Some(Type::Number),
         // `+s` is JS's explicit string→number coercion and the one TS keeps; it
@@ -14097,6 +14145,15 @@ fn unary_arith_result(op: UnOp, ty: &Type) -> Option<Type> {
         // number). Unary `-` on a string stays rejected: it reads as arithmetic,
         // not a conversion.
         t if matches!(op, UnOp::Pos) && t.is_string_shaped() => Some(Type::Number),
+        // `number | string`: each member converts to a number, so the union does.
+        Type::Union(members)
+            if matches!(op, UnOp::Pos)
+                && members
+                    .iter()
+                    .all(|member| matches!(unary_arith_result(op, member), Some(Type::Number))) =>
+        {
+            Some(Type::Number)
+        }
         _ => None,
     }
 }

@@ -988,7 +988,10 @@ impl CodegenAnalysis {
                 if matches!(op, crate::UnOp::Neg) && operand_ty.is_bigint() {
                     self.dependency_usage.collect_bigint_host_value("neg");
                 }
-                if matches!(op, crate::UnOp::Pos) && operand_ty.is_string_shaped() {
+                if matches!(op, crate::UnOp::Pos)
+                    && (operand_ty.is_string_shaped()
+                        || matches!(operand_ty.primitive_behavior(), crate::Type::Union(_)))
+                {
                     self.dependency_usage.collect_number_coercion_host_value();
                 }
             }

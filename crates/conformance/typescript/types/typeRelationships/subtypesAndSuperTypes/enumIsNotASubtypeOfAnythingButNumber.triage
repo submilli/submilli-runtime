@@ -18,4 +18,3 @@ line 85 extra: artifact tsc reports the property on line 87 that breaks the inde
 line 87 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 85
 line 111 extra: artifact tsc reports the property on line 113 that breaks the index signature, we report the interface declaring it, here
 line 113 missed: artifact tsc reports the property that breaks the index signature; we report the interface declaring it, on line 111
-line 55 extra: bug SUB-1722 an interface member that breaks its index signature is reported again at every reference to the interface (`I8`)

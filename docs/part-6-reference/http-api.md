@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "dfa2b77df768a11b77cfb80063f815edec090861ee9e5efc3d8c8cb36ffaa0ca"
+  contentHash: "227c6434d0d358a692bcf614ebdc2dd253aeadfd1176c5f8593ac090e022b799"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -450,6 +450,12 @@ cut short.
 
 Role: `user`. Query parameter `name` (required) is a Package name.
 
+The answer shows what the Blueprint lets programs use: a function it can't
+allow is left out, with the types only that function uses and the
+documentation regions about it, and a function it allows only under a
+filter or a person's approval says so in its doc comment. Search finds
+only what docs would show.
+
 A standard-library module answers `200` with JSON `name`, `source`,
 `description`, and `declarations` (TypeScript declarations):
 
@@ -467,7 +473,9 @@ with `source` `builtin`. An unknown name answers `404`:
 ```
 
 `did_you_mean` is present only when there is a suggestion. An unknown
-`@mcp/<server>` answers `404` with `error` `unknown_mcp_server`.
+`@mcp/<server>` answers `404` with `error` `unknown_mcp_server`. An installed
+Package whose documentation has malformed directives answers `422` with
+`error` `invalid_documentation`.
 
 ### GET /v1/blueprints/{name}/builtins
 

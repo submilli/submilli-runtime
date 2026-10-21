@@ -39,6 +39,9 @@ const SHARED_SYNTAX_CHECKS: &[&str] = &[
     "built-in type and can't be used as",
     "`<>` is not allowed",
     "can't name a binding in strict mode",
+    "line break is not allowed before `=>`",
+    "a setter's parameter can't",
+    "`\"use strict\"` directive",
 ];
 
 /// Errors from any phase that name a feature we lack.

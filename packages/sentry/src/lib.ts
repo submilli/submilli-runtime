@@ -806,11 +806,11 @@ export function updateIssue(organization: string, project: string, issueId: stri
 }
 
 /**
- * Build Sentry's repeated-parameter issue query. Exported for deterministic diagnostics and tests.
+ * Build Sentry's repeated-parameter issue query.
  * @param options Issue filters and pagination; omit it for the default page size only.
  * @returns Query string beginning with `?`, with each project and environment as a repeated parameter.
  */
-export function buildIssueQuery(options: ListIssuesOptions = {}): string {
+function buildIssueQuery(options: ListIssuesOptions = {}): string {
     const { limit, projects, environments, cursor, query, statsPeriod, start, end, groupStatsPeriod, sort, shortIdLookup } = options;
     const parts: string[] = [];
     addQuery(parts, "limit", pageLimit(limit).toString());
@@ -829,11 +829,11 @@ export function buildIssueQuery(options: ListIssuesOptions = {}): string {
 }
 
 /**
- * Build the partial update JSON body. Exported for deterministic diagnostics and tests.
+ * Build the partial update JSON body.
  * @param input Triage changes; validated before serializing.
  * @returns JSON body containing only the supplied fields; `clearAssignee` becomes `"assignedTo":null`.
  */
-export function buildUpdateIssueBody(input: UpdateIssueInput): string {
+function buildUpdateIssueBody(input: UpdateIssueInput): string {
     validateUpdate(input);
     const fields: string[] = [];
     if (input.status !== undefined) fields.push(jsonProperty("status", JSON.stringify(input.status)));
@@ -849,7 +849,7 @@ export function buildUpdateIssueBody(input: UpdateIssueInput): string {
  * @param link Value of Sentry's `Link` response header.
  * @returns Cursor for the `rel="next"` link, or an empty string when there is no further page.
  */
-export function parseNextCursor(link: string): string {
+function parseNextCursor(link: string): string {
     for (const rawPart of link.split(",")) {
         const part = rawPart.trim();
         if (part.indexOf("rel=\"next\"") < 0) continue;
@@ -875,7 +875,7 @@ export function parseNextCursor(link: string): string {
  * @param issueId Issue reference, already validated as non-empty text.
  * @returns `true` for a short ID such as `PROJECT-7E`; `false` for a numeric group ID or any other text.
  */
-export function isShortIssueId(issueId: string): boolean {
+function isShortIssueId(issueId: string): boolean {
     if (issueId.length === 0) return false;
     const parts = issueId.split("-");
     if (parts.length < 2) return false;
@@ -896,7 +896,7 @@ export function isShortIssueId(issueId: string): boolean {
  * @param body Raw JSON of one Sentry event.
  * @returns Curated event details.
  */
-export function normalizeEventJson(body: string): EventDetails {
+function normalizeEventJson(body: string): EventDetails {
     return eventDetailsFrom(JSON.parse(body) as ApiEvent);
 }
 
@@ -905,7 +905,7 @@ export function normalizeEventJson(body: string): EventDetails {
  * @param status HTTP status code of the failed response.
  * @returns Stable code such as `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`, `rate_limited`, or `http_error` for any other status.
  */
-export function sentryErrorCode(status: number): string {
+function sentryErrorCode(status: number): string {
     if (status === 400) return "bad_request";
     if (status === 401) return "unauthorized";
     if (status === 403) return "forbidden";
@@ -922,7 +922,7 @@ export function sentryErrorCode(status: number): string {
  * @param body Raw response body; its `detail`, `error` or `message` field is used when it is a JSON object.
  * @returns Sentry's error detail when present, otherwise `Sentry request failed: HTTP <status> <statusText>`.
  */
-export function sentryFailureMessage(status: number, statusText: string, body: string): string {
+function sentryFailureMessage(status: number, statusText: string, body: string): string {
     const fallback = "Sentry request failed: HTTP " + status.toString() + " " + statusText;
     if (body.startsWith("{")) {
         try {

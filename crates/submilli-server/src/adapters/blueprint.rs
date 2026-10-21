@@ -26,20 +26,31 @@ pub struct InMemoryBlueprintStore {
     // Poison means a panic may have interrupted a blueprint mutation. AGENTS.md
     // permits poisoned-lock panics rather than recovering potentially partial
     // registrations; it does not permit the panic that caused poisoning.
-    inner: RwLock<HashMap<String, StoredBlueprint>>,
+    inner: RwLock<HashMap<String, (StoredBlueprint, u64)>>,
+    /// The last revision handed out, by any name, so none is reused.
+    revisions: std::sync::atomic::AtomicU64,
 }
 
 impl InMemoryBlueprintStore {
     // Test helper: async trait add() can't be awaited in a sync test-router builder.
     pub fn seed(blueprints: impl IntoIterator<Item = Blueprint>) -> Result<Self, StoreError> {
         let mut map = HashMap::new();
+        let mut revision = 0;
         for p in blueprints {
             let yaml = serialize_blueprint(&p)?;
-            map.insert(p.name.clone(), StoredBlueprint::new(p, yaml));
+            revision += 1;
+            map.insert(p.name.clone(), (StoredBlueprint::new(p, yaml), revision));
         }
         Ok(Self {
             inner: RwLock::new(map),
+            revisions: std::sync::atomic::AtomicU64::new(revision),
         })
+    }
+
+    fn next_revision(&self) -> u64 {
+        self.revisions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .wrapping_add(1)
     }
 }
 
@@ -50,14 +61,16 @@ impl BlueprintStore for InMemoryBlueprintStore {
         if guard.contains_key(&stored.blueprint.name) {
             return Err(StoreError::AlreadyExists);
         }
-        guard.insert(stored.blueprint.name.clone(), stored);
+        let revision = self.next_revision();
+        guard.insert(stored.blueprint.name.clone(), (stored, revision));
         Ok(())
     }
 
     async fn upsert_yaml(&self, stored: StoredBlueprint) -> Result<bool, StoreError> {
         let mut guard = self.inner.write().expect("blueprint store lock poisoned");
+        let revision = self.next_revision();
         Ok(guard
-            .insert(stored.blueprint.name.clone(), stored)
+            .insert(stored.blueprint.name.clone(), (stored, revision))
             .is_none())
     }
 
@@ -72,7 +85,7 @@ impl BlueprintStore for InMemoryBlueprintStore {
         let guard = self.inner.read().expect("blueprint store lock poisoned");
         let mut blueprints: Vec<Blueprint> = guard
             .values()
-            .map(|stored| stored.blueprint.clone())
+            .map(|(stored, _)| stored.blueprint.clone())
             .collect();
         blueprints.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(blueprints)
@@ -84,7 +97,16 @@ impl BlueprintStore for InMemoryBlueprintStore {
             .read()
             .expect("blueprint store lock poisoned")
             .get(name)
-            .map(|stored| stored.blueprint.clone()))
+            .map(|(stored, _)| stored.blueprint.clone()))
+    }
+
+    async fn get_with_revision(&self, name: &str) -> Result<Option<(Blueprint, u64)>, StoreError> {
+        Ok(self
+            .inner
+            .read()
+            .expect("blueprint store lock poisoned")
+            .get(name)
+            .map(|(stored, revision)| (stored.blueprint.clone(), *revision)))
     }
 
     async fn get_yaml(&self, name: &str) -> Result<Option<String>, StoreError> {
@@ -93,7 +115,7 @@ impl BlueprintStore for InMemoryBlueprintStore {
             .read()
             .expect("blueprint store lock poisoned")
             .get(name)
-            .map(|stored| stored.yaml.clone()))
+            .map(|(stored, _)| stored.yaml.clone()))
     }
 
     async fn unusable_reason(&self, _name: &str) -> Result<Option<String>, StoreError> {
@@ -319,6 +341,16 @@ impl BlueprintStore for FileBlueprintStore {
             .map(|e| e.stored.blueprint.clone()))
     }
 
+    async fn get_with_revision(&self, name: &str) -> Result<Option<(Blueprint, u64)>, StoreError> {
+        Ok(self
+            .state
+            .read()
+            .expect("blueprint store lock poisoned")
+            .current
+            .get(name)
+            .map(|e| (e.stored.blueprint.clone(), e.rev)))
+    }
+
     /// The stored YAML, including a reserved name's — an operator has to be
     /// able to read what is stored to fix it.
     async fn get_yaml(&self, name: &str) -> Result<Option<String>, StoreError> {
@@ -453,7 +485,7 @@ fn io(e: io::Error) -> StoreError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn blueprint() -> Blueprint {
@@ -461,6 +493,39 @@ mod tests {
             name: "tenant".into(),
             ..Blueprint::default()
         }
+    }
+
+    /// Each write gets a newer revision, read back with the blueprint it
+    /// belongs to, and a name added again after removal never reuses one.
+    pub(crate) async fn assert_revisions_advance(store: &dyn BlueprintStore) {
+        let first = blueprint();
+        store.add(first.clone()).await.unwrap();
+        let (read, r1) = store.get_with_revision("tenant").await.unwrap().unwrap();
+        assert_eq!(read, first);
+        let second = Blueprint {
+            packages: ["@acme/notes".to_string()].into(),
+            ..first.clone()
+        };
+        store.upsert(second.clone()).await.unwrap();
+        let (read, r2) = store.get_with_revision("tenant").await.unwrap().unwrap();
+        assert_eq!(read, second);
+        assert!(r2 > r1, "{r2} > {r1}");
+        assert!(store.remove("tenant").await.unwrap());
+        assert!(store.get_with_revision("tenant").await.unwrap().is_none());
+        store.add(first).await.unwrap();
+        let (_, r3) = store.get_with_revision("tenant").await.unwrap().unwrap();
+        assert!(r3 > r2, "{r3} > {r2}");
+    }
+
+    #[tokio::test]
+    async fn file_store_revisions_advance() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_revisions_advance(&FileBlueprintStore::new(dir.path().into()).unwrap()).await;
+    }
+
+    #[tokio::test]
+    async fn in_memory_store_revisions_advance() {
+        assert_revisions_advance(&InMemoryBlueprintStore::seed([]).unwrap()).await;
     }
 
     #[test]

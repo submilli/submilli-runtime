@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "9103431c9f9b9020f6d18239c3d4fa29fe0eb11cebdff1bbcf6a4c1eef45b576"
+  contentHash: "f070e2892029e25200e85fbfda282e7a9ada5e10de5fbaa84226e106bc980c26"
   confirmedAt: "2026-10-05T13:07:41.890Z"
 ---
 
@@ -48,7 +48,7 @@ Each entry below has the same rows, taken from the Package's
 | Secret | The name the Package reads with `secrets.get`. Its `requires` entry is `secrets.get` with `name == "<secret>"` |
 | Credential | The value the secret must hold |
 | Without the secret | What a call does when `secrets.get` returns `undefined` for the secret |
-| HTTP | Each host the Package requires, with the `http.<method>` capabilities for it. `download` is `http.download`. A path is the `path ==` term of a requirement's filter. |
+| HTTP | Each host the Package requires, with the `http.<verb>` capabilities for it. `download` is `http.download`. A path is the `path ==` term of a requirement's filter. |
 | Filesystem | The `fs.*` capabilities the Package requires, all without a filter |
 | Readme | The Package's readme on GitHub, with its setup and development notes |
 

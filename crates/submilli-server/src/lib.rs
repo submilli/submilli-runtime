@@ -11,6 +11,7 @@ pub mod blueprint;
 mod compiler_thread;
 pub mod config;
 pub mod database;
+mod docs_scopes;
 pub mod domain;
 pub mod error;
 mod execution_timeout;

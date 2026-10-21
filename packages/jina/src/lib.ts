@@ -200,12 +200,12 @@ export function downloadSearch(
 /**
  * Encode reader options as request headers — the `x-*` option surface only.
  * Authorization is added later, in the request path, from the JINA_API_KEY
- * secret. Pure (no secrets, no network), so it is safe to unit-test directly.
+ * secret. Pure: no secrets, no network.
  * Each option is read from `options` exactly once.
  * @param options Reader options to encode; omit it for no headers.
  * @returns Map of `x-*` request header names to values; only options that are set appear.
  */
-export function readerHeaders(options: ReaderOptions = {}): Map<string, string> {
+function readerHeaders(options: ReaderOptions = {}): Map<string, string> {
     const headers = new Map<string, string>();
     put(headers, "x-engine", options.engine);
     put(headers, "x-target-selector", options.targetSelector);
@@ -226,7 +226,7 @@ export function readerHeaders(options: ReaderOptions = {}): Map<string, string> 
  * @param options Search options to encode; omit it for no headers.
  * @returns Map of `x-*` request header names to values; only options that are set appear.
  */
-export function searchHeaders(options: SearchOptions = {}): Map<string, string> {
+function searchHeaders(options: SearchOptions = {}): Map<string, string> {
     const headers = new Map<string, string>();
     put(headers, "x-site", options.site);
     put(headers, "x-engine", options.engine);
@@ -243,7 +243,7 @@ export function searchHeaders(options: SearchOptions = {}): Map<string, string> 
  * @param body Raw JSON response body from the Reader endpoint.
  * @returns The normalized page; throws `Error` if the body is not a Reader envelope.
  */
-export function normalizeReaderJson(body: string): ReaderResult {
+function normalizeReaderJson(body: string): ReaderResult {
     try {
         const data = (JSON.parse(body) as ReaderEnvelope).data;
         return {
@@ -265,7 +265,7 @@ export function normalizeReaderJson(body: string): ReaderResult {
  * @param body Raw JSON response body from the Search endpoint.
  * @returns One entry per hit, in Jina's order; throws `Error` if the body is not a Search envelope.
  */
-export function normalizeSearchJson(body: string): SearchResult[] {
+function normalizeSearchJson(body: string): SearchResult[] {
     try {
         const envelope = JSON.parse(body) as SearchEnvelope;
         const results: SearchResult[] = [];

@@ -1,9 +1,1 @@
-types: 90 of 131 tsc entries compared, 1 differ
-
-line 62: x
-  tsc:  number
-  ours: number | string
-
-errors:
-line 54: ours: unary `+` not defined for `number | string` (tsc accepts)
-line 61: ours: unary `+` not defined for `number | string` (tsc accepts)
+types: 93 of 131 tsc entries compared, 0 differ

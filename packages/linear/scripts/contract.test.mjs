@@ -3,15 +3,23 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { stripTypeScriptTypes } from 'node:module';
-import { test } from 'node:test';
+import { beforeEach, test } from 'node:test';
 
 let token = 'oauth-test-token';
 let response;
 // When set, the whole response envelope instead of `{ data: response }`.
 let envelope;
+// When set, the non-2xx response `post` returns instead of a success.
+let failure;
 let request;
 let denied = false;
 const capabilities = [];
+
+// A failed assertion must not leave a mocked envelope or failure for the next test.
+beforeEach(() => {
+    envelope = undefined;
+    failure = undefined;
+});
 const contexts = [];
 // Every request since a test last reset this, in order; `request` is the last of them.
 let requests = [];
@@ -36,6 +44,7 @@ globalThis.__linearHost = {
                 agentSession: { issue: resolvedTeam, comment: null },
             });
         }
+        if (failure !== undefined) return { ok: false, ...failure };
         return { ok: true, json: () => envelope ?? { data } };
     },
 };
@@ -242,7 +251,6 @@ test('GraphQL errors remain actionable', () => {
     assert.throws(() => linear.getAgentSession('session'), /^Error: Linear GraphQL error: Entity not found$/);
     envelope = { data: null, errors: null };
     assert.throws(() => linear.getAgentSession('session'), /no data/);
-    envelope = undefined;
 });
 
 test('an unfiltered issue list is checked with a null team and sends only the default page', () => {
@@ -256,6 +264,70 @@ test('an unfiltered issue list is checked with a null team and sends only the de
         first: 50, after: 'cursor', filter: { team: { id: { eq: 'team' } }, state: { type: { eq: 'started' } } },
     });
     queries.add(request.body.query);
+});
+
+test('issue filters send only supplied clauses and strip Temporal zone annotations', () => {
+    response = { issues: page };
+    const variables = (filter, pageOptions) => {
+        linear.listIssues(filter, pageOptions);
+        return JSON.parse(JSON.stringify(request.body.variables));
+    };
+    assert.deepEqual(variables({}), { first: 50, filter: {} });
+    assert.deepEqual(variables({ teamId: 'T1', assigneeId: 'U1', stateType: 'started' }, { first: 5 }), {
+        first: 5,
+        filter: { team: { id: { eq: 'T1' } }, assignee: { id: { eq: 'U1' } }, state: { type: { eq: 'started' } } },
+    });
+    assert.deepEqual(variables({
+        stateType: 'completed', completedAtAfter: '2026-06-08T00:00:00.000Z', completedAtBefore: '2026-06-15T00:00:00.000Z',
+    }).filter, {
+        state: { type: { eq: 'completed' } }, completedAt: { gte: '2026-06-08T00:00:00.000Z', lt: '2026-06-15T00:00:00.000Z' },
+    });
+    assert.deepEqual(variables({ createdAtAfter: '2026-06-01T00:00:00.000Z' }).filter, { createdAt: { gte: '2026-06-01T00:00:00.000Z' } });
+    assert.deepEqual(variables({ updatedAtAfter: '2026-07-08T00:00:00Z' }).filter, { updatedAt: { gte: '2026-07-08T00:00:00Z' } });
+    // Linear's DateTime scalar rejects ZonedDateTime.toString()'s bracketed zone.
+    assert.deepEqual(variables({ completedAtBefore: '2026-07-15T13:36:00.178322174+00:00[UTC]' }).filter,
+        { completedAt: { lt: '2026-07-15T13:36:00.178322174+00:00' } });
+});
+
+test('list pages always send a first, so Linear accepts after', () => {
+    response = { teams: page };
+    const variables = (pageOptions) => {
+        linear.listTeams(pageOptions);
+        return JSON.parse(JSON.stringify(request.body.variables));
+    };
+    assert.deepEqual(variables(), { first: 50 });
+    assert.deepEqual(variables({ first: 25 }), { first: 25 });
+    assert.deepEqual(variables({ first: 10, after: 'cur' }), { first: 10, after: 'cur' });
+    assert.deepEqual(variables({ after: 'cur' }), { first: 50, after: 'cur' });
+    // A last page's null endCursor feeds straight back and is omitted.
+    assert.deepEqual(variables({ after: page.pageInfo.endCursor }), { first: 50 });
+});
+
+test('GraphQL error details name the code, arguments and path', () => {
+    envelope = { errors: [{ message: 'Argument Validation Error', path: ['issues'],
+        extensions: { code: 'INVALID_INPUT', validationErrors: [{ property: 'after' }] } }] };
+    assert.throws(() => linear.getAgentSession('session'),
+        /^Error: Linear GraphQL error: Argument Validation Error \[INVALID_INPUT\] \(invalid arguments: after\) at issues$/);
+    envelope = { errors: [{ message: 'Argument Validation Error', extensions: { userPresentableMessage: 'after needs first' } }] };
+    assert.throws(() => linear.getAgentSession('session'), /: after needs first$/);
+});
+
+test('non-2xx failures lift the GraphQL errors body over the status line', () => {
+    failure = { status: 400, statusText: 'Bad Request', body: JSON.stringify({ errors: [{ message: 'Argument Validation Error',
+        path: ['issues'], extensions: { code: 'INVALID_INPUT', validationErrors: [{ property: 'filter' }] } }] }) };
+    assert.throws(() => linear.getViewer(), /INVALID_INPUT.*filter/);
+    // Captured from api.linear.app; `locations`, `type` and `userError` are not modelled and must be tolerated.
+    failure = { status: 400, statusText: 'Bad Request', body: JSON.stringify({ errors: [{
+        message: "Variable \"$filter\" got invalid value; Unable to parse value '2026-07-15T13:36:00.178322174+00:00[UTC]' into a valid date",
+        locations: [{ line: 1, column: 7 }], extensions: { code: 'BAD_USER_INPUT', type: 'graphql error', userError: true } }] }) };
+    assert.throws(() => linear.getViewer(), /Unable to parse value.*\[BAD_USER_INPUT\]/s);
+    failure = { status: 400, statusText: 'Bad Request', body: JSON.stringify({ errors: [{ message: 'Bad',
+        extensions: { code: null, userPresentableMessage: null, validationErrors: [{ property: null }, { property: 'first' }] } }] }) };
+    assert.throws(() => linear.getViewer(), /^Error: Linear GraphQL error: Bad \(invalid arguments: first\)$/);
+    failure = { status: 502, statusText: 'Bad Gateway', body: '<html>upstream error</html>' };
+    assert.throws(() => linear.getViewer(), /^Error: Linear request failed: HTTP 502 Bad Gateway$/);
+    failure = { status: 400, statusText: 'Bad Request', body: '' };
+    assert.throws(() => linear.getViewer(), /^Error: Linear request failed: HTTP 400 Bad Request$/);
 });
 
 // Supply a local SDL and an installed graphql module for an additional schema check.

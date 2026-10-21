@@ -99,6 +99,16 @@ mod tests {
         assert_eq!(examples[1].fence_line, 6);
     }
 
+    /// Examples a reader may never see are checked all the same.
+    #[test]
+    fn extracts_examples_inside_capability_regions() {
+        let md = "<!-- submilli:if capability=\"a.test/write\" -->\n```ts\nwrite();\n```\n<!-- submilli:endif -->\n";
+        let examples = extract_doc_examples(md);
+        assert_eq!(examples.len(), 1);
+        assert_eq!(examples[0].source, "write();");
+        assert_eq!(examples[0].fence_line, 2);
+    }
+
     #[test]
     fn skips_other_fences_and_modifiers() {
         let md = "```text\nnot code\n```\n```yaml\na: b\n```\n```ts ignore\nskip\n```\n";

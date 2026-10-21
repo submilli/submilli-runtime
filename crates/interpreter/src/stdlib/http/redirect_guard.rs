@@ -22,6 +22,36 @@ pub(super) fn host_and_path(url: &Url) -> (String, String) {
     (host.to_string(), url.path().to_string())
 }
 
+/// Which function sent a request, which decides the capability it is checked
+/// against: a verb function (`http.get`) checks `http.<verb>`, while
+/// `http.request` checks `http.request` with the method in its context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RequestForm {
+    Verb,
+    Request,
+}
+
+/// The capability and context of a request with `method` to `host` and `path`.
+pub(super) fn request_check(
+    form: RequestForm,
+    method: &str,
+    host: &str,
+    path: &str,
+    body_size: u64,
+    timeout_ms: u64,
+) -> (String, serde_json::Value) {
+    let mut context = verb_context(host, path, body_size, timeout_ms);
+    match form {
+        RequestForm::Verb => (format!("http.{}", method.to_ascii_lowercase()), context),
+        RequestForm::Request => {
+            if let Some(fields) = context.as_object_mut() {
+                fields.insert("method".to_string(), method.to_ascii_uppercase().into());
+            }
+            ("http.request".to_string(), context)
+        }
+    }
+}
+
 /// Context of an `http.<verb>` check.
 pub(super) fn verb_context(
     host: &str,
@@ -60,7 +90,11 @@ impl DownloadTarget {
 }
 
 pub(super) enum GuardedRequest {
-    Verb { timeout_ms: u64 },
+    /// A request a verb function or `http.request` sends.
+    Send {
+        form: RequestForm,
+        timeout_ms: u64,
+    },
     Download(DownloadTarget),
 }
 
@@ -145,7 +179,7 @@ impl CapabilityGuard {
     }
 
     /// The capability and context a hop is checked against. A hop whose method a
-    /// 301/302/303 rewrote to GET is checked as `http.get` on its host and path
+    /// 301/302/303 rewrote to GET is checked as a GET on its host and path
     /// alone: it sends no body, and the original request's size and timeout
     /// describe a different request.
     fn hop_check(&self, hop: &RedirectHop<'_>) -> (String, serde_json::Value) {
@@ -154,14 +188,23 @@ impl CapabilityGuard {
             GuardedRequest::Download(target) => {
                 ("http.download".to_string(), target.context(&host, &path))
             }
-            GuardedRequest::Verb { .. } if hop.method_rewritten => (
+            GuardedRequest::Send {
+                form: RequestForm::Verb,
+                ..
+            } if hop.method_rewritten => (
                 "http.get".to_string(),
                 serde_json::json!({ "host": host, "path": path }),
             ),
-            GuardedRequest::Verb { timeout_ms } => (
-                format!("http.{}", hop.method.to_ascii_lowercase()),
-                verb_context(&host, &path, hop.body_len, *timeout_ms),
+            GuardedRequest::Send {
+                form: RequestForm::Request,
+                ..
+            } if hop.method_rewritten => (
+                "http.request".to_string(),
+                serde_json::json!({ "method": "GET", "host": host, "path": path }),
             ),
+            GuardedRequest::Send { form, timeout_ms } => {
+                request_check(*form, hop.method, &host, &path, hop.body_len, *timeout_ms)
+            }
         }
     }
 }

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "e24696526d13f6c4ae70b86452222ff1a849761108ab14bdee20c81a23a16362"
+  contentHash: "3a2df78cbfac325fac9f213985a94a4cfacb84423df5313e09ca14f9a80223ad"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -71,7 +71,7 @@ submilli docs submilli:fs
 ```
 
 ```text
-submilli:fs — Sandbox filesystem: read/write/list/stat/remove/exists/info.
+submilli:fs — Sandbox filesystem: files and directories under the VFS root.
 …
 function appendText(path: string, content: string): void;
 function exists(path: string): boolean;

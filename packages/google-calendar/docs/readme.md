@@ -1,32 +1,74 @@
 # Google Calendar
 
-Use `@submilli/google-calendar` to inspect calendars, build agendas, check
-availability, find candidate meeting times, and manage events.
+Use `@submilli/google-calendar` to:
 
-The API covers calendar and event reads, event creation/update/response/deletion,
-free/busy queries, and bounded `agenda` and `findFreeTime` helpers. All list methods
-return one explicit page and never paginate without a caller-selected bound.
+<!-- submilli:if any="submilli/google-calendar.listCalendars submilli/google-calendar.listEvents submilli/google-calendar.getEvent" -->
+- inspect calendars
+<!-- submilli:endif -->
+<!-- submilli:if capability="submilli/google-calendar.agenda" -->
+- build agendas
+<!-- submilli:endif -->
+<!-- submilli:if capability="submilli/google-calendar.queryFreeBusy" -->
+- check availability
+<!-- submilli:endif -->
+<!-- submilli:if capability="submilli/google-calendar.findFreeTime" -->
+- find candidate meeting times
+<!-- submilli:endif -->
+<!-- submilli:if any="submilli/google-calendar.createEvent submilli/google-calendar.updateEvent submilli/google-calendar.respondToEvent submilli/google-calendar.deleteEvent" -->
+- manage events
+<!-- submilli:endif -->
 
-The read surface is `listCalendars`, `listEvents`, `getEvent`, `agenda`,
-`queryFreeBusy`, and `findFreeTime`. The write surface is `createEvent`,
-`updateEvent`, `respondToEvent`, and `deleteEvent`. The default calendar is
-`primary`; pass an explicit calendar ID when operating elsewhere.
+<!-- submilli:if any="submilli/google-calendar.listCalendars submilli/google-calendar.listEvents" -->
+
+All list methods return one explicit page and never paginate without a
+caller-selected bound.
+
+<!-- submilli:endif -->
+
+The default calendar is `primary`; pass an explicit calendar ID when operating
+elsewhere.
+
+<!-- submilli:if any="submilli/google-calendar.createEvent submilli/google-calendar.updateEvent submilli/google-calendar.deleteEvent" -->
 
 An attendee's `email` is one bare address such as `dana@example.com`; it is
 sent in lowercase. `sendUpdates` is `all`, `externalOnly`, or `none`, and
 `none` when unset.
 
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="submilli/google-calendar.updateEvent" -->
+
 `updateEvent` is a patch: omitted fields remain unchanged. When the patch has
 no `attendees`, the event is read first so the policy check covers the
 attendees it already has; a missing event throws `not_found`. Follow the
 declaration's explicit clear flags when intentionally removing optional values.
-`respondToEvent` updates the authenticated attendee's response. Treat
-`deleteEvent` as a deliberate destructive action even though deleting an
+
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="submilli/google-calendar.respondToEvent" -->
+
+`respondToEvent` updates the authenticated attendee's response.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="submilli/google-calendar.deleteEvent" -->
+
+Treat `deleteEvent` as a deliberate destructive action even though deleting an
 already absent event is idempotent.
 
+<!-- submilli:endif -->
+
 Credentials are supplied internally. Never request, accept, or pass an access
-token in package calls. Failures throw `CalendarError`; do not blindly retry
-mutations when the outcome may already have been committed.
+token in package calls. Failures throw `CalendarError`.
+
+<!-- submilli:if any="submilli/google-calendar.createEvent submilli/google-calendar.updateEvent submilli/google-calendar.respondToEvent submilli/google-calendar.deleteEvent" -->
+
+Do not blindly retry mutations when the outcome may already have been
+committed.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="submilli/google-calendar.agenda" -->
 
 ## Example
 
@@ -60,3 +102,5 @@ function main(): string {
     return lines.join("\n");
 }
 ```
+
+<!-- submilli:endif -->

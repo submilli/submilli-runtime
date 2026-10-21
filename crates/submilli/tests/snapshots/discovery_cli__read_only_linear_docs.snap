@@ -1,0 +1,366 @@
+---
+source: crates/submilli/tests/discovery_cli.rs
+expression: docs
+---
+@submilli/linear — Synchronous GraphQL client for Linear — read issues, teams, projects, and users, and create or update issues and comments.
+
+# Linear
+
+Use `@submilli/linear` to work with a Linear workspace. Operations are
+synchronous and return plain typed values; do not construct GraphQL queries
+yourself.
+
+Read operations:
+
+- `getIssue(id)` fetches one issue.
+- `listIssues(filter, page)` fetches a filtered, paginated page of issues.
+- `listTeams(page)` fetches a page of teams.
+
+Lists return a `Page<T>` with `nodes` and `pageInfo`. When
+`pageInfo.hasNextPage` is true, pass `{ after: pageInfo.endCursor }` to request
+the next page; a `null` cursor is treated as absent. The `page` argument is
+optional; omit it to request the first 50 items. Always keep pagination
+explicitly bounded.
+
+`listIssues` accepts optional curated filters for team, assignee, workflow
+state type, and lifecycle timestamp ranges; omit the filter to list all issues.
+To find issues completed during a period, use `stateType: "completed"` together
+with `completedAtAfter` and `completedAtBefore`. ISO timestamps from `Temporal` are accepted; a trailing
+bracketed zone annotation is removed before calling Linear.
+
+`Issue` includes lifecycle timestamps (`createdAt`, `updatedAt`, `completedAt`, `canceledAt`, `startedAt`, `triagedAt`, `archivedAt`, `autoClosedAt`), planning fields (`dueDate`, `estimate`, `priorityLabel`, `labelIds`), and embedded one-level relations (`assignee`, `creator`, `team`, `state`, `project`, `cycle`).
+
+Credentials are supplied internally. Never request, accept, or pass an API key
+in package calls. Each operation has its own `linear.app/<operation>`
+capability, so a permission denial means the operation is forbidden, not
+mis-called.
+
+## Example
+
+List in-progress issues for one team.
+
+```ts
+import linear from "@submilli/linear";
+
+function main(): string {
+    const teams = linear.listTeams({ first: 1 });
+    if (teams.nodes.length === 0) return "No teams visible.";
+    const team = teams.nodes[0];
+    const issues = linear.listIssues({ teamId: team.id, stateType: "started" }, { first: 10 });
+    if (issues.nodes.length === 0) return "Nothing in progress for " + team.name + ".";
+    const lines: string[] = [];
+    for (const issue of issues.nodes) {
+        lines.push(issue.identifier + "  " + issue.title);
+    }
+    return lines.join("\n");
+}
+```
+
+/**
+ * Fetch one issue by UUID; null when not found.
+ * @param id Issue UUID (not the `ENG-123` identifier).
+ * @capability linear.app/getIssue { teamId: string }
+ * @returns The issue, or `null` when no issue has that ID.
+ */
+function getIssue(id: string): Issue | null;
+
+/**
+ * List issues, optionally filtered and paginated. `teamId` in the check is the filter's team, or null when the filter names no team.
+ * @param filter Optional filters (team, assignee, state category, timestamps); omit it to apply none. `teamId` is also checked against capability rules.
+ * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; omit it to request the first 50 items.
+ * @capability linear.app/listIssues { teamId: string }
+ * @returns One page of issues in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
+ */
+function listIssues(filter?: IssueFilter, page?: PageOptions): Page<Issue>;
+
+/**
+ * List teams, paginated.
+ * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; omit it to request the first 50 items.
+ * @capability linear.app/listTeams
+ * @returns One page of teams in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
+ */
+function listTeams(page?: PageOptions): Page<Team>;
+
+/**
+ * A Linear cycle.
+ */
+interface Cycle {
+  /**
+   * Cycle end time, or null when unset.
+   */
+  endsAt: string | null;
+  /**
+   * Stable UUID.
+   */
+  id: string;
+  /**
+   * Cycle name, or null for an unnamed cycle.
+   */
+  name: string | null;
+  /**
+   * Cycle number within the team.
+   */
+  number: number;
+  /**
+   * Cycle start time, or null when unset.
+   */
+  startsAt: string | null;
+}
+
+/**
+ * A Linear issue, with its 1-level relations embedded.
+ */
+interface Issue {
+  /**
+   * ISO timestamp when the issue was archived, or null.
+   */
+  archivedAt: string | null;
+  /**
+   * Assignee, or null when unassigned.
+   */
+  assignee: User | null;
+  /**
+   * ISO timestamp when Linear auto-closed the issue, or null.
+   */
+  autoClosedAt: string | null;
+  /**
+   * ISO timestamp when the issue moved into canceled state, or null.
+   */
+  canceledAt: string | null;
+  /**
+   * ISO timestamp when the issue moved into completed state, or null.
+   */
+  completedAt: string | null;
+  /**
+   * ISO timestamp when the issue was created.
+   */
+  createdAt: string;
+  /**
+   * Creator, or null when unavailable.
+   */
+  creator: User | null;
+  /**
+   * Cycle, or null when not assigned to a cycle.
+   */
+  cycle: Cycle | null;
+  /**
+   * Markdown body, or null when unset.
+   */
+  description: string | null;
+  /**
+   * Due date in YYYY-MM-DD form, or null.
+   */
+  dueDate: string | null;
+  /**
+   * Estimate value, or null when unset.
+   */
+  estimate: number | null;
+  /**
+   * Stable UUID.
+   */
+  id: string;
+  /**
+   * Human identifier, e.g. "ENG-123".
+   */
+  identifier: string;
+  /**
+   * UUIDs of labels currently attached to the issue.
+   */
+  labelIds: string[];
+  /**
+   * Numeric issue number scoped to the team.
+   */
+  number: number;
+  /**
+   * Priority: 0=none, 1=urgent, 2=high, 3=medium, 4=low.
+   */
+  priority: number;
+  /**
+   * Human label for the priority, e.g. "High".
+   */
+  priorityLabel: string;
+  /**
+   * Project, or null when not assigned to a project.
+   */
+  project: Project | null;
+  /**
+   * ISO timestamp when the issue moved into started state, or null.
+   */
+  startedAt: string | null;
+  /**
+   * Current workflow state, or null.
+   */
+  state: WorkflowState | null;
+  /**
+   * Owning team, or null.
+   */
+  team: Team | null;
+  /**
+   * Issue title.
+   */
+  title: string;
+  /**
+   * ISO timestamp when the issue left triage, or null.
+   */
+  triagedAt: string | null;
+  /**
+   * ISO timestamp when the issue was last meaningfully updated.
+   */
+  updatedAt: string;
+  /**
+   * Web URL.
+   */
+  url: string;
+}
+
+/**
+ * A curated issue filter; maps to Linear's nested `IssueFilter`. All optional.
+ */
+interface IssueFilter {
+  /**
+   * Restrict to an assignee UUID.
+   */
+  assigneeId?: string;
+  /**
+   * Restrict to issues completed at or after this ISO timestamp.
+   */
+  completedAtAfter?: string;
+  /**
+   * Restrict to issues completed before this ISO timestamp.
+   */
+  completedAtBefore?: string;
+  /**
+   * Restrict to issues created at or after this ISO timestamp.
+   */
+  createdAtAfter?: string;
+  /**
+   * Restrict by state category, e.g. "started".
+   */
+  stateType?: string;
+  /**
+   * Restrict to a team UUID.
+   */
+  teamId?: string;
+  /**
+   * Restrict to issues updated at or after this ISO timestamp.
+   */
+  updatedAtAfter?: string;
+}
+
+/**
+ * A page of `T` from a Relay connection.
+ */
+interface Page<T> {
+  /**
+   * Items on this page.
+   */
+  nodes: T[];
+  /**
+   * Cursor metadata for fetching the next page.
+   */
+  pageInfo: PageInfo;
+}
+
+/**
+ * Relay page-cursor metadata.
+ */
+interface PageInfo {
+  /**
+   * Cursor of the page's last item, to pass as `after` for the next page when `hasNextPage`; null when the page is empty.
+   */
+  endCursor: string | null;
+  /**
+   * True when another page exists.
+   */
+  hasNextPage: boolean;
+}
+
+/**
+ * Pagination options for list calls. All optional.
+ */
+interface PageOptions {
+  /**
+   * Opaque cursor from a prior `PageInfo.endCursor`; a null cursor is treated as absent.
+   */
+  after?: string | null;
+  /**
+   * Max items to fetch (Linear default 50, max 250).
+   */
+  first?: number;
+}
+
+/**
+ * A Linear project.
+ */
+interface Project {
+  /**
+   * Stable UUID.
+   */
+  id: string;
+  /**
+   * Project name.
+   */
+  name: string;
+  /**
+   * Project state, e.g. "started".
+   */
+  state: string;
+}
+
+/**
+ * A Linear team.
+ */
+interface Team {
+  /**
+   * Stable UUID.
+   */
+  id: string;
+  /**
+   * Short key, e.g. "ENG".
+   */
+  key: string;
+  /**
+   * Team name.
+   */
+  name: string;
+}
+
+/**
+ * A Linear user (the viewer, an assignee, a comment author, …).
+ */
+interface User {
+  /**
+   * Whether the account is active.
+   */
+  active: boolean;
+  /**
+   * Email address.
+   */
+  email: string;
+  /**
+   * Stable UUID.
+   */
+  id: string;
+  /**
+   * Display name.
+   */
+  name: string;
+}
+
+/**
+ * A workflow state an issue can be in.
+ */
+interface WorkflowState {
+  /**
+   * Stable UUID.
+   */
+  id: string;
+  /**
+   * State name, e.g. "In Progress".
+   */
+  name: string;
+  /**
+   * Category: "backlog" | "unstarted" | "started" | "completed" | "canceled".
+   */
+  type: string;
+}

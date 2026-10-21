@@ -1,10 +1,10 @@
 use crate::compiler_error::{CompileError, CompilerFailure, CompilerStage};
 use crate::{
-    ArrayLiteralElement, ArrowBody, Ast, BinOp, Binding, CatchClause, Diagnostic, EnumInitializer,
-    EnumMember, ExportedDecl, Expr, ExprId, ExprKind, FileId, Ident, ImportKind, ImportSpecifier,
-    ObjectLiteralField, ObjectLiteralMember, ObjectPatternField, ParamDecl, PostfixOp, Severity,
-    Span, Stmt, StmtId, StmtKind, SwitchCase, SwitchDefault, Token, TokenKind, TypeAnnotation,
-    TypeAnnotationField, TypeAnnotationKind, UnOp,
+    ArrayLiteralElement, ArrowBody, Ast, BinOp, Binding, CatchClause, ClassMember, Diagnostic,
+    EnumInitializer, EnumMember, ExportedDecl, Expr, ExprId, ExprKind, FileId, Ident, ImportKind,
+    ImportSpecifier, ObjectLiteralField, ObjectLiteralMember, ObjectPatternField, ParamDecl,
+    PostfixOp, Severity, Span, Stmt, StmtId, StmtKind, SwitchCase, SwitchDefault, Token, TokenKind,
+    TypeAnnotation, TypeAnnotationField, TypeAnnotationKind, UnOp,
 };
 
 const MAX_ERRORS: usize = 20;
@@ -79,6 +79,9 @@ pub fn parse_checked(
         fatal: None,
     };
     p.parse_program();
+    if p.fatal.is_none() {
+        p.reject_use_strict_with_non_simple_params();
+    }
     if let Some(span) = p.recursion_limit_span {
         p.fatal = Some(CompilerFailure::Limit {
             stage: CompilerStage::Parse,
@@ -1076,7 +1079,20 @@ impl<'a> Parser<'a> {
                     self.error_at(name.span, "a setter must declare exactly one parameter");
                     return None;
                 }
-                Some(Box::new(params.remove(0)))
+                let param = params.remove(0);
+                // An assignment always passes the value, so a setter's parameter
+                // can't be omitted or collect several.
+                if param.rest {
+                    self.error_at(
+                        param.name.span,
+                        "a setter's parameter can't be a rest parameter",
+                    );
+                } else if param.default.is_some() {
+                    self.error_at(name.span, "a setter's parameter can't have a default value");
+                } else if param.optional {
+                    self.error_at(param.name.span, "a setter's parameter can't be optional");
+                }
+                Some(Box::new(param))
             }
         };
         let return_type = if matches!(self.peek().kind, TokenKind::Colon) {
@@ -4554,6 +4570,11 @@ impl<'a> Parser<'a> {
             self.error_at_peek("expected `=>` in arrow function");
             return None;
         }
+        // Like TypeScript, the arrow still parses, so later errors keep their spans.
+        if self.line_break_before_peek() {
+            let arrow_span = self.peek().span;
+            self.error_at(arrow_span, "a line break is not allowed before `=>`");
+        }
         self.advance();
 
         let (body, end_pos) = if matches!(self.peek().kind, TokenKind::LeftBrace) {
@@ -5935,6 +5956,100 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// JavaScript forbids a `"use strict"` directive in a function whose parameters
+    /// aren't all plain names: one with a default, a pattern, or `...`. As TypeScript
+    /// does, each such parameter and the directive are reported.
+    fn reject_use_strict_with_non_simple_params(&mut self) {
+        let mut functions: Vec<(Vec<Span>, StmtId)> = Vec::new();
+        let non_simple = |param: &ParamDecl| {
+            (param.default.is_some() || param.pattern.is_some() || param.rest).then(|| {
+                param
+                    .pattern
+                    .as_ref()
+                    .map_or(param.name.span, Binding::span)
+            })
+        };
+        for expr in self.ast.source_expressions() {
+            if let ExprKind::Arrow {
+                params,
+                body: ArrowBody::Block(body),
+                ..
+            } = &expr.kind
+            {
+                functions.push((params.iter().filter_map(non_simple).collect(), *body));
+            }
+        }
+        for stmt in self.ast.source_statements() {
+            match &stmt.kind {
+                StmtKind::Function { params, body, .. } => {
+                    functions.push((params.iter().filter_map(non_simple).collect(), *body));
+                }
+                StmtKind::ClassDecl { members, .. } => {
+                    for member in members {
+                        match member {
+                            ClassMember::Method { params, body, .. }
+                            | ClassMember::Constructor { params, body, .. } => {
+                                functions
+                                    .push((params.iter().filter_map(non_simple).collect(), *body));
+                            }
+                            ClassMember::Accessor { param, body, .. } => {
+                                let params = param.as_deref().and_then(non_simple);
+                                functions.push((params.into_iter().collect(), *body));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (params, body) in functions {
+            if params.is_empty() {
+                continue;
+            }
+            let Some(directive) = self.use_strict_directive(body) else {
+                continue;
+            };
+            for span in params {
+                self.error_at(
+                    span,
+                    "this parameter is not allowed with a `\"use strict\"` directive",
+                );
+            }
+            self.error_at_with_help(
+                directive,
+                "a `\"use strict\"` directive can't be used with a parameter list that has defaults, patterns, or a rest parameter",
+                vec!["remove the directive; Submilli code is always strict".into()],
+            );
+        }
+    }
+
+    /// The span of a `"use strict"` directive in the prologue of a function body:
+    /// the string-literal statements it starts with. As in TypeScript, the string's
+    /// value decides, so an escape spelling it counts too; a template doesn't.
+    fn use_strict_directive(&self, body: StmtId) -> Option<Span> {
+        let StmtKind::Block(stmts) = &self.ast.try_stmt(body).ok()?.kind else {
+            return None;
+        };
+        for stmt in stmts {
+            let stmt = self.ast.try_stmt(*stmt).ok()?;
+            let StmtKind::Expr(expr) = stmt.kind else {
+                return None;
+            };
+            let expr = self.ast.try_expr(expr).ok()?;
+            let ExprKind::String(value) = &expr.kind else {
+                return None;
+            };
+            if self.source.as_bytes().get(expr.span.start as usize) == Some(&b'`') {
+                return None;
+            }
+            if value == "use strict" {
+                return Some(stmt.span);
+            }
+        }
+        None
+    }
+
     fn error_at(&mut self, span: Span, message: impl Into<String>) {
         self.diagnostics.push(Diagnostic {
             severity: Severity::Error,
@@ -6217,7 +6332,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-fn is_property_name(kind: &TokenKind) -> bool {
+pub(crate) fn is_property_name(kind: &TokenKind) -> bool {
     matches!(
         kind,
         TokenKind::Identifier

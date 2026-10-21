@@ -41,11 +41,12 @@ async fn search_lists_all_and_filters_by_symbol() {
     let (status, all) = get("/packages/search").await;
     assert_eq!(status, StatusCode::OK);
     // Every stdlib module but `submilli:llm` and `submilli:embedding`, which need
-    // models declared.
+    // models declared, and `submilli:secrets` and `submilli:variables`, whose
+    // reads the runtime refuses to programs.
     let listed = all["results"].as_array().unwrap();
-    assert_eq!(listed.len(), 9, "got: {all}");
+    assert_eq!(listed.len(), 7, "got: {all}");
     assert!(
-        listed
+        !listed
             .iter()
             .any(|entry| entry["name"] == "submilli:variables")
     );
@@ -298,6 +299,10 @@ mod blueprint_scoped {
     const BLUEPRINT: &str = "scoped";
 
     fn write_package(store_root: &Path) {
+        write_package_documented(store_root, "Pied Piper tooling for tests.");
+    }
+
+    fn write_package_documented(store_root: &Path, documentation: &str) {
         const SOURCE: &str = "export function ping(): number { return 1; }";
         let package = compile_package(
             "@pied-piper/tools",
@@ -320,7 +325,7 @@ mod blueprint_scoped {
             ),
             &package.declaration,
             &ArtifactMetadata::new("@pied-piper/tools", "0.0.0-test", Vec::new()),
-            "Pied Piper tooling for tests.",
+            documentation,
             &[ArtifactSource {
                 path: ModulePath::from("lib"),
                 text: SOURCE.to_string(),
@@ -711,6 +716,27 @@ mod blueprint_scoped {
             "got: {body}"
         );
         assert!(body.contains("function ping("), "got: {body}");
+    }
+
+    #[tokio::test]
+    async fn malformed_installed_documentation_is_refused_not_shown_whole() {
+        let store = tempfile::tempdir().expect("tempdir");
+        let router = router(store.path());
+        // Overwrite the artifact after the router wrote the valid one.
+        write_package_documented(
+            store.path(),
+            "Intro.\n\n<!-- submilli:if capability=\"x.test/write\" -->\nHidden.\n",
+        );
+        let (status, body) = get_from(
+            router,
+            "/v1/blueprints/scoped/packages/docs?name=@pied-piper/tools",
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "got: {body}");
+        assert_eq!(body["error"], "invalid_documentation", "got: {body}");
+        let message = body["message"].as_str().unwrap_or("");
+        assert!(message.contains("line 3"), "got: {body}");
+        assert!(!body.to_string().contains("Hidden."), "got: {body}");
     }
 
     #[tokio::test]

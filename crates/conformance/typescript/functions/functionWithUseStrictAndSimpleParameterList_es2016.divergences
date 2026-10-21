@@ -1,11 +1,1 @@
 types: 12 of 41 tsc entries compared, 0 differ
-
-errors:
-line 4: tsc TS1346: This parameter is not allowed with 'use strict' directive. (we accept)
-line 5: tsc TS1347: 'use strict' directive cannot be used with non-simple parameter list. (we accept)
-line 26: tsc TS1346: This parameter is not allowed with 'use strict' directive. (we accept)
-line 27: tsc TS1347: 'use strict' directive cannot be used with non-simple parameter list. (we accept)
-line 38: tsc TS1346: This parameter is not allowed with 'use strict' directive. (we accept)
-line 39: tsc TS1347: 'use strict' directive cannot be used with non-simple parameter list. (we accept)
-line 42: tsc TS1346: This parameter is not allowed with 'use strict' directive. (we accept)
-line 44: tsc TS1347: 'use strict' directive cannot be used with non-simple parameter list. (we accept)

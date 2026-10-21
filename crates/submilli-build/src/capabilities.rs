@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use interpreter::{
     DerivedCapability, DocCapabilityBindingKind, DocCapabilityLiteral, DocComment, MangledName,
     MethodSig, PackageDeclaration, Param, Type, TypeKind, ValueKind, Visibility,
-    capability_binding_type,
+    capability_binding_type, stdlib::capabilities,
 };
 use serde::{Deserialize, Serialize};
 
@@ -69,14 +69,20 @@ pub fn derive_capability_schema(
 }
 
 /// One entry per capability *name*. Several callables typically provide the
-/// same capability (`read`/`readJson`/`readToVfs` all provide `jina.ai/read`),
+/// same capability (`read`/`readJson`/`downloadRead` all provide `jina.ai/read`),
 /// so entries merge: fields union across providers, and the description comes
-/// from the first provider in [`providers`] order.
+/// from the provider with the fewest tags, the first in [`providers`] order
+/// among equals, since a callable that needs more than this capability
+/// describes more than it. A standard-library capability a callable also needs
+/// (`fs.write` for `downloadRead`) is provided only when the package reports
+/// fields for it the runtime does not, which a blueprint can then filter on.
 fn provided_capabilities(
     declaration: &PackageDeclaration,
     dependencies: &[&PackageDeclaration],
 ) -> Vec<ProvidedCapability> {
     let mut merged: BTreeMap<String, ProvidedCapability> = BTreeMap::new();
+    // The tag count of the provider each description came from.
+    let mut described_by: BTreeMap<String, usize> = BTreeMap::new();
     for Provider { params, doc } in providers(declaration) {
         let param_descriptions = doc
             .params
@@ -92,8 +98,14 @@ fn provided_capabilities(
                         description: None,
                         fields: BTreeMap::new(),
                     });
-            if entry.description.is_none() {
-                entry.description = non_empty(doc.summary.as_str()).map(str::to_string);
+            let tags = doc.capabilities.len();
+            if let Some(summary) = non_empty(doc.summary.as_str())
+                && described_by
+                    .get(&cap.capability)
+                    .is_none_or(|&described| tags < described)
+            {
+                entry.description = Some(summary.to_string());
+                described_by.insert(cap.capability.clone(), tags);
             }
             for binding in &cap.bindings {
                 let description = binding_description(&binding.kind, &param_descriptions);
@@ -110,7 +122,19 @@ fn provided_capabilities(
             }
         }
     }
-    merged.into_values().collect()
+    merged.into_values().filter(reports_own_fields).collect()
+}
+
+/// Whether `provided` is the package's: a capability it defines, or a
+/// standard-library one it reports fields for that the runtime does not.
+fn reports_own_fields(provided: &ProvidedCapability) -> bool {
+    let Some(cataloged) = capabilities::find_any(&provided.name) else {
+        return true;
+    };
+    provided
+        .fields
+        .keys()
+        .any(|field| !cataloged.field_names().any(|known| known == field))
 }
 
 /// A documented callable a caller of the package can reach.
@@ -398,5 +422,59 @@ mod tests {
 
         let schema = derive_capability_schema(&declaration, &[], &[]);
         assert_eq!(schema.provides[0].fields["recipients"].ty, "string[]");
+    }
+
+    #[test]
+    fn the_narrowest_provider_describes_and_runtime_fields_are_not_provided() {
+        let mut declaration = PackageDeclaration::with_package("@jina/reader");
+        for (func, comment) in [
+            (
+                "downloadRead",
+                "/** Read a URL into a file.\n * @capability jina.ai/read { host }\n * @capability fs.write { path }\n */",
+            ),
+            (
+                "read",
+                "/** Read a URL as markdown.\n * @capability jina.ai/read { host }\n */",
+            ),
+            (
+                "save",
+                "/** Save a page for a purpose.\n * @capability fs.write { path, purpose }\n */",
+            ),
+        ] {
+            declaration.values.insert(
+                func.to_string(),
+                ValueSymbol {
+                    name: func.to_string(),
+                    mangled_name: mangle::package_symbol("@jina/reader", func),
+                    declaration_span: Span::new(FileId(0), 0, 1).unwrap(),
+                    kind: ValueKind::Function {
+                        generics: Vec::new(),
+                        params: vec![
+                            Param::new("host", Type::String),
+                            Param::new("path", Type::String),
+                            Param::new("purpose", Type::String),
+                        ],
+                        ret: Type::Void,
+                        type_predicate: None,
+                        doc: doc(FileId(0), comment),
+                    },
+                },
+            );
+        }
+
+        let schema = derive_capability_schema(&declaration, &[], &[]);
+
+        // `downloadRead` reports only the runtime's `fs.write` fields, but
+        // `save` adds `purpose`, which a blueprint can filter on.
+        let names = schema
+            .provides
+            .iter()
+            .map(|cap| cap.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["fs.write", "jina.ai/read"]);
+        assert_eq!(
+            schema.provides[1].description.as_deref(),
+            Some("Read a URL as markdown.")
+        );
     }
 }

@@ -16,6 +16,8 @@ pub mod compiler_limits;
 pub mod diagnostics;
 pub mod did_you_mean;
 pub mod doc_comment;
+pub mod doc_directives;
+pub mod docs_view;
 pub mod lexer;
 pub(crate) mod literal_units;
 pub mod lower_patterns;

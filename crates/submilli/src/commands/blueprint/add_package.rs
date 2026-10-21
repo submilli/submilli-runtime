@@ -100,7 +100,10 @@ fn run(args: &Args) -> Result<Vec<String>> {
     let Some(named) = closure.last() else {
         bail!("loading package '{}' returned no artifact", args.package);
     };
-    let selection = resolve_selection(args, &named.capabilities.provides)?;
+    let offered = package_owned(&named.capabilities.provides)
+        .cloned()
+        .collect::<Vec<_>>();
+    let selection = resolve_selection(args, &offered)?;
 
     if !blueprint.has_permission_policy() {
         blueprint.default_action = Some(DefaultAction::Deny);
@@ -414,6 +417,16 @@ fn reject_versioned_spec(package: &str) -> Result<()> {
     Ok(())
 }
 
+/// The provided capabilities the package itself defines. A standard-library
+/// capability a package reports extra fields for is listed in `provides` too,
+/// but granting it is the operator's call, with a filter of their own: an
+/// unfiltered `fs.write` for `main` would reach every file.
+fn package_owned(provides: &[ProvidedCapability]) -> impl Iterator<Item = &ProvidedCapability> {
+    provides
+        .iter()
+        .filter(|provided| interpreter::stdlib::capabilities::find_any(&provided.name).is_none())
+}
+
 /// The `main` rules the selection produces: selected → `allow`. Unselected
 /// capabilities normally need no rule (the `default:` covers them), but when
 /// the blueprint's effective default is `allow`, leaving them ruleless would
@@ -430,7 +443,7 @@ fn selected_provided_rules(
     main_decides: impl Fn(&str) -> bool,
 ) -> RuleChanges {
     let mut changes = RuleChanges::default();
-    for provided in &capabilities.provides {
+    for provided in package_owned(&capabilities.provides) {
         let selected = match selection {
             Selection::All => true,
             Selection::None => false,
@@ -469,9 +482,7 @@ fn count_left_to_default(
     main_rules: &[PermissionRule],
     main_has_rule: impl Fn(&str) -> bool,
 ) -> usize {
-    capabilities
-        .provides
-        .iter()
+    package_owned(&capabilities.provides)
         .filter(|provided| {
             !main_has_rule(&provided.name)
                 && !main_rules
@@ -746,6 +757,22 @@ mod tests {
         assert_eq!(some.len(), 1);
         assert_eq!(some[0].capability, "pied-piper.example/charge");
         assert_eq!(some[0].action, Action::Allow);
+    }
+
+    #[test]
+    fn standard_library_capabilities_are_never_granted() {
+        let schema = schema(vec![
+            provided("fs.write"),
+            provided("pied-piper.example/charge"),
+        ]);
+
+        let all = selected_provided_rules(&schema, &Selection::All, false, |_| false).appended;
+        let granted = all
+            .iter()
+            .map(|rule| rule.capability.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(granted, ["pied-piper.example/charge"]);
+        assert_eq!(count_left_to_default(&schema, &[], |_| false), 1);
     }
 
     #[test]

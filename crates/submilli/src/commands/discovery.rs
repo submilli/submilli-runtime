@@ -8,40 +8,56 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
-use interpreter::packages::{self, Resolution};
+use interpreter::Stdlib;
+use interpreter::docs_view::Unscoped;
+use interpreter::packages::{self, Catalog, ModuleDoc, ModuleSummary, Resolution, StdlibView};
 use submilli_blueprint::Blueprint;
-use submilli_build::{Artifact, PackageStore};
-use submilli_shared::library_visibility::LibraryVisibility;
+use submilli_build::PackageStore;
+use submilli_shared::docs_scope::{DocsScope, PackageView};
 
 /// What a discovery command shows. Without `--blueprint` it is the whole
 /// library, opt-in `submilli:git` and every installed package included, even
 /// when a `blueprint.yaml` sits in the directory: the author has to read an
 /// API before deciding to enable it. With `--blueprint` it is what that
-/// blueprint's programs could import, the view the server gives a bound
-/// blueprint.
+/// blueprint's programs could use, the view the server gives a bound
+/// blueprint: only the operations its rules could allow, and only the parts
+/// of a package's documentation about them.
 pub(crate) enum Scope {
-    Library,
+    Library {
+        stdlib: StdlibView,
+    },
     Blueprint {
         path: PathBuf,
         blueprint: Box<Blueprint>,
-        visibility: LibraryVisibility,
+        docs: Box<DocsScope>,
     },
 }
 
 impl Scope {
+    /// The whole library.
+    fn library() -> Self {
+        Self::Library {
+            stdlib: Stdlib::core().view(&Unscoped),
+        }
+    }
+
     pub(crate) fn load(path: Option<PathBuf>) -> anyhow::Result<Self> {
         let Some(path) = path else {
-            return Ok(Self::Library);
+            return Ok(Self::library());
         };
         let yaml = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
         let blueprint = submilli_blueprint::parse(&yaml)
             .with_context(|| format!("parsing {}", path.display()))?;
-        let visibility = LibraryVisibility::for_blueprint(&blueprint);
+        let artifacts = submilli_shared::docs_scope::load_declared(
+            &blueprint.packages,
+            &PackageStore::default(),
+        );
+        let docs = DocsScope::for_blueprint(&blueprint, &artifacts);
         Ok(Self::Blueprint {
             path,
             blueprint: Box::new(blueprint),
-            visibility,
+            docs: Box::new(docs),
         })
     }
 
@@ -50,43 +66,89 @@ impl Scope {
     /// follow the blueprint.
     pub(crate) fn allows(&self, name: &str) -> bool {
         let Self::Blueprint {
-            blueprint,
-            visibility,
-            ..
+            blueprint, docs, ..
         } = self
         else {
             return true;
         };
         if is_stdlib(name) {
-            return visibility.allows(name);
+            return docs.allows(name);
         }
         if !name.starts_with('@') {
             return true;
         }
         match name.strip_prefix("@mcp/") {
             Some(server) => blueprint.mcp.contains_key(server),
-            None => blueprint.packages.contains(name),
+            None => docs.declares(name) && docs.allows(name),
+        }
+    }
+
+    /// The standard library modules the scope shows.
+    fn stdlib(&self) -> &StdlibView {
+        match self {
+            Self::Library { stdlib } => stdlib,
+            Self::Blueprint { docs, .. } => docs.stdlib(),
+        }
+    }
+
+    /// A standard library module's documentation, narrowed to the scope.
+    pub(crate) fn stdlib_docs(&self, name: &str) -> Option<ModuleDoc> {
+        self.stdlib().docs(name)
+    }
+
+    /// Standard library modules matching `query`, within the scope.
+    pub(crate) fn stdlib_search(&self, query: &str) -> Vec<ModuleSummary> {
+        self.stdlib().search(query)
+    }
+
+    /// An installed package as the scope shows it, if the scope has it.
+    pub(crate) fn installed_package(&self, name: &str) -> Option<PackageView> {
+        match self {
+            Self::Library { .. } => PackageStore::default()
+                .load(name)
+                .ok()
+                .map(|artifact| PackageView::new(&artifact, &Unscoped)),
+            Self::Blueprint { docs, .. } => docs.package(name).cloned(),
         }
     }
 
     /// Installed packages this scope shows, in name order.
-    pub(crate) fn installed_packages(&self) -> Vec<Artifact> {
-        let store = PackageStore::default();
-        store
-            .available_packages()
-            .iter()
-            .filter(|name| self.allows(name))
-            // A directory that fails to load is skipped: the catalog is a
-            // listing, not a diagnostic.
-            .filter_map(|name| store.load(name).ok())
-            .collect()
+    pub(crate) fn installed_packages(&self) -> Vec<PackageView> {
+        match self {
+            Self::Library { .. } => {
+                let store = PackageStore::default();
+                store
+                    .available_packages()
+                    .iter()
+                    // A directory that fails to load is skipped: the catalog is
+                    // a listing, not a diagnostic.
+                    .filter_map(|name| store.load(name).ok())
+                    .map(|artifact| PackageView::new(&artifact, &Unscoped))
+                    .collect()
+            }
+            Self::Blueprint { docs, .. } => docs.usable_packages().cloned().collect(),
+        }
+    }
+
+    fn catalog(&self) -> Catalog {
+        self.stdlib()
+            .catalog_filtered(Vec::new(), |name| self.allows(name))
+    }
+
+    fn suggest(&self, name: &str) -> Option<String> {
+        self.stdlib()
+            .suggest_filtered(name, &[], |name| self.allows(name))
     }
 
     /// Why a package that exists is not shown, with the change that shows it.
     pub(crate) fn hidden_message(&self, name: &str) -> String {
         let path = match self {
-            Self::Library => return format!("{name} is not available."),
+            Self::Library { .. } => return format!("{name} is not available."),
             Self::Blueprint { path, .. } => path.display(),
+        };
+        let declared = match self {
+            Self::Blueprint { docs, .. } => docs.declares(name),
+            Self::Library { .. } => false,
         };
         let fix = match name {
             "submilli:git" => format!(
@@ -101,7 +163,7 @@ impl Scope {
                 "it needs an embedding alias and a rule allowing `embedding.embed`. Run \
                  `submilli blueprint capability list {name}`"
             ),
-            _ if is_stdlib(name) => format!(
+            _ if is_stdlib(name) || declared => format!(
                 "no rule for caller `main` allows one of its capabilities. Run `submilli \
                  blueprint capability list {name}`"
             ),
@@ -123,12 +185,11 @@ fn is_stdlib(name: &str) -> bool {
 
 /// One line for an installed package, falling back to name and version when
 /// its manifest carries no description.
-pub(crate) fn installed_summary(artifact: &Artifact) -> String {
-    let metadata = &artifact.metadata;
-    if metadata.description.trim().is_empty() {
-        format!("{} — v{}", metadata.package_name, metadata.package_version)
+pub(crate) fn installed_summary(package: &PackageView) -> String {
+    if package.description.trim().is_empty() {
+        format!("{} — v{}", package.name, package.version)
     } else {
-        format!("{} — {}", metadata.package_name, metadata.description)
+        format!("{} — {}", package.name, package.description)
     }
 }
 
@@ -162,7 +223,7 @@ pub(crate) fn builtin_miss_message(name: &str) -> String {
     }
     format!(
         "unknown built-in: {name}{}",
-        suggestion_clause(name, &Scope::Library)
+        suggestion_clause(name, &Scope::library())
     )
 }
 
@@ -172,7 +233,7 @@ pub(crate) const BUILTINS_LISTING_HINT: &str =
 
 /// List what does exist, plus where the language globals live.
 pub(crate) fn print_catalog(scope: &Scope) {
-    let catalog = packages::catalog_filtered(Vec::new(), |name| scope.allows(name));
+    let catalog = scope.catalog();
     eprintln!("Available packages:");
     for entry in &catalog.entries {
         eprintln!("  {} — {}", entry.name, entry.description);
@@ -183,15 +244,15 @@ pub(crate) fn print_catalog(scope: &Scope) {
     let installed = scope.installed_packages();
     if !installed.is_empty() {
         eprintln!("\nInstalled packages:");
-        for artifact in &installed {
-            eprintln!("  {}", installed_summary(artifact));
+        for package in &installed {
+            eprintln!("  {}", installed_summary(package));
         }
     }
     eprintln!("\n{}", packages::builtins_pointer("`submilli builtins`"));
 }
 
 fn suggestion_clause(name: &str, scope: &Scope) -> String {
-    match packages::suggest_filtered(name, &[], |name| scope.allows(name)) {
+    match scope.suggest(name) {
         Some(hint) => format!(". Did you mean `{hint}`?"),
         None => String::new(),
     }
