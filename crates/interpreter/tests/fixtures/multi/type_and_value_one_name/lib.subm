@@ -1,0 +1,6 @@
+import { Label } from "./other";
+
+export function describe(): string {
+  const label: Label = Label();
+  return label;
+}

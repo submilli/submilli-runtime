@@ -1045,7 +1045,8 @@ pub(super) struct Inferer<'a> {
     pub(super) package_inference: bool,
     pub(super) current_module_symbols: ModuleSymbols,
     pub(super) current_module_exports: Vec<crate::ExportEntry>,
-    pub(super) current_export_seen: BTreeMap<String, Span>,
+    pub(super) current_export_seen:
+        BTreeMap<(exports::ExportNamespace, String), exports::ExportedName>,
     pub(super) inferred_modules: BTreeMap<ModulePath, ModuleSymbols>,
     /// Type aliases whose name is forward-declared (placeholder in
     /// `types`) but whose body hasn't been resolved yet. Resolved on
@@ -1251,7 +1252,7 @@ impl<'a> Inferer<'a> {
                 .values
                 .entry(symbol.name.clone())
                 .or_insert((false, symbol));
-            self.mark_direct_package_export(&global.name.name)?;
+            self.mark_direct_package_export(&global.name.name, exports::ExportNamespace::Value)?;
         }
         self.typed_ast.globals.push(global);
 
@@ -1283,7 +1284,7 @@ impl<'a> Inferer<'a> {
                 .values
                 .entry(symbol.name.clone())
                 .or_insert((false, symbol));
-            self.mark_direct_package_export(&function.name.name)?;
+            self.mark_direct_package_export(&function.name.name, exports::ExportNamespace::Value)?;
         }
         self.typed_ast.functions.push(function);
 
@@ -1301,7 +1302,7 @@ impl<'a> Inferer<'a> {
                 .types
                 .entry(name.clone())
                 .or_insert((false, symbol));
-            self.mark_direct_package_export(&name)?;
+            self.mark_direct_package_export(&name, exports::ExportNamespace::Type)?;
         }
         self.typed_ast.types.push(decl);
 
