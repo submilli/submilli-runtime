@@ -366,6 +366,19 @@ impl Inferer<'_> {
                 let before = self.last_expr_id();
                 let inferred = self.infer_case_label(&case_discriminant, *value_expr, case_span)?;
                 label_writes.extend(self.writes_between(before, self.last_expr_id())?);
+                // An update (`x++`) records its write without an assignment
+                // sequence.
+                let label_span = self
+                    .ast
+                    .try_expr(*value_expr)
+                    .map_err(super::arena_failure)?
+                    .span;
+                label_writes.extend(
+                    self.last_write_spans
+                        .iter()
+                        .filter(|(_, write_span)| label_span.encloses(**write_span))
+                        .map(|(written, _)| written.clone()),
+                );
                 let Some((label, label_ty)) = inferred else {
                     continue;
                 };
