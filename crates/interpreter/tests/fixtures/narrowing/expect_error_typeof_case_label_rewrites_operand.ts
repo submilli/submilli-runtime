@@ -1,18 +1,21 @@
-// expect-error: cannot read field `toUpperCase`
+// expect-error: field `toFixed` does not exist on `string`
 // expect-error-count: 1
-// A case label that writes the operand of `switch (typeof x)` leaves the
-// matched tag a fact about the value `x` held before.
+// Every earlier clause's labels run before a clause matches, so a label that
+// writes the operand of `switch (typeof x)` leaves the matched tag a fact
+// about the value `x` held before.
 function tag(x: string | number): "string" {
   return "string";
 }
-function f(): string {
-  let x: string | number = "a";
+function f(t: string | number): number {
+  let x: string | number = t;
   switch (typeof x) {
-    case tag((x = 1)):
-      return x.toUpperCase();
+    case tag((x = "s")):
+      return 0;
+    case "number":
+      return x.toFixed(1).length;
   }
-  return "";
+  return -1;
 }
 function main(): void {
-  f();
+  f(1);
 }

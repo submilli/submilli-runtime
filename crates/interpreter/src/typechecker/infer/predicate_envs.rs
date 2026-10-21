@@ -1144,8 +1144,9 @@ impl<'a> Inferer<'a> {
                 .typed_ast
                 .try_expr(receiver)
                 .map_err(crate::typechecker::arena_failure)?;
-            // An element read by a constant key names a field, which may be a getter.
-            let read_getter = match self.expr_to_reference_path(read)? {
+            // A read with no reference form, or an element read by a constant
+            // key that names a getter, may not repeat its value.
+            let unstable_read = match self.expr_to_reference_path(read)? {
                 None => true,
                 Some(_) if !is_index => false,
                 Some(path) => match path.chain.last() {
@@ -1159,7 +1160,7 @@ impl<'a> Inferer<'a> {
                     _ => false,
                 },
             };
-            if read_getter {
+            if unstable_read {
                 return Ok(Some(ChainReceivers {
                     env,
                     result: None,
@@ -1389,7 +1390,7 @@ impl<'a> Inferer<'a> {
 
     /// Whether the reference `path_id` reads is written while `other_id` runs.
     /// An optional chain reads its base and everything below it.
-    pub(super) fn is_written_within(
+    fn is_written_within(
         &self,
         path_id: ExprId,
         other_id: ExprId,
@@ -1578,7 +1579,7 @@ impl<'a> Inferer<'a> {
         let path_span = path_expr.span;
         let fallback_kind = path_expr.kind.clone();
         let equal_ty = if matches!(path_ty.peel(), Type::Unknown) {
-            unknown_equal_to(&value_ty)
+            unknown_equal_to(&value_ty, self.resolver())
         } else {
             self.shared_values(&path_ty, &value_ty)
         };
@@ -1892,13 +1893,24 @@ impl<'a> Inferer<'a> {
                 split
             }
             DiscriminantKey::Position(pos) => {
-                let Some(table) = narrowing::tuple_position_discriminant(members, *pos) else {
-                    return Ok(None);
-                };
-                let Some(split) = table.partition(members, &literal) else {
-                    return Ok(None);
-                };
-                split
+                match narrowing::tuple_position_discriminant(members, *pos) {
+                    Some(table) => {
+                        let Some(split) = table.partition(members, &literal) else {
+                            return Ok(None);
+                        };
+                        split
+                    }
+                    // A position some member holds more than one value at
+                    // (`[null, string] | [boolean, number]`) still splits by
+                    // what each member's element may hold.
+                    None => {
+                        let Some(element_tys) = discriminant_element_types(members, *pos) else {
+                            return Ok(None);
+                        };
+                        let literal_ty = narrowing::literal_type(&literal);
+                        self.split_by_key_types(members, element_tys, &literal_ty)
+                    }
+                }
             }
         };
         let root_kind = self.discriminant_root_source(&root)?;
@@ -3418,8 +3430,10 @@ fn with_type_parameters_of(ty: &Type, compared: Type) -> Type {
 /// What an `unknown` equal to a value of type `value_ty` holds, as TypeScript
 /// narrows it: a primitive (an enum included) or `object` value's own type,
 /// and `object` for any other object type. A union says too little to narrow
-/// by, so it stays `unknown`.
-fn unknown_equal_to(value_ty: &Type) -> Type {
+/// by, and an object type a primitive is assignable to (`{}`, or an interface
+/// whose members a string has) holds no object for certain, so both stay
+/// `unknown`.
+fn unknown_equal_to(value_ty: &Type, types: super::assignable::TypeResolver) -> Type {
     match value_ty.peel() {
         Type::Number
         | Type::NumberLiteral(_)
@@ -3431,8 +3445,12 @@ fn unknown_equal_to(value_ty: &Type) -> Type {
         | Type::BooleanLiteral(_)
         | Type::NonPrimitive => value_ty.clone(),
         Type::NumberEnum { .. } | Type::StringEnum { .. } => value_ty.clone(),
-        // `{}` holds primitives too.
-        ty if ty.is_empty_object() => Type::Unknown,
+        _ if [Type::String, Type::Number, Type::Boolean, Type::BigInt]
+            .iter()
+            .any(|primitive| super::assignable::assignable(primitive, value_ty, types)) =>
+        {
+            Type::Unknown
+        }
         Type::Object { .. }
         | Type::Array(_)
         | Type::Tuple(_)
