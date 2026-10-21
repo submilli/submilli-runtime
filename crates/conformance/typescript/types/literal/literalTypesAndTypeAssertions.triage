@@ -1,1 +1,0 @@
-line 12 type: bug SUB-1713 a literal a pattern takes apart widens its property literals, where tsc keeps them for a literal default

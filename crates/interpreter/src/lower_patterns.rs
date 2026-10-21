@@ -4,7 +4,7 @@
 //! Synthesised array-pattern `IndexAccess` nodes are tagged in [`Ast::pattern_origins`]
 //! so the typechecker can rephrase index errors as destructure-specific diagnostics.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::compiler_error::{CompilerFailure, CompilerStage};
 use crate::tree_height;
@@ -542,7 +542,7 @@ impl LowerCtx {
         };
 
         let literal = match ty {
-            None => mark_literal_source(ast, &binding, value)?,
+            None => mark_literal_source(ast, &binding, value, is_const)?,
             Some(_) => None,
         };
         let pattern_span = binding.span();
@@ -591,7 +591,7 @@ impl LowerCtx {
             // pattern takes apart: a caller or a contextual type may supply
             // more elements or properties than the default has.
             let literal = match (&param.ty, param.default) {
-                (None, Some(default)) => mark_literal_source(ast, &pattern, default)?,
+                (None, Some(default)) => mark_literal_source(ast, &pattern, default, false)?,
                 _ => None,
             };
             if let Some(default) = param.default {
@@ -912,22 +912,40 @@ fn mark_literal_source(
     ast: &mut Ast,
     binding: &Binding,
     value: ExprId,
+    is_const: bool,
 ) -> Result<Option<LiteralSource>, CompilerFailure> {
     let value = peel_parens(ast, value)?;
     if let Some(len) = tuple_source_len(ast, binding, value)? {
         ast.tuple_pattern_sources.insert(value);
+        if let Binding::Array { defaults, .. } = binding {
+            let filled: BTreeMap<usize, ExprId> = defaults
+                .iter()
+                .take(len)
+                .enumerate()
+                .filter_map(|(index, default)| Some((index, (*default)?)))
+                .collect();
+            if !filled.is_empty() {
+                ast.tuple_pattern_defaults.insert(value, filled);
+            }
+        }
+        if is_const {
+            ast.const_pattern_sources.insert(value);
+        }
         return Ok(Some(LiteralSource::Tuple(len)));
     }
     if let Binding::Object { fields, .. } = binding
         && let Some(names) = object_literal_names(ast, value)?
     {
-        let defaulted: BTreeSet<String> = fields
+        let defaulted: BTreeMap<String, ExprId> = fields
             .iter()
-            .filter(|field| field.default.is_some() && names.contains(&field.source.name))
-            .map(|field| field.source.name.clone())
+            .filter(|field| names.contains(&field.source.name))
+            .filter_map(|field| Some((field.source.name.clone(), field.default?)))
             .collect();
         if !defaulted.is_empty() {
             ast.object_pattern_sources.insert(value, defaulted);
+        }
+        if is_const {
+            ast.const_pattern_sources.insert(value);
         }
         return Ok(Some(LiteralSource::Object(names)));
     }

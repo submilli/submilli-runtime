@@ -7587,12 +7587,25 @@ impl Inferer<'_> {
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let mut typed_elements = Vec::with_capacity(elements.len());
         let mut element_types = Vec::with_capacity(elements.len());
-        for element in &elements {
+        let defaults = self
+            .ast
+            .tuple_pattern_defaults
+            .get(&literal)
+            .cloned()
+            .unwrap_or_default();
+        for (index, element) in elements.iter().enumerate() {
             let crate::ArrayLiteralElement::Value(id) = element else {
                 return self.infer_array_literal(literal, elements, None, span);
             };
             let (typed_id, ty) = self.infer_expr(*id, None)?;
-            element_types.push(self.widen_fresh_literals(typed_id, &ty)?);
+            let widened = self.widen_fresh_literals(typed_id, &ty)?;
+            let element_ty = match defaults.get(&index) {
+                Some(&default) => {
+                    self.keep_default_context_literals(literal, default, *id, widened)?
+                }
+                None => widened,
+            };
+            element_types.push(element_ty);
             typed_elements.push(typed_id);
         }
         let tuple = crate::types::TupleType::from(element_types.clone());
@@ -7650,7 +7663,7 @@ impl Inferer<'_> {
                 padding.push(Type::Unknown);
                 continue;
             };
-            let Some(ty) = self.pattern_default_type(default)? else {
+            let Some(ty) = self.pattern_default_type(default, false)? else {
                 return Ok(Vec::new());
             };
             padding.push(Type::union(vec![ty, Type::Undefined]));
@@ -7658,18 +7671,53 @@ impl Inferer<'_> {
         Ok(padding)
     }
 
-    /// The widened type of a pattern default, inferred before the pattern
-    /// binds its names. A default that reads one of them, or is otherwise in
-    /// error there, has none; the pattern reports its errors when it infers it.
-    fn pattern_default_type(&mut self, default: ExprId) -> Result<Option<Type>, CompilerFailure> {
+    /// The type of a pattern default, inferred before the pattern binds its
+    /// names, with its fresh literals widened unless `keep_literals` (a `const`
+    /// declaration's). A default that reads one of the pattern's names, or is
+    /// otherwise in error there, has none; the pattern reports its errors when
+    /// it infers it.
+    fn pattern_default_type(
+        &mut self,
+        default: ExprId,
+        keep_literals: bool,
+    ) -> Result<Option<Type>, CompilerFailure> {
         if let Some(ty) = super::forward_globals::stated_literal_type(self.ast, default)? {
-            return Ok(Some(ty.widen_literal()));
+            return Ok(Some(if keep_literals {
+                ty
+            } else {
+                ty.widen_literal()
+            }));
         }
         self.with_parameter_type_trial(|this| {
             let errors_before = this.error_count();
-            let (_, ty) = this.infer_expr(default, None)?;
-            Ok((this.error_count() == errors_before).then(|| ty.widen_literal()))
+            let (typed, ty) = this.infer_expr(default, None)?;
+            if this.error_count() != errors_before {
+                return Ok(None);
+            }
+            if keep_literals {
+                return Ok(Some(ty));
+            }
+            this.widen_fresh_literals(typed, &ty).map(Some)
         })
+    }
+
+    /// The type a pattern source's element `value`, widened to `widened`, takes
+    /// with its slot's `default` as context, as TypeScript types the literal
+    /// with the pattern as its contextual type: a literal keeps its type where
+    /// the default's type has literals of its kind (`false` against `true`,
+    /// whose type is `boolean`, under `let`), through nested object literals.
+    fn keep_default_context_literals(
+        &mut self,
+        literal: ExprId,
+        default: ExprId,
+        value: ExprId,
+        widened: Type,
+    ) -> Result<Type, CompilerFailure> {
+        let keep_literals = self.ast.const_pattern_sources.contains(&literal);
+        let Some(context) = self.pattern_default_type(default, keep_literals)? else {
+            return Ok(widened);
+        };
+        contextual_literal_type(self.ast, value, widened, &context)
     }
 
     /// An object literal an object pattern takes apart, typed as TypeScript
@@ -7681,19 +7729,36 @@ impl Inferer<'_> {
         members: Vec<crate::ObjectLiteralMember>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        let (kind, ty) = self.infer_object_literal_expr(literal, members, None, span)?;
+        let (kind, ty) = self.infer_object_literal_expr(literal, members.clone(), None, span)?;
         let Type::Object { index, mut fields } = ty.clone() else {
             return Ok((kind, ty));
         };
+        let values: BTreeMap<String, ExprId> = members
+            .iter()
+            .filter_map(|member| match member {
+                crate::ObjectLiteralMember::Field(field) => {
+                    Some((field.name.name.clone(), field.value))
+                }
+                _ => None,
+            })
+            .collect();
         let defaulted = self
             .ast
             .object_pattern_sources
             .get(&literal)
-            .into_iter()
-            .flatten();
-        for name in defaulted {
-            if let Some(field) = fields.get_mut(name) {
-                field.optional = true;
+            .cloned()
+            .unwrap_or_default();
+        for (name, default) in defaulted {
+            let Some(field) = fields.get_mut(&name) else {
+                continue;
+            };
+            field.optional = true;
+            if let Some(&value) = values.get(&name) {
+                let widened = field.ty.clone();
+                let kept = self.keep_default_context_literals(literal, default, value, widened)?;
+                if let Some(field) = fields.get_mut(&name) {
+                    field.ty = kept;
+                }
             }
         }
         let target = Type::Object { index, fields };
@@ -7721,7 +7786,7 @@ impl Inferer<'_> {
         };
         let mut padding = Vec::with_capacity(defaults.len());
         for (name, default) in defaults {
-            let Some(ty) = self.pattern_default_type(default)? else {
+            let Some(ty) = self.pattern_default_type(default, false)? else {
                 return Ok(Vec::new());
             };
             padding.push((name, ty));
@@ -13127,6 +13192,67 @@ pub(super) fn enum_variant_help<'a>(
 
 /// The member a string-literal key names: `o["content-type"]` reads field
 /// `content-type` wherever `o.name` would read `name`. `None` for any other key.
+/// `ty`, the widened type of `value`, with the literal types `context` admits
+/// put back: a literal keeps its own type where the context has a literal of
+/// its kind, and an object literal's fields recurse into the context's.
+fn contextual_literal_type(
+    ast: &crate::Ast,
+    value: ExprId,
+    ty: Type,
+    context: &Type,
+) -> Result<Type, CompilerFailure> {
+    let value = peel_parens(ast, value)?;
+    if let Some(literal) = super::forward_globals::stated_literal_type(ast, value)? {
+        return Ok(if admits_literal_of(context, &literal) {
+            literal
+        } else {
+            ty
+        });
+    }
+    let ExprKind::ObjectLiteral { members } =
+        &ast.try_expr(value).map_err(super::arena_failure)?.kind
+    else {
+        return Ok(ty);
+    };
+    let (
+        Type::Object { index, mut fields },
+        Type::Object {
+            fields: context_fields,
+            ..
+        },
+    ) = (ty.clone(), context.peel())
+    else {
+        return Ok(ty);
+    };
+    for member in members {
+        let crate::ObjectLiteralMember::Field(field) = member else {
+            continue;
+        };
+        let (Some(slot), Some(context_field)) = (
+            fields.get_mut(&field.name.name),
+            context_fields.get(&field.name.name),
+        ) else {
+            continue;
+        };
+        slot.ty = contextual_literal_type(ast, field.value, slot.ty.clone(), &context_field.ty)?;
+    }
+    Ok(Type::Object { index, fields })
+}
+
+/// Whether `context` has a literal of `literal`'s kind, so a value of that
+/// literal type keeps it, as TypeScript's `isLiteralOfContextualType` decides.
+fn admits_literal_of(context: &Type, literal: &Type) -> bool {
+    match context.peel() {
+        Type::Union(members) => members
+            .iter()
+            .any(|member| admits_literal_of(member, literal)),
+        Type::StringLiteral(_) => matches!(literal, Type::StringLiteral(_)),
+        Type::NumberLiteral(_) => matches!(literal, Type::NumberLiteral(_)),
+        Type::BooleanLiteral(_) | Type::Boolean => matches!(literal, Type::BooleanLiteral(_)),
+        _ => false,
+    }
+}
+
 /// The index a canonical array-index key names: `"0"`, `"12"`, not `"01"`.
 fn array_index_key(key: &str) -> Option<usize> {
     let index: usize = key.parse().ok()?;

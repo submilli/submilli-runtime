@@ -897,11 +897,19 @@ pub struct Ast {
     /// optional property, so a caller may pass it.
     pub object_pattern_pad_defaults: std::collections::BTreeMap<ExprId, Vec<(String, ExprId)>>,
     /// Unannotated object literals an object pattern takes apart, with the
-    /// properties the pattern gives defaults: `{ a, b = 0 } = { a: 1, b: 2 }`.
-    /// TypeScript types such a literal from the pattern, so those properties
-    /// are optional in its type (populated by `lower_patterns`).
+    /// properties the pattern gives defaults and their defaults:
+    /// `{ a, b = 0 } = { a: 1, b: 2 }`. TypeScript types such a literal from
+    /// the pattern, so those properties are optional in its type (populated by
+    /// `lower_patterns`).
     pub object_pattern_sources:
-        std::collections::BTreeMap<ExprId, std::collections::BTreeSet<String>>,
+        std::collections::BTreeMap<ExprId, std::collections::BTreeMap<String, ExprId>>,
+    /// For a tuple pattern source, the defaults of the pattern's slots the
+    /// literal fills, by index: `[a = 1] = [2]`.
+    pub tuple_pattern_defaults:
+        std::collections::BTreeMap<ExprId, std::collections::BTreeMap<usize, ExprId>>,
+    /// Pattern sources a `const` declaration takes apart, whose defaults keep
+    /// their literal types as the context of the literal's properties.
+    pub const_pattern_sources: std::collections::BTreeSet<ExprId>,
     /// Pattern decomposition statements, run immediately after their parameter initializes.
     pub parameter_bindings: std::collections::HashMap<Span, Vec<StmtId>>,
     /// Source names in lowered for-of heads, whose TDZ includes the iterable.
