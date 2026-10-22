@@ -1,0 +1,256 @@
+// A failed `JSON.parse(...) as T` names the failing location, the type
+// expected there and what was found, not only the root type.
+interface Item {
+  id: string;
+}
+
+interface State {
+  total: number;
+  pool: Item[];
+}
+
+interface Named {
+  name: string | null;
+}
+
+type Tree = { value: number; children: Tree[] };
+
+interface Circle {
+  kind: "circle";
+  radius: number;
+}
+
+interface Square {
+  kind: "square";
+  side: number;
+}
+
+interface Drawing {
+  shape: Circle | Square;
+}
+
+type Expr = { op: "lit"; v: number } | { op: "add"; l: Expr; r: Expr };
+
+interface Pair {
+  first: string | null;
+  second: number | null;
+}
+
+interface Holder {
+  item: Item;
+}
+
+interface Slot {
+  shape: Circle | null;
+  label: string | Circle;
+}
+
+type Chain = { kind: "link"; next: Chain | null } | { kind: "end" };
+
+interface Count {
+  n: number;
+}
+
+// A tag miss in a nested union lies inside a member of the outer union.
+type Framed = { frame: Circle | Square } | Count;
+
+type Labeled = { frame: Circle | Square; label: number } | Count;
+
+interface Gallery {
+  shapes: Circle[] | null;
+  tree: Tree | null;
+}
+
+interface Tagged {
+  kind: "a-discriminator-literal-longer-than-forty-eight-characters";
+}
+
+function expectMessage(thunk: () => void): string {
+  try {
+    thunk();
+  } catch (e: Error) {
+    return e.message;
+  }
+  assert(false, "expected JSON.parse(... ) as T to throw");
+  return "";
+}
+
+function main(): void {
+  const missing = expectMessage((): void => {
+    const state = JSON.parse("{\"total\":1,\"sel\":[]}") as State;
+  });
+  assert(
+    missing === "type mismatch: expected State, got object at $[\"pool\"] (expected { id: string }[], got undefined)",
+    missing
+  );
+
+  const nested = expectMessage((): void => {
+    const state = JSON.parse("{\"total\":1,\"pool\":[{\"id\":3}]}") as State;
+  });
+  assert(
+    nested === "type mismatch: expected State, got object at $[\"pool\"][0][\"id\"] (expected string, got number)",
+    nested
+  );
+
+  // No member got further than the field itself, so the whole union is named.
+  const union = expectMessage((): void => {
+    const named = JSON.parse("{\"name\":5}") as Named;
+  });
+  assert(
+    union === "type mismatch: expected Named, got object at $[\"name\"] (expected string | null, got number)",
+    union
+  );
+
+  // The location and the expected type survive the recursive validator.
+  const recursive = expectMessage((): void => {
+    const tree = JSON.parse(
+      "{\"value\":5,\"children\":[{\"value\":6,\"children\":[{\"value\":\"x\",\"children\":[]}]}]}"
+    ) as Tree;
+  });
+  assert(
+    recursive === "type mismatch: expected Tree, got object at $[\"children\"][0][\"children\"][0][\"value\"] (expected number, got string)",
+    recursive
+  );
+
+  const recursiveMissing = expectMessage((): void => {
+    const tree = JSON.parse("{\"value\":5,\"children\":[{\"value\":6}]}") as Tree;
+  });
+  assert(
+    recursiveMissing === "type mismatch: expected Tree, got object at $[\"children\"][0][\"children\"] (expected Tree[], got undefined)",
+    recursiveMissing
+  );
+
+  // The member whose tag matches explains the failure, not the first member.
+  const tagged = expectMessage((): void => {
+    const drawing = JSON.parse("{\"shape\":{\"kind\":\"square\",\"side\":\"2\"}}") as Drawing;
+  });
+  assert(
+    tagged === "type mismatch: expected Drawing, got object at $[\"shape\"][\"side\"] (expected number, got string)",
+    tagged
+  );
+
+  const untagged = expectMessage((): void => {
+    const drawing = JSON.parse("{\"shape\":{\"kind\":\"oval\",\"radius\":1}}") as Drawing;
+  });
+  assert(
+    untagged === "type mismatch: expected Drawing, got object at $[\"shape\"][\"kind\"] (expected \"circle\", got string)",
+    untagged
+  );
+
+  const expr = expectMessage((): void => {
+    const e = JSON.parse(
+      "{\"op\":\"add\",\"l\":{\"op\":\"lit\",\"v\":1},\"r\":{\"op\":\"add\",\"l\":{\"op\":\"lit\",\"v\":\"x\"},\"r\":{\"op\":\"lit\",\"v\":2}}}"
+    ) as Expr;
+  });
+  assert(
+    expr === "type mismatch: expected Expr, got object at $[\"r\"][\"l\"][\"v\"] (expected number, got string)",
+    expr
+  );
+
+  const exprMissing = expectMessage((): void => {
+    const e = JSON.parse("{\"op\":\"add\",\"l\":{\"op\":\"lit\",\"v\":1}}") as Expr;
+  });
+  assert(
+    exprMissing === "type mismatch: expected Expr, got object at $[\"r\"] (expected Expr, got undefined)",
+    exprMissing
+  );
+
+  // A member that rejects the value itself, as null rejects an object, says
+  // less than another member's tag.
+  const nullable = expectMessage((): void => {
+    const slot = JSON.parse("{\"shape\":{\"kind\":\"oval\",\"radius\":1},\"label\":\"x\"}") as Slot;
+  });
+  assert(
+    nullable === "type mismatch: expected Slot, got object at $[\"shape\"][\"kind\"] (expected \"circle\", got string)",
+    nullable
+  );
+
+  const primitive = expectMessage((): void => {
+    const slot = JSON.parse("{\"shape\":null,\"label\":{\"kind\":\"circle\",\"radius\":\"1\"}}") as Slot;
+  });
+  assert(
+    primitive === "type mismatch: expected Slot, got object at $[\"label\"][\"radius\"] (expected number, got string)",
+    primitive
+  );
+
+  // Across recursive calls, a nullable link still reports the deeper tag.
+  const chain = expectMessage((): void => {
+    const c = JSON.parse("{\"kind\":\"link\",\"next\":{\"kind\":\"link\",\"next\":{\"kind\":\"loop\"}}}") as Chain;
+  });
+  assert(
+    chain === "type mismatch: expected Chain, got object at $[\"next\"][\"next\"][\"kind\"] (expected \"end\", got string)",
+    chain
+  );
+
+  const framed = expectMessage((): void => {
+    const f = JSON.parse("{\"frame\":{\"kind\":\"oval\",\"side\":1}}") as Framed;
+  });
+  assert(
+    framed === "type mismatch: expected Framed, got object at $[\"frame\"][\"kind\"] (expected \"circle\", got string)",
+    framed
+  );
+
+  // A nested union that passes leaves no failure behind for its siblings.
+  const passed = expectMessage((): void => {
+    const f = JSON.parse("{\"frame\":{\"kind\":\"square\",\"side\":1},\"label\":\"2\"}") as Labeled;
+  });
+  assert(
+    passed === "type mismatch: expected Labeled, got object at $[\"label\"] (expected number, got string)",
+    passed
+  );
+
+  // An element's tag lies inside the array member, so it outranks null's miss.
+  const element = expectMessage((): void => {
+    const g = JSON.parse("{\"shapes\":[{\"kind\":\"oval\",\"radius\":1}],\"tree\":null}") as Gallery;
+  });
+  assert(
+    element === "type mismatch: expected Gallery, got object at $[\"shapes\"][0][\"kind\"] (expected \"circle\", got string)",
+    element
+  );
+
+  // A value no member can hold names the whole union.
+  const whole = expectMessage((): void => {
+    const g = JSON.parse("{\"shapes\":null,\"tree\":5}") as Gallery;
+  });
+  assert(
+    whole === "type mismatch: expected Gallery, got object at $[\"tree\"] (expected { children: Tree[]; value: number } | null, got number)",
+    whole
+  );
+
+  // The second of two sibling unions fails.
+  const sibling = expectMessage((): void => {
+    const pair = JSON.parse("{\"first\":null,\"second\":\"2\"}") as Pair;
+  });
+  assert(
+    sibling === "type mismatch: expected Pair, got object at $[\"second\"] (expected number | null, got string)",
+    sibling
+  );
+
+  const tuple = expectMessage((): void => {
+    const t = JSON.parse("[1,2]") as [number, string];
+  });
+  assert(
+    tuple === "type mismatch: expected [number, string], got array at $[1] (expected string, got number)",
+    tuple
+  );
+
+  const array = expectMessage((): void => {
+    const holder = JSON.parse("{\"item\":[1]}") as Holder;
+  });
+  assert(
+    array === "type mismatch: expected Holder, got object at $[\"item\"] (expected { id: string }, got array)",
+    array
+  );
+
+  const longLiteral = expectMessage((): void => {
+    const t = JSON.parse("{\"kind\":\"x\"}") as Tagged;
+  });
+  assert(
+    longLiteral === "type mismatch: expected Tagged, got object at $[\"kind\"] (expected a literal, got string)",
+    longLiteral
+  );
+
+  // A union that passes keeps no failure from its earlier members.
+  const fine = JSON.parse("{\"total\":1,\"pool\":[{\"id\":\"a\"}]}") as State;
+  assert(fine.pool[0].id === "a", "a valid value still casts");
+}

@@ -59,6 +59,9 @@ Each operation returns `Result<T>` with `data`, `raw`, and `issues`:
   timestamps, units, IDs, engagement metrics, credit charges, cache metadata,
   and pagination. Missing metadata is `undefined`; explicit `null`, zero,
   and empty arrays stay distinct. Never convert large string IDs to numbers.
+- Reddit posts and comments in `data` also carry `canonical_url`, which this
+  package adds: the thread or comment URL on reddit.com, or null when the
+  provider returned no usable permalink or ID. It is not in `raw`.
 - `raw` is the complete JSON envelope as `unknown`, retaining future fields.
   It may contain public contact information returned by the provider.
 - `issues` exposes provider errors/warnings inside successful envelopes, with
@@ -72,7 +75,9 @@ or the endpoint's explicit end flag; do not send null tokens as strings.
 GitHub cursors are numeric; YouTube continuation tokens and Reddit `after`
 tokens are strings. Reddit comment cursors come from `more.cursor` or a nested
 reply's `more.cursor`; do not combine them. Set `usePost: true` to send long
-comment cursors in JSON at the same endpoint.
+comment cursors in JSON at the same endpoint. Pass a post's `canonical_url` to
+`listComments`; a post's `url` is what it links to, such as an image, video,
+gallery or external page, and `listComments` rejects it.
 
 `ScrapeCreatorsError` includes `code`, `status`, `providerCode`, and raw
 `retryAfter`. Local errors use status 0. Codes are `invalid_argument`,
@@ -171,9 +176,9 @@ function main(): string {
         sources.push(response);
         const posts = response.data.posts;
         if (posts !== undefined && posts !== null && posts.length > 0) {
-            const id = posts[0].id;
-            if (id !== undefined && id !== null) {
-                try { sources.push(reddit.listComments({ url: "https://www.reddit.com/comments/" + id })); }
+            const thread = posts[0].canonical_url;
+            if (thread !== undefined && thread !== null) {
+                try { sources.push(reddit.listComments({ url: thread })); }
                 catch (error) { failures.push("Reddit thread: " + error.message); }
             }
         }
