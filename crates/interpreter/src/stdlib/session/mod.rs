@@ -31,7 +31,9 @@ use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
 use crate::runtime::session_kv::{
     CursorKeys, SessionKvEntry, SessionKvError, SessionKvPage, SessionKvStore,
 };
-use crate::stdlib::abi::{self, backing_struct, f64_field, install_field_getters, string_field};
+use crate::stdlib::abi::{
+    self, HostView, backing_struct, f64_field, install_field_getters, string_field,
+};
 use crate::stdlib::shared::check_security_call;
 
 pub const MODULE_NAME: &str = "submilli:session";
@@ -234,20 +236,34 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    install_getters(linker, &engine, &intr, string, unknown)?;
+    install_getters(linker, &engine, &intr)?;
 
     Ok(())
 }
 
+const ENTRY_VIEW: HostView = HostView {
+    module: MODULE_NAME,
+    interface: "Entry",
+    backing: entry_backing_struct,
+    properties: &[("key", ENTRY_KEY), ("sizeBytes", ENTRY_SIZE_BYTES)],
+};
+
+const PAGE_VIEW: HostView = HostView {
+    module: MODULE_NAME,
+    interface: "Page",
+    backing: page_backing_struct,
+    properties: &[("entries", PAGE_ENTRIES), ("nextCursor", PAGE_NEXT_CURSOR)],
+};
+
+/// The host-backed interfaces this package's values are.
+pub(crate) const HOST_VIEWS: &[&HostView] = &[&ENTRY_VIEW, &PAGE_VIEW];
+
 /// `Entry` and `Page` are `Dispatch::Direct`, so each property is a host getter
-/// under `submilli:session#<Iface>#<prop>` whose result must be exactly what
-/// codegen lowers the declared type to — there is no coercion in between.
+/// under `submilli:session#<Iface>#<prop>`.
 fn install_getters(
     linker: &mut Linker<StoreData>,
     engine: &wasmtime::Engine,
     intr: &IntrinsicTypes,
-    string: ValType,
-    nullable_object: ValType,
 ) -> wasmtime::Result<()> {
     // A Direct receiver is the non-null `(ref $Object)`; the guest holds these
     // backings as the nullable `unknown` lowering and codegen bridges the two.
@@ -255,34 +271,10 @@ fn install_getters(
         false,
         HeapType::ConcreteStruct(intr.object.clone()),
     ));
-    // `entries: Entry[]` lowers to a non-null `$Array`; `nextCursor: string |
-    // undefined` is a mixed union, so it lowers to the universal `(ref null $Object)`.
-    let array = ValType::Ref(RefType::new(
-        false,
-        HeapType::ConcreteStruct(intr.array.clone()),
-    ));
-    install_field_getters(
-        linker,
-        MODULE_NAME,
-        "Entry",
-        engine,
-        &receiver,
-        &[
-            ("key", ENTRY_KEY, string),
-            ("sizeBytes", ENTRY_SIZE_BYTES, ValType::F64),
-        ],
-    )?;
-    install_field_getters(
-        linker,
-        MODULE_NAME,
-        "Page",
-        engine,
-        &receiver,
-        &[
-            ("entries", PAGE_ENTRIES, array),
-            ("nextCursor", PAGE_NEXT_CURSOR, nullable_object),
-        ],
-    )
+    for view in HOST_VIEWS {
+        install_field_getters(linker, engine, &receiver, view)?;
+    }
+    Ok(())
 }
 
 fn entry_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
@@ -302,6 +294,8 @@ fn page_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType
     backing_struct(
         engine,
         &intr,
+        // `entries: Entry[]` lowers to a non-null `$Array`; `nextCursor: string |
+        // undefined` is a mixed union, so it lowers to the universal `(ref null $Object)`.
         vec![
             abi::array_field(&intr),           // entries
             abi::nullable_object_field(&intr), // nextCursor

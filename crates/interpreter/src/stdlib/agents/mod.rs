@@ -32,7 +32,7 @@ use crate::runtime::host::{
 };
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::stdlib::abi::{
-    self, backing_struct, install_field_getters, nullable_object_field, string_field,
+    self, HostView, backing_struct, install_field_getters, nullable_object_field, string_field,
 };
 use crate::stdlib::shared::{
     check_security_call, permitted_candidates, preflight_listing, running_package,
@@ -49,6 +49,16 @@ pub const CAPABILITY: &str = "agent.run";
 // `$AgentInfoBacking` field indices (0 is the vtable).
 const A_NAME: usize = 1;
 const A_DESCRIPTION: usize = 2;
+
+const AGENT_INFO_VIEW: HostView = HostView {
+    module: MODULE_NAME,
+    interface: "AgentInfo",
+    backing: agent_info_backing_struct,
+    properties: &[("name", A_NAME), ("description", A_DESCRIPTION)],
+};
+
+/// The host-backed interfaces this package's values are.
+pub(crate) const HOST_VIEWS: &[&HostView] = &[&AGENT_INFO_VIEW];
 
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
@@ -100,17 +110,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         false,
         HeapType::ConcreteStruct(intr.object.clone()),
     ));
-    install_field_getters(
-        linker,
-        MODULE_NAME,
-        "AgentInfo",
-        &engine,
-        &receiver,
-        &[
-            ("name", A_NAME, string),
-            ("description", A_DESCRIPTION, nullable_object),
-        ],
-    )
+    install_field_getters(linker, &engine, &receiver, &AGENT_INFO_VIEW)
 }
 
 /// One run: gate, charge, record what is sent, dispatch, then build the result

@@ -34,7 +34,7 @@ use crate::runtime::prelude::map;
 use crate::runtime::prelude::vtable::dispatch_vtable_slot;
 use crate::runtime::{QuotaCharge, QuotaExceeded, StoreData};
 use crate::stdlib::abi::{
-    self, backing_receiver, backing_struct, f64_field, i32_field, install_field_getters,
+    self, HostView, backing_receiver, backing_struct, f64_field, i32_field, install_field_getters,
     nullable_object_field, string_field,
 };
 use crate::stdlib::dot_segments::refuse_dot_segments;
@@ -1054,6 +1054,37 @@ fn write_download_result(
 // Response / DownloadResult members
 // ---------------------------------------------------------------------------
 
+const RESPONSE_VIEW: HostView = HostView {
+    module: MODULE_NAME,
+    interface: "Response",
+    backing: response_backing_struct,
+    properties: &[
+        ("body", R_BODY),
+        ("headers", R_HEADERS),
+        ("ok", R_OK),
+        ("status", R_STATUS),
+        ("statusText", R_STATUS_TEXT),
+        ("url", R_URL),
+    ],
+};
+
+const DOWNLOAD_RESULT_VIEW: HostView = HostView {
+    module: MODULE_NAME,
+    interface: "DownloadResult",
+    backing: download_result_backing_struct,
+    properties: &[
+        ("bytesWritten", D_BYTES_WRITTEN),
+        ("contentType", D_CONTENT_TYPE),
+        ("duration_ms", D_DURATION_MS),
+        ("finalUrl", D_FINAL_URL),
+        ("path", D_PATH),
+        ("status", D_STATUS),
+    ],
+};
+
+/// The host-backed interfaces this package's values are.
+pub(crate) const HOST_VIEWS: &[&HostView] = &[&RESPONSE_VIEW, &DOWNLOAD_RESULT_VIEW];
+
 fn install_response_members(
     linker: &mut Linker<StoreData>,
     engine: &wasmtime::Engine,
@@ -1064,25 +1095,7 @@ fn install_response_members(
         false,
         HeapType::ConcreteStruct(intr.string.clone()),
     ));
-    let nullable_object = ValType::Ref(RefType::new(
-        true,
-        HeapType::ConcreteStruct(intr.object.clone()),
-    ));
-    install_field_getters(
-        linker,
-        MODULE_NAME,
-        "Response",
-        engine,
-        &receiver,
-        &[
-            ("body", R_BODY, string.clone()),
-            ("headers", R_HEADERS, nullable_object),
-            ("ok", R_OK, ValType::I32),
-            ("status", R_STATUS, ValType::F64),
-            ("statusText", R_STATUS_TEXT, string.clone()),
-            ("url", R_URL, string.clone()),
-        ],
-    )?;
+    install_field_getters(linker, engine, &receiver, &RESPONSE_VIEW)?;
 
     let response_key = crate::mangle::package_symbol(MODULE_NAME, "Response");
     register_host_fn(
@@ -1151,21 +1164,7 @@ fn install_download_result_members(
         false,
         HeapType::ConcreteStruct(intr.string.clone()),
     ));
-    install_field_getters(
-        linker,
-        MODULE_NAME,
-        "DownloadResult",
-        engine,
-        &receiver,
-        &[
-            ("bytesWritten", D_BYTES_WRITTEN, ValType::F64),
-            ("contentType", D_CONTENT_TYPE, string.clone()),
-            ("duration_ms", D_DURATION_MS, ValType::F64),
-            ("finalUrl", D_FINAL_URL, string.clone()),
-            ("path", D_PATH, string.clone()),
-            ("status", D_STATUS, ValType::F64),
-        ],
-    )?;
+    install_field_getters(linker, engine, &receiver, &DOWNLOAD_RESULT_VIEW)?;
 
     let result_key = crate::mangle::package_symbol(MODULE_NAME, "DownloadResult");
     register_host_fn(
@@ -1428,6 +1427,28 @@ function main(): void {
         )
         .await;
         result.expect("host guards");
+    }
+
+    #[tokio::test]
+    async fn responses_and_downloads_stringify_their_properties() {
+        let source = r#"
+import { get, download } from "submilli:http";
+function main(): void {
+ const r = JSON.stringify(get("https://example.test/"));
+ assert(r === '{"body":"hello","headers":{"content-type":"text/plain"},"ok":true,"status":200,"statusText":"OK","url":"https://example.test/"}', r!);
+ const d = JSON.parse(JSON.stringify(download("https://example.test/file", "/out.txt"))!) as { bytesWritten: number; path: string; status: number };
+ assert(d.bytesWritten === 5 && d.path === "/out.txt" && d.status === 200, JSON.stringify(d)!);
+}
+"#;
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, result) = run_download_with_mock(
+            source,
+            vec![ok_response(200, "hello"), ok_response(200, "hello")],
+            None,
+            tmp.path(),
+        )
+        .await;
+        result.expect("host values stringify");
     }
 
     #[tokio::test]

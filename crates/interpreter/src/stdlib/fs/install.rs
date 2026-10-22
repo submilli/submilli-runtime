@@ -5,9 +5,10 @@ use super::{
     INFO_MOUNTS, INFO_SIZE_LIMIT, INFO_VOLUME, MODULE_NAME, MOUNT_ACCESS, MOUNT_MODE, MOUNT_PATH,
     MOUNT_SIZE_LIMIT, MOUNT_VOLUME, PEEK_ENCODING, PEEK_LINE_ENDING, PEEK_PREVIEW, PEEK_SIZE,
     STAT_KIND, STAT_MODIFIED_AT, STAT_SIZE, append, append_text, backend_error, begin_work,
-    build_info, charge_path_work, effects, f64_arg, i32_flag, list_next, make_handle_iterator,
-    open_writer, peek_file, read_byte_range, read_whole_capped, reader_next, stat_entry, summary,
-    write, write_text, writer_payload,
+    build_info, charge_path_work, dir_entry_backing_struct, effects, f64_arg, i32_flag,
+    info_backing_struct, list_next, make_handle_iterator, mount_info_backing_struct, open_writer,
+    peek_backing_struct, peek_file, read_byte_range, read_whole_capped, reader_next,
+    stat_backing_struct, stat_entry, summary, write, write_text, writer_payload,
 };
 use crate::runtime::StoreData;
 use crate::runtime::call_log::{Payload, Side, record_payload};
@@ -21,7 +22,7 @@ use crate::runtime::host::{
     write_submilli_uint8array_struct,
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
-use crate::stdlib::abi::install_field_getters;
+use crate::stdlib::abi::{HostView, install_field_getters};
 use crate::stdlib::shared::{check_security_call, require_writable};
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
@@ -700,7 +701,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    install_getters(linker, &engine, &intr, object.clone())?;
+    for view in HOST_VIEWS {
+        install_field_getters(linker, &engine, &object, view)?;
+    }
     install_file_writer_methods(linker, &engine, &intr, object)?;
     Ok(())
 }
@@ -709,90 +712,75 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 // Getters and FileWriter methods
 // ---------------------------------------------------------------------------
 
-fn install_getters(
-    linker: &mut Linker<StoreData>,
-    engine: &wasmtime::Engine,
-    intr: &IntrinsicTypes,
-    receiver: ValType,
-) -> wasmtime::Result<()> {
-    let string = || {
-        ValType::Ref(RefType::new(
-            false,
-            HeapType::ConcreteStruct(intr.string.clone()),
-        ))
-    };
-    let array = ValType::Ref(RefType::new(
-        false,
-        HeapType::ConcreteStruct(intr.array.clone()),
-    ));
-    install_field_getters(
-        linker,
-        MODULE_NAME,
-        "Stat",
-        engine,
-        &receiver,
-        &[
-            ("kind", STAT_KIND, string()),
-            ("size", STAT_SIZE, ValType::F64),
-            ("modifiedAt", STAT_MODIFIED_AT, ValType::F64),
-        ],
-    )?;
-    install_field_getters(
-        linker,
-        MODULE_NAME,
-        "Peek",
-        engine,
-        &receiver,
-        &[
-            ("preview", PEEK_PREVIEW, string()),
-            ("encoding", PEEK_ENCODING, string()),
-            ("lineEnding", PEEK_LINE_ENDING, string()),
-            ("size", PEEK_SIZE, ValType::F64),
-        ],
-    )?;
-    install_field_getters(
-        linker,
-        MODULE_NAME,
-        "DirEntry",
-        engine,
-        &receiver,
-        &[
-            ("kind", ENTRY_KIND, string()),
-            ("name", ENTRY_NAME, string()),
-            ("path", ENTRY_PATH, string()),
-            ("size", ENTRY_SIZE, ValType::F64),
-        ],
-    )?;
-    install_field_getters(
-        linker,
-        MODULE_NAME,
-        "Info",
-        engine,
-        &receiver,
-        &[
-            ("mode", INFO_MODE, string()),
-            ("sizeLimit", INFO_SIZE_LIMIT, ValType::F64),
-            ("access", INFO_ACCESS, string()),
-            ("volume", INFO_VOLUME, string()),
-            ("mounts", INFO_MOUNTS, array),
-        ],
-    )?;
-    install_field_getters(
-        linker,
-        MODULE_NAME,
-        "MountInfo",
-        engine,
-        &receiver,
-        &[
-            ("path", MOUNT_PATH, string()),
-            ("mode", MOUNT_MODE, string()),
-            ("volume", MOUNT_VOLUME, string()),
-            ("access", MOUNT_ACCESS, string()),
-            ("sizeLimit", MOUNT_SIZE_LIMIT, ValType::F64),
-        ],
-    )?;
-    Ok(())
-}
+const STAT_VIEW: HostView = HostView {
+    module: MODULE_NAME,
+    interface: "Stat",
+    backing: stat_backing_struct,
+    properties: &[
+        ("kind", STAT_KIND),
+        ("size", STAT_SIZE),
+        ("modifiedAt", STAT_MODIFIED_AT),
+    ],
+};
+
+const PEEK_VIEW: HostView = HostView {
+    module: MODULE_NAME,
+    interface: "Peek",
+    backing: peek_backing_struct,
+    properties: &[
+        ("preview", PEEK_PREVIEW),
+        ("encoding", PEEK_ENCODING),
+        ("lineEnding", PEEK_LINE_ENDING),
+        ("size", PEEK_SIZE),
+    ],
+};
+
+const DIR_ENTRY_VIEW: HostView = HostView {
+    module: MODULE_NAME,
+    interface: "DirEntry",
+    backing: dir_entry_backing_struct,
+    properties: &[
+        ("kind", ENTRY_KIND),
+        ("name", ENTRY_NAME),
+        ("path", ENTRY_PATH),
+        ("size", ENTRY_SIZE),
+    ],
+};
+
+const INFO_VIEW: HostView = HostView {
+    module: MODULE_NAME,
+    interface: "Info",
+    backing: info_backing_struct,
+    properties: &[
+        ("mode", INFO_MODE),
+        ("sizeLimit", INFO_SIZE_LIMIT),
+        ("access", INFO_ACCESS),
+        ("volume", INFO_VOLUME),
+        ("mounts", INFO_MOUNTS),
+    ],
+};
+
+const MOUNT_INFO_VIEW: HostView = HostView {
+    module: MODULE_NAME,
+    interface: "MountInfo",
+    backing: mount_info_backing_struct,
+    properties: &[
+        ("path", MOUNT_PATH),
+        ("mode", MOUNT_MODE),
+        ("volume", MOUNT_VOLUME),
+        ("access", MOUNT_ACCESS),
+        ("sizeLimit", MOUNT_SIZE_LIMIT),
+    ],
+};
+
+/// The host-backed interfaces this package's values are.
+pub(crate) const HOST_VIEWS: &[&HostView] = &[
+    &STAT_VIEW,
+    &PEEK_VIEW,
+    &DIR_ENTRY_VIEW,
+    &INFO_VIEW,
+    &MOUNT_INFO_VIEW,
+];
 
 fn install_file_writer_methods(
     linker: &mut Linker<StoreData>,

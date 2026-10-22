@@ -53,7 +53,7 @@ pub(crate) struct HostVtables {
     pub regex_match_box: Global,
     /// The identity vtable for host-only backing structs (stdlib `URL`,
     /// `Response`, fs `Stat`, …): `toString` → "[object Object]", `toJson` →
-    /// "{}", reference-identity equality, hash 0.
+    /// the value's properties, reference-identity equality, hash 0.
     pub opaque: Global,
 }
 
@@ -735,14 +735,22 @@ async fn object_to_json_fields(
     raw_string: &ArrayType,
     string_ty: &StructType,
 ) -> wasmtime::Result<Val> {
-    if let Some(kind) = collection_backing_kind(caller, recv)? {
-        // `$MapBacking` / `$SetBacking` carry the object vtable but not the
-        // `$ObjectShape` field arrays this body reads.
-        let err = crate::runtime::host::type_error(format!(
-            "a `{kind}` has no JSON representation — convert it first: \
-             `JSON.stringify(Array.from(x))` serializes the entries, or build a plain object"
-        ));
-        return Err(crate::runtime::host::throw_host_error(caller, err));
+    // `$MapBacking` / `$SetBacking` carry the object vtable but not the
+    // `$ObjectShape` field arrays this body reads.
+    match collection_backing_kind(caller, recv)? {
+        Some(CollectionBacking::Map) => {
+            let output = serialization::map(caller, recv).await?;
+            let vtable = host_string_vtable(caller)?;
+            return build_string(caller, raw_string, string_ty, vtable, output.units());
+        }
+        Some(CollectionBacking::Set) => {
+            let err = crate::runtime::host::type_error(
+                "a `Set` has no JSON representation — convert it first: \
+                 `JSON.stringify(Array.from(x))` serializes the elements, or build an array",
+            );
+            return Err(crate::runtime::host::throw_host_error(caller, err));
+        }
+        None => {}
     }
     if let Some(value) = object_override(caller, recv, "toJson").await? {
         return Ok(value);
@@ -1009,6 +1017,15 @@ pub(crate) fn read_object_entries(
 // is bit-faithful `f64`/`i32` equality (so `NaN` is unequal and `+0`/`-0` are
 // equal), and `hash` XOR-folds the `f64` bit pattern (distinguishing `±0`).
 
+/// A number as JSON. NaN and ±Infinity are not valid JSON; both render as `null`.
+fn json_number(n: f64) -> String {
+    if n.is_finite() {
+        format_number_js(n)
+    } else {
+        "null".to_string()
+    }
+}
+
 fn build_boxed_number_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
@@ -1032,13 +1049,7 @@ fn build_boxed_number_vtable(
         |caller, params, results| {
             Box::new(async move {
                 let n = read_boxed_f64(&mut *caller, abi_arg(params, 0)?, "Number#toJson")?;
-                // NaN and ±Infinity are not valid JSON; both render as `null`.
-                let out = if n.is_finite() {
-                    format_number_js(n)
-                } else {
-                    "null".to_string()
-                };
-                let st = write_submilli_string_struct(&mut *caller, &out)?;
+                let st = write_submilli_string_struct(&mut *caller, &json_number(n))?;
                 *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })
@@ -1450,14 +1461,15 @@ fn build_regex_match_box_vtable(
 }
 
 /// The identity vtable for host-only backing structs (stdlib `URL`,
-/// `Response`, fs `Stat`, …): `[object Object]` / `{}` string slots over
+/// `Response`, fs `Stat`, …): `[object Object]` and the value's properties as
+/// JSON (`{}` for a resource such as a `FileWriter`, which has none) over
 /// reference-identity equality and hash 0.
 fn build_opaque_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
 ) -> wasmtime::Result<[Func; 4]> {
     let to_string = object_object_slot(store, intr.to_string_fn.clone());
-    let to_json = empty_object_json_slot(store, intr);
+    let to_json = host_value_json_slot(store, intr);
     let equals = ref_identity_equals_slot(store, intr);
     let hash = zero_hash_slot(store, intr);
     Ok([to_string, to_json, equals, hash])
@@ -1499,6 +1511,26 @@ fn empty_object_json_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -
         |caller, _params, results| {
             Box::new(async move {
                 let st = write_submilli_string_struct(&mut *caller, "{}")?;
+                *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
+                Ok(())
+            })
+        },
+    )
+}
+
+/// `toJson` slot of a host-backed value: the properties its interface's
+/// getters read, or `{}` for a value no interface describes.
+fn host_value_json_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Func {
+    host_vtable_func(
+        &mut *store,
+        intr.to_json_fn.clone(),
+        |caller, params, results| {
+            Box::new(async move {
+                let value = abi_arg(params, 0)?;
+                let object = as_struct(caller, value, "host value toJson")?;
+                let properties = crate::stdlib::abi::json_properties(caller, &object)?;
+                let output = serialization::host_value(caller, &object, properties).await?;
+                let st = write_submilli_string_struct_units(&mut *caller, output.units())?;
                 *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })

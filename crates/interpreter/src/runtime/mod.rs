@@ -127,6 +127,9 @@ pub struct VfsInfo {
     pub size_limit: Option<u64>,
 }
 
+/// The JSON properties host-backed values show, by backing struct.
+pub(crate) type HostViews = Vec<(wasmtime::StructType, crate::stdlib::abi::HostProperties)>;
+
 pub struct StoreData {
     #[cfg(test)]
     pub(crate) array_growth: array_storage::GrowthStats,
@@ -233,6 +236,9 @@ pub struct StoreData {
     /// This store's intrinsic types, built on first use; see
     /// [`crate::runtime::intrinsic_types::intrinsic_types`].
     pub(crate) intrinsic_types: Option<Arc<crate::runtime::intrinsic_types::IntrinsicTypes>>,
+    /// The JSON properties of each host-backed value's backing struct, built on
+    /// first use; see [`crate::stdlib::abi::json_properties`].
+    pub(crate) host_views: Option<HostViews>,
     /// An immutable global keeps the store's undefined value rooted across calls.
     pub(crate) undefined_value: Option<wasmtime::Global>,
     /// The bound-receiver closure environment type, built on first use for the
@@ -344,6 +350,7 @@ impl StoreData {
             test_labels: RefCell::new(Vec::new()),
             host_abi: None,
             intrinsic_types: None,
+            host_views: None,
             undefined_value: None,
             closure_receiver_type: None,
             call_metadata_type: None,

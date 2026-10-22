@@ -20,7 +20,7 @@ use crate::runtime::host::{
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::map;
 use crate::stdlib::abi::{
-    self, backing_struct, install_field_getters, nullable_object_field, string_field,
+    self, HostView, backing_struct, install_field_getters, nullable_object_field, string_field,
 };
 use crate::stdlib::dot_segments::refuse_dot_segments_in_path;
 use crate::{
@@ -533,42 +533,25 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    install_url_getters(linker, &engine, &intr, object)?;
-    Ok(())
+    install_field_getters(linker, &engine, &object, &URL_VIEW)
 }
 
-/// The six `URL#<prop>` getters. Each reads its `$UrlBacking` field verbatim —
-/// strings return as `(ref $string)`, nullable fields as `(ref null $Object)`.
-fn install_url_getters(
-    linker: &mut Linker<StoreData>,
-    engine: &wasmtime::Engine,
-    intr: &crate::runtime::intrinsic_types::IntrinsicTypes,
-    receiver: ValType,
-) -> wasmtime::Result<()> {
-    let string = ValType::Ref(RefType::new(
-        false,
-        HeapType::ConcreteStruct(intr.string.clone()),
-    ));
-    let nullable_object = ValType::Ref(RefType::new(
-        true,
-        HeapType::ConcreteStruct(intr.object.clone()),
-    ));
-    install_field_getters(
-        linker,
-        MODULE_NAME,
-        "URL",
-        engine,
-        &receiver,
-        &[
-            ("protocol", F_PROTOCOL, string.clone()),
-            ("host", F_HOST, string.clone()),
-            ("port", F_PORT, nullable_object.clone()),
-            ("path", F_PATH, string),
-            ("query", F_QUERY, nullable_object.clone()),
-            ("fragment", F_FRAGMENT, nullable_object),
-        ],
-    )
-}
+const URL_VIEW: HostView = HostView {
+    module: MODULE_NAME,
+    interface: "URL",
+    backing: url_backing_struct,
+    properties: &[
+        ("protocol", F_PROTOCOL),
+        ("host", F_HOST),
+        ("port", F_PORT),
+        ("path", F_PATH),
+        ("query", F_QUERY),
+        ("fragment", F_FRAGMENT),
+    ],
+};
+
+/// The host-backed interfaces this package's values are.
+pub(crate) const HOST_VIEWS: &[&HostView] = &[&URL_VIEW];
 
 /// Unbox a `number | undefined` param — `undefined`, or a `$boxed_number` — to a port.
 fn read_optional_number(

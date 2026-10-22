@@ -90,9 +90,9 @@ for a missing answer or another variant, and make no HTTP calls. Their TypeScrip
 predicates (for example, `answer is ChoiceAnswer`) let the compiler expose the
 variant's fields inside a successful branch or after a rejecting guard.
 They classify already-decoded answers; they do not validate arbitrary JSON.
-Probability maps support `.get(key)`. To serialize a Map, use
-`Array.from(map)` to get an array of key/value pairs; Submilli does not stringify
-Maps directly. State and nested descriptions must be JSON-serializable values;
+Probability maps support `.get(key)`. `JSON.stringify` writes a Map as an
+object of its entries, and `Array.from(map)` gives an array of key/value pairs.
+State and nested descriptions must be JSON-serializable values;
 use ordinary objects/arrays there, not Maps or class instances.
 
 ```ts

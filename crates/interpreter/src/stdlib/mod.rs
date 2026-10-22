@@ -305,6 +305,23 @@ fn install_core_host_functions(linker: &mut Linker<StoreData>) -> wasmtime::Resu
     Ok(())
 }
 
+/// Every host-backed interface of every package, optional ones included.
+pub(crate) fn host_views() -> impl Iterator<Item = &'static abi::HostView> {
+    [
+        agents::HOST_VIEWS,
+        embedding::HOST_VIEWS,
+        fs::HOST_VIEWS,
+        http::HOST_VIEWS,
+        llm::HOST_VIEWS,
+        session::HOST_VIEWS,
+        skills::HOST_VIEWS,
+        url::HOST_VIEWS,
+    ]
+    .into_iter()
+    .flatten()
+    .copied()
+}
+
 /// Initialize host-backed standard-library classes for this store.
 pub(crate) fn install_store_bound(
     linker: &mut Linker<StoreData>,
@@ -319,6 +336,73 @@ mod optional_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every `Direct` interface with properties is a host-backed value whose
+    /// getters and `JSON.stringify` both read its view, so each needs one
+    /// listing exactly its declared properties.
+    #[test]
+    fn every_host_backed_interface_has_a_view_of_its_properties() {
+        let mut declared = std::collections::BTreeMap::new();
+        let all = Stdlib::core()
+            .with(OptionalPackage::Agents)
+            .with(OptionalPackage::Skills);
+        for defs in all.package_declarations() {
+            for (name, symbol) in &defs.types {
+                if let crate::TypeKind::Interface {
+                    properties,
+                    dispatch: crate::Dispatch::Direct,
+                    ..
+                } = &symbol.kind
+                    && !properties.is_empty()
+                {
+                    let names: std::collections::BTreeSet<String> =
+                        properties.keys().cloned().collect();
+                    declared.insert(
+                        (defs.package_name.clone(), name.as_str().to_string()),
+                        names,
+                    );
+                }
+            }
+        }
+        let mut viewed = std::collections::BTreeMap::new();
+        for view in host_views() {
+            let names: std::collections::BTreeSet<String> = view
+                .properties
+                .iter()
+                .map(|(name, _)| (*name).to_string())
+                .collect();
+            assert_eq!(
+                names.len(),
+                view.properties.len(),
+                "{} repeats a property",
+                view.interface
+            );
+            viewed.insert((view.module.to_string(), view.interface.to_string()), names);
+        }
+        assert_eq!(viewed, declared);
+    }
+
+    /// Host-backed values are told apart by their backing struct, so two
+    /// interfaces whose layouts canonicalize to one type must show the same
+    /// properties.
+    #[test]
+    fn views_sharing_a_backing_struct_show_the_same_properties() {
+        let engine = crate::RuntimeConfig::default().engine().unwrap();
+        let mut seen: Vec<(wasmtime::StructType, &abi::HostView)> = Vec::new();
+        for view in host_views() {
+            let backing = (view.backing)(&engine).unwrap();
+            for (other, earlier) in &seen {
+                if *other == backing {
+                    assert_eq!(
+                        earlier.properties, view.properties,
+                        "{} and {} share a layout",
+                        earlier.interface, view.interface
+                    );
+                }
+            }
+            seen.push((backing, view));
+        }
+    }
 
     /// Every subset of the optional packages.
     fn every_set() -> Vec<Stdlib> {

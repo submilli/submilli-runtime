@@ -51,8 +51,8 @@ use crate::runtime::host::{
 };
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::stdlib::abi::{
-    self, backing_struct, f64_field, install_field_getters, nullable_object_field, raw_bytes_field,
-    string_field,
+    self, HostView, backing_struct, f64_field, install_field_getters, nullable_object_field,
+    raw_bytes_field, string_field,
 };
 use crate::stdlib::shared::{
     audit_quota_denial, check_security_call, filters_candidate, mark_filtered, optional_number,
@@ -145,47 +145,41 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, _params| Box::pin(async move { models(caller).await }),
     )?;
 
-    install_getters(linker, &engine, &receiver, string, nullable_object)?;
+    for view in HOST_VIEWS {
+        install_field_getters(linker, &engine, &receiver, view)?;
+    }
     install_methods(linker, &engine, receiver, array, uint8)
 }
 
-fn install_getters(
-    linker: &mut Linker<StoreData>,
-    engine: &wasmtime::Engine,
-    receiver: &ValType,
-    string: ValType,
-    nullable_object: ValType,
-) -> wasmtime::Result<()> {
-    install_field_getters(
-        linker,
-        MODULE_NAME,
-        "Embeddings",
-        engine,
-        receiver,
-        &[
-            ("count", E_COUNT, ValType::F64),
-            ("dimensions", E_DIMENSIONS, ValType::F64),
-            ("identity", E_IDENTITY, string.clone()),
-            ("model", E_MODEL, string.clone()),
-            ("inputTokens", E_INPUT_TOKENS, nullable_object.clone()),
-        ],
-    )?;
-    install_field_getters(
-        linker,
-        MODULE_NAME,
-        "EmbeddingModel",
-        engine,
-        receiver,
-        &[
-            ("name", M_NAME, string.clone()),
-            ("description", M_DESCRIPTION, nullable_object.clone()),
-            ("dimensions", M_DIMENSIONS, ValType::F64),
-            ("maxInputTokens", M_MAX_INPUT_TOKENS, nullable_object),
-            ("maxInputBytes", M_MAX_INPUT_BYTES, ValType::F64),
-            ("identity", M_IDENTITY, string),
-        ],
-    )
-}
+const EMBEDDINGS_VIEW: HostView = HostView {
+    module: MODULE_NAME,
+    interface: "Embeddings",
+    backing: embeddings_backing_struct,
+    properties: &[
+        ("count", E_COUNT),
+        ("dimensions", E_DIMENSIONS),
+        ("identity", E_IDENTITY),
+        ("model", E_MODEL),
+        ("inputTokens", E_INPUT_TOKENS),
+    ],
+};
+
+const EMBEDDING_MODEL_VIEW: HostView = HostView {
+    module: MODULE_NAME,
+    interface: "EmbeddingModel",
+    backing: model_backing_struct,
+    properties: &[
+        ("name", M_NAME),
+        ("description", M_DESCRIPTION),
+        ("dimensions", M_DIMENSIONS),
+        ("maxInputTokens", M_MAX_INPUT_TOKENS),
+        ("maxInputBytes", M_MAX_INPUT_BYTES),
+        ("identity", M_IDENTITY),
+    ],
+};
+
+/// The host-backed interfaces this package's values are.
+pub(crate) const HOST_VIEWS: &[&HostView] = &[&EMBEDDINGS_VIEW, &EMBEDDING_MODEL_VIEW];
 
 fn install_methods(
     linker: &mut Linker<StoreData>,
@@ -1027,6 +1021,35 @@ mod tests {
           const r = embedding.embed("mock", ["a", "b", "c"], "document");
           assert(r.count === 3, "three vectors");
         }"#;
+
+    /// `Embeddings` and `EmbeddingModel` stringify through their properties;
+    /// the vectors, read through methods, are not among them.
+    #[tokio::test]
+    async fn embeddings_and_models_stringify_their_properties() {
+        let provider = MockProvider::new(4, 10, Outcome::Reported);
+        let run = run(
+            r#"import embedding from "submilli:embedding";
+               function main(): string {
+                 const r = embedding.embed("mock", ["a"], "document");
+                 return JSON.stringify(r)! + "|" + JSON.stringify(embedding.models())!;
+               }"#,
+            Some(provider),
+            None,
+            None,
+        )
+        .await;
+        let out = run.result.expect("program completes");
+        let (embeddings, models) = out.split_once('|').expect("two values");
+        let embeddings: serde_json::Value = serde_json::from_str(embeddings).expect("JSON");
+        assert_eq!(embeddings["count"], 1, "{embeddings}");
+        assert_eq!(embeddings["dimensions"], 4, "{embeddings}");
+        assert_eq!(embeddings["model"], "mock", "{embeddings}");
+        assert!(embeddings.get("vectors").is_none(), "{embeddings}");
+        assert_eq!(
+            models,
+            r#"[{"name":"mock","dimensions":4,"maxInputBytes":10,"identity":"emb1:mock"}]"#
+        );
+    }
 
     /// AE1: an over-length input is refused before the provider is called, and
     /// the budget is unchanged.

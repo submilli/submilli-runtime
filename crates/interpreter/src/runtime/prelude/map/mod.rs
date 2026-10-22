@@ -849,12 +849,32 @@ pub(crate) fn string_entries(
     caller: &mut Caller<'_, StoreData>,
     map: &Val,
 ) -> wasmtime::Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    for (key, value) in live_entries(caller, map)? {
+        out.push((
+            crate::runtime::host::read_string_arg(caller, &key, "map entry key")?,
+            crate::runtime::host::read_string_arg(caller, &value, "map entry value")?,
+        ));
+    }
+    Ok(out)
+}
+
+/// A `Map`'s live (key, value) entries in insertion order, keys decoded. Each
+/// slot of the insertion-order ledger, deleted ones included, costs `ELEM`.
+pub(crate) fn live_entries(
+    caller: &mut Caller<'_, StoreData>,
+    map: &Val,
+) -> wasmtime::Result<Vec<(Val, Val)>> {
     let b = backing(caller, map)?;
     let keys = field_array(caller, &b, F_KEYS)?;
     let values = field_array(caller, &b, F_VALUES)?;
     let order = field_array(caller, &b, F_ORDER)?;
     let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
+    let slots = u32::try_from(order_len).unwrap_or(0);
+    crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::ELEM, u64::from(slots))?;
     let mut out = Vec::new();
+    out.try_reserve(slots as usize)
+        .map_err(crate::runtime::host::fatal_host_error)?;
     for o in 0..order_len {
         let Val::I32(idx) = order.get(&mut *caller, o as u32)? else {
             continue;
@@ -865,10 +885,7 @@ pub(crate) fn string_entries(
         let key = keys.get(&mut *caller, idx as u32)?;
         let key = decode_key(caller, key)?;
         let value = values.get(&mut *caller, idx as u32)?;
-        out.push((
-            crate::runtime::host::read_string_arg(caller, &key, "map entry key")?,
-            crate::runtime::host::read_string_arg(caller, &value, "map entry value")?,
-        ));
+        out.push((key, value));
     }
     Ok(out)
 }

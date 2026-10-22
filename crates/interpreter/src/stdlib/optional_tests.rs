@@ -459,6 +459,38 @@ async fn list_leaves_out_the_agents_the_caller_may_not_run() {
 }
 
 #[tokio::test]
+async fn agent_and_skill_values_stringify_their_properties() {
+    let agents = Harness::default()
+        .agents(FakeAgents::answering(""))
+        .run(
+            r#"import agents from "submilli:agents";
+               function main(): string { return JSON.stringify(agents.list()[0])!; }"#,
+        )
+        .await
+        .expect("program completes");
+    assert_eq!(
+        agents,
+        r#"{"name":"researcher","description":"Finds sources"}"#
+    );
+    let skills = Harness::default()
+        .skills(FakeSkills::new())
+        .run(
+            r#"import skills from "submilli:skills";
+               function main(): string {
+                 return JSON.stringify(skills.list()[0])! + "|" + JSON.stringify(skills.load("review"))!;
+               }"#,
+        )
+        .await
+        .expect("program completes");
+    let (info, skill) = skills.split_once('|').expect("two values");
+    let info: serde_json::Value = serde_json::from_str(info).expect("JSON");
+    let skill: serde_json::Value = serde_json::from_str(skill).expect("JSON");
+    assert_eq!(info["name"], "review", "{info}");
+    assert_eq!(skill["name"], "review", "{skill}");
+    assert_eq!(skill["content"], "Read the diff twice.", "{skill}");
+}
+
+#[tokio::test]
 async fn harness_failures_and_a_missing_provider_are_catchable() {
     let source = r#"import agents from "submilli:agents";
         function main(): string {

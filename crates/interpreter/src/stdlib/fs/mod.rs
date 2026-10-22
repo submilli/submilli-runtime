@@ -22,6 +22,8 @@ pub mod handles;
 mod install;
 mod summary;
 
+pub(crate) use install::HOST_VIEWS;
+
 use crate::runtime::filesystem::FilesystemError as PortError;
 
 use wasmtime::{
@@ -2260,6 +2262,8 @@ function main(): void {
                 assert(mount.path === "/data/memory" && mount.mode === "named", "mount path and mode");
                 assert(mount.volume === "project-memory" && mount.access === "read_write", "mount volume and access");
                 assert(mount.sizeLimit === 1000, "mount size limit");
+                const json = JSON.stringify(fs)!;
+                assert(json.endsWith(`"mounts":[{"path":"/data/memory","mode":"named","volume":"project-memory","access":"read_write","sizeLimit":1000}]}`), json);
             }
         "#;
         let data = StoreData::with_vfs("test-run".into(), vfs);

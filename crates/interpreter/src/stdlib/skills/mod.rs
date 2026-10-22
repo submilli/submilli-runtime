@@ -27,7 +27,7 @@ use crate::runtime::host::{
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::skills::{Skill, SkillError, SkillInfo, SkillProvider};
 use crate::stdlib::abi::{
-    self, backing_struct, install_field_getters, nullable_object_field, string_field,
+    self, HostView, backing_struct, install_field_getters, nullable_object_field, string_field,
 };
 use crate::stdlib::shared::{
     check_security_call, permitted_candidates, preflight_listing, sanitize_description, truncated,
@@ -44,6 +44,27 @@ pub const CAPABILITY: &str = "skill.load";
 const S_NAME: usize = 1;
 const S_DESCRIPTION: usize = 2;
 const S_CONTENT: usize = 3;
+
+const SKILL_INFO_VIEW: HostView = HostView {
+    module: MODULE_NAME,
+    interface: "SkillInfo",
+    backing: info_backing_struct,
+    properties: &[("name", S_NAME), ("description", S_DESCRIPTION)],
+};
+
+const SKILL_VIEW: HostView = HostView {
+    module: MODULE_NAME,
+    interface: "Skill",
+    backing: skill_backing_struct,
+    properties: &[
+        ("name", S_NAME),
+        ("description", S_DESCRIPTION),
+        ("content", S_CONTENT),
+    ],
+};
+
+/// The host-backed interfaces this package's values are.
+pub(crate) const HOST_VIEWS: &[&HostView] = &[&SKILL_INFO_VIEW, &SKILL_VIEW];
 
 #[derive(serde::Serialize)]
 struct SkillFile {
@@ -110,21 +131,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    let info_rows = [
-        ("name", S_NAME, string.clone()),
-        ("description", S_DESCRIPTION, nullable_object),
-    ];
-    install_field_getters(
-        linker,
-        MODULE_NAME,
-        "SkillInfo",
-        &engine,
-        &object,
-        &info_rows,
-    )?;
-    let mut skill_rows = info_rows.to_vec();
-    skill_rows.push(("content", S_CONTENT, string));
-    install_field_getters(linker, MODULE_NAME, "Skill", &engine, &object, &skill_rows)
+    install_field_getters(linker, &engine, &object, &SKILL_INFO_VIEW)?;
+    install_field_getters(linker, &engine, &object, &SKILL_VIEW)
 }
 
 /// The capability check, run before anything reaches the harness.
