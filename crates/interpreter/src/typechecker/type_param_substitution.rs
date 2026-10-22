@@ -613,7 +613,14 @@ impl TypeParamSubstitution {
         // Unless the argument gives no one binding (`[["a", 1], ["b", 2]]` is
         // a union of tuples); then the binding it fits stands, as tsc falls
         // back to the contextual type, and is final, since a later argument
-        // narrowing it would no longer fit this one.
+        // narrowing it would no longer fit this one. Its members' candidates
+        // would bind their union, which a method taking the type parameter
+        // makes no subtype of the expected type.
+        if fits_binding && holds_tuple_union(arg_ty) && self.mentions_replaceable_binding(param_ty)
+        {
+            self.keep_replaceable_bindings(param_ty);
+            return Ok(());
+        }
         let before = fits_binding.then(|| self.clone());
         let unified = self.keeping_close_matches_on_success(|sub| {
             let mut unifier = Unifier::new(sub, Some(types), types.limits);
@@ -655,6 +662,18 @@ impl TypeParamSubstitution {
             return Ok(());
         }
         unified
+    }
+}
+
+/// Whether `ty` is a union of tuples, or an array of one, as an array of
+/// entry literals with differing literals is typed.
+fn holds_tuple_union(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Array(element) => holds_tuple_union(element),
+        Type::Union(members) => members
+            .iter()
+            .all(|member| matches!(member.peel(), Type::Tuple(_))),
+        _ => false,
     }
 }
 

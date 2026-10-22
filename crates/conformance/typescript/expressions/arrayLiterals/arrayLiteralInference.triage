@@ -1,0 +1,1 @@
+line 26 type: by-design spec §1.4 a method's parameters are compared contravariantly, where tsc compares them both ways, so a `Map` of the entries' union would not fit the annotated `Map<AppType, AppStyle[]>`; the expected type stands as the binding instead
