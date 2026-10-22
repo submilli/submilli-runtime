@@ -30,7 +30,9 @@ const THROWAWAY = new Set(["test", "rerun"]);
 /**
  * When the session shown is open and keeps values that differ from the ones bound now:
  * which differ. A session's values are fixed when it starts, so a new binding never
- * reaches its messages; without this, a chat looks the same while it isn't.
+ * reaches its messages; without this, a chat looks the same while it isn't. Only names
+ * bound now count: a value the session has with nothing bound under its name is not
+ * listed, while a value bound now that the session lacks is.
  */
 export function keptValues(f: Frame): ValuesNote | null {
   // A new session not started yet shows over the last one, which isn't the one in view.
@@ -38,7 +40,7 @@ export function keptValues(f: Frame): ValuesNote | null {
   const s = f.data.sessions.find((x) => x.session === f.data.sessionId);
   const bound = f.data.status?.binding.variables;
   if (!s || !bound || s.open !== true || isThrowaway(s)) return null;
-  const changes = differing(s.variables, bound);
+  const changes = differing(s.variables, bound).filter((change) => Object.hasOwn(bound, change.name));
   return changes.length
     ? { lead: "This session keeps the values it started with; the ones bound now differ: ", changes, tail: ". Its messages still use its own." }
     : null;

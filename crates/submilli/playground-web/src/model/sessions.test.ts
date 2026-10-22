@@ -160,6 +160,29 @@ describe("an open session whose values differ from the ones bound now", () => {
     expect(keptValues(frame(ended, INITIAL_UI))).toBeNull();
   });
 
+  // The session in view started with customerId pied_piper.
+  it("leaves out a value only the session has, when nothing is bound under its name", () => {
+    expect(keptValues(frame(bound({}), INITIAL_UI))).toBeNull();
+  });
+
+  it("still names a value bound now that the session doesn't have", () => {
+    expect(keptValues(frame(bound({ customerId: "pied_piper", region: "us" }), INITIAL_UI))?.changes).toEqual([
+      { name: "region", was: "not set", now: "us" },
+    ]);
+  });
+
+  it("names only the bound values that differ, among the session's own", () => {
+    const data = bound({ customerId: "cus_globex" });
+    data.sessions = data.sessions.map((s) => (s.session === data.sessionId ? { ...s, variables: { ...s.variables, extra: "x" } } : s));
+    expect(keptValues(frame(data, INITIAL_UI))?.changes).toEqual([{ name: "customerId", was: "pied_piper", now: "cus_globex" }]);
+  });
+
+  it("treats a variable named like a built-in object key as any other", () => {
+    const data = bound({});
+    data.sessions = data.sessions.map((s) => (s.session === data.sessionId ? { ...s, variables: { constructor: "x" } } : s));
+    expect(keptValues(frame(data, INITIAL_UI))).toBeNull();
+  });
+
   it("says nothing over a new session that isn't started yet, nor while one is set up", () => {
     const data = bound({ customerId: "cus_globex" });
     expect(keptValues(frame(data, { ...INITIAL_UI, mode: "fresh" }))).toBeNull();
