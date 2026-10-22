@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "051084375d56856c2ad70f7add9cf6676b5db20f93053cfdf5208ff76d31d931"
+  contentHash: "4d8c1dea99798e42d2e1330b71392242167b531ae7bd1453a470a32468eca778"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -518,7 +518,7 @@ Outbound HTTP requests, and downloads into the filesystem.
 | `patch(url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.patch { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP PATCH. |
 | `post(url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.post { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP POST. |
 | `put(url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.put { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP PUT. |
-| `request(method: string, url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.request { method: $method, host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue an HTTP request with a runtime-chosen verb. |
+| `request(method: string, url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.request { method, host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue an HTTP request with a runtime-chosen verb. |
 
 ### `DownloadOptions`
 
