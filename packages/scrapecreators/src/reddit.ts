@@ -2,6 +2,63 @@ import { get, post } from "submilli:http";
 import { ProviderIssue, Result, RedditGetSubredditOptions, RedditGetSubredditData, RedditListSubredditPostsOptions, RedditListSubredditPostsData, RedditSearchSubredditOptions, RedditSearchSubredditData, RedditGetPostOptions, RedditGetPostData, RedditListCommentsOptions, RedditListCommentsData, RedditGetTranscriptOptions, RedditGetTranscriptData, RedditSearchOptions, RedditSearchData } from "./types";
 export { ProviderIssue, Result, RedditGetSubredditOptions, RedditGetSubredditData, RedditListSubredditPostsOptions, RedditListSubredditPostsData, RedditSearchSubredditOptions, RedditSearchSubredditData, RedditGetPostOptions, RedditGetPostData, RedditListCommentsOptions, RedditListCommentsData, RedditGetTranscriptOptions, RedditGetTranscriptData, RedditSearchOptions, RedditSearchData } from "./types";
 import { responseIssues, stringParam, booleanParam, integerParam, queryString, requireIdentity, authHeaders, readResponse, invalidArgument, invalidResponse, validateDates, validateSearchCursor, redditCommentsBody } from "./transport";
+const redditOrigin = "https://www.reddit.com";
+/** The fields of a returned Reddit post that give its canonical URL. */
+interface PostUrlFields {
+    id?: unknown;
+    permalink?: unknown;
+    canonical_url?: string | null;
+}
+/** The fields of a returned Reddit comment that give its canonical URL, and what it nests. */
+interface CommentUrlFields {
+    url?: unknown;
+    permalink?: unknown;
+    canonical_url?: string | null;
+    post?: unknown;
+    replies?: unknown;
+}
+interface ReplyListing {
+    items?: unknown;
+}
+function permalinkUrl(permalink: unknown): string | null {
+    return typeof permalink === "string" && permalink.startsWith("/") ? redditOrigin + permalink : null;
+}
+// A post's canonical URL is its permalink on reddit.com, else /comments/<id> without a t3_ prefix.
+function addPostCanonicalUrl(value: unknown): void {
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+        return;
+    const post = value as PostUrlFields;
+    let url = permalinkUrl(post.permalink);
+    if (url === null && typeof post.id === "string") {
+        const id = post.id.startsWith("t3_") ? post.id.slice(3) : post.id;
+        if (/^[A-Za-z0-9]+$/.test(id))
+            url = redditOrigin + "/comments/" + id;
+    }
+    post.canonical_url = url;
+}
+function addPostCanonicalUrls(values: unknown): void {
+    if (Array.isArray(values))
+        for (const value of values as unknown[])
+            addPostCanonicalUrl(value);
+}
+// Covers the comment's embedded post and every nested reply too.
+function addCommentCanonicalUrl(value: unknown): void {
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+        return;
+    const comment = value as CommentUrlFields;
+    let url = permalinkUrl(comment.permalink);
+    if (url === null && typeof comment.url === "string" && comment.url.startsWith(redditOrigin + "/"))
+        url = comment.url;
+    comment.canonical_url = url;
+    addPostCanonicalUrl(comment.post);
+    if (comment.replies !== null && typeof comment.replies === "object" && !Array.isArray(comment.replies))
+        addCommentCanonicalUrls((comment.replies as ReplyListing).items);
+}
+function addCommentCanonicalUrls(values: unknown): void {
+    if (Array.isArray(values))
+        for (const value of values as unknown[])
+            addCommentCanonicalUrl(value);
+}
 /** Reddit public-data operations through ScrapeCreators. */
 export class RedditTransport {
     /** Subreddit Details.
@@ -41,9 +98,11 @@ export class RedditTransport {
         const response = get("https://api.scrapecreators.com/v1/reddit/subreddit" + queryString(params), authHeaders());
         const raw = readResponse(response);
         try {
-            const data = raw as RedditListSubredditPostsData;
+            // A separate decode keeps raw native while data gains canonical_url.
+            const data = readResponse(response) as RedditListSubredditPostsData;
             if (!Array.isArray(data.posts))
                 throw invalidResponse();
+            addPostCanonicalUrls(data.posts);
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
@@ -64,9 +123,13 @@ export class RedditTransport {
         const response = get("https://api.scrapecreators.com/v1/reddit/subreddit/search" + queryString(params), authHeaders());
         const raw = readResponse(response);
         try {
-            const data = raw as RedditSearchSubredditData;
+            // A separate decode keeps raw native while data gains canonical_url.
+            const data = readResponse(response) as RedditSearchSubredditData;
             if (!Array.isArray(data.posts))
                 throw invalidResponse();
+            addPostCanonicalUrls(data.posts);
+            addCommentCanonicalUrls(data.comments);
+            addPostCanonicalUrls(data.media);
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
@@ -83,9 +146,11 @@ export class RedditTransport {
         const response = get("https://api.scrapecreators.com/v1/reddit/post" + queryString(params), authHeaders());
         const raw = readResponse(response);
         try {
-            const data = raw as RedditGetPostData;
+            // A separate decode keeps raw native while data gains canonical_url.
+            const data = readResponse(response) as RedditGetPostData;
             if (typeof data.id !== "string" || data.id.trim().length === 0)
                 throw invalidResponse();
+            addPostCanonicalUrl(data);
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
@@ -106,11 +171,14 @@ export class RedditTransport {
             : get("https://api.scrapecreators.com/v1/reddit/post/comments" + queryString(params), authHeaders());
         const raw = readResponse(response);
         try {
-            const data = raw as RedditListCommentsData;
+            // A separate decode keeps raw native while data gains canonical_url.
+            const data = readResponse(response) as RedditListCommentsData;
             if (!Array.isArray(data.comments))
                 throw invalidResponse();
             if (data.post === null || typeof data.post !== "object" || Array.isArray(data.post))
                 throw invalidResponse();
+            addPostCanonicalUrl(data.post);
+            addCommentCanonicalUrls(data.comments);
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
@@ -155,13 +223,16 @@ export class RedditTransport {
         const response = get("https://api.scrapecreators.com/v1/reddit/search" + queryString(params), authHeaders());
         const raw = readResponse(response);
         try {
-            const data = raw as RedditSearchData;
+            // A separate decode keeps raw native while data gains canonical_url.
+            const data = readResponse(response) as RedditSearchData;
             if (options.filter === "comments") {
                 if (!Array.isArray(data.comments))
                     throw invalidResponse();
             }
             else if (!Array.isArray(data.posts))
                 throw invalidResponse();
+            addPostCanonicalUrls(data.posts);
+            addCommentCanonicalUrls(data.comments);
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {

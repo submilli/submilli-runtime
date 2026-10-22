@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "643d6744f80b6b4505721312d94eb2884012a6c087b054fce71d4185f4b0c633"
+  contentHash: "e528adb94dd0fb673734d4ceca0417658ada3f748ba599e95f40c9037b0bce85"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -355,7 +355,7 @@ function main(): number {
 ```
 
 ```text
-error: TypeError: type mismatch: expected Tickets, got object at $["tickets"][0]["owner"]
+error: TypeError: type mismatch: expected Tickets, got object at $["tickets"][0]["owner"] (expected string, got null)
 ```
 
 ## Results

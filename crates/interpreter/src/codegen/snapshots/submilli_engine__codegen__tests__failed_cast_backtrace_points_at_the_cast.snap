@@ -2,7 +2,7 @@
 source: crates/interpreter/src/codegen/mod.rs
 expression: dump
 ---
-error: TypeError: type mismatch: expected P, got object at $["a"]
+error: TypeError: type mismatch: expected P, got object at $["a"] (expected number, got undefined)
   at main (script.subm:5:5)  [thrown here]
 4 |   const r = g(1,
 5 |     JSON.parse("{}") as P);

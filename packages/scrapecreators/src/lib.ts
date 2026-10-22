@@ -2506,7 +2506,12 @@ export interface RedditListSubredditPostsData {
         "score"?: number | null;
         "created"?: number | null;
         "num_comments"?: number | null;
+        /** What the post links to: the thread for a text post, otherwise the image, video, gallery or external page. Use canonical_url for the thread. */
         "url"?: string | null;
+        /** Thread path on reddit.com, such as /r/<subreddit>/comments/<id>/<slug>/. */
+        "permalink"?: string | null;
+        /** Added by this package, not the provider: the Reddit thread URL, from permalink or else from id. Pass it to reddit.listComments or reddit.getPost. Null when neither gives one. */
+        "canonical_url"?: string | null;
         "subreddit_subscribers"?: number | null;
         "is_video"?: boolean | null;
         "created_utc"?: number | null;
@@ -2548,8 +2553,12 @@ export interface RedditSearchSubredditData {
         "id"?: string | null;
         "post_id"?: string | null;
         "title"?: string | null;
+        /** What the post links to: the thread for a text post, otherwise the image, video, gallery or external page. Use canonical_url for the thread. */
         "url"?: string | null;
+        /** Thread path on reddit.com, such as /r/<subreddit>/comments/<id>/<slug>/. */
         "permalink"?: string | null;
+        /** Added by this package, not the provider: the Reddit thread URL, from permalink or else from id. Pass it to reddit.listComments or reddit.getPost. Null when neither gives one. */
+        "canonical_url"?: string | null;
         "nsfw"?: boolean | null;
         "spoiler"?: boolean | null;
         "is_crosspost"?: boolean | null;
@@ -2601,15 +2610,23 @@ export interface RedditSearchSubredditData {
         "body_html"?: string | null;
         "images"?: unknown[] | null;
         "votes"?: number | null;
+        /** The comment's own reddit.com URL. */
         "url"?: string | null;
+        /** The comment's path on reddit.com. */
         "permalink"?: string | null;
+        /** Added by this package, not the provider: the comment's reddit.com URL, from permalink or else from a reddit.com url. Null when neither is available. */
+        "canonical_url"?: string | null;
         "created_at"?: string | null;
         "created_at_iso"?: string | null;
         "post"?: {
             "id"?: string | null;
             "title"?: string | null;
+            /** What the post links to: the thread for a text post, otherwise the image, video, gallery or external page. Use canonical_url for the thread. */
             "url"?: string | null;
+            /** Thread path on reddit.com, such as /r/<subreddit>/comments/<id>/<slug>/. */
             "permalink"?: string | null;
+            /** Added by this package, not the provider: the Reddit thread URL, from permalink or else from id. Pass it to reddit.listComments or reddit.getPost. Null when neither gives one. */
+            "canonical_url"?: string | null;
             "nsfw"?: boolean | null;
             "spoiler"?: boolean | null;
             "votes"?: number | null;
@@ -2630,8 +2647,12 @@ export interface RedditSearchSubredditData {
     "media"?: ({
         "id"?: string | null;
         "title"?: string | null;
+        /** What the post links to: the thread for a text post, otherwise the image, video, gallery or external page. Use canonical_url for the thread. */
         "url"?: string | null;
+        /** Thread path on reddit.com, such as /r/<subreddit>/comments/<id>/<slug>/. */
         "permalink"?: string | null;
+        /** Added by this package, not the provider: the Reddit thread URL, from permalink or else from id. Pass it to reddit.listComments or reddit.getPost. Null when neither gives one. */
+        "canonical_url"?: string | null;
         "media_type"?: string | null;
         "video"?: unknown;
         "image"?: {
@@ -2713,10 +2734,12 @@ export interface RedditGetPostData {
     "created_at_iso"?: string | null;
     /** Native provider num_comments field; see the operation reference for its format. */
     "num_comments"?: number | null;
-    /** Native provider url field; see the operation reference for its format. */
+    /** What the post links to: the thread for a text post, otherwise the image, video, gallery or external page. Use canonical_url for the thread. */
     "url"?: string | null;
-    /** Native provider permalink field; see the operation reference for its format. */
+    /** Thread path on reddit.com, such as /r/<subreddit>/comments/<id>/<slug>/. */
     "permalink"?: string | null;
+    /** Added by this package, not the provider: the Reddit thread URL, from permalink or else from id. Pass it to reddit.listComments or reddit.getPost. Null when neither gives one. */
+    "canonical_url"?: string | null;
     /** Native provider subreddit_subscribers field; see the operation reference for its format. */
     "subreddit_subscribers"?: number | null;
     /** Native provider is_video field; see the operation reference for its format. */
@@ -2767,9 +2790,15 @@ export interface RedditListCommentsData {
         "created_utc"?: number | null;
         "created_at_iso"?: string | null;
         "parent_id"?: string | null;
+        /** The comment's own reddit.com URL. */
         "url"?: string | null;
+        /** The comment's path on reddit.com. */
+        "permalink"?: string | null;
+        /** Added by this package, not the provider: the comment's reddit.com URL, from permalink or else from a reddit.com url. Null when neither is available. */
+        "canonical_url"?: string | null;
         "replies"?: {
             "items"?: ({
+                /** The comment's own reddit.com URL. */
                 "url"?: string | null;
                 "created_utc"?: number | null;
                 "created_at_iso"?: string | null;
@@ -2785,6 +2814,7 @@ export interface RedditListCommentsData {
                 "subreddit"?: string | null;
                 "author_flair_template_id"?: unknown;
                 "likes"?: boolean | null;
+                /** Nested replies in the same items and more shape; their comments carry canonical_url too. */
                 "replies"?: unknown;
                 "user_reports"?: unknown[] | null;
                 "saved"?: boolean | null;
@@ -2826,7 +2856,10 @@ export interface RedditListCommentsData {
                 "unrepliable_reason"?: unknown;
                 "author_flair_text_color"?: unknown;
                 "score_hidden"?: boolean | null;
+                /** The comment's path on reddit.com. */
                 "permalink"?: string | null;
+                /** Added by this package, not the provider: the comment's reddit.com URL, from permalink or else from a reddit.com url. Null when neither is available. */
+                "canonical_url"?: string | null;
                 "subreddit_type"?: string | null;
                 "locked"?: boolean | null;
                 "report_reasons"?: unknown;
@@ -2867,7 +2900,12 @@ export interface RedditListCommentsData {
         "score"?: number | null;
         "created"?: number | null;
         "num_comments"?: number | null;
+        /** What the post links to: the thread for a text post, otherwise the image, video, gallery or external page. Use canonical_url for the thread. */
         "url"?: string | null;
+        /** Thread path on reddit.com, such as /r/<subreddit>/comments/<id>/<slug>/. */
+        "permalink"?: string | null;
+        /** Added by this package, not the provider: the Reddit thread URL, from permalink or else from id. Pass it to reddit.listComments or reddit.getPost. Null when neither gives one. */
+        "canonical_url"?: string | null;
         "subreddit_subscribers"?: number | null;
         "is_video"?: boolean | null;
         "created_utc"?: number | null;
@@ -2966,7 +3004,12 @@ export interface RedditSearchData {
         "score"?: number | null;
         "created"?: number | null;
         "num_comments"?: number | null;
+        /** What the post links to: the thread for a text post, otherwise the image, video, gallery or external page. Use canonical_url for the thread. */
         "url"?: string | null;
+        /** Thread path on reddit.com, such as /r/<subreddit>/comments/<id>/<slug>/. */
+        "permalink"?: string | null;
+        /** Added by this package, not the provider: the Reddit thread URL, from permalink or else from id. Pass it to reddit.listComments or reddit.getPost. Null when neither gives one. */
+        "canonical_url"?: string | null;
         "subreddit_subscribers"?: number | null;
         "is_video"?: boolean | null;
         "created_utc"?: number | null;
@@ -2986,15 +3029,23 @@ export interface RedditSearchData {
         "body_html"?: string | null;
         "images"?: unknown[] | null;
         "votes"?: number | null;
+        /** The comment's own reddit.com URL. */
         "url"?: string | null;
+        /** The comment's path on reddit.com. */
         "permalink"?: string | null;
+        /** Added by this package, not the provider: the comment's reddit.com URL, from permalink or else from a reddit.com url. Null when neither is available. */
+        "canonical_url"?: string | null;
         "created_at"?: string | null;
         "created_at_iso"?: string | null;
         "post"?: {
             "id"?: string | null;
             "title"?: string | null;
+            /** What the post links to: the thread for a text post, otherwise the image, video, gallery or external page. Use canonical_url for the thread. */
             "url"?: string | null;
+            /** Thread path on reddit.com, such as /r/<subreddit>/comments/<id>/<slug>/. */
             "permalink"?: string | null;
+            /** Added by this package, not the provider: the Reddit thread URL, from permalink or else from id. Pass it to reddit.listComments or reddit.getPost. Null when neither gives one. */
+            "canonical_url"?: string | null;
             "nsfw"?: boolean | null;
             "spoiler"?: boolean | null;
             "votes"?: number | null;

@@ -43,6 +43,12 @@ function minimal(op) {
 }
 function outcome(op) { return fixtures[`${op.platform}.${op.method}`]; }
 function call(op, options) { return api[op.platform][op.method](options); }
+// Reddit clients add canonical_url to data; everything else is the provider's JSON.
+function withoutCanonicalUrls(value) {
+    if (Array.isArray(value)) return value.map(withoutCanonicalUrls);
+    if (value === null || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.entries(value).filter(([name]) => name !== 'canonical_url').map(([name, field]) => [name, withoutCanonicalUrls(field)]));
+}
 function expectCode(code) { return error => error instanceof api.ScrapeCreatorsError && error.code === code; }
 
 for (const op of operations) {
@@ -50,7 +56,7 @@ for (const op of operations) {
         reset(); host.response(() => ({ data: outcome(op) }));
         const options = minimal(op);
         const response = call(op, options);
-        assert.deepEqual(response.data, outcome(op));
+        assert.deepEqual(withoutCanonicalUrls(response.data), outcome(op));
         assert.deepEqual(response.raw, outcome(op));
         assert.deepEqual(host.checks, [{ capability: op.capability, context: {} }]);
         assert.equal(secretReads, 1); assert.equal(host.requests.length, 1);
@@ -96,6 +102,66 @@ test('Reddit POST sends the identical opaque cursor as JSON without query parame
     assert.equal(request.method, 'post'); assert.equal(new URL(request.url).search, '');
     assert.deepEqual(JSON.parse(request.body), { url: 'https://www.reddit.com/r/test/comments/123/x/', cursor, trim: false });
     assert.equal(host.checks[0].capability, 'scrapecreators.com/reddit.listComments');
+});
+
+test('Reddit link posts carry their thread as canonical_url while url and raw stay native', () => {
+    reset();
+    const data = { success: true, posts: [
+        { id: '1xc6191', url: 'https://i.redd.it/x.jpeg', permalink: '/r/ClaudeAI/comments/1xc6191/wondered_why/' },
+        { id: '1xc6192', url: 'https://www.reddit.com/gallery/1xc6192' },
+        { id: null, url: 'https://example.com/article' },
+    ], after: null };
+    host.response(() => ({ data }));
+    const result = api.reddit.listSubredditPosts({ subreddit: 'ClaudeAI', sort: 'new' });
+    assert.equal(result.data.posts[0].canonical_url, 'https://www.reddit.com/r/ClaudeAI/comments/1xc6191/wondered_why/');
+    assert.equal(result.data.posts[0].url, 'https://i.redd.it/x.jpeg');
+    assert.equal(result.data.posts[1].canonical_url, 'https://www.reddit.com/comments/1xc6192');
+    assert.equal(result.data.posts[2].canonical_url, null);
+    assert.deepEqual(result.raw, data);
+    assert.equal('canonical_url' in result.raw.posts[0], false);
+});
+
+test('Reddit post ids with a t3_ prefix and posts without permalink build /comments/<id>', () => {
+    reset(); host.response(() => ({ data: { success: true, posts: [{ id: 't3_8gmjrb', url: 'https://v.redd.it/abc' }], cursor: null } }));
+    assert.equal(api.reddit.searchSubreddit({ subreddit: 'Fitness' }).data.posts[0].canonical_url, 'https://www.reddit.com/comments/8gmjrb');
+    reset(); host.response(() => ({ data: fixtures['reddit.search'] }));
+    assert.equal(api.reddit.search({ query: 'dogs' }).data.posts[0].canonical_url, 'https://www.reddit.com/comments/w63dgy');
+    reset(); host.response(() => ({ data: fixtures['reddit.getPost'] }));
+    assert.equal(api.reddit.getPost({ url: 'https://www.reddit.com/comments/1q6pxwn' }).data.canonical_url,
+        'https://www.reddit.com/r/webscraping/comments/1q6pxwn/just_started_web_scraping_is_this_a_good_start/');
+});
+
+test('Reddit search results give comments, their posts and media their own canonical_url', () => {
+    reset(); host.response(() => ({ data: fixtures['reddit.searchSubreddit'] }));
+    const result = api.reddit.searchSubreddit({ subreddit: 'Fitness', query: 'pushups' }).data;
+    assert.equal(result.posts[0].canonical_url, 'https://www.reddit.com/r/Fitness/comments/8gmjrb/is_doing_50100_pushups_a_day_doing_anything/');
+    assert.equal(result.comments[0].canonical_url, 'https://www.reddit.com/r/Fitness/comments/1q2p898/gym_story_saturday/nxf7p27/');
+    assert.equal(result.comments[0].post.canonical_url, 'https://www.reddit.com/r/Fitness/comments/1q2p898/gym_story_saturday/');
+    assert.equal(result.media[0].canonical_url, 'https://www.reddit.com/r/Fitness/comments/geo4x/bodyweight_training_for_really_strong_people_see/');
+    reset(); host.response(() => ({ data: fixtures['reddit.search'] }));
+    const comments = api.reddit.search({ query: 'gym', filter: 'comments' }).data.comments;
+    assert.equal(comments[0].post.canonical_url, 'https://www.reddit.com/r/Fitness/comments/1q2p898/gym_story_saturday/');
+});
+
+test('Reddit thread comments and nested replies carry canonical_url', () => {
+    reset();
+    const data = { success: true, post: { id: '1lfbo7u', url: 'https://i.redd.it/cat.jpeg' }, comments: [
+        { id: 'a1', url: 'https://www.reddit.com/r/AskReddit/comments/1lfbo7u/x/a1/', replies: { items: [
+            { id: 'b1', permalink: '/r/AskReddit/comments/1lfbo7u/x/b1/', replies: { items: [
+                { id: 'c1', permalink: '/r/AskReddit/comments/1lfbo7u/x/c1/', replies: '' },
+            ], more: { has_more: false } } },
+        ], more: { has_more: false } } },
+        { id: 'a2', url: 'https://example.com/elsewhere', permalink: 'not-a-path' },
+    ], more: { has_more: false, cursor: null } };
+    host.response(() => ({ data }));
+    const result = api.reddit.listComments({ url: 'https://www.reddit.com/comments/1lfbo7u', trim: true });
+    assert.equal(result.data.post.canonical_url, 'https://www.reddit.com/comments/1lfbo7u');
+    const [first, second] = result.data.comments;
+    assert.equal(first.canonical_url, 'https://www.reddit.com/r/AskReddit/comments/1lfbo7u/x/a1/');
+    assert.equal(first.replies.items[0].canonical_url, 'https://www.reddit.com/r/AskReddit/comments/1lfbo7u/x/b1/');
+    assert.equal(first.replies.items[0].replies.items[0].canonical_url, 'https://www.reddit.com/r/AskReddit/comments/1lfbo7u/x/c1/');
+    assert.equal(second.canonical_url, null);
+    assert.deepEqual(result.raw, data);
 });
 
 test('empty and missing credentials never send HTTP', () => {

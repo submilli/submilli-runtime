@@ -283,7 +283,7 @@ fn emit_structural_test_inner(
     let i32_block = BlockType::Result(ValType::I32);
     match ty.lowered() {
         Type::Union(members) => {
-            let best = diagnostic::union_start(emitter, ctx);
+            let union = diagnostic::union_start(emitter, ctx);
             let mut first = true;
             for m in members {
                 diagnostic::union_next(emitter, ctx);
@@ -295,7 +295,7 @@ fn emit_structural_test_inner(
                     interface_stack,
                     validator_state,
                 )?;
-                diagnostic::union_keep(emitter, ctx, best);
+                diagnostic::union_keep(emitter, ctx, union);
                 if first {
                     first = false;
                 } else {
@@ -305,7 +305,7 @@ fn emit_structural_test_inner(
             if first {
                 emitter.instruction(Instruction::I32Const(0));
             }
-            diagnostic::union_end(emitter, best, checkpoint);
+            diagnostic::union_end(emitter, ctx, union)?;
         }
         Type::Null => {
             emitter.instruction(Instruction::LocalGet(value_local));
@@ -454,7 +454,7 @@ fn emit_structural_test_inner(
             let field_local =
                 emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
             emitter.instruction(Instruction::I32Const(1)); // accumulator
-            for (fname, f) in fields {
+            for (fname, f) in diagnostic::discriminants_first(fields) {
                 emit_field_conformance(
                     emitter,
                     ctx,
@@ -697,7 +697,15 @@ fn emit_structural_test_inner(
         // Rejected at typecheck (`unsupported_cast_target_reason`); defensive 0.
         _ => emitter.instruction(Instruction::I32Const(0)),
     }
-    diagnostic::finish(emitter, ctx, checkpoint)?;
+    diagnostic::finish(
+        emitter,
+        ctx,
+        checkpoint,
+        diagnostic::Tested::Value {
+            ty,
+            local: value_local,
+        },
+    )?;
     Ok(())
 }
 
@@ -783,6 +791,7 @@ fn emit_interface_ref_test(
                 emitter,
                 ctx,
                 value_local,
+                ty,
                 test,
                 interface_stack,
                 validator_state,
@@ -1115,7 +1124,14 @@ fn emit_field_conformance(
         emitter.instruction(Instruction::I32Const(0));
     }
     emitter.emit_end();
-    diagnostic::finish(emitter, ctx, checkpoint)?;
+    // Reached unset only when the field itself is missing: a present value's
+    // own test records what it expected.
+    diagnostic::finish(
+        emitter,
+        ctx,
+        checkpoint,
+        diagnostic::Tested::Absent { ty: &field.ty },
+    )?;
     diagnostic::pop(emitter, parent_path);
     Ok(())
 }
@@ -1234,6 +1250,7 @@ fn emit_interface_test(
             emitter,
             ctx,
             value_local,
+            ty,
             test,
             &mut std::collections::BTreeSet::new(),
             None,
@@ -1246,6 +1263,7 @@ fn emit_interface_test_inner(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     value_local: u32,
+    ty: &Type,
     test: &crate::InterfaceNarrowingTest,
     interface_stack: &mut std::collections::BTreeSet<Type>,
     validator_state: Option<ValidatorState>,
@@ -1290,7 +1308,7 @@ fn emit_interface_test_inner(
     emitter.instruction(Instruction::LocalSet(object_local));
     let field_local = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
     emitter.instruction(Instruction::I32Const(1));
-    for (name, field) in &test.members {
+    for (name, field) in diagnostic::discriminants_first(&test.members) {
         if test.methods.contains(name) {
             let parent_path = diagnostic::field(emitter, ctx, name);
             let name_global = ctx
@@ -1355,7 +1373,15 @@ fn emit_interface_test_inner(
     if test.nullable || test.undefined {
         emitter.emit_end();
     }
-    diagnostic::finish(emitter, ctx, checkpoint)?;
+    diagnostic::finish(
+        emitter,
+        ctx,
+        checkpoint,
+        diagnostic::Tested::Value {
+            ty,
+            local: value_local,
+        },
+    )?;
     Ok(())
 }
 
@@ -1689,7 +1715,9 @@ fn emit_validator_state(
             nullable: false,
             heap_type: HeapType::Concrete(intr.raw_array),
         }))?;
-        emitter.instruction(Instruction::I32Const(RECURSIVE_VALIDATOR_CAPACITY * 2 + 2));
+        emitter.instruction(Instruction::I32Const(
+            RECURSIVE_VALIDATOR_CAPACITY * 2 + diagnostic::SLOTS,
+        ));
         emitter.instruction(Instruction::ArrayNewDefault(intr.raw_array));
         emitter.instruction(Instruction::LocalSet(local));
         local
@@ -1840,6 +1868,7 @@ pub(crate) fn emit_runtime_validator_body(
             &mut emitter,
             ctx,
             0,
+            key,
             test,
             &mut interface_stack,
             Some(ValidatorState {
@@ -1864,7 +1893,12 @@ pub(crate) fn emit_runtime_validator_body(
     }
     emitter.emit_end();
     emitter.emit_end();
-    diagnostic::finish(&mut emitter, ctx, checkpoint)?;
+    diagnostic::finish(
+        &mut emitter,
+        ctx,
+        checkpoint,
+        diagnostic::Tested::Value { ty: key, local: 0 },
+    )?;
     diagnostic::save_recursive(&mut emitter, ctx, 1)?;
     ctx.check_function_limits(&mut emitter)?;
     emitter.build()
@@ -1996,9 +2030,14 @@ fn emit_inline_string_checked(
     Ok(())
 }
 
-/// Cascades ref.test on scratch to produce a JS-typeof-style tag string;
-/// closures first, then string/number/boolean, then null, then "object" fallthrough.
-fn emit_runtime_type_string(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, scratch: u32) {
+/// Cascades ref.test on scratch to produce a JS-typeof-style tag string:
+/// undefined, null, string, number, boolean, function, then array, which typeof
+/// would call "object", then the "object" fallthrough.
+pub(super) fn emit_runtime_type_string(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    scratch: u32,
+) {
     ctx.latch(emit_runtime_type_string_checked(emitter, ctx, scratch));
 }
 
@@ -2068,9 +2107,21 @@ fn emit_runtime_type_string_checked(
     emit_type_tag(emitter, ctx, "function")?;
     emitter.emit_else();
 
+    // Arrays too, so `got object` never answers an expected array or tuple.
+    let array_idx = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsic types registered"))?
+        .array;
+    emitter.instruction(Instruction::LocalGet(scratch));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(array_idx)));
+    emitter.emit_if(block);
+    emit_type_tag(emitter, ctx, "array")?;
+    emitter.emit_else();
+
     emit_type_tag(emitter, ctx, "object")?;
 
-    for _ in 0..5 {
+    for _ in 0..6 {
         emitter.emit_end();
     }
 

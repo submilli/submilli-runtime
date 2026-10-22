@@ -36,7 +36,7 @@ function main(): void {
     ) as ListResponse;
   });
   assert(arrayAsObject.includes("type mismatch: expected ListResponse"), arrayAsObject);
-  assert(arrayAsObject.includes("got object"), arrayAsObject);
+  assert(arrayAsObject.includes("got array"), arrayAsObject);
 
   // Scalar actual.
   const scalarActual = expectMessage((): void => {
