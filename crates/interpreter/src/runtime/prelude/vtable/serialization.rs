@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use wasmtime::{Caller, Val};
+use wasmtime::{Caller, Rooted, StructRef, Val};
 
 use super::{
     as_struct, dispatch_vtable_slot, enter_walk, escaped_json_unit, intrinsic_types, is_function,
@@ -33,6 +33,93 @@ pub(super) async fn object(
 ) -> wasmtime::Result<Output> {
     let mut output = Output::new(caller);
     append_object(caller, value, &mut output, false).await?;
+    Ok(output)
+}
+
+/// A `Map` as the JSON object of its entries in insertion order, each key in
+/// its `String(key)` form. Values follow object-property rules: `undefined`
+/// and functions are left out. Keys that share a string form, such as `1` and
+/// `"1"`, are each written, so a parser keeps the last. All entries are read
+/// before any is written, because a value's own `toJson` may change the map.
+pub(super) async fn map(
+    caller: &mut Caller<'_, StoreData>,
+    value: &Val,
+) -> wasmtime::Result<Output> {
+    let entries = super::super::map::live_entries(caller, value)?;
+    let held: Vec<Val> = entries
+        .iter()
+        .flat_map(|&(key, child)| [key, child])
+        .collect();
+    keep_all(caller, &held)?;
+    let mut output = Output::new(caller);
+    output.append(caller, &[123])?;
+    let mut first = true;
+    for (key, child) in entries {
+        if super::super::undefined::is_undefined(caller, &child)? || is_function(caller, &child)? {
+            continue;
+        }
+        let key = map_key_text(caller, &key).await?;
+        output.append_key(caller, &mut first, &key)?;
+        append_value(caller, child, &mut output, true).await?;
+    }
+    output.append(caller, &[125])?;
+    Ok(output)
+}
+
+/// `String(key)`: what a `Map` key reads as when it names a JSON property.
+async fn map_key_text(caller: &mut Caller<'_, StoreData>, key: &Val) -> wasmtime::Result<Vec<u16>> {
+    if matches!(key, Val::AnyRef(None)) {
+        return Ok("null".encode_utf16().collect());
+    }
+    if super::super::undefined::is_undefined(caller, key)? {
+        return Ok("undefined".encode_utf16().collect());
+    }
+    let intr = intrinsic_types(&mut *caller)?;
+    if super::super::collection::is_a(caller, key, &intr.string)? {
+        return read_string_units(caller, key, "Map key");
+    }
+    let text = dispatch_vtable_slot(caller, key, 0, &[]).await?;
+    read_serializer_text(caller, &text)
+}
+
+/// A host-backed value as the JSON object of its `properties`, written as a
+/// plain object's would be: `undefined` left out, a number that isn't finite
+/// as `null`, and an `i32` field, which holds a boolean, as `true` or `false`.
+/// Its fields are immutable and reachable from `object`, which the caller holds.
+pub(super) async fn host_value(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Rooted<StructRef>,
+    properties: crate::stdlib::abi::HostProperties,
+) -> wasmtime::Result<Output> {
+    let mut output = Output::new(caller);
+    output.append(caller, &[123])?;
+    let mut first = true;
+    for &(name, field) in properties {
+        let child = object.field(&mut *caller, field)?;
+        if super::super::undefined::is_undefined(caller, &child)? {
+            continue;
+        }
+        let name: Vec<u16> = name.encode_utf16().collect();
+        output.append_key(caller, &mut first, &name)?;
+        match child {
+            Val::F64(bits) => {
+                let text: Vec<u16> = super::json_number(f64::from_bits(bits))
+                    .encode_utf16()
+                    .collect();
+                output.append(caller, &text)?;
+            }
+            Val::I32(flag) => {
+                let text: &[u16] = if flag != 0 {
+                    &[116, 114, 117, 101]
+                } else {
+                    &[102, 97, 108, 115, 101]
+                };
+                output.append(caller, text)?;
+            }
+            child => append_value(caller, child, &mut output, true).await?,
+        }
+    }
+    output.append(caller, &[125])?;
     Ok(output)
 }
 
@@ -175,12 +262,7 @@ async fn append_object(
         if super::super::undefined::is_undefined(caller, &child)? || is_function(caller, &child)? {
             continue;
         }
-        if !first {
-            output.append(caller, &[44])?;
-        }
-        first = false;
-        output.append_escaped(caller, &name)?;
-        output.append(caller, &[58])?;
+        output.append_key(caller, &mut first, &name)?;
         append_value(caller, child, output, true).await?;
     }
     output.append(caller, &[125])
@@ -244,6 +326,20 @@ impl Output {
         }
         self.units.extend_from_slice(units);
         Ok(())
+    }
+
+    /// An object property's `"name":`, after a `,` unless it is the `first`.
+    fn append_key(
+        &mut self,
+        caller: &mut Caller<'_, StoreData>,
+        first: &mut bool,
+        name: &[u16],
+    ) -> wasmtime::Result<()> {
+        if !std::mem::take(first) {
+            self.append(caller, &[44])?;
+        }
+        self.append_escaped(caller, name)?;
+        self.append(caller, &[58])
     }
 
     pub(crate) fn append_escaped(

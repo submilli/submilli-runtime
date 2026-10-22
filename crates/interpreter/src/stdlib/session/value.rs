@@ -74,7 +74,7 @@ fn corrupt(detail: &str) -> wasmtime::Error {
 }
 
 // ---------------------------------------------------------------------------
-// Rejecting values with no JSON form
+// Rejecting values that would not read back
 // ---------------------------------------------------------------------------
 
 /// The types a walk classifies against, recovered once per `set` — each read
@@ -203,8 +203,8 @@ fn walk(
 
 fn unsupported(what: &str) -> wasmtime::Error {
     type_error(format!(
-        "session: {what} has no JSON form and cannot be stored — store the data it \
-         stands for instead (a plain object, an array, or a primitive)"
+        "session: {what} cannot be stored because it would not read back as one — store \
+         the data it stands for instead (a plain object, an array, or a primitive)"
     ))
 }
 
