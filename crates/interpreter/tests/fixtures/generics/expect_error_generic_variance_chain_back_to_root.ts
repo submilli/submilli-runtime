@@ -6,18 +6,21 @@
 // a flipped position is measured again until its variances settle, so `T`
 // is invariant in `S` and `P`. A doubly linked chain, where every level is
 // in one such group, is walked again only from its first level, so it too
-// stays linear. A method's callback parameter is compared strictly, as in
-// tsc, so `Source<T>` and `Hub<T>` are covariant, while a callback's return
-// and any other method parameter are compared both ways, unless a type
-// parameter is invariant inside it, as in `Mapper<T>`.
+// stays linear. A method's parameters are contravariant, so a callback
+// parameter makes `Source<T>` and `Hub<T>` covariant, while a callback's
+// result makes `Lazy<T>` contravariant, and `Store<T>`, whose property also
+// holds a `T`, and `Mapper<T>`, whose callback takes and returns one, are
+// invariant.
 // expect-error: expected `L5<number>`, got `L5<1>`
 // expect-error: expected `S<number>`, got `S<1>`
 // expect-error: expected `P<number>`, got `P<1>`
 // expect-error: expected `D0<number>`, got `D0<number | string>`
 // expect-error: expected `Source<number>`, got `Source<number | string>`
+// expect-error: expected `Store<number>`, got `Store<1>`
+// expect-error: expected `Lazy<number>`, got `Lazy<1>`
 // expect-error: expected `Mapper<number>`, got `Mapper<number | string>`
 // expect-error: expected `Hub<number>`, got `Hub<number | string>`
-// expect-error-count: 7
+// expect-error-count: 9
 interface L0<T> {
   a: L1<T>;
   b: L1<T>;

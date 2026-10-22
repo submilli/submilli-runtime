@@ -136,8 +136,8 @@ pub struct ObjectField {
     /// freshly-synthesized shapes are writable (`false`); only an explicit `readonly`
     /// modifier on an object-type/interface property sets this.
     pub readonly: bool,
-    /// A method rather than a function-typed property. `tsc` compares a method's
-    /// parameters bivariantly and a property's contravariantly.
+    /// A method rather than a function-typed property. Both compare their
+    /// parameters contravariantly, though `tsc` compares a method's both ways.
     #[serde(default)]
     pub method: bool,
 }
