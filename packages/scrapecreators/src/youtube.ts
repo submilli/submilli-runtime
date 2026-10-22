@@ -1,7 +1,7 @@
 import { get, post } from "submilli:http";
 import { ProviderIssue, Result, YouTubeGetChannelOptions, YouTubeGetChannelData, YouTubeListChannelVideosOptions, YouTubeListChannelVideosData, YouTubeListChannelPlaylistsOptions, YouTubeListChannelPlaylistsData, YouTubeListChannelLivesOptions, YouTubeListChannelLivesData, YouTubeListChannelCommunityPostsOptions, YouTubeListChannelCommunityPostsData, YouTubeListChannelShortsOptions, YouTubeListChannelShortsData, YouTubeGetVideoOptions, YouTubeGetVideoData, YouTubeGetTranscriptOptions, YouTubeGetTranscriptData, YouTubeGetSponsorsOptions, YouTubeGetSponsorsData, YouTubeSearchOptions, YouTubeSearchData, YouTubeSearchTypeaheadOptions, YouTubeSearchTypeaheadData, YouTubeSearchHashtagOptions, YouTubeSearchHashtagData, YouTubeListCommentsOptions, YouTubeListCommentsData, YouTubeListCommentRepliesOptions, YouTubeListCommentRepliesData, YouTubeListTrendingShortsOptions, YouTubeListTrendingShortsData, YouTubeGetPlaylistOptions, YouTubeGetPlaylistData, YouTubeGetCommunityPostOptions, YouTubeGetCommunityPostData } from "./types";
 export { ProviderIssue, Result, YouTubeGetChannelOptions, YouTubeGetChannelData, YouTubeListChannelVideosOptions, YouTubeListChannelVideosData, YouTubeListChannelPlaylistsOptions, YouTubeListChannelPlaylistsData, YouTubeListChannelLivesOptions, YouTubeListChannelLivesData, YouTubeListChannelCommunityPostsOptions, YouTubeListChannelCommunityPostsData, YouTubeListChannelShortsOptions, YouTubeListChannelShortsData, YouTubeGetVideoOptions, YouTubeGetVideoData, YouTubeGetTranscriptOptions, YouTubeGetTranscriptData, YouTubeGetSponsorsOptions, YouTubeGetSponsorsData, YouTubeSearchOptions, YouTubeSearchData, YouTubeSearchTypeaheadOptions, YouTubeSearchTypeaheadData, YouTubeSearchHashtagOptions, YouTubeSearchHashtagData, YouTubeListCommentsOptions, YouTubeListCommentsData, YouTubeListCommentRepliesOptions, YouTubeListCommentRepliesData, YouTubeListTrendingShortsOptions, YouTubeListTrendingShortsData, YouTubeGetPlaylistOptions, YouTubeGetPlaylistData, YouTubeGetCommunityPostOptions, YouTubeGetCommunityPostData } from "./types";
-import { responseIssues, stringParam, booleanParam, integerParam, queryString, requireIdentity, authHeaders, readResponse, invalidArgument, invalidResponse, validateDates, validateSearchCursor, redditCommentsBody } from "./transport";
+import { responseIssues, stringParam, booleanParam, integerParam, queryString, requireIdentity, authHeaders, readResponse, invalidArgument, invalidResponse, invalidResponseFrom, validateDates, validateSearchCursor, redditCommentsBody } from "./transport";
 /** YouTube public-data operations through ScrapeCreators. */
 export class YouTubeTransport {
     /** Channel Details.
@@ -20,11 +20,11 @@ export class YouTubeTransport {
         try {
             const data = raw as YouTubeGetChannelData;
             if (typeof data.channelId !== "string" || data.channelId.trim().length === 0)
-                throw invalidResponse();
+                throw invalidResponse("channelId is missing or blank");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Channel Videos.
@@ -47,11 +47,11 @@ export class YouTubeTransport {
         try {
             const data = raw as YouTubeListChannelVideosData;
             if (!Array.isArray(data.videos))
-                throw invalidResponse();
+                throw invalidResponse("videos is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Channel Playlists.
@@ -69,11 +69,11 @@ export class YouTubeTransport {
         try {
             const data = raw as YouTubeListChannelPlaylistsData;
             if (!Array.isArray(data.playlists))
-                throw invalidResponse();
+                throw invalidResponse("playlists is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Channel Lives.
@@ -91,11 +91,11 @@ export class YouTubeTransport {
         try {
             const data = raw as YouTubeListChannelLivesData;
             if (!Array.isArray(data.lives))
-                throw invalidResponse();
+                throw invalidResponse("lives is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Channel Community Posts.
@@ -113,11 +113,11 @@ export class YouTubeTransport {
         try {
             const data = raw as YouTubeListChannelCommunityPostsData;
             if (!Array.isArray(data.posts))
-                throw invalidResponse();
+                throw invalidResponse("posts is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Channel Shorts.
@@ -136,11 +136,11 @@ export class YouTubeTransport {
         try {
             const data = raw as YouTubeListChannelShortsData;
             if (!Array.isArray(data.shorts))
-                throw invalidResponse();
+                throw invalidResponse("shorts is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Video/Short Details.
@@ -157,11 +157,11 @@ export class YouTubeTransport {
         try {
             const data = raw as YouTubeGetVideoData;
             if (typeof data.id !== "string" || data.id.trim().length === 0)
-                throw invalidResponse();
+                throw invalidResponse("id is missing or blank");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Transcript.
@@ -179,11 +179,11 @@ export class YouTubeTransport {
         try {
             const data = raw as YouTubeGetTranscriptData;
             if (data.transcript !== null && !Array.isArray(data.transcript))
-                throw invalidResponse();
+                throw invalidResponse("transcript is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Video Sponsors.
@@ -199,11 +199,11 @@ export class YouTubeTransport {
         try {
             const data = raw as YouTubeGetSponsorsData;
             if (data.video === null || typeof data.video !== "object" || Array.isArray(data.video))
-                throw invalidResponse();
+                throw invalidResponse("video is not an object");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Search.
@@ -225,11 +225,11 @@ export class YouTubeTransport {
         try {
             const data = raw as YouTubeSearchData;
             if (!Array.isArray(data.videos))
-                throw invalidResponse();
+                throw invalidResponse("videos is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Search Typeahead.
@@ -244,11 +244,11 @@ export class YouTubeTransport {
         try {
             const data = raw as YouTubeSearchTypeaheadData;
             if (data.data === null || typeof data.data !== "object" || Array.isArray(data.data))
-                throw invalidResponse();
+                throw invalidResponse("data is not an object");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Search by Hashtag.
@@ -265,11 +265,11 @@ export class YouTubeTransport {
         try {
             const data = raw as YouTubeSearchHashtagData;
             if (!Array.isArray(data.videos))
-                throw invalidResponse();
+                throw invalidResponse("videos is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Comments.
@@ -286,11 +286,11 @@ export class YouTubeTransport {
         try {
             const data = raw as YouTubeListCommentsData;
             if (!Array.isArray(data.comments))
-                throw invalidResponse();
+                throw invalidResponse("comments is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Comment Replies.
@@ -305,11 +305,11 @@ export class YouTubeTransport {
         try {
             const data = raw as YouTubeListCommentRepliesData;
             if (!Array.isArray(data.comments))
-                throw invalidResponse();
+                throw invalidResponse("comments is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Trending Shorts.
@@ -323,11 +323,11 @@ export class YouTubeTransport {
         try {
             const data = raw as YouTubeListTrendingShortsData;
             if (!Array.isArray(data.shorts))
-                throw invalidResponse();
+                throw invalidResponse("shorts is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Playlist.
@@ -343,11 +343,11 @@ export class YouTubeTransport {
         try {
             const data = raw as YouTubeGetPlaylistData;
             if (!Array.isArray(data.videos))
-                throw invalidResponse();
+                throw invalidResponse("videos is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Community Post Details.
@@ -362,11 +362,11 @@ export class YouTubeTransport {
         try {
             const data = raw as YouTubeGetCommunityPostData;
             if (typeof data.id !== "string" || data.id.trim().length === 0)
-                throw invalidResponse();
+                throw invalidResponse("id is missing or blank");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
 }

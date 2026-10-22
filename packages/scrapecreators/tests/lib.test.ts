@@ -145,6 +145,7 @@ function main(): void {
     label("provider failures do not become empty success");
     expectCode("quota_exceeded", () => { decodeResponse('{"success":false,"error":"Insufficient credits"}'); });
     expectCode("rate_limited", () => { decodeResponse('{"success":false,"message":"slow down"}', 429, "2"); });
+    expectCode("unavailable_content", () => { decodeResponse('{"success":false,"message":"Account is private or just not publicly available :("}'); });
     expectCode("invalid_response", () => { decodeResponse("{}"); });
     expectCode("invalid_response", () => { decodeResponse("null"); });
     expectCode("invalid_response", () => { decodeResponse("[]"); });

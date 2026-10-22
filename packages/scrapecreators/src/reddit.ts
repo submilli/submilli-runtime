@@ -1,7 +1,7 @@
 import { get, post } from "submilli:http";
 import { ProviderIssue, Result, RedditGetSubredditOptions, RedditGetSubredditData, RedditListSubredditPostsOptions, RedditListSubredditPostsData, RedditSearchSubredditOptions, RedditSearchSubredditData, RedditGetPostOptions, RedditGetPostData, RedditListCommentsOptions, RedditListCommentsData, RedditGetTranscriptOptions, RedditGetTranscriptData, RedditSearchOptions, RedditSearchData } from "./types";
 export { ProviderIssue, Result, RedditGetSubredditOptions, RedditGetSubredditData, RedditListSubredditPostsOptions, RedditListSubredditPostsData, RedditSearchSubredditOptions, RedditSearchSubredditData, RedditGetPostOptions, RedditGetPostData, RedditListCommentsOptions, RedditListCommentsData, RedditGetTranscriptOptions, RedditGetTranscriptData, RedditSearchOptions, RedditSearchData } from "./types";
-import { responseIssues, stringParam, booleanParam, integerParam, queryString, requireIdentity, authHeaders, readResponse, invalidArgument, invalidResponse, validateDates, validateSearchCursor, redditCommentsBody } from "./transport";
+import { responseIssues, stringParam, booleanParam, integerParam, queryString, requireIdentity, authHeaders, readResponse, invalidArgument, invalidResponse, invalidResponseFrom, validateDates, validateSearchCursor, redditCommentsBody } from "./transport";
 const redditOrigin = "https://www.reddit.com";
 /** The fields of a returned Reddit post that give its canonical URL. */
 interface PostUrlFields {
@@ -76,11 +76,11 @@ export class RedditTransport {
         try {
             const data = raw as RedditGetSubredditData;
             if (typeof data.display_name !== "string" || data.display_name.trim().length === 0)
-                throw invalidResponse();
+                throw invalidResponse("display_name is missing or blank");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Subreddit Posts.
@@ -101,12 +101,12 @@ export class RedditTransport {
             // A separate decode keeps raw native while data gains canonical_url.
             const data = readResponse(response) as RedditListSubredditPostsData;
             if (!Array.isArray(data.posts))
-                throw invalidResponse();
+                throw invalidResponse("posts is not an array");
             addPostCanonicalUrls(data.posts);
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Subreddit Search.
@@ -126,14 +126,14 @@ export class RedditTransport {
             // A separate decode keeps raw native while data gains canonical_url.
             const data = readResponse(response) as RedditSearchSubredditData;
             if (!Array.isArray(data.posts))
-                throw invalidResponse();
+                throw invalidResponse("posts is not an array");
             addPostCanonicalUrls(data.posts);
             addCommentCanonicalUrls(data.comments);
             addPostCanonicalUrls(data.media);
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Post.
@@ -149,12 +149,12 @@ export class RedditTransport {
             // A separate decode keeps raw native while data gains canonical_url.
             const data = readResponse(response) as RedditGetPostData;
             if (typeof data.id !== "string" || data.id.trim().length === 0)
-                throw invalidResponse();
+                throw invalidResponse("id is missing or blank");
             addPostCanonicalUrl(data);
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Post Comments.
@@ -174,15 +174,15 @@ export class RedditTransport {
             // A separate decode keeps raw native while data gains canonical_url.
             const data = readResponse(response) as RedditListCommentsData;
             if (!Array.isArray(data.comments))
-                throw invalidResponse();
+                throw invalidResponse("comments is not an array");
             if (data.post === null || typeof data.post !== "object" || Array.isArray(data.post))
-                throw invalidResponse();
+                throw invalidResponse("post is not an object");
             addPostCanonicalUrl(data.post);
             addCommentCanonicalUrls(data.comments);
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Post Transcript.
@@ -199,11 +199,11 @@ export class RedditTransport {
         try {
             const data = raw as RedditGetTranscriptData;
             if (data.transcript === undefined)
-                throw invalidResponse();
+                throw invalidResponse("transcript is missing");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Search.
@@ -227,16 +227,16 @@ export class RedditTransport {
             const data = readResponse(response) as RedditSearchData;
             if (options.filter === "comments") {
                 if (!Array.isArray(data.comments))
-                    throw invalidResponse();
+                    throw invalidResponse("comments is not an array");
             }
             else if (!Array.isArray(data.posts))
-                throw invalidResponse();
+                throw invalidResponse("posts is not an array");
             addPostCanonicalUrls(data.posts);
             addCommentCanonicalUrls(data.comments);
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
 }

@@ -1062,8 +1062,10 @@ export interface LinkedInGetProfileData {
         "@type"?: string | null;
         "name"?: string | null;
         "url"?: string | null;
+        "location"?: string | null;
         "member"?: {
             "@type"?: string | null;
+            "description"?: string | null;
             "startDate"?: number | null;
             "endDate"?: number | null;
         } | null;

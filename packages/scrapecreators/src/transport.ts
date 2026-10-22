@@ -37,20 +37,20 @@ export function decodeResponse(body: string, status: number = 200, retryAfter: s
     try {
         raw = JSON.parse(body);
         if (raw === null || typeof raw !== "object" || Array.isArray(raw))
-            throw invalidResponse();
+            throw invalidResponse("body is not a JSON object");
         envelope = raw as Envelope;
     }
     catch (cause) {
         if (status < 200 || status >= 300)
             throw providerError(status, "ScrapeCreators HTTP request failed", null, retryAfter);
-        throw invalidResponse();
+        throw invalidResponse("body is not a JSON object");
     }
     if (status < 200 || status >= 300 || envelope.success === false) {
         const message = envelope.message ?? errorMessage(envelope.error);
         throw providerError(status, message, envelope.code ?? null, retryAfter);
     }
     if (envelope.success !== true)
-        throw invalidResponse();
+        throw invalidResponse("success is not true");
     return raw;
 }
 export function readResponse(response: Response): unknown {
@@ -137,8 +137,14 @@ export function redditCommentsBody(params: Map<string, string>): string {
 export function invalidArgument(message: string): ScrapeCreatorsError {
     return new ScrapeCreatorsError("invalid_argument", message);
 }
-export function invalidResponse(): ScrapeCreatorsError {
-    return new ScrapeCreatorsError("invalid_response", "ScrapeCreators returned an invalid response");
+export function invalidResponse(detail: string): ScrapeCreatorsError {
+    return new ScrapeCreatorsError("invalid_response", "ScrapeCreators returned an invalid response: " + detail);
+}
+/** A failed endpoint check keeps its own error; a failed cast keeps what it expected. */
+export function invalidResponseFrom(cause: unknown): ScrapeCreatorsError {
+    if (cause instanceof ScrapeCreatorsError)
+        return cause;
+    return invalidResponse(cause instanceof Error ? cause.message : String(cause));
 }
 function validateUrl(url: string): void {
     try {
@@ -174,12 +180,12 @@ function providerError(status: number, message: string, providerCode: string | n
     let code = "provider_error";
     if (status === 400 || status === 422)
         code = "invalid_request";
+    if (status === 404 || status === 410 || text.includes("not publicly available") || text.includes("account is private"))
+        code = "unavailable_content";
     if (status === 401)
         code = "unauthorized";
     if (status === 403)
         code = "forbidden";
-    if (status === 404 || status === 410)
-        code = "unavailable_content";
     if (status === 402 || text.includes("insufficient credits") || text.includes("no credits") || text.includes("not enough credits") || text.includes("out of credits") || text.includes("quota"))
         code = "quota_exceeded";
     if (status === 429 || text.includes("rate limit"))

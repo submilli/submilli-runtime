@@ -103,6 +103,9 @@ without credentials or I/O; it returns `unknown`, not an endpoint-specific type.
   cannot guarantee exhaustive recent coverage. Search cursors range from 1–11.
   There is no standalone comments endpoint in this client: post details retain
   comments the provider returns. Video transcripts require public native captions.
+  `getProfile` takes only person URLs (`linkedin.com/in/<handle>`); post authors can be
+  company pages, which `getCompany` reads. Private profiles throw
+  `unavailable_content`.
 - **GitHub:** this client retrieves public data through ScrapeCreators and consumes
   its credits. User PR results use GitHub's public search index; activity pages
   cover one month at a time. The separate `@submilli/github` package uses GitHub

@@ -1,7 +1,7 @@
 import { get, post } from "submilli:http";
 import { ProviderIssue, Result, GitHubGetUserOptions, GitHubGetUserData, GitHubListUserRepositoriesOptions, GitHubListUserRepositoriesData, GitHubListUserPullRequestsOptions, GitHubListUserPullRequestsData, GitHubListUserActivityOptions, GitHubListUserActivityData, GitHubListFollowersOptions, GitHubListFollowersData, GitHubListFollowingOptions, GitHubListFollowingData, GitHubGetContributionsOptions, GitHubGetContributionsData, GitHubGetRepositoryOptions, GitHubGetRepositoryData, GitHubListTrendingRepositoriesOptions, GitHubListTrendingRepositoriesData, GitHubListTrendingDevelopersOptions, GitHubListTrendingDevelopersData } from "./types";
 export { ProviderIssue, Result, GitHubGetUserOptions, GitHubGetUserData, GitHubListUserRepositoriesOptions, GitHubListUserRepositoriesData, GitHubListUserPullRequestsOptions, GitHubListUserPullRequestsData, GitHubListUserActivityOptions, GitHubListUserActivityData, GitHubListFollowersOptions, GitHubListFollowersData, GitHubListFollowingOptions, GitHubListFollowingData, GitHubGetContributionsOptions, GitHubGetContributionsData, GitHubGetRepositoryOptions, GitHubGetRepositoryData, GitHubListTrendingRepositoriesOptions, GitHubListTrendingRepositoriesData, GitHubListTrendingDevelopersOptions, GitHubListTrendingDevelopersData } from "./types";
-import { responseIssues, stringParam, booleanParam, integerParam, queryString, requireIdentity, authHeaders, readResponse, invalidArgument, invalidResponse, validateDates, validateSearchCursor, redditCommentsBody } from "./transport";
+import { responseIssues, stringParam, booleanParam, integerParam, queryString, requireIdentity, authHeaders, readResponse, invalidArgument, invalidResponse, invalidResponseFrom, validateDates, validateSearchCursor, redditCommentsBody } from "./transport";
 /** GitHub public-data operations through ScrapeCreators. */
 export class GitHubTransport {
     /** User.
@@ -18,11 +18,11 @@ export class GitHubTransport {
         try {
             const data = raw as GitHubGetUserData;
             if (typeof data.login !== "string" || data.login.trim().length === 0)
-                throw invalidResponse();
+                throw invalidResponse("login is missing or blank");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Repositories.
@@ -43,11 +43,11 @@ export class GitHubTransport {
         try {
             const data = raw as GitHubListUserRepositoriesData;
             if (!Array.isArray(data.repositories))
-                throw invalidResponse();
+                throw invalidResponse("repositories is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Pull Requests.
@@ -66,11 +66,11 @@ export class GitHubTransport {
         try {
             const data = raw as GitHubListUserPullRequestsData;
             if (!Array.isArray(data.pull_requests))
-                throw invalidResponse();
+                throw invalidResponse("pull_requests is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Activity.
@@ -89,11 +89,11 @@ export class GitHubTransport {
         try {
             const data = raw as GitHubListUserActivityData;
             if (!Array.isArray(data.activity))
-                throw invalidResponse();
+                throw invalidResponse("activity is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Followers.
@@ -111,11 +111,11 @@ export class GitHubTransport {
         try {
             const data = raw as GitHubListFollowersData;
             if (!Array.isArray(data.followers))
-                throw invalidResponse();
+                throw invalidResponse("followers is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Following.
@@ -133,11 +133,11 @@ export class GitHubTransport {
         try {
             const data = raw as GitHubListFollowingData;
             if (!Array.isArray(data.following))
-                throw invalidResponse();
+                throw invalidResponse("following is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Contributions.
@@ -155,11 +155,11 @@ export class GitHubTransport {
         try {
             const data = raw as GitHubGetContributionsData;
             if (data.contributions === null || typeof data.contributions !== "object" || Array.isArray(data.contributions))
-                throw invalidResponse();
+                throw invalidResponse("contributions is not an object");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Repository.
@@ -174,11 +174,11 @@ export class GitHubTransport {
         try {
             const data = raw as GitHubGetRepositoryData;
             if (data.repository === null || typeof data.repository !== "object" || Array.isArray(data.repository))
-                throw invalidResponse();
+                throw invalidResponse("repository is not an object");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Trending Repositories.
@@ -195,11 +195,11 @@ export class GitHubTransport {
         try {
             const data = raw as GitHubListTrendingRepositoriesData;
             if (!Array.isArray(data.repositories))
-                throw invalidResponse();
+                throw invalidResponse("repositories is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Trending Developers.
@@ -215,11 +215,11 @@ export class GitHubTransport {
         try {
             const data = raw as GitHubListTrendingDevelopersData;
             if (!Array.isArray(data.developers))
-                throw invalidResponse();
+                throw invalidResponse("developers is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
 }

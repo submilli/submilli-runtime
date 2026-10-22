@@ -1,7 +1,7 @@
 import { get, post } from "submilli:http";
 import { ProviderIssue, Result, LinkedInGetProfileOptions, LinkedInGetProfileData, LinkedInGetCompanyOptions, LinkedInGetCompanyData, LinkedInListCompanyPostsOptions, LinkedInListCompanyPostsData, LinkedInSearchPostsOptions, LinkedInSearchPostsData, LinkedInGetPostOptions, LinkedInGetPostData, LinkedInGetTranscriptOptions, LinkedInGetTranscriptData } from "./types";
 export { ProviderIssue, Result, LinkedInGetProfileOptions, LinkedInGetProfileData, LinkedInGetCompanyOptions, LinkedInGetCompanyData, LinkedInListCompanyPostsOptions, LinkedInListCompanyPostsData, LinkedInSearchPostsOptions, LinkedInSearchPostsData, LinkedInGetPostOptions, LinkedInGetPostData, LinkedInGetTranscriptOptions, LinkedInGetTranscriptData } from "./types";
-import { responseIssues, stringParam, booleanParam, integerParam, queryString, requireIdentity, authHeaders, readResponse, invalidArgument, invalidResponse, validateDates, validateSearchCursor, redditCommentsBody } from "./transport";
+import { responseIssues, stringParam, booleanParam, integerParam, queryString, requireIdentity, authHeaders, readResponse, invalidArgument, invalidResponse, invalidResponseFrom, validateDates, validateSearchCursor, redditCommentsBody } from "./transport";
 /** LinkedIn public-data operations through ScrapeCreators. */
 export class LinkedInTransport {
     /** Person's Profile.
@@ -11,16 +11,19 @@ export class LinkedInTransport {
     getProfile(options: LinkedInGetProfileOptions): Result<LinkedInGetProfileData> {
         const params = new Map<string, string>();
         stringParam(params, "url", options.url, true);
+        // The provider charges for, then refuses, company and school pages.
+        if (!/^https?:\/\/([a-z0-9-]+\.)*linkedin\.com\/in\/[^/?#]+/i.test(options.url))
+            throw invalidArgument("url must be a person's profile, linkedin.com/in/<handle>; use getCompany for company pages");
         const response = get("https://api.scrapecreators.com/v1/linkedin/profile" + queryString(params), authHeaders());
         const raw = readResponse(response);
         try {
             const data = raw as LinkedInGetProfileData;
             if (typeof data.name !== "string" || data.name.trim().length === 0)
-                throw invalidResponse();
+                throw invalidResponse("name is missing or blank");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Company Page.
@@ -35,11 +38,11 @@ export class LinkedInTransport {
         try {
             const data = raw as LinkedInGetCompanyData;
             if (typeof data.name !== "string" || data.name.trim().length === 0)
-                throw invalidResponse();
+                throw invalidResponse("name is missing or blank");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Company Posts.
@@ -55,11 +58,11 @@ export class LinkedInTransport {
         try {
             const data = raw as LinkedInListCompanyPostsData;
             if (!Array.isArray(data.posts))
-                throw invalidResponse();
+                throw invalidResponse("posts is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Search Posts.
@@ -77,11 +80,11 @@ export class LinkedInTransport {
         try {
             const data = raw as LinkedInSearchPostsData;
             if (!Array.isArray(data.posts))
-                throw invalidResponse();
+                throw invalidResponse("posts is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Post.
@@ -96,11 +99,11 @@ export class LinkedInTransport {
         try {
             const data = raw as LinkedInGetPostData;
             if (typeof data.url !== "string" || data.url.trim().length === 0)
-                throw invalidResponse();
+                throw invalidResponse("url is missing or blank");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Post Transcript.
@@ -115,11 +118,11 @@ export class LinkedInTransport {
         try {
             const data = raw as LinkedInGetTranscriptData;
             if (data.transcript === undefined)
-                throw invalidResponse();
+                throw invalidResponse("transcript is missing");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
 }

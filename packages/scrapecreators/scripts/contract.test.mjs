@@ -73,7 +73,8 @@ for (const op of operations) {
     });
     test(`${op.platform}.${op.method}: missing endpoint data is rejected`, () => {
         reset(); host.response(() => ({ data: { success: true } }));
-        assert.throws(() => call(op, minimal(op)), expectCode('invalid_response'));
+        // The message names the endpoint field that failed its check.
+        assert.throws(() => call(op, minimal(op)), error => expectCode('invalid_response')(error) && /^ScrapeCreators returned an invalid response: \w+ is /.test(error.message));
     });
     test(`${op.platform}.${op.method}: every documented option reaches its wire parameter`, () => {
         for (const p of op.parameters) {
@@ -201,12 +202,35 @@ test('HTTP and HTTP-200 provider errors retain status, code and Retry-After', ()
         assert.throws(() => api.twitter.getProfile({ handle: 'example' }), error => expectCode(code)(error) && error.status === status && error.providerCode === 'upstream' && error.retryAfter === '2');
         assert.equal(host.requests.length, 1);
     }
-    for (const [message, code] of [['Insufficient credits', 'quota_exceeded'], ['Invalid API key', 'unauthorized'], ['Rate limit exceeded', 'rate_limited']]) {
+    for (const [message, code] of [['Insufficient credits', 'quota_exceeded'], ['Invalid API key', 'unauthorized'], ['Rate limit exceeded', 'rate_limited'], ['Account is private or just not publicly available :(', 'unavailable_content']]) {
         assert.throws(() => api.decodeResponse(JSON.stringify({ success: false, error: message })), expectCode(code));
     }
     assert.throws(() => api.decodeResponse('<html>bad gateway</html>', 503), expectCode('provider_error'));
     for (const text of ['{}', 'null', '[]', '1', '"text"', '{"success":"true"}', 'broken']) {
         assert.throws(() => api.decodeResponse(text), expectCode('invalid_response'));
+    }
+});
+
+test('linkedin.getProfile rejects company and school pages before the request', () => {
+    for (const url of ['https://www.linkedin.com/company/microsoft', 'https://www.linkedin.com/school/belmont-university/', 'https://www.linkedin.com/in/', 'https://www.linkedin.com/company/acme?ref=linkedin.com/in/x', 'https://example.com/linkedin.com/in/x']) {
+        reset(); host.response(() => ({ data: outcome(operations.find(op => op.platform === 'linkedin' && op.method === 'getProfile')) }));
+        assert.throws(() => api.linkedin.getProfile({ url }), expectCode('invalid_argument'));
+        assert.equal(host.requests.length, 0);
+    }
+});
+
+test('linkedin.getProfile accepts person URLs on any LinkedIn host and case', () => {
+    for (const url of ['https://ca.linkedin.com/in/stevemcody', 'https://www.LinkedIn.com/IN/parrsam/', 'http://linkedin.com/in/parrsam?trk=feed']) {
+        reset(); host.response(() => ({ data: outcome(operations.find(op => op.platform === 'linkedin' && op.method === 'getProfile')) }));
+        api.linkedin.getProfile({ url });
+        assert.equal(host.requests.length, 1);
+    }
+});
+
+test('private-account text is unavailable content at any status except auth failures', () => {
+    const body = JSON.stringify({ success: false, message: 'Account is private or just not publicly available :(' });
+    for (const [status, code] of [[200, 'unavailable_content'], [400, 'unavailable_content'], [500, 'unavailable_content'], [401, 'unauthorized'], [403, 'forbidden']]) {
+        assert.throws(() => api.decodeResponse(body, status), expectCode(code));
     }
 });
 

@@ -133,6 +133,11 @@ without credentials or I/O; it returns `unknown`, not an endpoint-specific type.
 - **LinkedIn:** post search uses Google indexing and is incomplete; a date filter
   cannot guarantee exhaustive recent coverage. Search cursors range from 1–11.
 <!-- submilli:endif -->
+<!-- submilli:if capability="scrapecreators.com/linkedin.getProfile" -->
+- **LinkedIn:** `getProfile` takes only person URLs (`linkedin.com/in/<handle>`);
+  post authors can be company pages, which it rejects. Private profiles throw
+  `unavailable_content`.
+<!-- submilli:endif -->
 <!-- submilli:if capability="scrapecreators.com/linkedin.getPost" -->
 - **LinkedIn:** there is no standalone comments endpoint in this client: post details
   retain comments the provider returns.
