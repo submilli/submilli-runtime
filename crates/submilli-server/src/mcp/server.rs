@@ -8,8 +8,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use interpreter::runtime::fs::{ContainError, ContentPath, guest_normalize, resolve_content};
-use interpreter::runtime::security::AuditDecision;
-use interpreter::runtime::{CallSite, CheckOutcome, EntryPath, SecurityCheck, Vfs, VfsInfo};
+use interpreter::runtime::{CheckOutcome, SecurityCheck, Vfs, VfsInfo};
 use interpreter::stdlib::fs::handles::kind_of;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::{Extension, ToolCallContext};
@@ -24,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use submilli_blueprint::{Blueprint, HarnessSecretBindings, VfsConfig, required_harness_secrets};
 use submilli_shared::PolicyCheck;
 
-use crate::app::{AppState, BlueprintForRun};
+use crate::app::AppState;
 use crate::error::ExecuteError;
 use crate::handlers::execute::{ExecuteInputs, VfsSource, blueprint_miss_message, execute_core};
 use crate::packages;
@@ -139,14 +138,6 @@ struct ExecuteOutput {
     error: Option<ExecuteError>,
 }
 
-/// The client's name from its `initialize`, for the run's record.
-#[derive(Clone)]
-struct McpClient(String);
-
-/// The client's id for the tool call, for the run's record and events.
-#[derive(Clone)]
-struct McpToolCall(String);
-
 /// The `mcp-session-id` header, present on every request in stateful mode.
 fn session_header(parts: &axum::http::request::Parts) -> Option<String> {
     parts
@@ -187,15 +178,15 @@ impl SubmilliMcp {
         }
     }
 
-    /// The current blueprint for a tool that cannot run without one, with the version
-    /// tag read in the same lookup for its run to record. A name whose stored revision
-    /// this binary can no longer parse stays reserved but has no runnable blueprint, so
-    /// the refusal names that reason instead of telling the agent the endpoint it is
-    /// connected to addresses nothing.
-    async fn require_blueprint_for_run(&self) -> Result<BlueprintForRun, ErrorData> {
+    /// The current blueprint for a tool that cannot run without one. A name whose stored
+    /// revision this binary can no longer parse stays reserved but has no runnable
+    /// blueprint, so the refusal names that reason instead of telling the agent the
+    /// endpoint it is connected to addresses nothing.
+    async fn require_blueprint(&self) -> Result<Blueprint, ErrorData> {
         match self
             .state
-            .blueprint_for_run(&self.blueprint_name)
+            .blueprints()
+            .get(&self.blueprint_name)
             .await
             .map_err(blueprint_store_error)?
         {
@@ -314,19 +305,13 @@ impl SubmilliMcp {
         parts: axum::http::request::Parts,
         audit: Arc<crate::audit::ExecutionAudit>,
     ) -> Result<CallToolResult, ErrorData> {
-        let BlueprintForRun {
-            blueprint,
-            version_tag,
-        } = self
-            .require_blueprint_for_run()
-            .await
-            .inspect_err(|error| {
-                audit.error(if error.code == ErrorCode::INTERNAL_ERROR {
-                    crate::error::ErrorKind::RuntimeError
-                } else {
-                    crate::error::ErrorKind::BlueprintNotFound
-                });
-            })?;
+        let blueprint = self.require_blueprint().await.inspect_err(|error| {
+            audit.error(if error.code == ErrorCode::INTERNAL_ERROR {
+                crate::error::ErrorKind::RuntimeError
+            } else {
+                crate::error::ErrorKind::BlueprintNotFound
+            });
+        })?;
         let blueprint = Arc::new(blueprint);
 
         // Stateful transport: every connection has a session id (rmcp rejects a
@@ -389,20 +374,11 @@ impl SubmilliMcp {
                 code: &args.code,
                 blueprint_name: &self.blueprint_name,
                 blueprint,
-                version_tag,
                 variables,
                 harness_secrets,
                 audit: Some(audit),
                 vfs_source: VfsSource::Mcp { vfs, vfs_info },
-                run_entry: crate::record::RunEntry::Mcp,
-                client: parts
-                    .extensions
-                    .get::<McpClient>()
-                    .map(|client| client.0.clone()),
-                tool_call_id: parts
-                    .extensions
-                    .get::<McpToolCall>()
-                    .map(|call| call.0.clone()),
+                run_entry: "mcp",
                 idempotency_key: None,
                 // MCP's `tools/call` cannot suspend: no application tools here.
                 tools: None,
@@ -593,8 +569,7 @@ impl SubmilliMcp {
         Parameters(args): Parameters<ReadFileArgs>,
         Extension(parts): Extension<axum::http::request::Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let tagged = TaggedBlueprint::from(self.require_blueprint_for_run().await?);
-        let blueprint = &tagged.blueprint;
+        let blueprint = Arc::new(self.require_blueprint().await?);
 
         let session_id = session_header(&parts);
         let variables = self
@@ -605,12 +580,9 @@ impl SubmilliMcp {
             .map_err(vfs_session_error)?;
         if let Err(refused) = self.authorize_file_call(
             &parts,
-            &tagged,
+            &blueprint,
             Arc::clone(&variables),
-            FileTool {
-                name: "submilli__files__read",
-                capability: "fs.read",
-            },
+            "fs.read",
             &args.path,
             None,
         ) {
@@ -618,7 +590,7 @@ impl SubmilliMcp {
         }
         let (vfs, _info) = self
             .acquire_vfs(
-                blueprint,
+                &blueprint,
                 session_id.as_deref(),
                 VfsUse::ReadFiles,
                 &variables,
@@ -656,8 +628,7 @@ impl SubmilliMcp {
         Parameters(args): Parameters<ListFilesArgs>,
         Extension(parts): Extension<axum::http::request::Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let tagged = TaggedBlueprint::from(self.require_blueprint_for_run().await?);
-        let blueprint = &tagged.blueprint;
+        let blueprint = Arc::new(self.require_blueprint().await?);
 
         let session_id = session_header(&parts);
         let variables = self
@@ -670,12 +641,9 @@ impl SubmilliMcp {
         let recursive = args.recursive.unwrap_or(false);
         if let Err(refused) = self.authorize_file_call(
             &parts,
-            &tagged,
+            &blueprint,
             Arc::clone(&variables),
-            FileTool {
-                name: "submilli__files__list",
-                capability: "fs.list",
-            },
+            "fs.list",
             dir,
             Some(recursive),
         ) {
@@ -683,7 +651,7 @@ impl SubmilliMcp {
         }
         let (vfs, _info) = self
             .acquire_vfs(
-                blueprint,
+                &blueprint,
                 session_id.as_deref(),
                 VfsUse::ReadFiles,
                 &variables,
@@ -722,14 +690,12 @@ impl SubmilliMcp {
     fn authorize_file_call(
         &self,
         parts: &axum::http::request::Parts,
-        tagged: &TaggedBlueprint,
+        blueprint: &Arc<Blueprint>,
         variables: Arc<submilli_blueprint::VarBindings>,
-        tool: FileTool<'_>,
+        capability: &str,
         path: &str,
         recursive: Option<bool>,
     ) -> Result<(), FileToolError> {
-        let capability = tool.capability;
-        let blueprint = &tagged.blueprint;
         let mut context = serde_json::Map::new();
         context.insert("path".into(), path.into());
         if let Some(recursive) = recursive {
@@ -742,18 +708,7 @@ impl SubmilliMcp {
             .map_err(|error| FileToolError::denied(capability, &error.to_string()))?;
         guest_normalize(config.cwd(), path)
             .map_err(|error| FileToolError::file(path, error.into()))?;
-        let recording = self.file_tool_recording(parts, tagged, &variables, tool.name);
-        let log = recording.as_ref().map(crate::record::Recording::log);
-        let policy: Arc<dyn SecurityCheck> =
-            Arc::new(PolicyCheck::with_variables(blueprint.clone(), variables));
-        let policy = log.as_ref().map_or(policy.clone(), |log| log.wrap(policy));
-        let call = policy.recorder().map(|recorder| {
-            let marker = recorder.enter_host_call();
-            (
-                marker,
-                recorder.begin_call("main", capability, Default::default()),
-            )
-        });
+        let policy = PolicyCheck::with_variables(blueprint.clone(), variables);
         let outcome = policy.check_with_cwd("main", capability, &context, config.cwd());
         let audit_context = policy.audit_context(capability, &context, config.cwd());
         self.state.audit().file_decision(
@@ -763,174 +718,15 @@ impl SubmilliMcp {
             audit_context.as_ref(),
             &outcome,
         );
-        let (allowed, rule, refusal) = match outcome {
-            CheckOutcome::Allow { rule } => (true, rule, None),
-            CheckOutcome::Deny { reason, rule } => (false, rule, Some(reason)),
-            _ => (false, None, Some("unrecognized policy outcome".to_string())),
-        };
-        if let (Some(recording), Some(log), Some((marker, ticket))) = (recording, log, call) {
-            finish_file_tool_run(
-                &recording,
-                &log,
-                &FileToolCall {
-                    policy: policy.as_ref(),
-                    tool,
-                    context: &context,
-                    audit_context: audit_context.as_ref(),
-                    cwd: config.cwd(),
-                    allowed,
-                    rule,
-                    refusal: refusal.as_deref(),
-                    marker,
-                    ticket,
-                },
-            );
-        }
-        match refusal {
-            None => Ok(()),
-            Some(reason) => Err(FileToolError::denied(capability, &reason)),
+        match outcome {
+            CheckOutcome::Allow { .. } => Ok(()),
+            CheckOutcome::Deny { reason, .. } => Err(FileToolError::denied(capability, &reason)),
+            _ => Err(FileToolError::denied(
+                capability,
+                "unrecognized policy outcome",
+            )),
         }
     }
-
-    /// A file tool's decision is a run of its own, when runs are recorded. Nothing is
-    /// built for a server without a run recorder.
-    fn file_tool_recording(
-        &self,
-        parts: &axum::http::request::Parts,
-        tagged: &TaggedBlueprint,
-        variables: &Arc<submilli_blueprint::VarBindings>,
-        tool: &str,
-    ) -> Option<crate::record::Recording> {
-        let blueprint = &tagged.blueprint;
-        crate::record::Recording::start(&self.state, || crate::record::RunStart {
-            execution_id: uuid::Uuid::new_v4().to_string(),
-            label: parts
-                .extensions
-                .get::<crate::audit::Principal>()
-                .map_or_else(|| "unauthenticated".to_owned(), |p| p.0.clone()),
-            entry: crate::record::RunEntry::McpFileTool { tool: tool.into() },
-            test_of: None,
-            client: parts.extensions.get::<McpClient>().map(|c| c.0.clone()),
-            tool_call_id: parts.extensions.get::<McpToolCall>().map(|c| c.0.clone()),
-            session_id: session_header(parts),
-            idempotency_key: None,
-            blueprint_name: self.blueprint_name.clone(),
-            blueprint: Arc::clone(blueprint),
-            blueprint_hash: crate::audit::blueprint_hash(blueprint),
-            blueprint_version: tagged
-                .version_tag
-                .clone()
-                .or_else(|| crate::audit::blueprint_hash(blueprint)),
-            variables: Arc::clone(variables),
-            // A file tool runs no program and reads no secret.
-            harness_secrets: Arc::default(),
-            code: None,
-        })
-    }
-}
-
-/// [`BlueprintForRun`], shared: a file tool's blueprint, and the version tag its run is
-/// recorded under.
-struct TaggedBlueprint {
-    blueprint: Arc<Blueprint>,
-    version_tag: Option<String>,
-}
-
-impl From<BlueprintForRun> for TaggedBlueprint {
-    fn from(
-        BlueprintForRun {
-            blueprint,
-            version_tag,
-        }: BlueprintForRun,
-    ) -> Self {
-        Self {
-            blueprint: Arc::new(blueprint),
-            version_tag,
-        }
-    }
-}
-
-/// A file tool: its name as the record gives it, and the capability it is gated by.
-#[derive(Clone, Copy)]
-struct FileTool<'a> {
-    name: &'a str,
-    capability: &'a str,
-}
-
-/// One file tool call and the policy's decision on it, with what the run's record needs.
-struct FileToolCall<'a> {
-    policy: &'a dyn SecurityCheck,
-    tool: FileTool<'a>,
-    /// The call's context as the tool built it, for the policy to explain.
-    context: &'a serde_json::Value,
-    /// The context the policy actually tested, for the record.
-    audit_context: &'a serde_json::Value,
-    cwd: &'a str,
-    allowed: bool,
-    rule: Option<usize>,
-    /// The denial's reason; `None` when allowed.
-    refusal: Option<&'a str>,
-    /// Where the call's host-call span began, and its ticket.
-    marker: u64,
-    ticket: interpreter::runtime::CallTicket,
-}
-
-/// Records the decision and finishes the run. A file tool's run is its one decision: it
-/// ends here, so the read's own I/O and its outcome are not part of it.
-fn finish_file_tool_run(
-    recording: &crate::record::Recording,
-    log: &interpreter::runtime::DecisionLog,
-    call: &FileToolCall<'_>,
-) {
-    let FileToolCall {
-        policy,
-        tool,
-        context,
-        audit_context,
-        cwd,
-        allowed,
-        rule,
-        refusal,
-        marker,
-        ticket,
-    } = *call;
-    let capability = tool.capability;
-    let explanation = policy.explain("main", capability, context, cwd);
-    policy.audit(
-        AuditDecision::new(
-            "main",
-            capability,
-            audit_context,
-            allowed,
-            "policy",
-            rule,
-            refusal,
-        )
-        .with_explanation(explanation.as_ref())
-        .with_site(CallSite::new(Some(ticket), EntryPath::FileTool)),
-    );
-    if let Some(recorder) = policy.recorder() {
-        recorder.exit_host_call(marker, allowed);
-    }
-    recording.finish(crate::record::FinishedRun {
-        dispatched: true,
-        error: refusal.map(|reason| ExecuteError {
-            kind: crate::error::ErrorKind::PermissionDenied,
-            message: FileToolError::denied(capability, reason).message,
-            diagnostics: Vec::new(),
-            denial: Some(crate::error::DenialDetails {
-                caller: "main".into(),
-                capability: capability.into(),
-                source: "policy",
-            }),
-        }),
-        result: None,
-        console: String::new(),
-        usage: interpreter::runtime::limits::ExecutionUsage::default(),
-        log: log.finish(),
-        mcp_catalog: None,
-        wall: recording.started.elapsed(),
-    });
 }
 
 /// A file tool call that failed for this call alone: a denial, a missing file, a
@@ -1149,40 +945,9 @@ impl ServerHandler for SubmilliMcp {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        mut context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        let tool_call_id = tool_call_id(&context);
-        attach_run_context(&mut context, tool_call_id.clone());
-        let Some(hub) = self.state.event_hub().cloned() else {
-            return self.dispatch_tool(request, context).await;
-        };
-        let started = std::time::Instant::now();
-        let tool = request.name.to_string();
-        let session = context
-            .extensions
-            .get::<axum::http::request::Parts>()
-            .and_then(session_header);
-        let result = self.dispatch_tool(request, context).await;
-        let (ok, bytes) = match &result {
-            Ok(result) => (
-                !result.is_error.unwrap_or(false),
-                serde_json::to_vec(result).map_or(0, |bytes| bytes.len() as u64),
-            ),
-            Err(error) => (
-                false,
-                serde_json::to_vec(error).map_or(0, |bytes| bytes.len() as u64),
-            ),
-        };
-        crate::record::events::tool_call(
-            &hub,
-            session.as_deref(),
-            tool_call_id.as_deref(),
-            &tool,
-            ok,
-            bytes,
-            started.elapsed(),
-        );
-        result
+        self.dispatch_tool(request, context).await
     }
 
     async fn list_tools(
@@ -1299,44 +1064,6 @@ impl SubmilliMcp {
         let success = result.as_ref().is_ok_and(|r| !r.is_error.unwrap_or(false));
         audit.finish(success);
         with_execution_id(result, &audit.id)
-    }
-}
-
-/// The longest `tool_call_id` kept. A client's id is an opaque handle of a few dozen
-/// bytes; a longer one is not an id worth carrying through every record and event, so it
-/// is dropped rather than truncated, which could make two ids collide.
-const MAX_TOOL_CALL_ID_BYTES: usize = 256;
-
-/// The client's id for this tool call, when it names a usable one: Claude Code sends
-/// `claudecode/toolUseId` in the request's `_meta`.
-fn tool_call_id(context: &RequestContext<RoleServer>) -> Option<String> {
-    context
-        .meta
-        .0
-        .get("claudecode/toolUseId")
-        .and_then(serde_json::Value::as_str)
-        .and_then(usable_tool_call_id)
-}
-
-fn usable_tool_call_id(id: &str) -> Option<String> {
-    (id.len() <= MAX_TOOL_CALL_ID_BYTES).then(|| id.to_owned())
-}
-
-/// Puts what the run's record needs of the call where the tools find it: the client's
-/// name from its `initialize` and the id of this tool call.
-fn attach_run_context(context: &mut RequestContext<RoleServer>, tool_call_id: Option<String>) {
-    let client = context
-        .peer
-        .peer_info()
-        .map(|info| McpClient(info.client_info.name.clone()));
-    let Some(parts) = context.extensions.get_mut::<axum::http::request::Parts>() else {
-        return;
-    };
-    if let Some(client) = client {
-        parts.extensions.insert(client);
-    }
-    if let Some(id) = tool_call_id {
-        parts.extensions.insert(McpToolCall(id));
     }
 }
 
@@ -1467,19 +1194,5 @@ mod tests {
         ] {
             assert_eq!(tool_call_failure(error.clone()).unwrap_err(), error);
         }
-    }
-
-    #[test]
-    fn an_overlong_tool_call_id_is_dropped() {
-        let at_cap = "a".repeat(MAX_TOOL_CALL_ID_BYTES);
-        assert_eq!(
-            usable_tool_call_id(&at_cap).as_deref(),
-            Some(at_cap.as_str())
-        );
-        assert_eq!(
-            usable_tool_call_id(&"a".repeat(MAX_TOOL_CALL_ID_BYTES + 1)),
-            None
-        );
-        assert_eq!(usable_tool_call_id("toolu_01").as_deref(), Some("toolu_01"));
     }
 }

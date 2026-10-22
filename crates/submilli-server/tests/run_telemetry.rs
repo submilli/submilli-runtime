@@ -1,7 +1,6 @@
-//! `ServerConfig::run_telemetry` decides whether a failed run, and the metrics a
-//! run's outside calls emit, reach a Sentry client bound in the process, as the
-//! CLI's own telemetry binds one when it is on. Its own test binary, with one test,
-//! because the client is process-wide.
+//! A failed run, and the metrics a run's outside calls emit, reach a Sentry client
+//! bound in the process. Its own test binary, with one test, because the client is
+//! process-wide.
 
 #[path = "common/in_memory_config.rs"]
 mod in_memory_config;
@@ -16,7 +15,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use sentry::test::TestTransport;
 use serde_json::{Value, json};
-use submilli_server::{AppState, NetworkPolicy, RunTelemetry, ServerConfig, app};
+use submilli_server::{AppState, NetworkPolicy, ServerConfig, app};
 use tower::ServiceExt;
 
 const BLUEPRINT: &str = "name: demo\n";
@@ -41,8 +40,8 @@ async fn post(router: &axum::Router, path: &str, body: Value) -> (StatusCode, Va
 /// The metric an HTTP call a program makes is reported under.
 const HTTP_METRIC: &str = "submilli.server.http.duration_ms";
 
-async fn run_failing_program(telemetry: RunTelemetry) {
-    let router = router(telemetry, BLUEPRINT).await;
+async fn run_failing_program() {
+    let router = router(BLUEPRINT).await;
     let (status, body) = post(
         &router,
         "/v1/execute",
@@ -53,9 +52,8 @@ async fn run_failing_program(telemetry: RunTelemetry) {
     assert_eq!(body["error"]["kind"], "runtime_error", "{body}");
 }
 
-async fn router(telemetry: RunTelemetry, blueprint: &str) -> axum::Router {
+async fn router(blueprint: &str) -> axum::Router {
     let config = ServerConfig {
-        run_telemetry: telemetry,
         network_policy: NetworkPolicy::deny_private().allow_localhost(true),
         ..in_memory_config::config()
     };
@@ -81,9 +79,9 @@ fn ok_fixture() -> u16 {
     port
 }
 
-async fn run_http_program(telemetry: RunTelemetry, port: u16) {
+async fn run_http_program(port: u16) {
     let blueprint = "name: demo\nallow_insecure_http: true\npermissions:\n  main:\n    - capability: http.get\n      action: allow\n";
-    let router = router(telemetry, blueprint).await;
+    let router = router(blueprint).await;
     let code = format!(
         "import {{ get, Response }} from \"submilli:http\";\nfunction main(): string {{ const r: Response = get(\"http://127.0.0.1:{port}/\"); return r.body; }}"
     );
@@ -113,7 +111,7 @@ fn sent_http_metric(transport: &TestTransport) -> bool {
 }
 
 #[test]
-fn a_run_reaches_sentry_only_when_run_telemetry_reports() {
+fn a_run_reaches_sentry() {
     let transport = TestTransport::new();
     let _guard = sentry::init(sentry::ClientOptions {
         dsn: Some("https://public@sentry.invalid/1".parse().unwrap()),
@@ -126,31 +124,12 @@ fn a_run_reaches_sentry_only_when_run_telemetry_reports() {
         .build()
         .unwrap();
 
-    runtime.block_on(run_failing_program(RunTelemetry::Off));
-    let events = transport.fetch_and_clear_events();
-    assert!(
-        events.is_empty(),
-        "run telemetry off still reported: {events:?}"
-    );
-
-    // The control: the same failure with the default does reach the client, so the
-    // empty result above is the setting at work, not a client that never captures.
-    runtime.block_on(run_failing_program(RunTelemetry::default()));
+    runtime.block_on(run_failing_program());
     let events = transport.fetch_and_clear_events();
     assert_eq!(events.len(), 1, "{events:?}");
 
-    // A run's HTTP metrics: none with run telemetry off, and, as the control, some
-    // with the default.
     let port = ok_fixture();
     let _ = sent_http_metric(&transport);
-    runtime.block_on(run_http_program(RunTelemetry::Off, port));
-    assert!(
-        !sent_http_metric(&transport),
-        "run telemetry off still sent the run's HTTP metrics"
-    );
-    runtime.block_on(run_http_program(RunTelemetry::default(), port));
-    assert!(
-        sent_http_metric(&transport),
-        "the control sent no HTTP metric"
-    );
+    runtime.block_on(run_http_program(port));
+    assert!(sent_http_metric(&transport), "the run sent no HTTP metric");
 }
