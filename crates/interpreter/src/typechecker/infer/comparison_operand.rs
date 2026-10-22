@@ -10,6 +10,24 @@ use crate::{BinOp, ExprId, ExprKind, MangledName, Type, TypedExprKind, UnOp};
 use super::assignable::TypeResolver;
 use super::comparable::comparable;
 
+/// Which of the global numbers `Infinity` and `NaN` a constant may name: those
+/// no local shadows, as TypeScript's evaluator folds only the globals.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct GlobalNumbers {
+    pub(super) infinity: bool,
+    pub(super) nan: bool,
+}
+
+impl GlobalNumbers {
+    fn value(self, name: &str) -> Option<f64> {
+        match name {
+            "Infinity" if self.infinity => Some(f64::INFINITY),
+            "NaN" if self.nan => Some(f64::NAN),
+            _ => None,
+        }
+    }
+}
+
 /// An equality operand or `case` label as it is compared: its type, the enum it
 /// is a member of, and how a diagnostic names it.
 pub(super) struct ComparisonOperand {
@@ -77,6 +95,14 @@ fn enum_name(ty: &Type) -> Option<&MangledName> {
 }
 
 impl super::Inferer<'_> {
+    /// The global numbers no local binding in scope shadows here.
+    pub(super) fn global_numbers(&self) -> GlobalNumbers {
+        GlobalNumbers {
+            infinity: self.scopes.get("Infinity").is_none(),
+            nan: self.scopes.get("NaN").is_none(),
+        }
+    }
+
     /// The operand `source` (typed as `typed`) as it is compared: a template
     /// whose substitutions are all string or number literals is the string it
     /// spells, as `tsc` folds it (`` `abc${0}` `` compares as `"abc0"`); an enum
@@ -90,7 +116,7 @@ impl super::Inferer<'_> {
             .typed_ast
             .try_expr(typed)
             .map_err(crate::typechecker::arena_failure)?;
-        if let Some(text) = constant_template(self.ast, source)? {
+        if let Some(text) = constant_template(self.ast, source, self.global_numbers())? {
             return Ok(ComparisonOperand::of_type(Type::StringLiteral(text)));
         }
         let member_value = match &typed.kind {
@@ -185,9 +211,10 @@ impl ComparisonOperand {
 pub(super) fn constant_template(
     ast: &crate::Ast,
     id: ExprId,
+    globals: GlobalNumbers,
 ) -> Result<Option<String>, CompilerFailure> {
     let (parts, exprs) = match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
-        ExprKind::Paren(inner) => return constant_template(ast, *inner),
+        ExprKind::Paren(inner) => return constant_template(ast, *inner, globals),
         ExprKind::TemplateLiteral { parts, exprs, .. } => (parts, exprs),
         _ => return Ok(None),
     };
@@ -197,7 +224,7 @@ pub(super) fn constant_template(
         let Some(expr) = exprs.get(index) else {
             continue;
         };
-        let Some(value) = constant_substitution(ast, *expr)? else {
+        let Some(value) = constant_substitution(ast, *expr, globals)? else {
             return Ok(None);
         };
         push_literal_text(&mut text, &value);
@@ -208,21 +235,22 @@ pub(super) fn constant_template(
 pub(super) fn constant_substitution(
     ast: &crate::Ast,
     id: ExprId,
+    globals: GlobalNumbers,
 ) -> Result<Option<String>, CompilerFailure> {
     Ok(
         match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
-            ExprKind::Paren(inner) => constant_substitution(ast, *inner)?,
+            ExprKind::Paren(inner) => constant_substitution(ast, *inner, globals)?,
             ExprKind::String(value) => Some(value.clone()),
-            ExprKind::TemplateLiteral { .. } => constant_template(ast, id)?,
+            ExprKind::TemplateLiteral { .. } => constant_template(ast, id, globals)?,
             ExprKind::Binary {
                 op: BinOp::Add,
                 lhs,
                 rhs,
-            } if constant_number(ast, id)?.is_none() => {
+            } if constant_number(ast, id, globals)?.is_none() => {
                 // A concatenation: at least one side is a string.
                 match (
-                    constant_substitution(ast, *lhs)?,
-                    constant_substitution(ast, *rhs)?,
+                    constant_substitution(ast, *lhs, globals)?,
+                    constant_substitution(ast, *rhs, globals)?,
                 ) {
                     (Some(mut left), Some(right)) => {
                         push_literal_text(&mut left, &right);
@@ -231,7 +259,7 @@ pub(super) fn constant_substitution(
                     _ => None,
                 }
             }
-            _ => constant_number(ast, id)?.map(crate::runtime::number::format_number_js),
+            _ => constant_number(ast, id, globals)?.map(crate::runtime::number::format_number_js),
         },
     )
 }
@@ -239,27 +267,30 @@ pub(super) fn constant_substitution(
 pub(super) fn constant_number(
     ast: &crate::Ast,
     id: ExprId,
+    globals: GlobalNumbers,
 ) -> Result<Option<f64>, CompilerFailure> {
     Ok(
         match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
-            ExprKind::Paren(inner) => constant_number(ast, *inner)?,
+            ExprKind::Paren(inner) => constant_number(ast, *inner, globals)?,
             ExprKind::Number(value) => Some(*value),
+            ExprKind::Identifier(name) => globals.value(&name.name),
             ExprKind::Unary {
                 op: UnOp::Neg,
                 operand,
-            } => constant_number(ast, *operand)?.map(|value| -value),
+            } => constant_number(ast, *operand, globals)?.map(|value| -value),
             ExprKind::Unary {
                 op: UnOp::Pos,
                 operand,
-            } => constant_number(ast, *operand)?,
+            } => constant_number(ast, *operand, globals)?,
             ExprKind::Unary {
                 op: UnOp::BitNot,
                 operand,
-            } => constant_number(ast, *operand)?.map(|value| f64::from(!to_int32(value))),
+            } => constant_number(ast, *operand, globals)?.map(|value| f64::from(!to_int32(value))),
             ExprKind::Binary { op, lhs, rhs } => {
-                let (Some(left), Some(right)) =
-                    (constant_number(ast, *lhs)?, constant_number(ast, *rhs)?)
-                else {
+                let (Some(left), Some(right)) = (
+                    constant_number(ast, *lhs, globals)?,
+                    constant_number(ast, *rhs, globals)?,
+                ) else {
                     return Ok(None);
                 };
                 evaluate_number_operator(*op, left, right)

@@ -821,6 +821,17 @@ impl Type {
         }
     }
 
+    /// Whether this is the type of an array that holds no element at any
+    /// depth: `never[]`, `never[][]`, as an empty literal is typed.
+    pub fn holds_no_element(&self) -> bool {
+        match self.peel() {
+            Type::Array(element) => {
+                matches!(element.peel(), Type::Never) || element.holds_no_element()
+            }
+            _ => false,
+        }
+    }
+
     /// Whether this is a union of only arrays and tuples, which share the `$Array`
     /// representation.
     pub fn is_array_like_union(&self) -> bool {

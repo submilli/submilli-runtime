@@ -887,15 +887,30 @@ pub struct Ast {
     /// than the literal is a compile error (populated by `lower_patterns`).
     pub tuple_pattern_sources: std::collections::BTreeSet<ExprId>,
     /// For a parameter's tuple literal default shorter than its pattern, the
-    /// defaults of the slots past its end. TypeScript pads the default's type
-    /// with an optional element for each, so a caller may pass them.
-    pub tuple_pattern_pad_defaults: std::collections::BTreeMap<ExprId, Vec<ExprId>>,
+    /// defaults of the slots past its end (`None` for a hole). TypeScript pads
+    /// the default's type with an optional element for each, so a caller may
+    /// pass them.
+    pub tuple_pattern_pad_defaults: std::collections::BTreeMap<ExprId, Vec<Option<ExprId>>>,
+    /// For a parameter's object literal default, the properties its pattern
+    /// gives defaults that the literal lacks, with those defaults:
+    /// `{ a = 1 } = {}`. TypeScript adds each to the default's type as an
+    /// optional property, so a caller may pass it.
+    pub object_pattern_pad_defaults: std::collections::BTreeMap<ExprId, Vec<(String, ExprId)>>,
     /// Unannotated object literals an object pattern takes apart, with the
-    /// properties the pattern gives defaults: `{ a, b = 0 } = { a: 1, b: 2 }`.
-    /// TypeScript types such a literal from the pattern, so those properties
-    /// are optional in its type (populated by `lower_patterns`).
+    /// properties the pattern gives defaults and their defaults:
+    /// `{ a, b = 0 } = { a: 1, b: 2 }`. TypeScript types such a literal from
+    /// the pattern, so those properties are optional in its type (populated by
+    /// `lower_patterns`). A default that may read a name the pattern binds is
+    /// `None`: it can't be typed ahead of the pattern as the property's context.
     pub object_pattern_sources:
-        std::collections::BTreeMap<ExprId, std::collections::BTreeSet<String>>,
+        std::collections::BTreeMap<ExprId, std::collections::BTreeMap<String, Option<ExprId>>>,
+    /// For a tuple pattern source, the defaults of the pattern's slots the
+    /// literal fills, by index: `[a = 1] = [2]`.
+    pub tuple_pattern_defaults:
+        std::collections::BTreeMap<ExprId, std::collections::BTreeMap<usize, ExprId>>,
+    /// Pattern sources a `const` declaration takes apart, whose defaults keep
+    /// their literal types as the context of the literal's properties.
+    pub const_pattern_sources: std::collections::BTreeSet<ExprId>,
     /// Pattern decomposition statements, run immediately after their parameter initializes.
     pub parameter_bindings: std::collections::HashMap<Span, Vec<StmtId>>,
     /// Source names in lowered for-of heads, whose TDZ includes the iterable.
@@ -951,6 +966,22 @@ impl Ast {
 
     pub fn try_expr(&self, id: ExprId) -> Result<&Expr, ArenaError> {
         arena::get(&self.exprs, id.0, ArenaKind::Expressions)
+    }
+
+    /// Every expression whose span lies within `span`, nested function bodies
+    /// included.
+    pub fn exprs_within(&self, span: Span) -> impl Iterator<Item = &Expr> {
+        self.exprs
+            .iter()
+            .filter(move |expr| span.encloses(expr.span))
+    }
+
+    /// The expression `id` is through any parentheses around it.
+    pub fn try_peel_parens(&self, mut id: ExprId) -> Result<ExprId, ArenaError> {
+        while let ExprKind::Paren(inner) = &self.try_expr(id)?.kind {
+            id = *inner;
+        }
+        Ok(id)
     }
 
     pub fn try_stmt(&self, id: StmtId) -> Result<&Stmt, ArenaError> {

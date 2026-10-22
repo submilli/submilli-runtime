@@ -122,7 +122,8 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(crate::TypedExprKind, Type), CompilerFailure> {
         let Some(arrow) = immediately_invoked_arrow(self.ast, callee, &args)? else {
-            return self.infer_call(callee, type_args, args, expected, span);
+            return self
+                .infer_call_typing_invoked_parameters(callee, type_args, args, expected, span);
         };
         let arrow_span = self.ast.try_expr(arrow).map_err(super::arena_failure)?.span;
         self.immediately_invoked = Some(arrow_span);
@@ -136,6 +137,112 @@ impl Inferer<'_> {
             self.apply_invoked_body_exit(exit, span)?;
         }
         Ok(inferred)
+    }
+
+    /// [`Self::infer_call`], giving a function literal invoked in place the
+    /// types of its arguments for its unannotated parameters, as tsc types an
+    /// immediately-invoked function's parameters from its arguments.
+    fn infer_call_typing_invoked_parameters(
+        &mut self,
+        callee: ExprId,
+        type_args: Option<Vec<crate::TypeAnnotation>>,
+        args: Vec<ExprId>,
+        expected: Option<&Type>,
+        span: Span,
+    ) -> Result<(crate::TypedExprKind, Type), CompilerFailure> {
+        let Some(arrow) = super::expr::function_literal(self.ast, callee)? else {
+            return self.infer_call(callee, type_args, args, expected, span);
+        };
+        let arrow_expr = self.ast.try_expr(arrow).map_err(super::arena_failure)?;
+        let arrow_span = arrow_expr.span;
+        let ExprKind::Arrow { params, .. } = &arrow_expr.kind else {
+            return self.infer_call(callee, type_args, args, expected, span);
+        };
+        let params = params.clone();
+        // Arguments that hold calls like this one are inferred both here and
+        // in the call; remembering each argument's type until the outermost
+        // such call is inferred keeps nested ones from doubling the work. A
+        // loop starts afresh (see `without_argument_memo`).
+        let outermost = self.invoked_argument_memo.is_none();
+        if outermost {
+            self.invoked_argument_memo = Some(Default::default());
+        }
+        let types = self.invoked_argument_types(&params, &args);
+        let inferred = types.and_then(|types| {
+            let enclosing = self.invoked_parameter_types.take();
+            if types.iter().any(Option::is_some) {
+                self.invoked_parameter_types = Some((arrow_span, types));
+            }
+            let inferred = self.infer_call(callee, type_args, args, expected, span);
+            self.invoked_parameter_types = enclosing;
+            inferred
+        });
+        if outermost {
+            self.invoked_argument_memo = None;
+        }
+        inferred
+    }
+
+    /// Runs `infer` without the argument types remembered so far: a loop types
+    /// its condition and body again under the narrowing a pass leaves, where
+    /// those types no longer hold.
+    pub(super) fn without_argument_memo<T>(&mut self, infer: impl FnOnce(&mut Self) -> T) -> T {
+        let memo = self.invoked_argument_memo.take();
+        let inferred = infer(self);
+        self.invoked_argument_memo = memo;
+        inferred
+    }
+
+    /// The type each argument gives the unannotated parameter it is passed
+    /// to: its own type, widened, as tsc takes it. A function literal that
+    /// needs its parameter's type to be typed itself gives none, and nor does
+    /// one passed to a rest parameter.
+    fn invoked_argument_types(
+        &mut self,
+        params: &[crate::ParamDecl],
+        args: &[ExprId],
+    ) -> Result<Vec<Option<Type>>, CompilerFailure> {
+        let mut types = vec![None; params.len()];
+        for (index, (param, &arg)) in params.iter().zip(args).enumerate() {
+            if param.rest {
+                break;
+            }
+            if param.ty.is_some() || self.is_context_sensitive_function(arg)? {
+                continue;
+            }
+            if let Some(known) = self
+                .invoked_argument_memo
+                .as_ref()
+                .and_then(|memo| memo.get(&arg))
+            {
+                types[index] = known.clone();
+                continue;
+            }
+            // An argument in error reports itself; its parameter takes the
+            // error rather than asking for an annotation too.
+            let ty = Some(
+                self.speculative_expr_type(arg, false, true)?
+                    .unwrap_or(Type::Error),
+            );
+            if let Some(memo) = self.invoked_argument_memo.as_mut() {
+                memo.insert(arg, ty.clone());
+            }
+            types[index] = ty;
+        }
+        Ok(types)
+    }
+
+    /// The types the arguments give the unannotated parameters of the
+    /// function literal at `span`, when a call invokes it in place, by
+    /// position. Taken once, so a function literal inside it sees none.
+    pub(super) fn take_invoked_parameter_types(&mut self, span: Span) -> Vec<Option<Type>> {
+        match self.invoked_parameter_types.take() {
+            Some((invoked, types)) if invoked == span => types,
+            other => {
+                self.invoked_parameter_types = other;
+                Vec::new()
+            }
+        }
     }
 
     /// What the immediately-invoked body being left hands to the code after

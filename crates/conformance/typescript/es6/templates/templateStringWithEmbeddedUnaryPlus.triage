@@ -1,1 +1,0 @@
-line 2 type: bug SUB-1732 a template literal interpolating `Infinity` or `NaN` (here `+Infinity`) is `string`, where tsc folds it to a literal

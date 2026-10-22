@@ -4,7 +4,7 @@
 //! Synthesised array-pattern `IndexAccess` nodes are tagged in [`Ast::pattern_origins`]
 //! so the typechecker can rephrase index errors as destructure-specific diagnostics.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::compiler_error::{CompilerFailure, CompilerStage};
 use crate::tree_height;
@@ -542,7 +542,7 @@ impl LowerCtx {
         };
 
         let literal = match ty {
-            None => mark_literal_source(ast, &binding, value)?,
+            None => mark_literal_source(ast, &binding, value, is_const)?,
             Some(_) => None,
         };
         let pattern_span = binding.span();
@@ -576,7 +576,25 @@ impl LowerCtx {
         ast: &mut Ast,
         params: &mut [ParamDecl],
     ) -> Result<(), CompilerFailure> {
-        for param in params.iter_mut() {
+        // A padding default is typed before the patterns bind and before any
+        // later parameter does, so one that reads such a name would resolve
+        // to an outer binding: its slot and the tuple slots after it stay out
+        // of the padding. An earlier plain parameter is already bound.
+        let pattern_names: BTreeSet<String> = params
+            .iter()
+            .filter_map(|param| param.pattern.as_ref())
+            .flat_map(|pattern| bound_names(pattern).into_iter().map(str::to_string))
+            .collect();
+        let mut unbound_by_param = Vec::with_capacity(params.len());
+        let mut unbound = pattern_names;
+        for param in params.iter().rev() {
+            unbound_by_param.push(unbound.clone());
+            if param.pattern.is_none() {
+                unbound.insert(param.name.name.clone());
+            }
+        }
+        unbound_by_param.reverse();
+        for (param, unbound) in params.iter_mut().zip(unbound_by_param) {
             let Some(pattern) = param.pattern.take() else {
                 continue;
             };
@@ -591,13 +609,44 @@ impl LowerCtx {
             // pattern takes apart: a caller or a contextual type may supply
             // more elements or properties than the default has.
             let literal = match (&param.ty, param.default) {
-                (None, Some(default)) => mark_literal_source(ast, &pattern, default)?,
+                (None, Some(default)) => mark_literal_source(ast, &pattern, default, false)?,
                 _ => None,
             };
-            if let (Some(LiteralSource::Tuple(len)), Some(default)) = (literal, param.default)
-                && let Some(pad_defaults) = defaults_past_end(&pattern, len)
-            {
-                ast.tuple_pattern_pad_defaults.insert(default, pad_defaults);
+            if let Some(default) = param.default {
+                let literal_id = peel_parens(ast, default)?;
+                match &literal {
+                    Some(LiteralSource::Tuple(len)) => {
+                        if let Some(mut pad_defaults) = defaults_past_end(&pattern, *len) {
+                            let mut kept = 0;
+                            for slot in &pad_defaults {
+                                if let Some(slot_default) = slot
+                                    && reads_any_of(ast, *slot_default, &unbound)?
+                                {
+                                    break;
+                                }
+                                kept += 1;
+                            }
+                            pad_defaults.truncate(kept);
+                            if !pad_defaults.is_empty() {
+                                ast.tuple_pattern_pad_defaults
+                                    .insert(literal_id, pad_defaults);
+                            }
+                        }
+                    }
+                    Some(LiteralSource::Object(names)) => {
+                        let mut pad_defaults = Vec::new();
+                        for (name, pad_default) in defaults_absent_from(&pattern, names) {
+                            if !reads_any_of(ast, pad_default, &unbound)? {
+                                pad_defaults.push((name, pad_default));
+                            }
+                        }
+                        if !pad_defaults.is_empty() {
+                            ast.object_pattern_pad_defaults
+                                .insert(literal_id, pad_defaults);
+                        }
+                    }
+                    None => {}
+                }
             }
             let statements =
                 self.emit_decompose(ast, pattern, fresh, root, /*doc=*/ None, None)?;
@@ -898,26 +947,142 @@ fn mark_literal_source(
     ast: &mut Ast,
     binding: &Binding,
     value: ExprId,
+    is_const: bool,
 ) -> Result<Option<LiteralSource>, CompilerFailure> {
+    let value = peel_parens(ast, value)?;
+    let bound = bound_names(binding);
+    let context_free =
+        |default: ExprId| -> Result<bool, CompilerFailure> { names_none_of(ast, default, &bound) };
     if let Some(len) = tuple_source_len(ast, binding, value)? {
+        if let Binding::Array { defaults, .. } = binding {
+            let mut filled: BTreeMap<usize, ExprId> = BTreeMap::new();
+            for (index, default) in defaults.iter().take(len).enumerate() {
+                if let Some(default) = *default
+                    && context_free(default)?
+                {
+                    filled.insert(index, default);
+                }
+            }
+            if !filled.is_empty() {
+                ast.tuple_pattern_defaults.insert(value, filled);
+            }
+        }
         ast.tuple_pattern_sources.insert(value);
+        if is_const {
+            ast.const_pattern_sources.insert(value);
+        }
         return Ok(Some(LiteralSource::Tuple(len)));
     }
     if let Binding::Object { fields, .. } = binding
         && let Some(names) = object_literal_names(ast, value)?
     {
-        let defaulted: BTreeSet<String> = fields
+        let mut defaulted: BTreeMap<String, Option<ExprId>> = BTreeMap::new();
+        for field in fields
             .iter()
-            .filter(|field| field.default.is_some() && names.contains(&field.source.name))
-            .map(|field| field.source.name.clone())
-            .collect();
+            .filter(|field| names.contains(&field.source.name))
+        {
+            if let Some(default) = field.default {
+                let context = context_free(default)?.then_some(default);
+                defaulted.insert(field.source.name.clone(), context);
+            }
+        }
         if !defaulted.is_empty() {
             ast.object_pattern_sources.insert(value, defaulted);
+        }
+        if is_const {
+            ast.const_pattern_sources.insert(value);
         }
         return Ok(Some(LiteralSource::Object(names)));
     }
     mark_operand_tuple_sources(ast, binding, value)?;
     Ok(None)
+}
+
+/// The names `binding` declares.
+fn bound_names(binding: &Binding) -> BTreeSet<&str> {
+    match binding {
+        Binding::Object { fields, rest, .. } => fields
+            .iter()
+            .map(|field| field.local.name.as_str())
+            .chain(rest.iter().map(|rest| rest.name.as_str()))
+            .collect(),
+        Binding::Array { elems, rest, .. } => elems
+            .iter()
+            .flatten()
+            .chain(rest.iter())
+            .map(|name| name.name.as_str())
+            .collect(),
+    }
+}
+
+/// Whether `default` can be typed before its pattern binds `names`, as the
+/// context of the pattern source's literal: a literal, or a reference whose
+/// root is none of them. Any other default may read a name the pattern binds,
+/// which a trial ahead of the pattern would resolve to an outer binding.
+fn names_none_of(
+    ast: &Ast,
+    default: ExprId,
+    names: &BTreeSet<&str>,
+) -> Result<bool, CompilerFailure> {
+    let mut expr = peel_parens(ast, default)?;
+    loop {
+        let kind = &ast
+            .try_expr(expr)
+            .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+            .kind;
+        match kind {
+            ExprKind::Identifier(name) => return Ok(!names.contains(name.name.as_str())),
+            ExprKind::FieldAccess { receiver, .. } => expr = peel_parens(ast, *receiver)?,
+            ExprKind::Unary { operand, .. } | ExprKind::As { expr: operand, .. } => {
+                expr = peel_parens(ast, *operand)?;
+            }
+            ExprKind::Number(_) | ExprKind::String(_) | ExprKind::Boolean(_) | ExprKind::Null => {
+                return Ok(true);
+            }
+            _ => return Ok(false),
+        }
+    }
+}
+
+/// Whether `expr` mentions any of `names`, inside a nested function too,
+/// other than where a nested function's parameter or own name shadows it.
+/// A nested `let` or `const` of the name still counts as a mention.
+fn reads_any_of(
+    ast: &Ast,
+    expr: ExprId,
+    names: &BTreeSet<String>,
+) -> Result<bool, CompilerFailure> {
+    let span = ast
+        .try_expr(expr)
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+        .span;
+    let mut shadowing: Vec<(Span, &str)> = Vec::new();
+    let mut mentions: Vec<(Span, &str)> = Vec::new();
+    for inner in ast.exprs_within(span) {
+        match &inner.kind {
+            ExprKind::Identifier(name) if names.contains(&name.name) => {
+                mentions.push((inner.span, name.name.as_str()));
+            }
+            ExprKind::Arrow { params, .. } => {
+                for param in params {
+                    let declared = match &param.pattern {
+                        Some(pattern) => bound_names(pattern),
+                        None => BTreeSet::from([param.name.name.as_str()]),
+                    };
+                    shadowing.extend(declared.into_iter().map(|name| (inner.span, name)));
+                }
+            }
+            ExprKind::FunctionExpression {
+                name: Some(name), ..
+            } => shadowing.push((inner.span, name.name.as_str())),
+            _ => {}
+        }
+    }
+    Ok(mentions.iter().any(|(at, name)| {
+        !shadowing
+            .iter()
+            .any(|(region, shadowed)| shadowed == name && region.encloses(*at))
+    }))
 }
 
 /// The properties every object literal inherits from `Object.prototype`.
@@ -938,20 +1103,46 @@ pub(crate) const OBJECT_PROTOTYPE_MEMBERS: &[&str] = &[
 
 /// The defaults of an array pattern's slots from `len` on, when each is a
 /// named slot with a default.
-fn defaults_past_end(binding: &Binding, len: usize) -> Option<Vec<ExprId>> {
+fn defaults_past_end(binding: &Binding, len: usize) -> Option<Vec<Option<ExprId>>> {
     let Binding::Array {
         elems, defaults, ..
     } = binding
     else {
         return None;
     };
-    let past: Vec<ExprId> = elems
+    // A hole reads nothing, so it pads with no default. A named slot without a
+    // default leaves the tuple as it is: reading past its end is an error.
+    let past: Vec<Option<ExprId>> = elems
         .iter()
         .zip(defaults)
         .skip(len)
-        .map(|(slot, default)| slot.is_some().then_some(*default).flatten())
+        .map(|(slot, default)| match slot {
+            None => Some(None),
+            Some(_) => default.map(Some),
+        })
         .collect::<Option<_>>()?;
-    (!past.is_empty()).then_some(past)
+    past.iter().any(Option::is_some).then_some(past)
+}
+
+/// The properties an object pattern gives defaults that a literal with
+/// `names` lacks and doesn't inherit, with their defaults.
+fn defaults_absent_from(binding: &Binding, names: &BTreeSet<String>) -> Vec<(String, ExprId)> {
+    let Binding::Object { fields, .. } = binding else {
+        return Vec::new();
+    };
+    fields
+        .iter()
+        .filter(|field| {
+            !names.contains(&field.source.name)
+                && !OBJECT_PROTOTYPE_MEMBERS.contains(&field.source.name.as_str())
+        })
+        .filter_map(|field| Some((field.source.name.clone(), field.default?)))
+        .collect()
+}
+
+fn peel_parens(ast: &Ast, value: ExprId) -> Result<ExprId, CompilerFailure> {
+    ast.try_peel_parens(value)
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))
 }
 
 /// An array literal the pattern may take apart as one operand of `value`, a

@@ -1,0 +1,14 @@
+// expect-error: duplicate public export `one`
+
+/** The first. */
+function first(): number {
+  return 1;
+}
+
+/** The second. */
+function second(): number {
+  return 2;
+}
+
+export { first as one };
+export { second as one };

@@ -1,1 +1,0 @@
-line 27 type: bug SUB-1712 an immediately-invoked arrow's unannotated parameter takes its default's type, where tsc takes its argument's

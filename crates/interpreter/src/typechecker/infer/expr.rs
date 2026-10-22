@@ -4882,12 +4882,13 @@ impl Inferer<'_> {
 
         // Arg must be a `string`. Pass `Some(&Type::String)` as the
         // hint so string-literal arguments widen correctly, then
-        // verify the resolved type is actually a string.
+        // verify the resolved type is assignable to `string`, as a call's
+        // argument is: `string | (T & string)` narrowed from `string | T`
+        // passes. Codegen coerces it to the string slot.
         let (typed_arg, arg_ty) = self.infer_expr(args[0], Some(&Type::String))?;
-        if !matches!(
-            arg_ty.peel(),
-            Type::String | Type::StringLiteral(_) | Type::Error
-        ) {
+        if !matches!(arg_ty.peel(), Type::Error)
+            && !super::assignable::assignable(&arg_ty, &Type::String, self.resolver())
+        {
             self.error_with_help(
                 self.ast
                     .try_expr(args[0])
@@ -5208,7 +5209,11 @@ impl Inferer<'_> {
         typed: ExprId,
         ty: &Type,
     ) -> Result<Option<String>, CompilerFailure> {
-        if let Some(text) = super::comparison_operand::constant_substitution(self.ast, source)? {
+        if let Some(text) = super::comparison_operand::constant_substitution(
+            self.ast,
+            source,
+            self.global_numbers(),
+        )? {
             return Ok(Some(text));
         }
         let kind = &self
@@ -6976,7 +6981,7 @@ impl Inferer<'_> {
                     // a running type of only `null`/`undefined`, unless a hint pins
                     // it: the element widens the type instead (`[undefined, { a: 1 }]`).
                     let running_hint = element_ty.as_ref().filter(|t| {
-                        !holds_no_element(t) && (hint_pins_element_ty || !is_nullish_only(t))
+                        !t.holds_no_element() && (hint_pins_element_ty || !is_nullish_only(t))
                     });
                     let hint = if open_element_type && (types_itself || arrays_of_object_literals) {
                         None
@@ -7694,18 +7699,28 @@ impl Inferer<'_> {
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let mut typed_elements = Vec::with_capacity(elements.len());
         let mut element_types = Vec::with_capacity(elements.len());
-        for element in &elements {
+        let defaults = self
+            .ast
+            .tuple_pattern_defaults
+            .get(&literal)
+            .cloned()
+            .unwrap_or_default();
+        for (index, element) in elements.iter().enumerate() {
             let crate::ArrayLiteralElement::Value(id) = element else {
                 return self.infer_array_literal(literal, elements, None, span);
             };
             let (typed_id, ty) = self.infer_expr(*id, None)?;
-            element_types.push(self.widen_fresh_literals(typed_id, &ty)?);
+            let widened = self.widen_fresh_literals(typed_id, &ty)?;
+            let element_ty = match defaults.get(&index) {
+                Some(&default) => {
+                    self.keep_default_context_literals(literal, default, *id, widened)?
+                }
+                None => widened,
+            };
+            element_types.push(element_ty);
             typed_elements.push(typed_id);
         }
-        let padding = self.tuple_pattern_padding(literal)?;
-        let mut tuple = crate::types::TupleType::from(element_types.clone());
-        tuple.optional = padding.len();
-        tuple.elements.extend(padding);
+        let tuple = crate::types::TupleType::from(element_types.clone());
         Ok((
             TypedExprKind::TupleLiteral {
                 elements: typed_elements,
@@ -7715,22 +7730,117 @@ impl Inferer<'_> {
         ))
     }
 
+    /// The type an unannotated parameter takes from its `default`: the
+    /// default's type widened, padded as TypeScript pads it from the
+    /// parameter's pattern, so a caller may pass the slots and properties the
+    /// pattern gives defaults that the default lacks. The default's own type
+    /// stays unpadded.
+    pub(super) fn parameter_default_type(
+        &mut self,
+        default: ExprId,
+    ) -> Result<Type, CompilerFailure> {
+        let ty = self.infer_expr(default, None)?.1.widen_literal();
+        let literal = peel_parens(self.ast, default)?;
+        Ok(match ty {
+            Type::Tuple(mut tuple) => {
+                let padding = self.tuple_pattern_padding(literal)?;
+                tuple.optional += padding.len();
+                tuple.elements.extend(padding);
+                Type::Tuple(tuple)
+            }
+            Type::Object { index, mut fields } => {
+                for (name, ty) in self.object_pattern_padding(literal)? {
+                    fields
+                        .entry(name)
+                        .or_insert_with(|| crate::ObjectField::optional(ty));
+                }
+                Type::Object { index, fields }
+            }
+            ty => ty,
+        })
+    }
+
     /// The optional elements a parameter's tuple default gains for the
-    /// pattern's defaulted slots past its end, each typed as its default
-    /// widened, or `undefined`. Only literal defaults are typed here, before
-    /// the pattern infers them; with any other, the tuple keeps its length.
-    fn tuple_pattern_padding(&self, literal: ExprId) -> Result<Vec<Type>, CompilerFailure> {
-        let Some(defaults) = self.ast.tuple_pattern_pad_defaults.get(&literal) else {
+    /// pattern's slots past its end: each defaulted slot typed as its default
+    /// widened, or `undefined`, and a hole `unknown`, since it reads nothing.
+    /// A default that can't be typed before the pattern binds ends the
+    /// padding there.
+    fn tuple_pattern_padding(&mut self, literal: ExprId) -> Result<Vec<Type>, CompilerFailure> {
+        let Some(defaults) = self.ast.tuple_pattern_pad_defaults.get(&literal).cloned() else {
             return Ok(Vec::new());
         };
         let mut padding = Vec::with_capacity(defaults.len());
-        for &default in defaults {
-            let Some(ty) = super::forward_globals::stated_literal_type(self.ast, default)? else {
-                return Ok(Vec::new());
+        for default in defaults {
+            let Some(default) = default else {
+                padding.push(Type::Unknown);
+                continue;
             };
-            padding.push(Type::union(vec![ty.widen_literal(), Type::Undefined]));
+            let Some(ty) = self.speculative_expr_type(default, false, false)? else {
+                break;
+            };
+            padding.push(Type::union(vec![ty, Type::Undefined]));
         }
         Ok(padding)
+    }
+
+    /// The type of `default`, inferred ahead of where it is inferred for real,
+    /// as a pattern default before the pattern binds its names or a call's
+    /// argument before its callee, with its fresh literals widened unless
+    /// `keep_literals` (a `const` declaration's). It sees the narrowing in
+    /// effect where it stands when `sees_narrowing`, and none as a parameter's
+    /// default. An expression in error there has none; it reports its errors
+    /// when it is inferred for real.
+    pub(super) fn speculative_expr_type(
+        &mut self,
+        default: ExprId,
+        keep_literals: bool,
+        sees_narrowing: bool,
+    ) -> Result<Option<Type>, CompilerFailure> {
+        if let Some(ty) = super::forward_globals::stated_literal_type(self.ast, default)? {
+            return Ok(Some(if keep_literals {
+                ty
+            } else {
+                ty.widen_literal()
+            }));
+        }
+        let infer = |this: &mut Self| {
+            let errors_before = this.error_count();
+            let (typed, ty) = this.infer_expr(default, None)?;
+            if this.error_count() != errors_before {
+                return Ok(None);
+            }
+            if keep_literals {
+                return Ok(Some(ty));
+            }
+            this.widen_fresh_literals(typed, &ty).map(Some)
+        };
+        if sees_narrowing {
+            self.with_expression_trial(infer)
+        } else {
+            self.with_parameter_type_trial(infer)
+        }
+    }
+
+    /// The type a pattern source's element `value`, widened to `widened`, takes
+    /// with its slot's `default` as context, as TypeScript types the literal
+    /// with the pattern as its contextual type: a literal keeps its type where
+    /// the default's type has literals of its kind (`false` against `true`,
+    /// whose type is `boolean`, under `let`), through nested object literals.
+    fn keep_default_context_literals(
+        &mut self,
+        literal: ExprId,
+        default: ExprId,
+        value: ExprId,
+        widened: Type,
+    ) -> Result<Type, CompilerFailure> {
+        if !may_keep_literal(self.ast, value)? {
+            return Ok(widened);
+        }
+        let keep_literals = self.ast.const_pattern_sources.contains(&literal);
+        let Some(context) = self.speculative_expr_type(default, keep_literals, true)? else {
+            return Ok(widened);
+        };
+        contextual_literal_type(self.ast, value, widened, &context)
     }
 
     /// An object literal an object pattern takes apart, typed as TypeScript
@@ -7742,6 +7852,15 @@ impl Inferer<'_> {
         members: Vec<crate::ObjectLiteralMember>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let values: BTreeMap<String, ExprId> = members
+            .iter()
+            .filter_map(|member| match member {
+                crate::ObjectLiteralMember::Field(field) => {
+                    Some((field.name.name.clone(), field.value))
+                }
+                _ => None,
+            })
+            .collect();
         let (kind, ty) = self.infer_object_literal_expr(literal, members, None, span)?;
         let Type::Object { index, mut fields } = ty.clone() else {
             return Ok((kind, ty));
@@ -7750,11 +7869,16 @@ impl Inferer<'_> {
             .ast
             .object_pattern_sources
             .get(&literal)
-            .into_iter()
-            .flatten();
-        for name in defaulted {
-            if let Some(field) = fields.get_mut(name) {
-                field.optional = true;
+            .cloned()
+            .unwrap_or_default();
+        for (name, default) in defaulted {
+            let Some(field) = fields.get_mut(&name) else {
+                continue;
+            };
+            field.optional = true;
+            if let (Some(default), Some(&value)) = (default, values.get(&name)) {
+                let widened = field.ty.clone();
+                field.ty = self.keep_default_context_literals(literal, default, value, widened)?;
             }
         }
         let target = Type::Object { index, fields };
@@ -7767,6 +7891,27 @@ impl Inferer<'_> {
             },
             target,
         ))
+    }
+
+    /// The optional properties a parameter's object default gains for the
+    /// pattern's defaulted properties it lacks, each typed as its default
+    /// widened. A default that can't be typed before the pattern binds adds
+    /// no property.
+    fn object_pattern_padding(
+        &mut self,
+        literal: ExprId,
+    ) -> Result<Vec<(String, Type)>, CompilerFailure> {
+        let Some(defaults) = self.ast.object_pattern_pad_defaults.get(&literal).cloned() else {
+            return Ok(Vec::new());
+        };
+        let mut padding = Vec::with_capacity(defaults.len());
+        for (name, default) in defaults {
+            let Some(ty) = self.speculative_expr_type(default, false, false)? else {
+                continue;
+            };
+            padding.push((name, ty));
+        }
+        Ok(padding)
     }
 
     /// array-literal expression interpreted as a tuple. Caller
@@ -8111,6 +8256,9 @@ impl Inferer<'_> {
             })
             && let Some(read) = self.narrowed_read(path)
         {
+            return Ok(read);
+        }
+        if let Some(read) = self.numeric_key_read(typed_receiver, &receiver_ty, &name)? {
             return Ok(read);
         }
         if name.name == "length"
@@ -8703,6 +8851,64 @@ impl Inferer<'_> {
         self.typed_ast
             .try_push_expr(TypedExpr { kind, span, ty })
             .map_err(crate::typechecker::arena_failure)
+    }
+
+    /// `s["0"]` on a string, array or tuple reads index 0, as in TypeScript,
+    /// where a numeric string key reads the number index signature.
+    fn numeric_key_read(
+        &mut self,
+        typed_receiver: ExprId,
+        receiver_ty: &Type,
+        name: &Ident,
+    ) -> Result<Option<(TypedExprKind, Type)>, CompilerFailure> {
+        let Some(index) = array_index_key(&name.name) else {
+            return Ok(None);
+        };
+        let slot = (index >= 0.0 && index.fract() == 0.0).then_some(index as usize);
+        let elem_ty = match receiver_ty.peel() {
+            _ if receiver_ty.is_string_shaped() => Type::String,
+            Type::Array(elem) => (**elem).clone(),
+            Type::Uint8Array => Type::Number,
+            // A tuple has no element at a key that names no slot, as tsc
+            // reports.
+            Type::Tuple(tuple) => match slot.and_then(|slot| tuple.elements.get(slot)) {
+                Some(elem) => elem.clone(),
+                None => return Ok(None),
+            },
+            // A union of arrays and tuples reads each member's element, as
+            // `infer_index_access` does with a numeric literal. With an
+            // array among them, a key that names no slot reads the number
+            // index every member has.
+            Type::Union(members) if receiver_ty.is_array_like_union() => {
+                if slot.is_none()
+                    && !members
+                        .iter()
+                        .any(|member| matches!(member.peel(), Type::Array(_)))
+                {
+                    return Ok(None);
+                }
+                let elements: Option<Vec<Type>> = members
+                    .iter()
+                    .map(|member| match member.peel() {
+                        Type::Array(elem) => Some((**elem).clone()),
+                        Type::Tuple(tuple) => tuple_key_element(tuple, slot),
+                        _ => None,
+                    })
+                    .collect();
+                match elements {
+                    Some(elements) => Type::union(elements),
+                    None => return Ok(None),
+                }
+            }
+            _ => return Ok(None),
+        };
+        let typed_index =
+            self.push_synthetic_expr(TypedExprKind::Number(index), Type::Number, name.span)?;
+        let kind = TypedExprKind::IndexAccess {
+            receiver: typed_receiver,
+            index: typed_index,
+        };
+        self.narrowed_index_read(kind, elem_ty).map(Some)
     }
 
     fn infer_index_access(
@@ -9516,6 +9722,7 @@ impl Inferer<'_> {
             _ => None,
         };
 
+        let invoked_types = self.take_invoked_parameter_types(span);
         self.scopes.push();
         let mut typed_params: Vec<TypedParam> = Vec::with_capacity(params.len());
         let mut params_reported = false;
@@ -9576,11 +9783,15 @@ impl Inferer<'_> {
                         Type::Error
                     }
                 }
+                (None, None) if let Some(Some(ty)) = invoked_types.get(i).cloned() => {
+                    self.parameters_typed_by_arguments.insert(p.name.span);
+                    ty
+                }
                 (None, None) if p.default.is_some() => {
                     let default = p.default.ok_or_else(|| {
                         super::inference_failure("default parameter lost its initializer")
                     })?;
-                    self.infer_expr(default, None)?.1.widen_literal()
+                    self.parameter_default_type(default)?
                 }
                 (None, None) => {
                     self.error_with_help(
@@ -9902,11 +10113,11 @@ impl Inferer<'_> {
     ) -> Type {
         let returns_into_unknown =
             ret_hint.is_some_and(|hint| matches!(hint.peel(), Type::Unknown));
-        let context_takes_undefined = ret_hint.is_some_and(|hint| {
-            !hint.is_void()
-                && assignable(&Type::Undefined, hint, self.resolver())
-                && !matches!(hint.peel(), Type::Unknown)
-        });
+        // TypeScript 5.1 infers `undefined` for a body with no `return` only
+        // where the context's return type is `undefined` itself; a union such
+        // as `string | undefined` or `void | string` leaves it `void`.
+        let context_takes_undefined =
+            ret_hint.is_some_and(|hint| matches!(hint.peel(), Type::Undefined));
         if let Some(t) = annotated_ret {
             t.clone()
         } else if returns_into_unknown && !collected.is_empty() {
@@ -12270,7 +12481,7 @@ impl Inferer<'_> {
         ty: TypeAnnotation,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        let target_ty = self.resolve_type(&ty)?;
+        let target_ty = self.resolve_type_in_flow(&ty)?;
         // An empty `[]` has no element type of its own, so it takes the target's
         // array element type, as under an annotation, also as a ternary branch or
         // nested in an array literal. Other operands infer unhinted: a hint is
@@ -13132,6 +13343,101 @@ pub(super) fn enum_variant_help<'a>(
     }
 }
 
+/// `ty`, the widened type of `value`, with the literal types `context` admits
+/// put back: a literal keeps its own type where the context has a literal of
+/// its kind, and an object literal's fields recurse into the context's.
+fn contextual_literal_type(
+    ast: &crate::Ast,
+    value: ExprId,
+    ty: Type,
+    context: &Type,
+) -> Result<Type, CompilerFailure> {
+    let value = peel_parens(ast, value)?;
+    if let Some(literal) = super::forward_globals::stated_literal_type(ast, value)? {
+        return Ok(if admits_literal_of(context, &literal) {
+            literal
+        } else {
+            ty
+        });
+    }
+    let ExprKind::ObjectLiteral { members } =
+        &ast.try_expr(value).map_err(super::arena_failure)?.kind
+    else {
+        return Ok(ty);
+    };
+    let (
+        Type::Object { index, mut fields },
+        Type::Object {
+            fields: context_fields,
+            ..
+        },
+    ) = (ty.clone(), context.peel())
+    else {
+        return Ok(ty);
+    };
+    for member in members {
+        let crate::ObjectLiteralMember::Field(field) = member else {
+            continue;
+        };
+        let (Some(slot), Some(context_field)) = (
+            fields.get_mut(&field.name.name),
+            context_fields.get(&field.name.name),
+        ) else {
+            continue;
+        };
+        slot.ty = contextual_literal_type(ast, field.value, slot.ty.clone(), &context_field.ty)?;
+    }
+    Ok(Type::Object { index, fields })
+}
+
+/// Whether [`contextual_literal_type`] may put a literal type back into
+/// `value`'s: a stated literal's, or an object literal's fields'.
+fn may_keep_literal(ast: &crate::Ast, value: ExprId) -> Result<bool, CompilerFailure> {
+    let value = peel_parens(ast, value)?;
+    Ok(
+        super::forward_globals::stated_literal_type(ast, value)?.is_some()
+            || matches!(
+                ast.try_expr(value).map_err(super::arena_failure)?.kind,
+                ExprKind::ObjectLiteral { .. }
+            ),
+    )
+}
+
+/// Whether `context` has a literal of `literal`'s kind, so a value of that
+/// literal type keeps it, as TypeScript's `isLiteralOfContextualType` decides.
+fn admits_literal_of(context: &Type, literal: &Type) -> bool {
+    match context.peel() {
+        Type::Union(members) => members
+            .iter()
+            .any(|member| admits_literal_of(member, literal)),
+        Type::StringLiteral(_) => matches!(literal, Type::StringLiteral(_)),
+        Type::NumberLiteral(_) => matches!(literal, Type::NumberLiteral(_)),
+        Type::BooleanLiteral(_) | Type::Boolean => matches!(literal, Type::BooleanLiteral(_)),
+        _ => false,
+    }
+}
+
+/// What a numeric key reads on a tuple member of a union with an array: the
+/// element at an integer `slot`, none past its end, and with no slot
+/// (`"-1"`, `"1.5"`, `"NaN"`) any element, its number index.
+fn tuple_key_element(tuple: &crate::types::TupleType, slot: Option<usize>) -> Option<Type> {
+    if let Some(slot) = slot {
+        return tuple.elements.get(slot).cloned();
+    }
+    let mut elements = tuple.elements.clone();
+    if tuple.optional > 0 {
+        elements.push(Type::Undefined);
+    }
+    Some(Type::union(elements))
+}
+
+/// The number a numeric key names, as tsc reads one: a key that is a
+/// number's own spelling (`"0"`, `"-1"`, `"1.5"`), not `"01"` or `"1.0"`.
+fn array_index_key(key: &str) -> Option<f64> {
+    let index: f64 = key.parse().ok()?;
+    (crate::runtime::number::format_number_js(index) == key).then_some(index)
+}
+
 /// The member a string-literal key names: `o["content-type"]` reads field
 /// `content-type` wherever `o.name` would read `name`. `None` for any other key.
 pub(super) fn string_key_name(
@@ -13246,15 +13552,6 @@ fn empty_literal_join(
         }
     }
     Ok(None)
-}
-
-/// Whether `ty` is the type of an array that holds no element at any depth:
-/// `never[]`, `never[][]`, as an empty literal is typed.
-fn holds_no_element(ty: &Type) -> bool {
-    match ty.peel() {
-        Type::Array(element) => matches!(element.peel(), Type::Never) || holds_no_element(element),
-        _ => false,
-    }
 }
 
 /// Whether `member` is the type of a fresh object literal with one of
@@ -13446,13 +13743,8 @@ fn fields_written_after(
 }
 
 /// The expression inside any parentheses around `expr`.
-pub(super) fn peel_parens(ast: &crate::Ast, mut expr: ExprId) -> Result<ExprId, CompilerFailure> {
-    loop {
-        match &ast.try_expr(expr).map_err(super::arena_failure)?.kind {
-            ExprKind::Paren(inner) => expr = *inner,
-            _ => return Ok(expr),
-        }
-    }
+pub(super) fn peel_parens(ast: &crate::Ast, expr: ExprId) -> Result<ExprId, CompilerFailure> {
+    ast.try_peel_parens(expr).map_err(super::arena_failure)
 }
 
 /// The function literal `expr` is through parentheses: the arrow itself, or

@@ -1,0 +1,15 @@
+// expect-error: duplicate public export `Made`
+// A class is a value as well as a type, as in TypeScript, so a specifier may
+// not export another value under an exported class's name.
+
+/** Made things. */
+export class Made {
+  n: number = 1;
+}
+
+/** Makes one. */
+function make(): number {
+  return 1;
+}
+
+export { make as Made };

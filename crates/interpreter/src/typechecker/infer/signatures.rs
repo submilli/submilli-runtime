@@ -859,7 +859,7 @@ impl<'a> Inferer<'a> {
         let ty = if let Some(annotation) = &p.ty {
             self.resolve_type(annotation)?
         } else if let Some(default) = p.default {
-            self.infer_expr(default, None)?.1.widen_literal()
+            self.parameter_default_type(default)?
         } else {
             Type::Error
         };

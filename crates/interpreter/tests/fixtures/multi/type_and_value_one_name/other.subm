@@ -1,0 +1,7 @@
+// A type and a value share a name: types and values live in separate
+// namespaces, so one specifier exports both.
+export type Label = string;
+function Label(): Label {
+  return "label";
+}
+export { Label };

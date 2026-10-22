@@ -1,4 +1,4 @@
-types: 28 of 68 tsc entries compared, 11 differ
+types: 28 of 68 tsc entries compared, 10 differ
 
 line 11: b2
   tsc:  number
@@ -6,15 +6,11 @@ line 11: b2
 
 line 11: b3
   tsc:  boolean
-  ours: boolean | undefined
+  ours: false | undefined
 
 line 11: b4
   tsc:  { t1: boolean; t2: string; }
-  ours: { t1: boolean; t2: string } | undefined
-
-line 11: [3, false, { t1: false, t2: "hello" }]
-  tsc:  [number, false, { t1: false; t2: string; }]
-  ours: [number, boolean, { t1: boolean; t2: string }]
+  ours: { t1: false; t2: string } | undefined
 
 line 11: { t1: false, t2: "hello" }
   tsc:  { t1: false; t2: string; }

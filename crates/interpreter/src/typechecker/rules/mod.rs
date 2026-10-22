@@ -95,15 +95,11 @@ pub(in crate::typechecker) fn check_package<'a>(
         fatal: Some(fatal),
     })?;
     let exports = &typed_ast.exports;
-    for module in modules {
-        exported_signature_types::run_module(
-            package_name,
-            "module",
-            module.symbols,
-            module.exports,
-            &mut diags,
-        );
-    }
+    let module_surfaces: Vec<_> = modules
+        .into_iter()
+        .map(|module| (module.symbols, module.exports))
+        .collect();
+    exported_signature_types::run_modules(package_name, "module", &module_surfaces, &mut diags);
     exported_signature_types::run(package_name, "package", package, exports, &mut diags);
     exported_docs::run(typed_ast, package, exports, &mut diags);
     let declarations = TypeDeclarations::for_package(package, dependencies);

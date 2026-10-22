@@ -1,9 +1,1 @@
-types: 17 of 89 tsc entries compared, 2 differ
-
-line 27: ({ r = 17 } = { r: 18 }) => r
-  tsc:  ({ r }?: { r: number; }) => number
-  ours: (arg0?: { r?: number }) => number
-
-line 27: { r: 18 }
-  tsc:  { r: number; }
-  ours: { r?: number }
+types: 17 of 89 tsc entries compared, 0 differ

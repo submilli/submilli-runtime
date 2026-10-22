@@ -183,6 +183,10 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         spread_context_for_next_literal: None,
         soft_context_function_spans: None,
         invoked_return_hint: None,
+        invoked_parameter_types: None,
+        invoked_argument_memo: None,
+        type_queries_see_narrowing: false,
+        parameters_typed_by_arguments: Default::default(),
         cast_operand: None,
         invoked_body_exit: None,
         prebinding_parameter_types: false,
@@ -481,6 +485,10 @@ pub fn infer_package_checked<'a>(
         spread_context_for_next_literal: None,
         soft_context_function_spans: None,
         invoked_return_hint: None,
+        invoked_parameter_types: None,
+        invoked_argument_memo: None,
+        type_queries_see_narrowing: false,
+        parameters_typed_by_arguments: Default::default(),
         cast_operand: None,
         invoked_body_exit: None,
         prebinding_parameter_types: false,
@@ -869,6 +877,22 @@ pub(super) struct Inferer<'a> {
     /// The type the immediately-invoked call's result is expected to have,
     /// which the arrow it runs takes as its return type's context, as in tsc.
     invoked_return_hint: Option<Type>,
+    /// The span of the function literal a call is about to invoke in place
+    /// with arguments, and the type each argument gives its unannotated
+    /// parameter there (see `Inferer::invoked_argument_types`).
+    invoked_parameter_types: Option<(Span, Vec<Option<Type>>)>,
+    /// The type each argument gave its parameter that way, while the
+    /// outermost such call is inferred (see
+    /// `Inferer::infer_call_typing_invoked_parameters`).
+    invoked_argument_memo: Option<std::collections::HashMap<crate::ExprId, Option<Type>>>,
+    /// Whether a type query takes the narrowing in effect where it is
+    /// written: in an annotation resolved where it runs (see
+    /// `Inferer::resolve_type_in_flow`), not in a signature, whose function
+    /// may run elsewhere.
+    type_queries_see_narrowing: bool,
+    /// The name spans of the parameters typed from their arguments that way,
+    /// whose defaults are typed against them.
+    parameters_typed_by_arguments: std::collections::HashSet<Span>,
     /// The span of the function literal an `as` cast is about to infer, and
     /// the cast's target. The target only types the literal's unannotated
     /// parameters and lets an `unknown` return take any value; the cast
@@ -1084,7 +1108,8 @@ pub(super) struct Inferer<'a> {
     pub(super) test_modules: Option<TestModules<'a>>,
     pub(super) current_module_symbols: ModuleSymbols,
     pub(super) current_module_exports: Vec<crate::ExportEntry>,
-    pub(super) current_export_seen: BTreeMap<String, Span>,
+    pub(super) current_export_seen:
+        BTreeMap<(exports::ExportNamespace, String), exports::ExportedName>,
     pub(super) inferred_modules: BTreeMap<ModulePath, ModuleSymbols>,
     /// Type aliases whose name is forward-declared (placeholder in
     /// `types`) but whose body hasn't been resolved yet. Resolved on
@@ -1179,6 +1204,7 @@ impl<'a> Inferer<'a> {
         self.current_module_symbols = ModuleSymbols::default();
         self.current_module_exports.clear();
         self.current_export_seen.clear();
+        self.parameters_typed_by_arguments.clear();
         self.inferred_modules = inferred_modules.clone();
         self.top_symbols.clear();
         self.imported_values.clear();
@@ -1290,7 +1316,7 @@ impl<'a> Inferer<'a> {
                 .values
                 .entry(symbol.name.clone())
                 .or_insert((false, symbol));
-            self.mark_direct_package_export(&global.name.name)?;
+            self.mark_direct_package_export(&global.name.name, exports::ExportNamespace::Value)?;
         }
         self.typed_ast.globals.push(global);
 
@@ -1322,7 +1348,7 @@ impl<'a> Inferer<'a> {
                 .values
                 .entry(symbol.name.clone())
                 .or_insert((false, symbol));
-            self.mark_direct_package_export(&function.name.name)?;
+            self.mark_direct_package_export(&function.name.name, exports::ExportNamespace::Value)?;
         }
         self.typed_ast.functions.push(function);
 
@@ -1340,7 +1366,7 @@ impl<'a> Inferer<'a> {
                 .types
                 .entry(name.clone())
                 .or_insert((false, symbol));
-            self.mark_direct_package_export(&name)?;
+            self.mark_direct_package_export(&name, exports::ExportNamespace::Type)?;
         }
         self.typed_ast.types.push(decl);
 

@@ -328,7 +328,7 @@ impl Inferer<'_> {
         annot: &TypeAnnotation,
         subject: &str,
     ) -> Result<Type, CompilerFailure> {
-        let resolved = self.resolve_type(annot)?;
+        let resolved = self.resolve_type_in_flow(annot)?;
         if let Some(offender) = super::value_operand::valueless_within_type_argument(&resolved) {
             let offender = offender.clone();
             self.error(
@@ -711,6 +711,7 @@ impl Inferer<'_> {
             &mut sub,
             signature_help,
         )?;
+        self.bind_from_empty_array_arguments(&mut sub, &argument_checks)?;
 
         let object_assign =
             iface_mangled == crate::mangle::prelude("ObjectConstructor") && name.name == "assign";
@@ -1823,6 +1824,36 @@ impl Inferer<'_> {
         Ok((typed_slots.into_iter().flatten().collect(), checks))
     }
 
+    /// Bind `T` to `never` for an empty array literal passed as a `T[]` no other
+    /// argument bound, as tsc infers from the literal's `never[]`:
+    /// `Array.from([])` is `never[]`, also under an enclosing call's open `a[]`.
+    fn bind_from_empty_array_arguments(
+        &self,
+        sub: &mut TypeParamSubstitution,
+        checks: &[ArgumentCheck],
+    ) -> Result<(), CompilerFailure> {
+        for check in checks {
+            let Some(name) = array_element_type_var(&check.param_ty) else {
+                continue;
+            };
+            if sub.is_unbound(name) && self.is_empty_array_literal(check.arg)? {
+                sub.insert(name.to_string(), Type::Never);
+            }
+        }
+        Ok(())
+    }
+
+    fn is_empty_array_literal(&self, arg: ExprId) -> Result<bool, CompilerFailure> {
+        Ok(matches!(
+            &self
+                .typed_ast
+                .try_expr(arg)
+                .map_err(crate::typechecker::arena_failure)?
+                .kind,
+            crate::TypedExprKind::ArrayLiteral { elements, .. } if elements.is_empty()
+        ))
+    }
+
     /// Check each argument against its parameter once the call's type
     /// parameters are all bound, as tsc does after inference: unification
     /// takes an argument as a candidate, which a later one may widen past
@@ -1838,6 +1869,18 @@ impl Inferer<'_> {
         for check in checks {
             let param = sub.apply_or_record(&check.param_ty, &self.type_limits);
             if super::expr::type_contains_type_var(&param) {
+                continue;
+            }
+            // `[]` kept its slot's open element type for inference to read;
+            // once bound, it is `never[]`, as an empty array is wherever it is
+            // used.
+            if super::expr::type_contains_type_var(&check.arg_ty)
+                && self.is_empty_array_literal(check.arg)?
+            {
+                self.typed_ast
+                    .try_expr_mut(check.arg)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .ty = Type::Array(Box::new(Type::Never));
                 continue;
             }
             if super::assignable(&check.arg_ty, &param, self.resolver()) {
@@ -1874,8 +1917,19 @@ impl Inferer<'_> {
         arguments: &GenericArguments,
         sub: &mut TypeParamSubstitution,
     ) -> Result<(ExprId, Type), CompilerFailure> {
-        // An oversized hint fails at the argument's own checkpoint.
-        let hint = sub.apply_or_record(param_ty, &self.type_limits);
+        // An oversized hint fails at the argument's own checkpoint. A callback
+        // whose parameters need the hint takes a `never` binding as it is.
+        let loose = if self.is_context_sensitive_function(arg_id)?
+            || self.literal_holds_context_sensitive_function(arg_id)?
+        {
+            None
+        } else {
+            sub.without_never_bindings()
+        };
+        let hint = match loose {
+            Some(loose) => loose.apply_or_record(param_ty, &self.type_limits),
+            None => sub.apply_or_record(param_ty, &self.type_limits),
+        };
         let diagnostics_before = self.diagnostics.len();
         let errors_before = self.error_count();
         let first = self.infer_generic_argument_with(arg_id, param_ty, hint, arguments, sub)?;
@@ -2465,6 +2519,7 @@ impl Inferer<'_> {
             &mut sub,
             signature_help,
         )?;
+        self.bind_from_empty_array_arguments(&mut sub, &argument_checks)?;
 
         if has_rest || typed_args.len() < params.len() {
             self.typed_ast
@@ -3111,6 +3166,30 @@ impl ShapeKind {
     }
 }
 
+/// The type parameter `T` of a parameter that takes an array as `T[]`, alone,
+/// `readonly`, or as the one array member of a union (`Array.from`'s source).
+fn array_element_type_var(param: &Type) -> Option<&str> {
+    match param.peel() {
+        Type::Union(members) => {
+            let mut vars = members.iter().filter_map(element_type_var);
+            let first = vars.next()?;
+            vars.next().is_none().then_some(first)
+        }
+        _ => element_type_var(param),
+    }
+}
+
+fn element_type_var(ty: &Type) -> Option<&str> {
+    match ty.peel() {
+        Type::Array(element) => match element.peel() {
+            Type::TypeVar(name) => Some(name.as_str()),
+            _ => None,
+        },
+        Type::Readonly(inner) => element_type_var(inner),
+        _ => None,
+    }
+}
+
 /// Whether a call's expected result type is worth binding its type parameters
 /// from before the arguments are inferred. `unknown` is not: every type is
 /// assignable to it, so binding a parameter to it first would hide what the
@@ -3118,15 +3197,11 @@ impl ShapeKind {
 /// as `unknown`). It only fills the parameters the arguments leave unbound.
 fn pins_type_parameters(want: &Type) -> bool {
     // An enclosing call's own unbound type parameter (`use(first(1, 2))`,
-    // or `T | null` for `orNull(first(1, 2))`) says nothing yet, and binding
-    // to it would bind it from inside this call.
-    match want.peel() {
-        Type::Error | Type::Unknown | Type::TypeVar(_) => false,
-        Type::Union(members) => !members
-            .iter()
-            .any(|member| matches!(member.peel(), Type::TypeVar(_))),
-        _ => true,
-    }
+    // `T | null` for `orNull(first(1, 2))`, or `a[]` for
+    // `f2(Array.from([]), …)`) says nothing yet, and binding to it would
+    // leak it into this call's result.
+    !matches!(want.peel(), Type::Error | Type::Unknown)
+        && !super::expr::type_contains_type_var(want)
 }
 
 /// Bind every type parameter inference left unsolved to `fallback`, so the call

@@ -129,6 +129,26 @@ impl<'a> Inferer<'a> {
         Ok(typed_body)
     }
 
+    /// A copy of the narrowing state, for a trial to put back with
+    /// [`Self::restore_narrowing`].
+    pub(super) fn copy_narrowing(&self) -> SuspendedNarrowing {
+        SuspendedNarrowing {
+            narrow_scopes: self.narrow_scopes.clone(),
+            assigned_scopes: self.assigned_scopes.clone(),
+            clause_write_scopes: self.clause_write_scopes.clone(),
+            tombstone_scopes: self.tombstone_scopes.clone(),
+            pending_materializations: self.pending_post_if_materializations.clone(),
+        }
+    }
+
+    pub(super) fn restore_narrowing(&mut self, saved: SuspendedNarrowing) {
+        self.narrow_scopes = saved.narrow_scopes;
+        self.assigned_scopes = saved.assigned_scopes;
+        self.clause_write_scopes = saved.clause_write_scopes;
+        self.tombstone_scopes = saved.tombstone_scopes;
+        self.pending_post_if_materializations = saved.pending_materializations;
+    }
+
     fn suspend_narrow_scopes(&mut self) {
         self.suspended_narrow_scopes.push(SuspendedNarrowing {
             narrow_scopes: std::mem::take(&mut self.narrow_scopes),
@@ -148,11 +168,7 @@ impl<'a> Inferer<'a> {
             .suspended_narrow_scopes
             .pop()
             .ok_or_else(|| super::inference_failure("missing suspended narrowing scope"))?;
-        self.narrow_scopes = saved.narrow_scopes;
-        self.assigned_scopes = saved.assigned_scopes;
-        self.clause_write_scopes = saved.clause_write_scopes;
-        self.tombstone_scopes = saved.tombstone_scopes;
-        self.pending_post_if_materializations = saved.pending_materializations;
+        self.restore_narrowing(saved);
         Ok(())
     }
 

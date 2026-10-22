@@ -59,16 +59,35 @@ impl Inferer<'_> {
         Ok(())
     }
 
-    pub(super) fn mark_direct_package_export(&mut self, name: &str) -> Result<(), CompilerFailure> {
+    pub(super) fn mark_direct_package_export(
+        &mut self,
+        name: &str,
+        namespace: ExportNamespace,
+    ) -> Result<(), CompilerFailure> {
         if !self.package_inference {
             return Ok(());
         }
-        let Some(span) = self.direct_export_span(name)? else {
+        let Some((span, class_or_enum)) = self.direct_export(name, namespace)? else {
             return Ok(());
         };
         let declarations = self.current_module_symbols.clone();
         let source_label = self.module.as_str().to_string();
-        self.export_symbol_from(&declarations, false, name, name, span, &source_label);
+        self.export_symbol_from(
+            &declarations,
+            false,
+            name,
+            name,
+            span,
+            &source_label,
+            ExportOrigin::Direct(namespace),
+        );
+        // A class or enum is a value too, as in TypeScript, so no specifier
+        // may export another value under its name.
+        if class_or_enum {
+            self.current_export_seen
+                .entry((ExportNamespace::Value, name.to_string()))
+                .or_insert(ExportedName { span, direct: true });
+        }
 
         Ok(())
     }
@@ -91,6 +110,7 @@ impl Inferer<'_> {
                         &spec.local_name.name,
                         spec.imported_name.span,
                         &source_label,
+                        ExportOrigin::Specifier,
                     );
                 }
                 continue;
@@ -138,6 +158,7 @@ impl Inferer<'_> {
                     public,
                     spec.imported_name.span,
                     resolved.as_str(),
+                    ExportOrigin::Specifier,
                 );
             }
         }
@@ -145,22 +166,33 @@ impl Inferer<'_> {
         Ok(())
     }
 
-    fn direct_export_span(&self, name: &str) -> Result<Option<crate::Span>, CompilerFailure> {
-        self.ast
-            .exported_decls
-            .iter()
-            .map(|ed| {
-                let stmt = self.ast.try_stmt(ed.stmt).map_err(super::arena_failure)?;
-                Ok::<_, CompilerFailure>(
-                    exported_decl_name(&stmt.kind)
-                        .is_some_and(|exported| exported.name == name)
-                        .then_some(ed.export_span),
-                )
-            })
-            .find_map(Result::transpose)
-            .transpose()
+    /// The span of the direct export of `name` in `namespace`, and whether it
+    /// exports a class or an enum.
+    fn direct_export(
+        &self,
+        name: &str,
+        namespace: ExportNamespace,
+    ) -> Result<Option<(crate::Span, bool)>, CompilerFailure> {
+        for ed in &self.ast.exported_decls {
+            let stmt = self.ast.try_stmt(ed.stmt).map_err(super::arena_failure)?;
+            if exported_decl_namespace(&stmt.kind) == Some(namespace)
+                && exported_decl_name(&stmt.kind).is_some_and(|exported| exported.name == name)
+            {
+                let class_or_enum = matches!(
+                    stmt.kind,
+                    StmtKind::ClassDecl { .. } | StmtKind::EnumDecl { .. }
+                );
+                return Ok(Some((ed.export_span, class_or_enum)));
+            }
+        }
+        Ok(None)
     }
 
+    /// Exports what `source_name` names in the namespaces `origin` allows. A
+    /// specifier (`export { A }`) carries both a value and a type of one name,
+    /// as in TypeScript, where the two live in separate namespaces. The same
+    /// declaration exported both directly and by a specifier is one export.
+    #[allow(clippy::too_many_arguments)]
     fn export_symbol_from(
         &mut self,
         declarations: &ModuleSymbols,
@@ -169,11 +201,51 @@ impl Inferer<'_> {
         public_name: &str,
         span: crate::Span,
         source_label: &str,
+        origin: ExportOrigin,
     ) {
-        if let Some(prev) = self
-            .current_export_seen
-            .insert(public_name.to_string(), span)
-        {
+        let value = origin
+            .allows(ExportNamespace::Value)
+            .then(|| {
+                if exported_only {
+                    declarations.exported_value(source_name)
+                } else {
+                    declarations.value(source_name)
+                }
+            })
+            .flatten();
+        let ty = origin
+            .allows(ExportNamespace::Type)
+            .then(|| {
+                if exported_only {
+                    declarations.exported_type(source_name)
+                } else {
+                    declarations.type_symbol(source_name)
+                }
+            })
+            .flatten();
+        if value.is_none() && ty.is_none() {
+            self.diagnostics.push(crate::Diagnostic {
+                severity: crate::Severity::Error,
+                span,
+                message: format!("module `{source_label}` does not export `{source_name}`"),
+                help: declarations.exports_help(),
+                notes: Vec::new(),
+            });
+            return;
+        }
+
+        let exported = ExportedName {
+            span,
+            direct: matches!(origin, ExportOrigin::Direct(_)),
+        };
+        let namespaces: Vec<ExportNamespace> = [
+            (ExportNamespace::Value, value.is_some()),
+            (ExportNamespace::Type, ty.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(namespace, present)| present.then_some(namespace))
+        .collect();
+        if let Some(prev) = self.conflicting_export(public_name, origin, &namespaces) {
             self.diagnostics.push(crate::Diagnostic {
                 severity: crate::Severity::Error,
                 span,
@@ -183,101 +255,160 @@ impl Inferer<'_> {
             });
             return;
         }
+        let fresh: Vec<ExportNamespace> = namespaces
+            .into_iter()
+            .filter(|namespace| {
+                !self
+                    .current_export_seen
+                    .contains_key(&(*namespace, public_name.to_string()))
+            })
+            .collect();
 
-        let public_mangled = if self.module == self.root_module {
-            crate::mangle::package_symbol(self.package_name, public_name)
-        } else {
-            declarations
-                .value(source_name)
-                .map(|s| s.mangled_name.clone())
+        for namespace in fresh {
+            self.current_export_seen
+                .insert((namespace, public_name.to_string()), exported.clone());
+            match namespace {
+                ExportNamespace::Value => {
+                    if let Some(sym) = value {
+                        self.export_value(sym, public_name, span);
+                    }
+                }
+                ExportNamespace::Type => {
+                    if let Some(sym) = ty {
+                        self.export_type(sym, public_name, span);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Where `public_name` was already exported in a way an export coming
+    /// from `origin` with the `namespaces` it exports clashes with, as tsc
+    /// decides it. Two specifiers of one name clash (TS2300), and so does a
+    /// specifier with a direct export of a value (TS2323) or with direct
+    /// exports covering all it exports (TS2484). A specifier that adds a value
+    /// to a directly exported type is one export of both.
+    fn conflicting_export(
+        &self,
+        public_name: &str,
+        origin: ExportOrigin,
+        namespaces: &[ExportNamespace],
+    ) -> Option<crate::Span> {
+        let previous: Vec<(ExportNamespace, &ExportedName)> =
+            [ExportNamespace::Value, ExportNamespace::Type]
+                .into_iter()
+                .filter_map(|namespace| {
+                    self.current_export_seen
+                        .get(&(namespace, public_name.to_string()))
+                        .map(|prev| (namespace, prev))
+                })
+                .collect();
+        let clash = match origin {
+            ExportOrigin::Specifier => previous
+                .iter()
+                .find(|(namespace, prev)| !prev.direct || *namespace == ExportNamespace::Value)
                 .or_else(|| {
-                    declarations
-                        .type_symbol(source_name)
-                        .map(|s| s.mangled_name.clone())
-                })
-                .unwrap_or_else(|| {
-                    crate::mangle::package_module_symbol(
-                        self.package_name,
-                        self.module.as_str(),
-                        public_name,
-                    )
-                })
+                    namespaces
+                        .iter()
+                        .all(|namespace| previous.iter().any(|(seen, _)| seen == namespace))
+                        .then(|| previous.first())
+                        .flatten()
+                }),
+            // Direct exports are recorded as their declarations are inferred,
+            // before any specifier, and those of one name are one merged
+            // declaration.
+            ExportOrigin::Direct(_) => None,
         };
+        clash.map(|(_, prev)| prev.span)
+    }
 
-        let value = if exported_only {
-            declarations.exported_value(source_name)
-        } else {
-            declarations.value(source_name)
+    fn export_value(&mut self, sym: &crate::ValueSymbol, public_name: &str, span: crate::Span) {
+        let mut sym = sym.clone();
+        let target_mangled = sym.mangled_name.clone();
+        sym.name = public_name.to_string();
+        let is_root = self.module == self.root_module;
+        let public_mangled = crate::mangle::package_symbol(self.package_name, public_name);
+        if is_root {
+            sym.mangled_name = public_mangled.clone();
+        }
+        let kind = match sym.kind {
+            crate::ValueKind::Function { .. } => ExportKind::Function,
+            crate::ValueKind::Let { .. } | crate::ValueKind::Const { .. } => ExportKind::Global,
         };
-        if let Some(sym) = value {
-            let mut sym = sym.clone();
-            let target_mangled = sym.mangled_name.clone();
-            sym.name = public_name.to_string();
-            if self.module == self.root_module {
-                sym.mangled_name = public_mangled.clone();
-            }
-            self.current_module_symbols
-                .values
-                .insert(public_name.to_string(), (true, sym.clone()));
-            if self.module == self.root_module {
-                self.current_module_exports.push(ExportEntry {
-                    public_name: public_mangled,
-                    target: target_mangled,
-                    kind: match sym.kind {
-                        crate::ValueKind::Function { .. } => ExportKind::Function,
-                        crate::ValueKind::Let { .. } | crate::ValueKind::Const { .. } => {
-                            ExportKind::Global
-                        }
-                    },
-                    span,
-                });
-            }
+        self.current_module_symbols
+            .values
+            .insert(public_name.to_string(), (true, sym));
+        if is_root {
+            self.current_module_exports.push(ExportEntry {
+                public_name: public_mangled,
+                target: target_mangled,
+                kind,
+                span,
+            });
+        }
+    }
+
+    fn export_type(&mut self, sym: &crate::TypeSymbol, public_name: &str, span: crate::Span) {
+        let mut sym = sym.clone();
+        let target_mangled = sym.mangled_name.clone();
+        sym.name = public_name.to_string();
+        // A type's mangled name is its identity: every signature and type
+        // reference names it so, as do a class's `extends`/`implements` and
+        // WasmGC exports. Re-exporting must not rebrand it to the public
+        // package name, or a consumer would find a signature's type under one
+        // name and the package's type table holding it under another
+        // (SUB-488). Only the public *name*, the lookup key, changes.
+        let statics = static_export_entries(&sym.kind, &target_mangled, span);
+        self.current_module_symbols
+            .types
+            .insert(public_name.to_string(), (true, sym));
+        if self.module != self.root_module {
             return;
         }
-
-        let ty = if exported_only {
-            declarations.exported_type(source_name)
-        } else {
-            declarations.type_symbol(source_name)
-        };
-        if let Some(sym) = ty {
-            let mut sym = sym.clone();
-            let target_mangled = sym.mangled_name.clone();
-            sym.name = public_name.to_string();
-            // A type's mangled name is its identity: every signature and type
-            // reference names it so, as do a class's `extends`/`implements` and
-            // WasmGC exports. Re-exporting must not rebrand it to the public
-            // package name, or a consumer would find a signature's type under one
-            // name and the package's type table holding it under another
-            // (SUB-488). Only the public *name*, the lookup key, changes.
-            let statics = static_export_entries(&sym.kind, &target_mangled, span);
-            self.current_module_symbols
-                .types
-                .insert(public_name.to_string(), (true, sym));
-            if self.module == self.root_module {
-                // Statics ride the class export: one function/global entry per
-                // public static, keyed by the defining class's `Class#static#name`
-                // (stable across re-exports — statics derive from the class
-                // mangle, which never rebrands).
-                self.current_module_exports.extend(statics);
-                self.current_module_exports.push(ExportEntry {
-                    public_name: target_mangled.clone(),
-                    target: target_mangled,
-                    kind: ExportKind::Type,
-                    span,
-                });
-            }
-            return;
-        }
-
-        self.diagnostics.push(crate::Diagnostic {
-            severity: crate::Severity::Error,
+        // Statics ride the class export: one function/global entry per
+        // public static, keyed by the defining class's `Class#static#name`
+        // (stable across re-exports — statics derive from the class
+        // mangle, which never rebrands).
+        self.current_module_exports.extend(statics);
+        self.current_module_exports.push(ExportEntry {
+            public_name: target_mangled.clone(),
+            target: target_mangled,
+            kind: ExportKind::Type,
             span,
-            message: format!("module `{source_label}` does not export `{source_name}`"),
-            help: declarations.exports_help(),
-            notes: Vec::new(),
         });
     }
+}
+
+/// The namespace an exported name occupies. TypeScript keeps types and values
+/// apart, so one name may export a type and a value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(in crate::typechecker) enum ExportNamespace {
+    Value,
+    Type,
+}
+
+/// How a name came to be exported: by an `export` on its declaration, which
+/// exports only that declaration's namespace, or by an `export { … }`
+/// specifier, which exports whatever the name means.
+#[derive(Clone, Copy, Debug)]
+enum ExportOrigin {
+    Direct(ExportNamespace),
+    Specifier,
+}
+
+impl ExportOrigin {
+    fn allows(self, namespace: ExportNamespace) -> bool {
+        match self {
+            Self::Direct(own) => own == namespace,
+            Self::Specifier => true,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::typechecker) struct ExportedName {
+    span: crate::Span,
+    direct: bool,
 }
 
 /// The declared name of an exportable top-level declaration, or `None` for any
@@ -292,6 +423,22 @@ pub(super) fn exported_decl_name(kind: &StmtKind) -> Option<&Ident> {
         | StmtKind::ClassDecl { name, .. }
         | StmtKind::EnumDecl { name, .. }
         | StmtKind::TypeAliasDecl { name, .. } => Some(name),
+        _ => None,
+    }
+}
+
+/// The namespace an exportable top-level declaration exports into. Classes
+/// and enums are recorded as types; their constructor and members ride on the
+/// type's export.
+fn exported_decl_namespace(kind: &StmtKind) -> Option<ExportNamespace> {
+    match kind {
+        StmtKind::Function { .. } | StmtKind::Let { .. } | StmtKind::Const { .. } => {
+            Some(ExportNamespace::Value)
+        }
+        StmtKind::InterfaceDecl { .. }
+        | StmtKind::ClassDecl { .. }
+        | StmtKind::EnumDecl { .. }
+        | StmtKind::TypeAliasDecl { .. } => Some(ExportNamespace::Type),
         _ => None,
     }
 }

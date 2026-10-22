@@ -1,0 +1,7 @@
+// A type another module exports may appear in this module's exported
+// signature: callers import it from where it is declared.
+import { Point } from "./types";
+
+export function origin(): Point {
+  return { x: 0 };
+}

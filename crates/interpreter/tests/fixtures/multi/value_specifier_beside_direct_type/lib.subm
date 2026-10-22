@@ -1,0 +1,13 @@
+// A directly exported type and a specifier exporting a value under its name
+// are one export of each, as in TypeScript.
+
+export interface Made {
+  n: number;
+}
+
+/** Makes one. */
+function make(): Made {
+  return { n: 1 };
+}
+
+export { make as Made };

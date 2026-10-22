@@ -94,51 +94,52 @@ impl Inferer<'_> {
                 then_block,
                 else_block,
             } => self.infer_if_statement(condition, then_block, else_block, span),
-            StmtKind::While { condition, body } => {
+            StmtKind::While { condition, body } => self.without_argument_memo(|this| {
                 let (condition, _, body) =
-                    self.infer_condition_first_loop(Some(condition), None, body, span)?;
+                    this.infer_condition_first_loop(Some(condition), None, body, span)?;
                 Ok(TypedStmtKind::While {
                     condition: condition.ok_or_else(|| {
                         super::inference_failure("missing inferred while condition")
                     })?,
                     body,
                 })
-            }
+            }),
             StmtKind::For {
                 init,
                 condition,
                 update,
                 body,
-            } => {
-                self.check_for_pattern_init_captures(stmt_id, span);
-                self.scopes.push();
-                let typed_init = init.map(|id| self.infer_stmt(id)).transpose()?.flatten();
+            } => self.without_argument_memo(|this| {
+                this.check_for_pattern_init_captures(stmt_id, span);
+                this.scopes.push();
+                let typed_init = init.map(|id| this.infer_stmt(id)).transpose()?.flatten();
                 // Init-scope bindings persist across iterations, so the body's
                 // scope floor, taken in `infer_condition_first_loop`, sits
                 // above them.
                 let (typed_cond, typed_update, typed_body) =
-                    self.infer_condition_first_loop(condition, update, body, span)?;
-                self.scopes.pop();
+                    this.infer_condition_first_loop(condition, update, body, span)?;
+                this.scopes.pop();
                 // The init scope is popped after the fold, so anything the fold
                 // installed that is rooted in it is now unreadable.
-                self.drop_out_of_scope_narrowings();
+                this.drop_out_of_scope_narrowings();
                 Ok(TypedStmtKind::For {
                     init: typed_init,
                     condition: typed_cond,
                     update: typed_update,
                     body: typed_body,
                 })
-            }
+            }),
             StmtKind::ForOf {
                 binding_kind,
                 name,
                 ty: ann,
                 iter,
                 body,
-            } => self.infer_for_of_statement(binding_kind, name, ann, iter, body, span),
-            StmtKind::DoWhile { body, condition } => {
-                self.infer_do_while_statement(body, condition, span)
-            }
+            } => self.without_argument_memo(|this| {
+                this.infer_for_of_statement(binding_kind, name, ann, iter, body, span)
+            }),
+            StmtKind::DoWhile { body, condition } => self
+                .without_argument_memo(|this| this.infer_do_while_statement(body, condition, span)),
             StmtKind::Switch {
                 discriminant,
                 cases,
@@ -491,7 +492,10 @@ impl Inferer<'_> {
         doc: Option<crate::DocComment>,
         preserve_binding_literals: bool,
     ) -> Result<TypedStmtKind, CompilerFailure> {
-        let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
+        let hint = ty
+            .as_ref()
+            .map(|a| self.resolve_type_in_flow(a))
+            .transpose()?;
         if self.ast.implicit_initializers.contains(&value) {
             return self.infer_uninitialized_let(name, hint, value, doc);
         }
@@ -695,7 +699,10 @@ impl Inferer<'_> {
         // `x ?? "d"` adds `"d"`. The binding cannot be reassigned, so nothing
         // can invalidate them, and they are fresh, so a `let` copying it widens.
         // A computed value still widens (`const a = 1 + 1` is `number`).
-        let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
+        let hint = ty
+            .as_ref()
+            .map(|a| self.resolve_type_in_flow(a))
+            .transpose()?;
         let component_hint = self.destructuring_default_hint(hint.as_ref(), value)?;
         let (typed_value, value_ty) = self.infer_expr_keeping_literals(
             value,

@@ -576,22 +576,28 @@ impl Inferer<'_> {
             return Ok(Some(literal));
         }
         // A template of constants is the string it spells, as `tsc` has it.
-        if let Some(value) = super::comparison_operand::constant_template(self.ast, value_expr)? {
+        if let Some(value) = super::comparison_operand::constant_template(
+            self.ast,
+            value_expr,
+            self.global_numbers(),
+        )? {
             return Ok(Some(TypedSwitchValue::String {
                 value,
                 span: value_span,
             }));
         }
         // Adding `0.0` makes `-0` the same label as `0`, which `===` can't tell
-        // apart either.
-        Ok(
-            super::comparison_operand::constant_number(self.ast, value_expr)?.map(|value| {
-                TypedSwitchValue::Number {
-                    value: value + 0.0,
-                    span: value_span,
-                }
-            }),
-        )
+        // apart either. `NaN` and `Infinity` stay expressions of type `number`,
+        // as tsc types them, so they neither narrow nor clash as labels.
+        Ok(super::comparison_operand::constant_number(
+            self.ast,
+            value_expr,
+            super::comparison_operand::GlobalNumbers::default(),
+        )?
+        .map(|value| TypedSwitchValue::Number {
+            value: value + 0.0,
+            span: value_span,
+        }))
     }
 
     /// A `case` label that isn't a literal, compared with `===` at run time as

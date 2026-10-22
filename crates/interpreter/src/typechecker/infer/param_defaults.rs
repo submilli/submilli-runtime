@@ -85,16 +85,34 @@ impl Inferer<'_> {
         };
         // An unannotated parameter's type is its default's own, which an object
         // pattern shapes; typing the default against it again would lose that.
-        let shaped_by_pattern =
-            param.ty.is_none() && self.ast.object_pattern_sources.contains_key(&default);
+        // One typed from its argument is the default's context instead.
+        let shaped_by_pattern = param.ty.is_none()
+            && !self
+                .parameters_typed_by_arguments
+                .contains(&param.name.span)
+            && self
+                .ast
+                .object_pattern_sources
+                .contains_key(&super::expr::peel_parens(self.ast, default)?);
         let expected = (!shaped_by_pattern).then_some(&declared);
+        let errors_before = self.error_count();
         let (default_value, default_ty) = self.infer_expr(default, expected)?;
         let default_span = self.ast.try_expr(default).map_err(arena_failure)?.span;
         // Replace only the outer contextual mismatch with the parameter
         // diagnostic; keep errors from inside the initializer intact.
         self.drop_contextual_mismatch(default_span, &declared, &default_ty);
-        self.check_parameter_default(param, &declared, &default_ty, default_span);
-        let body_ty = self.initialized_parameter_type(input_ty, &default_ty);
+        // A parameter typed from its argument is typed as an annotated one is:
+        // a default that doesn't fit was reported against it, once, and the
+        // body sees the parameter's type.
+        let typed_by_argument = self.parameters_typed_by_arguments.contains(&span);
+        if !typed_by_argument || self.error_count() == errors_before {
+            self.check_parameter_default(param, &declared, &default_ty, default_span);
+        }
+        let body_ty = if typed_by_argument {
+            target.clone()
+        } else {
+            self.initialized_parameter_type(input_ty, &default_ty)
+        };
         let write_ty = self.parameter_write_type(param, input_ty)?;
         self.record_authored_parameter_type(span, &write_ty);
         let incoming = self.parameter_input(param, input_ty)?;
@@ -349,8 +367,27 @@ impl Inferer<'_> {
     /// Keep speculative flow and parameter metadata out of the ordered pass.
     /// Arena work and type-budget charges remain accounted for; nested trials
     /// are disabled so nested default expressions do not multiply the work.
-    fn with_parameter_type_trial<T>(
+    /// The trial sees no narrowing: a parameter is typed at its function's
+    /// start.
+    pub(super) fn with_parameter_type_trial<T>(
         &mut self,
+        infer: impl FnOnce(&mut Self) -> Result<T, CompilerFailure>,
+    ) -> Result<T, CompilerFailure> {
+        self.with_trial(false, infer)
+    }
+
+    /// [`Self::with_parameter_type_trial`] for an expression inferred ahead
+    /// of where it stands, which sees the narrowing in effect there.
+    pub(super) fn with_expression_trial<T>(
+        &mut self,
+        infer: impl FnOnce(&mut Self) -> Result<T, CompilerFailure>,
+    ) -> Result<T, CompilerFailure> {
+        self.with_trial(true, infer)
+    }
+
+    fn with_trial<T>(
+        &mut self,
+        keeps_narrowing: bool,
         infer: impl FnOnce(&mut Self) -> Result<T, CompilerFailure>,
     ) -> Result<T, CompilerFailure> {
         let scopes = self.scopes.clone();
@@ -363,11 +400,20 @@ impl Inferer<'_> {
         let initializations = self.typed_ast.parameter_initializations.clone();
         let prologues = self.typed_ast.parameter_default_prologues.clone();
         let authored_types = self.typed_ast.authored_parameter_types.clone();
-        self.enter_function_declaration_narrow_boundary();
+        let flow = keeps_narrowing.then(|| self.copy_narrowing());
+        if !keeps_narrowing {
+            self.enter_function_declaration_narrow_boundary();
+        }
         let was_prebinding = std::mem::replace(&mut self.prebinding_parameter_types, true);
         let result = infer(self);
         self.prebinding_parameter_types = was_prebinding;
-        let restored = self.exit_closure_narrow_boundary();
+        let restored = match flow {
+            Some(saved) => {
+                self.restore_narrowing(saved);
+                Ok(())
+            }
+            None => self.exit_closure_narrow_boundary(),
+        };
         self.scopes = scopes;
         self.reachable = reachable;
         self.pattern_sources = pattern_sources;

@@ -262,6 +262,19 @@ impl<'a> Inferer<'a> {
         Ok(ty)
     }
 
+    /// [`Self::resolve_type`] for an annotation resolved where it runs, a
+    /// `let` or `const` declaration's, a cast's or a call's type argument,
+    /// whose type queries take the narrowing in effect there, as in tsc.
+    pub(super) fn resolve_type_in_flow(
+        &mut self,
+        annot: &TypeAnnotation,
+    ) -> Result<Type, CompilerFailure> {
+        let outer = std::mem::replace(&mut self.type_queries_see_narrowing, true);
+        let resolved = self.resolve_type(annot);
+        self.type_queries_see_narrowing = outer;
+        resolved
+    }
+
     pub(super) fn resolve_type(&mut self, annot: &TypeAnnotation) -> Result<Type, CompilerFailure> {
         // Checks of the resolved type (index fields and callable signatures)
         // record limits they cannot return; report one met here at this
@@ -737,15 +750,20 @@ impl<'a> Inferer<'a> {
                 return_type,
             } => {
                 self.report_duplicate_params(params.iter().map(|f| &f.name));
-                let resolved_params: Vec<Type> = params
+                // A function type is a signature, whose type queries take no
+                // narrowing, as tsc gives each signature its own flow.
+                let in_flow = std::mem::replace(&mut self.type_queries_see_narrowing, false);
+                let resolved = params
                     .iter()
                     .map(|f| {
                         self.resolve_type(&f.ty)
                             .map(|ty| crate::ObjectField::widen_optional(f.optional, ty))
                     })
-                    .collect::<Result<_, _>>()?;
-                // The return position is the one place `void` belongs.
-                let resolved_ret = self.resolve_type(return_type)?;
+                    .collect::<Result<Vec<Type>, _>>()
+                    // The return position is the one place `void` belongs.
+                    .and_then(|params| Ok((params, self.resolve_type(return_type)?)));
+                self.type_queries_see_narrowing = in_flow;
+                let (resolved_params, resolved_ret) = resolved?;
                 let has_rest = params.last().is_some_and(|f| f.rest);
                 Type::Function {
                     params: resolved_params,
@@ -787,19 +805,51 @@ impl<'a> Inferer<'a> {
             .ok_or_else(|| super::inference_failure("empty typeof path"))?;
         let name = root_span.name.clone();
 
-        let Some(mut ty) = self.lookup_value_type(&name) else {
+        let Some(declared) = self.lookup_value_type(&name) else {
             return Ok(self.typeof_type_name(root_span, rest));
         };
 
-        for seg in rest {
+        // Each step reads the narrowed type of the path so far, so a root
+        // narrowed to one member of a union reads that member's field.
+        let mut ty = self.narrowed_query_type(root_span, &[]).unwrap_or(declared);
+        for (index, seg) in rest.iter().enumerate() {
             let field = seg.name.clone();
-            let Some(next) = self.field_type_of(&ty, &field) else {
+            let Some(next) = self.field_type_of(&ty, &field, seg.span)? else {
                 self.error(seg.span, format!("`{field}` is not a field of `{ty}`"));
                 return Ok(Type::Error);
             };
-            ty = next;
+            ty = self
+                .narrowed_query_type(root_span, &rest[..=index])
+                .unwrap_or(next);
         }
         Ok(ty)
+    }
+
+    /// The type a narrowing in scope gives `root.rest…`, which a type query
+    /// takes as TypeScript does where it runs: `typeof x.p` under
+    /// `x.p === "A"` is `"A"`. A signature's takes none, as its function may
+    /// run elsewhere.
+    fn narrowed_query_type(&self, root: &crate::Ident, rest: &[crate::Ident]) -> Option<Type> {
+        if !self.type_queries_see_narrowing {
+            return None;
+        }
+        let binding = match self.scopes.get(&root.name) {
+            Some(entry) => super::narrowing::BindingId::Local {
+                name: root.name.clone(),
+                decl_scope: entry.decl_scope,
+            },
+            None => super::narrowing::BindingId::Global(
+                self.top_symbols.get(&root.name)?.mangled_name.clone(),
+            ),
+        };
+        let path = super::narrowing::ReferencePath {
+            root: binding,
+            chain: rest
+                .iter()
+                .map(|segment| super::narrowing::PathElem::Field(segment.name.clone()))
+                .collect(),
+        };
+        self.narrowed_read(path).map(|(_, ty)| ty)
     }
 
     /// `typeof` whose root names no value. An enum member reads as its enum, as
@@ -908,25 +958,30 @@ impl<'a> Inferer<'a> {
     }
 
     /// One field read for a `typeof a.b` path. Object types carry their fields
-    /// directly; an interface reference resolves through its declaring symbol.
-    fn field_type_of(&self, ty: &Type, field: &str) -> Option<Type> {
-        match ty.peel() {
+    /// directly; an interface's is instantiated with the type arguments `ty`
+    /// gives it: `typeof x.p` on `x: I<"A">` is `"A"`.
+    fn field_type_of(
+        &self,
+        ty: &Type,
+        field: &str,
+        span: crate::Span,
+    ) -> Result<Option<Type>, CompilerFailure> {
+        Ok(match ty.peel() {
             Type::Object { fields, index } => fields
                 .get(field)
                 .map(crate::types::ObjectField::read_ty)
                 .or_else(|| index.as_ref().map(crate::IndexSignature::read_ty)),
             Type::InterfaceRef { .. } => {
-                let (mangled, _package, name, _args) = ty.interface_routing()?;
-                let sym = self.lookup_structural_type(&mangled, name)?;
-                let TypeKind::Interface { properties, .. } = &sym.kind else {
-                    return None;
+                let Some((sig, bindings, _, _)) = self.lookup_interface_property(ty, field) else {
+                    return Ok(None);
                 };
-                properties
-                    .get(field)
-                    .map(|p| crate::ObjectField::widen_optional(p.optional, p.ty.clone()))
+                let declared =
+                    super::generic::substitute_typevars(&sig.ty, &bindings, &self.type_limits)
+                        .map_err(super::type_limit_at(span))?;
+                Some(crate::ObjectField::widen_optional(sig.optional, declared))
             }
             _ => None,
-        }
+        })
     }
 
     /// `keyof T` as the union of `T`'s member names, resolved eagerly to string literal

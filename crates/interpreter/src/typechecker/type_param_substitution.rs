@@ -331,6 +331,27 @@ impl TypeParamSubstitution {
         loose
     }
 
+    /// This substitution without its `never` and `never[]` candidates, when
+    /// it has any: such a candidate is no hint for a later argument, which
+    /// takes or widens the binding instead (tsc drops `never` from the
+    /// candidates, and `never[]` is a subtype of every array).
+    pub fn without_never_bindings(&self) -> Option<TypeParamSubstitution> {
+        let mut loose = self.clone();
+        loose
+            .bindings
+            .retain(|name, _| !self.is_never_candidate(name));
+        (loose.bindings.len() != self.bindings.len()).then_some(loose)
+    }
+
+    /// Whether `name` is bound to a `never` or `never[]` argument candidate.
+    fn is_never_candidate(&self, name: &str) -> bool {
+        self.widenable.contains(name)
+            && self
+                .bindings
+                .get(name)
+                .is_some_and(|ty| matches!(ty.peel(), Type::Never) || ty.holds_no_element())
+    }
+
     /// Whether `name` is bound to a candidate a later argument may widen.
     pub fn is_widenable(&self, name: &str) -> bool {
         self.widenable.contains(name)
@@ -568,7 +589,15 @@ impl TypeParamSubstitution {
                 .collect();
             self.several_literal_candidates.extend(joined);
         }
+        // A `never` candidate binds nothing a literal replacing it widens:
+        // once replaced, the name counts as newly bound.
         let bound_before: std::collections::BTreeSet<String> = self.bound_names().collect();
+        let never_candidates: BTreeMap<String, Type> = self
+            .bindings
+            .iter()
+            .filter(|(name, _)| self.is_never_candidate(name))
+            .map(|(name, ty)| (name.clone(), ty.clone()))
+            .collect();
         let resolved = self.apply_or_record(param_ty, types.limits);
         let fits_binding = !super::infer::expr::type_contains_type_var(&resolved)
             && assignable(arg_ty, &resolved, types);
@@ -584,7 +613,14 @@ impl TypeParamSubstitution {
         // Unless the argument gives no one binding (`[["a", 1], ["b", 2]]` is
         // a union of tuples); then the binding it fits stands, as tsc falls
         // back to the contextual type, and is final, since a later argument
-        // narrowing it would no longer fit this one.
+        // narrowing it would no longer fit this one. Its members' candidates
+        // would bind their union, which a method taking the type parameter
+        // makes no subtype of the expected type.
+        if fits_binding && holds_tuple_union(arg_ty) && self.mentions_replaceable_binding(param_ty)
+        {
+            self.keep_replaceable_bindings(param_ty);
+            return Ok(());
+        }
         let before = fits_binding.then(|| self.clone());
         let unified = self.keeping_close_matches_on_success(|sub| {
             let mut unifier = Unifier::new(sub, Some(types), types.limits);
@@ -599,7 +635,12 @@ impl TypeParamSubstitution {
             // against `T[]` is an ordinary one.
             let newly_bound: Vec<String> = self
                 .bound_names()
-                .filter(|name| !bound_before.contains(name))
+                .filter(|name| {
+                    !bound_before.contains(name)
+                        || never_candidates
+                            .get(name)
+                            .is_some_and(|before| self.bindings.get(name) != Some(before))
+                })
                 .filter(|name| {
                     self.bindings.get(name).is_some_and(|bound| {
                         matches!(
@@ -622,6 +663,27 @@ impl TypeParamSubstitution {
         }
         unified
     }
+}
+
+/// Whether `ty` is a union of tuples, or an array of one, as an array of
+/// entry literals with differing literals is typed.
+fn holds_tuple_union(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Array(element) => holds_tuple_union(element),
+        Type::Union(members) => members
+            .iter()
+            .all(|member| matches!(member.peel(), Type::Tuple(_))),
+        _ => false,
+    }
+}
+
+/// Whether `a` and `b` are literals of one primitive, or members of one enum.
+fn share_literal_base(a: &Type, b: &Type) -> bool {
+    if a.literal_base().is_some() {
+        return a.literal_base() == b.literal_base();
+    }
+    let is_enum_member = |ty: &Type| ty.all_members(&Type::is_enum_member);
+    is_enum_member(a) && is_enum_member(b) && a.widen_literal() == b.widen_literal()
 }
 
 /// A [`Unifier`]'s state before a speculative attempt.
@@ -659,6 +721,10 @@ struct Unifier<'a> {
     /// Whether the argument is an object or array literal, which widens a
     /// binding other literals gave to the union of the two.
     combines_literals: bool,
+    /// Whether this unifies the members of an argument's union of tuples in
+    /// turn, whose array and object candidates form their union, as tsc
+    /// unions an array literal's element candidates.
+    unions_member_candidates: bool,
     /// Whether the walk is inside a function type's result, where a
     /// candidate never takes over literal candidates (see `takes_over` in
     /// [`Self::unify`]).
@@ -745,6 +811,15 @@ impl<'a> Unifier<'a> {
                 // ones widen, and the result is checked against the expected
                 // type afterwards.
                 let replaces_hint = replaceable && covariant;
+                // A `never` candidate, as from an empty array, adds nothing to
+                // the candidates' common supertype, so the next one takes the
+                // binding, as tsc drops `never` from the candidates. A binding
+                // from the receiver, as `never[]`'s, is no candidate.
+                let replaces_never = covariant
+                    && self.is_argument
+                    && self.sub.widenable.contains(name)
+                    && matches!(resolved.peel(), Type::Never)
+                    && !matches!(arg_resolved.peel(), Type::Never | Type::Error);
                 // A non-literal candidate wins over object and array literal
                 // candidates, as in tsc: it takes the binding, and the
                 // literals are checked against it once inference is done, the
@@ -780,7 +855,7 @@ impl<'a> Unifier<'a> {
                 if covariant && takes_over && !self.combines_literals {
                     replaces_literals = self.sub.literal_candidates.remove(name);
                 }
-                if replaces_hint || replaces_literals {
+                if replaces_hint || replaces_literals || replaces_never {
                     self.sub.bindings.insert(name.clone(), arg_ty.clone());
                     self.sub.widenable.insert(name.clone());
                     return Ok(());
@@ -1076,6 +1151,28 @@ impl<'a> Unifier<'a> {
                 }
                 Ok(())
             }
+            // An argument's union of tuples (`[["a", 1], ["b", 2]]` kept as
+            // `["a", 1] | ["b", 2]`) infers from each member, as tsc infers
+            // from each member of a union source: its candidates form the
+            // binding.
+            (Type::Tuple(_), Type::Union(members))
+                if self.is_argument
+                    && !self.contravariant
+                    && members
+                        .iter()
+                        .all(|member| matches!(member.peel(), Type::Tuple(_))) =>
+            {
+                let snap = self.snapshot();
+                let outer = std::mem::replace(&mut self.unions_member_candidates, true);
+                let unified = members
+                    .iter()
+                    .try_for_each(|member| self.unify(param_ty, member));
+                self.unions_member_candidates = outer;
+                if unified.is_err() {
+                    self.restore(snap);
+                }
+                unified
+            }
             // Union param against a single (non-union) arg: try each member.
             (Type::Union(pa), _) => self.unify_into_union_members(param_ty, pa, unpeeled_arg),
             // A param slot resolving to `unknown` accepts any argument — the top
@@ -1174,6 +1271,7 @@ impl<'a> Unifier<'a> {
             is_argument: false,
             contravariant: false,
             combines_literals: false,
+            unions_member_candidates: false,
             inside_function_result: false,
             field_path: Vec::new(),
         }
@@ -1274,12 +1372,23 @@ impl<'a> Unifier<'a> {
         if assignable(bound, arg, types) {
             return Some(unresolved_arg.clone());
         }
-        if self.combines_literals && self.sub.literal_candidates.contains(name) {
+        let structured = |ty: &Type| {
+            matches!(
+                ty.peel(),
+                Type::Array(_) | Type::Object { .. } | Type::Tuple(_)
+            )
+        };
+        // A literal's candidates form their union; so do an array literal's
+        // tuple members', which tsc unions as the literal's element type.
+        if self.combines_literals
+            && (self.sub.literal_candidates.contains(name)
+                || (self.unions_member_candidates && structured(bound) && structured(arg)))
+        {
             return Some(Type::union(vec![bound.clone(), unresolved_arg.clone()]));
         }
-        // Literal candidates of one primitive form their union, as tsc infers
-        // where they are kept: `pick(1, 2)` is a `1 | 2`.
-        if bound.literal_base().is_some() && bound.literal_base() == arg.literal_base() {
+        // Literal candidates of one primitive or enum form their union, as
+        // tsc infers where they are kept: `pick(1, 2)` is a `1 | 2`.
+        if share_literal_base(bound, arg) {
             return Some(Type::union(vec![bound.clone(), arg.clone()]));
         }
         // tsc sets `null` and `undefined` candidates aside and adds them back
@@ -1299,9 +1408,7 @@ impl<'a> Unifier<'a> {
             (Some(only), None) | (None, Some(only)) => only,
             (Some(bound), Some(arg)) if assignable(&arg, &bound, types) => bound,
             (Some(bound), Some(arg)) if assignable(&bound, &arg, types) => arg,
-            (Some(bound), Some(arg))
-                if bound.literal_base().is_some() && bound.literal_base() == arg.literal_base() =>
-            {
+            (Some(bound), Some(arg)) if share_literal_base(&bound, &arg) => {
                 Type::union(vec![bound, arg])
             }
             _ => return None,
