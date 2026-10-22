@@ -577,6 +577,43 @@ fn wildcard_undetermined_args(ty: &Type) -> Type {
     }
 }
 
+/// Whether `kind` is `JSON.parse(…)`, or `r.json()`, which lowers to it.
+fn parses_json(kind: &TypedExprKind) -> bool {
+    matches!(
+        kind,
+        TypedExprKind::IntrinsicCall {
+            kind: Intrinsic::JsonParse,
+            ..
+        }
+    )
+}
+
+/// Whether a parsed JSON value can pass `as target`, so the cast is worth
+/// suggesting. JSON holds no function, `bigint`, byte array or `undefined`.
+fn json_can_fill(target: &Type, depth: u32) -> bool {
+    // A type this deep is too large to judge; offer the cast.
+    if depth > 32 {
+        return true;
+    }
+    let fits = |ty: &Type| json_can_fill(ty, depth + 1);
+    match target.peel() {
+        Type::Void
+        | Type::Undefined
+        | Type::Never
+        | Type::BigInt
+        | Type::BigIntLiteral(_)
+        | Type::Uint8Array
+        | Type::Function { .. } => false,
+        Type::Union(members) => members.iter().any(fits),
+        Type::Array(element) => fits(element),
+        Type::Tuple(tuple) => tuple.elements.iter().take(tuple.required_len()).all(fits),
+        Type::Object { fields, .. } => fields
+            .values()
+            .all(|field| field.optional || fits(&field.ty)),
+        _ => true,
+    }
+}
+
 /// A type's union members, or the type itself — the set a runtime class test
 /// has to consider one at a time.
 fn class_members(ty: &Type) -> Vec<Type> {
@@ -898,7 +935,11 @@ impl Inferer<'_> {
             // `JSON.parse(text)` and other untyped reads land here: name the
             // checked cast, which is the usual fix, when `as` accepts the target.
             if matches!(ty.peel(), Type::Unknown) && self.is_legal_cast_target(&ty, want) {
-                help.push(self.checked_cast_help(expr_id, span, want)?);
+                if parses_json(&kind) {
+                    help.extend(self.parsed_json_cast_help(expr_id, span, want)?);
+                } else {
+                    help.push(self.checked_cast_help(expr_id, span, want)?);
+                }
             }
             let shown = self.reported_result_type(&kind, &ty, want)?;
             self.error_with_help(
@@ -1421,6 +1462,119 @@ impl Inferer<'_> {
         Ok(format!(
             "cast it, checked at run time: `{value} as {want}`, or narrow it first with `typeof` or `Array.isArray`"
         ))
+    }
+
+    /// [`Self::checked_cast_help`] for `JSON.parse(…)` or `r.json()` itself,
+    /// which says why the value is `unknown` and what the cast does. `None` when
+    /// a parsed value could never pass the cast, or would pass it only to fail
+    /// on the first read.
+    fn parsed_json_cast_help(
+        &self,
+        expr_id: ExprId,
+        span: Span,
+        want: &Type,
+    ) -> Result<Option<String>, CompilerFailure> {
+        let shape = self.reduce_interfaces_to_shapes(want);
+        if !json_can_fill(&shape, 0) || self.holds_host_type(want, &mut Vec::new()) {
+            return Ok(None);
+        }
+        // A call binds tighter than `as`, so it needs no parentheses.
+        let call = match self.short_source(span) {
+            Some(call) => call.to_string(),
+            None if self.calls_json_method(expr_id)? => "….json()".to_string(),
+            None => "JSON.parse(…)".to_string(),
+        };
+        Ok(Some(format!(
+            "`{call}` returns `unknown`. Cast it to the type you expect, which checks the value at \
+             run time and throws a `TypeError` if it doesn't match: `{call} as {want}`"
+        )))
+    }
+
+    /// Whether `expr_id` is a `….json()` call, as an http response's is.
+    fn calls_json_method(&self, expr_id: ExprId) -> Result<bool, CompilerFailure> {
+        let ExprKind::Call { callee, .. } = self
+            .ast
+            .try_expr(expr_id)
+            .map_err(super::arena_failure)?
+            .kind
+        else {
+            return Ok(false);
+        };
+        Ok(matches!(
+            &self.ast.try_expr(callee).map_err(super::arena_failure)?.kind,
+            ExprKind::FieldAccess { name, .. } if name.name == "json"
+        ))
+    }
+
+    /// Whether `ty` holds a host type anywhere, interface properties and index
+    /// signatures included: a `submilli:` or prelude class, or an interface
+    /// whose values the host builds and reads through host getters. A parsed
+    /// object can't serve those getters, so `as` to such a type passes a value
+    /// of the right shape that the first read then fails on. `seen` stops the
+    /// walk through recursive interfaces; written types are finite otherwise.
+    fn holds_host_type(&self, ty: &Type, seen: &mut Vec<MangledName>) -> bool {
+        match ty.peel() {
+            Type::InterfaceRef {
+                mangled,
+                name,
+                args,
+                ..
+            }
+            | Type::ClassRef {
+                mangled,
+                name,
+                args,
+                ..
+            } => {
+                // Arguments first: `seen` keys on the interface alone, and
+                // `Box<number>` met earlier must not hide `Box<fs.Stat>`.
+                if args.iter().any(|arg| self.holds_host_type(arg, seen)) {
+                    return true;
+                }
+                if seen.contains(mangled) {
+                    return false;
+                }
+                seen.push(mangled.clone());
+                match self
+                    .resolver()
+                    .lookup(mangled, name)
+                    .map(|symbol| &symbol.kind)
+                {
+                    Some(crate::TypeKind::Interface {
+                        properties,
+                        index,
+                        dispatch,
+                        ..
+                    }) => {
+                        matches!(dispatch, crate::Dispatch::Direct)
+                            || properties
+                                .values()
+                                .any(|property| self.holds_host_type(&property.ty, seen))
+                            || index
+                                .as_ref()
+                                .is_some_and(|index| self.holds_host_type(&index.value, seen))
+                    }
+                    _ => crate::mangle::is_builtin(mangled),
+                }
+            }
+            Type::Union(members) => members
+                .iter()
+                .any(|member| self.holds_host_type(member, seen)),
+            Type::Array(element) => self.holds_host_type(element, seen),
+            Type::Tuple(tuple) => tuple
+                .elements
+                .iter()
+                .any(|element| self.holds_host_type(element, seen)),
+            Type::Object { fields, index } => {
+                fields
+                    .values()
+                    .any(|field| self.holds_host_type(&field.ty, seen))
+                    || index
+                        .as_ref()
+                        .is_some_and(|index| self.holds_host_type(&index.value, seen))
+            }
+            _ => false,
+        }
     }
 
     /// A string and a number under `+`, which does not coerce: the number
@@ -14799,7 +14953,7 @@ mod tests {
         assert_eq!(
             diags[0].help.last().map(String::as_str),
             Some(
-                "cast it, checked at run time: `JSON.parse(\"[]\") as string[]`, or narrow it first with `typeof` or `Array.isArray`"
+                "`JSON.parse(\"[]\")` returns `unknown`. Cast it to the type you expect, which checks the value at run time and throws a `TypeError` if it doesn't match: `JSON.parse(\"[]\") as string[]`"
             )
         );
     }
@@ -14817,6 +14971,90 @@ mod tests {
         assert!(
             !diags[0].help.iter().any(|h| h.starts_with("cast it")),
             "{diags:?}"
+        );
+        let (_, diags) =
+            run("class Box { n: number = 0; } const u: unknown = 1; const b: Box = u;");
+        assert!(
+            !diags[0].help.iter().any(|h| h.starts_with("cast it")),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn response_json_names_the_checked_cast() {
+        let http = crate::stdlib::http::package_declaration();
+        let src = "import * as http from \"submilli:http\"; \
+                   interface User { name: string; } \
+                   function main(): void { \
+                     const r = http.get(\"https://example.com\"); \
+                     const u: User = r.json(); \
+                     const v: User[] = http.get(\"https://example.com/a/rather/long/path/that/is/long\").json(); }";
+        let (_, diags) = run_with_packages(src, &[&http]);
+        let casts: Vec<_> = diags
+            .iter()
+            .filter_map(|d| d.help.last())
+            .map(|h| h.rsplit(": ").next().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            casts,
+            vec!["`r.json() as User`", "`….json() as User[]`"],
+            "{diags:?}"
+        );
+    }
+
+    /// No cast is offered for a parsed value where it could never pass, or
+    /// would pass only to fail on the first read: a type JSON can't hold, or a
+    /// `submilli:` host type anywhere in the target.
+    #[test]
+    fn parsed_json_gets_no_cast_where_it_cannot_work() {
+        let fs = crate::stdlib::fs::package_declaration();
+        let src = "import * as fs from \"submilli:fs\"; \
+                   interface Box<T> { v: T; } \
+                   interface Holder { s: fs.Stat; } \
+                   interface Dir { [key: string]: fs.Stat; } \
+                   interface Id { id: bigint; } \
+                   function main(): void { \
+                     const t = \"1\"; \
+                     const f: () => void = JSON.parse(t); \
+                     const b: bigint = JSON.parse(t); \
+                     const s: fs.Stat | null = JSON.parse(t); \
+                     const o: { s?: fs.Stat } = JSON.parse(t); \
+                     const h: Holder = JSON.parse(t); \
+                     const g: { a: Box<number>; b: Box<fs.Stat> } = JSON.parse(t); \
+                     const d: Dir = JSON.parse(t); \
+                     const i: Id = JSON.parse(t); \
+                     const n: Box<number> | undefined = JSON.parse(t); \
+                     const e: ErrorOptions = JSON.parse(t); \
+                     const x: number = JSON.parse(\"a very long piece of text to parse, longer than the limit\"); }";
+        let (_, diags) = run_with_packages(src, &[&fs]);
+        let offered: Vec<_> = diags
+            .iter()
+            .filter(|d| d.help.iter().any(|h| h.contains("returns `unknown`")))
+            .map(|d| {
+                (
+                    d.message.as_str(),
+                    d.help.last().map(String::as_str).unwrap_or_default(),
+                )
+            })
+            .collect();
+        assert_eq!(offered.len(), 3, "{diags:?}");
+        let any_cast = diags
+            .iter()
+            .filter(|d| d.help.iter().any(|h| h.contains(" as ")))
+            .count();
+        assert_eq!(
+            any_cast, 3,
+            "a withheld cast came back in other words: {diags:?}"
+        );
+        assert_eq!(
+            offered[0].0,
+            "expected `Box<number> | undefined`, got `unknown`"
+        );
+        // A prelude data interface is no host type: a parsed object serves it.
+        assert_eq!(offered[1].0, "expected `ErrorOptions`, got `unknown`");
+        assert!(
+            offered[2].1.ends_with("`JSON.parse(…) as number`"),
+            "{offered:?}"
         );
     }
 
