@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "592f53bded0711a23b4f51e8d7b74bfb7a36b5a743b652f2cc0486318b40c17b"
+  contentHash: "9e719c0ff9f39bfb523c9947499b145f740cf4d088840f44625a26d9cf3a5f8d"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -29,19 +29,25 @@ repository.
 
 ## Install the CLI and server yourself
 
-macOS and Linux:
+The verification steps on this page and the [Quickstart](/docs/quickstart)
+use Bash or Zsh. On Windows, follow them inside WSL and install the Linux
+binaries there. A native PowerShell installation is separate from WSL.
+
+macOS, Linux, and Windows inside WSL:
 
 ```
 curl -fsSL https://submilli.ai/install.sh | sh
 ```
 
-Windows (PowerShell):
+For a native Windows CLI and server installation, use PowerShell:
 
 ```
 irm https://submilli.ai/install.ps1 | iex
 ```
 
-One line, and you have both binaries. Check the CLI:
+These commands install the latest release. To choose a version or inspect
+what the installer verifies, see [Pin and verify a release](#pin-and-verify-a-release).
+Continue in Bash or Zsh for the checks here. Check the CLI:
 
 ```
 submilli --version
@@ -98,6 +104,33 @@ blueprints:      (none)
 ```
 
 Later, `submilli upgrade` moves both binaries to the latest release in place.
+
+### Pin and verify a release
+
+Pass a release tag to choose the binary version. Keep the tag with the
+deployment record, and use the same option when upgrading a pinned deployment:
+
+```sh
+curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.4.2
+```
+
+For native Windows, save and run the installer with its `-Version` parameter:
+
+```powershell
+$installer = Join-Path $env:TEMP ('submilli-install-' + [guid]::NewGuid() + '.ps1')
+Invoke-WebRequest -UseBasicParsing https://submilli.ai/install.ps1 -OutFile $installer
+& $installer -Version v0.4.2
+Remove-Item $installer
+```
+
+Both installers download the binaries and `SHA256SUMS` over HTTPS and check
+each binary against that file before replacing an existing installation.
+This detects a mismatch with the checksum list. It does not authenticate the
+installer script or establish who published the list. The installer script
+at `submilli.ai` can change independently of the selected binary version.
+Review the [installer source](https://github.com/submilli/submilli-runtime)
+and [release assets](https://github.com/submilli/submilli-runtime/releases)
+before running them when you need to approve the code and files yourself.
 
 ## The skill
 

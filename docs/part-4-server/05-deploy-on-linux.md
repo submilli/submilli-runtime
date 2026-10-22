@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "3018d9e376e63936617718db9845825f955b9f40d85fd0c2688a091b75aad71c"
+  contentHash: "125b6f7baa3a587b43483295b168f93773a966139d143f0b099b517f06c7c16b"
   confirmedAt: "2026-10-05T16:46:31.966Z"
 ---
 
@@ -30,8 +30,13 @@ told otherwise. The published Linux binaries require x86-64. For a
 service, put them where all users find them:
 
 ```sh
-curl -fsSL https://submilli.ai/install.sh | sudo sh -s -- --install-dir /usr/local/bin
+curl -fsSL https://submilli.ai/install.sh | sudo sh -s -- --version v0.4.2 --install-dir /usr/local/bin
 ```
+
+Pin the tag to the release you approved. The installer verifies each binary
+against that release's `SHA256SUMS` before replacing an existing installation.
+See [pin and verify a release](/docs/install#pin-and-verify-a-release) for the
+verification limits and the Windows form of the command.
 
 ## Create the user and the directories
 
@@ -59,10 +64,12 @@ sudo chmod 0400 /etc/submilli/admin.token /etc/submilli/app.token /etc/submilli/
 
 Then write the config file, with your editor or with `tee` as below,
 with the paths of those three files in it. Your application is on
-another machine, so the server listens on all interfaces. An application
-that connects over MCP needs the name it will use for this machine under
-`mcp_allowed_hosts`. `hostname -f` gives the machine's name, which is
-that name unless you point a DNS alias at it. The state directories
+another machine, so bind to this machine's private interface address.
+Replace `10.0.12.7` with that address. An application that connects over
+MCP needs the name it will use for this machine under `mcp_allowed_hosts`.
+`hostname -f` gives the machine's name, which is that name unless you point
+a DNS alias at it. That name must resolve to the private address from the
+server and the application host. The state directories
 aren't in the file. They keep their defaults under the state directory,
 which the server takes from the `SUBMILLI_HOME` environment variable
 (`~/.submilli` when it is unset). The unit below sets it to
@@ -70,7 +77,7 @@ which the server takes from the `SUBMILLI_HOME` environment variable
 
 ```sh
 sudo tee /etc/submilli/server.yaml >/dev/null <<EOF
-bind: 0.0.0.0
+bind: 10.0.12.7
 api_tokens:
   - name: admin
     role: admin
@@ -84,6 +91,28 @@ mcp_allowed_hosts:
   - $(hostname -f):8128
 EOF
 ```
+
+Restrict inbound TCP port `8128` in the cloud security group and the host
+firewall to the application's private address or fixed private subnet. Leave
+other sources denied. For an existing UFW firewall, first check its policy:
+
+```sh
+sudo ufw status verbose
+```
+
+UFW must be active, with incoming traffic denied by default and no broader
+rule allowing port `8128`. Remove any broader allow rule for that port before
+adding this rule. Replace `10.0.20.15` with the application's address and
+`10.0.12.7` with the server's private address:
+
+```sh
+sudo ufw allow from 10.0.20.15 to 10.0.12.7 port 8128 proto tcp
+```
+
+Check the policy again before enabling the service. If setting up UFW for the
+first time, preserve SSH and other required management access before enabling
+it. HTTPS protects the token in transit, but it does not decide which machines
+may reach the port.
 
 ## Run it under systemd
 
@@ -126,7 +155,7 @@ the server](/docs/server/run-the-server) shows at start-up. Check
 it from your shell with the admin token:
 
 ```sh
-sudo submilli server status --token-file /etc/submilli/admin.token
+sudo submilli server status --server http://10.0.12.7:8128 --token-file /etc/submilli/admin.token
 ```
 
 Your application connects to `http://<the machine's name>:8128` with
@@ -230,14 +259,15 @@ reference covers the block and its settings.
 
 ## Upgrade and back up
 
-To upgrade, run the installer again and restart the service:
+To upgrade, choose a release after reading its migration instructions. Replace
+`v0.4.2` with that approved tag, run the installer, and restart the service:
 
 ```sh
 sudo systemctl stop submilli
 sudo tar czf /var/backups/submilli-pre-0.4.2.tgz -C /var/lib submilli
 # Retain /etc/submilli's store key and tokens in your secrets manager.
 # The 0.4.2 SQLite migrations are forward-only. Rollback needs this backup.
-curl -fsSL https://submilli.ai/install.sh | sudo sh -s -- --install-dir /usr/local/bin
+curl -fsSL https://submilli.ai/install.sh | sudo sh -s -- --version v0.4.2 --install-dir /usr/local/bin
 sudo systemctl restart submilli
 ```
 

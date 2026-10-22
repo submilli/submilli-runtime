@@ -7,12 +7,14 @@ on:
       - "docs/**"
       - "docs-site/**"
       - "examples/quickstart/**"
+      - "scripts/docker-compose-e2e.sh"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "docs/**"
       - "docs-site/**"
       - "examples/quickstart/**"
+      - "scripts/docker-compose-e2e.sh"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -20,6 +22,15 @@ permissions:
   contents: read
 
 jobs:
+  compose-e2e:
+    name: Compose documentation journey
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replay the published Compose deployment
+        run: scripts/docker-compose-e2e.sh
+
   build:
     runs-on: ubuntu-latest
     defaults:

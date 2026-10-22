@@ -5,15 +5,17 @@ slug: server/deploy-with-compose
 # The Compose ps output is from the earlier documented run; its image pin
 # was updated for 0.4.2. It could not be recaptured during release preparation
 # because the 0.4.2 image is published only with the release.
-# Turn on HTTPS was not run under Docker (no engine was available); the
-# SUBMILLI_TLS_* variables and --health-check over HTTPS were run with the
-# release binaries on main 51ce450b.
+# The published 0.4.1 deployment passed Linux amd64 Docker CI on 2026-10-14:
+# https://github.com/submilli/submilli-runtime/actions/runs/38588647497
+# The check extracts this page's YAML and verifies health, admin/user roles,
+# application execution over the Docker network, store-key mounts, HTTPS and
+# application CA trust, and persistence across container recreation and down/up.
 sidebar:
   order: 6
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "b5702ac331571c10959d36acd5eae1ea7c6ef6b6648f7f8c98881d2c310db06e"
+  contentHash: "84aa9808b3873d3c6612f02f8eb701a368aef53eeb048aef112266d08c330225"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -35,7 +37,12 @@ the same version in `.env`, beside the token. Into a new directory:
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/v0.4.2/compose.yaml
-printf 'SUBMILLI_IMAGE=ghcr.io/submilli/submilli-runtime:0.4.2\nSUBMILLI_SERVER_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env
+ADMIN_TOKEN=$(openssl rand -hex 32)
+APP_TOKEN=$(openssl rand -hex 32)
+printf 'SUBMILLI_IMAGE=ghcr.io/submilli/submilli-runtime:0.4.2\nSUBMILLI_SERVER_TOKEN=%s\nSUBMILLI_APP_TOKEN=%s\n' "$ADMIN_TOKEN" "$APP_TOKEN" > .env
+printf '%s\n' "$APP_TOKEN" > app-token
+chmod 600 .env
+chmod 0444 app-token
 docker compose up -d
 docker compose ps
 ```
@@ -45,9 +52,12 @@ NAME                   IMAGE                                     COMMAND        
 myproject-submilli-1   ghcr.io/submilli/submilli-runtime:0.4.2   "/usr/local/bin/subm…"   submilli   12 seconds ago   Up 12 seconds (healthy)   127.0.0.1:8128->8128/tcp
 ```
 
-Compose reads the token from `.env` and refuses to start without it. The
-port is published on the host's loopback, so the `submilli server`
-commands work from the host once the same token is in your shell:
+Compose reads the admin token from `.env` and refuses to start without it.
+Keep that token for host-side administration. The application gets the user
+token in [Put your application on its network](#put-your-application-on-its-network), so it can run programs and sessions without
+being able to replace Blueprints or manage secrets. The port is published on
+the host's loopback, so the `submilli server` commands work from the host once
+the same admin token is in your shell:
 
 ```sh
 set -a; . ./.env; set +a
@@ -82,25 +92,65 @@ port is closed.
 Loopback publishing only covers the host, though. Other containers reach
 the server over Docker's networks. So the server
 sits on its own network, `submilli-net`, and only containers you put on
-that network can reach it. Add your application to it and call the
-server by its service name:
+that network can reach it. First, declare the application's user token in
+`server.yaml`, beside the published Compose file:
 
-```yaml title="compose.yaml (your service, added to the published file)"
+```yaml title="server.yaml"
+api_tokens:
+  - name: app
+    role: user
+    token_file: /run/secrets/app-token
+```
+
+Save this complete override as `compose.override.yaml` in the same directory.
+Replace `your-application` with your application's image:
+
+```yaml title="compose.override.yaml"
 services:
+  submilli:
+    environment:
+      SUBMILLI_CONFIG: /run/secrets/submilli-config
+    secrets:
+      - submilli-config
+      - app-token
   app:
     image: your-application
     environment:
       SUBMILLI_URL: http://submilli:8128
-      SUBMILLI_SERVER_TOKEN: ${SUBMILLI_SERVER_TOKEN}
+      SUBMILLI_SERVER_TOKEN: ${SUBMILLI_APP_TOKEN}
     networks:
       - submilli-net
+
+secrets:
+  submilli-config:
+    file: ./server.yaml
+  app-token:
+    file: ./app-token
 ```
 
-Your application defines the two variables, so name them as it expects.
-This hands it the admin token. To give it a `user` token instead,
-declare one in a config file as [Run the
-server](/docs/server/run-the-server) shows, and mount the file and
-the token the way the store key is mounted below.
+The server keeps the admin token from the published file. The application's
+`SUBMILLI_SERVER_TOKEN` variable receives the separate user token stored as
+`SUBMILLI_APP_TOKEN` in `.env`. Name the application's variables as its client
+expects. The server reads that same user token from `app-token`.
+
+Both tokens appear in `docker compose config`, and container environment
+variables are visible through `docker inspect`. Limit access to Docker and
+keep this output private.
+
+Compose keeps the host file modes for these mounts outside Docker Swarm.
+Make `server.yaml` readable by the server's uid `65532`, then apply the
+override to recreate the server and start the application:
+
+```sh
+chmod 0444 server.yaml
+docker compose up -d
+docker compose ps
+```
+
+Keep `.env`, `app-token`, and `server.yaml` out of source control and in a
+directory accessible only to trusted operators. The `0444` mode lets the
+container read the mounted files. On a shared host, use owner `65532:65532`
+and mode `0400` for `app-token` instead if other local users can reach it.
 
 Any container on `submilli-net` can reach the API, so don't put anything
 else there. A container on Docker's default network can't connect at
@@ -131,10 +181,10 @@ head -c 32 /dev/urandom | base64 > submilli-store-key
 chmod 0444 submilli-store-key
 ```
 
-Additions to the stack go in `compose.override.yaml`, which Compose
-reads automatically, so the shipped file stays untouched:
+Merge these additions into the existing `compose.override.yaml`, preserving
+its application-token configuration. Compose reads the file automatically:
 
-```yaml title="compose.override.yaml"
+```yaml title="compose.override.yaml (additions)"
 services:
   submilli:
     environment:

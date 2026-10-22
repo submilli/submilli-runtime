@@ -28,8 +28,9 @@ been initialized; it never replaces an existing generated configuration.
 
 CI checks the built HTML with Lychee v0.24.2. It checks local pages and anchors,
 the canonical `https://submilli.ai/docs` URLs against the same build, and external
-HTTP links. GitHub edit links are checked against source files in the checkout,
-avoiding GitHub’s rate-limited edit UI. Signed-in account-setup pages that reject
+HTTP links. This repository's GitHub `edit/main` and `blob/main` links are checked
+against source files in the checkout, avoiding GitHub's rate-limited web UI.
+Missing source files still fail the check. Signed-in account-setup pages that reject
 automated clients are excluded explicitly in `lychee.toml`.
 
 To run the fixture checks locally, install Lychee and set
