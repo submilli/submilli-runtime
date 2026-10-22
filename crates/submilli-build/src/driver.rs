@@ -42,6 +42,9 @@ pub struct BuiltPackage {
     /// for a plain `build_packages` run (local compile); `submilli install` sets
     /// it to the resolved GitHub repo + SHA before calling `install_packages`.
     pub source: Option<PackageSource>,
+    /// The non-entry modules this package's tests may import. `Some` only from
+    /// [`build_packages_for_tests`], whose `wasm` also exports them.
+    pub test_surface: Option<interpreter::PackageTestSurface>,
 }
 
 /// Compile every package in the manifest (or the sibling-dependency closure of
@@ -72,6 +75,44 @@ pub fn build_packages_with_inputs(
     only: Option<&PackageName>,
     inputs: &crate::ConfigInputs,
 ) -> Result<Vec<BuiltPackage>, DriverError> {
+    build_with_inputs(
+        manifest,
+        manifest_dir,
+        externals,
+        only,
+        inputs,
+        interpreter::PackageSurface::Public,
+    )
+}
+
+/// [`build_packages_with_inputs`] for `submilli build test`: each package's Wasm
+/// also exports its non-entry modules, so its tests can import them by relative
+/// path. Never install or publish these builds.
+pub fn build_packages_for_tests(
+    manifest: &ProjectManifest,
+    manifest_dir: &Path,
+    externals: &PackageStore,
+    only: Option<&PackageName>,
+    inputs: &crate::ConfigInputs,
+) -> Result<Vec<BuiltPackage>, DriverError> {
+    build_with_inputs(
+        manifest,
+        manifest_dir,
+        externals,
+        only,
+        inputs,
+        interpreter::PackageSurface::WithTestModules,
+    )
+}
+
+fn build_with_inputs(
+    manifest: &ProjectManifest,
+    manifest_dir: &Path,
+    externals: &PackageStore,
+    only: Option<&PackageName>,
+    inputs: &crate::ConfigInputs,
+    surface: interpreter::PackageSurface,
+) -> Result<Vec<BuiltPackage>, DriverError> {
     inputs
         .validate(only.is_some())
         .map_err(|error| DriverError::ConfigurationInput(error.to_string()))?;
@@ -95,7 +136,14 @@ pub fn build_packages_with_inputs(
         };
         configuration.insert(package.name.clone(), overrides);
     }
-    build_packages_configured(manifest, manifest_dir, externals, only, &configuration)
+    build_configured(
+        manifest,
+        manifest_dir,
+        externals,
+        only,
+        &configuration,
+        surface,
+    )
 }
 
 /// Build with package-scoped explicit overrides. Callers must keep user inputs
@@ -106,6 +154,24 @@ pub fn build_packages_configured(
     externals: &PackageStore,
     only: Option<&PackageName>,
     config: &BTreeMap<PackageName, BTreeMap<String, String>>,
+) -> Result<Vec<BuiltPackage>, DriverError> {
+    build_configured(
+        manifest,
+        manifest_dir,
+        externals,
+        only,
+        config,
+        interpreter::PackageSurface::Public,
+    )
+}
+
+fn build_configured(
+    manifest: &ProjectManifest,
+    manifest_dir: &Path,
+    externals: &PackageStore,
+    only: Option<&PackageName>,
+    config: &BTreeMap<PackageName, BTreeMap<String, String>>,
+    surface: interpreter::PackageSurface,
 ) -> Result<Vec<BuiltPackage>, DriverError> {
     let scoped = package_build_scope(manifest, only)?;
     let order = topo_order(&scoped)?;
@@ -165,6 +231,7 @@ pub fn build_packages_configured(
             &dependency_refs,
             &transitive_refs,
             overrides,
+            surface,
         )
         .map_err(|error| DriverError::Compile {
             package: package.name.clone(),
@@ -252,6 +319,7 @@ pub fn build_packages_configured(
             })?,
             type_info: compiled.type_info,
             source: None,
+            test_surface: compiled.test_surface,
         });
     }
     Ok(results)

@@ -487,6 +487,8 @@ TypedAst {
     shapes: [],
     exports: [],
     imported_packages: {},
+    internal_modules: {},
+    test_exports: [],
     runtime_type_tests: {
         Number: Shape(
             Number,

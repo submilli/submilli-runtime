@@ -78,6 +78,25 @@ impl ModuleSymbols {
             .collect()
     }
 
+    pub(in crate::typechecker) fn internal_exports(&self) -> crate::InternalModuleExports {
+        crate::InternalModuleExports {
+            values: self.exported_value_map(),
+            types: self.exported_type_map(),
+            unexported: self
+                .values
+                .iter()
+                .map(|(name, (exported, _))| (name, exported))
+                .chain(
+                    self.types
+                        .iter()
+                        .map(|(name, (exported, _))| (name, exported)),
+                )
+                .filter(|(_, exported)| !**exported)
+                .map(|(name, _)| name.clone())
+                .collect(),
+        }
+    }
+
     pub(in crate::typechecker) fn all_types(&self) -> impl Iterator<Item = &TypeSymbol> {
         self.types.values().map(|(_, sym)| sym)
     }
