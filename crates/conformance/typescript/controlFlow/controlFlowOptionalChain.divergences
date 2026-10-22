@@ -1,4 +1,4 @@
-types: 577 of 1056 tsc entries compared, 56 differ
+types: 650 of 1056 tsc entries compared, 55 differ
 
 line 83: y
   tsc:  boolean | undefined
@@ -12,65 +12,81 @@ line 98: w
   tsc:  boolean | undefined
   ours: boolean
 
-line 174: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 173: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
-line 177: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 179: bar
+  tsc:  (() => number) | undefined
+  ours: () => number
 
-line 180: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 182: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
-line 183: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 183: o.foo
+  tsc:  string | number
+  ours: number
 
-line 186: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 186: o["foo"]
+  tsc:  string | number
+  ours: number
 
-line 189: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 188: bar
+  tsc:  (() => number) | undefined
+  ours: () => number
 
-line 195: o
-  tsc:  Thing
-  ours: Thing | null
+line 194: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
-line 198: o
-  tsc:  Thing
-  ours: Thing | null
+line 200: bar
+  tsc:  (() => number) | undefined
+  ours: () => number
 
-line 201: o
-  tsc:  Thing
-  ours: Thing | null
+line 203: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
-line 204: o
-  tsc:  Thing
-  ours: Thing | null
+line 204: o.foo
+  tsc:  string | number
+  ours: number
 
-line 207: o
-  tsc:  Thing
-  ours: Thing | null
+line 207: o["foo"]
+  tsc:  string | number
+  ours: number
 
-line 210: o
-  tsc:  Thing
-  ours: Thing | null
+line 209: bar
+  tsc:  (() => number) | undefined
+  ours: () => number
 
-line 237: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 236: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
-line 240: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 242: bar
+  tsc:  (() => number) | undefined
+  ours: () => number
 
-line 243: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 245: foo
+  tsc:  string | number | undefined
+  ours: Thing
+
+line 246: o
+  tsc:  Thing | undefined
+  ours: Thing
+
+line 249: o
+  tsc:  Thing | undefined
+  ours: Thing
+
+line 251: bar
+  tsc:  (() => number) | undefined
+  ours: () => number
+
+line 252: o
+  tsc:  Thing | undefined
+  ours: Thing
 
 line 257: foo
   tsc:  string | number | undefined
@@ -79,10 +95,6 @@ line 257: foo
 line 263: bar
   tsc:  (() => number) | undefined
   ours: () => number
-
-line 264: o
-  tsc:  Thing
-  ours: Thing | undefined
 
 line 278: foo
   tsc:  string | number | undefined
@@ -100,25 +112,29 @@ line 305: bar
   tsc:  (() => number) | undefined
   ours: () => number
 
-line 306: o
-  tsc:  Thing
-  ours: Thing | null
+line 311: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
-line 312: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 317: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
-line 321: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 323: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
-line 324: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 324: o.foo
+  tsc:  string | number
+  ours: number
 
-line 333: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 329: foo
+  tsc:  string | number | undefined
+  ours: Thing
+
+line 333: o.foo
+  tsc:  string | number
+  ours: number
 
 line 365: foo
   tsc:  string | number | undefined
@@ -128,89 +144,69 @@ line 371: foo
   tsc:  string | number | undefined
   ours: Thing
 
-line 393: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 392: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
-line 396: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 398: bar
+  tsc:  (() => number) | undefined
+  ours: () => number
 
-line 399: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 401: baz
+  tsc:  object | undefined
+  ours: Thing
 
-line 402: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 407: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
-line 408: o
-  tsc:  Thing
-  ours: Thing | null
+line 413: bar
+  tsc:  (() => number) | undefined
+  ours: () => number
 
-line 411: o
-  tsc:  Thing
-  ours: Thing | null
+line 416: baz
+  tsc:  object | undefined
+  ours: Thing
 
-line 414: o
-  tsc:  Thing
-  ours: Thing | null
+line 422: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
-line 417: o
-  tsc:  Thing
-  ours: Thing | null
+line 428: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
-line 423: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 434: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
-line 432: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 440: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
-line 435: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 449: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
-line 444: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 455: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
-line 453: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 461: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
-line 456: o
-  tsc:  Thing
-  ours: Thing | undefined
-
-line 465: o
-  tsc:  Thing
-  ours: Thing | undefined
-
-line 468: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 467: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
 line 498: foo
   tsc:  string | number | undefined
   ours: Thing
 
-line 500: o.foo
-  tsc:  "abc"
-  ours: number | string
-
-line 503: o.foo
-  tsc:  42
-  ours: number | string
-
-line 517: o
-  tsc:  Thing
-  ours: Thing | undefined
-
-line 520: o
-  tsc:  Thing
-  ours: Thing | undefined
+line 515: foo
+  tsc:  string | number | undefined
+  ours: Thing
 
 line 537: shape
   tsc:  Shape | undefined
@@ -225,42 +221,6 @@ line 558: type
   ours: Feature
 
 errors:
-line 174: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 177: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 180: ours: cannot read field `bar` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 183: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 186: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 189: ours: cannot read field `bar` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 195: ours: cannot read field `foo` on `Thing | null`: the receiver can be `null` (tsc accepts)
-line 198: ours: cannot read field `foo` on `Thing | null`: the receiver can be `null` (tsc accepts)
-line 201: ours: cannot read field `bar` on `Thing | null`: the receiver can be `null` (tsc accepts)
-line 204: ours: cannot read field `foo` on `Thing | null`: the receiver can be `null` (tsc accepts)
-line 207: ours: cannot read field `foo` on `Thing | null`: the receiver can be `null` (tsc accepts)
-line 210: ours: cannot read field `bar` on `Thing | null`: the receiver can be `null` (tsc accepts)
-line 237: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 240: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 243: ours: cannot read field `bar` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 264: ours: cannot read field `bar` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 306: ours: cannot read field `bar` on `Thing | null`: the receiver can be `null` (tsc accepts)
-line 312: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 321: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 324: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 333: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 393: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 396: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 399: ours: cannot read field `bar` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 402: ours: cannot read field `baz` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 408: ours: cannot read field `foo` on `Thing | null`: the receiver can be `null` (tsc accepts)
-line 411: ours: cannot read field `foo` on `Thing | null`: the receiver can be `null` (tsc accepts)
-line 414: ours: cannot read field `bar` on `Thing | null`: the receiver can be `null` (tsc accepts)
-line 417: ours: cannot read field `baz` on `Thing | null`: the receiver can be `null` (tsc accepts)
-line 423: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 432: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 435: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 444: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 453: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 456: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 465: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 468: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 517: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
-line 520: ours: cannot read field `foo` on `Thing | undefined`: the receiver can be `undefined` (tsc accepts)
+line 246: tsc TS18048: 'o' is possibly 'undefined'. (we accept)
+line 249: tsc TS18048: 'o' is possibly 'undefined'. (we accept)
+line 252: tsc TS18048: 'o' is possibly 'undefined'. (we accept)

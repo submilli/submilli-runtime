@@ -342,6 +342,11 @@ impl Inferer<'_> {
         let mut seen: BTreeMap<CaseKey, Span> = BTreeMap::new();
         let mut all_assigned: BTreeSet<narrowing::ReferencePath> = BTreeSet::new();
         let mut any_arm_reachable_exit = false;
+        // What the labels evaluated so far write. A clause's body runs after
+        // its own labels and every earlier clause's, matched or not, and the
+        // no-match path after all of them, so what they write is no longer
+        // what the discriminant read.
+        let mut label_writes: Vec<narrowing::ReferencePath> = Vec::new();
         // Whether the `case`s, with no `default`, match every value.
         let mut covers_every_value = false;
         // The clause last in the source leaves the switch when it runs off
@@ -358,9 +363,23 @@ impl Inferer<'_> {
             // Each label with its own type, which an enum member's test keeps.
             let mut labels: Vec<(TypedSwitchValue, Type)> = Vec::new();
             for value_expr in &case.values {
-                let Some((label, label_ty)) =
-                    self.infer_case_label(&case_discriminant, *value_expr, case_span)?
-                else {
+                let before = self.last_expr_id();
+                let inferred = self.infer_case_label(&case_discriminant, *value_expr, case_span)?;
+                label_writes.extend(self.writes_between(before, self.last_expr_id())?);
+                // An update (`x++`) records its write without an assignment
+                // sequence.
+                let label_span = self
+                    .ast
+                    .try_expr(*value_expr)
+                    .map_err(super::arena_failure)?
+                    .span;
+                label_writes.extend(
+                    self.last_write_spans
+                        .iter()
+                        .filter(|(_, write_span)| label_span.encloses(**write_span))
+                        .map(|(written, _)| written.clone()),
+                );
+                let Some((label, label_ty)) = inferred else {
                     continue;
                 };
                 let value_span = case_value_span(&label);
@@ -378,7 +397,8 @@ impl Inferer<'_> {
                 labels.push((label, label_ty));
             }
 
-            let true_env = self.case_true_env(typed_disc, disc_source_span, &labels)?;
+            let mut true_env = self.case_true_env(typed_disc, disc_source_span, &labels)?;
+            super::assign_expr::forget_writes(&mut true_env, &label_writes);
 
             let body_span = self
                 .ast
@@ -428,6 +448,7 @@ impl Inferer<'_> {
                 narrowed_before,
                 body_span,
             )?);
+            super::assign_expr::forget_writes(&mut env, &label_writes);
             self.push_narrow_frame(env.clone());
             self.switch_depth += 1;
             self.reachable = entry_reachable;
@@ -480,6 +501,7 @@ impl Inferer<'_> {
                 narrowed_before,
                 switch_span,
             )?);
+            super::assign_expr::forget_writes(&mut natural, &label_writes);
             Some(natural)
         } else {
             None
@@ -632,6 +654,9 @@ impl Inferer<'_> {
         disc_source_span: Span,
         labels: &[(TypedSwitchValue, Type)],
     ) -> Result<narrowing::NarrowEnv, CompilerFailure> {
+        if let Some(operand) = self.typeof_switch_operand(typed_disc)? {
+            return self.typeof_case_true_env(operand, disc_source_span, labels);
+        }
         let mut literal_values: Vec<(TypedSwitchValue, Type)> = Vec::new();
         for (value, value_ty) in labels {
             let TypedSwitchValue::Expr { label, span, .. } = value else {
@@ -649,8 +674,8 @@ impl Inferer<'_> {
             let Some(literals) = literal_members(&label_ty).and_then(|literals| {
                 literals
                     .into_iter()
-                    .map(|literal| {
-                        literal_switch_value(literal, *span).map(|value| (value, label_ty.clone()))
+                    .map(|(literal, member_ty)| {
+                        literal_switch_value(literal, *span).map(|value| (value, member_ty))
                     })
                     .collect::<Option<Vec<_>>>()
             }) else {
@@ -671,6 +696,109 @@ impl Inferer<'_> {
             acc = joined;
         }
         Ok(acc)
+    }
+
+    /// The last expression allocated so far.
+    fn last_expr_id(&self) -> ExprId {
+        let len = u32::try_from(self.typed_ast.exprs_len()).unwrap_or(u32::MAX);
+        ExprId(len.saturating_sub(1))
+    }
+
+    /// The operand of a `switch (typeof x)` discriminant, written in place.
+    fn typeof_switch_operand(&self, typed_disc: ExprId) -> Result<Option<ExprId>, CompilerFailure> {
+        let expr = |id: ExprId| {
+            self.typed_ast
+                .try_expr(id)
+                .map_err(crate::typechecker::arena_failure)
+        };
+        let TypedExprKind::Cast {
+            value, target_ty, ..
+        } = &expr(typed_disc)?.kind
+        else {
+            return Ok(None);
+        };
+        if *target_ty != super::expr::typeof_result_type() {
+            return Ok(None);
+        }
+        let TypedExprKind::Sequence { stmts, result } = &expr(*value)?.kind else {
+            return Ok(None);
+        };
+        let [binding] = stmts.as_slice() else {
+            return Ok(None);
+        };
+        // `typeof` lowers to a chain of tag tests on the held value; another
+        // lowering of the same outer shape is no `typeof`.
+        let TypedExprKind::Ternary { cond, .. } = &expr(*result)?.kind else {
+            return Ok(None);
+        };
+        if !matches!(expr(*cond)?.kind, TypedExprKind::TypeofTag { .. }) {
+            return Ok(None);
+        }
+        Ok(
+            match &self
+                .typed_ast
+                .try_stmt(*binding)
+                .map_err(crate::typechecker::arena_failure)?
+                .kind
+            {
+                crate::TypedStmtKind::Const { value, .. } => Some(*value),
+                _ => None,
+            },
+        )
+    }
+
+    /// What a `case` of `switch (typeof x)` narrows `x` to: the join of what
+    /// `typeof x === label` narrows it to for each label. Nothing when a label
+    /// is no tag narrowing understands.
+    fn typeof_case_true_env(
+        &mut self,
+        operand: ExprId,
+        disc_source_span: Span,
+        labels: &[(TypedSwitchValue, Type)],
+    ) -> Result<narrowing::NarrowEnv, CompilerFailure> {
+        let mut tags = Vec::new();
+        for (label, label_ty) in labels {
+            // A label that isn't a literal names the tags its type allows.
+            let values = match label {
+                TypedSwitchValue::Expr { .. } => literal_members(label_ty)
+                    .map(|members| members.into_iter().map(|(literal, _)| literal).collect()),
+                literal => narrowing::switch_value_literal(literal).map(|value| vec![value]),
+            };
+            let Some(values) = values else {
+                return Ok(narrowing::NarrowEnv::new());
+            };
+            for value in values {
+                let narrowing::LiteralValue::String(tag) = value else {
+                    return Ok(narrowing::NarrowEnv::new());
+                };
+                let Some(tag) = super::expr::typeof_tag_kind(&tag) else {
+                    return Ok(narrowing::NarrowEnv::new());
+                };
+                tags.push(tag);
+            }
+        }
+        let mut joined: Option<narrowing::NarrowEnv> = None;
+        for tag in tags {
+            let test = self
+                .typed_ast
+                .try_push_expr(TypedExpr {
+                    kind: TypedExprKind::TypeofTag {
+                        value: operand,
+                        tag,
+                    },
+                    span: disc_source_span,
+                    ty: Type::Boolean,
+                })
+                .map_err(crate::typechecker::arena_failure)?;
+            let env = self.predicate_envs(test)?.0;
+            joined = Some(match joined {
+                None => env,
+                Some(so_far) => {
+                    narrowing::union_envs(so_far, BTreeSet::new(), env, BTreeSet::new()).0
+                }
+            });
+        }
+        Ok(joined.unwrap_or_default())
     }
 
     /// The label as an expression for the synthesized `disc === label` test. An
@@ -724,6 +852,12 @@ impl Inferer<'_> {
                     *span,
                 ),
             },
+        };
+        // A literal of an expression label's enum member keeps that type.
+        let ty = if label_ty.enum_member_value().is_some() {
+            label_ty.clone()
+        } else {
+            ty
         };
         self.typed_ast
             .try_push_expr(TypedExpr { kind, span, ty })
@@ -791,22 +925,34 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?;
             if let Type::Union(members) = receiver_expr.ty.peel()
                 && let Some(position) = index_position(&index_expr.kind)
-                && let Some(table) = narrowing::tuple_position_discriminant(members, position)
             {
-                let kept = table.uncovered_members(members, &covered.literals);
-                let missing = Type::union(
-                    table
-                        .uncovered(&covered.literals)
-                        .iter()
-                        .map(narrowing::literal_type)
-                        .collect(),
-                );
-                return self.discriminated_residual(
-                    receiver_expr,
-                    kept,
-                    missing,
-                    format!("[{position}]"),
-                );
+                let left = match narrowing::tuple_position_discriminant(members, position) {
+                    Some(table) => Some((
+                        table.uncovered_members(members, &covered.literals),
+                        Type::union(
+                            table
+                                .uncovered(&covered.literals)
+                                .iter()
+                                .map(narrowing::literal_type)
+                                .collect(),
+                        ),
+                    )),
+                    // A position some member types with no single literal
+                    // (`[null, string] | [boolean, number]`) still
+                    // discriminates, as a field typed so does.
+                    None => super::predicate_envs::discriminant_element_types(members, position)
+                        .map(|element_tys| {
+                            self.members_left_unmatched(members, &element_tys, covered)
+                        }),
+                };
+                if let Some((kept, missing)) = left {
+                    return self.discriminated_residual(
+                        receiver_expr,
+                        kept,
+                        missing,
+                        format!("[{position}]"),
+                    );
+                }
             }
         }
         let residual = self.unmatched_values(disc_ty, covered);
@@ -1292,12 +1438,19 @@ fn discriminant_temporary(switch_id: StmtId, span: Span) -> Ident {
     }
 }
 
-/// The literals `ty` is made of, or `None` if it holds any other value.
-fn literal_members(ty: &Type) -> Option<Vec<narrowing::LiteralValue>> {
-    match ty.peel() {
-        Type::Union(members) => members.iter().map(narrowing::unit_literal_value).collect(),
-        other => narrowing::unit_literal_value(other).map(|literal| vec![literal]),
-    }
+/// The literals `ty` is made of, each with the member type that holds it (an
+/// enum member keeps its enum), or `None` if it holds any other value.
+fn literal_members(ty: &Type) -> Option<Vec<(narrowing::LiteralValue, Type)>> {
+    let members = match ty.peel() {
+        Type::Union(members) => members.as_slice(),
+        _ => std::slice::from_ref(ty),
+    };
+    members
+        .iter()
+        .map(|member| {
+            narrowing::unit_literal_value(member).map(|literal| (literal, member.clone()))
+        })
+        .collect()
 }
 
 /// The literal `case` value a label of literal type compares as; a bigint has

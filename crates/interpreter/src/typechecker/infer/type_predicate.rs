@@ -129,6 +129,9 @@ impl Inferer<'_> {
             .typed_ast
             .try_expr(target)
             .map_err(crate::typechecker::arena_failure)?;
+        if matches!(arg_expr.kind, crate::TypedExprKind::OptionalChain { .. }) {
+            return self.narrow_optional_chain_to_asserted(target, asserted);
+        }
         let Some(path) = self.expr_to_reference_path(arg_expr)? else {
             return Ok(None);
         };
