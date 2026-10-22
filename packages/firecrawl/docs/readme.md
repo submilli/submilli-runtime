@@ -28,8 +28,8 @@ Use `@submilli/firecrawl` for:
 <!-- submilli:endif -->
 
 Named imports and the default package namespace are supported.
-`FIRECRAWL_API_KEY` is supplied internally: never ask for it, pass it in a
-call, or print it.
+Credentials are supplied internally: never ask for an API key, pass one in a
+call, or print one.
 
 <!-- submilli:if capability="firecrawl.dev/search" -->
 
@@ -265,7 +265,7 @@ the previous response's `next` to get the next page. Only exact HTTPS URLs for
 the same Firecrawl job with `skip` and optional `limit` are accepted. There is
 no implicit polling, retry, pagination loop or sleep. `next` can be present
 while the job is still running, including on an empty page; it does not mean
-new content is immediately available. Arrange later calls in the harness.
+new content is immediately available. Schedule any later call yourself.
 
 <!-- submilli:endif -->
 

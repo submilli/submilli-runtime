@@ -133,8 +133,8 @@ without credentials or I/O; it returns `unknown`, not an endpoint-specific type.
 <!-- submilli:endif -->
 <!-- submilli:if any="scrapecreators.com/github.getContributions scrapecreators.com/github.getRepository scrapecreators.com/github.getUser scrapecreators.com/github.listFollowers scrapecreators.com/github.listFollowing scrapecreators.com/github.listTrendingDevelopers scrapecreators.com/github.listTrendingRepositories scrapecreators.com/github.listUserActivity scrapecreators.com/github.listUserPullRequests scrapecreators.com/github.listUserRepositories" -->
 - **GitHub:** this client retrieves public data through ScrapeCreators and consumes
-  its credits. The separate `@submilli/github` package uses GitHub directly with
-  `GITHUB_TOKEN` and supports issue/PR/code research and mutations. These clients
+  its credits. The separate `@submilli/github` package uses the GitHub API directly
+  and supports issue/PR/code research and mutations. These clients
   do not fall back to one another.
 <!-- submilli:endif -->
 <!-- submilli:if capability="scrapecreators.com/github.listUserPullRequests" -->
@@ -165,8 +165,7 @@ All platforms depend on public availability and provider coverage. Preserve
 unknown dates and unavailable metrics instead of fabricating recency or zero.
 Calls use the native HTTP timeout (30 seconds); slow provider scrapes or long AI
 transcriptions may exceed it. No automatic media downloads or paid fallback runs.
-See the [provider introduction](https://docs.scrapecreators.com/introduction/)
-and [current endpoint catalog](https://docs.scrapecreators.com/openapi.json).
+See the [current endpoint catalog](https://docs.scrapecreators.com/openapi.json).
 
 <!-- submilli:if any="scrapecreators.com/youtube.getTranscript scrapecreators.com/linkedin.searchPosts scrapecreators.com/github.listUserPullRequests scrapecreators.com/twitter.searchPosts" -->
 
