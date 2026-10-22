@@ -971,6 +971,14 @@ pub struct TypedAst {
     /// module. This is deliberately package-level, not symbol-level: embedders
     /// use it to install only the package modules the typed program imports.
     pub imported_packages: std::collections::BTreeSet<String>,
+    /// What each non-entry module of a package exports, by module path. Package
+    /// inference fills it and package compilation takes it before any later
+    /// pass; only the package's own tests may import these.
+    pub internal_modules: BTreeMap<crate::ModulePath, InternalModuleExports>,
+    /// Exports a test build of a package adds to `exports`: the functions,
+    /// globals and class statics of its non-entry modules, under their
+    /// module-qualified mangled names. Empty outside a test build.
+    pub test_exports: Vec<ExportEntry>,
     /// Concrete runtime validators resolved while inference still has access to
     /// interface declarations and generic substitutions. Codegen consults this
     /// for narrowed reads instead of re-deriving type structure.
@@ -986,6 +994,16 @@ pub struct TypedAst {
 pub struct InstanceTypeContext {
     pub declaration: MangledName,
     pub args: Vec<Type>,
+}
+
+/// The surface of one non-entry package module, as a sibling module sees it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InternalModuleExports {
+    pub values: BTreeMap<String, crate::ValueSymbol>,
+    pub types: BTreeMap<String, crate::TypeSymbol>,
+    /// Names the module declares without exporting, to tell "add `export`"
+    /// apart from a misspelling.
+    pub unexported: std::collections::BTreeSet<String>,
 }
 
 /// A public export: maps a package-public mangled name onto the internal symbol

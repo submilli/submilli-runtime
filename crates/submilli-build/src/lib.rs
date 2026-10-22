@@ -39,7 +39,7 @@ pub use doc_examples::{
     DocExample, compile_check_doc_example, compile_doc_example_warnings, extract_doc_examples,
 };
 pub use driver::{
-    BuiltPackage, DriverError, build_packages, build_packages_configured,
+    BuiltPackage, DriverError, build_packages, build_packages_configured, build_packages_for_tests,
     build_packages_with_inputs, install_packages, package_build_scope, package_sources,
 };
 pub use install::{

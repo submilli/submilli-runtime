@@ -755,11 +755,70 @@ impl<'a> Inferer<'a> {
             );
             return;
         }
+        let message = format!("unresolved identifier `{name}`");
+        if name == "await" {
+            self.error_with_help(
+                span,
+                message,
+                vec![
+                    "`await` is not supported: calls return their value directly; remove `await`"
+                        .to_string(),
+                ],
+            );
+            return;
+        }
+        // Only `fs.list(…)`-shaped uses: a bare `url` or `code` is far more
+        // likely a mistyped local, which keeps its "did you mean".
+        let used_as_namespace = self.source.get(span.end as usize..).is_some_and(|rest| {
+            let rest = rest.trim_start();
+            rest.starts_with('.') || rest.starts_with("?.")
+        });
+        if used_as_namespace && let Some(import) = self.missing_import(name) {
+            let help = format!("`{name}` is a module; import it first:\n  {import}");
+            // One import fixes every use in the file, so later uses would only
+            // repeat it.
+            let already_named = self.diagnostics.iter().any(|d| {
+                d.span.file == span.file && d.message == message && d.help.contains(&help)
+            });
+            if !already_named {
+                self.error_with_help(span, message, vec![help]);
+            }
+            return;
+        }
         let help: Vec<String> = self
             .closest_local_or_global(name)
             .map(|s| vec![format!("did you mean `{}`?", s)])
             .unwrap_or_default();
-        self.error_with_help(span, format!("unresolved identifier `{name}`"), help);
+        self.error_with_help(span, message, help);
+    }
+
+    /// The import that would bind `name` to a loaded module, when one is named
+    /// after it: `fs` for `submilli:fs`, `gmail` for `@submilli/gmail`. Models
+    /// write `fs.read(…)` as if the module were a global.
+    fn missing_import(&self, name: &str) -> Option<String> {
+        let stdlib = format!("submilli:{name}");
+        if self.packages_by_name.contains_key(stdlib.as_str()) {
+            return Some(format!("import * as {name} from \"{stdlib}\";"));
+        }
+        let package = format!("@submilli/{name}");
+        self.packages_by_name
+            .contains_key(package.as_str())
+            .then(|| format!("import {name} from \"{package}\";"))
+    }
+
+    /// Help for `name` missing from `package`: the `submilli:fs` spelling of a
+    /// Node.js `fs` function, when there is one, ahead of the export list.
+    /// Edit distance cannot get from `readdir` to `list`.
+    pub(super) fn missing_export_help(
+        package: &str,
+        name: &str,
+        exports_help: Vec<String>,
+    ) -> Vec<String> {
+        node_fs_equivalent(package, name)
+            .map(|equivalent| format!("did you mean `{equivalent}`?"))
+            .into_iter()
+            .chain(exports_help)
+            .collect()
     }
 
     /// Suggest the closest type name to `query` from the four
@@ -1562,6 +1621,15 @@ impl<'a> Inferer<'a> {
             .unwrap_or_else(|| "x".to_string())
     }
 
+    /// Source text of `span` when it is short enough to quote in a help line:
+    /// one line, at most 60 bytes. Unlike [`rewritable_text`](Self::rewritable_text)
+    /// it is never parenthesized, for a slot that already delimits it, such as
+    /// the argument of `String(…)`.
+    pub(super) fn short_source(&self, span: Span) -> Option<&'a str> {
+        let text = self.source.get(span.start as usize..span.end as usize)?;
+        (!text.is_empty() && text.len() <= 60 && !text.contains('\n')).then_some(text)
+    }
+
     /// Source text of `span` if it can be rendered at all, `None` otherwise.
     ///
     /// [`rewritable_snippet`](Self::rewritable_snippet) substitutes `x` for the
@@ -1569,10 +1637,7 @@ impl<'a> Inferer<'a> {
     /// in prose that points at a binding — "bind `x` to a `const`" names a
     /// variable the reader does not have. Advice of the second kind asks here.
     fn rewritable_text(&self, span: Span) -> Option<String> {
-        let text = self.source.get(span.start as usize..span.end as usize)?;
-        if text.is_empty() || text.len() > 60 || text.contains('\n') {
-            return None;
-        }
+        let text = self.short_source(span)?;
         let is_path_char =
             |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '$' | '.' | '[' | ']');
         if text.chars().all(is_path_char) {
@@ -1648,6 +1713,29 @@ fn render_literal(literal: &narrowing::LiteralValue) -> String {
         narrowing::LiteralValue::Null => "null".to_string(),
         narrowing::LiteralValue::Undefined => "undefined".to_string(),
     }
+}
+
+/// The `submilli:fs` function for a Node.js `fs` name models write out of habit.
+fn node_fs_equivalent(package: &str, name: &str) -> Option<&'static str> {
+    if package != crate::stdlib::fs::MODULE_NAME {
+        return None;
+    }
+    Some(match name.strip_suffix("Sync").unwrap_or(name) {
+        "readFile" => "readText",
+        "writeFile" => "writeText",
+        "appendFile" => "appendText",
+        "readdir" | "readDir" | "listDir" | "ls" => "list",
+        "rm" | "rmdir" | "unlink" => "remove",
+        "rename" => "move",
+        "copyFile" | "cp" => "copy",
+        "lstat" | "stat" => "stat",
+        // Reached for the `…Sync` spelling only: the bare name already resolves.
+        "exists" => "exists",
+        "mkdir" => "mkdir",
+        "createWriteStream" => "writer",
+        "createReadStream" => "lines",
+        _ => return None,
+    })
 }
 
 #[cfg(test)]

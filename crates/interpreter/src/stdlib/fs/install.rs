@@ -6,8 +6,8 @@ use super::{
     MOUNT_SIZE_LIMIT, MOUNT_VOLUME, PEEK_ENCODING, PEEK_LINE_ENDING, PEEK_PREVIEW, PEEK_SIZE,
     STAT_KIND, STAT_MODIFIED_AT, STAT_SIZE, append, append_text, backend_error, begin_work,
     build_info, charge_path_work, effects, f64_arg, i32_flag, list_next, make_handle_iterator,
-    open_writer, peek_file, read_byte_range, read_whole_capped, reader_next, stat_entry, write,
-    write_text, writer_payload,
+    open_writer, peek_file, read_byte_range, read_whole_capped, reader_next, stat_entry, summary,
+    write, write_text, writer_payload,
 };
 use crate::runtime::StoreData;
 use crate::runtime::call_log::{Payload, Side, record_payload};
@@ -667,6 +667,35 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 make_handle_iterator(caller, dir, |caller, params| {
                     Box::new(async move { list_next(caller, params).await })
                 })
+            })
+        },
+    )?;
+
+    register_host_value_async(
+        linker,
+        MODULE_NAME,
+        fs_fn("summary"),
+        FuncType::new(&engine, [string.clone()], [string.clone()]),
+        |caller, params| {
+            Box::pin(async move {
+                let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.summary")?;
+                let text = summary::summarize(caller, &path).await?;
+                let value = write_submilli_string_struct(caller, &text)?;
+                Ok(Val::AnyRef(Some(value.to_anyref())))
+            })
+        },
+    )?;
+
+    register_host_value_async(
+        linker,
+        MODULE_NAME,
+        fs_fn("isEmpty"),
+        FuncType::new(&engine, [string.clone()], [ValType::I32]),
+        |caller, params| {
+            Box::pin(async move {
+                let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.isEmpty")?;
+                let empty = summary::is_empty(caller, &path).await?;
+                Ok(Val::I32(i32::from(empty)))
             })
         },
     )?;

@@ -56,6 +56,7 @@ pub(crate) mod variance;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(crate) use exports::static_export_entries;
 use module_symbols::{ModuleSymbols, NamespaceMembers, NamespaceSymbolSet};
 use scopes::Scopes;
 use type_namespace::TypeNamespace;
@@ -96,11 +97,21 @@ pub fn infer_with_transitive_checked<'a>(
     packages: &'a [&'a PackageDeclaration],
     transitive: &'a [&'a PackageDeclaration],
 ) -> Result<(TypedAst, Vec<Diagnostic>), CompileError> {
-    infer_with_transitive_for_owner_checked(None, source, package_name, ast, packages, transitive)
+    infer_with_transitive_for_owner_checked(
+        None,
+        source,
+        package_name,
+        ast,
+        packages,
+        transitive,
+        None,
+    )
 }
 
 /// Infer a script with the import access of its engine-assigned owner. Ordinary
 /// scripts and external package consumers cannot import lifecycle entry points.
+/// `test_modules` lets a package's test file import its package's non-entry
+/// modules by relative path.
 pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
     owning_package: Option<&str>,
     source: &'a str,
@@ -108,6 +119,7 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
     ast: &'a Ast,
     packages: &'a [&'a PackageDeclaration],
     transitive: &'a [&'a PackageDeclaration],
+    test_modules: Option<TestModules<'a>>,
 ) -> Result<(TypedAst, Vec<Diagnostic>), CompileError> {
     let file = ast
         .source_statements()
@@ -241,6 +253,7 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         module: ModulePath::from(""),
         root_module: ModulePath::from(""),
         package_inference: false,
+        test_modules,
         current_module_symbols: ModuleSymbols::default(),
         current_module_exports: Vec::new(),
         current_export_seen: BTreeMap::new(),
@@ -533,6 +546,7 @@ pub fn infer_package_checked<'a>(
         module: first_module.clone(),
         root_module: root_module.clone(),
         package_inference: true,
+        test_modules: None,
         current_module_symbols: ModuleSymbols::default(),
         current_module_exports: Vec::new(),
         current_export_seen: BTreeMap::new(),
@@ -670,6 +684,10 @@ pub fn infer_package_checked<'a>(
             package_declaration.values = module_symbols.exported_value_map();
             package_declaration.types = module_symbols.exported_type_map();
             root_public_exports = exports.clone();
+        } else {
+            tc.typed_ast
+                .internal_modules
+                .insert(module.clone(), module_symbols.internal_exports());
         }
         module_exports.insert(module.clone(), exports);
         inferred_modules.insert(module, module_symbols);
@@ -737,6 +755,25 @@ pub fn infer_package_checked<'a>(
     tc.diagnostics.extend(rule_diagnostics);
     diagnostics.extend(tc.diagnostics);
     Ok((tc.typed_ast, package_declaration, diagnostics))
+}
+
+/// The non-entry modules of the package a test file belongs to, which the test
+/// may import by relative path (`../src/paths`).
+#[derive(Clone, Copy)]
+pub(crate) struct TestModules<'a> {
+    /// The test file's path in its package directory, without its extension
+    /// (`tests/paths.test`). Relative imports resolve against it.
+    pub(crate) importer: &'a ModulePath,
+    pub(crate) owner: &'a str,
+    /// Keyed by path under `src/`, without the entry module.
+    pub(crate) modules: &'a BTreeMap<ModulePath, TestModule>,
+}
+
+/// A non-entry module as a test sees it: a declaration named after the owning
+/// package that holds the module's exports.
+pub(crate) struct TestModule {
+    pub(crate) declaration: PackageDeclaration,
+    pub(crate) unexported: BTreeSet<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -1067,6 +1104,7 @@ pub(super) struct Inferer<'a> {
     pub(super) module: ModulePath,
     pub(super) root_module: ModulePath,
     pub(super) package_inference: bool,
+    pub(super) test_modules: Option<TestModules<'a>>,
     pub(super) current_module_symbols: ModuleSymbols,
     pub(super) current_module_exports: Vec<crate::ExportEntry>,
     pub(super) current_export_seen:
@@ -1440,6 +1478,7 @@ mod tests {
                     &ast,
                     &declarations,
                     &[],
+                    None,
                 )
                 .unwrap();
                 assert_eq!(

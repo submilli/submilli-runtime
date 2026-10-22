@@ -9,5 +9,5 @@ error: expected `:` and return type
   |                 ^
 2 | 
   |
-help: function name(): T { … }
+help: write the return type: `function main(…): T { … }`, with `void` when it returns nothing
 ---

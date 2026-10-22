@@ -895,6 +895,11 @@ impl Inferer<'_> {
             if let Some((narrow_help, _)) = self.narrowing_refusal_hint(&kind, &ty, want)? {
                 help.extend(narrow_help);
             }
+            // `JSON.parse(text)` and other untyped reads land here: name the
+            // checked cast, which is the usual fix, when `as` accepts the target.
+            if matches!(ty.peel(), Type::Unknown) && self.is_legal_cast_target(&ty, want) {
+                help.push(self.checked_cast_help(expr_id, span, want)?);
+            }
             let shown = self.reported_result_type(&kind, &ty, want)?;
             self.error_with_help(
                 span,
@@ -1273,6 +1278,18 @@ impl Inferer<'_> {
             );
             return Ok(unresolved_ref(ident));
         }
+        // `new Promise(…)`, `Promise.all(…)`, `Promise.resolve(…)`: calls are
+        // synchronous, so there is nothing to wait for.
+        if ident.name == "Promise" {
+            self.error_with_help(
+                span,
+                "`Promise` is not supported".to_string(),
+                vec![
+                    "calls return their value directly: call them one after another and use the results".to_string(),
+                ],
+            );
+            return Ok(unresolved_ref(ident));
+        }
         self.report_unresolved_identifier(&ident.name, span);
         Ok(unresolved_ref(ident))
     }
@@ -1352,14 +1369,15 @@ impl Inferer<'_> {
                     ty
                 } else {
                     let message = format!("`+` not defined for `{lt}` and `{rt}`");
-                    let help = mixed_string_number_add_help(&lt, &rt)
-                        .map(|h| vec![h.to_string()])
-                        .unwrap_or_default();
+                    let (error_span, help) = match self.string_number_add_fix(lhs, &lt, rhs, &rt)? {
+                        Some((operand, help)) => (operand, vec![help]),
+                        None => (span, Vec::new()),
+                    };
                     let culprit =
                         self.nullable_binary_culprit((typed_lhs, &lt), (typed_rhs, &rt), |l, r| {
                             plus_result(l, r).is_some()
                         });
-                    self.error_with_narrowing_hint(span, message, help, culprit)?;
+                    self.error_with_narrowing_hint(error_span, message, help, culprit)?;
                     Type::Error
                 }
             }
@@ -1372,6 +1390,75 @@ impl Inferer<'_> {
             },
             result_ty,
         ))
+    }
+
+    /// `value as T` written against the expression's source. An operand other
+    /// than a name, call, member access, index or parenthesized expression is
+    /// parenthesized, so the cast covers all of it (a ternary would otherwise
+    /// cast its last branch only).
+    fn checked_cast_help(
+        &self,
+        expr_id: ExprId,
+        span: Span,
+        want: &Type,
+    ) -> Result<String, CompilerFailure> {
+        let binds_tighter = matches!(
+            self.ast
+                .try_expr(expr_id)
+                .map_err(super::arena_failure)?
+                .kind,
+            ExprKind::Identifier(_)
+                | ExprKind::Call { .. }
+                | ExprKind::FieldAccess { .. }
+                | ExprKind::IndexAccess { .. }
+                | ExprKind::Paren(_)
+        );
+        let value = match self.short_source(span) {
+            Some(value) if binds_tighter => value.to_string(),
+            Some(value) => format!("({value})"),
+            None => "value".to_string(),
+        };
+        Ok(format!(
+            "cast it, checked at run time: `{value} as {want}`, or narrow it first with `typeof` or `Array.isArray`"
+        ))
+    }
+
+    /// A string and a number under `+`, which does not coerce: the number
+    /// operand, where the fix goes, and the rewrite to apply there. In a long
+    /// `"a" + x + " " + n` chain the whole left side is the string built so far,
+    /// so underlining the operator's span would hide which operand to wrap.
+    fn string_number_add_fix(
+        &self,
+        lhs: ExprId,
+        lt: &Type,
+        rhs: ExprId,
+        rt: &Type,
+    ) -> Result<Option<(Span, String)>, CompilerFailure> {
+        let is_string = |ty: &Type| matches!(ty.peel(), Type::String | Type::StringLiteral(_));
+        let is_number = |ty: &Type| matches!(ty.peel(), Type::Number | Type::NumberLiteral(_));
+        let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
+        let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
+        let wrap = |span: Span| match self.short_source(span) {
+            Some(number) => format!("write `String({number})`"),
+            None => "wrap the number with `String(...)`".to_string(),
+        };
+        Ok(if is_string(lt) && is_number(rt) {
+            Some((
+                rhs_span,
+                format!("`+` does not coerce; {} to concatenate", wrap(rhs_span)),
+            ))
+        } else if is_number(lt) && is_string(rt) {
+            Some((
+                lhs_span,
+                format!(
+                    "`+` does not coerce; {} to concatenate, or convert the string with \
+                     `Number(...)`, `parseInt(...)`, or `parseFloat(...)` to add",
+                    wrap(lhs_span)
+                ),
+            ))
+        } else {
+            None
+        })
     }
 
     /// Arithmetic and bitwise operators other than `+`.
@@ -2355,11 +2442,12 @@ impl Inferer<'_> {
                     span,
                 );
             }
-            let exports = ns.members.exports_help();
+            let help =
+                Self::missing_export_help(&package_name, &name.name, ns.members.exports_help());
             self.error_with_help(
                 name.span,
                 format!("package `{package_name}` does not export `{}`", name.name),
-                exports,
+                help,
             );
             return Ok((
                 TypedExprKind::Call {
@@ -14037,29 +14125,6 @@ fn op_symbol(op: BinOp) -> &'static str {
     }
 }
 
-/// Help for adding a string and a number: `+` does not coerce either side.
-fn mixed_string_number_add_help(lt: &Type, rt: &Type) -> Option<&'static str> {
-    let left_is_string = matches!(lt.peel(), Type::String | Type::StringLiteral(_));
-    let right_is_string = matches!(rt.peel(), Type::String | Type::StringLiteral(_));
-    let left_is_number = matches!(lt.peel(), Type::Number | Type::NumberLiteral(_));
-    let right_is_number = matches!(rt.peel(), Type::Number | Type::NumberLiteral(_));
-
-    match (
-        left_is_string,
-        right_is_string,
-        left_is_number,
-        right_is_number,
-    ) {
-        (true, false, false, true) => {
-            Some("`+` does not coerce; wrap the number with `String(...)` before concatenating")
-        }
-        (false, true, true, false) => Some(
-            "`+` does not coerce; convert the string with `Number(...)`, `parseInt(...)`, or `parseFloat(...)` before adding",
-        ),
-        _ => None,
-    }
-}
-
 /// The pairs `+` is defined for, and the result. The single source of truth for both
 /// [`Inferer::infer_addition`] and the narrowing hint it emits: a hint may only claim
 /// a guard is the fix when the guarded pair is one this accepts.
@@ -14889,7 +14954,7 @@ mod tests {
         assert_eq!(
             diags[0].help,
             vec![
-                "`+` does not coerce; convert the string with `Number(...)`, `parseInt(...)`, or `parseFloat(...)` before adding"
+                "`+` does not coerce; write `String(1)` to concatenate, or convert the string with `Number(...)`, `parseInt(...)`, or `parseFloat(...)` to add"
             ]
         );
     }
@@ -14904,8 +14969,160 @@ mod tests {
         );
         assert_eq!(
             diags[0].help,
-            vec!["`+` does not coerce; wrap the number with `String(...)` before concatenating"]
+            vec!["`+` does not coerce; write `String(1)` to concatenate"]
         );
+    }
+
+    #[test]
+    fn string_plus_number_points_at_the_number_in_a_chain() {
+        let source = r#"
+            interface Entry { kind: string; path: string; size: number; }
+            function line(e: Entry): string { return e.kind + " " + e.path + " " + e.size; }
+        "#;
+        let (_, diags) = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let span = diags[0].span;
+        assert_eq!(&source[span.start as usize..span.end as usize], "e.size");
+        assert_eq!(
+            diags[0].help,
+            vec!["`+` does not coerce; write `String(e.size)` to concatenate"]
+        );
+    }
+
+    #[test]
+    fn module_used_without_import_names_the_import_once() {
+        let fs = crate::stdlib::fs::package_declaration();
+        let (_, diags) = run_with_packages(
+            "function main(): string { const a = fs.list(\"/a\"); const b = fs.readText(\"/b\"); return \"\"; }",
+            &[&fs],
+        );
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].message, "unresolved identifier `fs`");
+        assert_eq!(
+            diags[0].help,
+            vec!["`fs` is a module; import it first:\n  import * as fs from \"submilli:fs\";"]
+        );
+    }
+
+    #[test]
+    fn a_bare_name_that_matches_a_module_keeps_did_you_mean() {
+        let url = crate::stdlib::url::package_declaration();
+        let (_, diags) = run_with_packages(
+            "function main(): string { const urls = [\"a\"]; const a = url; const b = url; return \"\"; }",
+            &[&url],
+        );
+        assert_eq!(diags.len(), 2, "{diags:?}");
+        assert_eq!(diags[0].help, vec!["did you mean `urls`?"]);
+    }
+
+    #[test]
+    fn module_import_help_survives_an_earlier_bare_use() {
+        let fs = crate::stdlib::fs::package_declaration();
+        let (_, diags) = run_with_packages(
+            "function main(): boolean { const a = fs; const b = fs?.exists(\"/\"); return fs.exists(\"/\"); }",
+            &[&fs],
+        );
+        let import = "`fs` is a module; import it first:\n  import * as fs from \"submilli:fs\";";
+        assert_eq!(
+            diags
+                .iter()
+                .filter(|d| d.help.iter().any(|h| h == import))
+                .count(),
+            1,
+            "{diags:?}"
+        );
+        assert!(
+            diags[1].help.iter().any(|h| h == import),
+            "the `?.` use names it: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn an_unresolved_await_names_the_fix() {
+        for source in [
+            "function main(): number { const a = await (1); return a; }",
+            "function main(): number { const a = await [1]; return 0; }",
+            "function main(): number { const a = await -1; return 0; }",
+            "function main(): number { const a = await\n  1; return 0; }",
+        ] {
+            let (_, diags) = run(source);
+            assert_eq!(
+                diags[0].help,
+                vec!["`await` is not supported: calls return their value directly; remove `await`"],
+                "{source}: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn node_fs_names_suggest_the_submilli_function() {
+        let fs = crate::stdlib::fs::package_declaration();
+        for (source, suggestion) in [
+            (
+                "import * as fs from \"submilli:fs\"; const e = fs.readDir(\"/a\");",
+                "did you mean `list`?",
+            ),
+            (
+                "import * as fs from \"submilli:fs\"; const t = fs.readFileSync(\"/a\");",
+                "did you mean `readText`?",
+            ),
+            (
+                "import { existsSync } from \"submilli:fs\";",
+                "did you mean `exists`?",
+            ),
+        ] {
+            let (_, diags) = run_with_packages(source, &[&fs]);
+            assert_eq!(
+                diags
+                    .first()
+                    .and_then(|d| d.help.first())
+                    .map(String::as_str),
+                Some(suggestion),
+                "{source}: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_where_a_type_is_expected_names_the_checked_cast() {
+        let (_, diags) = run("const arr: string[] = JSON.parse(\"[]\");");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].message, "expected `string[]`, got `unknown`");
+        assert_eq!(
+            diags[0].help.last().map(String::as_str),
+            Some(
+                "cast it, checked at run time: `JSON.parse(\"[]\") as string[]`, or narrow it first with `typeof` or `Array.isArray`"
+            )
+        );
+    }
+
+    #[test]
+    fn unknown_cast_help_is_parenthesized_and_only_for_castable_targets() {
+        let (_, diags) = run(
+            "function f(c: boolean): string[] { const xs: string[] = c ? JSON.parse(\"[]\") : JSON.parse(\"[1]\"); return xs; }",
+        );
+        assert!(
+            diags.iter().flat_map(|d| &d.help).any(|h| h.contains("`(c ? JSON.parse(\"[]\") : JSON.parse(\"[1]\")) as string[]`")),
+            "{diags:?}"
+        );
+        let (_, diags) = run("class Box { n: number = 0; } const b: Box = JSON.parse(\"{}\");");
+        assert!(
+            !diags[0].help.iter().any(|h| h.starts_with("cast it")),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn promise_names_the_synchronous_rewrite() {
+        let (_, diags) = run("function main(): Promise<string> { return \"\"; }");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].message, "`Promise` is not supported");
+        assert_eq!(
+            diags[0].help,
+            vec!["calls return their value directly: write `string` instead of `Promise<string>`"]
+        );
+        let (_, diags) = run("const all = Promise.all;");
+        assert_eq!(diags[0].message, "`Promise` is not supported", "{diags:?}");
     }
 
     #[test]

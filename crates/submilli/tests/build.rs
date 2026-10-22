@@ -1652,6 +1652,238 @@ path = "other"
     );
 }
 
+const PATHS_MANIFEST: &str = "[[package]]\nname = \"@pied-piper/util\"\nversion = \"0.1.0\"\ndescription = \"Test package.\"\n";
+
+const PATHS_LIB: &str = r#"
+import { customerPath } from "./paths";
+/**
+ * The path of the default customer.
+ * @returns the path
+ */
+export function defaultCustomer(): string { return customerPath("default"); }
+"#;
+
+fn paths_module(helper_exported: bool) -> String {
+    let export = if helper_exported { "export " } else { "" };
+    format!(
+        "export const BASE: string = \"/v1\";\n\
+         export function customerPath(id: string): string {{ return BASE + \"/customers/\" + id; }}\n\
+         {export}function escape(id: string): string {{ return id.replace(\"/\", \"%2F\"); }}\n"
+    )
+}
+
+#[test]
+fn build_test_reaches_internal_module_by_relative_path() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    write_file(&project.join("submilli.toml"), PATHS_MANIFEST);
+    write_file(&project.join("src/lib.ts"), PATHS_LIB);
+    write_file(&project.join("src/paths.ts"), &paths_module(true));
+    write_file(
+        &project.join("tests/paths.test.ts"),
+        r#"
+            import { customerPath, escape } from "../src/paths";
+            import { defaultCustomer } from "@pied-piper/util";
+            function main(): void {
+                assert(customerPath("42") === "/v1/customers/42", "path");
+                assert(escape("a/b") === "a%2Fb", "escape");
+                assert(defaultCustomer() === customerPath("default"), "public");
+            }
+        "#,
+    );
+    write_file(
+        &project.join("tests/nested/failing.test.ts"),
+        r#"
+            import * as paths from "../../src/paths";
+            function main(): void { assert(paths.customerPath("1") === "/v2/customers/1", "base"); }
+        "#,
+    );
+
+    let out = build_test(&project, tmp.path(), &[]);
+    let stdout = stdout(&out);
+    assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
+    assert!(
+        stdout.contains("ok   tests/paths.test.ts"),
+        "stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("FAIL tests/nested/failing.test.ts"),
+        "stdout: {stdout}"
+    );
+    assert!(stdout.contains("1 passed, 1 failed"), "stdout: {stdout}");
+    assert!(
+        stderr(&out).contains("tests/nested/failing.test.ts:3:"),
+        "the failure points into the test: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn build_test_refuses_imports_outside_own_src() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        r#"
+[[package]]
+name = "@pied-piper/a"
+version = "0.1.0"
+description = "Test package."
+path = "a"
+
+[[package]]
+name = "@pied-piper/b"
+version = "0.1.0"
+description = "Test package."
+path = "b"
+"#,
+    );
+    write_file(
+        &project.join("a/src/lib.ts"),
+        "/** One. @returns 1 */\nexport function one(): number { return 1; }\n",
+    );
+    write_file(
+        &project.join("b/src/lib.ts"),
+        "import { x } from \"./x\";\n/** Two. @returns 2 */\nexport function two(): number { return x + 1; }\n",
+    );
+    write_file(&project.join("b/src/x.ts"), "export const x: number = 1;\n");
+    write_file(
+        &project.join("a/tests/sibling.test.ts"),
+        "import { x } from \"../../b/src/x\";\nfunction main(): void {}\n",
+    );
+    write_file(
+        &project.join("a/tests/helpers.test.ts"),
+        "import { help } from \"./helpers\";\nfunction main(): void {}\n",
+    );
+    write_file(
+        &project.join("a/tests/entry.test.ts"),
+        "import { one } from \"../src/lib\";\nfunction main(): void {}\n",
+    );
+    write_file(
+        &project.join("a/tests/ok.test.ts"),
+        "import { one } from \"@pied-piper/a\";\nfunction main(): void { assert(one() === 1, \"one\"); }\n",
+    );
+
+    let out = build_test(&project, tmp.path(), &["-p", "@pied-piper/a"]);
+    let stdout = stdout(&out);
+    let stderr = stderr(&out);
+    assert_eq!(out.status.code(), Some(1), "stderr: {stderr}");
+    assert!(
+        stderr.contains(
+            "import escapes package directory: `../../b/src/x` climbs above the package root"
+        ),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("import another package by name"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("`./helpers` resolves to `tests/helpers`, outside the package's `src/`"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("`../src/lib` is the package's entry module"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("import it by name: `from \"@pied-piper/a\"`"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("ok   a/tests/ok.test.ts"),
+        "stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("1 passed, 3 failed across 4 files"),
+        "stdout: {stdout}"
+    );
+}
+
+#[test]
+fn docs_and_capabilities_ignore_internal_exports() {
+    let snapshot = |helper_exported: bool| {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project = tmp.path().join("project");
+        write_file(&project.join("submilli.toml"), PATHS_MANIFEST);
+        write_file(&project.join("src/lib.ts"), PATHS_LIB);
+        write_file(
+            &project.join("src/paths.ts"),
+            &paths_module(helper_exported),
+        );
+        write_file(
+            &project.join("tests/paths.test.ts"),
+            "import { customerPath } from \"../src/paths\";\n\
+             function main(): void { assert(customerPath(\"1\") === \"/v1/customers/1\", \"path\"); }\n",
+        );
+        let out = build_test(&project, tmp.path(), &[]);
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        let tested = fs::read_to_string(project.join("capabilities.yaml")).expect("capabilities");
+        let out = build(&project, tmp.path(), &[]);
+        assert!(out.status.success(), "stderr: {}", stderr(&out));
+        let published =
+            fs::read_to_string(project.join("capabilities.yaml")).expect("capabilities");
+        let docs = run_with_home(
+            &[OsStr::new("docs"), OsStr::new("@pied-piper/util")],
+            tmp.path(),
+        );
+        assert!(docs.status.success(), "stderr: {}", stderr(&docs));
+        let docs = std::str::from_utf8(&docs.stdout)
+            .expect("docs utf-8")
+            .to_string();
+        assert_eq!(tested, published);
+        (published, docs)
+    };
+    let (capabilities, docs) = snapshot(false);
+    assert!(docs.contains("defaultCustomer"), "docs: {docs}");
+    for internal in ["customerPath", "BASE", "escape"] {
+        assert!(!docs.contains(internal), "docs: {docs}");
+        assert!(
+            !capabilities.contains(internal),
+            "capabilities: {capabilities}"
+        );
+    }
+    assert_eq!(snapshot(true), (capabilities, docs));
+}
+
+#[test]
+fn check_discipline_is_unchanged_for_a_non_entry_function_under_test() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    write_file(&project.join("submilli.toml"), PATHS_MANIFEST);
+    write_file(
+        &project.join("src/lib.ts"),
+        "import { guard } from \"./ops\";\n\
+         /**\n * Send to a channel.\n * @param channelId where to send\n */\n\
+         export function send(channelId: string): void { guard({ channelId }); }\n",
+    );
+    write_file(
+        &project.join("src/ops.ts"),
+        "import { check } from \"submilli:security\";\n\
+         export interface Input { channelId: string }\n\
+         function post(channelId: string): void {}\n\
+         export function guard(input: Input): void {\n\
+           check(\"x/guard\", { channelId: input.channelId });\n\
+           post(input.channelId);\n\
+         }\n",
+    );
+    write_file(
+        &project.join("tests/ops.test.ts"),
+        "import { guard } from \"../src/ops\";\nfunction main(): void { guard({ channelId: \"c\" }); }\n",
+    );
+    let warning = "`check()` is called in `guard`, which is not part of the package's public API";
+    for command in ["check", "test"] {
+        let out = build_subcommand(command, &project, tmp.path(), &[]);
+        assert!(out.status.success(), "{command}: {}", stderr(&out));
+        assert_eq!(
+            stderr(&out).matches(warning).count(),
+            1,
+            "{command}: {}",
+            stderr(&out)
+        );
+    }
+}
+
 #[test]
 fn submilli_run_rejects_test_module_import() {
     let tmp = tempfile::tempdir().expect("tempdir");

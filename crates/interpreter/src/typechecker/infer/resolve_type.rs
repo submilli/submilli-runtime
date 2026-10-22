@@ -532,6 +532,24 @@ impl<'a> Inferer<'a> {
                     );
                     return Ok(Type::Error);
                 }
+                if text == "Promise" {
+                    let rewrite = match (args.as_slice(), self.short_source(annot.span)) {
+                        ([inner], Some(written)) => self
+                            .short_source(inner.span)
+                            .map(|inner| format!("write `{inner}` instead of `{written}`")),
+                        _ => None,
+                    };
+                    self.error_with_help(
+                        annot.span,
+                        "`Promise` is not supported".to_string(),
+                        vec![format!(
+                            "calls return their value directly: {}",
+                            rewrite
+                                .unwrap_or_else(|| "write `T` instead of `Promise<T>`".to_string())
+                        )],
+                    );
+                    return Ok(Type::Error);
+                }
                 if text == "Record" {
                     return self.resolve_record(args, annot.span);
                 }
