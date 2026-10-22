@@ -34,6 +34,15 @@ directly. The package adds the Bearer prefix to an OAuth token and sends a
 personal `lin_api_` key raw, which still works for issue and comment
 operations.
 
+## Receiving agent session events
+
+This package only sends requests to Linear. Receiving session events is the
+harness's job: its webhook receiver must validate and deduplicate deliveries,
+acknowledge within 5 seconds, and route `created` to a new conversation and
+`prompted` to the existing conversation keyed by Linear session ID. On a user
+`stop` signal, the harness interrupts ongoing work, then emits a final
+acknowledgement.
+
 ## Development
 
 Run:

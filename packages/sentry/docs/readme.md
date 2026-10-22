@@ -1,8 +1,8 @@
 # Sentry package guide
 
 Use `@submilli/sentry` for typed Sentry Cloud issue investigation and triage.
-The token stays inside the package as `SENTRY_AUTH_TOKEN`; never pass credentials
-through function arguments.
+Credentials are supplied internally; never pass credentials through function
+arguments.
 
 - Organization arguments are Sentry slugs.
 

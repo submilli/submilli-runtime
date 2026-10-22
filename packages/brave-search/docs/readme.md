@@ -18,8 +18,8 @@ The caller needs `brave.com/context`.
 
 Use `@submilli/jina` to read a specific URL after discovering it.
 
-Credentials are supplied internally through `BRAVE_SEARCH_API_KEY`. Never ask
-for or pass an API key in package calls.
+Credentials are supplied internally. Never ask for or pass an API key in package
+calls.
 
 <!-- submilli:if capability="brave.com/search" -->
 

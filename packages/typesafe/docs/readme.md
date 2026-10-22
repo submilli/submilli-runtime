@@ -161,7 +161,7 @@ errors. Examples illustrate decomposition, not measured accuracy for your domain
 
 ## Credentials, permissions, and failures
 
-Credentials are read internally from `TYPESAFE_AI_KEY`; never pass a key in calls.
+Credentials are supplied internally; never pass a key in calls.
 Every call checks the `typesafe.ai/systemone` capability. A permission denial
 means the call is forbidden, not mis-called.
 

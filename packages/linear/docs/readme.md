@@ -186,13 +186,8 @@ Agent session mutations require the app identity that owns the session.
 
 <!-- submilli:if any="linear.app/getAgentSession linear.app/listAgentActivities linear.app/createAgentActivity linear.app/updateAgentSession linear.app/createAgentSessionOnIssue linear.app/createAgentSessionOnComment" -->
 
-A webhook receiver must validate and deduplicate deliveries, acknowledge within
-5 seconds, and route `created` to a new conversation and `prompted` to the existing
-conversation keyed by Linear session ID. A new session needs an activity or
-external URL update within 10 seconds. Handle a user `stop` signal in the harness:
-interrupt ongoing work, then emit a final acknowledgement. These receiving,
-routing, and cancellation responsibilities are outside this outbound API package.
-Do not use an ordinary issue comment as a substitute for a session response.
+A new session needs an activity or external URL update within 10 seconds. Do not
+use an ordinary issue comment as a substitute for a session response.
 
 <!-- submilli:endif -->
 
