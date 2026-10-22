@@ -963,6 +963,8 @@ pub struct TypedAst {
     pub rebindable_globals: std::collections::BTreeMap<MangledName, String>,
     /// Top-level function declarations. Hoisted — codegen doesn't depend on source order.
     pub functions: Vec<TypedFunction>,
+    /// [`crate::Ast::unparsed_main`]: a `main` was declared but did not parse.
+    pub unparsed_main: bool,
     /// Source-order `_start` body — currently one `AssignGlobal` per global initializer.
     pub top_level_statements: Vec<StmtId>,
     /// Where each top-level class is declared: the index into

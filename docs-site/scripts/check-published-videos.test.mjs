@@ -29,7 +29,7 @@ function hostedFetch(overrides = {}) {
     if (url.endsWith('/player.js')) return response('console.log("player");', { headers: { 'content-type': 'application/javascript' } });
     if (url.endsWith('/embed/packages/')) return response('<video data-film="packages"></video><script src="/player.js"></script>');
     if (url.endsWith('/films/packages/current.json')) return response(JSON.stringify(manifest), { headers: { 'content-type': 'application/json' } });
-    if (url.endsWith('.mp4')) return response(new Uint8Array([0]), { status: 206, headers: { 'content-type': 'video/mp4' } });
+    if (url.endsWith('.mp4')) return response(new Uint8Array(64), { status: 206, headers: { 'content-type': 'video/mp4', 'content-range': 'bytes 64-127/1000' } });
     if (url.endsWith('.vtt')) return response('WEBVTT\n\n00:00.000 --> 00:01.000\nHello');
     if (url.endsWith('.txt')) return response('A useful transcript.');
     throw new Error(`unexpected request ${url}`);
@@ -37,11 +37,60 @@ function hostedFetch(overrides = {}) {
   return { calls, fetchImpl };
 }
 
-test('published video check validates every hosted dependency and uses a one-byte media range', async () => {
+test('published video check validates every hosted dependency and uses a nonzero media range', async () => {
   const { calls, fetchImpl } = hostedFetch();
   assert.deepEqual(await checkPublishedVideos({ films: [film], fetchImpl }), ['packages']);
   const mediaCall = calls.find((call) => call.url.endsWith('.mp4'));
-  assert.equal(mediaCall.init.headers.Range, 'bytes=0-0');
+  assert.equal(mediaCall.init.headers.Range, 'bytes=64-127');
+});
+
+test('the check rejects a media host that ignores the byte range', async () => {
+  const { fetchImpl } = hostedFetch({
+    [`${PRODUCTION_ORIGIN}${manifest.media}`]: async () => response(new Uint8Array(64), { status: 200, headers: { 'content-type': 'video/mp4' } }),
+  });
+  await assert.rejects(checkPublishedVideos({ films: [film], fetchImpl }), /packages: media ignored the byte range and returned HTTP 200/);
+});
+
+test('the check rejects malformed or mismatched media Content-Range headers', async () => {
+  for (const contentRange of ['not-a-range', 'bytes 65-128/1000', 'bytes 64-127/127']) {
+    const { fetchImpl } = hostedFetch({
+      [`${PRODUCTION_ORIGIN}${manifest.media}`]: async () => response(new Uint8Array(64), { status: 206, headers: { 'content-type': 'video/mp4', 'content-range': contentRange } }),
+    });
+    await assert.rejects(checkPublishedVideos({ films: [film], fetchImpl }), /packages: media returned an invalid Content-Range/);
+  }
+});
+
+test('the check rejects a truncated media range body', async () => {
+  const { fetchImpl } = hostedFetch({
+    [`${PRODUCTION_ORIGIN}${manifest.media}`]: async () => response(new Uint8Array(63), { status: 206, headers: { 'content-type': 'video/mp4', 'content-range': 'bytes 64-127/1000' } }),
+  });
+  await assert.rejects(checkPublishedVideos({ films: [film], fetchImpl }), /packages: media body was truncated/);
+});
+
+test('the check accepts a media range delivered in fragments', async () => {
+  const { fetchImpl } = hostedFetch({
+    [`${PRODUCTION_ORIGIN}${manifest.media}`]: async () => response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(32));
+        controller.enqueue(new Uint8Array(32));
+        controller.close();
+      },
+    }), { status: 206, headers: { 'content-type': 'video/mp4', 'content-range': 'bytes 64-127/1000' } }),
+  });
+  assert.deepEqual(await checkPublishedVideos({ films: [film], fetchImpl }), ['packages']);
+});
+
+test('the check rejects a media body with bytes after the requested range', async () => {
+  const { fetchImpl } = hostedFetch({
+    [`${PRODUCTION_ORIGIN}${manifest.media}`]: async () => response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(64));
+        controller.enqueue(new Uint8Array(1));
+        controller.close();
+      },
+    }), { status: 206, headers: { 'content-type': 'video/mp4', 'content-range': 'bytes 64-127/1000' } }),
+  });
+  await assert.rejects(checkPublishedVideos({ films: [film], fetchImpl }), /packages: media body exceeded the requested range/);
 });
 
 test('the check rejects a 200 HTML not-found page from an embed host', async () => {
@@ -89,8 +138,8 @@ test('the check reports missing media, captions, and transcripts and rejects emp
   await assert.rejects(checkPublishedVideos({ films: [film], fetchImpl: missingCaptions.fetchImpl }), /packages: captions returned HTTP 404/);
   const missingTranscript = hostedFetch({ [`${PRODUCTION_ORIGIN}/assets/${'c'.repeat(64)}.txt`]: async () => response('', { status: 404 }) });
   await assert.rejects(checkPublishedVideos({ films: [film], fetchImpl: missingTranscript.fetchImpl }), /packages: transcript returned HTTP 404/);
-  const emptyMedia = hostedFetch({ [`${PRODUCTION_ORIGIN}/assets/${'a'.repeat(64)}.mp4`]: async () => response(new Uint8Array(), { status: 206, headers: { 'content-type': 'video/mp4', 'content-length': '0' } }) });
-  await assert.rejects(checkPublishedVideos({ films: [film], fetchImpl: emptyMedia.fetchImpl }), /packages: media returned an empty body/);
+  const emptyMedia = hostedFetch({ [`${PRODUCTION_ORIGIN}/assets/${'a'.repeat(64)}.mp4`]: async () => response(new Uint8Array(), { status: 206, headers: { 'content-type': 'video/mp4', 'content-range': 'bytes 64-127/1000', 'content-length': '0' } }) });
+  await assert.rejects(checkPublishedVideos({ films: [film], fetchImpl: emptyMedia.fetchImpl }), /packages: media body was truncated/);
 });
 
 test('local origin override is restricted to loopback', () => {
@@ -106,7 +155,7 @@ test('a stalled media body times out and releases the stream', async () => {
       start(controller) {
         signal.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')), { once: true });
       },
-    }), { headers: { 'content-type': 'video/mp4' } }),
+    }), { status: 206, headers: { 'content-type': 'video/mp4', 'content-range': 'bytes 64-127/1000' } }),
   });
   await assert.rejects(checkPublishedVideos({ films: [film], fetchImpl, timeoutMs: 20 }), /media request failed.*timed out/);
 });

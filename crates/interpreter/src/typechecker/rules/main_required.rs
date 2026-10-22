@@ -2,6 +2,10 @@ use crate::{Diagnostic, FileId, Severity, Span, TypedAst};
 
 pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
     let Some(main) = ta.functions.iter().find(|f| f.name.name == "main") else {
+        // The parser already reported what is wrong with the `main` it dropped.
+        if ta.unparsed_main {
+            return;
+        }
         diags.push(Diagnostic {
             severity: Severity::Error,
             // Missing `main` has no real location; anchor at the start of the
@@ -28,7 +32,7 @@ pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_util::run_raw;
+    use super::super::test_util::{compile_messages, run_raw};
 
     #[test]
     fn missing_main_diagnoses() {
@@ -61,6 +65,27 @@ mod tests {
         let diags = run_raw("function main(a: number): void { }");
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].message, "`main` must have no parameters");
+    }
+
+    #[test]
+    fn a_main_that_did_not_parse_is_not_also_missing() {
+        assert_eq!(
+            compile_messages("function main() {\n  return \"x\";\n}\n"),
+            ["expected `:` and return type"]
+        );
+        assert_eq!(
+            compile_messages("function main(\n"),
+            ["expected parameter name"]
+        );
+    }
+
+    #[test]
+    fn a_nested_main_that_did_not_parse_leaves_main_missing() {
+        let messages = compile_messages("function f(): void {\n  function main() {}\n}\n");
+        assert!(
+            messages.iter().any(|m| m == "missing `main` function"),
+            "{messages:?}"
+        );
     }
 
     #[test]

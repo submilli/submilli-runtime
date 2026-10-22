@@ -144,7 +144,7 @@ fn run_rules(
 }
 
 #[cfg(test)]
-mod test_util {
+pub(crate) mod test_util {
     use std::collections::BTreeMap;
 
     use super::check_script;
@@ -162,6 +162,17 @@ mod test_util {
 
     pub fn run_raw(source: &str) -> Vec<Diagnostic> {
         pipeline(source)
+    }
+
+    /// Every diagnostic the whole compile pipeline reports for `source`. Unlike
+    /// [`run_raw`], parse errors are included and later phases still run.
+    pub fn compile_messages(source: &str) -> Vec<String> {
+        crate::typecheck(source, FileId(0))
+            .err()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|diag| diag.message)
+            .collect()
     }
 
     /// Each diagnostic of [`run_raw`] as its message and 1-based line, so a

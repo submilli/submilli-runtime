@@ -268,6 +268,7 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         type_limits: Default::default(),
         diagnostic_failure: Default::default(),
     };
+    tc.typed_ast.unparsed_main = ast.unparsed_main;
     tc.populate_prelude().map_err(|fatal| CompileError {
         diagnostics: tc.diagnostics.clone(),
         fatal: Some(fatal),

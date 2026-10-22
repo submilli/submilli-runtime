@@ -138,6 +138,8 @@ impl Stdlib {
         let globals = global_classes();
         let mut out = String::new();
         for defs in packages {
+            let defs = with_public_type_names(defs);
+            let defs = defs.as_ref();
             let _ = writeln!(out, "declare module \"{}\" {{", defs.package_name);
             let imports = block_imports(defs, &exporters);
             for (local, (public, module)) in &imports.types {
@@ -1013,6 +1015,8 @@ fn matches_query(defs: &PackageDeclaration, q: &str) -> bool {
 /// embedder can render dynamically-built packages (e.g. `@mcp/<server>`) the same
 /// way the stdlib docs render.
 pub fn render_declarations(defs: &PackageDeclaration) -> String {
+    let defs = with_public_type_names(defs);
+    let defs = defs.as_ref();
     let mut out = String::new();
     for (name, sym) in &defs.values {
         push_doc(&mut out, value_doc(&sym.kind), "");
@@ -1023,6 +1027,63 @@ pub fn render_declarations(defs: &PackageDeclaration) -> String {
         render_type(&mut out, name, &sym.kind, "");
     }
     out.trim_end().to_string()
+}
+
+/// `defs` with each reference to a type it exports under another name, as in
+/// `export { Res as Result } from "./model"`, renamed to that public name. A
+/// reference records the name its declaring module gave the type, which the
+/// package's readers can't import.
+///
+/// Like [`rendered_type_references`], this walks the serialized form, where
+/// every by-name `Type` carries its declaring symbol's `mangled` name. A
+/// declaration that won't round-trip renders under its source names.
+fn with_public_type_names(defs: &PackageDeclaration) -> Cow<'_, PackageDeclaration> {
+    // A type declared in the entry module has its public name in its own
+    // mangled name, so only a re-export can be referenced by another name.
+    let mut public: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (name, symbol) in &defs.types {
+        if symbol.mangled_name != crate::mangle::package_symbol(&defs.package_name, name) {
+            public
+                .entry(symbol.mangled_name.as_str())
+                .or_default()
+                .push(name.as_str());
+        }
+    }
+    if public.is_empty() {
+        return Cow::Borrowed(defs);
+    }
+    let Ok(mut value) = serde_json::to_value(defs) else {
+        return Cow::Borrowed(defs);
+    };
+    let mut renamed = false;
+    let mut pending = vec![&mut value];
+    while let Some(node) = pending.pop() {
+        match node {
+            serde_json::Value::Object(fields) => {
+                let Some(serde_json::Value::String(mangled)) = fields.get("mangled") else {
+                    pending.extend(fields.values_mut());
+                    continue;
+                };
+                // A type exported under several names keeps whichever the
+                // reference already uses, else takes the alphabetically first.
+                if let Some(names) = public.get(mangled.as_str())
+                    && let Some(serde_json::Value::String(name)) = fields.get_mut("name")
+                    && !names.contains(&name.as_str())
+                    && let Some(first) = names.first()
+                {
+                    *name = first.to_string();
+                    renamed = true;
+                }
+                pending.extend(fields.get_mut("args"));
+            }
+            serde_json::Value::Array(items) => pending.extend(items),
+            _ => {}
+        }
+    }
+    if !renamed {
+        return Cow::Borrowed(defs);
+    }
+    serde_json::from_value(value).map_or(Cow::Borrowed(defs), Cow::Owned)
 }
 
 /// Render editor-facing TypeScript declarations for every stdlib module a
@@ -4016,6 +4077,73 @@ mod tests {
             assert!(!rendered.contains("hidden"), "{rendered}");
             assert!(!rendered.contains("KEY"), "{rendered}");
             assert!(!rendered.contains("seed"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn a_type_re_exported_under_another_name_renders_by_that_name() {
+        let model = r#"
+            export interface Res { ok: boolean; }
+            export type Alias = string | Res;
+            export class Thing { name: string = "t"; }
+            export interface Both { n: number; }
+        "#;
+        let lib = r#"
+            export { Res as Result, Alias as Either, Thing as Item, Both, Both as Pair } from "./model";
+            import { Res, Alias, Thing, Both } from "./model";
+            /** Get one. @returns the result */
+            export function read(): Res { return { ok: true }; }
+            /** Use one. @param a the value */
+            export function either(a: Alias): void { }
+            /** Make one. @param r a result @returns the thing */
+            export function make(r: Res): Thing { return new Thing(); }
+            /** A pair. @returns it */
+            export function pair(): Both { return { n: 1 }; }
+            /** A list of either. */
+            export type Wrapped = Res[] | Thing;
+        "#;
+        let defs = crate::compile_package(
+            "@pied-piper/renamed",
+            crate::ModulePath::from("lib"),
+            &[
+                crate::PackageSourceModule {
+                    path: crate::ModulePath::from("lib"),
+                    source: lib,
+                },
+                crate::PackageSourceModule {
+                    path: crate::ModulePath::from("model"),
+                    source: model,
+                },
+            ],
+            &[],
+        )
+        .unwrap_or_else(|diagnostics| panic!("compile failed: {diagnostics:#?}"))
+        .declaration;
+
+        let docs = render_declarations(&defs);
+        let d_ts = render_packages_d_ts(&[&defs], &[]);
+        for rendered in [&docs, &d_ts] {
+            assert!(rendered.contains("read(): Result;"), "{rendered}");
+            assert!(rendered.contains("either(a: Either): void;"), "{rendered}");
+            assert!(rendered.contains("make(r: Result): Item;"), "{rendered}");
+            assert!(
+                rendered.contains("type Either = string | Result;"),
+                "{rendered}"
+            );
+            assert!(
+                rendered.contains("type Wrapped = Result[] | Item;"),
+                "{rendered}"
+            );
+            // Exported under two names, a reference keeps the one it uses.
+            assert!(rendered.contains("pair(): Both;"), "{rendered}");
+            for source_name in ["Res", "Alias", "Thing"] {
+                assert!(
+                    !rendered.contains(&format!("{source_name};"))
+                        && !rendered.contains(&format!("{source_name}[]"))
+                        && !rendered.contains(&format!("{source_name})")),
+                    "{source_name} in {rendered}"
+                );
+            }
         }
     }
 }

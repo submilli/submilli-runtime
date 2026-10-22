@@ -1,6 +1,15 @@
 {
   "films": [
     {
+      "id": "support-demo",
+      "title": "Support agent example",
+      "description": "An online store’s support agent handles a replacement request within a shipping limit set by its Blueprint.",
+      "language": "en",
+      "status": "published",
+      "canonicalPath": "/docs/videos/#video-support-demo-title",
+      "embedUrl": "https://submilli-videos.onrender.com/embed/support-demo/"
+    },
+    {
       "id": "code-execution-introduction",
       "title": "Why agents execute code",
       "description": "Follow a failed-payment investigation from sequential tool calls to a program that returns a focused report.",
@@ -59,15 +68,6 @@
       "canonicalPath": "/docs/server/#what-happens-to-a-program",
       "embedUrl": "https://submilli-videos.onrender.com/embed/works/",
       "language": "en"
-    },
-    {
-      "id": "support-demo",
-      "title": "Support agent example",
-      "description": "An online store’s support agent handles a replacement request within a shipping limit set by its Blueprint.",
-      "language": "en",
-      "status": "published",
-      "canonicalPath": "/docs/videos/#video-support-demo-title",
-      "embedUrl": "https://submilli-videos.onrender.com/embed/support-demo/"
     },
     {
       "id": "using",
