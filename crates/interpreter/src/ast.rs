@@ -914,6 +914,9 @@ pub struct Ast {
     pub synthetic_undefined: std::collections::BTreeSet<ExprId>,
     /// Destructuring defaults, keyed by the ternary `lower_patterns` makes of each.
     pub binding_defaults: std::collections::BTreeMap<ExprId, BindingDefault>,
+    /// A top-level `function main` the parser reported and dropped, so the
+    /// program is not also told it has no `main`.
+    pub unparsed_main: bool,
 }
 
 impl Ast {
