@@ -13,6 +13,7 @@ async function runLychee(root) {
 			'--offline', '--include-fragments=full', '--root-dir', root,
 			'--remap', '^https://submilli\\.ai/docs([?#].*)?$ file://' + root + '/docs/$1',
 			'--remap', '^https://submilli\\.ai/docs/(.*)$ file://' + root + '/docs/$1',
+			'--remap', '^https://github\\.com/submilli/submilli-runtime/blob/main/(.*)$ file://' + root + '/$1',
 			'--index-files', 'index.html', join(root, 'index.html'),
 		], { stdio: ['ignore', 'pipe', 'pipe'] });
 		let output = '';
@@ -45,6 +46,22 @@ test('built-style local links and anchors pass', async (t) => {
 
 test('missing page fails', async (t) => {
 	const root = await fixture('<a href="/docs/missing">Missing</a>');
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const result = await runLychee(root);
+	assert.equal(result.code, 2, result.output);
+});
+
+test('same-repository source link passes when its file exists', async (t) => {
+	const root = await fixture('<a href="https://github.com/submilli/submilli-runtime/blob/main/packages/example/readme.md">Package</a>');
+	t.after(() => rm(root, { recursive: true, force: true }));
+	await mkdir(join(root, 'packages', 'example'), { recursive: true });
+	await writeFile(join(root, 'packages', 'example', 'readme.md'), '# Example\n');
+	const result = await runLychee(root);
+	assert.equal(result.code, 0, result.output);
+});
+
+test('same-repository source link fails when its file is missing', async (t) => {
+	const root = await fixture('<a href="https://github.com/submilli/submilli-runtime/blob/main/packages/missing/readme.md">Missing package</a>');
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const result = await runLychee(root);
 	assert.equal(result.code, 2, result.output);
