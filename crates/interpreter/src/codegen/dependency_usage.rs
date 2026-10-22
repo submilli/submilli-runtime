@@ -6,6 +6,16 @@ use crate::{
     ValueSymbol,
 };
 
+/// The `ObjectConstructor` helpers that reading, writing and checking a value
+/// with an index signature call.
+pub(super) const RECORD_HELPERS: [&str; 5] = [
+    "#getField",
+    "#setField",
+    "#recordValues",
+    "#hasField",
+    "#quotedRecordKeys",
+];
+
 pub struct DependencyValue<'a> {
     pub package: &'a PackageDeclaration,
     pub export_name: Cow<'a, str>,
@@ -407,7 +417,7 @@ impl DependencyUsage {
             Type::Object { fields, index } => {
                 if let Some(index) = index {
                     self.collect_type(&index.value);
-                    for helper in ["#getField", "#setField", "#recordValues", "#hasField"] {
+                    for helper in RECORD_HELPERS {
                         self.note_member(crate::mangle::extend(
                             &crate::mangle::prelude("ObjectConstructor"),
                             helper,

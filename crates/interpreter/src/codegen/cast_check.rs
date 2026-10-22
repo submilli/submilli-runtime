@@ -485,77 +485,15 @@ fn emit_structural_test_inner(
             emitter.emit_end();
         }
         Type::Array(elem) => {
-            let intr = ctx
-                .symbols
-                .intrinsic_type_indices()
-                .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
-            let array_idx = ctx
-                .symbols
-                .array_type_idx()
-                .ok_or_else(|| crate::codegen::internal_failure("$Array intrinsic registered"))?;
-            emitter.instruction(Instruction::LocalGet(value_local));
-            emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(array_idx)));
-            emitter.emit_if(i32_block);
-            let raw_local = emitter.add_anonymous_local(ValType::Ref(RefType {
-                nullable: false,
-                heap_type: HeapType::Concrete(intr.raw_array),
-            }))?;
-            emitter.instruction(Instruction::LocalGet(value_local));
-            emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(array_idx)));
-            emitter.instruction(Instruction::StructGet {
-                struct_type_index: array_idx,
-                field_index: 1,
-            });
-            emitter.instruction(Instruction::LocalSet(raw_local));
-            let acc = emitter.add_anonymous_local(ValType::I32)?;
-            let i = emitter.add_anonymous_local(ValType::I32)?;
-            let len = emitter.add_anonymous_local(ValType::I32)?;
-            let elem_local = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
-            emitter.instruction(Instruction::I32Const(1));
-            emitter.instruction(Instruction::LocalSet(acc));
-            emitter.instruction(Instruction::I32Const(0));
-            emitter.instruction(Instruction::LocalSet(i));
-            emitter.instruction(Instruction::LocalGet(value_local));
-            emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(array_idx)));
-            emitter.instruction(Instruction::StructGet {
-                struct_type_index: array_idx,
-                field_index: 2,
-            });
-            emitter.instruction(Instruction::LocalSet(len));
-            emitter.emit_block(BlockType::Empty);
-            emitter.emit_loop(BlockType::Empty);
-            emitter.instruction(Instruction::LocalGet(i));
-            emitter.instruction(Instruction::LocalGet(len));
-            emitter.instruction(Instruction::I32GeU);
-            emitter.instruction(Instruction::BrIf(1));
-            emitter.instruction(Instruction::LocalGet(raw_local));
-            emitter.instruction(Instruction::LocalGet(i));
-            emitter.instruction(Instruction::ArrayGet(intr.raw_array));
-            emitter.instruction(Instruction::LocalSet(elem_local));
-            emitter.instruction(Instruction::LocalGet(acc));
-            let parent_path = diagnostic::index(emitter, ctx, i);
-            emit_structural_test_inner(
+            emit_elements_test(
                 emitter,
                 ctx,
-                elem_local,
+                value_local,
                 elem,
                 interface_stack,
                 validator_state,
+                None,
             )?;
-            diagnostic::pop(emitter, parent_path);
-            emitter.instruction(Instruction::I32And);
-            emitter.instruction(Instruction::LocalSet(acc));
-            emitter.instruction(Instruction::LocalGet(i));
-            emitter.instruction(Instruction::I32Const(1));
-            emitter.instruction(Instruction::I32Add);
-            emitter.instruction(Instruction::LocalSet(i));
-            emitter.instruction(Instruction::Br(0));
-            emitter.emit_end();
-            emitter.emit_end();
-            emitter.instruction(Instruction::LocalGet(acc));
-            emitter.emit_else();
-            emitter.instruction(Instruction::I32Const(0));
-            emitter.emit_end();
         }
         Type::Tuple(elems) => {
             let intr = ctx
@@ -2241,6 +2179,96 @@ fn emit_store_validator_environment(
     Ok(())
 }
 
+/// Tests each element of the array in `value_local`. When the array holds a
+/// record's values, `record_keys` names a failing element by its key instead of
+/// its index.
+fn emit_elements_test(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    value_local: u32,
+    elem: &Type,
+    interface_stack: &mut std::collections::BTreeSet<Type>,
+    validator_state: Option<ValidatorState>,
+    record_keys: Option<diagnostic::RecordKeys>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let i32_block = BlockType::Result(ValType::I32);
+    let intr = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
+    let array_idx = ctx
+        .symbols
+        .array_type_idx()
+        .ok_or_else(|| crate::codegen::internal_failure("$Array intrinsic registered"))?;
+    emitter.instruction(Instruction::LocalGet(value_local));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(array_idx)));
+    emitter.emit_if(i32_block);
+    let raw_local = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(intr.raw_array),
+    }))?;
+    emitter.instruction(Instruction::LocalGet(value_local));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(array_idx)));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: array_idx,
+        field_index: 1,
+    });
+    emitter.instruction(Instruction::LocalSet(raw_local));
+    let acc = emitter.add_anonymous_local(ValType::I32)?;
+    let i = emitter.add_anonymous_local(ValType::I32)?;
+    let len = emitter.add_anonymous_local(ValType::I32)?;
+    let elem_local = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
+    emitter.instruction(Instruction::I32Const(1));
+    emitter.instruction(Instruction::LocalSet(acc));
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.instruction(Instruction::LocalSet(i));
+    emitter.instruction(Instruction::LocalGet(value_local));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(array_idx)));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: array_idx,
+        field_index: 2,
+    });
+    emitter.instruction(Instruction::LocalSet(len));
+    emitter.emit_block(BlockType::Empty);
+    emitter.emit_loop(BlockType::Empty);
+    emitter.instruction(Instruction::LocalGet(i));
+    emitter.instruction(Instruction::LocalGet(len));
+    emitter.instruction(Instruction::I32GeU);
+    emitter.instruction(Instruction::BrIf(1));
+    emitter.instruction(Instruction::LocalGet(raw_local));
+    emitter.instruction(Instruction::LocalGet(i));
+    emitter.instruction(Instruction::ArrayGet(intr.raw_array));
+    emitter.instruction(Instruction::LocalSet(elem_local));
+    emitter.instruction(Instruction::LocalGet(acc));
+    let parent_path = match record_keys {
+        Some(keys) => diagnostic::record_key(emitter, keys, i),
+        None => diagnostic::index(emitter, ctx, i),
+    };
+    emit_structural_test_inner(
+        emitter,
+        ctx,
+        elem_local,
+        elem,
+        interface_stack,
+        validator_state,
+    )?;
+    diagnostic::pop(emitter, parent_path);
+    emitter.instruction(Instruction::I32And);
+    emitter.instruction(Instruction::LocalSet(acc));
+    emitter.instruction(Instruction::LocalGet(i));
+    emitter.instruction(Instruction::I32Const(1));
+    emitter.instruction(Instruction::I32Add);
+    emitter.instruction(Instruction::LocalSet(i));
+    emitter.instruction(Instruction::Br(0));
+    emitter.emit_end();
+    emitter.emit_end();
+    emitter.instruction(Instruction::LocalGet(acc));
+    emitter.emit_else();
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.emit_end();
+    Ok(())
+}
+
 fn emit_index_conformance(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -2260,13 +2288,15 @@ fn emit_index_conformance(
     emitter.instruction(Instruction::Call(symbol));
     let values = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
     emitter.instruction(Instruction::LocalSet(values));
-    emit_structural_test_inner(
+    let record_keys = diagnostic::record_keys(emitter, ctx, object, values);
+    emit_elements_test(
         emitter,
         ctx,
         values,
-        &Type::Array(index.value.clone()),
+        &index.value,
         interface_stack,
         validator_state,
+        record_keys,
     )?;
     Ok(())
 }

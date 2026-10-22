@@ -5,6 +5,7 @@ use super::{
     ctor_key, field_array, field_is_present, field_is_private, is_accessor_slot, shape_arrays,
 };
 use crate::runtime::StoreData;
+use crate::runtime::fuel;
 use crate::runtime::host::{register_host_fn, register_host_fn_async, write_submilli_array_struct};
 use crate::runtime::prelude::collection::FIELD_NAME;
 use crate::runtime::prelude::keep::KeptValues;
@@ -198,6 +199,31 @@ pub(super) fn has(
     )
 }
 
+/// How a slot appears among a record's values; `None` when it has no entry
+/// (a private field, an absent optional field, or a setter alone).
+enum RecordEntry {
+    Getter,
+    Data,
+}
+
+/// The `"get "` prefix of a getter's slot name.
+const GETTER_PREFIX: [u16; 4] = [b'g' as u16, b'e' as u16, b't' as u16, b' ' as u16];
+
+fn record_entry(
+    caller: &mut Caller<'_, StoreData>,
+    name: &Val,
+    value: &Val,
+) -> wasmtime::Result<Option<RecordEntry>> {
+    if field_is_private(caller, name)? {
+        return Ok(None);
+    }
+    if is_accessor_slot(caller, name)? {
+        let getter = read_string_units(caller, name, FIELD_NAME)?.starts_with(&GETTER_PREFIX);
+        return Ok(getter.then_some(RecordEntry::Getter));
+    }
+    Ok(field_is_present(caller, name, value)?.then_some(RecordEntry::Data))
+}
+
 async fn values(caller: &mut Caller<'_, StoreData>, object: &Val) -> wasmtime::Result<Val> {
     let Some((names, fields)) = shape_arrays(caller, object)? else {
         return Ok(Val::AnyRef(None));
@@ -208,23 +234,75 @@ async fn values(caller: &mut Caller<'_, StoreData>, object: &Val) -> wasmtime::R
     for slot in 0..count {
         let name = names.get(&mut *caller, slot)?;
         let value = fields.get(&mut *caller, slot)?;
-        if field_is_private(caller, &name)? {
-            continue;
-        }
-        if is_accessor_slot(caller, &name)? {
-            if read_string_units(caller, &name, FIELD_NAME)?.starts_with(&[103, 101, 116, 32]) {
+        match record_entry(caller, &name, &value)? {
+            Some(RecordEntry::Getter) => {
                 let got = super::super::closure::read(caller, &value, "record getter")?
                     .call_with_receiver(caller, *object, &[])
                     .await?;
                 result.push(caller, got)?;
             }
-        } else if field_is_present(caller, &name, &value)? {
-            let checked = checked_data_value(caller, object, slot, value).await?;
-            result.push(caller, checked)?;
+            Some(RecordEntry::Data) => {
+                let checked = checked_data_value(caller, object, slot, value).await?;
+                result.push(caller, checked)?;
+            }
+            None => {}
         }
     }
     Ok(Val::AnyRef(Some(
         write_submilli_array_struct(caller, result.values())?.to_anyref(),
+    )))
+}
+
+/// The JSON-quoted keys of the first `count` values `#recordValues` returned,
+/// which name a failed record cast's entries. A record check asks once, when
+/// it first renders a path: on a failure, including a rejected union
+/// alternative, or before a recursive validator call. A passing cast of a
+/// record without either never walks its keys.
+///
+/// The keys are read after `#recordValues` ran the record's getters, so a getter
+/// that makes an absent optional field present shifts the keys after it. The
+/// result always holds `count` keys, so the cast never reads past its end: if
+/// the walk finds fewer entries, the rest are named by their positions.
+fn quoted_keys(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    count: f64,
+) -> wasmtime::Result<Val> {
+    let Some((names, fields)) = shape_arrays(caller, object)? else {
+        return Err(crate::runtime::host::fatal_host_error(
+            "record keys of a value that is not an object",
+        ));
+    };
+    let slots = super::field_count(caller, object)?;
+    fuel::charge(&mut *caller, fuel::ELEM, u64::from(slots))?;
+    // `count` is the length of the values array, and the cast reads a key for
+    // each of its positions, so the result always holds exactly `count` keys.
+    let wanted = count as usize;
+    let mut keys = KeptValues::with_capacity(caller, wanted)?;
+    for slot in 0..slots {
+        if keys.values().len() >= wanted {
+            break;
+        }
+        let name = names.get(&mut *caller, slot)?;
+        let value = fields.get(&mut *caller, slot)?;
+        let Some(entry) = record_entry(caller, &name, &value)? else {
+            continue;
+        };
+        let units = read_string_units(caller, &name, FIELD_NAME)?;
+        let key = match entry {
+            RecordEntry::Getter => units.get(GETTER_PREFIX.len()..).unwrap_or_default(),
+            RecordEntry::Data => &units,
+        };
+        let quoted = crate::runtime::prelude::vtable::quote_string(caller, key)?;
+        keys.push(caller, quoted)?;
+    }
+    while keys.values().len() < wanted {
+        let position: Vec<u16> = keys.values().len().to_string().encode_utf16().collect();
+        let quoted = crate::runtime::prelude::vtable::quote_string(caller, &position)?;
+        keys.push(caller, quoted)?;
+    }
+    Ok(Val::AnyRef(Some(
+        write_submilli_array_struct(caller, keys.values())?.to_anyref(),
     )))
 }
 
@@ -277,6 +355,21 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     register_host_fn(
         linker,
         MODULE_NAME,
+        ctor_key("#quotedRecordKeys"),
+        FuncType::new(&engine, [object.clone(), ValType::F64], [object.clone()]),
+        |caller, params, results| {
+            let ([object, Val::F64(count)], [result]) = (params, results) else {
+                return Err(crate::runtime::host::fatal_host_error(
+                    "invalid record keys host ABI",
+                ));
+            };
+            *result = quoted_keys(caller, object, f64::from_bits(*count))?;
+            Ok(())
+        },
+    )?;
+    register_host_fn(
+        linker,
+        MODULE_NAME,
         ctor_key("#hasField"),
         FuncType::new(&engine, [object, string], [ValType::I32]),
         |caller, params, results| {
@@ -307,4 +400,14 @@ pub(super) fn declare(defs: &mut PackageDeclaration) {
         };
         declare_method(defs, name, ctor_key(name), params, ret);
     }
+    declare_method(
+        defs,
+        "#quotedRecordKeys",
+        ctor_key("#quotedRecordKeys"),
+        vec![
+            Param::new("object", Type::Unknown),
+            Param::new("count", Type::Number),
+        ],
+        Type::Unknown,
+    );
 }
