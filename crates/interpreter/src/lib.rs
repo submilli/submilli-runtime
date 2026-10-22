@@ -61,10 +61,11 @@ pub use backtrace::{BacktraceMode, failure_message, render as render_backtrace};
 pub use capability_derivation::{DerivedCapability, derive_call_site_capability};
 pub use codegen::{SymbolTable, codegen};
 pub use compile::{
-    CompiledPackage, CompiledScript, PackageSourceModule, ParsedScript, PhaseTimings,
-    ScriptImports, compile_package, compile_package_with_transitive, compile_parsed_script_timed,
-    compile_script, compile_script_owned_by, parse_script, typecheck,
-    typecheck_package_to_typed_ast, typecheck_to_typed_ast,
+    CompiledPackage, CompiledScript, PackageSourceModule, PackageSurface, PackageTestSurface,
+    ParsedScript, PhaseTimings, ScriptImports, compile_package, compile_package_test,
+    compile_package_with_transitive, compile_parsed_script_timed, compile_script,
+    compile_script_owned_by, parse_script, typecheck, typecheck_package_to_typed_ast,
+    typecheck_to_typed_ast,
 };
 pub use diagnostics::{Diagnostic, Severity};
 pub use doc_comment::{
@@ -92,12 +93,13 @@ pub use typechecker::{capability_binding_type, capture, check, desugar, infer, i
 pub use typed_ast::{
     CapturedVar, ClosureBody, EnumVariantPayload, ExportEntry, ExportKind, FieldNarrowingCheck,
     FieldNarrowingTest, ForOfKind, GenericArgument, GlobalKind, InterfaceCarrier,
-    InterfaceNarrowingTest, Intrinsic, PostfixTarget, TypedArrayElement, TypedAst,
-    TypedCatchClause, TypedChainPart, TypedClassAccessor, TypedClassConstructor, TypedClassDecl,
-    TypedClassField, TypedClassMethod, TypedExpr, TypedExprKind, TypedFunction, TypedGlobal,
-    TypedInterfaceDecl, TypedInterfaceMember, TypedNumberEnumDecl, TypedNumberEnumMember,
-    TypedObjectFieldOrigin, TypedObjectFieldSource, TypedObjectLiteralField, TypedObjectMember,
-    TypedParam, TypedStmt, TypedStmtKind, TypedStringEnumDecl, TypedStringEnumMember,
-    TypedSwitchCase, TypedSwitchValue, TypedTypeAliasDecl, TypedTypeDecl, TypeofTagKind,
+    InterfaceNarrowingTest, InternalModuleExports, Intrinsic, PostfixTarget, TypedArrayElement,
+    TypedAst, TypedCatchClause, TypedChainPart, TypedClassAccessor, TypedClassConstructor,
+    TypedClassDecl, TypedClassField, TypedClassMethod, TypedExpr, TypedExprKind, TypedFunction,
+    TypedGlobal, TypedInterfaceDecl, TypedInterfaceMember, TypedNumberEnumDecl,
+    TypedNumberEnumMember, TypedObjectFieldOrigin, TypedObjectFieldSource, TypedObjectLiteralField,
+    TypedObjectMember, TypedParam, TypedStmt, TypedStmtKind, TypedStringEnumDecl,
+    TypedStringEnumMember, TypedSwitchCase, TypedSwitchValue, TypedTypeAliasDecl, TypedTypeDecl,
+    TypeofTagKind,
 };
 pub use types::{IndexSignature, ObjectField, Package, TupleType, Type, TypePredicate};

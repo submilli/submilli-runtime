@@ -702,6 +702,29 @@ async fn durable_interpreter_passes_distinct_ids_for_each_resource_call() {
 }
 
 #[tokio::test]
+async fn durable_summary_and_is_empty_walk_listings_as_recorded_steps() {
+    let fixture = Fixture::new().await;
+    run_backend(
+        &fixture,
+        r#"
+        import { mkdir, writeText, summary, isEmpty } from "submilli:fs";
+        function main(): void {
+            mkdir("/empty", false);
+            mkdir("/data", false);
+            writeText("/data/a.txt", "abc");
+            assert(isEmpty("/empty"));
+            assert(!isEmpty("/data"));
+            assert(summary("/empty") === "/empty: empty directory");
+            const text = summary("/data");
+            assert(text.startsWith("/data: directory, 1 entry: 1 file (3 B)\n  a.txt  (file, 3 B"), text);
+        }
+    "#,
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn listing_open_admits_memory_before_enumeration_or_replay() {
     let fixture = Fixture::new().await;
     std::fs::write(fixture.filesystem.vfs().root().join("file"), b"x").unwrap();

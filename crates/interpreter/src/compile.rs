@@ -10,6 +10,7 @@ use crate::compile_capabilities;
 use crate::compiler_error::{CompileError, CompilerFailure, CompilerStage};
 use crate::runtime::prelude;
 use crate::stdlib::Stdlib;
+use crate::typechecker::infer::{TestModule, TestModules};
 use crate::typechecker::rules::check_script;
 use crate::typed_ast::TypedAst;
 use crate::{
@@ -180,7 +181,7 @@ fn front_end(
     stdlib_defs: &[PackageDeclaration],
     packages: &[&PackageDeclaration],
 ) -> Result<(TypedAst, Vec<Diagnostic>, PhaseTimings), CompileError> {
-    front_end_with_transitive(None, source, parsed, stdlib_defs, packages, &[])
+    front_end_with_transitive(None, source, parsed, stdlib_defs, packages, &[], None)
 }
 
 fn front_end_with_transitive(
@@ -190,6 +191,7 @@ fn front_end_with_transitive(
     stdlib_defs: &[PackageDeclaration],
     packages: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
+    test_modules: Option<TestModules<'_>>,
 ) -> Result<(TypedAst, Vec<Diagnostic>, PhaseTimings), CompileError> {
     if source != parsed.source {
         return Err(CompilerFailure::Internal {
@@ -217,6 +219,7 @@ fn front_end_with_transitive(
         &parsed.ast,
         &infer_refs,
         transitive,
+        test_modules,
     )
     .map_err(|mut error| {
         error.diagnostics.splice(0..0, diags.clone());
@@ -246,6 +249,33 @@ pub struct CompiledPackage {
     pub required_capabilities: Vec<DerivedCapability>,
     pub authority_map: crate::AuthorityMap,
     pub warnings: Vec<Diagnostic>,
+    /// The non-entry modules the package's tests may import. `Some` only for
+    /// [`PackageSurface::WithTestModules`].
+    pub test_surface: Option<PackageTestSurface>,
+}
+
+/// What a compiled package's Wasm exports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PackageSurface {
+    /// The entry module's exports: what programs and other packages link against.
+    Public,
+    /// Also every function, global and class static that a non-entry module
+    /// exports, for the package's own tests under `submilli build test`. Never
+    /// publish such a build: Wasm compiled elsewhere could import an internal
+    /// helper and skip the checks the public functions run. A public build
+    /// still exports every class's constructor and methods, internal classes'
+    /// included, so keep secrets and checks out of internal classes. Internal
+    /// functions escape in this build, so their Wasm signatures can be wider
+    /// than the public build's.
+    WithTestModules,
+}
+
+/// The exports of a package's non-entry modules, by path under `src/`, which
+/// [`compile_package_test_checked`] binds a test's relative imports to. The
+/// declaration, capabilities, docs and authority map never include them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PackageTestSurface {
+    pub modules: BTreeMap<ModulePath, crate::InternalModuleExports>,
 }
 
 #[derive(Clone, Debug)]
@@ -457,7 +487,129 @@ pub fn compile_script_owned_by_checked(
         &stdlib_defs,
         &declarations,
         &[],
+        None,
     )
+}
+
+/// Compiles a test file of `owner`'s package, which runs under `submilli build test`.
+///
+/// It compiles as [`compile_script_owned_by_checked`] does, and may also import
+/// the package's non-entry modules by relative path (`../src/paths`). Those
+/// imports bind to the exports in `surface`, so the test must link against the
+/// [`PackageSurface::WithTestModules`] build that produced it. `importer` is the
+/// test file's path in the package directory without its extension
+/// (`tests/paths.test`).
+pub fn compile_package_test_checked(
+    owner: &PackageDeclaration,
+    surface: &PackageTestSurface,
+    importer: &ModulePath,
+    source: &str,
+    filename: &str,
+    file: FileId,
+    packages: &[&PackageDeclaration],
+) -> Result<CompiledScript, CompileError> {
+    let modules: BTreeMap<ModulePath, TestModule> = surface
+        .modules
+        .iter()
+        .map(|(path, exports)| (path.clone(), test_module(owner, exports)))
+        .collect();
+    crate::typechecker::infer::check_declaration_types(
+        modules.values().map(|module| &module.declaration),
+    )?;
+    let codegen_owner = test_codegen_owner(owner, surface);
+    let mut declarations = packages.to_vec();
+    if !declarations
+        .iter()
+        .any(|declaration| declaration.package_name == owner.package_name)
+    {
+        declarations.push(owner);
+    }
+    let parsed = parse_script(source, file);
+    let stdlib_defs = runtime::stdlib_package_declarations();
+    compile_parsed_script_owned_by(
+        Some(&owner.package_name),
+        source,
+        filename,
+        &parsed,
+        &stdlib_defs,
+        &declarations,
+        &[],
+        Some(TestBuild {
+            modules: TestModules {
+                importer,
+                owner: &owner.package_name,
+                modules: &modules,
+            },
+            codegen_owner: &codegen_owner,
+        }),
+    )
+}
+
+/// What a test file compiles against besides its declared packages.
+#[derive(Clone, Copy)]
+struct TestBuild<'a> {
+    modules: TestModules<'a>,
+    /// The owner's declaration with its internal exports added. It replaces the
+    /// owner in codegen only, which must import what the typechecker bound to
+    /// the package's modules; the typechecker keeps the public declaration, so
+    /// `from "<owner>"` still reaches only the entry module.
+    codegen_owner: &'a PackageDeclaration,
+}
+
+/// A module's exports as a declaration named after its package, so a test
+/// binds them as it binds a package's.
+fn test_module(owner: &PackageDeclaration, exports: &crate::InternalModuleExports) -> TestModule {
+    let mut declaration = PackageDeclaration::with_package(owner.package_name.clone());
+    declaration.values = exports.values.clone();
+    declaration.types = exports.types.clone();
+    declaration.refresh_shapes();
+    TestModule {
+        declaration,
+        unexported: exports.unexported.clone(),
+    }
+}
+
+/// `owner` plus the internal values and classes in `surface`, keyed by their
+/// mangled names, which no source identifier can spell. A class joins `types`
+/// so its statics are imported as a public class's are; its layout stays in
+/// `runtime_types`.
+fn test_codegen_owner(
+    owner: &PackageDeclaration,
+    surface: &PackageTestSurface,
+) -> PackageDeclaration {
+    let mut declaration = owner.clone();
+    let public_values: BTreeSet<&crate::MangledName> = owner
+        .values
+        .values()
+        .map(|value| &value.mangled_name)
+        .collect();
+    let public_types: BTreeSet<&crate::MangledName> = owner
+        .types
+        .values()
+        .map(|symbol| &symbol.mangled_name)
+        .collect();
+    for exports in surface.modules.values() {
+        for value in exports.values.values() {
+            if !public_values.contains(&value.mangled_name) {
+                declaration
+                    .values
+                    .entry(value.mangled_name.to_string())
+                    .or_insert_with(|| value.clone());
+            }
+        }
+        for symbol in exports.types.values() {
+            if matches!(symbol.kind, crate::TypeKind::Class { .. })
+                && !public_types.contains(&symbol.mangled_name)
+            {
+                declaration
+                    .types
+                    .entry(symbol.mangled_name.to_string())
+                    .or_insert_with(|| symbol.clone());
+            }
+        }
+    }
+    declaration.refresh_shapes();
+    declaration
 }
 
 pub fn compile_parsed_script_timed_checked(
@@ -499,9 +651,11 @@ pub fn compile_parsed_script_with_transitive_checked(
         stdlib_defs,
         &declarations,
         transitive,
+        None,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_parsed_script_owned_by(
     owning_package: Option<&str>,
     source: &str,
@@ -510,6 +664,7 @@ fn compile_parsed_script_owned_by(
     stdlib_defs: &[PackageDeclaration],
     external_declarations: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
+    test: Option<TestBuild<'_>>,
 ) -> Result<CompiledScript, CompileError> {
     compile_parsed_script(
         owning_package,
@@ -519,10 +674,12 @@ fn compile_parsed_script_owned_by(
         stdlib_defs,
         external_declarations,
         transitive,
+        test,
     )
     .map_err(|error| error.with_limit_span_cut(|file| (file == parsed.file).then_some(source)))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_parsed_script(
     owning_package: Option<&str>,
     source: &str,
@@ -531,6 +688,7 @@ fn compile_parsed_script(
     stdlib_defs: &[PackageDeclaration],
     external_declarations: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
+    test: Option<TestBuild<'_>>,
 ) -> Result<CompiledScript, CompileError> {
     let (mut ta, diags, mut timings) = front_end_with_transitive(
         owning_package,
@@ -539,6 +697,7 @@ fn compile_parsed_script(
         stdlib_defs,
         external_declarations,
         transitive,
+        test.map(|test| test.modules),
     )?;
     if has_errors(&diags) {
         return Err(diags.into());
@@ -568,7 +727,12 @@ fn compile_parsed_script(
     for defs in stdlib_defs {
         dependencies.push(defs);
     }
-    dependencies.extend_from_slice(external_declarations);
+    dependencies.extend(external_declarations.iter().map(|declaration| match test {
+        Some(test) if test.codegen_owner.package_name == declaration.package_name => {
+            test.codegen_owner
+        }
+        _ => *declaration,
+    }));
     dependencies.extend_from_slice(transitive);
 
     let codegen_start = Instant::now();
@@ -653,6 +817,7 @@ pub fn compile_package_with_transitive_checked_for(
         dependencies,
         transitive,
         &BTreeMap::new(),
+        PackageSurface::Public,
     )
 }
 
@@ -666,6 +831,7 @@ pub fn compile_package_configured(
     dependencies: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
     config: &BTreeMap<String, String>,
+    surface: PackageSurface,
 ) -> Result<CompiledPackage, CompileError> {
     if !modules
         .iter()
@@ -684,6 +850,7 @@ pub fn compile_package_configured(
         dependencies,
         transitive,
         config,
+        surface,
     )
     .map_err(|error| {
         error.with_limit_span_cut(|file| sources.get(file).map(crate::SourceFile::text))
@@ -700,6 +867,7 @@ fn compile_package_sources(
     dependencies: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
     config: &BTreeMap<String, String>,
+    surface: PackageSurface,
 ) -> Result<CompiledPackage, CompileError> {
     // Public declarations may be constructed directly. Validate recursive
     // metadata before cloning them into the inference registries.
@@ -761,6 +929,11 @@ fn compile_package_sources(
     if has_errors(&diagnostics) {
         return Err(diagnostics.into());
     }
+    let internal_modules = std::mem::take(&mut ta.internal_modules);
+    let test_surface = match surface {
+        PackageSurface::Public => None,
+        PackageSurface::WithTestModules => Some(own_test_surface(&ta, internal_modules)),
+    };
     let (required_capabilities, capability_warnings) =
         compile_capabilities::derive_package_requirements(
             &declaration,
@@ -804,6 +977,9 @@ fn compile_package_sources(
         diagnostics: diagnostics.clone(),
         fatal: Some(fatal),
     })?;
+    if let Some(surface) = &test_surface {
+        ta.test_exports = test_exports(surface, &ta.exports);
+    }
 
     let mut codegen_deps: Vec<&PackageDeclaration> = prelude_defs.iter().collect();
     codegen_deps.extend(host_defs.iter());
@@ -827,7 +1003,83 @@ fn compile_package_sources(
         required_capabilities,
         authority_map,
         warnings: warnings_only(diagnostics),
+        test_surface,
     })
+}
+
+/// The modules' exports minus values and classes another package declares,
+/// which a module can re-export but this package's Wasm cannot export.
+fn own_test_surface(
+    ta: &TypedAst,
+    modules: BTreeMap<ModulePath, crate::InternalModuleExports>,
+) -> PackageTestSurface {
+    let own_values: BTreeSet<&crate::MangledName> = ta
+        .functions
+        .iter()
+        .map(|function| &function.mangled_name)
+        .chain(ta.globals.iter().map(|global| &global.mangled_name))
+        .collect();
+    let own_classes: BTreeSet<&crate::MangledName> = ta
+        .types
+        .iter()
+        .filter_map(|declaration| match declaration {
+            crate::TypedTypeDecl::Class(class) => Some(&class.mangled_name),
+            _ => None,
+        })
+        .collect();
+    let modules = modules
+        .into_iter()
+        .map(|(path, mut exports)| {
+            exports
+                .values
+                .retain(|_, value| own_values.contains(&value.mangled_name));
+            exports.types.retain(|_, symbol| {
+                !matches!(symbol.kind, crate::TypeKind::Class { .. })
+                    || own_classes.contains(&symbol.mangled_name)
+            });
+            (path, exports)
+        })
+        .collect();
+    PackageTestSurface { modules }
+}
+
+/// The Wasm exports that let a test call into `surface`: each value under its
+/// mangled name, and the public statics of each class, each once and none
+/// already among the package's `public` exports. Two modules can export one
+/// declaration, and a re-exported one is public under the same mangled name.
+fn test_exports(
+    surface: &PackageTestSurface,
+    public: &[crate::ExportEntry],
+) -> Vec<crate::ExportEntry> {
+    let mut seen: BTreeSet<crate::MangledName> = public
+        .iter()
+        .map(|entry| entry.public_name.clone())
+        .collect();
+    let mut exports = Vec::new();
+    for module in surface.modules.values() {
+        for value in module.values.values() {
+            exports.push(crate::ExportEntry {
+                public_name: value.mangled_name.clone(),
+                target: value.mangled_name.clone(),
+                kind: match value.kind {
+                    crate::ValueKind::Function { .. } => crate::ExportKind::Function,
+                    crate::ValueKind::Let { .. } | crate::ValueKind::Const { .. } => {
+                        crate::ExportKind::Global
+                    }
+                },
+                span: value.declaration_span,
+            });
+        }
+        for symbol in module.types.values() {
+            exports.extend(crate::typechecker::infer::static_export_entries(
+                &symbol.kind,
+                &symbol.mangled_name,
+                symbol.declaration_span,
+            ));
+        }
+    }
+    exports.retain(|entry| seen.insert(entry.public_name.clone()));
+    exports
 }
 
 fn parse_config_module(
@@ -908,6 +1160,20 @@ pub fn compile_script_owned_by(
     mcps: &[&PackageDeclaration],
 ) -> Result<CompiledScript, Vec<Diagnostic>> {
     compile_script_owned_by_checked(owning_package, source, filename, file, packages, mcps)
+        .map_err(|error| error.into_diagnostics(file))
+}
+
+/// Compatibility adapter returning source and fatal failures as diagnostics.
+pub fn compile_package_test(
+    owner: &PackageDeclaration,
+    surface: &PackageTestSurface,
+    importer: &ModulePath,
+    source: &str,
+    filename: &str,
+    file: FileId,
+    packages: &[&PackageDeclaration],
+) -> Result<CompiledScript, Vec<Diagnostic>> {
+    compile_package_test_checked(owner, surface, importer, source, filename, file, packages)
         .map_err(|error| error.into_diagnostics(file))
 }
 

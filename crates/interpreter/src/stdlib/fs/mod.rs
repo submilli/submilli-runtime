@@ -20,6 +20,7 @@ pub mod declaration;
 mod effects;
 pub mod handles;
 mod install;
+mod summary;
 
 use crate::runtime::filesystem::FilesystemError as PortError;
 
@@ -407,22 +408,50 @@ async fn append_text(
 
 /// `stat(path)`: a `$StatBacking`, or `undefined` when the path does not exist.
 async fn stat_entry(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::Result<Val> {
+    let observation = stat_path(caller, path, false).await?;
+    let Some(stat) = &observation else {
+        return crate::runtime::prelude::undefined::value(caller);
+    };
+    let kind = write_submilli_string_struct(caller, &stat.kind)?.to_anyref();
+    let ty = stat_backing_struct(caller.engine())?;
+    abi::new_backing(
+        caller,
+        ty,
+        &[
+            Val::AnyRef(Some(kind)),
+            Val::F64(stat.size.to_bits()),
+            Val::F64(stat.modified_ms.to_bits()),
+        ],
+    )
+}
+
+/// The recorded metadata of `path`, `None` when it does not exist. `follow`
+/// resolves a symlink to what it points at, as `list` does; otherwise the link
+/// itself is described, as `stat` does.
+async fn stat_path(
+    caller: &mut Caller<'_, StoreData>,
+    path: &str,
+    follow: bool,
+) -> wasmtime::Result<Option<effects::FileStat>> {
     // `stat` is declared `Stat | undefined` so a program can probe for absence. Resolution now
     // opens the parent, so a missing *ancestor* fails here rather than at the metadata call
     // below — and answering that with a trap would break the contract every caller branches
     // on. Escapes still trap: unreachable-because-outside is not the same as absent.
-    let observation = runtime_effects::execute(
+    // The two reads are recorded under different names, so a replay can never
+    // answer one with the other.
+    let operation = if follow { "fs.stat.follow" } else { "fs.stat" };
+    runtime_effects::execute(
         caller,
-        "fs.stat",
+        operation,
         path.to_owned(),
-        |caller, effect_id, path| {
+        move |caller, effect_id, path| {
             Box::pin(async move {
                 charge_path_work(caller, &[&path])?;
                 let work = begin_work(caller)?;
                 let meta = match caller
                     .data()
                     .filesystem
-                    .metadata(&effect_id, Some(work.clone()), &path, false)
+                    .metadata(&effect_id, Some(work.clone()), &path, follow)
                     .await
                 {
                     Ok(meta) => meta,
@@ -449,21 +478,7 @@ async fn stat_entry(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime:
             })
         },
     )
-    .await?;
-    let Some(stat) = &observation else {
-        return crate::runtime::prelude::undefined::value(caller);
-    };
-    let kind = write_submilli_string_struct(caller, &stat.kind)?.to_anyref();
-    let ty = stat_backing_struct(caller.engine())?;
-    abi::new_backing(
-        caller,
-        ty,
-        &[
-            Val::AnyRef(Some(kind)),
-            Val::F64(stat.size.to_bits()),
-            Val::F64(stat.modified_ms.to_bits()),
-        ],
-    )
+    .await
 }
 
 /// `peek(path)`: sniff the first ~256 bytes into a `$PeekBacking`.
@@ -795,10 +810,38 @@ async fn list_next(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmti
     let Some(handle) = env_handle(caller, abi_arg(params, 0)?)? else {
         return iter_done(caller);
     };
+    let outcome = next_entry(caller, handle).await?;
+    let Some(entry) = &outcome else {
+        return iter_done(caller);
+    };
+    let size = entry.bytes as f64;
+    let kind = write_submilli_string_struct(caller, entry.kind)?.to_anyref();
+    let name = write_submilli_string_struct(caller, &entry.name)?.to_anyref();
+    let path = write_submilli_string_struct(caller, &entry.path)?.to_anyref();
+    let ty = dir_entry_backing_struct(caller.engine())?;
+    let entry = abi::new_backing(
+        caller,
+        ty,
+        &[
+            Val::AnyRef(Some(kind)),
+            Val::AnyRef(Some(name)),
+            Val::AnyRef(Some(path)),
+            Val::F64(size.to_bits()),
+            Val::I64(0),
+        ],
+    )?;
+    iter_yield(caller, entry)
+}
+
+/// The next entry of the directory `handle` holds, as one recorded effect.
+async fn next_entry(
+    caller: &mut Caller<'_, StoreData>,
+    handle: Rooted<ExternRef>,
+) -> wasmtime::Result<Option<crate::runtime::filesystem::DirectoryEntry>> {
     let descriptor = handle_payload::<Option<ChargedDirIter>>(caller, &handle, "fs.list.next")?
         .as_ref()
         .map(ChargedDirIter::id);
-    let outcome = runtime_effects::execute(
+    runtime_effects::execute(
         caller,
         "fs.list.next",
         descriptor,
@@ -829,27 +872,7 @@ async fn list_next(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmti
             })
         },
     )
-    .await?;
-    let Some(entry) = &outcome else {
-        return iter_done(caller);
-    };
-    let size = entry.bytes as f64;
-    let kind = write_submilli_string_struct(caller, entry.kind)?.to_anyref();
-    let name = write_submilli_string_struct(caller, &entry.name)?.to_anyref();
-    let path = write_submilli_string_struct(caller, &entry.path)?.to_anyref();
-    let ty = dir_entry_backing_struct(caller.engine())?;
-    let entry = abi::new_backing(
-        caller,
-        ty,
-        &[
-            Val::AnyRef(Some(kind)),
-            Val::AnyRef(Some(name)),
-            Val::AnyRef(Some(path)),
-            Val::F64(size.to_bits()),
-            Val::I64(0),
-        ],
-    )?;
-    iter_yield(caller, entry)
+    .await
 }
 
 /// Eager close: drops the OS handle and refunds bytes now. A reclaimed
@@ -860,43 +883,52 @@ async fn close_handle_of<T: handles::Closable + 'static>(
     params: &[Val],
 ) -> wasmtime::Result<Val> {
     if let Some(handle) = env_handle(caller, abi_arg(params, 0)?)? {
-        let descriptor = handle_payload::<Option<T>>(caller, &handle, "fs.close")?
-            .as_ref()
-            .map(handles::Closable::id);
-        let live_handle = handle;
-        runtime_effects::execute(
-            caller,
-            "fs.iterator.close",
-            descriptor,
-            move |caller, effect_id, _| {
-                let handle = live_handle;
-                Box::pin(async move {
-                    let work = begin_work(caller)?;
-                    if let Some(mut payload) =
-                        handle_payload::<Option<T>>(caller, &handle, "fs.close")?.take()
-                    {
-                        let result = payload
-                            .close(
-                                caller.data().filesystem.as_ref(),
-                                &effect_id,
-                                Some(work.clone()),
-                                &caller.data().tenant_limits,
-                            )
-                            .await;
-                        *handle_payload::<Option<T>>(caller, &handle, "fs.close")? = Some(payload);
-                        work.settle(&mut *caller)?;
-                        result.map_err(|error| backend_error("fs.close", "", error))?;
-                    }
-                    Ok(())
-                })
-            },
-        )
-        .await?;
-        if let Some(payload) = handle_payload::<Option<T>>(caller, &handle, "fs.close")?.as_mut() {
-            payload.release_buffer();
-        }
+        close_handle::<T>(caller, handle).await?;
     }
     crate::runtime::prelude::undefined::value(caller)
+}
+
+/// Close the payload `handle` holds, as one recorded effect, and refund its buffer.
+async fn close_handle<T: handles::Closable + 'static>(
+    caller: &mut Caller<'_, StoreData>,
+    handle: Rooted<ExternRef>,
+) -> wasmtime::Result<()> {
+    let descriptor = handle_payload::<Option<T>>(caller, &handle, "fs.close")?
+        .as_ref()
+        .map(handles::Closable::id);
+    let live_handle = handle;
+    runtime_effects::execute(
+        caller,
+        "fs.iterator.close",
+        descriptor,
+        move |caller, effect_id, _| {
+            let handle = live_handle;
+            Box::pin(async move {
+                let work = begin_work(caller)?;
+                if let Some(mut payload) =
+                    handle_payload::<Option<T>>(caller, &handle, "fs.close")?.take()
+                {
+                    let result = payload
+                        .close(
+                            caller.data().filesystem.as_ref(),
+                            &effect_id,
+                            Some(work.clone()),
+                            &caller.data().tenant_limits,
+                        )
+                        .await;
+                    *handle_payload::<Option<T>>(caller, &handle, "fs.close")? = Some(payload);
+                    work.settle(&mut *caller)?;
+                    result.map_err(|error| backend_error("fs.close", "", error))?;
+                }
+                Ok(())
+            })
+        },
+    )
+    .await?;
+    if let Some(payload) = handle_payload::<Option<T>>(caller, &handle, "fs.close")?.as_mut() {
+        payload.release_buffer();
+    }
+    Ok(())
 }
 
 /// Borrow the [`BackendFileWriter`] out of a `$FileWriterBacking` receiver.
@@ -1585,6 +1617,167 @@ function main(): void {
         run_with(r#"import { writeText, readText } from "submilli:fs";
             function main(): void { writeText("/healthy", "ok"); assert(readText("/healthy") === "ok"); }"#,
             StoreData::with_vfs("test-run".into(), vfs)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn summary_and_is_empty_describe_what_is_there() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("data/nested")).unwrap();
+        std::fs::create_dir(root.path().join("empty")).unwrap();
+        std::fs::write(root.path().join("data/b.txt"), vec![b'x'; 2048]).unwrap();
+        std::fs::write(root.path().join("data/a.txt"), "").unwrap();
+        let vfs = Vfs::external(root.path().to_path_buf()).unwrap();
+        let output = run_with(
+            r#"import { summary, isEmpty } from "submilli:fs";
+            function main(): string {
+                assert(isEmpty("/empty"), "empty directory");
+                assert(!isEmpty("/data"), "directory with entries");
+                assert(isEmpty("/data/a.txt"), "zero-byte file");
+                assert(!isEmpty("/data/b.txt"), "file with bytes");
+                return [summary("/data"), summary("/empty"), summary("/missing"), summary("/data/b.txt")].join("\n");
+            }"#,
+            StoreData::with_vfs("test-run".into(), vfs),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        // Modification times vary per run; every entry must carry one.
+        let lines: Vec<String> = output
+            .lines()
+            .map(|line| match line.find(", modified ") {
+                Some(at) => {
+                    let end = line[at..].find(')').map_or(line.len(), |end| at + end);
+                    format!("{}{}", &line[..at], &line[end..])
+                }
+                None => line.to_string(),
+            })
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "/data: directory, 3 entries: 2 files (2.0 KB), 1 directory",
+                "  nested/  (directory)",
+                "  a.txt  (file, 0 B)",
+                "  b.txt  (file, 2.0 KB)",
+                "/empty: empty directory",
+                "/missing: does not exist",
+                "/data/b.txt: file, 2.0 KB",
+            ],
+            "{output}"
+        );
+        assert_eq!(output.matches(", modified ").count(), 4, "{output}");
+    }
+
+    #[tokio::test]
+    async fn summary_and_is_empty_require_only_fs_list() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("data")).unwrap();
+        std::fs::write(root.path().join("data/a.txt"), "abc").unwrap();
+        let recording = Arc::new(RecordingCheck {
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        let mut data = StoreData::with_vfs(
+            "test-run".into(),
+            Vfs::external(root.path().to_path_buf()).unwrap(),
+        );
+        data.security_check = recording.clone();
+        run_with(
+            r#"import { summary, isEmpty } from "submilli:fs";
+            function main(): void {
+                summary("/data"); summary("/data/a.txt"); summary("/missing");
+                isEmpty("/data"); isEmpty("/data/a.txt");
+            }"#,
+            data,
+        )
+        .await
+        .unwrap();
+        let seen: Vec<String> = recording
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, capability)| capability.clone())
+            .collect();
+        assert_eq!(seen, ["fs.list"; 5], "one check per call, and only fs.list");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn summary_and_is_empty_follow_a_symlink_like_list() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("data")).unwrap();
+        std::fs::create_dir(root.path().join("empty")).unwrap();
+        std::fs::write(root.path().join("data/a.txt"), "abc").unwrap();
+        std::os::unix::fs::symlink("data", root.path().join("link")).unwrap();
+        std::os::unix::fs::symlink("empty", root.path().join("empty-link")).unwrap();
+        let vfs = Vfs::external(root.path().to_path_buf()).unwrap();
+        let output = run_with(
+            r#"import { summary, isEmpty } from "submilli:fs";
+            function main(): string {
+                assert(!isEmpty("/link"), "a link to a directory with entries");
+                assert(isEmpty("/empty-link"), "a link to an empty directory");
+                return summary("/link") + "\n" + summary("/");
+            }"#,
+            StoreData::with_vfs("test-run".into(), vfs),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            output.starts_with("/link: directory, 1 entry: 1 file (3 B)\n  a.txt  (file, 3 B"),
+            "{output}"
+        );
+        // Inside a listing, a link is described as the link it is, as `list` does.
+        assert!(output.contains("\n  link  (symlink"), "{output}");
+    }
+
+    #[tokio::test]
+    async fn summary_shows_the_first_hundred_entries_and_counts_the_rest() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("we \"quote\"");
+        std::fs::create_dir(&dir).unwrap();
+        for index in 0..105 {
+            std::fs::write(dir.join(format!("f{index:03}")), "").unwrap();
+        }
+        std::fs::create_dir(dir.join("zz")).unwrap();
+        let vfs = Vfs::external(root.path().to_path_buf()).unwrap();
+        let output = run_with(
+            r#"import { summary } from "submilli:fs";
+            function main(): string { return summary("/we \"quote\""); }"#,
+            StoreData::with_vfs("test-run".into(), vfs),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines.len(), 102, "{output}");
+        assert!(
+            lines[1].starts_with("  zz/  (directory"),
+            "directories come first: {output}"
+        );
+        assert!(lines[2].starts_with("  f000  (file"), "{output}");
+        assert!(lines[100].starts_with("  f098  (file"), "{output}");
+        assert_eq!(
+            lines[101],
+            "  … 6 more not shown; iterate `list(\"/we \\\"quote\\\"\", false)` for every entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn is_empty_throws_on_a_missing_path() {
+        let root = tempfile::tempdir().unwrap();
+        let vfs = Vfs::external(root.path().to_path_buf()).unwrap();
+        let error = run_with(
+            r#"import { isEmpty } from "submilli:fs";
+            function main(): boolean { return isEmpty("/missing"); }"#,
+            StoreData::with_vfs("test-run".into(), vfs),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("fs.isEmpty /missing: no such file or directory"),
+            "{error:#}"
+        );
     }
 
     #[tokio::test]

@@ -486,6 +486,62 @@ mod tests {
     }
 
     #[test]
+    fn types_reexported_from_sibling_modules_are_reached_by_the_signatures_naming_them() {
+        let modules = [
+            crate::PackageSourceModule {
+                path: crate::ModulePath::from("lib"),
+                source: r#"
+                    import type { SearchResult, Draft } from "./model";
+                    export { SearchResult, Draft } from "./model";
+                    /** @capability acme.test/read */
+                    export function search(q: string): SearchResult[] { return []; }
+                    /** @capability acme.test/write */
+                    export function save(draft: Draft): void {}
+                "#,
+            },
+            crate::PackageSourceModule {
+                path: crate::ModulePath::from("model"),
+                source: r#"
+                    export interface SearchResult { title: string; }
+                    export interface Draft { title: string; }
+                "#,
+            },
+        ];
+        let defs =
+            crate::compile_package("@acme/pkg", crate::ModulePath::from("lib"), &modules, &[])
+                .unwrap_or_else(|diagnostics| panic!("compile failed: {diagnostics:#?}"))
+                .declaration;
+        let Some(ValueKind::Function { ret, .. }) = defs.values.get("search").map(|v| &v.kind)
+        else {
+            panic!("search is a function");
+        };
+        let crate::Type::Array(element) = ret else {
+            panic!("search returns an array: {ret:?}");
+        };
+        let crate::Type::InterfaceRef { mangled, .. } = element.as_ref() else {
+            panic!("search returns interfaces: {element:?}");
+        };
+        assert_eq!(&defs.types["SearchResult"].mangled_name, mangled);
+
+        let projection = project_declaration(
+            &defs,
+            &Fixed {
+                denied: &["acme.test/write"],
+                noted: &[],
+            },
+        );
+        assert!(projection.declaration.types.contains_key("SearchResult"));
+        assert!(!projection.declaration.types.contains_key("Draft"));
+
+        let rendered = crate::packages::render_packages_d_ts(&[&defs], &[]);
+        assert!(rendered.contains("interface SearchResult {"), "{rendered}");
+        assert!(
+            rendered.contains("search(q: string): SearchResult[]"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn notes_follow_the_summary() {
         let defs = declaration(SOURCE);
         let projection = project_declaration(

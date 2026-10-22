@@ -1,4 +1,4 @@
 types: 1 of 11 tsc entries compared, 0 differ
 
 errors:
-line 4: ours: unresolved identifier `Promise` (tsc accepts)
+line 4: ours: `Promise` is not supported (tsc accepts)

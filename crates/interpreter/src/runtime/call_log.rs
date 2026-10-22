@@ -647,6 +647,10 @@ mod tests {
         ),
         ("src/stdlib/fs/mod.rs", Some(crate::stdlib::fs::MODULE_NAME)),
         (
+            "src/stdlib/fs/summary.rs",
+            Some(crate::stdlib::fs::MODULE_NAME),
+        ),
+        (
             "src/stdlib/git/mod.rs",
             Some(crate::stdlib::git::MODULE_NAME),
         ),

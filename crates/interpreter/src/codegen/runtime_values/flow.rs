@@ -61,9 +61,12 @@ fn seed_dependencies(dependencies: &[&crate::PackageDeclaration], flow: &mut Flo
 fn escaping_functions(
     ast: &TypedAst,
 ) -> Result<HashSet<MangledName>, crate::compiler_error::CompilerFailure> {
+    // A test may call a function its package's own code never passes such a
+    // value, so test exports escape too.
     let mut escaping_functions: HashSet<_> = ast
         .exports
         .iter()
+        .chain(&ast.test_exports)
         .map(|export| export.target.clone())
         .collect();
     for index in ast.expr_ids().map_err(crate::codegen::arena_failure)? {

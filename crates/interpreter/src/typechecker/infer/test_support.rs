@@ -215,6 +215,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         module: crate::ModulePath::from(""),
         root_module: crate::ModulePath::from(""),
         package_inference: false,
+        test_modules: None,
         current_module_symbols: super::ModuleSymbols::default(),
         current_module_exports: Vec::new(),
         current_export_seen: BTreeMap::new(),
