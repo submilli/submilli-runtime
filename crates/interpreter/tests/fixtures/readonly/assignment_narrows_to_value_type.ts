@@ -128,6 +128,10 @@ interface HasArea {
   area: number;
 }
 
+class Holder<T> {
+  constructor(public readonly v: T) {}
+}
+
 interface HasX {
   x: number;
   readonly y: number;
@@ -138,10 +142,9 @@ function readonlyDeclarations(): void {
   p = new Moving();
   assert(p.len() + p.x === 2, "a subclass keeps the readonly its ancestor declares");
 
-  let m: Map<string, readonly number[]> | null = null;
-  m = new Map<string, number[]>();
-  m.set("k", [1, 2]);
-  assert(m.get("k")!.length === 2, "a generic instance narrows to the declared arguments");
+  let h: Holder<readonly number[]> | null = null;
+  h = new Holder<number[]>([1, 2]);
+  assert(h.v.length === 2, "a generic instance narrows to the declared arguments");
 
   let t: Tree | null = null;
   t = { val: 3, kids: [] };

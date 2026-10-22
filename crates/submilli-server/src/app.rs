@@ -32,7 +32,7 @@ use submilli_shared::llm::{
 };
 use submilli_shared::mcp_auth::{McpGrantStore, SecretStoreGrants};
 use submilli_shared::secret_store::SecretStore;
-use tokio::sync::{Mutex as AsyncMutex, Notify, RwLock as AsyncRwLock};
+use tokio::sync::{Mutex as AsyncMutex, Notify};
 use wasmtime::{Engine, Linker, Module};
 
 use crate::ServerConfig;
@@ -171,34 +171,6 @@ struct AppStateInner {
     embedding_dispatch_factory: EmbeddingDispatchFactory,
     #[cfg(test)]
     mcp_setup: McpSetup,
-    run_recorder: Option<Arc<dyn crate::record::RunRecorderFactory>>,
-    /// Session events for a recorder that wants them.
-    event_hub: Option<Arc<crate::record::events::EventHub>>,
-    /// Cancellers of the recorded runs in flight, by execution id. Poison means a panic
-    /// interrupted a registration; AGENTS.md permits the poisoned-lock panic.
-    running: Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>,
-    run_telemetry: crate::config::RunTelemetry,
-    pre_execute: Option<Arc<dyn crate::config::PreExecuteHook>>,
-    /// The opaque version tag each registered blueprint carries, by name: set by
-    /// [`AppState::apply_local_blueprint`], cleared by every other registration.
-    /// Every write to the blueprint store holds this lock for writing across the
-    /// write, and a run's lookup holds it for reading across its read, so a run
-    /// sees a blueprint and its tag from one registration.
-    blueprint_tags: AsyncRwLock<HashMap<String, String>>,
-}
-
-/// Removes a run's canceller once the run is over.
-pub(crate) struct RunRegistration {
-    state: AppState,
-    execution_id: String,
-}
-
-impl Drop for RunRegistration {
-    fn drop(&mut self) {
-        if let Ok(mut running) = self.state.inner.running.lock() {
-            running.remove(&self.execution_id);
-        }
-    }
 }
 
 impl AppState {
@@ -485,16 +457,6 @@ impl AppState {
                 embedding_dispatch_factory,
                 #[cfg(test)]
                 mcp_setup: Arc::new(|| Ok(())),
-                event_hub: config
-                    .run_recorder
-                    .as_ref()
-                    .filter(|factory| factory.wants_events())
-                    .map(|factory| crate::record::events::EventHub::new(factory.clone())),
-                run_recorder: config.run_recorder,
-                running: Mutex::new(HashMap::new()),
-                run_telemetry: config.run_telemetry,
-                pre_execute: config.pre_execute,
-                blueprint_tags: AsyncRwLock::new(HashMap::new()),
             }),
         };
         Ok(state)
@@ -628,67 +590,12 @@ impl AppState {
         &self.inner.audit
     }
 
-    pub(crate) fn pre_execute(&self) -> Option<&Arc<dyn crate::config::PreExecuteHook>> {
-        self.inner.pre_execute.as_ref()
-    }
-
-    pub(crate) fn run_recorder(&self) -> Option<&Arc<dyn crate::record::RunRecorderFactory>> {
-        self.inner.run_recorder.as_ref()
-    }
-
-    pub(crate) fn event_hub(&self) -> Option<&Arc<crate::record::events::EventHub>> {
-        self.inner.event_hub.as_ref()
-    }
-
-    /// Cancels a recorded run in flight, whoever sent it. The run ends with a
-    /// `cancelled` outcome once its workers have drained. `false` when no recorded run
-    /// with that id is running.
-    pub fn cancel_run(&self, execution_id: &str) -> bool {
-        // A run that may suspend is cancelled through its own entry.
-        if let Some(run) = self.session_manager().runs().get(execution_id) {
-            let unfinished = !matches!(run.current(), crate::runs::RunState::Finished(_));
-            run.cancel();
-            return unfinished;
-        }
-        let canceller = self
-            .inner
-            .running
-            .lock()
-            .expect("running-run registry lock poisoned")
-            .remove(execution_id);
-        canceller.is_some_and(|canceller| canceller.send(()).is_ok())
-    }
-
-    /// Registers a recorded run's canceller until the returned guard drops.
-    pub(crate) fn register_run(
-        &self,
-        execution_id: &str,
-    ) -> (RunRegistration, tokio::sync::oneshot::Receiver<()>) {
-        let (canceller, cancelled) = tokio::sync::oneshot::channel();
-        self.inner
-            .running
-            .lock()
-            .expect("running-run registry lock poisoned")
-            .insert(execution_id.to_owned(), canceller);
-        (
-            RunRegistration {
-                state: self.clone(),
-                execution_id: execution_id.to_owned(),
-            },
-            cancelled,
-        )
-    }
-
     pub fn database(&self) -> Option<Arc<crate::database::ServerDatabase>> {
         self.inner.database.clone()
     }
 
     pub(crate) fn auth(&self) -> Arc<AuthConfig> {
         Arc::clone(&self.inner.auth)
-    }
-
-    pub(crate) fn run_telemetry(&self) -> crate::config::RunTelemetry {
-        self.inner.run_telemetry
     }
 
     pub(crate) fn engine(&self) -> &Engine {
@@ -705,29 +612,6 @@ impl AppState {
 
     pub(crate) fn last_runs(&self) -> &Arc<crate::adapters::session::last_run::LastRuns> {
         self.inner.session_manager.last_runs()
-    }
-
-    /// The blueprint a run is decided under and its version tag, read together:
-    /// a concurrent registration lands wholly before or wholly after this lookup.
-    pub(crate) async fn blueprint_for_run(
-        &self,
-        name: &str,
-    ) -> std::result::Result<Option<BlueprintForRun>, crate::blueprint::StoreError> {
-        let tags = self.inner.blueprint_tags.read().await;
-        let found = self.blueprints().get(name).await?;
-        Ok(found.map(|blueprint| BlueprintForRun {
-            blueprint,
-            version_tag: tags.get(name).cloned(),
-        }))
-    }
-
-    /// Held across a write to the blueprint store, so no run reads the blueprint
-    /// and its tag from different registrations. A writer that registers without
-    /// a tag removes the name's entry.
-    pub(crate) async fn blueprint_tags_for_write(
-        &self,
-    ) -> tokio::sync::RwLockWriteGuard<'_, HashMap<String, String>> {
-        self.inner.blueprint_tags.write().await
     }
 
     pub(crate) fn blueprints(&self) -> &Arc<dyn BlueprintStore> {
@@ -1134,8 +1018,7 @@ impl AppState {
     }
 
     /// Drop the discovered `@mcp/<server>` catalog so the next execute rediscovers
-    /// it against the current `mcp:` block. Called on blueprint update and removal,
-    /// including [`Self::apply_local_blueprint`].
+    /// it against the current `mcp:` block. Called on blueprint update and removal.
     pub fn evict_mcp_catalog(&self, name: &str) {
         let mut catalogs = self
             .inner
@@ -1170,8 +1053,7 @@ impl AppState {
     }
 
     /// Drop the prepared package modules cached for blueprint `name`, so the next
-    /// run loads them from the package store again: after a blueprint change, or
-    /// once an embedder has rebuilt a package that blueprint uses.
+    /// run loads them from the package store again, after a blueprint change.
     pub fn evict_prepared_packages(&self, name: &str) {
         let mut cache = self
             .inner
@@ -1598,14 +1480,6 @@ fn cache_key_belongs_to_blueprint(key: &str, blueprint_name: &str) -> bool {
         || key.starts_with(&format!("pkg:{blueprint_name}:"))
 }
 
-/// A blueprint as a run reads it: the blueprint and its version tag, from one lookup.
-#[derive(Clone, Debug)]
-pub(crate) struct BlueprintForRun {
-    pub(crate) blueprint: Blueprint,
-    /// `None` for a blueprint registered without one; the run then records its hash.
-    pub(crate) version_tag: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     #[tokio::test]
@@ -1923,9 +1797,6 @@ mod mcp_setup_tests;
 
 #[cfg(test)]
 mod blueprint_mutation_tests;
-
-#[cfg(test)]
-mod local_apply_tests;
 
 struct AppFinalizerExecutor(std::sync::Weak<AppStateInner>);
 #[async_trait::async_trait]

@@ -14,10 +14,10 @@ use std::time::Instant;
 use interpreter::diagnostics::{self, Severity};
 use interpreter::runtime::limits::ExecutionUsage;
 use interpreter::runtime::{
-    AuthProxy, CursorKeys, DecisionLog, EmbeddingProvider, EmbeddingTokenBudget,
-    ExecutionTokenBudget, HttpClient, LinkedPackageModule, LlmProvider, McpTransport,
-    RuntimeConfig, SecretProvider, SecurityCheck, SessionKvStore, StoreData, ToolProvider, Vfs,
-    VfsInfo, install_package_modules_async, install_runtime_store_bound, install_tenant_limits,
+    AuthProxy, CursorKeys, EmbeddingProvider, EmbeddingTokenBudget, ExecutionTokenBudget,
+    HttpClient, LinkedPackageModule, LlmProvider, McpTransport, RuntimeConfig, SecretProvider,
+    SecurityCheck, SessionKvStore, StoreData, ToolProvider, Vfs, VfsInfo,
+    install_package_modules_async, install_runtime_store_bound, install_tenant_limits,
     is_memory_exhausted,
 };
 use interpreter::{
@@ -32,7 +32,6 @@ use crate::app::PreparedBlueprintPackages;
 use crate::compiler_thread;
 use crate::error::{DenialDetails, DiagnosticNote, DiagnosticPayload, ErrorKind, ExecuteError};
 use crate::mcp::McpCatalog;
-use crate::record::FinishedRun;
 
 // Internal entry points are exercised before transport/startup integration.
 #[allow(dead_code)]
@@ -128,13 +127,8 @@ pub struct HostServices {
     pub embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
     /// This execution's embedding budget, released on drop like `llm_budget`.
     pub embedding_budget: Option<Arc<EmbeddingTokenBudget>>,
-    /// The run's recorder, finished from the owner task; `None` records nothing.
-    pub(crate) recording: Option<crate::record::Recording>,
     /// Fires when someone other than the caller asks to cancel the run.
     pub(crate) cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
-    /// A test run's throwaway copies. The owner task holds them until the run is done, so
-    /// a caller that gives up on the run cannot delete files a worker still uses.
-    pub(crate) throwaway: Option<Arc<crate::record::Throwaway>>,
 }
 
 pub(crate) struct RunnerImports<'a> {
@@ -157,7 +151,6 @@ pub(crate) struct RunnerRuntime<'a> {
     pub engine: &'a Engine,
     pub base_linker: &'a Linker<StoreData>,
     pub config: &'a RuntimeConfig,
-    pub telemetry: crate::config::RunTelemetry,
 }
 
 /// Run `code` against a caller-provided VFS. Ownership of `vfs` lives outside:
@@ -181,19 +174,10 @@ pub(crate) async fn run(
     let engine = runtime.engine.clone();
     let linker = runtime.base_linker.clone();
     let config = runtime.config.clone();
-    let telemetry = runtime.telemetry;
     let packages = Arc::clone(imports.packages);
     let mcps = Arc::clone(imports.mcps);
     let tools = imports.tools.cloned();
     let (request, caller_gone) = tokio::sync::oneshot::channel();
-    // This clone stays outside the owner task, so a run whose task panics is still
-    // finished.
-    let recording = services.recording.clone();
-    if let Some(recording) = &recording {
-        recording.mark_dispatched();
-    }
-    // This one goes into the owner task, which finishes the run.
-    let owner_recording = recording.clone();
     // This task owns the store independently of the request. Dropping the
     // request signals cancellation; the owner drains workers before exiting.
     let owner = tokio::spawn(async move {
@@ -214,10 +198,8 @@ pub(crate) async fn run(
             });
             services.cancel_requested = Some(receiver);
         }
-        let throwaway = services.throwaway.take();
         let audit = services.audit.clone();
         let budget = services.llm_budget.clone();
-        let log = owner_recording.as_ref().map(crate::record::Recording::log);
         let embedding_budget = services.embedding_budget.clone();
         let mut outcome = run_inner(
             &owned_code,
@@ -229,7 +211,6 @@ pub(crate) async fn run(
                 engine: &engine,
                 base_linker: &linker,
                 config: &config,
-                telemetry,
             },
             (vfs, vfs_info),
             services,
@@ -239,7 +220,6 @@ pub(crate) async fn run(
                 tools: tools.as_ref(),
             },
             caller_gone,
-            log.clone(),
         )
         .await;
         if let Some(manager) = session_manager {
@@ -261,51 +241,25 @@ pub(crate) async fn run(
             );
             audit.finish(outcome.error.is_none());
         }
-        if let (Some(owner_recording), Some(log)) = (owner_recording, log) {
-            owner_recording.finish(FinishedRun {
-                dispatched: true,
-                error: outcome.error.clone(),
-                result: outcome.value.clone(),
-                console: outcome.console_raw.clone(),
-                usage: outcome.usage,
-                log: log.finish(),
-                mcp_catalog: Some(Arc::clone(&mcps)),
-                wall: owner_recording.started.elapsed(),
-            });
-        }
         log_execution(&blueprint, &session, started, &outcome);
-        // Dropped here, once the run is done; deleting the copies is kept off this worker.
-        drop(throwaway);
         drop(resource_use);
         outcome
     });
     let outcome = match owner.await {
         Ok(outcome) => outcome,
-        Err(error) => {
-            let outcome = internal_failure(&format!("execution task failed: {error}"));
-            if let (Some(recording), Some(error)) = (&recording, &outcome.error) {
-                // A no-op when the owner had already finished the run.
-                recording.lost(error, Arc::clone(imports.mcps));
-            }
-            outcome
-        }
+        Err(error) => internal_failure(&format!("execution task failed: {error}")),
     };
     drop(request);
     crate::metrics::execution(match &outcome.error {
         None => "success",
         Some(error) => error_kind_tag(error.kind),
     });
-    if let Some(error) = &outcome.error
-        && telemetry == crate::config::RunTelemetry::Report
-    {
+    if let Some(error) = &outcome.error {
         report_to_sentry(code, error);
     }
     outcome
 }
 
-// The per-run signals and the decision log are separate arguments on purpose: they are
-// not host services, and a grouping struct would only be built to be taken apart here.
-#[allow(clippy::too_many_arguments)]
 async fn run_inner(
     code: &str,
     mut parsed: ParsedExecute,
@@ -314,7 +268,6 @@ async fn run_inner(
     mut services: HostServices,
     imports: RunnerImports<'_>,
     mut caller_gone: tokio::sync::oneshot::Receiver<()>,
-    log: Option<Arc<DecisionLog>>,
 ) -> RunOutcome {
     let cancel_receiver = services.cancel_requested.take();
     let git = match services.git {
@@ -383,11 +336,6 @@ async fn run_inner(
     data.variables = services.variables;
     data.secret_provider = services.secret_provider;
     data.security_check = services.security_check;
-    // Outermost, so the host functions see the recorder; installed before packages run
-    // their top-level statements, so those decisions are recorded too.
-    if let Some(log) = &log {
-        data.security_check = log.wrap(data.security_check.clone());
-    }
     data.http_client = services.http_client;
     data.mcp_transport = Some(services.mcp_transport);
     data.tool_provider = services.tool_provider;
@@ -398,12 +346,9 @@ async fn run_inner(
     data.llm_budget = services.llm_budget;
     data.embedding_provider = services.embedding_provider;
     data.embedding_budget = services.embedding_budget;
-    if runtime.telemetry == crate::config::RunTelemetry::Report {
-        data.metrics = Arc::new(crate::metrics::SentryMetricsSink);
-    }
+    data.metrics = Arc::new(crate::metrics::SentryMetricsSink);
     data.console = Box::new(Sink {
         output: buf.clone(),
-        lines: log.clone().map(ConsoleLines::new),
     });
     data.install_type_info(compiled.type_info.clone());
 
@@ -910,24 +855,13 @@ fn captured_console(buf: &Mutex<Vec<u8>>) -> String {
 // poisoning is still subject to the no-panic policy.
 struct Sink {
     output: Arc<Mutex<Vec<u8>>>,
-    /// Reports each line as it is written, for a recorded run.
-    lines: Option<ConsoleLines>,
 }
 
 const MAX_CONSOLE_BYTES: usize = 1024 * 1024;
 
-/// The longest console line a session event carries; the run's console keeps the rest.
-const MAX_CONSOLE_LINE_BYTES: usize = 4 * 1024;
-/// The most console lines one run reports as session events; the run's console keeps the
-/// rest.
-const MAX_CONSOLE_LINES: usize = 1000;
-
 impl Write for Sink {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.append(buf)?;
-        if let Some(lines) = &mut self.lines {
-            lines.feed(buf);
-        }
         Ok(buf.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -959,61 +893,6 @@ impl Sink {
     }
 }
 
-/// Splits what the console accepted into lines and reports each complete one to the run's
-/// log, up to [`MAX_CONSOLE_LINES`]. `console.log` ends every line, so otherwise only
-/// output cut at the console's cap leaves a line unreported.
-struct ConsoleLines {
-    log: Arc<DecisionLog>,
-    /// The line so far, at most [`MAX_CONSOLE_LINE_BYTES`] of it.
-    pending: Vec<u8>,
-    truncated: bool,
-    reported: usize,
-}
-
-impl ConsoleLines {
-    fn new(log: Arc<DecisionLog>) -> Self {
-        Self {
-            log,
-            pending: Vec::new(),
-            truncated: false,
-            reported: 0,
-        }
-    }
-
-    fn feed(&mut self, mut bytes: &[u8]) {
-        while !bytes.is_empty() && self.reported < MAX_CONSOLE_LINES {
-            let (part, rest, ended) = match bytes.iter().position(|byte| *byte == b'\n') {
-                Some(end) => (&bytes[..end], &bytes[end + 1..], true),
-                None => (bytes, &[][..], false),
-            };
-            let room = MAX_CONSOLE_LINE_BYTES.saturating_sub(self.pending.len());
-            self.pending
-                .extend_from_slice(&part[..part.len().min(room)]);
-            self.truncated |= part.len() > room;
-            if ended {
-                self.report();
-            }
-            bytes = rest;
-        }
-    }
-
-    fn report(&mut self) {
-        // The cut may split a character: leave its start off rather than show it replaced.
-        if self.truncated
-            && let Err(error) = std::str::from_utf8(&self.pending)
-            && error.error_len().is_none()
-        {
-            self.pending.truncate(error.valid_up_to());
-        }
-        let line = String::from_utf8_lossy(&self.pending);
-        let line = line.strip_suffix('\r').unwrap_or(&line);
-        self.log.console_line(line, self.truncated);
-        self.pending.clear();
-        self.truncated = false;
-        self.reported += 1;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1026,7 +905,6 @@ mod tests {
         let buffer = Arc::new(Mutex::new(Vec::new()));
         let mut sink = Sink {
             output: buffer.clone(),
-            lines: None,
         };
         let chunk = vec![b'x'; MAX_CONSOLE_BYTES / 2];
         sink.write_all(&chunk).unwrap();
@@ -1208,9 +1086,7 @@ mod tests {
             llm_budget: None,
             embedding_provider: None,
             embedding_budget: None,
-            recording: None,
             cancel_requested: None,
-            throwaway: None,
         };
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
@@ -1240,7 +1116,6 @@ mod tests {
                 engine: &engine,
                 base_linker: &linker,
                 config: &config,
-                telemetry: crate::config::RunTelemetry::Report,
             },
             vfs,
             defaults.vfs_info,

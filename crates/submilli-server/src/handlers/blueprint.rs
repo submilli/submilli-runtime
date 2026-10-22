@@ -242,12 +242,6 @@ pub async fn add(
     let name = blueprint.name.clone();
     crate::audit::annotate(serde_json::json!({"name": name,
         "new_hash": crate::audit::blueprint_hash(&blueprint)}));
-    // An add never replaces, so there is no tag to clear; the lock keeps a run's
-    // lookup from seeing the new blueprint beside a tag a local apply sets meanwhile.
-    let _tags = state.blueprint_tags_for_write().await;
-    // Again under the lock: a local apply may have declared a volume the check above
-    // saw and then withdrawn it when its own write failed.
-    reject_unusable_volume_reference(&blueprint, &state.session_manager().volumes())?;
     let stored = StoredBlueprint::new(blueprint, permissions_last_preserving_comments(&req.yaml));
     state
         .blueprints()
@@ -305,23 +299,12 @@ pub async fn apply(
             ),
         ));
     }
-    let created = {
-        // Registered without a tag: its runs record the blueprint's hash. The tag
-        // goes only once the write succeeds, so a failed write leaves both as they were.
-        let mut tags = state.blueprint_tags_for_write().await;
-        // Again under the lock: a local apply may have declared a volume the check
-        // above saw and then withdrawn it when its own write failed.
-        reject_unusable_volume_reference(&blueprint, &state.session_manager().volumes())?;
-        let stored =
-            StoredBlueprint::new(blueprint, permissions_last_preserving_comments(&req.yaml));
-        let created = state
-            .blueprints()
-            .upsert_yaml(stored)
-            .await
-            .map_err(store_error)?;
-        tags.remove(&name);
-        created
-    };
+    let stored = StoredBlueprint::new(blueprint, permissions_last_preserving_comments(&req.yaml));
+    let created = state
+        .blueprints()
+        .upsert_yaml(stored)
+        .await
+        .map_err(store_error)?;
     state.evict_mcp_catalog(&name);
     // Another apply may have committed since the audit read above.
     state.evict_prepared_packages(&name);
@@ -421,21 +404,14 @@ pub async fn remove(
     };
     crate::audit::annotate(serde_json::json!({"name": name,
         "old_hash": previous.as_ref().map(crate::audit::blueprint_hash)}));
-    let removed = {
-        let mut tags = state.blueprint_tags_for_write().await;
-        let removed = state
-            .remove_blueprint(&name)
-            .await
-            .map_err(|error| match error {
-                crate::application::blueprints::remove::RemoveBlueprintError::Storage(error) => {
-                    store_error(error)
-                }
-            })?;
-        if removed {
-            tags.remove(&name);
-        }
-        removed
-    };
+    let removed = state
+        .remove_blueprint(&name)
+        .await
+        .map_err(|error| match error {
+            crate::application::blueprints::remove::RemoveBlueprintError::Storage(error) => {
+                store_error(error)
+            }
+        })?;
     if !removed {
         return Err(not_found(name));
     }

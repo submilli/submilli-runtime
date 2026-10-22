@@ -1,7 +1,7 @@
 # GitHub package guide
 
-Use `@submilli/github` for typed GitHub.com work inside Submilli. Credentials are read
-internally from `GITHUB_TOKEN`; never pass tokens as function arguments.
+Use `@submilli/github` for typed GitHub.com work inside Submilli. Credentials are supplied
+internally; never pass tokens as function arguments.
 
 - Pass repositories as `{ owner, name }`: one owner login and one repository name. A
   value with a space, a slash, or other syntax throws `GitHubError` with code
@@ -151,7 +151,7 @@ function main(): string {
 ## A person's pull requests in a date window
 
 Summary search costs one request per page. Enrich only selected hits; full detail
-and issue-style reaction reads need the corresponding repository grants.
+and issue-style reaction reads need the corresponding repository capabilities.
 
 ```ts
 import github from "@submilli/github";

@@ -1,7 +1,7 @@
 //! Persistence-agnostic blueprint store.
 //!
-//! Two implementations: [`InMemoryBlueprintStore`] (ephemeral, used by tests and
-//! embedded callers) and [`FileBlueprintStore`] (a crash-safe, versioned,
+//! Two implementations: [`InMemoryBlueprintStore`] (ephemeral, used by
+//! tests) and [`FileBlueprintStore`] (a crash-safe, versioned,
 //! file-backed store so the blueprint library survives a server restart).
 
 use submilli_blueprint::Blueprint;

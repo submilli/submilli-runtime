@@ -110,16 +110,27 @@ fn first_party_packages_build_without_check_warnings() {
 
 /// The agent reads `docs/readme.md` while writing a program. It can run no
 /// CLI command and cannot change its blueprint, so setup belongs in the root
-/// `readme.md`, which people read.
+/// `readme.md`, which people read. That includes the names of the secrets the
+/// packages read: credentials are supplied internally, so the agent never
+/// needs them.
 #[test]
 fn agent_docs_carry_no_setup() {
     const COMMANDS: &[&str] = &["submilli install", "submilli secret", "submilli blueprint"];
     // Blueprint YAML keys, starting a line after its indentation.
     const YAML_KEYS: &[&str] = &["secrets:", "harness:"];
     let packages = repository_root().join("packages");
+    let package_dirs: Vec<PathBuf> = std::fs::read_dir(&packages)
+        .expect("packages directory")
+        .map(|entry| entry.expect("package entry").path())
+        .collect();
+    let secrets = secret_names(&package_dirs);
+    assert!(
+        !secrets.is_empty(),
+        "no `secrets.get` calls found under packages/*/src"
+    );
     let mut found = Vec::new();
-    for entry in std::fs::read_dir(&packages).expect("packages directory") {
-        let readme = entry.expect("package entry").path().join("docs/readme.md");
+    for package in &package_dirs {
+        let readme = package.join("docs/readme.md");
         let Ok(text) = std::fs::read_to_string(&readme) else {
             continue;
         };
@@ -127,6 +138,7 @@ fn agent_docs_carry_no_setup() {
             let trimmed = line.trim_start();
             if COMMANDS.iter().any(|command| line.contains(command))
                 || YAML_KEYS.iter().any(|key| trimmed.starts_with(key))
+                || secrets.iter().any(|secret| line.contains(secret.as_str()))
             {
                 found.push(format!("{}:{number}: {line}", readme.display()));
             }
@@ -137,6 +149,30 @@ fn agent_docs_carry_no_setup() {
         "setup in agent docs:\n{}",
         found.join("\n")
     );
+}
+
+/// The names every package passes to `secrets.get("…")` in its `src/`.
+fn secret_names(package_dirs: &[PathBuf]) -> Vec<String> {
+    const CALL: &str = "secrets.get(\"";
+    let mut names = Vec::new();
+    for package in package_dirs {
+        let Ok(sources) = std::fs::read_dir(package.join("src")) else {
+            continue;
+        };
+        for source in sources {
+            let Ok(text) = std::fs::read_to_string(source.expect("source entry").path()) else {
+                continue;
+            };
+            for call in text.split(CALL).skip(1) {
+                if let Some((name, _)) = call.split_once('"') {
+                    names.push(name.to_string());
+                }
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
 }
 
 /// Every `<name>.ts` with a `<name>.yaml` beside it under the package's `tests/policy/`.

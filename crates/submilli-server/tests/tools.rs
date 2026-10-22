@@ -360,30 +360,6 @@ async fn the_waiting_run_cap_is_server_wide_and_a_resume_frees_its_slot() {
 }
 
 #[tokio::test]
-async fn cancelling_a_waiting_run_ends_it() {
-    let state = state_with(&[BLUEPRINT], |_| {});
-    let router = app(state.clone());
-    let session = open(&router, "orders").await;
-    let (_, suspended) = execute(&router, &session, COUNT_ORDERS).await;
-    let run = run_id(&suspended);
-    assert!(state.cancel_run(&run));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let (_, current) = get(&router, &format!("/v1/runs/{run}")).await;
-        assert_ne!(
-            current["status"], "suspended",
-            "a cancelled run shows no call to answer"
-        );
-        if current["status"] == "finished" {
-            assert!(!current["error"].is_null(), "{current}");
-            break;
-        }
-        assert!(Instant::now() < deadline, "the run did not end: {current}");
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-}
-
-#[tokio::test]
 async fn a_run_that_never_waits_is_answered_whole_and_not_kept() {
     let router = router();
     let session = open(&router, "orders").await;

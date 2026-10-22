@@ -6,9 +6,9 @@
 //! - A parameter of a function *type* (a property `put: (a: A) => string`, a
 //!   callback's own parameters) flips the position: `Sink<number>` is not a
 //!   `Sink<string | number>`, since its `put` would be handed a string.
-//! - A *method's* own parameters are bivariant, as in `tsc`, which compares
-//!   method parameters both ways: `Logger<number>` is a `Logger<1>` and a
-//!   `Logger<number | string>`, but not a `Logger<string>`.
+//! - A *method's* own parameters are contravariant too. `tsc` compares them
+//!   both ways, but nothing checks an argument at the call, so a method that
+//!   expects a `Dog` would read a `Cat` passed through a `Logger<Animal>`.
 //! - A parameter that appears nowhere relates any instantiation to any other.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -26,8 +26,6 @@ pub(crate) enum Variance {
     Independent,
     Covariant,
     Contravariant,
-    /// Only in method parameters: the arguments must be related either way.
-    Bivariant,
     Invariant,
 }
 
@@ -44,9 +42,6 @@ impl Variance {
             Variance::Independent => true,
             Variance::Covariant => assignable(actual_arg, expected_arg),
             Variance::Contravariant => assignable(expected_arg, actual_arg),
-            Variance::Bivariant => {
-                assignable(actual_arg, expected_arg) || assignable(expected_arg, actual_arg)
-            }
             Variance::Invariant => {
                 assignable(actual_arg, expected_arg) && assignable(expected_arg, actual_arg)
             }
@@ -59,7 +54,6 @@ impl Variance {
 struct Occurrences {
     covariant: bool,
     contravariant: bool,
-    bivariant: bool,
 }
 
 impl Occurrences {
@@ -68,7 +62,6 @@ impl Occurrences {
             (true, true) => Variance::Invariant,
             (true, false) => Variance::Covariant,
             (false, true) => Variance::Contravariant,
-            (false, false) if self.bivariant => Variance::Bivariant,
             (false, false) => Variance::Independent,
         }
     }
@@ -78,7 +71,6 @@ impl Occurrences {
 enum Polarity {
     Covariant,
     Contravariant,
-    Bivariant,
 }
 
 impl Polarity {
@@ -86,7 +78,6 @@ impl Polarity {
         match self {
             Polarity::Covariant => Polarity::Contravariant,
             Polarity::Contravariant => Polarity::Covariant,
-            Polarity::Bivariant => Polarity::Bivariant,
         }
     }
 }
@@ -415,72 +406,12 @@ impl VarianceWalk<'_, '_> {
         }
     }
 
-    /// A method's parameters are compared both ways, as tsc compares them:
-    /// `Logger<number>` is a `Logger<1>`. A callback is the exception: tsc
-    /// compares its parameters strictly and only its return both ways, so
-    /// `subscribe(listener: (value: T) => void)` is covariant in `T`. A rest
-    /// parameter is compared by its elements.
+    /// A method's parameters are contravariant, as a function type's are.
     fn method(&mut self, params: &[crate::Param], ret: &Type, bindings: &BTreeMap<String, Type>) {
         for param in params {
-            let ty = substitute_or_record(&param.ty, bindings, self.resolver.limits);
-            self.method_parameter(&ty, param.rest, Polarity::Covariant);
+            self.substituted(&param.ty, bindings, Polarity::Contravariant);
         }
         self.substituted(ret, bindings, Polarity::Covariant);
-    }
-
-    /// A method declared in an object type (`{ f(x: T): T }`), found at
-    /// `polarity`: its parameters are compared as an interface method's are.
-    fn object_type_method(
-        &mut self,
-        params: &[Type],
-        ret: &Type,
-        has_rest: bool,
-        polarity: Polarity,
-    ) {
-        for (index, param) in params.iter().enumerate() {
-            let rest = has_rest && index + 1 == params.len();
-            self.method_parameter(param, rest, polarity);
-        }
-        self.walk(ret, polarity);
-    }
-
-    /// One parameter of a method found at `polarity`; see [`Self::method`].
-    fn method_parameter(&mut self, ty: &Type, rest: bool, polarity: Polarity) {
-        let compared = match ty.peel() {
-            Type::Array(element) if rest => element.as_ref(),
-            _ => ty,
-        };
-        match callback_signature(compared) {
-            Some((callback_params, callback_ret)) => {
-                for callback_param in callback_params {
-                    self.walk(callback_param, polarity);
-                }
-                self.both_ways(callback_ret);
-            }
-            None => self.both_ways(compared),
-        }
-    }
-
-    /// `ty` compared both ways: a type parameter found in it in one direction
-    /// is bivariant, while one it is invariant in stays invariant, since
-    /// neither direction then holds (`run(p: { k: (x: T) => T })`).
-    fn both_ways(&mut self, ty: &Type) {
-        let fresh = vec![Occurrences::default(); self.found.len()];
-        let outer = std::mem::replace(&mut self.found, fresh);
-        self.walk(ty, Polarity::Covariant);
-        let found_inside = std::mem::replace(&mut self.found, outer);
-        for (found, inside) in self.found.iter_mut().zip(found_inside) {
-            match inside.variance() {
-                Variance::Independent => {}
-                Variance::Invariant => {
-                    found.covariant = true;
-                    found.contravariant = true;
-                }
-                Variance::Covariant | Variance::Contravariant | Variance::Bivariant => {
-                    found.bivariant = true;
-                }
-            }
-        }
     }
 
     fn substituted(&mut self, ty: &Type, bindings: &BTreeMap<String, Type>, polarity: Polarity) {
@@ -499,7 +430,6 @@ impl VarianceWalk<'_, '_> {
                     match polarity {
                         Polarity::Covariant => found.covariant = true,
                         Polarity::Contravariant => found.contravariant = true,
-                        Polarity::Bivariant => found.bivariant = true,
                     }
                 }
             }
@@ -516,17 +446,7 @@ impl VarianceWalk<'_, '_> {
             }
             Type::Object { fields, index } => {
                 for field in fields.values() {
-                    match field.ty.peel() {
-                        Type::Function {
-                            params,
-                            ret,
-                            has_rest,
-                            ..
-                        } if field.method => {
-                            self.object_type_method(params, ret, *has_rest, polarity);
-                        }
-                        _ => self.walk(&field.ty, polarity),
-                    }
+                    self.walk(&field.ty, polarity);
                 }
                 if let Some(index) = index {
                     self.walk(&index.value, polarity);
@@ -589,7 +509,6 @@ impl VarianceWalk<'_, '_> {
                 Variance::Independent => {}
                 Variance::Covariant => self.walk(arg, polarity),
                 Variance::Contravariant => self.walk(arg, polarity.flipped()),
-                Variance::Bivariant => self.walk(arg, Polarity::Bivariant),
                 Variance::Invariant => {
                     self.walk(arg, polarity);
                     self.walk(arg, polarity.flipped());
@@ -597,27 +516,4 @@ impl VarianceWalk<'_, '_> {
             }
         }
     }
-}
-
-/// The parameters and return of a function type, alone or beside `null`,
-/// which tsc takes a parameter of that type to be a callback.
-fn callback_signature(ty: &Type) -> Option<(&[Type], &Type)> {
-    let function = match ty.peel() {
-        function @ Type::Function { .. } => function,
-        Type::Union(members) => {
-            let mut rest = members
-                .iter()
-                .map(Type::peel)
-                .filter(|member| !matches!(member, Type::Null));
-            match (rest.next(), rest.next()) {
-                (Some(function), None) => function,
-                _ => return None,
-            }
-        }
-        _ => return None,
-    };
-    let Type::Function { params, ret, .. } = function else {
-        return None;
-    };
-    Some((params, ret))
 }
