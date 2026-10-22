@@ -12,22 +12,31 @@ pub(super) const PATH_SLOT: i32 = super::cast_check::RECURSIVE_VALIDATOR_CAPACIT
 pub(super) const FAILURE_SLOT: i32 = PATH_SLOT + 1;
 const VALUE_SLOT: i32 = PATH_SLOT + 2;
 const EXPECTED_SLOT: i32 = PATH_SLOT + 3;
-/// Non-null when the failure's tier is [`TAG_MISS`] or [`IN_MEMBER`]: array
-/// cells hold references, so each tier bit is a null or non-null cell.
-const TAG_MISS_SLOT: i32 = PATH_SLOT + 4;
-const IN_MEMBER_SLOT: i32 = PATH_SLOT + 5;
+/// One cell per tier above [`AT_UNION`], non-null when the failure has that
+/// tier: array cells hold references, so each tier bit is a null or non-null
+/// cell.
+const TIER_SLOTS: [(i32, i32); 4] = [
+    (PATH_SLOT + 4, TAG_MISS),
+    (PATH_SLOT + 5, IN_MEMBER),
+    (PATH_SLOT + 6, LITERAL_AFTER_TAG),
+    (PATH_SLOT + 7, AFTER_TAGS),
+];
 /// Cells after the recursion frames that carry the diagnostic across a call.
-pub(super) const SLOTS: i32 = 6;
+pub(super) const SLOTS: i32 = 8;
 
 /// How well a failure explains why a union member rejected a value, lowest
 /// first. A member that rejects the value itself, as `null` rejects an object,
-/// says least; one whose own tag field mismatched is most likely another member;
-/// any other failure inside a member is the one to report.
+/// says least; one whose tag mismatched is most likely another member. Any
+/// other failure inside a member says more, and more still once one of the
+/// member's tags matched, since the value then claims to be that member: most
+/// when all of them matched, so the failure is past the member's literals.
 const AT_UNION: i32 = 0;
 const TAG_MISS: i32 = 1;
 const IN_MEMBER: i32 = 2;
+const LITERAL_AFTER_TAG: i32 = 3;
+const AFTER_TAGS: i32 = 4;
 /// The tier sits above any path length in a failure's rank.
-const TIER_SHIFT: i32 = 29;
+const TIER_SHIFT: i32 = 28;
 
 /// Longer type names, such as an inline object type, are named by kind, so a
 /// check site does not carry a long literal for each nested value it tests.
@@ -45,8 +54,17 @@ pub(super) struct Locals {
     /// Union locals by nesting depth: sibling unions reuse them, so a large
     /// type does not cost locals for each union it contains.
     unions: Vec<UnionLocals>,
-    /// The path length of each union being checked, innermost last.
-    open_unions: Vec<usize>,
+    /// Each union being checked, innermost last.
+    open_unions: Vec<OpenUnion>,
+}
+
+#[derive(Clone)]
+struct OpenUnion {
+    /// The path length of the union's value.
+    path: usize,
+    /// Fields that are tags in more than one of its members, which its
+    /// members check before their other tags.
+    shared_tags: std::collections::BTreeSet<String>,
 }
 
 /// What a test that just failed was checking.
@@ -67,7 +85,7 @@ struct Failure {
     value: u32,
     /// The name of the type the test expected.
     expected: u32,
-    /// An i32 tier: [`AT_UNION`], [`TAG_MISS`] or [`IN_MEMBER`].
+    /// An i32 tier, from [`AT_UNION`] to [`AFTER_TAGS`].
     tier: u32,
 }
 
@@ -82,8 +100,22 @@ pub(super) struct UnionLocals {
 
 #[derive(Clone)]
 enum Segment {
-    Field(String),
+    /// A field, and the tier of a failure under it when its object is a union
+    /// member, as [`check_order`] gives it.
+    Field {
+        name: String,
+        member_tier: i32,
+    },
     Index(u32),
+}
+
+/// A field of an object in the order its check tests them.
+#[derive(Clone, Copy)]
+pub(super) struct OrderedField<'a> {
+    pub(super) name: &'a str,
+    pub(super) field: &'a crate::ObjectField,
+    /// The tier of a failure under this field when the object is a union member.
+    member_tier: i32,
 }
 
 /// Scalar checks retain their established root-only message and need no paths.
@@ -232,15 +264,34 @@ fn record_tested(
 fn tier(state: &Locals, ty: &crate::Type) -> i32 {
     match state.path.len().checked_sub(innermost_union_path(state)) {
         None | Some(0) => AT_UNION,
-        Some(1) if is_discriminant(ty) => TAG_MISS,
-        Some(_) => IN_MEMBER,
+        // A tuple member's literal element is its tag.
+        Some(1)
+            if is_discriminant(ty)
+                && matches!(
+                    state.path.get(innermost_union_path(state)),
+                    Some(Segment::Index(_))
+                ) =>
+        {
+            TAG_MISS
+        }
+        Some(_) => member_tier(state),
+    }
+}
+
+/// The tier of a failure below the innermost union's value: the one its
+/// member's field carries, which also holds for a failure recorded deeper by a
+/// nested union or a callee.
+fn member_tier(state: &Locals) -> i32 {
+    match state.path.get(innermost_union_path(state)) {
+        Some(Segment::Field { member_tier, .. }) => *member_tier,
+        _ => IN_MEMBER,
     }
 }
 
 /// The path length of the innermost union being checked, or of the validated
 /// value itself when there is none.
 fn innermost_union_path(state: &Locals) -> usize {
-    state.open_unions.last().copied().unwrap_or(0)
+    state.open_unions.last().map_or(0, |union| union.path)
 }
 
 /// Whether the current path lies below the innermost union's value, so a
@@ -250,16 +301,101 @@ fn inside_member(state: &Locals) -> bool {
     state.path.len() > innermost_union_path(state)
 }
 
-/// Fields in check order: a value of another discriminated union member then
-/// fails at its tag, a [`TAG_MISS`], rather than at another of its fields.
+/// Whether the path is at the innermost union's value, so an object checked
+/// here is one of its members.
+fn at_union_value(state: &Locals) -> bool {
+    state.path.len() == innermost_union_path(state)
+}
+
+/// Fields in check order: the tags a union member shares with its siblings,
+/// then its other literals, then the rest. A value of another discriminated
+/// union member then fails at a tag rather than at another of its fields.
 /// Conformance tests every field either way, so the order changes no result.
-pub(super) fn discriminants_first(
-    fields: &std::collections::BTreeMap<String, crate::ObjectField>,
-) -> impl Iterator<Item = (&String, &crate::ObjectField)> {
-    let (tags, rest): (Vec<_>, Vec<_>) = fields
+///
+/// Each field also gets the tier of a failure under it. A failure is recorded
+/// only while every earlier test passed, so a field after a required one of
+/// those kinds comes after it matched:
+///
+/// | field                                      | tier                    |
+/// |--------------------------------------------|-------------------------|
+/// | a shared tag                               | [`TAG_MISS`]            |
+/// | another literal, after a shared tag        | [`LITERAL_AFTER_TAG`]   |
+/// | another literal, with no shared tag before | [`TAG_MISS`]            |
+/// | any other field, after a literal           | [`AFTER_TAGS`]          |
+/// | any other field, with no literal before    | [`IN_MEMBER`]           |
+///
+/// Ranks rather than order within a rank decide the tier, so renaming a field
+/// never changes which member a failure names. An absent optional literal
+/// passes without matching, so it counts as none.
+pub(super) fn check_order<'a>(
+    emitter: &FunctionEmitter,
+    fields: &'a std::collections::BTreeMap<String, crate::ObjectField>,
+) -> Vec<OrderedField<'a>> {
+    const SHARED_TAG: u8 = 0;
+    const LITERAL: u8 = 1;
+    const OTHER: u8 = 2;
+    let shared_tags = emitter
+        .cast_diagnostic
+        .as_ref()
+        .filter(|state| at_union_value(state))
+        .and_then(|state| state.open_unions.last())
+        .map(|union| &union.shared_tags);
+    let mut ranked: Vec<_> = fields
         .iter()
-        .partition(|(_, field)| is_discriminant(&field.ty));
-    tags.into_iter().chain(rest)
+        .map(|(name, field)| {
+            let rank = if !is_discriminant(&field.ty) {
+                OTHER
+            } else if shared_tags.is_some_and(|tags| tags.contains(name)) {
+                SHARED_TAG
+            } else {
+                LITERAL
+            };
+            (rank, name, field)
+        })
+        .collect();
+    ranked.sort_by_key(|&(rank, ..)| rank);
+    let mut after_shared_tag = false;
+    let mut after_literal = false;
+    ranked
+        .into_iter()
+        .map(|(rank, name, field)| {
+            let member_tier = match rank {
+                SHARED_TAG => TAG_MISS,
+                LITERAL if after_shared_tag => LITERAL_AFTER_TAG,
+                LITERAL => TAG_MISS,
+                _ if after_literal => AFTER_TAGS,
+                _ => IN_MEMBER,
+            };
+            if !field.optional {
+                after_shared_tag |= rank == SHARED_TAG;
+                after_literal |= rank != OTHER;
+            }
+            OrderedField {
+                name,
+                field,
+                member_tier,
+            }
+        })
+        .collect()
+}
+
+/// The fields that are tags in more than one of a union's object members.
+fn shared_tags(members: &[crate::Type]) -> std::collections::BTreeSet<String> {
+    let mut counts = std::collections::BTreeMap::<&String, usize>::new();
+    for member in members {
+        if let crate::Type::Object { fields, .. } = member.lowered() {
+            for (name, field) in fields {
+                if is_discriminant(&field.ty) {
+                    *counts.entry(name).or_default() += 1;
+                }
+            }
+        }
+    }
+    counts
+        .into_iter()
+        .filter(|&(_, count)| count > 1)
+        .map(|(name, _)| name.clone())
+        .collect()
 }
 
 /// A literal, or a union of literals, as a discriminated union's tag field is.
@@ -277,11 +413,12 @@ fn is_discriminant(ty: &crate::Type) -> bool {
     }
 }
 
-/// The type a failure names as expected: as written when short, else its kind.
+/// The type a failure names as expected: as written when it has a name or is
+/// short, else its kind.
 fn expected_name(ty: &crate::Type) -> String {
     use crate::Type;
     let written = ty.to_string();
-    if written.chars().count() <= MAX_EXPECTED_LEN {
+    if is_named(ty) || written.chars().count() <= MAX_EXPECTED_LEN {
         return written;
     }
     if is_discriminant(ty) {
@@ -296,11 +433,70 @@ fn expected_name(ty: &crate::Type) -> String {
     .to_string()
 }
 
+/// Whether `ty` is written with names, such as `Item`, `Item[]`,
+/// `Item | null`, `[Item, number]` or `{ [key: string]: Item }`: built from at
+/// least one named type and otherwise only primitives and literals, so naming
+/// it costs no more than the program spent.
+fn is_named(ty: &crate::Type) -> bool {
+    use crate::Type;
+    match ty {
+        Type::Alias { .. }
+        | Type::AliasRef { .. }
+        | Type::InterfaceRef { .. }
+        | Type::ClassRef { .. }
+        | Type::NumberEnum { .. }
+        | Type::StringEnum { .. } => true,
+        Type::Array(element) | Type::Readonly(element) => is_named(element),
+        Type::Union(members) => named_with_primitives(members.iter()),
+        Type::Tuple(elements) => named_with_primitives(elements.iter()),
+        Type::Object {
+            fields,
+            index: Some(index),
+        } => fields.is_empty() && is_named(&index.value),
+        _ => false,
+    }
+}
+
+/// Whether `parts` hold a named type and otherwise only primitives and literals.
+fn named_with_primitives<'a>(parts: impl Iterator<Item = &'a crate::Type>) -> bool {
+    let mut any_named = false;
+    for part in parts {
+        if is_named(part) {
+            any_named = true;
+        } else if !is_primitive(part) {
+            return false;
+        }
+    }
+    any_named
+}
+
+/// A primitive or literal type, written in a few characters.
+fn is_primitive(ty: &crate::Type) -> bool {
+    use crate::Type;
+    matches!(
+        ty,
+        Type::Number
+            | Type::NumberLiteral(_)
+            | Type::String
+            | Type::StringLiteral(_)
+            | Type::Boolean
+            | Type::BooleanLiteral(_)
+            | Type::BigInt
+            | Type::BigIntLiteral(_)
+            | Type::Null
+            | Type::Undefined
+    )
+}
+
 /// Each union alternative starts with an independent failure. When all
 /// alternatives fail, prefer the highest tier, then a longer path, so a tag or
 /// null mismatch does not hide a nested field failure. Ties retain the first
 /// alternative's explanation.
-pub(super) fn union_start(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) -> Option<UnionLocals> {
+pub(super) fn union_start(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    members: &[crate::Type],
+) -> Option<UnionLocals> {
     let state = emitter.cast_diagnostic.clone()?;
     let union = if let Some(union) = state.unions.get(state.open_unions.len()) {
         *union
@@ -317,7 +513,10 @@ pub(super) fn union_start(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) -> Op
         .cast_diagnostic
         .as_mut()?
         .open_unions
-        .push(state.path.len());
+        .push(OpenUnion {
+            path: state.path.len(),
+            shared_tags: shared_tags(members),
+        });
     emitter.instruction(Instruction::RefNull(HeapType::Concrete(
         ctx.latch(string_index(ctx))?,
     )));
@@ -408,7 +607,7 @@ pub(super) fn union_end(
     emitter.instruction(Instruction::LocalSet(state.failure.path));
     if inside_member(&state) {
         emitter.emit_else();
-        emitter.instruction(Instruction::I32Const(IN_MEMBER));
+        emitter.instruction(Instruction::I32Const(member_tier(&state)));
         emitter.instruction(Instruction::LocalSet(state.failure.tier));
     }
     emitter.emit_end();
@@ -445,10 +644,32 @@ fn path_length_checked(
     Ok(())
 }
 
-pub(super) fn field(emitter: &mut FunctionEmitter, _ctx: &CodegenCtx, name: &str) -> Option<usize> {
+/// Enter a Map or Set entry's `key` or `value`. Its tier is never read: the
+/// entry's index is the segment at a union member's value.
+pub(super) fn entry_part(
+    emitter: &mut FunctionEmitter,
+    _ctx: &CodegenCtx,
+    name: &str,
+) -> Option<usize> {
+    push_field(emitter, name, IN_MEMBER)
+}
+
+/// Enter an object's field, in the order [`check_order`] gives.
+pub(super) fn field(
+    emitter: &mut FunctionEmitter,
+    _ctx: &CodegenCtx,
+    field: OrderedField<'_>,
+) -> Option<usize> {
+    push_field(emitter, field.name, field.member_tier)
+}
+
+fn push_field(emitter: &mut FunctionEmitter, name: &str, member_tier: i32) -> Option<usize> {
     let state = emitter.cast_diagnostic.as_mut()?;
     let mark = state.path.len();
-    state.path.push(Segment::Field(name.into()));
+    state.path.push(Segment::Field {
+        name: name.into(),
+        member_tier,
+    });
     Some(mark)
 }
 
@@ -480,7 +701,7 @@ fn emit_path(
     emitter.instruction(Instruction::LocalGet(state.current));
     for segment in &state.path {
         match segment {
-            Segment::Field(name) => {
+            Segment::Field { name, .. } => {
                 let units = name.encode_utf16().count() / PATH_UNITS_PER_STEP;
                 let name_steps = u64::try_from(units).unwrap_or(u64::MAX);
                 ctx.charge_validator_steps(emitter, name_steps.saturating_add(1))?;
@@ -592,7 +813,7 @@ pub(super) fn save_recursive(
         }
         emitter.instruction(Instruction::ArraySet(array));
     }
-    for (index, tier) in [(TAG_MISS_SLOT, TAG_MISS), (IN_MEMBER_SLOT, IN_MEMBER)] {
+    for (index, tier) in TIER_SLOTS {
         emitter.instruction(Instruction::LocalGet(visited));
         emitter.instruction(Instruction::I32Const(index));
         emitter.instruction(Instruction::LocalGet(state.failure.path));
@@ -633,10 +854,10 @@ fn load_recursive_checked(
     emitter.instruction(Instruction::I32Eqz);
     emitter.emit_if(BlockType::Empty);
     if inside_member(&state) {
-        emitter.instruction(Instruction::I32Const(IN_MEMBER));
+        emitter.instruction(Instruction::I32Const(member_tier(&state)));
     } else {
         emitter.instruction(Instruction::I32Const(AT_UNION));
-        for (index, tier) in [(TAG_MISS_SLOT, TAG_MISS), (IN_MEMBER_SLOT, IN_MEMBER)] {
+        for (index, tier) in TIER_SLOTS {
             emitter.instruction(Instruction::I32Const(tier));
             emitter.instruction(Instruction::LocalGet(visited));
             emitter.instruction(Instruction::I32Const(index));

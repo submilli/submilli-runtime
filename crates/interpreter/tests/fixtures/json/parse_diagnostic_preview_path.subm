@@ -61,7 +61,7 @@ function main(): void {
       "{\"hasNextPage\":false,\"issues\":[]}"
     ) as ListNodesResponse;
   });
-  assert(shapeRename === "type mismatch: expected ListNodesResponse, got object at $[\"nodes\"] (expected { id: string; state: string; title: string }[], got undefined)", shapeRename);
+  assert(shapeRename === "type mismatch: expected ListNodesResponse, got object at $[\"nodes\"] (expected LinearIssue[], got undefined)", shapeRename);
 
   const indexed = expectMessage((): void => {
     const nums = JSON.parse("[1,\"two\",3]") as number[];

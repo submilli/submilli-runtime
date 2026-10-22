@@ -2894,9 +2894,33 @@ impl<'a> Parser<'a> {
             self.error_at_peek("expected `{` to start `switch` body");
             return None;
         }
-        let open = self.advance();
+        self.advance();
         self.block_depth += 1;
+        let arms = self.parse_switch_arms();
+        self.block_depth -= 1;
+        let (cases, default) = arms?;
 
+        if !matches!(self.peek().kind, TokenKind::RightBrace) {
+            self.error_at_peek("expected `}` to close `switch` body");
+            return None;
+        }
+        let close = self.advance();
+
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Switch {
+                    discriminant,
+                    cases,
+                    default,
+                },
+                span: self.span(kw.span.start, close.span.end),
+            }),
+            &mut self.fatal,
+        )
+    }
+
+    // Reads the arms up to the closing `}`, which is left for the caller.
+    fn parse_switch_arms(&mut self) -> Option<(Vec<SwitchCase>, Option<SwitchDefault>)> {
         let mut cases: Vec<SwitchCase> = Vec::new();
         let mut default: Option<SwitchDefault> = None;
         let mut pending_values: Vec<ExprId> = Vec::new();
@@ -2986,26 +3010,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-
-        self.block_depth -= 1;
-        if !matches!(self.peek().kind, TokenKind::RightBrace) {
-            self.error_at_peek("expected `}` to close `switch` body");
-            return None;
-        }
-        let close = self.advance();
-
-        let _ = open;
-        parse_arena_result(
-            self.ast.try_push_stmt(Stmt {
-                kind: StmtKind::Switch {
-                    discriminant,
-                    cases,
-                    default,
-                },
-                span: self.span(kw.span.start, close.span.end),
-            }),
-            &mut self.fatal,
-        )
+        Some((cases, default))
     }
 
     // `body_start` is the label keyword's offset so diagnostics point at the label.
@@ -13159,6 +13164,39 @@ class Dog extends Animal {
             ["calls return their values directly: remove `await` and write `for (const e of …)`"]
         );
         assert_eq!(ast.top_level.len(), 1, "the loop is still read");
+    }
+
+    #[test]
+    fn a_broken_switch_leaves_later_declarations_at_the_top_level() {
+        assert_eq!(
+            crate::typechecker::rules::test_util::compile_messages(
+                "function g(): void { switch (1) { case 1 } }\nclass C {}\nfunction main() { return \"x\"; }\n"
+            ),
+            [
+                "expected `:` after `case` label",
+                "expected expression",
+                "expected `:` and return type"
+            ]
+        );
+    }
+
+    #[test]
+    fn every_switch_arm_error_restores_the_nesting() {
+        for switch in [
+            "switch (1) { case 1 }",
+            "switch (1) { case : break; }",
+            "switch (1) { default: break; default: break; }",
+            "switch (1) { default }",
+            "switch (1) { x; }",
+            "switch (1) { case 1: }",
+        ] {
+            let source = format!("function g(): void {{ {switch} }}\nclass C {{}}\n");
+            let (_ast, diags) = parse_str(&source);
+            assert!(
+                diags.iter().all(|d| !d.message.contains("top level")),
+                "{switch}: {diags:?}"
+            );
+        }
     }
 
     #[test]

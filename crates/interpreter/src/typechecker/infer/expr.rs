@@ -3914,14 +3914,17 @@ impl Inferer<'_> {
                         format!(
                             "`session.get<{result_ty}>` cannot be verified at runtime: {reason}"
                         ),
-                        vec![format!(
-                            "`session.get` checks the stored value against its type argument, so \
+                        cast_gate_help(
+                            reason,
+                            format!(
+                                "`session.get` checks the stored value against its type argument, so \
                          that argument must be one the runtime can test: an object, array, \
                          tuple, union, or primitive shape, optionally `| null`. Call it at a \
                          concrete type instead of `{result_ty}` — `session.get<Progress>(key)` \
                          — or drop the type argument and narrow the result yourself with a \
                          runtime-checked `as`."
-                        )],
+                            ),
+                        ),
                     );
                     (TypedExprKind::Null, Type::Error)
                 }
@@ -4002,7 +4005,7 @@ impl Inferer<'_> {
         // (`unsupported_cast_target_reason`'s `TypeVar | GenericParam` arm), so
         // a program hitting it under `llm.call` reads the same advice it would
         // hit under `as`.
-        let shape = self.reduce_interfaces_to_shapes(result_ty);
+        let shape = self.reduce_cast_target(result_ty);
         if matches!(shape.peel(), Type::TypeVar(_) | Type::GenericParam { .. })
             && let Some(reason) =
                 unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
@@ -4036,14 +4039,17 @@ impl Inferer<'_> {
                     self.error_with_help(
                         span,
                         format!("`{callee}<{result_ty}>` cannot be verified at runtime: {reason}"),
-                        vec![format!(
-                            "`{callee}` checks {checks} against its type \
-                             argument, so that argument must be one the runtime can test: \
-                             an object, array, tuple, union, or primitive shape. Call it \
-                             at a concrete type instead of `{result_ty}` — \
-                             `{example}` — or drop the type \
-                             argument and {untyped_hint}."
-                        )],
+                        cast_gate_help(
+                            reason,
+                            format!(
+                                "`{callee}` checks {checks} against its type \
+                                 argument, so that argument must be one the runtime can test: \
+                                 an object, array, tuple, union, or primitive shape. Call it \
+                                 at a concrete type instead of `{result_ty}` — \
+                                 `{example}` — or drop the type \
+                                 argument and {untyped_hint}."
+                            ),
+                        ),
                     );
                     return Err(());
                 }
@@ -4133,11 +4139,11 @@ impl Inferer<'_> {
     /// The inlined JSON Schema for `target_ty`, as the compact string the host
     /// function takes.
     ///
-    /// Reduces interfaces to shapes first, as [`Self::checked_cast_around`]
-    /// does, so the emitter sees the same structural type the check will, and
-    /// resolves alias back-edges through the type namespace — without that
-    /// expander every `AliasRef` survives the walk and is rejected as
-    /// unresolvable.
+    /// Reduces interfaces to their structural shapes first, since a schema
+    /// describes fields, not names; the cast gate that also runs rejects what
+    /// a check can't verify, such as a host-backed interface. It resolves
+    /// alias back-edges through the type namespace — without that expander
+    /// every `AliasRef` survives the walk and is rejected as unresolvable.
     fn json_schema_for(
         &mut self,
         target_ty: &Type,
@@ -4166,7 +4172,7 @@ impl Inferer<'_> {
         target_ty: &Type,
         span: Span,
     ) -> Result<Result<(TypedExprKind, Type), &'static str>, CompilerFailure> {
-        let shape = self.reduce_interfaces_to_shapes(target_ty);
+        let shape = self.reduce_cast_target(target_ty);
         if let Some(reason) =
             unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
         {
@@ -5966,14 +5972,21 @@ impl Inferer<'_> {
         if checks_unknown_fields && let Some(Type::Union(union_members)) = peeled {
             unknown_fields = self.report_unknown_union_fields(union_members, &members)?;
         }
+        // A literal can't become a host-backed interface, whose reads need the
+        // host's backing struct, so it keeps its own type and the assignment
+        // fails.
         let interface_target: Option<(crate::Package, String, crate::MangledName, Vec<Type>)> =
             match peeled {
-                Some(Type::InterfaceRef {
-                    mangled,
-                    package,
-                    name,
-                    args,
-                }) => Some((package.clone(), name.clone(), mangled.clone(), args.clone())),
+                Some(
+                    interface @ Type::InterfaceRef {
+                        mangled,
+                        package,
+                        name,
+                        args,
+                    },
+                ) if !assignable::is_host_backed_interface(interface) => {
+                    Some((package.clone(), name.clone(), mangled.clone(), args.clone()))
+                }
                 _ => None,
             };
         let expected_fields: Option<std::collections::BTreeMap<String, crate::ObjectField>> =
@@ -12610,7 +12623,7 @@ impl Inferer<'_> {
     /// assignable to it. Otherwise the target is reduced to its structural shape
     /// and put to the same predicate `infer_as` uses.
     pub(super) fn is_legal_cast_target(&self, source: &Type, target: &Type) -> bool {
-        let shape = self.reduce_interfaces_to_shapes(target);
+        let shape = self.reduce_cast_target(target);
         if super::assignable::assignable(source, &shape, self.resolver()) {
             return true;
         }
@@ -12672,7 +12685,7 @@ impl Inferer<'_> {
         }
         // `assignable` is nominal for `InterfaceRef`; relate (and later check) against the
         // interface's structural data shape so `unknown`/structurally-compatible sources pass.
-        let shape = self.reduce_interfaces_to_shapes(&target_ty);
+        let shape = self.reduce_cast_target(&target_ty);
         let inner_to_target = assignable(&inner_ty, &shape, self.resolver());
         let target_to_inner = assignable(&shape, &inner_ty, self.resolver());
         let target_to_widened =
@@ -12734,16 +12747,20 @@ impl Inferer<'_> {
             if let Some(reason) =
                 unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
             {
-                self.error_with_help(
-                    span,
-                    format!("`as` to `{target_ty}` is not yet supported: {reason}"),
-                    vec![
+                let (message, help) = if reason == HOST_BACKED_TARGET {
+                    (
+                        format!("`as` can't produce a `{target_ty}`: {reason}"),
+                        HOST_BACKED_HELP,
+                    )
+                } else {
+                    (
+                        format!("`as` to `{target_ty}` is not yet supported: {reason}"),
                         "supported targets: primitives (`number`, `string`, `boolean`, \
                          `null`), `bigint`, arrays, tuples, `Uint8Array`, object shapes \
-                         (`{ a: T }`), interfaces, closures, `unknown`, and unions of these"
-                            .to_string(),
-                    ],
-                );
+                         (`{ a: T }`), interfaces, closures, `unknown`, and unions of these",
+                    )
+                };
+                self.error_with_help(span, message, vec![help.to_string()]);
                 return Ok((TypedExprKind::Null, Type::Error));
             }
             Some(Box::new(shape))
@@ -13121,13 +13138,28 @@ impl Inferer<'_> {
     /// (`Map`, `Iterator`, …) are nominal — a structural check can't verify their vtable —
     /// so they stay `InterfaceRef` and relate nominally instead. Recurses through object
     /// fields, arrays, tuples, and unions. `seen` guards against recursive/mutually-recursive
-    /// interfaces: a re-encountered interface is left as `InterfaceRef`. Leftover
-    /// `InterfaceRef`s are rejected by `unsupported_cast_target_reason` when a runtime
-    /// check is actually needed.
+    /// interfaces: a re-encountered interface is left as `InterfaceRef`.
     pub(super) fn reduce_interfaces_to_shapes(&self, ty: &Type) -> Type {
+        self.reduce_interfaces(ty, false)
+    }
+
+    /// [`reduce_interfaces_to_shapes`](Self::reduce_interfaces_to_shapes) for a
+    /// cast target, the shape its runtime check walks. A host-backed interface
+    /// stays an `InterfaceRef`: a parsed object of its shape would pass the
+    /// check and fail on the first read. That and any other leftover
+    /// `InterfaceRef` is rejected by `unsupported_cast_target_reason` when a
+    /// runtime check is actually needed. An alias or interface keeps its name
+    /// around its reduced body, so a failed check names the type the program
+    /// wrote.
+    fn reduce_cast_target(&self, ty: &Type) -> Type {
+        self.reduce_interfaces(ty, true)
+    }
+
+    fn reduce_interfaces(&self, ty: &Type, cast_target: bool) -> Type {
         let mut budget = self.type_limits.budget();
         self.type_limits.type_or_error(self.reduce_interfaces_rec(
             ty,
+            cast_target,
             &mut Vec::new(),
             1,
             &mut budget,
@@ -13141,19 +13173,35 @@ impl Inferer<'_> {
     fn reduce_interfaces_rec(
         &self,
         ty: &Type,
+        cast_target: bool,
         seen: &mut Vec<String>,
         depth: u32,
         budget: &mut TypeBudget<'_>,
     ) -> Result<Type, TypeTooLarge> {
         let child = depth.saturating_add(1);
-        match ty.peel_preserving_readonly() {
-            Type::InterfaceRef {
+        if cast_target
+            && let Type::Alias {
                 mangled,
+                package,
                 name,
                 args,
-                ..
+                ty: body,
+            } = ty
+        {
+            budget.charge(depth)?;
+            let body = self.reduce_interfaces_rec(body, cast_target, seen, child, budget)?;
+            return Ok(named(mangled, package, name, args, body));
+        }
+        match ty.peel_preserving_readonly() {
+            interface @ Type::InterfaceRef {
+                mangled,
+                package,
+                name,
+                args,
             } => {
-                let data_shape = if seen.iter().any(|n| n == name) {
+                let data_shape = if seen.iter().any(|n| n == name)
+                    || (cast_target && assignable::is_host_backed_interface(interface))
+                {
                     None
                 } else {
                     self.interface_data_shape(mangled, name, args)
@@ -13170,7 +13218,13 @@ impl Inferer<'_> {
                         Ok((
                             k,
                             crate::ObjectField {
-                                ty: self.reduce_interfaces_rec(&f.ty, seen, child, budget)?,
+                                ty: self.reduce_interfaces_rec(
+                                    &f.ty,
+                                    cast_target,
+                                    seen,
+                                    child,
+                                    budget,
+                                )?,
                                 optional: f.optional,
                                 readonly: f.readonly,
                                 method: f.method,
@@ -13183,15 +13237,19 @@ impl Inferer<'_> {
                     .index_signature(ty)
                     .map(|i| {
                         i.try_map_value(|value| {
-                            self.reduce_interfaces_rec(value, seen, child, budget)
+                            self.reduce_interfaces_rec(value, cast_target, seen, child, budget)
                         })
                     })
                     .transpose()?;
                 seen.pop();
-                Ok(Type::Object {
+                let shape = Type::Object {
                     index,
                     fields: reduced,
-                })
+                };
+                if !cast_target {
+                    return Ok(shape);
+                }
+                Ok(named(mangled, package, name, args, shape))
             }
             peeled @ (Type::Object { .. }
             | Type::Array(_)
@@ -13200,7 +13258,7 @@ impl Inferer<'_> {
             | Type::Union(_)) => {
                 budget.charge(depth)?;
                 map_children(peeled, |inner| {
-                    self.reduce_interfaces_rec(inner, seen, child, budget)
+                    self.reduce_interfaces_rec(inner, cast_target, seen, child, budget)
                 })
             }
             other => {
@@ -13214,10 +13272,37 @@ impl Inferer<'_> {
     /// variant values: a value is one of the enum's members exactly when it
     /// equals one of them. Relatedness is decided before this, against the
     /// enum itself, because a member literal is not assignable to its enum.
+    /// An alias keeps its name around its reduced body, and a whole enum
+    /// names its members, so a failed check still names the written type.
     fn reduce_enums_to_members(&self, ty: &Type) -> Type {
+        if let Type::Alias {
+            mangled,
+            package,
+            name,
+            args,
+            ty: body,
+        } = ty
+        {
+            let body = self.reduce_enums_to_members(body);
+            return named(mangled, package, name, args, body);
+        }
         let peeled = ty.peel_preserving_readonly();
         if let Some(members) = self.enum_runtime_members(peeled) {
-            return members;
+            return match peeled {
+                Type::NumberEnum {
+                    mangled,
+                    package,
+                    name,
+                    member: None,
+                }
+                | Type::StringEnum {
+                    mangled,
+                    package,
+                    name,
+                    member: None,
+                } => named(mangled, package, name, &[], members),
+                _ => members,
+            };
         }
         if !matches!(
             peeled,
@@ -13366,10 +13451,11 @@ fn optional_vs_required_blockers(
     target: &Type,
     types: super::assignable::TypeResolver,
 ) -> Vec<String> {
-    let (mut s, mut t) = (source, target);
+    // A cast target keeps its alias and interface names around each shape.
+    let (mut s, mut t) = (source, target.peel());
     while let (Type::Array(se), Type::Array(te)) = (s, t) {
         s = &**se;
-        t = &**te;
+        t = te.peel();
     }
     let (
         Type::Object {
@@ -13397,10 +13483,50 @@ fn optional_vs_required_blockers(
     blockers
 }
 
-/// Recurses the (interface-reduced) cast-target shape so the compile-time gate matches
-/// exactly what `emit_structural_test` can verify at runtime. A leftover `InterfaceRef`
-/// here means an interface `reduce_interfaces_to_shapes` could not expand: either
-/// method-bearing (nominal) or recursive/mutually-recursive.
+/// `body` under the name of the alias, interface or enum the program wrote, so
+/// a failed cast check names that type rather than its reduced shape.
+fn named(
+    mangled: &crate::MangledName,
+    package: &crate::Package,
+    name: &str,
+    args: &[Type],
+    body: Type,
+) -> Type {
+    Type::alias_ty(
+        package.clone(),
+        name,
+        mangled.clone(),
+        args.to_vec(),
+        Box::new(body),
+    )
+}
+
+/// Why a cast target holding a host-backed interface such as `fs.Stat` is
+/// rejected: `as` would have to accept an object of its shape, and reads of one
+/// need the host's backing struct.
+const HOST_BACKED_TARGET: &str = "only the standard library builds values of a host-backed \
+     interface, and an object of the same shape can't stand in for one";
+
+/// What to do instead of checking a value against a host-backed interface.
+const HOST_BACKED_HELP: &str = "keep the value the standard-library function returned, narrowing \
+     a `T | null` with `!` or an `if` check; for data you parse, store or ask a model for, \
+     declare an interface with the fields you need";
+
+/// The help for a cast gate that rejected its target for `reason`: `general`,
+/// unless the target holds a host-backed interface, which no check produces.
+fn cast_gate_help(reason: &str, general: String) -> Vec<String> {
+    if reason == HOST_BACKED_TARGET {
+        vec![HOST_BACKED_HELP.to_string()]
+    } else {
+        vec![general]
+    }
+}
+
+/// Recurses the cast-target shape from [`Inferer::reduce_cast_target`] so the
+/// compile-time gate matches exactly what `emit_structural_test` can verify at
+/// runtime. A leftover `InterfaceRef` here is one that reduction keeps: a
+/// host-backed interface, which no cast can produce, or one it could not
+/// expand, method-bearing (nominal) or recursive/mutually-recursive.
 fn unsupported_cast_target_reason(
     target_ty: &Type,
     types: super::assignable::TypeResolver,
@@ -13439,7 +13565,9 @@ fn unsupported_cast_target_reason(
             .iter()
             .find_map(|m| unsupported_cast_target_reason(m, types, seen)),
         Type::InterfaceRef { mangled, name, .. } => {
-            if types.interface_has_methods(mangled, name) {
+            if assignable::is_host_backed_interface(peeled) {
+                Some(HOST_BACKED_TARGET)
+            } else if types.interface_has_methods(mangled, name) {
                 Some(
                     "interfaces with methods are nominal — a plain structural check \
                      can't verify their vtable at runtime",
