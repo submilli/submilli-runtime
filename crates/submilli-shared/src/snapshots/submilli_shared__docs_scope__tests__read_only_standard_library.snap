@@ -1,0 +1,278 @@
+---
+source: crates/submilli-shared/src/docs_scope.rs
+expression: "format!(\"modules: {}\\n\\n# submilli:fs\\n\\n{}\\n\\n# submilli:session\\n\\n{}\\n\",\nmodules.join(\", \"), declarations(&scope, \"submilli:fs\"),\ndeclarations(&scope, \"submilli:session\"))"
+---
+modules: submilli:code, submilli:crypto, submilli:fs, submilli:session, submilli:url, submilli:uuid
+
+# submilli:fs
+
+/**
+ * Stream the file at `path` as a constant-memory byte iterator. Each `next()` returns up to `chunkSize` bytes; the last chunk may be shorter. Sized for large binary inputs that don't fit `maxReadSize`.
+ * @param path File path under the VFS root.
+ * @param chunkSize Maximum bytes per iterator chunk.
+ * @capability fs.read { path, chunkSize }
+ */
+function bytes(path: string, chunkSize: number): Iterator<Uint8Array>;
+
+/**
+ * The absolute guest working directory used by relative paths. Shared by the program and packages; no capability required. Defaults to `/`.
+ */
+function cwd(): string;
+
+/**
+ * Returns `true` iff `path` resolves to a filesystem entry under the VFS root. Symlinks count as existing; broken symlinks count as not existing (mirrors `std::path::exists`).
+ * @param path File path under the VFS root.
+ * @capability fs.stat { path }
+ */
+function exists(path: string): boolean;
+
+/**
+ * The active VFS configuration: the root's `mode` (`"none"` / `"ephemeral"` / `"per_session"` / `"named"`), `access`, `volume` and `sizeLimit` (the cap on the bytes its files may hold, or `-1` when none applies), plus `mounts`, the named volumes grafted below the root. Deterministic; no capability required. The host directories backing the VFS are never exposed.
+ */
+function info(): Info;
+
+/**
+ * Returns `true` when the directory at `path` has no entries, or the file at `path` has zero bytes. Throws when `path` does not exist — call `exists(path)` first if it may not.
+ * @param path File or directory path under the VFS root.
+ * @capability fs.list { path, recursive }
+ */
+function isEmpty(path: string): boolean;
+
+/**
+ * Stream the file at `path` as a constant-memory line iterator. Each `next()` returns one line stripped of its trailing CR/LF. A leading UTF-8 BOM on the first line is dropped. The file descriptor is released when the iterator is closed (a `for...of` loop closes it on exit, including `break`/`throw`) or, failing that, when it is garbage-collected.
+ * @param path File path under the VFS root.
+ * @capability fs.read { path }
+ */
+function lines(path: string): Iterator<string>;
+
+/**
+ * List the children of the directory at `path` as a constant-memory iterator of `DirEntry`. `recursive=true` walks descendants as well; `recursive=false` yields only direct children. Order: a directory is always yielded before its contents, and a directory's whole subtree is yielded as one consecutive run — no entry from outside a subtree is interleaved into it. Down to 32 levels of nesting that is exactly depth-first (matching `find` / `os.walk`); deeper than that the walk runs out of directory handles and a subdirectory's contents follow the rest of its parent's entries instead of coming directly after it, so don't depend on strict depth-first order past that depth. Siblings come in whatever order the filesystem reports — not sorted. Symlinks surface as `kind="symlink"` and are not followed. A recursive walk is best-effort: a subdirectory it cannot read — or, past a fixed ceiling on how many postponed descents one walk holds, cannot afford to remember — is skipped and the walk continues, so a listing is not proof that a path is absent.
+ * @param path Directory path under the VFS root.
+ * @param recursive Whether to walk descendants recursively.
+ * @capability fs.list { path, recursive }
+ */
+function list(path: string, recursive: boolean): Iterator<DirEntry>;
+
+/**
+ * Maximum number of bytes `read` / `readText` will load whole; past this they return `undefined`. Also the upper bound on `readBytes(path, offset, length)`'s `length`. Configured by the harness per Store; defaults to the 50 MB tier memory cap.
+ */
+function maxReadSize(): number;
+
+/**
+ * Quick file-only inspection: preview (first ~256 bytes decoded UTF-8 lossy), detected `encoding` (`utf-8` / `utf-16le` / `utf-16be` / `latin1`), `lineEnding` (`lf` / `crlf`), and total `size`. Traps on directories / missing paths.
+ * @param path File path under the VFS root.
+ * @capability fs.stat { path }
+ */
+function peek(path: string): Peek;
+
+/**
+ * Read the whole file as a `Uint8Array`. Returns `undefined` when the file is larger than `maxReadSize()` — the typechecker forces narrowing before use. Traps on missing paths or directories.
+ * @param path File path under the VFS root.
+ * @capability fs.read { path }
+ */
+function read(path: string): Uint8Array | undefined;
+
+/**
+ * Random-access byte-range read. Traps if `length > maxReadSize()`, if `offset` is negative, or on I/O errors. The returned `Uint8Array` may be shorter than `length` if the request runs past EOF.
+ * @param path File path under the VFS root.
+ * @param offset Zero-based byte offset.
+ * @param length Maximum number of bytes to read.
+ * @capability fs.read { path, length }
+ */
+function readBytes(path: string, offset: number, length: number): Uint8Array;
+
+/**
+ * Read the whole file as a UTF-8 string. Returns `undefined` when the file is larger than `maxReadSize()`. Strips a leading UTF-8 BOM by default; invalid bytes are replaced by U+FFFD.
+ * @param path File path under the VFS root.
+ * @capability fs.read { path }
+ */
+function readText(path: string): string | undefined;
+
+/**
+ * File size in bytes. Traps on directories or missing paths — call `exists(path)` first or use `stat(path)` if you need to handle absence.
+ * @param path File path under the VFS root.
+ * @capability fs.stat { path }
+ */
+function size(path: string): number;
+
+/**
+ * Metadata about an entry under the VFS root. Returns `undefined` when the path does not exist; otherwise returns a `Stat` carrying `kind` / `size` / `modifiedAt`.
+ * @param path File path under the VFS root.
+ * @capability fs.stat { path }
+ */
+function stat(path: string): Stat | undefined;
+
+/**
+ * Describe `path` in a few lines of text, for a program that needs to see what is there before deciding what to read. A directory lists its direct children — directories first, then by name — each with its kind, size and modification time, under a count line; an empty directory says `empty directory`. A file reports its size and modification time, and a missing path says `does not exist` rather than throwing. Shows at most 100 entries and counts the rest; iterate `list(path, false)` to visit all of them.
+ * @param path File or directory path under the VFS root.
+ * @capability fs.list { path, recursive }
+ */
+function summary(path: string): string;
+
+/**
+ * Directory entry yielded by `list(path, recursive)`. Properties: `kind` / `name` / `path` / `size`. Constructed only by the iterator.
+ */
+interface DirEntry {
+  /**
+   * `"file"` / `"directory"` / `"symlink"` / `"other"`.
+   */
+  readonly kind: string;
+  /**
+   * Basename of the entry (no parent path).
+   */
+  readonly name: string;
+  /**
+   * Full guest-visible path under the VFS root, with a leading `/`.
+   */
+  readonly path: string;
+  /**
+   * File size in bytes; `0` for non-files.
+   */
+  readonly size: number;
+}
+
+/**
+ * VFS configuration returned by `info()`: the root's `mode`, `access`, `volume` and `sizeLimit` (`-1` when no limit applies), plus its `mounts`. Never carries a host path.
+ */
+interface Info {
+  /**
+   * `"read_write"`, or `"read_only"` when every write to the root throws a `PermissionDeniedError`.
+   */
+  readonly access: string;
+  /**
+   * The root's mode: `"none"` / `"ephemeral"` / `"per_session"` / `"named"`.
+   */
+  readonly mode: string;
+  /**
+   * The named volumes mounted below the root, sorted by path; empty when there are none. Paths under a mount's `path` read and write that volume.
+   */
+  readonly mounts: MountInfo[];
+  /**
+   * The most bytes the files in the root may hold, or `-1` when no limit applies. A write that would pass it throws a `QuotaExceededError`. A named volume's limit is shared with every session and blueprint that uses it.
+   */
+  readonly sizeLimit: number;
+  /**
+   * The named volume backing the root under `mode: "named"`; `""` otherwise, and for a directory `submilli run --vfs` exposes.
+   */
+  readonly volume: string;
+}
+
+/**
+ * One volume mounted below the VFS root, as `info().mounts` lists it. Mount points cannot be removed or moved. Never carries a host path.
+ */
+interface MountInfo {
+  /**
+   * `"read_write"`, or `"read_only"` when every write under `path` throws a `PermissionDeniedError`.
+   */
+  readonly access: string;
+  /**
+   * Always `"named"`: mounts are named volumes the server declares.
+   */
+  readonly mode: string;
+  /**
+   * The guest path the volume is mounted at, such as `/memory`.
+   */
+  readonly path: string;
+  /**
+   * The most bytes the volume may hold, shared with everyone who mounts it, or `-1` when no limit applies.
+   */
+  readonly sizeLimit: number;
+  /**
+   * The volume's name. Its files persist across runs and sessions, and other blueprints that mount it see them.
+   */
+  readonly volume: string;
+}
+
+/**
+ * Lightweight file-only inspection — preview + transport metadata. Constructed only by `peek`; user code reads fields via property access.
+ */
+interface Peek {
+  /**
+   * Detected text encoding: `"utf-8"` / `"utf-16le"` / `"utf-16be"` / `"latin1"`. BOM-driven when a BOM is present; falls back to a UTF-8 validity check then `latin1`.
+   */
+  readonly encoding: string;
+  /**
+   * `"crlf"` if a CRLF sequence appears in the preview; `"lf"` otherwise (including files with no line terminators yet).
+   */
+  readonly lineEnding: string;
+  /**
+   * First ~256 bytes of the file decoded as UTF-8 lossy. Use `lines` / `read` for full content.
+   */
+  readonly preview: string;
+  /**
+   * Total file size in bytes — same value as `size(path)`.
+   */
+  readonly size: number;
+}
+
+/**
+ * Filesystem metadata returned by `stat(path)`. Constructed only by `stat`; user code reads `kind` / `size` / `modifiedAt` via property access.
+ */
+interface Stat {
+  /**
+   * One of `"file"` / `"directory"` / `"symlink"` / `"other"`. Symlinks are reported as `"symlink"` without dereferencing.
+   */
+  readonly kind: string;
+  /**
+   * Last-modified timestamp in milliseconds since the Unix epoch. `0` when the underlying filesystem doesn't report one.
+   */
+  readonly modifiedAt: number;
+  /**
+   * File size in bytes. `0` for non-files (directories, symlinks, other).
+   */
+  readonly size: number;
+}
+
+# submilli:session
+
+/**
+ * Read a session value, checked against `T`. The stored value is tested structurally — every field, element, and union arm — and a mismatch throws a catchable `TypeError` rather than handing back a wrongly-typed value, so `get<Progress>("progress")` returns a real `Progress`, `undefined` for a missing key, or throws. Returns `T | undefined`: a missing key returns `undefined`; a stored `null` is preserved when `T` permits it and otherwise throws a `TypeError`. `T` must be a type the runtime can verify: object, array, tuple, union, and primitive shapes. A bare `unknown`, a generic parameter of the calling function, a class, or an interface with methods is rejected at compile time.
+ * @param key Session key. Exact UTF-16 code units; no normalization, no path semantics.
+ * @capability session.read { key }
+ */
+function get<T>(key: string): T | undefined;
+
+/**
+ * Whether the session holds an entry for `key`. A stored `null` is an entry and answers `true`.
+ * @param key Session key.
+ * @capability session.read { key }
+ */
+function has(key: string): boolean;
+
+/**
+ * Enumerate session keys starting with `prefix`, in UTF-16 code-unit order. Returns metadata only — `key` and `sizeBytes` — never the stored values; read one with `get`. Pass `""` to list every key. Each page holds at most `limit` entries. `nextCursor` is a `string` when the listing is unfinished and `undefined` only when no further matching key remains, so page until it is `undefined` rather than until a page is short: a page can be short because the scan bound was reached, not because the keys ran out. Pass the previous page's `nextCursor` back unchanged; a cursor minted for a different prefix, or one this runtime did not issue, throws. Each page reflects the store as it is when the page is read, not a snapshot: a key written behind a cursor is not seen until the listing restarts. Keys the policy does not permit reading are omitted, and neither the entry count nor the cursor reveals them.
+ * @param prefix Key prefix, matched as exact UTF-16 code units — no normalization, no path semantics. `""` matches every key.
+ * @param limit Maximum entries in the page; 1 to 1000. Outside that range throws.
+ * @param cursor The previous page's `nextCursor`; omit it to start at the first key.
+ * @capability session.list { prefix }
+ * @capability session.read { key } - per candidate key
+ */
+function list(prefix: string, limit: number, cursor?: string): Page;
+
+/**
+ * One key a `list` page discloses. Carries the key and the value's size; the value itself is never part of a listing — call `get(entry.key)` for it.
+ */
+interface Entry {
+  /**
+   * The session key, in the exact code units it was stored under.
+   */
+  readonly key: string;
+  /**
+   * Serialized size of the stored value in bytes — the value alone, not the key and not the store's per-entry overhead.
+   */
+  readonly sizeBytes: number;
+}
+
+/**
+ * One page of a `list` call: the `entries` it discloses and the `nextCursor` that continues it. Constructed only by `list`.
+ */
+interface Page {
+  /**
+   * The keys this page discloses, in UTF-16 code-unit order. May be shorter than `limit`, or empty, while `nextCursor` is still defined.
+   */
+  readonly entries: Entry[];
+  /**
+   * Opaque cursor for the next page, or `undefined` when no further matching key remains. Pass it back to `list` unchanged, with the same prefix.
+   */
+  readonly nextCursor: string | undefined;
+}

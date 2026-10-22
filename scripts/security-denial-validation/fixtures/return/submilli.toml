@@ -1,4 +1,4 @@
 [[package]]
-name = "@acme/denial-validation"
+name = "@pied-piper/denial-validation"
 version = "0.1.0"
 description = "Denial-path contract validation."

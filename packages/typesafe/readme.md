@@ -29,7 +29,8 @@ secrets:
 
 The package reads `TYPESAFE_AI_KEY` through `submilli:secrets`. This deliberately
 uses our binding name, rather than the official SDK's `TYPESAFE_API_KEY` default.
-HTTP permissions are restricted to `POST api.typesafe.ai/v1/systemone`.
+The package requests only `POST https://api.typesafe.ai/v1/systemone` and that
+secret.
 No Node SDK is needed.
 
 ## Use

@@ -1,7 +1,7 @@
 //! Who may use the control listener, and the checks that need no credential.
 //!
 //! - The CLI presents the admin token, checked with the server's own digest
-//!   comparison ([`submilli_server::auth::authenticate`]).
+//!   comparison ([`authenticate`](super::host::auth::authenticate)).
 //! - The page presents a browser session token, which it got by exchanging a
 //!   single-use login code from a link. Both live only in this process's memory,
 //!   as digests, and a stop drops them.
@@ -16,11 +16,11 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
+use super::host::auth::{self, ApiToken};
 use axum::http::HeaderMap;
 use axum::http::header::{HOST, ORIGIN};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
-use submilli_server::ApiToken;
 
 use super::state::{ADMIN_TOKEN, hex, random_hex};
 
@@ -172,14 +172,14 @@ impl ControlAuth {
 
     /// Who presents `headers`' bearer token, if anyone recognized.
     pub(crate) fn caller(&self, headers: &HeaderMap, now: Now) -> Option<Caller> {
-        if let Some(token) = submilli_server::auth::authenticate(&self.tokens, headers) {
+        if let Some(token) = auth::authenticate(&self.tokens, headers) {
             return Some(if token.name() == ADMIN_TOKEN {
                 Caller::Admin
             } else {
                 Caller::Token(token.name().to_owned())
             });
         }
-        let presented = submilli_server::auth::bearer_token(headers)?;
+        let presented = auth::bearer_token(headers)?;
         let secrets = self.lock();
         secrets
             .sessions
@@ -267,9 +267,9 @@ fn digest(secret: &str) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
+    use super::super::host::auth::Role;
     use axum::http::HeaderValue;
     use axum::http::header::AUTHORIZATION;
-    use submilli_server::Role;
 
     use super::*;
 

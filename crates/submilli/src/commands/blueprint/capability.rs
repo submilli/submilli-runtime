@@ -15,9 +15,7 @@ use interpreter::stdlib::capabilities;
 use submilli_blueprint::{Action, Blueprint, DefaultAction, FilterExpr, PermissionRule};
 use submilli_build::PackageStore;
 
-use super::capability_names::{
-    UnlistedName, did_you_mean, http_method_scope, http_misspelling, unlisted_name,
-};
+use super::capability_names::{UnlistedName, did_you_mean, unlisted_name};
 use super::declared_packages;
 use super::file::{blueprint_path, has_capability_rule, load, write};
 use submilli_shared::blueprint_validation::{
@@ -147,15 +145,8 @@ struct Entry {
 }
 
 impl Entry {
-    /// Whether a rule for `capability` belongs under this entry: its own name,
-    /// or for the `http.<method>` template, a name that fills it. A rule for
-    /// the template's literal name matches no call, so it is not listed. A
-    /// package that provides a filling name lists the rule under its own
-    /// entry too, as for a standard-library name a package checks itself.
+    /// Whether a rule for `capability` belongs under this entry.
     fn holds(&self, capability: &str) -> bool {
-        if self.name == capabilities::HTTP_OTHER_METHOD.name {
-            return capabilities::uncataloged_http_method(capability).is_some();
-        }
         capability == self.name
     }
 }
@@ -296,17 +287,12 @@ pub(super) fn unruled_call_outcome(default: Option<DefaultAction>) -> &'static s
 fn collect_sources(blueprint: Option<&Blueprint>) -> Vec<Source> {
     let mut sources = Vec::new();
     for group in capabilities::catalog() {
-        let mut entries: Vec<Entry> = group
+        let entries: Vec<Entry> = group
             .capabilities
             .iter()
             .filter(|c| !c.is_template())
             .map(stdlib_entry)
             .collect();
-        // Outside the catalog, whose other readers take a template for
-        // `mcp.<server>`; see `HTTP_OTHER_METHOD`.
-        if group.module == "submilli:http" {
-            entries.push(stdlib_entry(&capabilities::HTTP_OTHER_METHOD));
-        }
         if !entries.is_empty() {
             sources.push(Source {
                 name: group.module.to_string(),
@@ -453,7 +439,7 @@ fn add(args: &AddArgs) -> Result<String> {
 
     refuse_if_never_grantable_to_main(&args.capability, &args.caller)?;
     let packages = load_packages(&blueprint);
-    let name_warning = validate_name(
+    validate_name(
         &blueprint,
         &packages,
         &args.caller,
@@ -514,7 +500,7 @@ fn add(args: &AddArgs) -> Result<String> {
         args.caller,
         path.display()
     );
-    if let Some(cap) = capabilities::find_gating(&args.capability) {
+    if let Some(cap) = capabilities::find(&args.capability) {
         message.push_str(&format!("\n  {}", cap.summary));
         if !cap.filter_fields.is_empty() {
             message.push_str(&format!(
@@ -526,9 +512,6 @@ fn add(args: &AddArgs) -> Result<String> {
                     .join(", ")
             ));
         }
-    }
-    if let Some(warning) = name_warning {
-        message.push_str(&format!("\n  warning: {warning}"));
     }
     let filter_warnings = filter_field_warnings(
         &blueprint,
@@ -660,22 +643,18 @@ fn refuse_if_never_grantable_to_main(capability: &str, caller: &str) -> Result<(
     );
 }
 
-/// Refuses a name `caller` cannot reach, and returns a warning for a name the
-/// runtime gates but the catalog doesn't list. `force` bypasses the refusals —
-/// the policy engine itself matches names verbatim and doesn't care — but
-/// keeps what an `http.<method>` rule matches as a warning.
+/// Refuses a name `caller` cannot reach. `force` bypasses the refusals — the
+/// policy engine itself matches names verbatim and doesn't care.
 fn validate_name(
     blueprint: &Blueprint,
     packages: &declared_packages::DeclaredPackages,
     caller: &str,
     name: &str,
     force: bool,
-) -> Result<Option<String>> {
+) -> Result<()> {
     match unlisted_name(blueprint, packages, caller, name) {
-        None => Ok(None),
-        Some(UnlistedName::DependencyOnly { .. } | UnlistedName::Unknown { .. }) if force => {
-            Ok(None)
-        }
+        None => Ok(()),
+        Some(UnlistedName::DependencyOnly { .. } | UnlistedName::Unknown { .. }) if force => Ok(()),
         Some(UnlistedName::DependencyOnly {
             dependency,
             dependents,
@@ -691,16 +670,6 @@ fn validate_name(
                  grant it to one of them with {callers}, or declare `{dependency}` \
                  with `submilli blueprint add-package {dependency}`"
             );
-        }
-        Some(UnlistedName::UncatalogedHttpMethod { method }) => {
-            Ok(Some(format!("this rule {}", http_method_scope(&method))))
-        }
-        Some(UnlistedName::MisspelledHttpOperation { intended, method }) => {
-            let misspelling = http_misspelling(intended, &method);
-            if force {
-                return Ok(Some(format!("this rule {misspelling}")));
-            }
-            bail!("'{name}' {misspelling}\n  pass --force to add the rule anyway");
         }
         Some(UnlistedName::Unknown { near }) => {
             bail!(
@@ -836,12 +805,10 @@ mod tests {
         assert!(err.to_string().contains("available:"), "{err}");
     }
 
-    /// `http.request` gates any method, so the listing names the template
-    /// and shows the rules that fill it under it.
     #[test]
-    fn list_shows_the_http_method_template_and_its_rules() {
+    fn list_shows_http_request_with_its_method_field() {
         let (_tmp, path) = temp_blueprint(
-            "name: t\npermissions:\n  main:\n    - capability: http.trace\n      action: deny\n",
+            "name: t\npermissions:\n  main:\n    - capability: http.request\n      filter: method == \"GET\"\n      action: allow\n",
         );
         let out = list(&ListArgs {
             library: Some("submilli:http".into()),
@@ -849,30 +816,16 @@ mod tests {
             unconfigured: false,
         })
         .unwrap();
+        assert!(out.contains("  http.request — "), "{out}");
         assert!(
-            out.contains(
-                "  http.<method> — Any other HTTP method, through `http.request`: `http.trace` gates TRACE\n"
-            ),
+            out.contains("fields: method: string, host: string"),
             "{out}"
         );
-        assert!(out.contains("      rule[main]: http.trace deny"), "{out}");
-    }
-
-    /// The runtime never checks the template's literal name, so a rule for it
-    /// is not shown as if it covered every other method.
-    #[test]
-    fn list_does_not_hold_a_rule_for_the_literal_template_name() {
-        let (_tmp, path) = temp_blueprint(
-            "name: t\npermissions:\n  main:\n    - capability: http.<method>\n      action: deny\n",
+        assert!(
+            out.contains("rule[main]: allow (filter: method == \"GET\")"),
+            "{out}"
         );
-        let out = list(&ListArgs {
-            library: Some("submilli:http".into()),
-            blueprint: Some(path),
-            unconfigured: false,
-        })
-        .unwrap();
-        assert!(out.contains("  http.<method> — "), "{out}");
-        assert!(!out.contains("rule[main]"), "{out}");
+        assert!(!out.contains("http.<method>"), "{out}");
     }
 
     #[test]
@@ -894,52 +847,12 @@ mod tests {
         assert!(err.to_string().contains("unknown capability"), "{err}");
         assert!(err.to_string().contains("fs.read"), "{err}");
 
-        let mut forced = add_args("acme.com/charge", &path);
+        let mut forced = add_args("pied-piper.example/charge", &path);
         forced.force = true;
         add(&forced).unwrap();
         assert_eq!(
             reload(&path).permissions["main"][0].capability,
-            "acme.com/charge"
-        );
-    }
-
-    /// `http.request` gates any method, so a rule for one is added, with a
-    /// warning that names the method it matches. A near miss of a cataloged
-    /// operation is refused: a misspelled `deny` would let the operation through.
-    #[test]
-    fn add_accepts_an_uncataloged_http_method_with_a_warning() {
-        let (_tmp, path) = temp_blueprint("name: t\n");
-        let message = add(&add_args("http.trace", &path)).unwrap();
-        assert!(
-            message.contains(
-                "warning: this rule matches only `http.request` calls with method `TRACE`, through `http.<method>`"
-            ),
-            "{message}"
-        );
-        assert!(message.contains("filter fields: host: string"), "{message}");
-        assert_eq!(
-            reload(&path).permissions["main"][0].capability,
-            "http.trace"
-        );
-
-        let err = add(&add_args("http.TRACE", &path)).unwrap_err();
-        assert!(err.to_string().contains("unknown capability"), "{err}");
-
-        let err = add(&add_args("http.dlete", &path)).unwrap_err();
-        assert!(
-            err.to_string().contains(
-                "'http.dlete' looks like a misspelling of `http.delete`; as written it matches only `http.request` calls with method `DLETE`"
-            ),
-            "{err}"
-        );
-        assert_eq!(reload(&path).permissions["main"].len(), 1);
-
-        let mut forced = add_args("http.dlete", &path);
-        forced.force = true;
-        let message = add(&forced).unwrap();
-        assert!(
-            message.contains("warning: this rule looks like a misspelling of `http.delete`"),
-            "{message}"
+            "pied-piper.example/charge"
         );
     }
 
@@ -1002,12 +915,12 @@ mod tests {
     fn add_allows_the_same_capability_under_a_package_caller() {
         let (_tmp, path) = temp_blueprint("name: t\n");
         let mut package = add_args("secrets.get", &path);
-        package.caller = "@acme/sdk".into();
+        package.caller = "@pied-piper/sdk".into();
 
         add(&package).unwrap();
 
         assert_eq!(
-            reload(&path).permissions["@acme/sdk"][0].capability,
+            reload(&path).permissions["@pied-piper/sdk"][0].capability,
             "secrets.get"
         );
     }
@@ -1105,17 +1018,17 @@ mod tests {
     fn the_unreachable_warning_names_the_callers_remove_command() {
         let (_tmp, path) = temp_blueprint("name: t\n");
         let mut whole = add_args("fs.read", &path);
-        whole.caller = "@acme/x".into();
+        whole.caller = "@pied-piper/x".into();
         add(&whole).unwrap();
 
         let mut narrowed = add_args("fs.read", &path);
-        narrowed.caller = "@acme/x".into();
+        narrowed.caller = "@pied-piper/x".into();
         narrowed.filter = Some("path == \"/x\"".into());
         let message = add(&narrowed).unwrap();
 
         assert!(
             message.contains(&format!(
-                "`permissions.@acme/x` rule 1 for `fs.read` (`allow`, no filter) decides every call first, so this rule never matches; delete or narrow it in the file, or run `submilli blueprint capability remove fs.read --caller @acme/x --blueprint {}`",
+                "`permissions.@pied-piper/x` rule 1 for `fs.read` (`allow`, no filter) decides every call first, so this rule never matches; delete or narrow it in the file, or run `submilli blueprint capability remove fs.read --caller @pied-piper/x --blueprint {}`",
                 path.display()
             )),
             "{message}"

@@ -101,7 +101,12 @@ fn prepare(config: &Config) -> anyhow::Result<BTreeMap<String, Prepared>> {
             snapshot.coverage_gaps.is_empty(),
             "fixture {id} has missing source"
         );
-        snapshot.authority = Some(authority::collect(&snapshot, &manifest, None)?);
+        snapshot.authority = Some(authority::collect(
+            &snapshot,
+            &manifest,
+            None,
+            &submilli_build::ConfigInputs::default(),
+        )?);
         prepared.insert(
             id.clone(),
             Prepared {
@@ -221,6 +226,7 @@ async fn run_trial(
 
 fn review_args() -> Args {
     Args {
+        config: Vec::new(),
         agent: agent::Agent::Codex,
         model: "gpt-6-astra".to_owned(),
         effort: Some(Effort::High),

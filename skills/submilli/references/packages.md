@@ -9,11 +9,11 @@ the operations and their capability fields first using
 ## Layout and commands
 
 ```sh
-submilli build init @acme/billing packages/billing   # first package: writes submilli.toml
-submilli build new  @acme/billing packages/billing   # add to an existing submilli.toml
+submilli build init @pied-piper/billing packages/billing   # first package: writes submilli.toml
+submilli build new  @pied-piper/billing packages/billing   # add to an existing submilli.toml
 submilli build check                                 # compile, derive capabilities.yaml
-submilli build test [-p @acme/billing] [--skip-network] # run tests + compile docs examples
-submilli build publish-local [-p @acme/billing]      # install into the local store
+submilli build test [-p @pied-piper/billing] [--skip-network] # run tests + compile docs examples
+submilli build publish-local [-p @pied-piper/billing]      # install into the local store
 ```
 
 `submilli.toml` holds one `[[package]]` block per package: `name`, `version`,
@@ -29,6 +29,44 @@ derived from the code. `submilli blueprint add-package` and
 `submilli blueprint lint --fix` turn `requires` into the package's grants, so
 never hand-write those rules from memory.
 
+## Package build configuration
+
+Use `<package>/src/config.ts` for deployment choices fixed at installation, such
+as a self-hosted service URL. Import it with ordinary relative imports:
+
+```typescript
+// src/config.ts
+export declare const baseUrl: string;
+export const timeoutMs = 5000;
+```
+
+`export declare const` requires a build input. Exported `const` primitive
+literals provide defaults; optional primitive annotations must match. Only
+strings, finite numbers and booleans are supported. This root file is reserved
+for these declarations and comments; imports, functions and computed defaults
+are refused. There is no TOML configuration schema or special module import.
+
+Supply repeatable `--config name=value` with an explicitly selected package:
+`submilli build test -p @pied-piper/search --config baseUrl=https://search.test`,
+`submilli install OWNER/REPOSITORY @OWNER/search --config baseUrl=https://search.internal`,
+or `submilli server packages install` with the same repository, package, and
+flags. Install examples use placeholders: replace `OWNER/REPOSITORY` and
+`@OWNER/search` with the real repository and declared Package; the scope must
+match its GitHub owner. Build check/publish-local/authority-map/security-review also accept inputs.
+Local builds use flags and source defaults, not the selected package's installed
+overrides. Credentials remain secrets; session identity remains a variable.
+
+Installs preserve explicit overrides across upgrades while adopting new source
+defaults. Changing installed source or configuration requires `--upgrade`.
+Install commands accept `--reset-config name` to remove an explicit override.
+Configuration values are inspectable in artifacts and never grant permissions.
+
+Inputs apply only to the selected package. If a dependency needs a required value,
+use the error's pinned local/server command to install that dependency first,
+then retry the original installation. Never forward parent inputs into dependencies
+or invent endpoint values. Dependencies with defaults remain automatic.
+Playground rebuilds retain overrides previously supplied by publish-local.
+
 ## The smallest slice
 
 ```typescript
@@ -38,10 +76,10 @@ import { check } from "submilli:security";
  * Return a customer's fixture balance in cents.
  * @param customerId The customer's id.
  * @returns The balance, in cents.
- * @capability acme.com/balance.read { customerId: string }
+ * @capability pied-piper.example/balance.read { customerId: string }
  */
 export function readBalance(customerId: string): number {
-    check("acme.com/balance.read", { customerId });
+    check("pied-piper.example/balance.read", { customerId });
     return 6150;
 }
 ```
@@ -55,7 +93,7 @@ The `@capability` tag declares the operation's name and the policy-visible
 fields; `check` enforces it at runtime. The annotation alone enforces nothing.
 
 ```text
-@capability acme.com/orders.cancel { customerId: string, orderId: $orderId, totalCents: number }
+@capability pied-piper.example/orders.cancel { customerId: string, orderId: $orderId, totalCents: number }
 ```
 
 Each binding inside `{ }` becomes a field in the schema:
@@ -135,11 +173,11 @@ export interface MessageInput {
 /**
  * Post one message. Flat input: destructure once, pass the consts on.
  * @param input The channel and the text to post.
- * @capability acme.com/messages.post { channelId: $input.channelId }
+ * @capability pied-piper.example/messages.post { channelId: $input.channelId }
  */
 export function postMessage(input: MessageInput): void {
     const { channelId, text } = input;
-    check("acme.com/messages.post", { channelId: channelId });
+    check("pied-piper.example/messages.post", { channelId: channelId });
     send(channelId, text);
 }
 
@@ -148,14 +186,14 @@ export function postMessage(input: MessageInput): void {
  * the package's own array.
  * @param channelIds The channels to post to.
  * @param text The message body.
- * @capability acme.com/messages.broadcast { channelIds }
+ * @capability pied-piper.example/messages.broadcast { channelIds }
  */
 export function broadcast(channelIds: string[], text: string): void {
     const targets: string[] = [];
     for (const channelId of channelIds) {
         targets.push(channelId);
     }
-    check("acme.com/messages.broadcast", { channelIds: targets });
+    check("pied-piper.example/messages.broadcast", { channelIds: targets });
     for (const channelId of targets) {
         send(channelId, text);
     }
@@ -166,10 +204,10 @@ export function broadcast(channelIds: string[], text: string): void {
  * needs no copy.
  * @param channelId The destination channel.
  * @param fields Name and value pairs, posted one per line.
- * @capability acme.com/messages.post { channelId }
+ * @capability pied-piper.example/messages.post { channelId }
  */
 export function postFields(channelId: string, fields: Map<string, string>): void {
-    check("acme.com/messages.post", { channelId: channelId });
+    check("pied-piper.example/messages.post", { channelId: channelId });
     for (const [name, value] of fields) {
         send(channelId, name + ": " + value);
     }
@@ -200,26 +238,26 @@ one `for...of` into the package's own array:
 
 ```ts
 // Read for the check, read again for the request.
-check("acme.com/messages.post", { channelId: input.channelId });
+check("pied-piper.example/messages.post", { channelId: input.channelId });
 send(input.channelId, input.text);
 
 // A condition picks which check runs, and a second read picks the operation.
-if (input.kind === "reply") check("acme.com/messages.reply", { threadId });
-else check("acme.com/messages.post", { channelId });
+if (input.kind === "reply") check("pied-piper.example/messages.reply", { threadId });
+else check("pied-piper.example/messages.post", { channelId });
 if (input.kind === "reply") reply(threadId, text); else post(channelId, text);
 
 // The decision goes through a flag, and the request reads the value again.
 let notify = false;
 if (input.mentions !== undefined) notify = true;
-if (notify) check("acme.com/mentions.notify", {});
+if (notify) check("pied-piper.example/mentions.notify", {});
 sendMentions(input.mentions);  // undefined on the first read, a list now: unchecked
 
 // The object holding a checked field is handed to a helper that reads it.
-check("acme.com/messages.post", { channelId: input.channelId });
+check("pied-piper.example/messages.post", { channelId: input.channelId });
 request(input);
 
 // A checked array is iterated once to check and again to send.
-for (const id of input.channelIds) check("acme.com/messages.post", { channelId: id });
+for (const id of input.channelIds) check("pied-piper.example/messages.post", { channelId: id });
 for (const id of input.channelIds) send(id, input.text);
 ```
 
@@ -227,11 +265,12 @@ for (const id of input.channelIds) send(id, input.text);
 
 The pattern below wraps a REST API. It reads the token by literal secret name
 inside the package, builds URLs from a top-level constant so the compiler can
-derive `host == "api.acme.com"` into `requires`, separates pure builders from
-network code so they can be unit tested, and resolves ownership before a write.
+derive `host == "api.pied-piper.example"` into `requires`, validates input
+before any check or request so tests reach it offline, and resolves ownership
+before a write.
 
 ```typescript
-// Orders for one customer, wrapping the internal REST API at api.acme.com.
+// Orders for one customer, wrapping the internal REST API at api.pied-piper.example.
 // The API token is read from the ORDERS_API_TOKEN secret inside this package;
 // generated code never sees it.
 
@@ -240,7 +279,7 @@ import { encodeComponent } from "submilli:url";
 import secrets from "submilli:secrets";
 import { check } from "submilli:security";
 
-const BASE = "https://api.acme.com/v1";
+const BASE = "https://api.pied-piper.example/v1";
 
 /** One order on a customer's account. */
 export interface Order {
@@ -278,11 +317,11 @@ export interface CancelInput {
 
 /**
  * List one customer's orders, newest first.
- * @capability acme.com/orders.list { customerId }
+ * @capability pied-piper.example/orders.list { customerId }
  */
 export function listOrders(customerId: string, page?: PageOptions): Page<Order> {
     const query = pageQuery(page?.limit, page?.cursor);
-    check("acme.com/orders.list", { customerId: customerId });
+    check("pied-piper.example/orders.list", { customerId: customerId });
     const path = "/customers/" + encodeComponent(customerId) + "/orders" + query;
     const response = request("GET", path, null);
     return JSON.parse(response.body) as Page<Order>;
@@ -291,7 +330,7 @@ export function listOrders(customerId: string, page?: PageOptions): Page<Order> 
 /**
  * Cancel an open order. The order's owner is resolved from the service, so the
  * policy filter sees the real customer even though the caller passes only an id.
- * @capability acme.com/orders.cancel { customerId: string, orderId: $orderId, totalCents: number }
+ * @capability pied-piper.example/orders.cancel { customerId: string, orderId: $orderId, totalCents: number }
  */
 export function cancelOrder(orderId: string, input?: CancelInput): Order {
     const reason = input?.reason;
@@ -299,7 +338,7 @@ export function cancelOrder(orderId: string, input?: CancelInput): Order {
     if (order === null) {
         throw new Error("order not found: " + orderId);
     }
-    check("acme.com/orders.cancel", {
+    check("pied-piper.example/orders.cancel", {
         customerId: order.customerId,
         orderId: orderId,
         totalCents: order.totalCents,
@@ -307,11 +346,6 @@ export function cancelOrder(orderId: string, input?: CancelInput): Order {
     const body: CancelInput = reason === undefined ? {} : { reason: reason };
     const response = request("POST", "/orders/" + encodeComponent(orderId) + "/cancel", body);
     return JSON.parse(response.body) as Order;
-}
-
-/** Build the `?limit=&cursor=` suffix; exported so tests cover it without a token. */
-export function buildPageQuery(page?: PageOptions): string {
-    return pageQuery(page?.limit, page?.cursor);
 }
 
 function pageQuery(requested: number | undefined, cursor: string | undefined): string {
@@ -357,7 +391,7 @@ function request(method: string, path: string, body: {} | null): Response {
 
 `build check` derives from this: `provides` with `orders.list { customerId }`
 and `orders.cancel { customerId, orderId, totalCents }`, and `requires` of
-`http.get` and `http.post` filtered to `host == "api.acme.com"` plus
+`http.get` and `http.post` filtered to `host == "api.pied-piper.example"` plus
 `secrets.get` filtered to `name == "ORDERS_API_TOKEN"`. If the URL is built
 through an intermediate variable or a parameter carries the host, the compiler
 warns that it cannot resolve the host and the derived filter loses it. Keep
@@ -414,16 +448,40 @@ pasting them into chat or source control.
 
 ## Model-facing documentation
 
+A package has two readmes. The root `README.md` is for the people who install
+and grant it: install and secret commands, blueprint YAML, which capabilities
+to grant and how to filter them. `docs/readme.md` is for the agent writing a
+program, which can run none of that and cannot change its blueprint, so keep
+setup out of it. A capability name belongs there only where it explains a
+denial the agent will see.
+
 `docs/readme.md` is what the agent reads through the `packages.docs` tool. Its
 `ts`/`typescript` fences are compiled against the package by `build test`, so
 examples cannot rot; use `ts ignore` for illustrative fragments. Cover: what
-the package is for, every operation grouped by read and write, argument and
+the package is for, each operation's behavior in its own region, argument and
 return types, pagination and how to request the next page, error behavior and
-`null` returns, which fields are policy-visible and that a denial means the
-operation is forbidden rather than mis-called, and that credentials are
-supplied internally so no key is ever passed. End with one complete `main`
-example that returns a compact result. Write it for an agent choosing calls,
-not for a human onboarding.
+`null` returns, that a denial means the operation is forbidden rather than
+mis-called, and that credentials are supplied internally so no key is ever
+passed. End with one complete `main` example that returns a compact result,
+inside the region of the operations it calls.
+
+An agent reads only what its blueprint could let it call. Wrap each
+operation's section in a capability region, matching the `@capability` tags of
+the functions it describes:
+
+```markdown
+<!-- submilli:if capability="pied-piper.example/orders.cancel" -->
+## Cancel an order
+...
+<!-- submilli:endif -->
+```
+
+`all="a b"` needs every name and `any="a b"` at least one; a function with
+several tags needs `all`. Directive lines stand alone, unindented, outside
+fenced code, and may sit between list items or table rows. Do not list every
+operation in prose outside regions: make it a list with one region per item,
+or leave the listing to the declarations, which agents already get narrowed.
+The build rejects malformed directives and names nothing provides.
 
 ## Tests
 
@@ -437,18 +495,22 @@ normally:
 
 ```typescript
 import { label, expectException } from "submilli:test";
-import { buildPageQuery } from "@acme/orders";
+import { listOrders } from "@pied-piper/orders";
 function main(): void {
-  label("defaults to a page of 50");
-  assert(buildPageQuery() === "?limit=50", "default page size");
-  label("rejects a limit above 100");
-  const error = expectException(() => { buildPageQuery({ limit: 101 }); }, "RangeError");
+  label("rejects a limit above 100 before any request");
+  const error = expectException(() => { listOrders("pied_piper", { limit: 101 }); }, "RangeError");
   assert(error.message.includes("limit"), "message names the argument");
 }
 ```
 
-- Unit-test pure builders (query strings, filter variables, error rendering)
-  without network or secrets. Export them for that purpose.
+- In `src/lib.ts`, export only the operations an agent calls: an exported
+  helper there is shown to every agent, whatever its blueprint allows. Put
+  request builders and response mappers in another `src/` file that `lib.ts`
+  imports, export them there, and unit-test them offline with
+  `import { buildPageQuery } from "../src/request";`. A test reaches only its
+  own package's `src/` files; `submilli docs` and programs still see only
+  `lib.ts`. Test input validation through the operations: it runs before
+  `check()` and `secrets.get`, so it needs no network or secret.
 - Tests receive no credentials by default. Use `--env-var NAME` (repeatable or
   comma-separated), `--env-file PATH` (relative to the current directory), or
   `--all-env`. Precedence is `--env-var` > `--env-file` > `--all-env`, regardless
@@ -464,9 +526,10 @@ function main(): void {
   not detection of network calls. Other tests and readme examples still run.
   `SUBMILLI_SKIP_HTTP_TESTS` has no effect on package-test selection.
 - In a CI job with an injected secret, run
-  `submilli build test --deny-warnings -p @acme/billing --env-var BILLING_API_KEY`.
-- Test that a write operation sends only the fields set, that a missing
-  resource yields `null`, and that a service error surfaces its detail.
+  `submilli build test --deny-warnings -p @pied-piper/billing --env-var BILLING_API_KEY`.
+- In tests gated on the secret, check that a write operation sends only the
+  fields set, that a missing resource yields `null`, and that a service error
+  surfaces its detail.
 
 Package tests run with the package's own identity and an unrestricted policy.
 They do not prove that a `main` caller is constrained; the allowed and denied

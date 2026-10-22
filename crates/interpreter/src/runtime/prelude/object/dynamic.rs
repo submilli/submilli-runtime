@@ -251,7 +251,6 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             ctor_key(name),
             FuncType::new(&engine, params, results),
-            true,
             move |caller, params, results| {
                 Box::pin(async move {
                     match (name, params, results) {
@@ -280,7 +279,6 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("#hasField"),
         FuncType::new(&engine, [object, string], [ValType::I32]),
-        true,
         |caller, params, results| {
             let ([object, key], [result]) = (params, results) else {
                 return Err(crate::runtime::host::fatal_host_error(

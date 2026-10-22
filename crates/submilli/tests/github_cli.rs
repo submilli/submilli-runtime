@@ -81,7 +81,7 @@ fn authenticate_refuses_an_owner_that_is_not_a_github_name() {
     let home = tempfile::tempdir().unwrap();
     let output = github(
         home.path(),
-        &["authenticate", "--owner", "acme&contents=write"],
+        &["authenticate", "--owner", "pied-piper&contents=write"],
     );
     assert!(!output.status.success(), "{output:?}");
     let error = String::from_utf8_lossy(&output.stderr);

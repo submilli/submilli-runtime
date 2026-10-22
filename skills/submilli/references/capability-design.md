@@ -59,7 +59,7 @@ limited another way or excluded from customer-facing roles.
 ## 5. Group into packages
 
 One package per service or cohesive domain with a shared credential and a
-shared capability namespace (`acme.com/...`). Separate packages when
+shared capability namespace (`pied-piper.example/...`). Separate packages when
 credentials, owning teams, or review boundaries differ. Reuse a maintained
 package when one exists and its capabilities carry the fields you need;
 otherwise wrap the gap in a small package of your own rather than editing the
@@ -84,7 +84,7 @@ Deliver this before implementing, with file and function citations:
 
 | Workflow | Existing code | Package operation and check fields | Blueprint, caller rules, bound variables | Verification |
 | --- | --- | --- | --- | --- |
-| Support balance lookup | `billing.ts readBalance`, identity from `auth.ts requireSession` | `@acme/billing` `readBalance(customerId)` checks `{ customerId }` | `support-read`: main allows `balance.read` where `customerId == ${vars.customerId}`; `customerId` required | own customer allowed; other customer denied; missing binding rejected |
+| Support balance lookup | `billing.ts readBalance`, identity from `auth.ts requireSession` | `@pied-piper/billing` `readBalance(customerId)` checks `{ customerId }` | `support-read`: main allows `balance.read` where `customerId == ${vars.customerId}`; `customerId` required | own customer allowed; other customer denied; missing binding rejected |
 | Small refunds awaiting approval | `billing.ts refund(chargeId, amountCents)` | `refund(chargeId, amountCents)` resolves the charge's customer, checks `{ customerId, chargeId, amountCents }` | Runtime agent gets no refund grant; trusted application owns approval and a separate execution path with customer and amount constraints | agent refund denied; no side effect; approved path must separately verify the exact approved operation |
 | Finance export | `billing.ts exportCustomers` | `exportCustomers()` checks `{}` | `finance-report`: no customer variable; selected by the app only for the finance role | support blueprint cannot call it |
 

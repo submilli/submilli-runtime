@@ -58,6 +58,16 @@ pub trait BlueprintStore: Send + Sync + 'static {
     /// Parsed blueprints of the active set, sorted by name.
     async fn list_blueprints(&self) -> Result<Vec<Blueprint>, StoreError>;
     async fn get(&self, name: &str) -> Result<Option<Blueprint>, StoreError>;
+    /// [`Self::get`] with the revision it read, which changes whenever the
+    /// blueprint stored under `name` does, so a cache of what is derived from
+    /// it can key on the pair. A store without revisions identifies one by a
+    /// hash of the blueprint.
+    async fn get_with_revision(&self, name: &str) -> Result<Option<(Blueprint, u64)>, StoreError> {
+        Ok(self.get(name).await?.map(|blueprint| {
+            let revision = content_revision(&blueprint);
+            (blueprint, revision)
+        }))
+    }
     async fn get_yaml(&self, name: &str) -> Result<Option<String>, StoreError>;
     /// Why a registered name has no runnable blueprint: its current revision is
     /// on disk but no longer parses — typically a schema key retired by an
@@ -72,3 +82,17 @@ pub trait BlueprintStore: Send + Sync + 'static {
 }
 
 pub use crate::adapters::blueprint::StoredBlueprint;
+
+/// A revision derived from the blueprint's content, for a store that keeps
+/// none: the first eight bytes of the SHA-256 of its JSON form.
+fn content_revision(blueprint: &Blueprint) -> u64 {
+    use sha2::{Digest, Sha256};
+    // A blueprint that fails to serialize hashes as empty: every such one then
+    // shares a revision, so a cache keyed on it is shared too. Parsed
+    // blueprints hold only strings, numbers, and string-keyed maps, which
+    // serialize.
+    let bytes = serde_json::to_vec(blueprint).unwrap_or_default();
+    let digest: [u8; 32] = Sha256::digest(&bytes).into();
+    let [a, b, c, d, e, f, g, h, ..] = digest;
+    u64::from_le_bytes([a, b, c, d, e, f, g, h])
+}

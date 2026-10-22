@@ -32,7 +32,6 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             crate::mangle::prelude(&format!("__value_{operation}")),
             FuncType::new(&engine, [value.clone(), value.clone()], [value.clone()]),
-            true,
             move |caller, params, results| {
                 Box::pin(async move {
                     let lhs = primitive(caller, abi_arg(params, 0)?).await?;
@@ -49,7 +48,6 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             crate::mangle::prelude(&format!("__value_{operation}")),
             FuncType::new(&engine, [value.clone(), value.clone()], [ValType::I32]),
-            true,
             move |caller, params, results| {
                 Box::pin(async move {
                     let lhs = primitive(caller, abi_arg(params, 0)?).await?;
@@ -78,7 +76,6 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             crate::mangle::prelude(&format!("__value_{operation}")),
             FuncType::new(&engine, [value.clone()], [value.clone()]),
-            true,
             move |caller, params, results| {
                 Box::pin(async move {
                     let value = primitive(caller, abi_arg(params, 0)?).await?;
@@ -93,7 +90,6 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::prelude("__value_to_number"),
         FuncType::new(&engine, [value.clone()], [ValType::F64]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 *abi_result(results, 0)? =
@@ -107,7 +103,6 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::prelude("__value_to_index"),
         FuncType::new(&engine, [value.clone()], [ValType::F64]),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let key = primitive_with_hint(caller, abi_arg(params, 0)?, true).await?;
@@ -133,7 +128,6 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 HeapType::ConcreteStruct(intr.string),
             ))],
         ),
-        true,
         |caller, params, results| {
             Box::pin(async move {
                 let value = primitive_with_hint(caller, abi_arg(params, 0)?, true).await?;

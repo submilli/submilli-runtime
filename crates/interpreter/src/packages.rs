@@ -11,6 +11,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
+use crate::docs_view::{DocAvailability, Unscoped, project_declaration};
 use crate::runtime::prelude::declaration::prelude_package_declaration;
 use crate::stdlib::Stdlib;
 use crate::types::escape_string_literal;
@@ -53,52 +54,44 @@ pub fn search(query: &str) -> Vec<ModuleSummary> {
 /// Discovery over the modules of a [`Stdlib`]: what the free functions above do
 /// for [`Stdlib::core`], for any set.
 impl Stdlib {
+    /// The modules of this set as a reader sees them: each narrowed to what
+    /// `availability` allows, and a module with nothing left to call
+    /// left out.
+    pub fn view(self, availability: &dyn DocAvailability) -> StdlibView {
+        self.view_where(availability, |_, usable| usable)
+    }
+
+    /// [`Self::view`], with the host deciding which modules to keep: `keep`
+    /// gets each module's name and whether it is usable, for a module the
+    /// host shows on a condition of its own.
+    pub fn view_where(
+        self,
+        availability: &dyn DocAvailability,
+        keep: impl Fn(&str, bool) -> bool,
+    ) -> StdlibView {
+        let modules = user_modules(self)
+            .iter()
+            .filter_map(|defs| {
+                let projection = project_declaration(defs, availability);
+                keep(&defs.package_name, projection.usable).then_some(projection.declaration)
+            })
+            .collect();
+        StdlibView { modules }
+    }
+
     /// [`docs`] over the modules of this set.
     pub fn docs(self, name: &str) -> Option<ModuleDoc> {
-        user_modules(self)
-            .into_iter()
-            .find(|d| d.package_name == name)
-            .map(|defs| ModuleDoc {
-                name: defs.package_name.clone(),
-                description: module_description(&defs.package_name).to_string(),
-                declarations: render_declarations(&defs),
-            })
+        self.view(&Unscoped).docs(name)
     }
 
     /// [`search`] over the modules of this set.
     pub fn search(self, query: &str) -> Vec<ModuleSummary> {
-        let q = query.trim().to_lowercase();
-        user_modules(self)
-            .iter()
-            .filter(|defs| matches_query(defs, &q))
-            .map(|defs| ModuleSummary {
-                name: defs.package_name.clone(),
-                description: module_description(&defs.package_name).to_string(),
-            })
-            .collect()
+        self.view(&Unscoped).search(query)
     }
 
     /// [`resolve`] over the modules of this set.
     pub fn resolve(self, name: &str) -> Resolution {
-        if let Some(doc) = self.docs(name) {
-            return Resolution::Module(doc);
-        }
-        match builtin_lookup(name) {
-            BuiltinLookup::Found(declarations) => Resolution::Builtin {
-                name: name.to_string(),
-                declarations,
-            },
-            BuiltinLookup::UnknownMember {
-                path,
-                member,
-                members,
-            } => Resolution::UnknownMember {
-                path,
-                member,
-                members,
-            },
-            BuiltinLookup::Unknown => Resolution::Unknown,
-        }
+        self.view(&Unscoped).resolve(name)
     }
 
     /// [`suggest_filtered`] over the modules of this set.
@@ -108,54 +101,7 @@ impl Stdlib {
         extra: &[String],
         visible: impl Fn(&str) -> bool,
     ) -> Option<String> {
-        let mut candidates: Vec<String> = self.search("").into_iter().map(|m| m.name).collect();
-        let builtins = builtins();
-        candidates.extend(builtins.types);
-        candidates.extend(builtins.namespaces);
-        candidates.extend(extra.iter().cloned());
-        candidates.retain(|candidate| visible(candidate));
-
-        // Only the head segment is in question: `Temporel.Instant` misses because
-        // of `Temporel`, and the tail only inflates the distance past threshold.
-        let query = name.split('.').find(|s| !s.is_empty()).unwrap_or(name);
-        // `closest_match` floors its threshold at 2 edits, so a one- or two-character
-        // query sits within reach of an unrelated name. Below that length there is no
-        // signal to match on.
-        if query.len() < 3 {
-            return None;
-        }
-
-        if let Some((_, replacement)) = OMITTED_GLOBALS
-            .iter()
-            .find(|(omitted, _)| omitted.eq_ignore_ascii_case(name))
-        {
-            return Some((*replacement).to_string());
-        }
-
-        // Never offer the query back to the caller: a name that resolved nowhere is
-        // not its own repair, however it was spelled.
-        let is_self = |c: &String| c.eq_ignore_ascii_case(name);
-        if let Some(hit) = candidates
-            .iter()
-            .find(|c| !is_self(c) && name_tail(c).eq_ignore_ascii_case(query))
-        {
-            return Some(hit.clone());
-        }
-        // Match full names and scheme-stripped tails in one pass, so the globally
-        // closest key wins: `htp` should reach `submilli:http` (one edit from its
-        // tail) rather than whichever unrelated full name lands inside threshold.
-        let mut keys: Vec<(&str, &str)> = Vec::new();
-        for c in candidates.iter().filter(|c| !is_self(c)) {
-            keys.push((c.as_str(), c.as_str()));
-            let tail = name_tail(c);
-            if tail != c.as_str() {
-                keys.push((tail, c.as_str()));
-            }
-        }
-        let hit = crate::did_you_mean::closest_match(query, keys.iter().map(|(k, _)| *k))?;
-        keys.iter()
-            .find(|(k, _)| *k == hit)
-            .map(|(_, owner)| (*owner).to_string())
+        self.view(&Unscoped).suggest_filtered(name, extra, visible)
     }
 
     /// [`catalog_filtered`] over the modules of this set.
@@ -164,20 +110,7 @@ impl Stdlib {
         extra: Vec<CatalogEntry>,
         visible: impl Fn(&str) -> bool,
     ) -> Catalog {
-        let mut entries: Vec<CatalogEntry> = self
-            .search("")
-            .into_iter()
-            .map(|m| CatalogEntry {
-                name: m.name,
-                source: SOURCE_STDLIB.to_string(),
-                description: m.description,
-            })
-            .collect();
-        entries.extend(extra);
-        entries.retain(|entry| visible(&entry.name));
-        let remaining = entries.len().saturating_sub(CATALOG_LIMIT);
-        entries.truncate(CATALOG_LIMIT);
-        Catalog { entries, remaining }
+        self.view(&Unscoped).catalog_filtered(extra, visible)
     }
 
     /// [`render_stdlib_d_ts`] for the modules of this set.
@@ -233,6 +166,154 @@ impl Stdlib {
             let _ = writeln!(out, "}}\n");
         }
         out.trim_end().to_string()
+    }
+}
+
+/// The standard library modules one reader can use, from [`Stdlib::view`].
+/// Docs, search, suggestions and the catalog all read this one set, so none
+/// of them advertises what another leaves out.
+pub struct StdlibView {
+    modules: Vec<PackageDeclaration>,
+}
+
+impl StdlibView {
+    /// The names of the modules in the view.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.modules.iter().map(|defs| defs.package_name.as_str())
+    }
+
+    /// Whether the view has the module `name`.
+    pub fn contains(&self, name: &str) -> bool {
+        self.declaration(name).is_some()
+    }
+
+    /// The narrowed declaration of the module `name`.
+    pub fn declaration(&self, name: &str) -> Option<&PackageDeclaration> {
+        self.modules.iter().find(|defs| defs.package_name == name)
+    }
+
+    /// [`docs`] over the view.
+    pub fn docs(&self, name: &str) -> Option<ModuleDoc> {
+        self.declaration(name).map(|defs| ModuleDoc {
+            name: defs.package_name.clone(),
+            description: module_description(&defs.package_name).to_string(),
+            declarations: render_declarations(defs),
+        })
+    }
+
+    /// [`search`] over the view.
+    pub fn search(&self, query: &str) -> Vec<ModuleSummary> {
+        let q = query.trim().to_lowercase();
+        self.modules
+            .iter()
+            .filter(|defs| matches_query(defs, &q))
+            .map(|defs| ModuleSummary {
+                name: defs.package_name.clone(),
+                description: module_description(&defs.package_name).to_string(),
+            })
+            .collect()
+    }
+
+    /// [`resolve`] over the view.
+    pub fn resolve(&self, name: &str) -> Resolution {
+        if let Some(doc) = self.docs(name) {
+            return Resolution::Module(doc);
+        }
+        match builtin_lookup(name) {
+            BuiltinLookup::Found(declarations) => Resolution::Builtin {
+                name: name.to_string(),
+                declarations,
+            },
+            BuiltinLookup::UnknownMember {
+                path,
+                member,
+                members,
+            } => Resolution::UnknownMember {
+                path,
+                member,
+                members,
+            },
+            BuiltinLookup::Unknown => Resolution::Unknown,
+        }
+    }
+
+    /// [`suggest_filtered`] over the view.
+    pub fn suggest_filtered(
+        &self,
+        name: &str,
+        extra: &[String],
+        visible: impl Fn(&str) -> bool,
+    ) -> Option<String> {
+        let mut candidates: Vec<String> = self.search("").into_iter().map(|m| m.name).collect();
+        let builtins = builtins();
+        candidates.extend(builtins.types);
+        candidates.extend(builtins.namespaces);
+        candidates.extend(extra.iter().cloned());
+        candidates.retain(|candidate| visible(candidate));
+
+        // Only the head segment is in question: `Temporel.Instant` misses because
+        // of `Temporel`, and the tail only inflates the distance past threshold.
+        let query = name.split('.').find(|s| !s.is_empty()).unwrap_or(name);
+        // `closest_match` floors its threshold at 2 edits, so a one- or two-character
+        // query sits within reach of an unrelated name. Below that length there is no
+        // signal to match on.
+        if query.len() < 3 {
+            return None;
+        }
+
+        if let Some((_, replacement)) = OMITTED_GLOBALS
+            .iter()
+            .find(|(omitted, _)| omitted.eq_ignore_ascii_case(name))
+        {
+            return Some((*replacement).to_string());
+        }
+
+        // Never offer the query back to the caller: a name that resolved nowhere is
+        // not its own repair, however it was spelled.
+        let is_self = |c: &String| c.eq_ignore_ascii_case(name);
+        if let Some(hit) = candidates
+            .iter()
+            .find(|c| !is_self(c) && name_tail(c).eq_ignore_ascii_case(query))
+        {
+            return Some(hit.clone());
+        }
+        // Match full names and scheme-stripped tails in one pass, so the globally
+        // closest key wins: `htp` should reach `submilli:http` (one edit from its
+        // tail) rather than whichever unrelated full name lands inside threshold.
+        let mut keys: Vec<(&str, &str)> = Vec::new();
+        for c in candidates.iter().filter(|c| !is_self(c)) {
+            keys.push((c.as_str(), c.as_str()));
+            let tail = name_tail(c);
+            if tail != c.as_str() {
+                keys.push((tail, c.as_str()));
+            }
+        }
+        let hit = crate::did_you_mean::closest_match(query, keys.iter().map(|(k, _)| *k))?;
+        keys.iter()
+            .find(|(k, _)| *k == hit)
+            .map(|(_, owner)| (*owner).to_string())
+    }
+
+    /// [`catalog_filtered`] over the view.
+    pub fn catalog_filtered(
+        &self,
+        extra: Vec<CatalogEntry>,
+        visible: impl Fn(&str) -> bool,
+    ) -> Catalog {
+        let mut entries: Vec<CatalogEntry> = self
+            .search("")
+            .into_iter()
+            .map(|m| CatalogEntry {
+                name: m.name,
+                source: SOURCE_STDLIB.to_string(),
+                description: m.description,
+            })
+            .collect();
+        entries.extend(extra);
+        entries.retain(|entry| visible(&entry.name));
+        let remaining = entries.len().saturating_sub(CATALOG_LIMIT);
+        entries.truncate(CATALOG_LIMIT);
+        Catalog { entries, remaining }
     }
 }
 
@@ -896,11 +977,9 @@ fn module_description(name: &str) -> &'static str {
         "submilli:embedding" => {
             "Remote text embeddings: embed batches into sealed vectors, and models() to discover aliases."
         }
-        "submilli:fs" => "Sandbox filesystem: read/write/list/stat/remove/exists/info.",
-        "submilli:git" => {
-            "Capability-controlled VFS repositories: history, staging, commits, branches and HTTPS fetch."
-        }
-        "submilli:http" => "Outbound HTTP: get/post/put/patch/delete/head.",
+        "submilli:fs" => "Sandbox filesystem: files and directories under the VFS root.",
+        "submilli:git" => "Capability-controlled Git repositories in the VFS, with HTTPS remotes.",
+        "submilli:http" => "Outbound HTTP requests, and downloads into the filesystem.",
         "submilli:llm" => "Gated model calls: call/batch, and models() to discover them.",
         "submilli:secrets" => "Policy-gated access to Blueprint-declared secrets.",
         "submilli:session" => {
@@ -1189,11 +1268,48 @@ fn rendered_type_references(defs: &PackageDeclaration) -> Vec<TypeReference> {
         .iter()
         .map(|(name, symbol)| (name, public_surface(symbol)))
         .collect();
-    let rendered = [
+    collect_type_references(&[
         serde_json::to_value(&defs.values),
         serde_json::to_value(&types),
         serde_json::to_value(&defs.namespaces),
-    ];
+    ])
+}
+
+/// The mangled names of the by-name types in `rendered`, as
+/// [`rendered_type_references`] finds them.
+pub(crate) fn type_references(
+    rendered: &[Result<serde_json::Value, serde_json::Error>],
+) -> Vec<String> {
+    collect_type_references(rendered)
+        .into_iter()
+        .map(|reference| reference.mangled)
+        .collect()
+}
+
+/// The mangled names of the types `symbol`'s public surface mentions,
+/// including a class's parent and the interfaces it implements, which are not
+/// `Type`s.
+pub(crate) fn type_symbol_references(symbol: &TypeSymbol) -> Vec<String> {
+    let mut references = type_references(&[serde_json::to_value(public_surface(symbol))]);
+    if let TypeKind::Class {
+        extends,
+        implements,
+        ..
+    } = &symbol.kind
+    {
+        references.extend(
+            extends
+                .iter()
+                .map(|extends| extends.parent.as_str().to_string()),
+        );
+        references.extend(implements.iter().map(|name| name.as_str().to_string()));
+    }
+    references
+}
+
+fn collect_type_references(
+    rendered: &[Result<serde_json::Value, serde_json::Error>],
+) -> Vec<TypeReference> {
     // A part that won't serialize still renders; it just imports nothing.
     let mut pending: Vec<&serde_json::Value> = rendered.iter().flatten().collect();
     let mut references = Vec::new();
@@ -2476,7 +2592,7 @@ mod tests {
     fn catalog_filters_before_counting_omitted_entries() {
         let extra = (0..CATALOG_LIMIT)
             .map(|index| CatalogEntry {
-                name: format!("@acme/package{index}"),
+                name: format!("@pied-piper/package{index}"),
                 source: "registry".into(),
                 description: String::new(),
             })
@@ -2488,7 +2604,7 @@ mod tests {
             catalog
                 .entries
                 .iter()
-                .all(|entry| entry.name.starts_with("@acme/"))
+                .all(|entry| entry.name.starts_with("@pied-piper/"))
         );
     }
 
@@ -2812,8 +2928,8 @@ mod tests {
         // An empty leading segment is skipped rather than matched on.
         assert_eq!(suggest(".Temporel", &[]).as_deref(), Some("Temporal"));
         // A name that resolved nowhere is never its own repair.
-        let declared = vec!["@acme/mypkg".to_string()];
-        assert_eq!(suggest("@acme/mypkg", &declared), None);
+        let declared = vec!["@pied-piper/mypkg".to_string()];
+        assert_eq!(suggest("@pied-piper/mypkg", &declared), None);
     }
 
     #[test]
@@ -2827,7 +2943,7 @@ mod tests {
 
         let extra: Vec<CatalogEntry> = (0..CATALOG_LIMIT)
             .map(|i| CatalogEntry {
-                name: format!("@acme/p{i}"),
+                name: format!("@pied-piper/p{i}"),
                 source: "registry".to_string(),
                 description: "x".to_string(),
             })
@@ -2955,7 +3071,7 @@ mod tests {
 
     #[test]
     fn packages_d_ts_imports_the_types_a_package_borrows() {
-        let mut package = PackageDeclaration::with_package("@acme/files");
+        let mut package = PackageDeclaration::with_package("@pied-piper/files");
         let download = crate::stdlib::http::package_declaration()
             .values
             .get("download")
@@ -2965,7 +3081,7 @@ mod tests {
 
         let docs = render_packages_d_ts(&[&package], &[]);
 
-        assert!(docs.starts_with("declare module \"@acme/files\" {\n"));
+        assert!(docs.starts_with("declare module \"@pied-piper/files\" {\n"));
         assert!(docs.contains("  import type { DownloadResult } from \"submilli:http\";\n"));
         assert!(docs.contains("  import type { DownloadOptions } from \"submilli:http\";\n"));
         assert!(!docs.contains("import type { Response }"));
@@ -2973,29 +3089,32 @@ mod tests {
 
     #[test]
     fn a_borrowed_type_is_imported_from_its_own_module_when_others_share_its_name() {
-        // `submilli:session` and `@acme/other` export a `Page` too; the
+        // `submilli:session` and `@pied-piper/other` export a `Page` too; the
         // reference's mangled name picks the leaf's.
-        let mut leaf = PackageDeclaration::with_package("@acme/leaf");
+        let mut leaf = PackageDeclaration::with_package("@pied-piper/leaf");
         leaf.types
-            .insert("Page".to_string(), alias_symbol("@acme/leaf", "Page"));
-        let mut other = PackageDeclaration::with_package("@acme/other");
-        other
-            .types
-            .insert("Page".to_string(), alias_symbol("@acme/other", "Page"));
-        let mut mid = PackageDeclaration::with_package("@acme/mid");
+            .insert("Page".to_string(), alias_symbol("@pied-piper/leaf", "Page"));
+        let mut other = PackageDeclaration::with_package("@pied-piper/other");
+        other.types.insert(
+            "Page".to_string(),
+            alias_symbol("@pied-piper/other", "Page"),
+        );
+        let mut mid = PackageDeclaration::with_package("@pied-piper/mid");
         let page = reference(
-            "@acme/leaf",
-            crate::mangle::package_symbol("@acme/leaf", "Page"),
+            "@pied-piper/leaf",
+            crate::mangle::package_symbol("@pied-piper/leaf", "Page"),
             "Page",
         );
-        mid.values
-            .insert("page".to_string(), const_symbol("@acme/mid", "page", page));
+        mid.values.insert(
+            "page".to_string(),
+            const_symbol("@pied-piper/mid", "page", page),
+        );
 
         let docs = render_packages_d_ts(&[&leaf, &other, &mid], &[]);
 
-        assert!(docs.contains("  import type { Page } from \"@acme/leaf\";\n"));
+        assert!(docs.contains("  import type { Page } from \"@pied-piper/leaf\";\n"));
         assert!(!docs.contains("from \"submilli:session\""));
-        assert!(!docs.contains("from \"@acme/other\""));
+        assert!(!docs.contains("from \"@pied-piper/other\""));
     }
 
     fn alias_symbol(package: &str, name: &str) -> crate::TypeSymbol {
@@ -3031,55 +3150,59 @@ mod tests {
 
     #[test]
     fn an_aliased_type_is_imported_under_the_name_the_text_uses() {
-        let mut leaf = PackageDeclaration::with_package("@acme/leaf");
+        let mut leaf = PackageDeclaration::with_package("@pied-piper/leaf");
         leaf.types
-            .insert("Page".to_string(), alias_symbol("@acme/leaf", "Page"));
-        let mut mid = PackageDeclaration::with_package("@acme/mid");
+            .insert("Page".to_string(), alias_symbol("@pied-piper/leaf", "Page"));
+        let mut mid = PackageDeclaration::with_package("@pied-piper/mid");
         let page = reference(
-            "@acme/leaf",
-            crate::mangle::package_symbol("@acme/leaf", "Page"),
+            "@pied-piper/leaf",
+            crate::mangle::package_symbol("@pied-piper/leaf", "Page"),
             "LeafPage",
         );
-        mid.values
-            .insert("page".to_string(), const_symbol("@acme/mid", "page", page));
+        mid.values.insert(
+            "page".to_string(),
+            const_symbol("@pied-piper/mid", "page", page),
+        );
 
         let docs = render_packages_d_ts(&[&mid], &[&leaf]);
 
-        assert!(docs.contains("  import type { Page as LeafPage } from \"@acme/leaf\";\n"));
-        assert!(!docs.contains("declare module \"@acme/leaf\""));
+        assert!(docs.contains("  import type { Page as LeafPage } from \"@pied-piper/leaf\";\n"));
+        assert!(!docs.contains("declare module \"@pied-piper/leaf\""));
     }
 
     #[test]
     fn a_type_reexported_from_an_internal_module_is_imported_from_the_package() {
-        let mut leaf = PackageDeclaration::with_package("@acme/leaf");
-        leaf.types
-            .insert("Status".to_string(), alias_symbol("@acme/leaf", "Status"));
-        let mut mid = PackageDeclaration::with_package("@acme/mid");
+        let mut leaf = PackageDeclaration::with_package("@pied-piper/leaf");
+        leaf.types.insert(
+            "Status".to_string(),
+            alias_symbol("@pied-piper/leaf", "Status"),
+        );
+        let mut mid = PackageDeclaration::with_package("@pied-piper/mid");
         let status = reference(
-            "@acme/leaf",
-            crate::mangle::package_module_symbol("@acme/leaf", "model", "Status"),
+            "@pied-piper/leaf",
+            crate::mangle::package_module_symbol("@pied-piper/leaf", "model", "Status"),
             "Status",
         );
         mid.values.insert(
             "status".to_string(),
-            const_symbol("@acme/mid", "status", status),
+            const_symbol("@pied-piper/mid", "status", status),
         );
 
         let docs = render_packages_d_ts(&[&leaf, &mid], &[]);
 
-        assert!(docs.contains("  import type { Status } from \"@acme/leaf\";\n"));
+        assert!(docs.contains("  import type { Status } from \"@pied-piper/leaf\";\n"));
     }
 
     #[test]
     fn only_the_rendered_declarations_bring_imports() {
-        let mut mid = PackageDeclaration::with_package("@acme/mid");
+        let mut mid = PackageDeclaration::with_package("@pied-piper/mid");
         let response = reference(
             "submilli:http",
             crate::mangle::package_symbol("submilli:http", "Response"),
             "Response",
         );
         mid.runtime_globals.insert(
-            crate::mangle::package_symbol("@acme/mid", "hidden"),
+            crate::mangle::package_symbol("@pied-piper/mid", "hidden"),
             response.clone(),
         );
 
@@ -3097,10 +3220,10 @@ mod tests {
             crate::mangle::package_symbol("submilli:http", "DownloadResult"),
             "DownloadResult",
         );
-        let mut mid = PackageDeclaration::with_package("@acme/mid");
+        let mut mid = PackageDeclaration::with_package("@pied-piper/mid");
         mid.values.insert(
             "DownloadResult".to_string(),
-            const_symbol("@acme/mid", "DownloadResult", download),
+            const_symbol("@pied-piper/mid", "DownloadResult", download),
         );
 
         let docs = render_packages_d_ts(&[&mid], &[]);
@@ -3113,26 +3236,26 @@ mod tests {
 
     #[test]
     fn type_arguments_bring_imports_and_alias_bodies_do_not() {
-        let mut leaf = PackageDeclaration::with_package("@acme/leaf");
+        let mut leaf = PackageDeclaration::with_package("@pied-piper/leaf");
         leaf.types
-            .insert("Page".to_string(), alias_symbol("@acme/leaf", "Page"));
+            .insert("Page".to_string(), alias_symbol("@pied-piper/leaf", "Page"));
         leaf.types
-            .insert("Item".to_string(), alias_symbol("@acme/leaf", "Item"));
-        let mut mid = PackageDeclaration::with_package("@acme/mid");
+            .insert("Item".to_string(), alias_symbol("@pied-piper/leaf", "Item"));
+        let mut mid = PackageDeclaration::with_package("@pied-piper/mid");
         let item = reference(
-            "@acme/leaf",
-            crate::mangle::package_symbol("@acme/leaf", "Item"),
+            "@pied-piper/leaf",
+            crate::mangle::package_symbol("@pied-piper/leaf", "Item"),
             "Item",
         );
         let page_of_items = Type::alias_ref(
-            crate::types::Package("@acme/leaf".to_string()),
+            crate::types::Package("@pied-piper/leaf".to_string()),
             "Page",
-            crate::mangle::package_symbol("@acme/leaf", "Page"),
+            crate::mangle::package_symbol("@pied-piper/leaf", "Page"),
             vec![Type::Array(Box::new(item))],
         );
         mid.values.insert(
             "page".to_string(),
-            const_symbol("@acme/mid", "page", page_of_items),
+            const_symbol("@pied-piper/mid", "page", page_of_items),
         );
         // A resolved alias renders as its name; what it stands for doesn't
         // appear in the text.
@@ -3142,21 +3265,21 @@ mod tests {
             "Response",
         );
         let wrapped = Type::Alias {
-            mangled: crate::mangle::package_symbol("@acme/leaf", "Item"),
-            package: crate::types::Package("@acme/leaf".to_string()),
+            mangled: crate::mangle::package_symbol("@pied-piper/leaf", "Item"),
+            package: crate::types::Package("@pied-piper/leaf".to_string()),
             name: "Item".to_string(),
             args: Vec::new(),
             ty: Box::new(response),
         };
         mid.values.insert(
             "item".to_string(),
-            const_symbol("@acme/mid", "item", wrapped),
+            const_symbol("@pied-piper/mid", "item", wrapped),
         );
 
         let docs = render_packages_d_ts(&[&mid], &[&leaf]);
 
-        assert!(docs.contains("  import type { Page } from \"@acme/leaf\";\n"));
-        assert!(docs.contains("  import type { Item } from \"@acme/leaf\";\n"));
+        assert!(docs.contains("  import type { Page } from \"@pied-piper/leaf\";\n"));
+        assert!(docs.contains("  import type { Item } from \"@pied-piper/leaf\";\n"));
         assert!(!docs.contains("Response"), "{docs}");
     }
 
@@ -3190,21 +3313,23 @@ mod tests {
 
     #[test]
     fn a_class_renders_and_imports_its_parent() {
-        let mut leaf = PackageDeclaration::with_package("@acme/leaf");
+        let mut leaf = PackageDeclaration::with_package("@pied-piper/leaf");
+        leaf.types.insert(
+            "Base".to_string(),
+            class_symbol("@pied-piper/leaf", "Base", None),
+        );
         leaf.types
-            .insert("Base".to_string(), class_symbol("@acme/leaf", "Base", None));
-        leaf.types
-            .insert("Item".to_string(), alias_symbol("@acme/leaf", "Item"));
+            .insert("Item".to_string(), alias_symbol("@pied-piper/leaf", "Item"));
         let item = reference(
-            "@acme/leaf",
-            crate::mangle::package_symbol("@acme/leaf", "Item"),
+            "@pied-piper/leaf",
+            crate::mangle::package_symbol("@pied-piper/leaf", "Item"),
             "Item",
         );
         let extends = crate::ClassExtends {
-            parent: crate::mangle::package_symbol("@acme/leaf", "Base"),
+            parent: crate::mangle::package_symbol("@pied-piper/leaf", "Base"),
             args: vec![item],
         };
-        let mut sub = class_symbol("@acme/mid", "Sub", Some(extends));
+        let mut sub = class_symbol("@pied-piper/mid", "Sub", Some(extends));
         if let TypeKind::Class { fields, .. } = &mut sub.kind {
             // A private member isn't rendered, so its type isn't imported.
             let response = reference(
@@ -3224,17 +3349,17 @@ mod tests {
                 },
             );
         }
-        let mut mid = PackageDeclaration::with_package("@acme/mid");
+        let mut mid = PackageDeclaration::with_package("@pied-piper/mid");
         mid.types.insert("Sub".to_string(), sub);
 
         let docs = render_packages_d_ts(&[&mid], &[&leaf]);
 
         assert!(
-            docs.contains("  import type { Base } from \"@acme/leaf\";\n"),
+            docs.contains("  import type { Base } from \"@pied-piper/leaf\";\n"),
             "{docs}"
         );
         assert!(
-            docs.contains("  import type { Item } from \"@acme/leaf\";\n"),
+            docs.contains("  import type { Item } from \"@pied-piper/leaf\";\n"),
             "{docs}"
         );
         assert!(
@@ -3248,15 +3373,17 @@ mod tests {
         class_symbol(package, name, Some(crate::ClassExtends::plain(parent)))
     }
 
-    /// `@acme/leaf` and `@acme/other`, which each export a class `Base`.
+    /// `@pied-piper/leaf` and `@pied-piper/other`, which each export a class `Base`.
     fn two_bases() -> (PackageDeclaration, PackageDeclaration) {
-        let mut leaf = PackageDeclaration::with_package("@acme/leaf");
-        leaf.types
-            .insert("Base".to_string(), class_symbol("@acme/leaf", "Base", None));
-        let mut other = PackageDeclaration::with_package("@acme/other");
+        let mut leaf = PackageDeclaration::with_package("@pied-piper/leaf");
+        leaf.types.insert(
+            "Base".to_string(),
+            class_symbol("@pied-piper/leaf", "Base", None),
+        );
+        let mut other = PackageDeclaration::with_package("@pied-piper/other");
         other.types.insert(
             "Base".to_string(),
-            class_symbol("@acme/other", "Base", None),
+            class_symbol("@pied-piper/other", "Base", None),
         );
         (leaf, other)
     }
@@ -3264,21 +3391,21 @@ mod tests {
     #[test]
     fn a_parent_named_like_a_local_value_is_imported_under_another_name() {
         let (leaf, _) = two_bases();
-        let mut package = PackageDeclaration::with_package("@acme/shadowed");
+        let mut package = PackageDeclaration::with_package("@pied-piper/shadowed");
         package.values.insert(
             "Base".to_string(),
-            const_symbol("@acme/shadowed", "Base", Type::Number),
+            const_symbol("@pied-piper/shadowed", "Base", Type::Number),
         );
-        let base = crate::mangle::package_symbol("@acme/leaf", "Base");
+        let base = crate::mangle::package_symbol("@pied-piper/leaf", "Base");
         package.types.insert(
             "Sub".to_string(),
-            subclass_of("@acme/shadowed", "Sub", base),
+            subclass_of("@pied-piper/shadowed", "Sub", base),
         );
 
         let docs = render_packages_d_ts(&[&package], &[&leaf]);
 
         assert!(
-            docs.contains("  import type { Base as Base1 } from \"@acme/leaf\";\n"),
+            docs.contains("  import type { Base as Base1 } from \"@pied-piper/leaf\";\n"),
             "{docs}"
         );
         assert!(
@@ -3290,32 +3417,32 @@ mod tests {
     #[test]
     fn parents_that_share_a_public_name_get_different_local_names() {
         let (leaf, other) = two_bases();
-        let mut package = PackageDeclaration::with_package("@acme/both");
+        let mut package = PackageDeclaration::with_package("@pied-piper/both");
         package.types.insert(
             "A".to_string(),
             subclass_of(
-                "@acme/both",
+                "@pied-piper/both",
                 "A",
-                crate::mangle::package_symbol("@acme/leaf", "Base"),
+                crate::mangle::package_symbol("@pied-piper/leaf", "Base"),
             ),
         );
         package.types.insert(
             "B".to_string(),
             subclass_of(
-                "@acme/both",
+                "@pied-piper/both",
                 "B",
-                crate::mangle::package_symbol("@acme/other", "Base"),
+                crate::mangle::package_symbol("@pied-piper/other", "Base"),
             ),
         );
 
         let docs = render_packages_d_ts(&[&package], &[&leaf, &other]);
 
         assert!(
-            docs.contains("  import type { Base } from \"@acme/leaf\";\n"),
+            docs.contains("  import type { Base } from \"@pied-piper/leaf\";\n"),
             "{docs}"
         );
         assert!(
-            docs.contains("  import type { Base as Base1 } from \"@acme/other\";\n"),
+            docs.contains("  import type { Base as Base1 } from \"@pied-piper/other\";\n"),
             "{docs}"
         );
         assert!(docs.contains("  export class A extends Base {"), "{docs}");
@@ -3325,24 +3452,25 @@ mod tests {
     #[test]
     fn a_parent_already_imported_under_an_alias_keeps_it() {
         let (leaf, _) = two_bases();
-        let base = crate::mangle::package_symbol("@acme/leaf", "Base");
-        let mut package = PackageDeclaration::with_package("@acme/aliased");
+        let base = crate::mangle::package_symbol("@pied-piper/leaf", "Base");
+        let mut package = PackageDeclaration::with_package("@pied-piper/aliased");
         package.values.insert(
             "base".to_string(),
             const_symbol(
-                "@acme/aliased",
+                "@pied-piper/aliased",
                 "base",
-                reference("@acme/leaf", base.clone(), "LB"),
+                reference("@pied-piper/leaf", base.clone(), "LB"),
             ),
         );
-        package
-            .types
-            .insert("Sub".to_string(), subclass_of("@acme/aliased", "Sub", base));
+        package.types.insert(
+            "Sub".to_string(),
+            subclass_of("@pied-piper/aliased", "Sub", base),
+        );
 
         let docs = render_packages_d_ts(&[&package], &[&leaf]);
 
         assert!(
-            docs.contains("  import type { Base as LB } from \"@acme/leaf\";\n"),
+            docs.contains("  import type { Base as LB } from \"@pied-piper/leaf\";\n"),
             "{docs}"
         );
         assert!(docs.contains("  export class Sub extends LB {"), "{docs}");
@@ -3357,10 +3485,10 @@ mod tests {
             .expect("the prelude declares Error")
             .mangled_name
             .clone();
-        let mut package = PackageDeclaration::with_package("@acme/errors");
+        let mut package = PackageDeclaration::with_package("@pied-piper/errors");
         package.types.insert(
             "BillingError".to_string(),
-            subclass_of("@acme/errors", "BillingError", error),
+            subclass_of("@pied-piper/errors", "BillingError", error),
         );
 
         let docs = render_packages_d_ts(&[&package], &[]);
@@ -3380,14 +3508,14 @@ mod tests {
             .expect("the prelude declares Error")
             .mangled_name
             .clone();
-        let mut package = PackageDeclaration::with_package("@acme/errors");
+        let mut package = PackageDeclaration::with_package("@pied-piper/errors");
         package.values.insert(
             "Error".to_string(),
-            const_symbol("@acme/errors", "Error", Type::Number),
+            const_symbol("@pied-piper/errors", "Error", Type::Number),
         );
         package.types.insert(
             "BillingError".to_string(),
-            subclass_of("@acme/errors", "BillingError", error),
+            subclass_of("@pied-piper/errors", "BillingError", error),
         );
 
         let docs = render_packages_d_ts(&[&package], &[]);
@@ -3438,18 +3566,22 @@ mod tests {
     #[test]
     fn a_value_named_like_a_borrowed_class_keeps_the_class_out() {
         // A class is a value too, so importing it would clash with the const.
-        let mut leaf = PackageDeclaration::with_package("@acme/leaf");
-        leaf.types
-            .insert("Base".to_string(), class_symbol("@acme/leaf", "Base", None));
+        let mut leaf = PackageDeclaration::with_package("@pied-piper/leaf");
+        leaf.types.insert(
+            "Base".to_string(),
+            class_symbol("@pied-piper/leaf", "Base", None),
+        );
         let base = Type::class_ref(
-            crate::types::Package("@acme/leaf".to_string()),
+            crate::types::Package("@pied-piper/leaf".to_string()),
             "Base",
-            crate::mangle::package_symbol("@acme/leaf", "Base"),
+            crate::mangle::package_symbol("@pied-piper/leaf", "Base"),
             Vec::new(),
         );
-        let mut mid = PackageDeclaration::with_package("@acme/mid");
-        mid.values
-            .insert("Base".to_string(), const_symbol("@acme/mid", "Base", base));
+        let mut mid = PackageDeclaration::with_package("@pied-piper/mid");
+        mid.values.insert(
+            "Base".to_string(),
+            const_symbol("@pied-piper/mid", "Base", base),
+        );
 
         let docs = render_packages_d_ts(&[&mid], &[&leaf]);
 
@@ -3458,13 +3590,14 @@ mod tests {
 
     #[test]
     fn a_package_type_named_like_a_constructor_is_an_ordinary_type() {
-        let mut package = PackageDeclaration::with_package("@acme/leaf");
-        package
-            .types
-            .insert("Client".to_string(), alias_symbol("@acme/leaf", "Client"));
+        let mut package = PackageDeclaration::with_package("@pied-piper/leaf");
+        package.types.insert(
+            "Client".to_string(),
+            alias_symbol("@pied-piper/leaf", "Client"),
+        );
         package.types.insert(
             "ClientConstructor".to_string(),
-            alias_symbol("@acme/leaf", "ClientConstructor"),
+            alias_symbol("@pied-piper/leaf", "ClientConstructor"),
         );
 
         let docs = render_packages_d_ts(&[&package], &[]);
@@ -3563,7 +3696,7 @@ mod tests {
 
     #[test]
     fn a_private_constructor_stays_out_of_the_docs_and_is_protected_in_d_ts() {
-        let package = "@acme/shapes";
+        let package = "@pied-piper/shapes";
         let mut defs = PackageDeclaration::with_package(package);
         let point = class_with_constructor(
             package,
@@ -3603,7 +3736,7 @@ mod tests {
 
     #[test]
     fn constructor_visibility_round_trips_and_a_public_one_is_not_written() {
-        let package = "@acme/shapes";
+        let package = "@pied-piper/shapes";
         for visibility in [crate::Visibility::Private, crate::Visibility::Public] {
             let symbol = class_with_constructor(package, "Point", Vec::new(), visibility, None);
             let json = serde_json::to_string(&symbol.kind).unwrap();
@@ -3656,12 +3789,12 @@ mod tests {
         method_visibility.insert("speak".to_string(), Visibility::Public);
         method_visibility.insert("secret".to_string(), Visibility::Private);
 
-        let mut defs = PackageDeclaration::with_package("@acme/zoo");
+        let mut defs = PackageDeclaration::with_package("@pied-piper/zoo");
         defs.types.insert(
             "Animal".to_string(),
             TypeSymbol {
                 name: "Animal".to_string(),
-                mangled_name: crate::mangle::package_symbol("@acme/zoo", "Animal"),
+                mangled_name: crate::mangle::package_symbol("@pied-piper/zoo", "Animal"),
                 declaration_span: Span::new(FileId(0), 0, 0).unwrap(),
                 kind: TypeKind::Class {
                     generics: Vec::new(),
@@ -3734,12 +3867,12 @@ mod tests {
             setter("secret", Type::Number),
         ];
 
-        let mut defs = PackageDeclaration::with_package("@acme/geo");
+        let mut defs = PackageDeclaration::with_package("@pied-piper/geo");
         defs.types.insert(
             "Shape".to_string(),
             TypeSymbol {
                 name: "Shape".to_string(),
-                mangled_name: crate::mangle::package_symbol("@acme/geo", "Shape"),
+                mangled_name: crate::mangle::package_symbol("@pied-piper/geo", "Shape"),
                 declaration_span: Span::new(FileId(0), 0, 0).unwrap(),
                 kind: TypeKind::Class {
                     generics: Vec::new(),
@@ -3840,12 +3973,12 @@ mod tests {
             },
         );
 
-        let mut defs = PackageDeclaration::with_package("@acme/calc");
+        let mut defs = PackageDeclaration::with_package("@pied-piper/calc");
         defs.types.insert(
             "Calc".to_string(),
             TypeSymbol {
                 name: "Calc".to_string(),
-                mangled_name: crate::mangle::package_symbol("@acme/calc", "Calc"),
+                mangled_name: crate::mangle::package_symbol("@pied-piper/calc", "Calc"),
                 declaration_span: Span::new(FileId(0), 0, 0).unwrap(),
                 kind: TypeKind::Class {
                     generics: Vec::new(),

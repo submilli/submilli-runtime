@@ -282,6 +282,27 @@ mod tests {
     }
 
     #[test]
+    fn a_resumed_attempt_gets_a_fresh_timeout() {
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let timeout = Some(Duration::from_secs(2));
+        let mut first = config.store(&engine, ()).unwrap();
+        arm(&mut first, timeout, |_| Duration::ZERO);
+        for _ in 0..3 {
+            engine.increment_epoch();
+        }
+        assert!(!can_run(&mut first));
+        let mut resumed = config.store(&engine, ()).unwrap();
+        arm(&mut resumed, timeout, |_| Duration::ZERO);
+        for _ in 0..2 {
+            engine.increment_epoch();
+            assert!(can_run(&mut resumed));
+        }
+        engine.increment_epoch();
+        assert!(!can_run(&mut resumed));
+    }
+
+    #[test]
     fn ticker_releases_engine_and_exits() {
         let engine = RuntimeConfig::default().engine().unwrap();
         let weak = engine.weak();

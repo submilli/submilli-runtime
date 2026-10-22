@@ -1,2 +1,0 @@
-line 54, 61 extra: bug SUB-1735 unary `+` rejects a `number | string` operand, though it accepts each member
-line 62 type: bug SUB-1735 unary `+` rejects a `number | string` operand, though it accepts each member (we reject `+x` on line 61, so `x` keeps its loop type)

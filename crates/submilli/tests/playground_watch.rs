@@ -28,7 +28,7 @@ permissions:
 
     const CHECK: &str = r#"import { check } from "submilli:security";
 function main(): string {
-  try { check("test.com/charges", { customerId: "cus_initech" }); return "allowed"; }
+  try { check("test.com/charges", { customerId: "hooli" }); return "allowed"; }
   catch (e: PermissionDeniedError) { return "denied"; }
 }"#;
 
@@ -170,29 +170,64 @@ function main(): string {
         }
     }
 
-    fn execute(record: &Value, token: &str, customer: &str) -> Value {
+    /// One POST to the MCP endpoint: its status, session id, and JSON-RPC message.
+    fn mcp_post(
+        url: &str,
+        token: &str,
+        session: Option<&str>,
+        body: &Value,
+    ) -> (u16, Option<String>, Value) {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
             .timeout_global(Some(Duration::from_secs(60)))
             .build()
             .into();
-        let url = format!("{}/v1/execute", record["server_url"].as_str().unwrap());
-        let mut response = agent
-            .post(&url)
+        let mut request = agent
+            .post(url)
             .header("authorization", &format!("Bearer {token}"))
             .header("content-type", "application/json")
-            .send(
-                json!({
-                    "code": CHECK,
-                    "blueprint": "demo",
-                    "variables": { "customerId": customer },
-                })
-                .to_string(),
-            )
-            .unwrap();
+            .header("accept", "application/json, text/event-stream");
+        if let Some(session) = session {
+            request = request.header("mcp-session-id", session);
+        }
+        let mut response = request.send(body.to_string()).unwrap();
+        let session = response
+            .headers()
+            .get("mcp-session-id")
+            .map(|value| value.to_str().unwrap().to_owned());
         let text = response.body_mut().read_to_string().unwrap();
-        assert_eq!(response.status().as_u16(), 200, "execute: {text}");
-        serde_json::from_str(&text).unwrap()
+        let data = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .next_back()
+            .map_or(text.as_str(), str::trim);
+        let message = serde_json::from_str(data).unwrap_or(Value::Null);
+        (response.status().as_u16(), session, message)
+    }
+
+    /// The MCP execute tool on a session bound to `customer`: its structured result.
+    fn execute(record: &Value, token: &str, customer: &str) -> Value {
+        let url = format!("{}/mcp/demo", record["server_url"].as_str().unwrap());
+        let initialize = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18", "capabilities": {},
+                "clientInfo": { "name": "app", "version": "0" },
+                "_meta": { "variables": { "customerId": customer } }
+            }
+        });
+        let (status, session, message) = mcp_post(&url, token, None, &initialize);
+        assert_eq!(status, 200, "initialize: {message}");
+        let session = session.expect("an MCP session id");
+        let initialized = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+        mcp_post(&url, token, Some(&session), &initialized);
+        let call = json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": { "name": "submilli__typescript__execute", "arguments": { "code": CHECK } }
+        });
+        let (status, _, message) = mcp_post(&url, token, Some(&session), &call);
+        assert_eq!(status, 200, "execute: {message}");
+        message["result"]["structuredContent"].clone()
     }
 
     /// Waits for run `id` to be stored: the recorder writes it as the run ends.
@@ -217,7 +252,7 @@ function main(): string {
         let app = project.token("app");
 
         // Under version 1 the pin holds: another customer's charges are denied.
-        let denied = execute(&record, &app, "cus_northwind");
+        let denied = execute(&record, &app, "pied_piper");
         assert_eq!(denied["result"], "denied", "{denied}");
         assert_eq!(
             stored_run(&project, 1)["recording"]["blueprint_version"],
@@ -241,7 +276,7 @@ function main(): string {
             version["classification"]["changes"][0]["pin"]["kind"], "removed",
             "{version}"
         );
-        let allowed = execute(&record, &app, "cus_northwind");
+        let allowed = execute(&record, &app, "pied_piper");
         assert_eq!(allowed["result"], "allowed", "{allowed}");
         assert_eq!(
             stored_run(&project, 2)["recording"]["blueprint_version"],
@@ -276,7 +311,7 @@ function main(): string {
         assert_eq!(status["refused"]["code"], "parse_error", "{status}");
         assert!(status["refused"]["line"].as_u64().is_some(), "{status}");
         assert_eq!(status["version"], 2);
-        let still = execute(&record, &app, "cus_northwind");
+        let still = execute(&record, &app, "pied_piper");
         assert_eq!(still["result"], "allowed", "{still}");
         assert_eq!(
             stored_run(&project, 3)["recording"]["blueprint_version"],
@@ -305,7 +340,7 @@ function main(): string {
         let versions = project.versions();
         assert_eq!(versions.len(), 3);
         assert_eq!(versions[0]["hash"], versions[2]["hash"]);
-        let denied = execute(&record, &app, "cus_northwind");
+        let denied = execute(&record, &app, "pied_piper");
         assert_eq!(denied["result"], "denied", "{denied}");
         assert_eq!(
             stored_run(&project, 4)["recording"]["blueprint_version"],
@@ -319,7 +354,7 @@ function main(): string {
         let record = project.start();
         project.wait_for_version(3);
         assert_eq!(project.versions().len(), 3);
-        execute(&record, &app, "cus_northwind");
+        execute(&record, &app, "pied_piper");
         assert_eq!(
             stored_run(&project, 5)["recording"]["blueprint_version"],
             "3"
@@ -340,13 +375,7 @@ function main(): string {
         project.save_by_rename(
             &PINNED.replace("      filter: customerId == ${vars.customerId}\n", ""),
         );
-        let output = project.run(&[
-            "exec",
-            &program,
-            "--var",
-            "customerId=cus_northwind",
-            "--json",
-        ]);
+        let output = project.run(&["exec", &program, "--var", "customerId=pied_piper", "--json"]);
         let ran: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(ran["untrusted"]["result"], "allowed", "{ran}");
         assert_eq!(ran["blueprint_version"], "2", "{ran}");

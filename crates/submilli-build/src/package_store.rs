@@ -645,32 +645,32 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let store = PackageStore::new(tmp.path());
 
-        let dir = store.package_dir("@acme/util").expect("package dir");
+        let dir = store.package_dir("@pied-piper/util").expect("package dir");
 
-        assert_eq!(dir, tmp.path().join("@acme").join("util"));
+        assert_eq!(dir, tmp.path().join("@pied-piper").join("util"));
     }
 
     #[test]
     fn missing_package_lists_available_packages() {
         let tmp = tempdir().expect("tempdir");
-        write_package(tmp.path(), "@acme/other", "@acme/other");
+        write_package(tmp.path(), "@pied-piper/other", "@pied-piper/other");
         let store = PackageStore::new(tmp.path());
 
-        let err = store.load("@acme/util").expect_err("missing package");
+        let err = store.load("@pied-piper/util").expect_err("missing package");
 
         let text = err.to_string();
-        assert!(text.contains("@acme/util"), "got: {text}");
+        assert!(text.contains("@pied-piper/util"), "got: {text}");
         assert!(text.contains(tmp.path().to_str().unwrap()), "got: {text}");
-        assert!(text.contains("@acme/other"), "got: {text}");
+        assert!(text.contains("@pied-piper/other"), "got: {text}");
     }
 
     #[test]
     fn artifact_name_mismatch_is_rejected() {
         let tmp = tempdir().expect("tempdir");
-        write_package(tmp.path(), "@acme/util", "@acme/wrong");
+        write_package(tmp.path(), "@pied-piper/util", "@pied-piper/wrong");
         let store = PackageStore::new(tmp.path());
 
-        let err = store.load("@acme/util").expect_err("name mismatch");
+        let err = store.load("@pied-piper/util").expect_err("name mismatch");
 
         assert!(matches!(err, PackageStoreError::NameMismatch { .. }));
     }
@@ -725,18 +725,24 @@ mod tests {
     #[test]
     fn fallback_root_is_searched_after_the_owned_root() {
         let (owned, fallback, store) = layered();
-        write_package(fallback.path(), "@acme/util", "@acme/util");
+        write_package(fallback.path(), "@pied-piper/util", "@pied-piper/util");
 
-        let artifact = store.load("@acme/util").expect("loads from fallback");
-        let located = store.locate("@acme/util").expect("locate").expect("found");
+        let artifact = store.load("@pied-piper/util").expect("loads from fallback");
+        let located = store
+            .locate("@pied-piper/util")
+            .expect("locate")
+            .expect("found");
 
-        assert_eq!(artifact.metadata.package_name, "@acme/util");
+        assert_eq!(artifact.metadata.package_name, "@pied-piper/util");
         assert_eq!(located.root, fallback.path());
-        assert_eq!(located.dir, fallback.path().join("@acme").join("util"));
+        assert_eq!(
+            located.dir,
+            fallback.path().join("@pied-piper").join("util")
+        );
         assert!(!store.owns(&located.root));
         assert_eq!(
-            store.package_dir("@acme/util").unwrap(),
-            owned.path().join("@acme").join("util"),
+            store.package_dir("@pied-piper/util").unwrap(),
+            owned.path().join("@pied-piper").join("util"),
             "writes still target the owned root"
         );
     }
@@ -744,11 +750,23 @@ mod tests {
     #[test]
     fn owned_copy_shadows_the_fallback_copy() {
         let (owned, fallback, store) = layered();
-        write_package_with_deps(owned.path(), "@acme/util", "@acme/util", "2.0.0", &[]);
-        write_package_with_deps(fallback.path(), "@acme/util", "@acme/util", "1.0.0", &[]);
+        write_package_with_deps(
+            owned.path(),
+            "@pied-piper/util",
+            "@pied-piper/util",
+            "2.0.0",
+            &[],
+        );
+        write_package_with_deps(
+            fallback.path(),
+            "@pied-piper/util",
+            "@pied-piper/util",
+            "1.0.0",
+            &[],
+        );
 
-        let artifact = store.load("@acme/util").expect("loads");
-        let located = store.locate("@acme/util").unwrap().unwrap();
+        let artifact = store.load("@pied-piper/util").expect("loads");
+        let located = store.locate("@pied-piper/util").unwrap().unwrap();
 
         assert_eq!(artifact.metadata.package_version, "2.0.0");
         assert_eq!(located.root, owned.path());
@@ -758,9 +776,9 @@ mod tests {
     #[test]
     fn load_owned_ignores_the_fallback() {
         let (owned, fallback, store) = layered();
-        write_package(fallback.path(), "@acme/util", "@acme/util");
+        write_package(fallback.path(), "@pied-piper/util", "@pied-piper/util");
 
-        let err = store.load_owned("@acme/util").expect_err("not owned");
+        let err = store.load_owned("@pied-piper/util").expect_err("not owned");
 
         let PackageStoreError::MissingPackage { searched_roots, .. } = &err else {
             panic!("expected MissingPackage, got {err:?}");
@@ -771,9 +789,9 @@ mod tests {
     #[test]
     fn an_owned_only_miss_does_not_advertise_fallback_packages() {
         let (_owned, fallback, store) = layered();
-        write_package(fallback.path(), "@acme/other", "@acme/other");
+        write_package(fallback.path(), "@pied-piper/other", "@pied-piper/other");
 
-        let err = store.load_owned("@acme/util").expect_err("not owned");
+        let err = store.load_owned("@pied-piper/util").expect_err("not owned");
 
         let PackageStoreError::MissingPackage { available, .. } = &err else {
             panic!("expected MissingPackage, got {err:?}");
@@ -784,12 +802,14 @@ mod tests {
     #[test]
     fn a_broken_owned_copy_does_not_fall_through() {
         let (owned, fallback, store) = layered();
-        write_package(fallback.path(), "@acme/util", "@acme/util");
-        let broken = owned.path().join("@acme").join("util");
+        write_package(fallback.path(), "@pied-piper/util", "@pied-piper/util");
+        let broken = owned.path().join("@pied-piper").join("util");
         fs::create_dir_all(&broken).unwrap();
         fs::write(broken.join("metadata.json"), b"{ not json").unwrap();
 
-        let err = store.load("@acme/util").expect_err("owned copy is broken");
+        let err = store
+            .load("@pied-piper/util")
+            .expect_err("owned copy is broken");
 
         assert!(
             !matches!(err, PackageStoreError::MissingPackage { .. }),
@@ -800,42 +820,42 @@ mod tests {
     #[test]
     fn an_empty_owned_package_dir_does_not_fall_through() {
         let (owned, fallback, store) = layered();
-        write_package(fallback.path(), "@acme/util", "@acme/util");
+        write_package(fallback.path(), "@pied-piper/util", "@pied-piper/util");
         // An interrupted install: the directory exists, the files do not.
-        fs::create_dir_all(owned.path().join("@acme").join("util")).unwrap();
+        fs::create_dir_all(owned.path().join("@pied-piper").join("util")).unwrap();
 
         let err = store
-            .load("@acme/util")
+            .load("@pied-piper/util")
             .expect_err("owned copy is incomplete");
 
         assert!(
             matches!(err, PackageStoreError::Artifact { .. }),
             "got: {err}"
         );
-        let located = store.locate("@acme/util").unwrap().unwrap();
+        let located = store.locate("@pied-piper/util").unwrap().unwrap();
         assert!(store.owns(&located.root), "locate agrees with load");
     }
 
     #[test]
     fn a_non_directory_owned_package_does_not_fall_through() {
         let (owned, fallback, store) = layered();
-        write_package(fallback.path(), "@acme/util", "@acme/util");
-        let package = owned.path().join("@acme/util");
+        write_package(fallback.path(), "@pied-piper/util", "@pied-piper/util");
+        let package = owned.path().join("@pied-piper/util");
         fs::create_dir_all(package.parent().unwrap()).unwrap();
         fs::write(&package, b"not a directory").unwrap();
 
         assert_package_probe_error(
-            store.locate("@acme/util").unwrap_err(),
+            store.locate("@pied-piper/util").unwrap_err(),
             &package,
             io::ErrorKind::NotADirectory,
         );
         assert_package_probe_error(
-            store.load("@acme/util").unwrap_err(),
+            store.load("@pied-piper/util").unwrap_err(),
             &package,
             io::ErrorKind::NotADirectory,
         );
         assert_package_probe_error(
-            store.load_owned("@acme/util").unwrap_err(),
+            store.load_owned("@pied-piper/util").unwrap_err(),
             &package,
             io::ErrorKind::NotADirectory,
         );
@@ -847,17 +867,17 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let (owned, fallback, store) = layered();
-        write_package(owned.path(), "@acme/util", "@acme/util");
-        write_package(fallback.path(), "@acme/util", "@acme/util");
-        let scope = owned.path().join("@acme");
+        write_package(owned.path(), "@pied-piper/util", "@pied-piper/util");
+        write_package(fallback.path(), "@pied-piper/util", "@pied-piper/util");
+        let scope = owned.path().join("@pied-piper");
         let package = scope.join("util");
         let permissions = fs::metadata(&scope).unwrap().permissions();
         fs::set_permissions(&scope, fs::Permissions::from_mode(0o000)).unwrap();
         let denied = fs::metadata(&package)
             .is_err_and(|error| error.kind() == io::ErrorKind::PermissionDenied);
-        let located = store.locate("@acme/util");
-        let loaded = store.load("@acme/util");
-        let loaded_owned = store.load_owned("@acme/util");
+        let located = store.locate("@pied-piper/util");
+        let loaded = store.load("@pied-piper/util");
+        let loaded_owned = store.load_owned("@pied-piper/util");
         // Restore before asserting so failed tests can clean up their directories.
         fs::set_permissions(&scope, permissions).unwrap();
         if !denied {
@@ -906,22 +926,22 @@ mod tests {
     #[test]
     fn a_scope_that_is_not_a_directory_hides_only_itself() {
         let (owned, fallback, store) = layered();
-        write_package(owned.path(), "@acme/util", "@acme/util");
+        write_package(owned.path(), "@pied-piper/util", "@pied-piper/util");
         // A file where a scope directory is expected.
         fs::write(fallback.path().join("@broken"), b"not a directory").unwrap();
         write_package(fallback.path(), "@zed/extra", "@zed/extra");
 
         let available = store.available_packages();
 
-        assert_eq!(available, vec!["@acme/util", "@zed/extra"]);
+        assert_eq!(available, vec!["@pied-piper/util", "@zed/extra"]);
     }
 
     #[test]
     fn missing_package_names_every_searched_root() {
         let (owned, fallback, store) = layered();
-        write_package(fallback.path(), "@acme/other", "@acme/other");
+        write_package(fallback.path(), "@pied-piper/other", "@pied-piper/other");
 
-        let err = store.load("@acme/util").expect_err("missing");
+        let err = store.load("@pied-piper/util").expect_err("missing");
 
         let text = err.to_string();
         assert!(text.contains(owned.path().to_str().unwrap()), "got: {text}");
@@ -930,7 +950,7 @@ mod tests {
             "got: {text}"
         );
         assert!(
-            text.contains("available packages: @acme/other"),
+            text.contains("available packages: @pied-piper/other"),
             "got: {text}"
         );
     }
@@ -938,15 +958,18 @@ mod tests {
     #[test]
     fn available_packages_unions_roots_without_duplicates() {
         let (owned, fallback, store) = layered();
-        write_package(owned.path(), "@acme/util", "@acme/util");
-        write_package(owned.path(), "@acme/shared", "@acme/shared");
-        write_package(fallback.path(), "@acme/shared", "@acme/shared");
+        write_package(owned.path(), "@pied-piper/util", "@pied-piper/util");
+        write_package(owned.path(), "@pied-piper/shared", "@pied-piper/shared");
+        write_package(fallback.path(), "@pied-piper/shared", "@pied-piper/shared");
         write_package(fallback.path(), "@zed/extra", "@zed/extra");
 
         let available = store.available_packages();
         let located = store.locate_all();
 
-        assert_eq!(available, vec!["@acme/shared", "@acme/util", "@zed/extra"]);
+        assert_eq!(
+            available,
+            vec!["@pied-piper/shared", "@pied-piper/util", "@zed/extra"]
+        );
         let origins: Vec<(&str, bool)> = located
             .iter()
             .map(|l| (l.name.as_str(), store.owns(&l.root)))
@@ -954,8 +977,8 @@ mod tests {
         assert_eq!(
             origins,
             vec![
-                ("@acme/shared", true),
-                ("@acme/util", true),
+                ("@pied-piper/shared", true),
+                ("@pied-piper/util", true),
                 ("@zed/extra", false)
             ]
         );
@@ -966,20 +989,28 @@ mod tests {
         let (owned, fallback, store) = layered();
         write_package_with_deps(
             owned.path(),
-            "@acme/app",
-            "@acme/app",
+            "@pied-piper/app",
+            "@pied-piper/app",
             "1.0.0",
-            &[("@acme/util", "1.0.0")],
+            &[("@pied-piper/util", "1.0.0")],
         );
-        write_package_with_deps(fallback.path(), "@acme/util", "@acme/util", "1.0.0", &[]);
+        write_package_with_deps(
+            fallback.path(),
+            "@pied-piper/util",
+            "@pied-piper/util",
+            "1.0.0",
+            &[],
+        );
 
-        let closure = store.load_closure(["@acme/app"]).expect("closure loads");
+        let closure = store
+            .load_closure(["@pied-piper/app"])
+            .expect("closure loads");
 
         let names: Vec<&str> = closure
             .iter()
             .map(|a| a.metadata.package_name.as_str())
             .collect();
-        assert_eq!(names, vec!["@acme/util", "@acme/app"]);
+        assert_eq!(names, vec!["@pied-piper/util", "@pied-piper/app"]);
     }
 
     #[test]
@@ -1009,41 +1040,50 @@ mod tests {
     #[test]
     fn load_closure_loads_shared_dependencies_once() {
         let tmp = tempdir().expect("tempdir");
-        write_package_with_deps(tmp.path(), "@acme/base", "@acme/base", "1.0.0", &[]);
         write_package_with_deps(
             tmp.path(),
-            "@acme/a",
-            "@acme/a",
+            "@pied-piper/base",
+            "@pied-piper/base",
             "1.0.0",
-            &[("@acme/base", "1.0.0")],
+            &[],
         );
         write_package_with_deps(
             tmp.path(),
-            "@acme/b",
-            "@acme/b",
+            "@pied-piper/a",
+            "@pied-piper/a",
             "1.0.0",
-            &[("@acme/base", "1.0.0")],
+            &[("@pied-piper/base", "1.0.0")],
+        );
+        write_package_with_deps(
+            tmp.path(),
+            "@pied-piper/b",
+            "@pied-piper/b",
+            "1.0.0",
+            &[("@pied-piper/base", "1.0.0")],
         );
         let store = PackageStore::new(tmp.path());
 
         let closure = store
-            .load_closure(["@acme/a", "@acme/b"])
+            .load_closure(["@pied-piper/a", "@pied-piper/b"])
             .expect("closure loads");
 
         let names: Vec<&str> = closure
             .iter()
             .map(|a| a.metadata.package_name.as_str())
             .collect();
-        assert_eq!(names, vec!["@acme/base", "@acme/a", "@acme/b"]);
+        assert_eq!(
+            names,
+            vec!["@pied-piper/base", "@pied-piper/a", "@pied-piper/b"]
+        );
     }
 
     #[test]
     fn load_closure_bounds_bytes_across_individually_valid_packages() {
         let tmp = tempdir().expect("tempdir");
-        write_package(tmp.path(), "@acme/a", "@acme/a");
-        write_package(tmp.path(), "@acme/b", "@acme/b");
-        let a_dir = tmp.path().join("@acme/a");
-        let b_dir = tmp.path().join("@acme/b");
+        write_package(tmp.path(), "@pied-piper/a", "@pied-piper/a");
+        write_package(tmp.path(), "@pied-piper/b", "@pied-piper/b");
+        let a_dir = tmp.path().join("@pied-piper/a");
+        let b_dir = tmp.path().join("@pied-piper/b");
         let (a_total, a_max) = artifact_file_sizes(&a_dir);
         let (b_total, b_max) = artifact_file_sizes(&b_dir);
         let limits = ArtifactReadLimits {
@@ -1054,7 +1094,7 @@ mod tests {
         let store = PackageStore::new(tmp.path());
 
         let error = store
-            .load_closure_with_limits(["@acme/a", "@acme/b"], limits)
+            .load_closure_with_limits(["@pied-piper/a", "@pied-piper/b"], limits)
             .expect_err("combined closure exceeds the single-package budget");
 
         assert!(matches!(
@@ -1066,7 +1106,7 @@ mod tests {
         ));
         assert_eq!(
             store
-                .load_closure(["@acme/a", "@acme/b"])
+                .load_closure(["@pied-piper/a", "@pied-piper/b"])
                 .expect("ordinary budget recovers")
                 .len(),
             2
@@ -1078,19 +1118,24 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         write_package_with_deps(
             tmp.path(),
-            "@acme/app",
-            "@acme/app",
+            "@pied-piper/app",
+            "@pied-piper/app",
             "1.0.0",
-            &[("@acme/util", "1.0.0")],
+            &[("@pied-piper/util", "1.0.0")],
         );
         let store = PackageStore::new(tmp.path());
 
-        let err = store.load_closure(["@acme/app"]).expect_err("missing dep");
+        let err = store
+            .load_closure(["@pied-piper/app"])
+            .expect_err("missing dep");
 
         assert!(matches!(err, PackageStoreError::MissingDependency { .. }));
         let text = err.to_string();
-        assert!(text.contains("@acme/util"), "got: {text}");
-        assert!(text.contains("required by `@acme/app`"), "got: {text}");
+        assert!(text.contains("@pied-piper/util"), "got: {text}");
+        assert!(
+            text.contains("required by `@pied-piper/app`"),
+            "got: {text}"
+        );
         assert!(text.contains("submilli build"), "got: {text}");
     }
 
@@ -1099,21 +1144,21 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         write_package_with_deps(
             tmp.path(),
-            "@acme/a",
-            "@acme/a",
+            "@pied-piper/a",
+            "@pied-piper/a",
             "1.0.0",
-            &[("@acme/b", "1.0.0")],
+            &[("@pied-piper/b", "1.0.0")],
         );
         write_package_with_deps(
             tmp.path(),
-            "@acme/b",
-            "@acme/b",
+            "@pied-piper/b",
+            "@pied-piper/b",
             "1.0.0",
-            &[("@acme/a", "1.0.0")],
+            &[("@pied-piper/a", "1.0.0")],
         );
         let store = PackageStore::new(tmp.path());
 
-        let err = store.load_closure(["@acme/a"]).expect_err("cycle");
+        let err = store.load_closure(["@pied-piper/a"]).expect_err("cycle");
 
         assert!(matches!(err, PackageStoreError::DependencyCycle { .. }));
         assert!(
@@ -1127,15 +1172,23 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         write_package_with_deps(
             tmp.path(),
-            "@acme/app",
-            "@acme/app",
+            "@pied-piper/app",
+            "@pied-piper/app",
             "1.0.0",
-            &[("@acme/util", "2.0.0")],
+            &[("@pied-piper/util", "2.0.0")],
         );
-        write_package_with_deps(tmp.path(), "@acme/util", "@acme/util", "1.0.0", &[]);
+        write_package_with_deps(
+            tmp.path(),
+            "@pied-piper/util",
+            "@pied-piper/util",
+            "1.0.0",
+            &[],
+        );
         let store = PackageStore::new(tmp.path());
 
-        let err = store.load_closure(["@acme/app"]).expect_err("mismatch");
+        let err = store
+            .load_closure(["@pied-piper/app"])
+            .expect_err("mismatch");
 
         assert!(matches!(
             err,

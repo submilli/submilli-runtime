@@ -9,7 +9,7 @@
         "rerun"
       ],
       "variables": {
-        "customerId": "cus_northwind"
+        "customerId": "pied_piper"
       },
       "run_count": 1,
       "runs": [
@@ -32,7 +32,7 @@
         "test"
       ],
       "variables": {
-        "customerId": "cus_northwind"
+        "customerId": "pied_piper"
       },
       "run_count": 1,
       "runs": [
@@ -55,7 +55,7 @@
         "test"
       ],
       "variables": {
-        "customerId": "cus_northwind"
+        "customerId": "pied_piper"
       },
       "run_count": 1,
       "runs": [
@@ -78,7 +78,7 @@
         "chat"
       ],
       "variables": {
-        "customerId": "cus_northwind"
+        "customerId": "pied_piper"
       },
       "model": "anthropic:claude-sonnet-5-5",
       "run_count": 4,

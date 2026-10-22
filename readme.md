@@ -3,9 +3,9 @@
 # Submilli
 
 A code-execution runtime with a [semantic permission model](https://submilli.ai/docs/blueprints/#semantic-permission-model), for business agents that
-generate code. Think about someone who wants to allow their customer support agent to issue a refund of up to $500 for platinum clients, and up to $100 for all other customer tiers. Currently, there's no elegant way to do this, (that we know of, at least). 
+generate code. For example, a support agent could issue a refund of up to $500 for platinum clients and up to $100 for all other customer tiers.
 
-They could try to add it as a safeguard to the prompt, but due to the nature of models, it will likely only work *some* of the time. By using the Submilli Runtime to execute the agent generated code, the owner of that agentic workflow can define these guardrails in advance, and they will be enforced by the runtime, outside the model's control.
+The developer could try to add that rule as a safeguard to the prompt, but due to the nature of models, it will likely only work *some* of the time. By using the Submilli Runtime to execute the agent generated code, the owner of that agentic workflow can define these guardrails in advance, and they will be enforced by the runtime, outside the model's control.
 
 [Docs](https://submilli.ai/docs/) ·
 [Set up with your agent](https://submilli.ai/docs/quickstart/#agent-setup) ·
@@ -30,25 +30,19 @@ A support agent creates a replacement with $18 shipping. A $42 replacement is bl
 
 ---
 
-Code mode and programmatic tool calling started a movement toward agents
-that write code, instead of calling tools one by one. There are many reasons for that movement and its growinf popularity - you can read more about it [here](https://submilli.ai/docs/why/#video-code-execution-introduction).
+Code mode and programmatic tool calling let agents write code instead of calling
+tools one by one. You can read more about it [here](https://submilli.ai/docs/why/#video-code-execution-introduction).
 
-We built Submilli to be the runtime for those agents. The agent submits TypeScript code,
-and the Submilli runtime executes it in WebAssembly for isolation. We rebuilt
-the runtime completely, so there is no `node:http` or `node:fs`. It is a new
-runtime, built purposely for agents.
+Submilli is the runtime for those agents. The agent submits TypeScript code, and
+Submilli executes it in WebAssembly for isolation. Programs reach the outside
+world through Packages, not `node:http` or `node:fs`.
 
-Submilli comes with governance, but from the inside out. Before any call to
-the outside world, the Submilli runtime first checks the environment's permissions (the
-Blueprint) to see if the call is allowed. It doesn't just check the IP,
-domain, or port. The Package author defines a semantic language for each
-operation, and that language allows you to control what your agent can do in those terms: "Allow a
-refund up to $500, only for customer 123".
-
-We also gave the ecosystem a reset. All the Packages for Submilli are written
-from scratch, purposely for agents, with [semantic permissions](https://submilli.ai/docs/blueprints/#semantic-permission-model). We don't use npm
-Packages, and while we do support MCP servers, Packages are the native way to
-work with Submilli.
+Before a program calls the outside world, Submilli checks the Blueprint's
+permissions. Package authors define operations and fields. You set rules such as
+"Allow a refund up to $500, only for customer 123". Submilli Packages are built
+for agents with [semantic permissions](https://submilli.ai/docs/blueprints/#semantic-permission-model).
+We don't use npm packages, and while we support MCP servers, Packages are the
+native way to work with Submilli.
 
 ## What a rule looks like
 
@@ -60,9 +54,9 @@ The permissions block in a Blueprint defines what the code can do, and you
 fill it by adding capabilities. Package authors publish the capabilities the package supports, and you
 grant them (or some of them) to the agent by declaring them in the Blueprint. 
 
-You may also define variables for a Blueprint, which is a very powerful concept. Now you control not only the
+You may also define variables for a Blueprint. Now you control not only the
 agent's capabilities, but also the context it can use them in. In the example
-below, we allow the code to access billing operations, bot only for a specific customer (that is bound to the runtime by the host application), and to issue credits of up to $500. If the agent tries a different customer, or a higher amount, the operation fails.
+below, we allow the code to access billing operations, but only for a specific customer (that is bound to the runtime by the host application), and to issue credits of up to $500. If the agent tries a different customer, or a higher amount, the operation fails.
 
 ```yaml
 variables:
@@ -71,10 +65,10 @@ variables:
 
 permissions:
   main:
-  - capability: acme.com/charges.list
+  - capability: pied-piper.example/charges.list
     filter: customerId == ${vars.customerId}
     action: allow
-  - capability: acme.com/credits.apply
+  - capability: pied-piper.example/credits.apply
     filter: customerId == ${vars.customerId} and amount <= 50000  # cents
     action: allow
 ```

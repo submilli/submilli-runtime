@@ -259,7 +259,7 @@ fn measure(
     let tmp = tempfile::tempdir().expect("tempdir");
     seed(tmp.path());
     let vfs = Vfs::external(tmp.path().to_path_buf()).expect("external vfs");
-    let mut data = StoreData::with_vfs_and_cap(vfs, cap);
+    let mut data = StoreData::with_vfs_and_cap("test-run".into(), vfs, cap);
     data.git = Some(GitConfig {
         name: "Agent".into(),
         email: "agent@example.com".into(),

@@ -73,7 +73,7 @@ export function tokenMatches(expected: string): boolean {
 
 fn write_secret_package(store_root: &Path) {
     let package = compile_package(
-        "@acme/secrets",
+        "@pied-piper/secrets",
         ModulePath::from("lib"),
         &[PackageSourceModule {
             path: ModulePath::from("lib"),
@@ -81,9 +81,9 @@ fn write_secret_package(store_root: &Path) {
         }],
         &[],
     )
-    .expect("compile @acme/secrets");
+    .expect("compile @pied-piper/secrets");
     write_package_artifact(
-        store_root.join("@acme").join("secrets"),
+        store_root.join("@pied-piper").join("secrets"),
         &package.wasm,
         &package.type_info,
         &submilli_build::derive_capability_schema(
@@ -92,14 +92,14 @@ fn write_secret_package(store_root: &Path) {
             &package.required_capabilities,
         ),
         &package.declaration,
-        &ArtifactMetadata::new("@acme/secrets", "0.0.0-test", Vec::new()),
+        &ArtifactMetadata::new("@pied-piper/secrets", "0.0.0-test", Vec::new()),
     )
-    .expect("write @acme/secrets artifact");
+    .expect("write @pied-piper/secrets artifact");
 }
 
 fn secret_router(store_root: &Path) -> Router {
     let blueprint = submilli_blueprint::parse(
-        "name: secret-api\ndefault: deny\npackages:\n  - \"@acme/secrets\"\nsecrets:\n  TOKEN:\n    harness:\n      required: true\npermissions:\n  \"@acme/secrets\":\n    - capability: secrets.get\n      filter: name == \"TOKEN\"\n      action: allow\n",
+        "name: secret-api\ndefault: deny\npackages:\n  - \"@pied-piper/secrets\"\nsecrets:\n  TOKEN:\n    harness:\n      required: true\npermissions:\n  \"@pied-piper/secrets\":\n    - capability: secrets.get\n      filter: name == \"TOKEN\"\n      action: allow\n",
     )
     .expect("valid blueprint");
     let blueprints = Arc::new(InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"));
@@ -329,7 +329,7 @@ async fn harness_secret_create_and_rebind() {
 
 fn probe(expected: &str) -> String {
     format!(
-        r#"import {{ tokenMatches }} from "@acme/secrets";
+        r#"import {{ tokenMatches }} from "@pied-piper/secrets";
 function main(): boolean {{ return tokenMatches("{expected}"); }}"#
     )
 }

@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use wasmtime::{Result, bail};
 
+#[cfg(test)]
 pub fn read(snapshot: &Snapshot, op: &str, args: &[Value]) -> Result<Value> {
     match op {
         "status" => status(snapshot),
@@ -25,10 +26,21 @@ pub fn read(snapshot: &Snapshot, op: &str, args: &[Value]) -> Result<Value> {
     }
 }
 
+#[cfg(test)]
 pub fn text_arg(args: &[Value], index: usize) -> Result<&str> {
     args.get(index)
         .and_then(Value::as_str)
         .ok_or_else(|| wasmtime::Error::msg("git: expected a string argument"))
+}
+
+pub(super) fn remotes(snapshot: &Snapshot) -> Result<Value> {
+    Ok(json!(
+        snapshot
+            .remotes()?
+            .into_iter()
+            .map(|(name, url)| json!({"name":name,"url":url}))
+            .collect::<Vec<_>>()
+    ))
 }
 
 pub fn head_entries(snapshot: &Snapshot) -> Result<Entries> {
@@ -226,7 +238,7 @@ fn change(
     }
 }
 
-fn status(snapshot: &Snapshot) -> Result<Value> {
+pub(super) fn status(snapshot: &Snapshot) -> Result<Value> {
     let raw_index = snapshot.index()?;
     let conflicts: BTreeSet<String> = raw_index
         .entries()
@@ -289,7 +301,7 @@ pub fn current_branch(snapshot: &Snapshot) -> Result<Option<String>> {
     Ok(Some(branch.to_owned()))
 }
 
-fn log(snapshot: &Snapshot, opts: &Value) -> Result<Value> {
+pub(super) fn log(snapshot: &Snapshot, opts: &Value) -> Result<Value> {
     let limit = page_number(opts, "limit", 50)?;
     let offset = page_number(opts, "offset", 0)?;
     if limit == 0 || limit > 1000 {
@@ -552,7 +564,7 @@ fn append_patch_hunk(
     Ok(())
 }
 
-fn branches(snapshot: &Snapshot) -> Result<Value> {
+pub(super) fn branches(snapshot: &Snapshot) -> Result<Value> {
     let current = current_branch(snapshot)?;
     let mut branches = Vec::new();
     let mut bytes = 0;
@@ -802,15 +814,33 @@ pub fn replace_worktree(snapshot: &Snapshot, next: &Entries) -> Result<()> {
     Ok(())
 }
 
-pub fn set_remote(snapshot: &mut Snapshot, name: &str, url: &str, add: bool) -> Result<()> {
-    if add {
-        validate_new_ref_name(name)?;
-    } else {
-        validate_branch(name)?;
-    }
+pub fn add_remote(snapshot: &mut Snapshot, name: &str, url: &str) -> Result<()> {
+    validate_new_ref_name(name)?;
     let url = super::transport::canonical_url(url)?;
-    let remotes = snapshot.remotes()?;
-    if add == remotes.contains_key(name) {
+    if snapshot.remotes()?.contains_key(name) {
+        bail!(
+            "git: remote already exists or was not found; use addRemote or setRemoteUrl appropriately"
+        );
+    }
+    let mut config = gix::config::File::from_bytes_no_includes(
+        &snapshot.config,
+        gix::config::file::Metadata::default(),
+        Default::default(),
+    )?;
+    config.set_raw_value_by("remote", Some(name.as_bytes().as_bstr()), "url", url)?;
+    config.set_raw_value_by(
+        "remote",
+        Some(name.as_bytes().as_bstr()),
+        "fetch",
+        format!("+refs/heads/*:refs/remotes/{name}/*"),
+    )?;
+    snapshot.set_config(config.to_bstring().into())
+}
+
+pub fn set_remote_url(snapshot: &mut Snapshot, name: &str, url: &str) -> Result<()> {
+    validate_branch(name)?;
+    let url = super::transport::canonical_url(url)?;
+    if !snapshot.remotes()?.contains_key(name) {
         bail!(
             "git: remote already exists or was not found; use addRemote or setRemoteUrl appropriately"
         );
@@ -822,20 +852,10 @@ pub fn set_remote(snapshot: &mut Snapshot, name: &str, url: &str, add: bool) -> 
     )?;
     // URLs are multivalued in native Git: replacing only the last one leaves
     // native fetch using the old first URL. Preserve every unrelated setting.
-    if !add {
-        config
-            .raw_values_mut_by("remote", Some(name.as_bytes().as_bstr()), "url")?
-            .delete_all();
-    }
+    config
+        .raw_values_mut_by("remote", Some(name.as_bytes().as_bstr()), "url")?
+        .delete_all();
     config.set_raw_value_by("remote", Some(name.as_bytes().as_bstr()), "url", url)?;
-    if add {
-        config.set_raw_value_by(
-            "remote",
-            Some(name.as_bytes().as_bstr()),
-            "fetch",
-            format!("+refs/heads/*:refs/remotes/{name}/*"),
-        )?;
-    }
     snapshot.set_config(config.to_bstring().into())
 }
 

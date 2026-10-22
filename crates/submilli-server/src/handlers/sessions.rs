@@ -592,7 +592,7 @@ impl Drop for CancelOnDrop {
 
 /// Whether programs under `blueprint` may see a session's `@tools`.
 fn exposes_tools(blueprint: &submilli_blueprint::Blueprint) -> bool {
-    submilli_shared::library_visibility::LibraryVisibility::for_blueprint(blueprint).tools()
+    submilli_shared::docs_scope::tools_availability(blueprint).is_available()
 }
 
 /// What a session runs under: the blueprint it was bound to, as registered now, and the

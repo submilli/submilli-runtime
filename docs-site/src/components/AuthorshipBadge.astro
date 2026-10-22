@@ -12,17 +12,28 @@ const confirmedAuthorship = confirmedAuthorshipFor(authorship, entry.body);
 							<><circle cx="12" cy="8" r="3"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></>
 						) : authorship?.label === 'generated-from-source' ? (
 							<path d="m8 5-6 7 6 7m8-14 6 7-6 7m-3-17-2 20"/>
+						) : authorship?.label === 'ai-assisted' ? (
+							<>
+								<circle cx="12" cy="8" r="3"/>
+								<path d="M5 21v-2a7 7 0 0 1 14 0v2"/>
+								<path d="m20 2 .8 2.2L23 5l-2.2.8L20 8l-.8-2.2L17 5l2.2-.8Z"/>
+							</>
 						) : (
 							<>
 								<rect x="4" y="7" width="16" height="13" rx="4"/>
-								<path d="M12 3v4M2 12v4m20-4v4M9 16h6"/>
+								<path d="M12 3v4M2 12v4m20-4v4M9 16c1.8 1.6 4.2 1.6 6 0"/>
 								<circle cx="9" cy="12" r=".7"/>
 								<circle cx="15" cy="12" r=".7"/>
 							</>
 						)}
 					</svg>
 				</summary>
-				<span class="authorship__tooltip" role="tooltip"><strong>{confirmedAuthorship.label}</strong>{confirmedAuthorship.description}</span>
+				<span class="authorship__tooltip" role="tooltip">{authorship?.label === 'ai-generated'
+					? 'written with AI'
+					: authorship?.label === 'ai-assisted'
+						? 'Written by a human with AI assistance'
+						: <><strong>{confirmedAuthorship.label}</strong>{confirmedAuthorship.description}</>}
+				</span>
 			</details>
 		)}
 <style>

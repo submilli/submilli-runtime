@@ -127,7 +127,7 @@ pub fn package_declaration() -> PackageDeclaration {
         &mut properties,
         "host",
         Type::String,
-        "/** Host name, e.g. `\"api.acme.com\"`. Lower-case, without the port or a trailing dot: `\"https://api.acme.com./\"` gives `\"api.acme.com\"`. A host that would be empty or invalid without its trailing dots, such as `\".\"`, keeps them. */",
+        "/** Host name, e.g. `\"api.pied-piper.example\"`. Lower-case, without the port or a trailing dot: `\"https://api.pied-piper.example./\"` gives `\"api.pied-piper.example\"`. A host that would be empty or invalid without its trailing dots, such as `\".\"`, keeps them. */",
     );
     insert_url_property(
         &mut properties,
@@ -181,7 +181,7 @@ pub fn package_declaration() -> PackageDeclaration {
                 ret: url_ref,
                 type_predicate: None,
                 doc: url_doc(
-                    "/**\n * Parse an absolute URL string into its parts. Throws a catchable `TypeError` on malformed input (matches Rust's `url::Url::parse`).\n * @param url Absolute URL (e.g. `\"https://api.acme.com:8443/v1/orders?status=paid#section\"`).\n */",
+                    "/**\n * Parse an absolute URL string into its parts. Throws a catchable `TypeError` on malformed input (matches Rust's `url::Url::parse`).\n * @param url Absolute URL (e.g. `\"https://api.pied-piper.example:8443/v1/orders?status=paid#section\"`).\n */",
                 ),
             },
         },
@@ -213,7 +213,7 @@ pub fn package_declaration() -> PackageDeclaration {
                 ret: Type::String,
                 type_predicate: None,
                 doc: url_doc(
-                    "/**\n * Serialise URL parts to an absolute URL string. Inverse of `parse`.\n * @param protocol Scheme (e.g. `\"https\"`), without `:`.\n * @param host Host name (e.g. `\"api.acme.com\"`), optionally with userinfo or a port. A `/`, `\\`, `?` or `#` in it throws `TypeError`; pass those parts as their own arguments.\n * @param port Port number, or `undefined` to omit the `:port` segment.\n * @param path Path component (typically starts with `/`). A `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError`.\n * @param query Query parameters as a `Query` (`Map<string, string>`). Empty map omits the `?` segment.\n * @param fragment Fragment string (without `#`); omit it or pass `undefined` for none.\n */",
+                    "/**\n * Serialise URL parts to an absolute URL string. Inverse of `parse`.\n * @param protocol Scheme (e.g. `\"https\"`), without `:`.\n * @param host Host name (e.g. `\"api.pied-piper.example\"`), optionally with userinfo or a port. A `/`, `\\`, `?` or `#` in it throws `TypeError`; pass those parts as their own arguments.\n * @param port Port number, or `undefined` to omit the `:port` segment.\n * @param path Path component (typically starts with `/`). A `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError`.\n * @param query Query parameters as a `Query` (`Map<string, string>`). Empty map omits the `?` segment.\n * @param fragment Fragment string (without `#`); omit it or pass `undefined` for none.\n */",
                 ),
             },
         },
@@ -391,7 +391,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "encodeComponent"),
         string_to_string.clone(),
-        /* deterministic = */ true,
         |caller, params, results| {
             let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.encodeComponent")?;
             fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
@@ -407,7 +406,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "decodeComponent"),
         string_to_string,
-        /* deterministic = */ true,
         |caller, params, results| {
             let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.decodeComponent")?;
             fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
@@ -430,7 +428,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "encodeQuery"),
         FuncType::new(&engine, [nullable_object.clone()], [string.clone()]),
-        /* deterministic = */ true,
         |caller, params, results| {
             let pairs = map::string_entries(caller, abi_arg(params, 0)?)?;
             fuel::charge(&mut *caller, fuel::SCAN, pairs_len(&pairs))?;
@@ -445,7 +442,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "decodeQuery"),
         FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
-        /* deterministic = */ true,
         |caller, params, results| {
             Box::pin(async move {
                 let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.decodeQuery")?;
@@ -463,7 +459,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "parse"),
         FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
-        /* deterministic = */ true,
         |caller, params, results| {
             Box::pin(async move {
                 let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.parse")?;
@@ -505,7 +500,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ],
             [string],
         ),
-        /* deterministic = */ true,
         |caller, params, results| {
             let protocol =
                 read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.build (protocol)")?;
@@ -739,7 +733,7 @@ mod tests {
             compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.security_check = recording.clone();
         let mut store = cfg.store(&engine, data).expect("store");
         let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");

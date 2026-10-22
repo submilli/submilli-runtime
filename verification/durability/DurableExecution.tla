@@ -4,20 +4,20 @@ EXTENDS Naturals, Sequences, FiniteSets
 \* A bounded protocol model, not the interpreter or a SQLite implementation.
 \* One session makes admission order observable. Runs are numbered on admission.
 CONSTANTS MaxRuns, MaxSteps, MaxCrashes, FuelLimit, Lifecycle, Compatible,
-          LegacyKey, Fault, Witness, NoWrite
+          LegacyKey, Idempotent, Fault, Witness, NoWrite
 
 ASSUME /\ MaxRuns \in Nat \ {0} /\ MaxSteps \in Nat \ {0}
        /\ MaxCrashes \in Nat /\ FuelLimit \in Nat
        /\ Lifecycle \in BOOLEAN /\ Compatible \in BOOLEAN /\ LegacyKey \in BOOLEAN
+       /\ Idempotent \in BOOLEAN
        /\ Fault \in {"none", "early-ack", "expire-key", "skip-replay",
-                    "stale-write", "new-key"}
+                    "stale-write", "new-key", "consume-uncommitted", "charge-replay"}
 
 Runs == 1..MaxRuns
 Keys == 1..MaxRuns
 Values == {1, 2}
 Terminal == {"completed", "cancelled"}
 OutcomeKinds == {"observation", "outcome"}
-ChargedKinds == {"observation", "intent"}
 EffectKey(r, step) == <<r, step, 1>>
 IsObservation(step) == step % 2 = 1
 
@@ -26,9 +26,9 @@ vars == <<db, process, flight, finished, provider, monitor, witnessed>>
 
 EmptyLocal == [active |-> FALSE, generation |-> 0, step |-> 1,
                seen |-> <<>>, replayThrough |-> 0, pending |-> NoWrite,
-               call |-> "none", reply |-> 0]
+               call |-> "none", reply |-> 0, spent |-> 0]
 EmptyRun == [state |-> "absent", key |-> 0, code |-> 0, generation |-> 0,
-             history |-> <<>>, next |-> 1, spent |-> 0, response |-> <<>>,
+             history |-> <<>>, next |-> 1, response |-> <<>>,
              retained |-> FALSE, pinned |-> FALSE]
 
 Init ==
@@ -45,7 +45,9 @@ Init ==
     /\ flight = {}
     /\ finished = {}
     /\ provider = {}
-    /\ monitor = [earlyDispatch |-> FALSE, repeatedDispatch |-> FALSE,
+    /\ monitor = [repeatedDispatch |-> FALSE,
+                   nativeWork |-> [r \in Runs |-> 0],
+                   mutations |-> [r \in Runs |-> [s \in 1..MaxSteps |-> 0]],
                    badIdentity |-> FALSE, earlyConsume |-> FALSE,
                    earlyAck |-> FALSE, staleWrite |-> FALSE,
                    outOfOrder |-> FALSE, badClientResponse |-> FALSE]
@@ -58,9 +60,7 @@ Events(r, step, kinds) ==
             db.runs[r].history[j].step = step /\
             db.runs[r].history[j].kind \in kinds}}
 HasOutcome(r, step) == Events(r, step, OutcomeKinds) # {}
-HasIntent(r, step) == Events(r, step, {"intent"}) # {}
 Outcome(r, step) == CHOOSE e \in Events(r, step, OutcomeKinds) : TRUE
-Intent(r, step) == CHOOSE e \in Events(r, step, {"intent"}) : TRUE
 PreviousOutcomes(r, step) ==
     [i \in 1..(step - 1) |-> Outcome(r, i).value]
 Arguments(r) ==
@@ -91,9 +91,6 @@ Current(r) ==
 CanPrepare(r) ==
     Current(r) /\ process.local[r].pending = NoWrite /\
     process.local[r].step <= MaxSteps
-Charged(r) ==
-    Cardinality({i \in 1..Len(db.runs[r].history) :
-                    db.runs[r].history[i].kind \in ChargedKinds})
 RecordedThrough(r) ==
     Cardinality({i \in 1..Len(db.runs[r].history) :
                     db.runs[r].history[i].kind \in OutcomeKinds})
@@ -170,7 +167,8 @@ Launch(r) ==
                         !.replayThrough = RecordedThrough(r)]]
                   ELSE process
     /\ monitor' = [monitor EXCEPT
-                    !.outOfOrder = @ \/ ~EarlierDrained(r)]
+                    !.outOfOrder = @ \/ ~EarlierDrained(r),
+                    !.nativeWork[r] = 0]
     /\ UNCHANGED <<flight, finished, provider, witnessed>>
 
 Prepare(r, kind, value) ==
@@ -178,18 +176,17 @@ Prepare(r, kind, value) ==
     /\ ~HasOutcome(r, process.local[r].step)
     /\ CASE kind = "observation" ->
                 IsObservation(process.local[r].step) /\
-                db.runs[r].spent < FuelLimit
-         [] kind = "intent" ->
-                ~IsObservation(process.local[r].step) /\
-                ~HasIntent(r, process.local[r].step) /\
-                db.runs[r].spent < FuelLimit /\ value = 1
+                process.local[r].spent < FuelLimit
          [] kind = "outcome" ->
                 process.local[r].call = "reply" /\
                 value = process.local[r].reply
     /\ process' = [process EXCEPT !.local[r].pending =
                     [generation |-> process.local[r].generation,
-                     event |-> Entry(kind, r, value)]]
-    /\ UNCHANGED <<db, flight, finished, provider, monitor, witnessed>>
+                     event |-> Entry(kind, r, value)],
+                     !.local[r].spent = @ + IF kind = "observation" THEN 1 ELSE 0]
+    /\ monitor' = [monitor EXCEPT
+                     !.nativeWork[r] = @ + IF kind = "observation" THEN 1 ELSE 0]
+    /\ UNCHANGED <<db, flight, finished, provider, witnessed>>
 
 PrepareTerminal(r) ==
     /\ Current(r) /\ process.local[r].pending = NoWrite
@@ -205,13 +202,13 @@ Commit(r) ==
     LET p == process.local[r].pending IN
     /\ process.online /\ p # NoWrite
     /\ p.event.seq = db.runs[r].next
+    /\ db.runs[r].state # "completed"
     /\ (Fault = "stale-write" \/
         (p.generation = db.runs[r].generation /\
          db.runs[r].state = "running"))
     /\ db' = [db EXCEPT
-         !.runs[r].history = Append(@, p.event),
-         !.runs[r].next = @ + 1,
-         !.runs[r].spent = @ + IF p.event.kind \in ChargedKinds THEN 1 ELSE 0,
+         !.runs[r].history = IF p.event.kind = "terminal" THEN @ ELSE Append(@, p.event),
+         !.runs[r].next = IF p.event.kind = "terminal" THEN @ ELSE @ + 1,
          !.runs[r].state = IF p.event.kind = "terminal" THEN "completed" ELSE @,
          !.runs[r].response = IF p.event.kind = "terminal" THEN p.event.value ELSE @,
          !.runs[r].retained = IF p.event.kind = "terminal" THEN TRUE ELSE @,
@@ -232,79 +229,99 @@ Dispatch(r) ==
         q == Request(r)
     IN
     /\ Current(r) /\ step <= MaxSteps
-    /\ ~IsObservation(step) /\ HasIntent(r, step) /\ ~HasOutcome(r, step)
+    /\ ~IsObservation(step) /\ ~HasOutcome(r, step)
+    /\ process.local[r].spent < FuelLimit
     /\ process.local[r].pending = NoWrite /\ process.local[r].call = "none"
     \* Within a startup, retry only after completion and retirement of the reply.
     \* Requests from an older startup can still be in flight at the same time.
-    /\ q \notin flight \cup finished
+    /\ q \notin flight /\ q \notin {f.request : f \in finished}
     /\ flight' = flight \cup {q}
-    /\ process' = [process EXCEPT !.local[r].call = "waiting"]
+    /\ process' = [process EXCEPT !.local[r].call = "waiting",
+                     !.local[r].spent = @ + 1]
     /\ monitor' = [monitor EXCEPT
-         !.earlyDispatch = @ \/ ~HasIntent(r, step),
          !.repeatedDispatch = @ \/ HasOutcome(r, step),
-         !.badIdentity = @ \/ q.key # Intent(r, step).key \/
-                             q.args # Intent(r, step).args]
-    /\ witnessed' = Saw("retry-in-flight",
+         !.nativeWork[r] = @ + 1,
+         !.badIdentity = @ \/ q.key # EffectKey(r, step) \/
+                             q.args # ExpectedArguments(r, step)]
+    /\ witnessed' = (Saw("retry-in-flight",
                          \E old \in flight : old.run = r /\ old.step = step /\
                                               old.generation # q.generation)
+                     \/ Saw("fresh-budget", RecordedThrough(r) >= FuelLimit /\ FuelLimit > 0))
     /\ UNCHANGED <<db, finished, provider>>
 
 \* The provider progresses independently, including while the server is down.
-\* Dedupe is the explicit adapter assumption; its outcome persists per key.
+\* The framework has no idempotency policy. The adapter may deduplicate;
+\* otherwise a repeated request may mutate again, even with the same key.
+\* The saturating observer records whether duplication has occurred.
 RemoteComplete(q, value) ==
     /\ q \in flight
     /\ flight' = flight \ {q}
-    /\ finished' = finished \cup {q}
+    /\ finished' = finished \cup {[request |-> q, value |->
+         IF Idempotent /\ ProviderRecords(q.key) # {}
+         THEN (CHOOSE p \in ProviderRecords(q.key) : TRUE).value ELSE value]}
     /\ provider' =
-        IF ProviderRecords(q.key) = {}
+        IF ~Idempotent \/ ProviderRecords(q.key) = {}
         THEN provider \cup {[key |-> q.key, run |-> q.run, step |-> q.step,
                             args |-> q.args, value |-> value]}
         ELSE provider
-    /\ UNCHANGED <<db, process, monitor, witnessed>>
+    /\ monitor' = [monitor EXCEPT !.mutations[q.run][q.step] =
+         IF (Idempotent /\ ProviderRecords(q.key) # {}) \/ @ = 2 THEN @ ELSE @ + 1]
+    /\ witnessed' = Saw("duplicate-mutation", ~Idempotent /\
+                          monitor.mutations[q.run][q.step] = 1)
+    /\ UNCHANGED <<db, process>>
 
 Receive(r) ==
-    LET q == Request(r) IN
+    LET q == Request(r)
+        replies == {f \in finished : f.request = q}
+    IN
     /\ Current(r) /\ process.local[r].call = "waiting"
-    /\ q \in finished
+    /\ replies # {}
     /\ process' = [process EXCEPT
          !.local[r].call = "reply",
-         !.local[r].reply = (CHOOSE p \in ProviderRecords(q.key) : TRUE).value]
-    /\ finished' = finished \ {q}
+         !.local[r].reply = (CHOOSE f \in replies : TRUE).value]
+    /\ finished' = finished \ replies
     /\ UNCHANGED <<db, flight, provider, monitor, witnessed>>
 
 LoseReply(r) ==
     /\ Current(r) /\ process.local[r].call = "waiting"
-    /\ Request(r) \in finished
+    /\ Request(r) \in {f.request : f \in finished}
     /\ process' = [process EXCEPT !.local[r].call = "none"]
-    /\ finished' = finished \ {Request(r)}
+    /\ finished' = {f \in finished : f.request # Request(r)}
     /\ UNCHANGED <<db, flight, provider, monitor, witnessed>>
 
 Consume(r) ==
     LET step == process.local[r].step
-        value == Outcome(r, step).value
+        value == IF HasOutcome(r, step) THEN Outcome(r, step).value
+                 ELSE process.local[r].pending.event.value
         replayed == IF Fault = "skip-replay" /\
                        step <= process.local[r].replayThrough
                     THEN CHOOSE other \in Values : other # value
                     ELSE value
     IN
     /\ Current(r) /\ step <= MaxSteps
-    /\ HasOutcome(r, step) /\ process.local[r].pending = NoWrite
+    /\ ((HasOutcome(r, step) /\ process.local[r].pending = NoWrite) \/
+        (Fault = "consume-uncommitted" /\ process.local[r].pending # NoWrite /\
+         process.local[r].pending.event.kind \in OutcomeKinds))
     /\ process' = [process EXCEPT
          !.local[r].seen = Append(@, replayed), !.local[r].step = @ + 1,
+         !.local[r].spent = @ + IF Fault = "charge-replay" /\
+                                    step <= process.local[r].replayThrough THEN 1 ELSE 0,
          !.local[r].call = "none", !.local[r].reply = 0]
     /\ monitor' = [monitor EXCEPT !.earlyConsume = @ \/ ~HasOutcome(r, step)]
     /\ witnessed' = Saw("replayed", step <= process.local[r].replayThrough)
     /\ UNCHANGED <<db, flight, finished, provider>>
 
 BlockForFuel(r) ==
+    /\ process.local[r].call = "none"
     /\ Current(r) /\ process.local[r].step <= MaxSteps
     /\ process.local[r].pending = NoWrite
     /\ ~HasOutcome(r, process.local[r].step)
-    /\ ~HasIntent(r, process.local[r].step)
-    /\ db.runs[r].spent = FuelLimit
+    /\ process.local[r].spent = FuelLimit
     /\ db' = [db EXCEPT !.runs[r].state = "blocked"]
     /\ process' = [process EXCEPT !.local[r] = EmptyLocal]
-    /\ UNCHANGED <<flight, finished, provider, monitor, witnessed>>
+    /\ witnessed' = Saw("blocked-predecessor",
+                         \E q \in (r + 1)..MaxRuns : db.runs[q].state = "accepted")
+    /\ UNCHANGED <<flight, finished, provider, monitor>>
 
 Ack(r) ==
     /\ process.online
@@ -357,8 +374,7 @@ Crash ==
     /\ process' = [process EXCEPT !.online = FALSE,
                    !.local = [r \in Runs |-> EmptyLocal]]
     /\ witnessed' = (
-        Saw("crash-after-intent", \E r \in Runs, s \in 1..MaxSteps :
-            HasIntent(r, s) /\ ~HasOutcome(r, s)) \/
+        Saw("crash-after-dispatch", flight # {}) \/
         Saw("crash-after-remote", \E p \in provider :
             ~HasOutcome(p.run, p.step)) \/
         Saw("crash-after-outcome", \E r \in Runs :
@@ -381,7 +397,7 @@ Next ==
          ForgetWrite(r) \/ Dispatch(r) \/ Receive(r) \/ LoseReply(r) \/
          Consume(r) \/ BlockForFuel(r) \/ Ack(r) \/ Cancel(r) \/ Drain(r) \/
          Release(r) \/ ExpireResponse(r) \/
-         (\E kind \in {"observation", "intent", "outcome"}, value \in Values :
+         (\E kind \in OutcomeKinds, value \in Values :
              Prepare(r, kind, value))
     \/ \E q \in flight, value \in Values : RemoteComplete(q, value)
     \/ ExpireSession \/ Crash \/ Restart
@@ -393,38 +409,39 @@ TypeOK ==
     /\ \A r \in Runs :
          /\ db.runs[r].state \in {"absent", "accepted", "running", "blocked",
                                   "completed", "cancelled", "indeterminate"}
-         /\ db.runs[r].spent \in 0..FuelLimit
-         /\ Len(db.runs[r].history) <= 2 * MaxSteps + 1
+         /\ process.local[r].spent \in 0..FuelLimit
+         /\ Len(db.runs[r].history) <= MaxSteps
          /\ process.local[r].step \in 1..(MaxSteps + 1)
          /\ process.local[r].replayThrough \in 0..MaxSteps
          /\ process.local[r].seen \in UNION {[1..n -> Values] : n \in 0..MaxSteps}
 
-RequestSetsDisjoint == flight \cap finished = {}
+RequestSetsDisjoint == flight \cap {f.request : f \in finished} = {}
 AdmissionUnique ==
     \A r, q \in 1..db.admitted : db.runs[r].key = db.runs[q].key => r = q
 KeyReserved ==
     \A r \in 1..db.admitted : db.keys[db.runs[r].key] = r
 ClientResponseMatches ==
     ~monitor.badClientResponse
+\* Replay and database commits cannot charge the native work of an attempt.
+FuelMatchesWork ==
+    \A r \in Runs : process.local[r].active =>
+        process.local[r].spent = monitor.nativeWork[r]
+
 HistoryConsistent ==
     \A r \in Runs :
       /\ db.runs[r].next = Len(db.runs[r].history) + 1
-      /\ db.runs[r].spent = Charged(r)
       /\ \A i \in 1..Len(db.runs[r].history) :
            LET e == db.runs[r].history[i] IN
            /\ e.seq = i
            /\ e.args = ExpectedArguments(r, e.step)
            /\ e.key = EffectKey(r, e.step)
-           /\ (e.kind = "outcome" =>
-                \E j \in 1..(i - 1) :
-                    db.runs[r].history[j].kind = "intent" /\
-                    db.runs[r].history[j].step = e.step)
+           /\ e.kind \in OutcomeKinds
+           /\ e.step = i
 EffectHistoryWellFormed ==
     \A r \in Runs, step \in 1..MaxSteps :
       /\ Cardinality(Events(r, step, OutcomeKinds)) <= 1
-      /\ Cardinality(Events(r, step, {"intent"})) <= 1
       /\ IF IsObservation(step)
-         THEN ~HasIntent(r, step) /\ Events(r, step, {"outcome"}) = {}
+         THEN Events(r, step, {"outcome"}) = {}
          ELSE Events(r, step, {"observation"}) = {}
       /\ ((HasOutcome(r, step) /\ ~IsObservation(step)) =>
            \E p \in provider :
@@ -436,12 +453,12 @@ ReplayMatches ==
       /\ \A i \in 1..Len(process.local[r].seen) :
            HasOutcome(r, i) /\ process.local[r].seen[i] = Outcome(r, i).value
 NoDuplicateMutation ==
-    \A r \in Runs, s \in 1..MaxSteps :
-        Cardinality({p \in provider : p.run = r /\ p.step = s}) <= 1
+    Idempotent => \A r \in Runs, s \in 1..MaxSteps :
+        monitor.mutations[r][s] <= 1
 ProviderArgumentsMatch ==
-    \A p \in provider : p.args = Intent(p.run, p.step).args
+    \A p \in provider : p.args = ExpectedArguments(p.run, p.step)
 CommitBarriers ==
-    ~monitor.earlyDispatch /\ ~monitor.repeatedDispatch /\
+    ~monitor.repeatedDispatch /\
     ~monitor.earlyConsume /\ ~monitor.earlyAck
 StableEffectIdentity == ~monitor.badIdentity
 NoStaleWrites == ~monitor.staleWrite
@@ -453,7 +470,7 @@ ResourcesProtected ==
 TerminalConsistent ==
     /\ \A r \in Runs : db.runs[r].state = "completed" =>
          /\ db.runs[r].response = PreviousOutcomes(r, MaxSteps + 1)
-         /\ db.runs[r].history[Len(db.runs[r].history)].kind = "terminal"
+         /\ Len(db.runs[r].history) = MaxSteps
     /\ db.lastResult =
          IF {r \in Runs : db.runs[r].state = "completed"} = {} THEN 0
          ELSE CHOOSE r \in Runs :
@@ -473,7 +490,7 @@ Spec == Init /\ [][Next]_vars
 \* There are finitely many crashes; recovery has no dependency on a client retry.
 FairRun(r) ==
     /\ WF_vars(Claim(r)) /\ WF_vars(Launch(r))
-    /\ SF_vars(\E k \in {"observation", "intent", "outcome"}, v \in Values :
+    /\ SF_vars(\E k \in OutcomeKinds, v \in Values :
                    Prepare(r, k, v))
     /\ SF_vars(Commit(r)) /\ WF_vars(ForgetWrite(r))
     /\ SF_vars(Dispatch(r)) /\ SF_vars(Receive(r))
@@ -485,9 +502,13 @@ FairRemote ==
            q.run = r /\ q.step = s /\ q.generation = g /\ RemoteComplete(q, v))
 LiveSpec ==
     Spec /\ WF_vars(Restart) /\ FairRemote /\ (\A r \in Runs : FairRun(r))
+WaitingForBlockedRun(r) ==
+    db.runs[r].state = "accepted" /\
+    \E q \in 1..(r - 1) : db.runs[q].state = "blocked"
 Progress ==
     \A r \in Runs : (db.runs[r].state \in {"accepted", "running"})
-        ~> (db.runs[r].state \in Terminal \cup {"blocked"})
+        ~> (db.runs[r].state \in Terminal \cup {"blocked"} \/
+            WaitingForBlockedRun(r))
 CleanupProgress ==
     \A r \in Runs : (db.runs[r].state \in Terminal)
         ~> (~process.local[r].active /\ ~InFlight(r))

@@ -564,7 +564,10 @@ mod tests {
         let ta = typed("enum Color { Red }\nfunction main(): void { }\n");
         let declarations = TypeDeclarations::for_script(&ta, &[]);
         assert_eq!(
-            declarations.enum_values(&crate::mangle::package_symbol("@acme/ui", "Color"), "Color"),
+            declarations.enum_values(
+                &crate::mangle::package_symbol("@pied-piper/ui", "Color"),
+                "Color"
+            ),
             None
         );
     }
@@ -780,9 +783,9 @@ mod tests {
         );
         let declarations = TypeDeclarations::for_script(&ta, &[]);
         let imported = Type::interface_ref(
-            crate::Package("@acme/sdk".to_string()),
+            crate::Package("@pied-piper/sdk".to_string()),
             "Input",
-            crate::mangle::package_symbol("@acme/sdk", "Input"),
+            crate::mangle::package_symbol("@pied-piper/sdk", "Input"),
             Vec::new(),
         );
         assert_eq!(declarations.member(&imported, "teamId"), Member::Unresolved);

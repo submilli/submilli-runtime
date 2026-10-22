@@ -1,4 +1,1 @@
 types: 1 of 5 tsc entries compared, 0 differ
-
-errors:
-line 4: tsc TS1052: A 'set' accessor parameter cannot have an initializer. (we accept)

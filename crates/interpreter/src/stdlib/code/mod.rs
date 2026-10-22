@@ -1,7 +1,7 @@
 //! Contained workspace navigation and anchor-based editing, gated by existing fs grants.
-use crate::runtime::host::{abi_arg, abi_result};
 mod budget;
 pub mod declaration;
+mod install;
 mod myers;
 mod patch;
 #[cfg(test)]
@@ -9,13 +9,8 @@ mod tests;
 mod text;
 mod walk;
 
+use crate::runtime::StoreData;
 use crate::runtime::fuel;
-use crate::runtime::{
-    StoreData,
-    host::{register_host_fn, write_submilli_string_struct_units},
-    intrinsic_types::build_intrinsic_types,
-    prelude::vtable::read_string_units,
-};
 use crate::stdlib::shared::{
     atomic_write, check_security, check_security_call, contain_trap, require_writable,
     resolve_content_or_trap,
@@ -23,157 +18,20 @@ use crate::stdlib::shared::{
 use budget::{Budget, OutputBudget};
 use serde_json::{Value, json};
 use std::io::Read;
-use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Result, Val, ValType, bail};
+use wasmtime::{Caller, Result, bail};
+
 pub const MODULE_NAME: &str = "submilli:code";
 pub use declaration::package_declaration;
+pub use install::install;
+use walk::{glob, search, tree};
 
-pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
-    let engine = linker.engine().clone();
-    let intr = build_intrinsic_types(&engine)?;
-    let string = ValType::Ref(RefType::new(false, HeapType::ConcreteStruct(intr.string)));
-    let object = ValType::Ref(RefType::new(
-        false,
-        HeapType::ConcreteStruct(intr.object_shape.clone()),
-    ));
-    let options = ValType::Ref(RefType::new(true, HeapType::ConcreteStruct(intr.object)));
-    for (name, params, result) in [
-        (
-            "read",
-            vec![string.clone(), ValType::F64, ValType::F64],
-            object.clone(),
-        ),
-        ("search", vec![string.clone(), options], object.clone()),
-        ("glob", vec![string.clone()], object.clone()),
-        ("tree", vec![string.clone(), ValType::F64], object.clone()),
-        (
-            "edit",
-            vec![
-                string.clone(),
-                string.clone(),
-                string.clone(),
-                ValType::I32,
-                ValType::F64,
-            ],
-            object.clone(),
-        ),
-        (
-            "insertAt",
-            vec![string.clone(), ValType::F64, string.clone()],
-            object.clone(),
-        ),
-        (
-            "diffText",
-            vec![string.clone(), string.clone()],
-            string.clone(),
-        ),
-        (
-            "diffFiles",
-            vec![string.clone(), string.clone()],
-            string.clone(),
-        ),
-        ("applyPatch", vec![string.clone(), string], object),
-    ] {
-        register_host_fn(
-            linker,
-            MODULE_NAME,
-            crate::mangle::package_symbol(MODULE_NAME, name),
-            FuncType::new(&engine, params, [result]),
-            name == "diffText",
-            move |caller, params, results| {
-                let mut budget = Budget::new(caller);
-                *abi_result(results, 0)? = invoke(caller, &mut budget, name, params)?;
-                Ok(())
-            },
-        )?;
-    }
-    Ok(())
-}
-fn invoke(
-    caller: &mut Caller<'_, StoreData>,
-    budget: &mut Budget,
-    op: &str,
-    params: &[Val],
-) -> Result<Val> {
-    if op == "diffText" {
-        let a = units(caller, budget, abi_arg(params, 0)?)?;
-        let b = units(caller, budget, abi_arg(params, 1)?)?;
-        let result = diff(caller, budget, &a, &b)?;
-        return Ok(Val::AnyRef(Some(
-            write_submilli_string_struct_units(caller, &result)?.to_anyref(),
-        )));
-    }
-    let first = argument(caller, budget, abi_arg(params, 0)?)?;
-    let result = match op {
-        "search" => walk::search(caller, budget, &first, abi_arg(params, 1)?)?,
-        "glob" => walk::glob(caller, budget, &first)?,
-        "tree" => walk::tree(
-            caller,
-            budget,
-            &normalize(caller.data().vfs.cwd(), &first)?,
-            integer(abi_arg(params, 1)?, "depth", 0)?,
-        )?,
-        "read" => read_window(
-            caller,
-            budget,
-            &normalize(caller.data().vfs.cwd(), &first)?,
-            params,
-        )?,
-        "diffFiles" => {
-            let second = argument(caller, budget, abi_arg(params, 1)?)?;
-            let a = read_file(
-                caller,
-                budget,
-                &normalize(caller.data().vfs.cwd(), &first)?,
-                op,
-            )?;
-            let b = read_file(
-                caller,
-                budget,
-                &normalize(caller.data().vfs.cwd(), &second)?,
-                op,
-            )?;
-            budget.charge(caller, (a.len() + b.len()).saturating_mul(2))?;
-            let result = diff(
-                caller,
-                budget,
-                &a.encode_utf16().collect::<Vec<_>>(),
-                &b.encode_utf16().collect::<Vec<_>>(),
-            )?;
-            return Ok(Val::AnyRef(Some(
-                write_submilli_string_struct_units(caller, &result)?.to_anyref(),
-            )));
-        }
-        "edit" | "insertAt" | "applyPatch" => {
-            return mutate(
-                caller,
-                budget,
-                &normalize(caller.data().vfs.cwd(), &first)?,
-                op,
-                params,
-            );
-        }
-        _ => {
-            return Err(crate::runtime::host::invariant_trap(
-                "unknown code operation",
-            ));
-        }
-    };
-    encode(caller, budget, &result)
-}
-fn encode(caller: &mut Caller<'_, StoreData>, budget: &mut Budget, result: &Value) -> Result<Val> {
-    let encoded = serde_json::to_string(result)?;
-    budget.check_size(encoded.len())?;
-    budget.charge(caller, encoded.len().saturating_mul(4))?;
-    crate::stdlib::session::value::deserialize(caller, &encoded.encode_utf16().collect::<Vec<_>>())
-}
-fn read_window(
+fn read(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     path: &str,
-    params: &[Val],
+    start: usize,
+    limit: usize,
 ) -> Result<Value> {
-    let start = integer(abi_arg(params, 1)?, "offset", 1)? - 1;
-    let limit = integer(abi_arg(params, 2)?, "limit", 1)?;
     let source = read_file(caller, budget, path, "read")?;
     budget.charge(
         caller,
@@ -197,47 +55,87 @@ fn read_window(
         json!({"path":path,"truncated":start.saturating_add(values.len()) < lines.len(),"lines":values}),
     )
 }
-fn mutate(
+
+fn edit(
+    caller: &mut Caller<'_, StoreData>,
+    budget: &mut Budget,
+    path: &str,
+    old: &str,
+    new: &str,
+    replace_all: bool,
+    near_line: usize,
+) -> Result<Value> {
+    let original = read_file(caller, budget, path, "edit")?;
+    budget.charge(caller, original.len().saturating_mul(64))?;
+    fuel::charge(&mut *caller, fuel::SCAN, original.len() as u64)?;
+    let change = prepare_edit(caller, budget, &original, old, new, replace_all, near_line)?;
+    write_change(caller, budget, path, "edit", &original, change)
+}
+
+fn insert_at(
+    caller: &mut Caller<'_, StoreData>,
+    budget: &mut Budget,
+    path: &str,
+    line: usize,
+    text: &str,
+) -> Result<Value> {
+    let original = read_file(caller, budget, path, "insertAt")?;
+    budget.charge(caller, original.len().saturating_mul(64))?;
+    fuel::charge(&mut *caller, fuel::SCAN, original.len() as u64)?;
+    let change = text::insert(&original, line, text)?;
+    write_change(caller, budget, path, "insertAt", &original, change)
+}
+
+fn diff_files(
+    caller: &mut Caller<'_, StoreData>,
+    budget: &mut Budget,
+    first: &str,
+    second: &str,
+) -> Result<Vec<u16>> {
+    let first = read_file(caller, budget, first, "diffFiles")?;
+    let second = read_file(caller, budget, second, "diffFiles")?;
+    budget.charge(caller, (first.len() + second.len()).saturating_mul(2))?;
+    diff_text(
+        caller,
+        budget,
+        &first.encode_utf16().collect::<Vec<_>>(),
+        &second.encode_utf16().collect::<Vec<_>>(),
+    )
+}
+
+fn apply_patch(
+    caller: &mut Caller<'_, StoreData>,
+    budget: &mut Budget,
+    path: &str,
+    patch: &str,
+) -> Result<Value> {
+    let original = read_file(caller, budget, path, "applyPatch")?;
+    budget.charge(caller, original.len().saturating_mul(64))?;
+    fuel::charge(&mut *caller, fuel::SCAN, original.len() as u64)?;
+    budget.charge(caller, patch.len().saturating_mul(32))?;
+    fuel::charge(
+        &mut *caller,
+        fuel::SCAN,
+        (original.len() as u64).saturating_mul(patch.lines().count().max(1) as u64),
+    )?;
+    fuel::charge(&mut *caller, fuel::PARSE, patch.len() as u64)?;
+    let change = patch::apply(&original, patch)?;
+    write_change(caller, budget, path, "applyPatch", &original, change)
+}
+
+fn write_change(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     path: &str,
     op: &str,
-    params: &[Val],
-) -> Result<Val> {
-    let original = read_file(caller, budget, path, op)?;
-    budget.charge(caller, original.len().saturating_mul(64))?;
-    // Splicing the change back into the original rewrites the whole text.
-    fuel::charge(&mut *caller, fuel::SCAN, original.len() as u64)?;
-    let change = match op {
-        "edit" => prepare_edit(caller, budget, &original, params)?,
-        "insertAt" => text::insert(
-            &original,
-            integer(abi_arg(params, 1)?, "line", 1)?,
-            &argument(caller, budget, abi_arg(params, 2)?)?,
-        )?,
-        "applyPatch" => {
-            let patch = argument(caller, budget, abi_arg(params, 1)?)?;
-            budget.charge(caller, patch.len().saturating_mul(32))?;
-            // Each hunk is located by scanning the original.
-            fuel::charge(
-                &mut *caller,
-                fuel::SCAN,
-                (original.len() as u64).saturating_mul(patch.lines().count().max(1) as u64),
-            )?;
-            fuel::charge(&mut *caller, fuel::PARSE, patch.len() as u64)?;
-            patch::apply(&original, &patch)?
-        }
-        _ => {
-            return Err(crate::runtime::host::invariant_trap(
-                "unknown code mutation",
-            ));
-        }
-    };
+    original: &str,
+    change: text::Edit,
+) -> Result<Value> {
     budget.check_size(change.text.len())?;
     let success = change.diagnostics.is_empty();
     let changed = success && change.text != original;
     let patch = if changed {
-        String::from_utf16(&diff(
+        String::from_utf16(&diff_text(
             caller,
             budget,
             &original.encode_utf16().collect::<Vec<_>>(),
@@ -251,10 +149,10 @@ fn mutate(
         "fs.write",
         json!({"path":path, "length": change.text.len(), "diff": patch}),
     )?;
-    // Allocate the return value before commit so a guest allocation failure cannot hide a write.
+    // Build the native result before commit; history captures it before guest conversion.
     let result =
         json!({"success":success,"changed":changed,"diff":patch,"diagnostics":change.diagnostics});
-    let result = encode(caller, budget, &result)?;
+    budget.check_size(serde_json::to_string(&result)?.len())?;
     if changed {
         let resolved = resolve_content_or_trap(caller.data(), path, op)?;
         require_writable(&*caller, ticket, resolved.placement(), "fs.write", path)?;
@@ -278,10 +176,11 @@ fn prepare_edit(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     original: &str,
-    params: &[Val],
+    old: &str,
+    new: &str,
+    replace_all: bool,
+    near_line: usize,
 ) -> Result<text::Edit> {
-    let old = argument(caller, budget, abi_arg(params, 1)?)?;
-    let new = argument(caller, budget, abi_arg(params, 2)?)?;
     // Naive substring search: every position against the whole needle.
     fuel::charge(
         &mut *caller,
@@ -291,15 +190,7 @@ fn prepare_edit(
     if old.is_empty() {
         bail!("code.edit: oldString must not be empty; use insertAt");
     }
-    let matches = original.match_indices(&old).count();
-    let replace_all = match abi_arg(params, 3)? {
-        Val::I32(value) => *value != 0,
-        _ => {
-            return Err(crate::runtime::host::invariant_trap(
-                "code.edit: invalid boolean argument",
-            ));
-        }
-    };
+    let matches = original.match_indices(old).count();
     let selected = if replace_all {
         matches
     } else {
@@ -327,14 +218,7 @@ fn prepare_edit(
     } else {
         budget.max_bytes
     };
-    text::replace(
-        original,
-        &old,
-        &new,
-        replace_all,
-        integer(abi_arg(params, 4)?, "nearLine", 0)?,
-        maximum,
-    )
+    text::replace(original, old, new, replace_all, near_line, maximum)
 }
 
 fn normalize(cwd: &str, path: &str) -> Result<String> {
@@ -394,18 +278,7 @@ fn read_contents(
     String::from_utf8(bytes)
         .map_err(|_| wasmtime::Error::msg(format!("code.{op}: {path} is not valid UTF-8")))
 }
-fn argument(caller: &mut Caller<'_, StoreData>, budget: &mut Budget, val: &Val) -> Result<String> {
-    String::from_utf16(&units(caller, budget, val)?).map_err(|_| {
-        wasmtime::Error::msg("code: filesystem text must not contain lone UTF-16 surrogates")
-    })
-}
-fn units(caller: &mut Caller<'_, StoreData>, budget: &mut Budget, val: &Val) -> Result<Vec<u16>> {
-    let value = read_string_units(caller, val, "code argument")?;
-    budget.check_size(value.len().saturating_mul(2))?;
-    budget.charge(caller, value.len().saturating_mul(4))?;
-    Ok(value)
-}
-fn diff(
+fn diff_text(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     a: &[u16],
@@ -420,21 +293,4 @@ fn diff(
     let result = text::diff_charged(a, b, |steps| fuel::charge(&mut *caller, fuel::PARSE, steps))?;
     budget.check_size(result.len().saturating_mul(2))?;
     Ok(result)
-}
-fn integer(val: &Val, name: &str, min: usize) -> Result<usize> {
-    let n = match val {
-        Val::F64(bits) => f64::from_bits(*bits),
-        _ => {
-            return Err(crate::runtime::host::invariant_trap(
-                "code: invalid numeric argument",
-            ));
-        }
-    };
-    if !n.is_finite() || n.fract() != 0.0 || n < min as f64 || n > u32::MAX as f64 {
-        bail!(
-            "code: {name} must be an integer between {min} and {}",
-            u32::MAX
-        );
-    }
-    Ok(n as usize)
 }

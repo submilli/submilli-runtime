@@ -18,7 +18,7 @@
  ],
  "packages": [
   {
-   "name": "@acme/billing",
+   "name": "@pied-piper/billing",
    "version": "0.1.0",
    "origin": "blueprint",
    "importable": true,
@@ -34,7 +34,7 @@
  },
  "binding": {
   "variables": {
-   "customerId": "cus_northwind"
+   "customerId": "pied_piper"
   },
   "secrets": []
  },

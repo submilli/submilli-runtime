@@ -277,17 +277,6 @@ impl<'a> Inferer<'a> {
     fn resolve_and_check_type(&mut self, annot: &TypeAnnotation) -> Result<Type, CompilerFailure> {
         let resolved = self.resolve_type_inner(annot)?;
         self.check_callable_type(&resolved, annot.span);
-        if let Some(index) = self.resolver().index_signature(&resolved)
-            && let Type::InterfaceRef {
-                mangled,
-                name,
-                args,
-                ..
-            } = resolved.peel()
-            && let Some(fields) = self.resolver().interface_full_form(mangled, name, args)
-        {
-            self.check_index_fields(&fields, Some(&index), annot.span)?;
-        }
         Ok(resolved)
     }
 
@@ -527,6 +516,24 @@ impl<'a> Inferer<'a> {
                         vec![
                             "use `Temporal.Now.instant()` for wall-clock time, or `Temporal.ZonedDateTime` / `Temporal.Instant` for time values. `Date` is intentionally out of scope — see Temporal for a correct, immutable, timezone-aware time API.".to_string(),
                         ],
+                    );
+                    return Ok(Type::Error);
+                }
+                if text == "Promise" {
+                    let rewrite = match (args.as_slice(), self.short_source(annot.span)) {
+                        ([inner], Some(written)) => self
+                            .short_source(inner.span)
+                            .map(|inner| format!("write `{inner}` instead of `{written}`")),
+                        _ => None,
+                    };
+                    self.error_with_help(
+                        annot.span,
+                        "`Promise` is not supported".to_string(),
+                        vec![format!(
+                            "calls return their value directly: {}",
+                            rewrite
+                                .unwrap_or_else(|| "write `T` instead of `Promise<T>`".to_string())
+                        )],
                     );
                     return Ok(Type::Error);
                 }

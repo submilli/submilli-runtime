@@ -1,147 +1,196 @@
 ---
 title: "Connect Claude Agent SDK"
-description: "Run the research agent on the Claude Agent SDK with every action going through Submilli: the SDK's own tools removed, only this server's tools allowed, then a real conversation."
+description: "Give a Claude Agent SDK agent Submilli's MCP tools and run its TypeScript programs under a registered Blueprint."
 slug: tutorials/connect-claude-agent-sdk
+docType: how-to
 sidebar:
   order: 6
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "9f635fdc1a1c66c7145624dd46478b1792bce822c5ef6729e26da468e9e8c784"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "bc7edc5d23f2486e68cb9c2e3ced3f60c56a1cbd879cfa627b7d7939fb07f989"
+  confirmedAt: "2026-10-20T09:28:54Z"
 ---
 
-In this tutorial we will run the research agent on the Claude Agent SDK,
-with every action going through Submilli and its programs executed on the
-server as the signed-in user (`u_ada` in the examples).
-You need the server and the `research` Blueprint from [Connect a
-harness](/docs/tutorials/connect-a-harness), with
-`SUBMILLI_SERVER_TOKEN` still exported, Node.js 20 or later, and an
-Anthropic key for the conversation. This SDK speaks to Claude,
-whichever provider the Blueprint's model uses.
+## Use your coding agent
 
-## Start the project
+Choose an icon to open a prefilled prompt. Select your project, review, and send.
 
-In `harnesses`, make a directory for this harness and install the
-dependencies. The files use top-level `await`, hence `type=module`. The
-full project is
-[`examples/harnesses/claude-agent-sdk/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/claude-agent-sdk).
+```text agent-prompt
+Read https://submilli.ai/docs/tutorials/connect-claude-agent-sdk/ as the source for this setup.
+
+Inspect my project and follow this guide to create agent.ts.
+Reuse valid local Submilli connection settings and provider credentials. If
+SUBMILLI_SERVER, SUBMILLI_SERVER_TOKEN, or SUBMILLI_BLUEPRINT is missing, ask
+for that value or its local configuration source. Do not invent values,
+expose secrets, create a Blueprint, or change the server. Ask for missing
+provider credentials without printing them. Install only the
+missing dependencies shown in this guide. Preserve its tool restrictions and
+session cleanup. Prepare the files without running the agent or making a
+model request.
+Leave the files ready for the exact Try it out command.
+```
+
+After setup, [try it out](#try-it-out).
+
+## Set up manually
+
+The files read this terminal's environment; they do not automatically load
+`.env` files. Use your running server's base URL and registered Blueprint.
+Replace these values before running the files:
 
 ```sh
-mkdir claude-agent-sdk && cd claude-agent-sdk
+export SUBMILLI_SERVER='your-server-base-url'
+export SUBMILLI_SERVER_TOKEN='your-server-token'
+export SUBMILLI_BLUEPRINT='your-registered-blueprint'
+```
+
+This guide connects a Claude Agent SDK agent to Submilli over MCP. The SDK
+keeps control of the agent loop, and Submilli executes the TypeScript programs
+under a Blueprint your application selects.
+
+Before you start:
+
+- [Run `submilli-server`](/docs/server/run-the-server) and keep
+  `SUBMILLI_SERVER_TOKEN` exported.
+- [Register a Blueprint](/docs/server/register-a-blueprint), then set
+  `SUBMILLI_BLUEPRINT` to its registered name. The calculation below assumes
+  the Blueprint has no required variables. The sample calls no external tools.
+- Install Node.js 20 or later and configure the Claude Agent SDK with an
+  Anthropic API key, Amazon Bedrock, Google Vertex AI, or a Claude Code login.
+
+### Start the project
+
+```sh
+mkdir claude-agent-submilli && cd claude-agent-submilli
 npm init -y
 npm pkg set type=module
-npm install @anthropic-ai/claude-agent-sdk
+npm install @anthropic-ai/claude-agent-sdk @modelcontextprotocol/sdk
 npm install --save-dev tsx typescript @types/node
 ```
 
-## The agent
+### Connect the agent
 
-Save this as `agent.ts`. It reads the brief from `../prompt.txt`:
+Create `agent.ts` in the project directory and paste the code below:
 
 ```typescript title="agent.ts"
-// A Claude Agent SDK agent that runs its programs on submilli-server, over MCP.
-
-import { readFileSync } from "node:fs";
 import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
-const SUBMILLI_SERVER = process.env.SUBMILLI_SERVER ?? "http://127.0.0.1:8128";
-const BLUEPRINT = "research";
+const prompt = process.argv.slice(2).join(" ");
+if (!prompt.trim()) throw new Error("Usage: npx tsx agent.ts '<message>'");
 
-// The agent's brief, kept beside the blueprint.
-const INSTRUCTIONS = readFileSync(new URL("../prompt.txt", import.meta.url), "utf8");
+const server = process.env.SUBMILLI_SERVER ?? "http://127.0.0.1:8128";
+const blueprint = required("SUBMILLI_BLUEPRINT");
+const endpoint = new URL(`${server}/mcp/${encodeURIComponent(blueprint)}`);
+const requestInit = { headers: { Authorization: `Bearer ${required("SUBMILLI_SERVER_TOKEN")}` } };
+const transport = new StreamableHTTPClientTransport(endpoint, { requestInit });
+const client = new Client({ name: "claude-submilli", version: "1.0.0" });
 
-export function options(userId: string): Options {
-  return {
+try {
+  await client.connect(transport);
+  const catalog = await client.listTools();
+  if (!catalog.tools.some((tool) => tool.name === "submilli__typescript__execute")) {
+    throw new Error("Submilli's execute tool is unavailable");
+  }
+
+  const mcp = new McpServer(
+    { name: "submilli", version: "1.0.0" },
+    { capabilities: { tools: {} }, instructions: client.getInstructions() },
+  );
+  mcp.server.setRequestHandler(ListToolsRequestSchema, (request) => client.listTools(request.params));
+  mcp.server.setRequestHandler(CallToolRequestSchema, (request) => client.callTool(request.params));
+  const options: Options = {
+    // Change this model ID to use another supported Claude model.
     model: "claude-sonnet-5",
-    systemPrompt: INSTRUCTIONS,
-    mcpServers: {
-      // One entry per user: the binding is fixed when the agent connects.
-      submilli: {
-        type: "http",
-        url: `${SUBMILLI_SERVER}/mcp/${BLUEPRINT}`,
-        headers: {
-          Authorization: `Bearer ${serverToken()}`,
-          "submilli-variables": `userId=${userId}`,
-        },
-      },
-    },
-    // Only the server above, whatever else the account or machine has configured.
+    systemPrompt: "Use Submilli to do calculations in TypeScript. Return the execution result.",
+    mcpServers: { submilli: { type: "sdk", name: "submilli", instance: mcp } },
     strictMcpConfig: true,
     allowedTools: ["mcp__submilli__*"],
-    // No shell, no file tools, no web fetch: every action goes through Submilli.
     tools: [],
     settingSources: [],
-    maxTurns: 20,
+    maxTurns: 10,
   };
-}
-
-export async function answer(question: string, userId: string): Promise<string> {
-  for await (const message of query({ prompt: question, options: options(userId) })) {
-    if (message.type === "result") {
-      return message.subtype === "success" ? message.result : `stopped: ${message.subtype}`;
+  const agent = query({ prompt, options });
+  try {
+    for await (const message of agent) {
+      // Keep the SDK events visible so the tool call and its result can be checked.
+      console.dir(message, { depth: null });
+      if (message.type === "result" && message.is_error) {
+        throw new Error("Claude reported an error; see the SDK result above");
+      }
     }
+  } finally {
+    agent.close();
+    await mcp.close();
   }
-  throw new Error("the agent ended without a result");
+} finally {
+  try {
+    if (transport.sessionId) {
+      // Initialization failures can auto-close the original transport.
+      const cleanup = new StreamableHTTPClientTransport(endpoint, {
+        requestInit, sessionId: transport.sessionId,
+      });
+      if (transport.protocolVersion) cleanup.setProtocolVersion(transport.protocolVersion);
+      try {
+        await cleanup.terminateSession();
+      } finally {
+        await cleanup.close();
+      }
+    }
+  } finally {
+    await client.close();
+  }
 }
 
-/** The API token this application was given for the server. */
-function serverToken(): string {
-  const token = process.env.SUBMILLI_SERVER_TOKEN;
-  if (!token) throw new Error("SUBMILLI_SERVER_TOKEN is not set: export the token the server was started with");
-  return token;
-}
-
-if (import.meta.filename === process.argv[1]) {
-  // In a real application the user comes from the signed-in session.
-  console.log(await answer("What is new in the latest stable release of Rust? Save a note with your sources.", "u_ada"));
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is not set`);
+  return value;
 }
 ```
 
-Notice the four options after the server. This SDK gives its agent a
-shell, file access, and web fetch unless told otherwise, and those tools
-run outside Submilli, where no Blueprint applies. `tools: []` removes
-them, and `allowedTools` lets the agent call Submilli's without asking.
-The SDK also loads the MCP servers of whoever runs the process. Run under
-a Claude login that had two connectors attached, this agent started with
-84 tools, eight of them Submilli's. `strictMcpConfig` limits it to the
-server named here, and `settingSources: []` keeps that person's other
-settings out.
+`strictMcpConfig` limits MCP servers to the entry declared here.
+`allowedTools` allows calls to that server without an interactive permission
+prompt. The SDK can also give the agent shell, filesystem, web, and user-level
+MCP tools that run outside Submilli. `tools: []` and `settingSources: []` keep
+this example limited to the configured Submilli server.
 
-The same caution holds for any harness. A Blueprint governs what
-programs do. It can't govern a tool the harness offers beside Submilli's.
+The exact boundary in this example is one `mcpServers.submilli` entry, the
+`mcp__submilli__*` allowlist, `tools: []`, and `settingSources: []`. No Claude
+built-in tool or delegation tool is enabled. Direct Claude Agent SDK tools can
+still be added when the application needs them, but those calls bypass
+Submilli and keep the SDK's own authorization and approval path.
+Current Submilli MCP connections do not support application-tool callbacks. To
+let a TypeScript program call an application tool through Submilli, use an HTTP
+session with the `tools` field on `POST /v1/sessions`, grant `tools.call` in the
+Blueprint, and answer each suspended run through
+`POST /v1/runs/{run_id}/resume`. See the [HTTP API reference](/docs/reference/http-api#application-tools).
 
-The SDK takes its credentials from `ANTHROPIC_API_KEY`, from Amazon
-Bedrock or Google Vertex AI when `CLAUDE_CODE_USE_BEDROCK` or
-`CLAUDE_CODE_USE_VERTEX` is set, or from a Claude Code login on the
-machine.
+If the selected Blueprint declares required variables, add a
+`submilli-variables` header whose values come from trusted application state,
+as described in [Your application](/docs/application#three-decisions-the-model-has-no-part-in).
+Never take those values from the conversation.
 
-## One conversation
+## Try it out
 
 ```sh
-ANTHROPIC_API_KEY=... npx tsx agent.ts
+npx tsx agent.ts \
+  'Run this program through Submilli and report its result:
+export function main(): number { return 2 + 2; }'
 ```
 
-This is one real run, with Claude Sonnet 5 as the model, made after
-three other tutorials' agents had answered the same question for the
-same user. The model's programs are its own, and another run writes
-different ones. The answer began and ended:
+The script prints the SDK messages. Confirm that they contain a call to
+Submilli's execute tool and a tool result containing `4`; the final
+assistant text alone does not verify where the calculation ran. This example
+uses the model provider for the agent conversation. The TypeScript program
+itself only computes a value and calls no Package, application tool, or
+external service.
 
-```text
-The latest stable Rust release is **1.99.0**, released 2026-10-01. I checked this against the official blog post and releases.rs today (2026-10-03), and no newer stable release has shipped.
-…
-**Notebook:** I updated the existing `/notes/rust-latest-release.md` (it already held a 1.99.0 note from an earlier session). I added a line recording today's verification and why the `/releases/latest/` redirect is not a usable source. The existing content is unchanged.
-
-**Not established:** I did not read the Cargo or Clippy changelogs or the full stable release notes, so the list above covers the blog post's highlights, not every change.
-```
-
-Notice the notebook paragraph. Another harness's agent wrote the note,
-in another conversation, under the same user. This one found it
-at `/notes`, read it before searching, and added to it. The notebook
-belongs to the user and the Blueprint, not to the harness.
-
-You have the research agent running on the Claude Agent SDK with nothing
-beside Submilli's tools, each program it writes executed on the server
-as the signed-in user, and the binding proved on the index before
-any model was involved. Project:
-[`examples/harnesses/claude-agent-sdk/`](https://github.com/submilli/submilli-runtime/tree/main/examples/harnesses/claude-agent-sdk).
+A Blueprint applies only to programs executed through Submilli. If you enable
+other Claude Agent SDK tools, they keep the SDK's own access and approval
+rules. See [How Submilli works with
+harnesses](/docs/tutorials/connect-a-harness) for the full boundary.

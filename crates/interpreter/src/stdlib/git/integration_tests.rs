@@ -56,8 +56,7 @@ fn metadata_publication_preserves_native_hook_execution() {
     std::fs::write(&hook, "#!/bin/sh\nprintf ran > hook-ran\n").unwrap();
     std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
     let mut state = snapshot(root.path());
-    super::operations::set_remote(&mut state, "origin", "https://example.com/repo.git", true)
-        .unwrap();
+    super::operations::add_remote(&mut state, "origin", "https://example.com/repo.git").unwrap();
     state.publish().unwrap();
     assert_ne!(
         std::fs::metadata(&hook).unwrap().permissions().mode() & 0o111,
@@ -93,7 +92,7 @@ fn failed_metadata_staging_does_not_leave_a_recovery_blocker() {
 }
 
 fn job(vfs: &Vfs, op: &str) -> Job {
-    let data = StoreData::with_vfs(vfs.clone());
+    let data = StoreData::with_vfs("test-run".into(), vfs.clone());
     Job {
         op: op.into(),
         path: "/".into(),
@@ -350,8 +349,7 @@ async fn filesystem_ref_aliases_cannot_bypass_branch_grants() {
             "forbidden update"
         };
         let error = worker::run(&vfs, &request, operation, &[json!(argument)])
-            .err()
-            .expect("filesystem alias must not use MAIN's branch grant");
+            .expect_err("filesystem alias must not use MAIN's branch grant");
         assert!(error.to_string().contains("reference spelling"), "{error}");
         let after = storage::read_files(
             &metadata,

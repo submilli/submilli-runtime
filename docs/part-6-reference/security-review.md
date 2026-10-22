@@ -9,7 +9,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "d4d84745120b1431b996adbe8ea4540c7434775d67c15111664e2e8885292916"
+  contentHash: "74bb4048eeaa76a9666c3adf09b21c72d7fb3c54049877938bc09bc2097a866a"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -22,7 +22,7 @@ defects and report false positives.
 ## Invocation
 
 ```sh
-submilli build security-review -a codex -m gpt-6.1-sol -e high -p @acme/billing --fail-on high --output review.json
+submilli build security-review -a codex -m gpt-6.1-sol -e high -p @pied-piper/billing --fail-on high --output review.json
 ```
 
 The [CLI reference](/docs/reference/cli#submilli-build-security-review)

@@ -103,7 +103,6 @@ pub fn install_tools_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<(
         TOOLS_MODULE_NAME,
         crate::mangle::host(TOOLS_MODULE_NAME, "call"),
         ty,
-        /* deterministic = */ false,
         move |caller, params, results| {
             Box::pin(async move {
                 let params: &[Val; 2] = params.try_into().map_err(|_| {
@@ -126,52 +125,66 @@ pub fn install_tools_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<(
                     Payload::meta(serde_json::json!({ "tool": tool }))
                         .with_body(args_json.as_bytes())
                 });
-                // Looked up after the gate, so a denied caller cannot learn
-                // whether the session offers tools.
-                let provider = caller.data().tool_provider.clone().ok_or_else(|| {
+                let request = ToolRequest { tool, args_json };
+                let response = super::effects::execute(
+                    caller,
+                    "tools.call",
+                    request,
+                    move |caller, _, request| {
+                        Box::pin(async move {
+                            fuel::charge(&mut *caller, fuel::IO, request.args_json.len() as u64)?;
+                            let ToolRequest { tool, args_json } = request;
+                            // Looked up after the gate, so a denied caller cannot learn
+                            // whether the session offers tools.
+                            let provider = caller.data().tool_provider.clone().ok_or_else(|| {
                     wasmtime::Error::msg(format!(
                         "{TOOLS_PACKAGE}.{tool}: this session offers no application tools"
                     ))
                 })?;
-                let principal = running_package(&*caller)
-                    .map_err(|error| error.into_denial(TOOLS_CAPABILITY))?;
+                            let principal = running_package(&*caller)
+                                .map_err(|error| error.into_denial(TOOLS_CAPABILITY))?;
 
-                fuel::charge(&mut *caller, fuel::IO, args_json.len() as u64)?;
-                let waited = Instant::now();
-                let outcome = provider.call(&tool, &args_json).await;
-                let data = caller.data_mut();
-                data.clock_paused = data.clock_paused.saturating_add(waited.elapsed());
+                            let waited = Instant::now();
+                            let outcome = provider.call(&tool, &args_json).await;
+                            let data = caller.data_mut();
+                            data.clock_paused = data.clock_paused.saturating_add(waited.elapsed());
 
-                // A refusal by the harness is a denial in the audit trail, inside the
-                // call the policy allowed.
-                if let Err(ToolCallError::Denied { .. }) = &outcome {
-                    audit_denial_in(
-                        &*caller,
-                        ticket,
-                        &principal,
-                        TOOLS_CAPABILITY,
-                        &serde_json::json!({ "tool": tool }),
-                        crate::runtime::host::DenialSource::Harness.as_str(),
-                        "the application refused the call",
-                    );
-                }
-                record_payload(&*caller, ticket, Side::Response, || match &outcome {
-                    Ok(response) => Payload::meta(serde_json::Value::Null)
-                        .with_owned_body(serde_json::to_vec(response.value()).unwrap_or_default()),
-                    Err(error) => Payload::meta(error.record()),
-                });
-                fuel::settle_result(caller, |caller| {
-                    let result = (|| {
-                        let response = outcome
-                            .map_err(|error| tool_error_to_throw(&principal, &tool, error))?;
-                        *result_slot = super::mcp::allocate_response(caller, &response)?;
-                        Ok(())
-                    })();
-                    result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
-                })
+                            // A refusal by the harness is a denial in the audit trail, inside the
+                            // call the policy allowed.
+                            if let Err(ToolCallError::Denied { .. }) = &outcome {
+                                audit_denial_in(
+                                    &*caller,
+                                    ticket,
+                                    &principal,
+                                    TOOLS_CAPABILITY,
+                                    &serde_json::json!({ "tool": tool }),
+                                    crate::runtime::host::DenialSource::Harness.as_str(),
+                                    "the application refused the call",
+                                );
+                            }
+                            record_payload(&*caller, ticket, Side::Response, || match &outcome {
+                                Ok(response) => Payload::meta(serde_json::Value::Null)
+                                    .with_owned_body(
+                                        serde_json::to_vec(response.value()).unwrap_or_default(),
+                                    ),
+                                Err(error) => Payload::meta(error.record()),
+                            });
+                            outcome.map_err(|error| tool_error_to_throw(&principal, &tool, error))
+                        })
+                    },
+                )
+                .await?;
+                *result_slot = super::mcp::allocate_response(caller, &response)?;
+                Ok(())
             })
         },
     )
+}
+
+#[derive(serde::Serialize)]
+struct ToolRequest {
+    tool: String,
+    args_json: String,
 }
 
 fn tool_error_to_throw(principal: &str, tool: &str, error: ToolCallError) -> wasmtime::Error {
@@ -335,7 +348,7 @@ mod tests {
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().unwrap();
         let calls = Calls::default();
-        let mut data = StoreData::with_vfs(Vfs::none());
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::none());
         data.install_type_info(compiled.type_info.clone());
         if provided {
             data.tool_provider = Some(Arc::new(Answer {

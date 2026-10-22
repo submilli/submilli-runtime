@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "e39fff88433856622ba7aec48a281a80732644b9b5fe813510eeb720c8dffb94"
+  contentHash: "1c140e46f9dd3bc5f4db5ceea441f30cc9736d08ff941136aebe4895c695fc2c"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -88,18 +88,18 @@ variables:
   region:
     default: us
 auth_proxy:
-- host: status.acme.com
+- host: status.pied-piper.example
   auth:
     bearer: STATUS_TOKEN
 git:
   identity:
     name: Support Agent (${vars.customerId})
-    email: agent@acme.example
+    email: agent@pied-piper.example
 default: deny
 permissions:
   main:
   - capability: http.get
-    filter: host == "status.acme.com"
+    filter: host == "status.pied-piper.example"
     action: allow
 mcp:
   linear:
@@ -482,7 +482,7 @@ Each name:
 - is listed once
 
 ```text
-error: case.yaml: invalid packages config: package `@acme.co/billing` scope `@acme.co` must be a GitHub org: ASCII letters, digits, and single internal hyphens only (no dots), 1–39 characters
+error: case.yaml: invalid packages config: package `@pied-piper.co/billing` scope `@pied-piper.co` must be a GitHub org: ASCII letters, digits, and single internal hyphens only (no dots), 1–39 characters
 ```
 
 ```text
@@ -490,14 +490,14 @@ error: case.yaml: invalid packages config: `@mcp/linear` is an MCP virtual packa
 ```
 
 ```text
-error: case.yaml: blueprint parse error: duplicate package `@acme/a` in packages:
+error: case.yaml: blueprint parse error: duplicate package `@pied-piper/a` in packages:
 ```
 
 `submilli blueprint lint` checks each Package against the local Package
 store, and registration against the server's:
 
 ```text
-error: case.yaml: cannot validate package `@acme/billing` capabilities: package `@acme/billing` was not found in /…/packages; no packages are available
+error: case.yaml: cannot validate package `@pied-piper/billing` capabilities: package `@pied-piper/billing` was not found in /…/packages; no packages are available
 ```
 
 ## auth_proxy
@@ -522,10 +522,10 @@ port.
 
 ```yaml title="blueprint.yaml (fragment)"
 auth_proxy:
-- host: status.acme.com
+- host: status.pied-piper.example
   auth:
     bearer: STATUS_TOKEN
-- host: legacy.acme.com
+- host: legacy.pied-piper.example
   headers:
     X-Api-Key: ${secrets.LEGACY_KEY}
 ```
@@ -564,7 +564,7 @@ other `${…}` reference is accepted.
 git:
   identity:
     name: Support Agent (${vars.customerId})
-    email: agent@acme.example
+    email: agent@pied-piper.example
   username: agent
 ```
 
@@ -614,7 +614,7 @@ stable name to refer to instead of its position in the list.
 ```yaml title="blueprint.yaml (fragment)"
 permissions:
   main:
-  - capability: acme.com/credits.apply
+  - capability: pied-piper.example/credits.apply
     filter: customerId == ${vars.customerId} and customerClass == "premium"
     action: allow
 ```
@@ -922,7 +922,7 @@ check isn't registered.
 | Every volume, as the root or a mount, is declared on the server | `volume 'team' is not declared on this server; declared volumes: handbook, notes` |
 | `access` doesn't exceed the server's declaration | ``volume 'handbook' is read_only on this server; drop `access: read_write` (or write `access: read_only`), or ask the operator to declare it read_write`` |
 | Every `store` secret has a value in the server's store | `secret check failed: missing secret 'K'` |
-| Every Package, and every Package it depends on, is installed on the server | ``package check failed: package `@acme/billing` is not installed; install it with `submilli server packages install <org/repo> @acme/billing` `` |
+| Every Package, and every Package it depends on, is installed on the server | ``package check failed: package `@pied-piper/billing` is not installed; install it with `submilli server packages install <org/repo> @pied-piper/billing` `` |
 | Each capability a Package requires for its own calls has a rule under that Package's caller | `package check failed:` followed by the Package, the capability, and the missing rule |
 | A filter tests only fields its capability reports, for standard-library, Package, and `mcp.<name>` capabilities | The rule, the field, and the fields the capability reports |
 

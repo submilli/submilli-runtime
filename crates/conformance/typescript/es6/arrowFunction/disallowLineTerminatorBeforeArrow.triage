@@ -1,1 +1,0 @@
-line 4, 6, 16, 18, 20, 23, 25, 28, 54, 56 missed: bug SUB-1736 a line break before an arrow's `=>` is accepted, where tsc rejects it

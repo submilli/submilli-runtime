@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "98b1846631d83602abe846456487c4eeeaf58e2836f05133d1733096a49a018a"
+  contentHash: "a7bfe25e6d00ced5277b44a29e7d368ea4d1b8008afa5df075a9ab158b591850"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -44,7 +44,7 @@ module speaks HTTPS and not SSH, so the identity also carries the
 username a remote will ask for:
 
 ```sh
-submilli blueprint git set --name "Support Agent" --email agent@acme.example --username agent
+submilli blueprint git set --name "Support Agent" --email agent@pied-piper.example --username agent
 ```
 
 ```text
@@ -55,7 +55,7 @@ Configured Git in blueprint.yaml. Configure grants with `submilli blueprint capa
 git:
   identity:
     name: Support Agent
-    email: agent@acme.example
+    email: agent@pied-piper.example
   username: agent
 ```
 
@@ -91,7 +91,7 @@ submilli docs submilli:git
 ```
 
 ```text
-submilli:git — Capability-controlled VFS repositories: history, staging, commits, branches and HTTPS fetch.
+submilli:git — Capability-controlled Git repositories in the VFS, with HTTPS remotes.
 …
 class Repository {
   static clone(url: string, path: string, options?: { branch?: string }): Repository;
@@ -121,10 +121,10 @@ submilli:git
       example filter: path == "/repo"
   git.clone — Clone an HTTPS repository into a VFS directory
       fields: path: string, remoteName: string, remote: string, branch: string
-      example filter: path == "/repo" and remote == "https://github.com/acme/project.git"
+      example filter: path == "/repo" and remote == "https://github.com/pied-piper/project.git"
   git.fetch — Fetch or pull HTTPS remote branches into an existing repository
       fields: path: string, remoteName: string, remote: string, branch: string
-      example filter: path == "/repo" and remote == "https://github.com/acme/project.git"
+      example filter: path == "/repo" and remote == "https://github.com/pied-piper/project.git"
   git.commit — Commit staged changes with blueprint identity
       fields: path: string, branch: string
       example filter: path == "/repo" and branch == "main"
@@ -257,7 +257,7 @@ secrets:
 git:
   identity:
     name: Support Agent
-    email: agent@acme.example
+    email: agent@pied-piper.example
   username: agent
 default: deny
 permissions:

@@ -59,6 +59,20 @@ pub fn package_declaration() -> PackageDeclaration {
     );
     insert_fn(
         &mut defs,
+        "summary",
+        vec![path_param.clone()],
+        Type::String,
+        "/**\n * Describe `path` in a few lines of text, for a program that needs to see what is there before deciding what to read. A directory lists its direct children — directories first, then by name — each with its kind, size and modification time, under a count line; an empty directory says `empty directory`. A file reports its size and modification time, and a missing path says `does not exist` rather than throwing. Shows at most 100 entries and counts the rest; iterate `list(path, false)` to visit all of them.\n * @param path File or directory path under the VFS root.\n * @capability fs.list { path, recursive }\n */",
+    );
+    insert_fn(
+        &mut defs,
+        "isEmpty",
+        vec![path_param.clone()],
+        Type::Boolean,
+        "/**\n * Returns `true` when the directory at `path` has no entries, or the file at `path` has zero bytes. Throws when `path` does not exist — call `exists(path)` first if it may not.\n * @param path File or directory path under the VFS root.\n * @capability fs.list { path, recursive }\n */",
+    );
+    insert_fn(
+        &mut defs,
         "size",
         vec![path_param.clone()],
         Type::Number,

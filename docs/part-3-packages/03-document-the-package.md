@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "f14b4e6514a0f86e2dac9ad0fa6a6972d35838a0ec6fb728791459a135f76910"
+  contentHash: "ab67ff7e2c134a96a9927096d1d71ecfcd857d6017022b895dec839897930aee"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -18,7 +18,7 @@ reads the Package's readme. The model reads the declarations and
 a program nobody reviews. What each file leaves out, that reader guesses.
 
 This guide shows you how to document a Package for both readers. The
-example is Acme's billing Package. Substitute your operations and your
+example is Pied Piper's billing Package. Substitute your operations and your
 service.
 
 ## Doc comments are the API
@@ -43,17 +43,17 @@ warning: parameter `customerId` is undocumented (missing `@param customerId`)
 returns them:
 
 ```sh
-submilli docs @acme/billing
+submilli docs @pied-piper/billing
 ```
 
 ```typescript
-@acme/billing — Goodwill credits for one customer of Acme's billing service.
+@pied-piper/billing — Goodwill credits for one customer of Pied Piper's billing service.
 
 /**
  * Add a goodwill credit to a customer's account.
- * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param customerId The customer's id in the billing system, such as `pied_piper`.
  * @param amount The credit, in cents; must be positive.
- * @capability acme.com/credits.apply { customerId: string, customerClass: string, amount: number }
+ * @capability pied-piper.example/credits.apply { customerId: string, customerClass: string, amount: number }
  * @returns The credit as recorded, with the customer's balance after it.
  */
 function applyCredit(customerId: string, amount: number): Credit;
@@ -67,7 +67,7 @@ interface Credit {
    */
   amount: number;
   /**
-   * The customer's balance after the credit, in cents. Negative means Acme owes the customer.
+   * The customer's balance after the credit, in cents. Negative means Pied Piper owes the customer.
    */
   balance: number;
   /**
@@ -86,12 +86,14 @@ unit, and what the fields mean.
 `docs/readme.md` is returned to the model with the declarations. Say what
 the Package is for, what each operation takes and returns, when it
 throws, what a denial means and that the program should stop, and end
-with one complete `main`:
+with one complete `main`. Leave setup out: the model runs no install or
+grant command and cannot change its blueprint, so those belong in the
+Package's root `README.md`, which people read.
 
 ````markdown title="packages/billing/docs/readme.md"
-# @acme/billing
+# @pied-piper/billing
 
-Credits for one customer of Acme's billing service. The customer is the
+Credits for one customer of Pied Piper's billing service. The customer is the
 one the session was opened for; a credit for any other customer is
 refused.
 
@@ -107,14 +109,56 @@ the customer is not the session's, or the amount is more than the policy
 allows. Do not retry with another customer or amount; report it and stop.
 
 ```ts
-import { applyCredit } from "@acme/billing";
+import { applyCredit } from "@pied-piper/billing";
 
 function main(): string {
-    const credit = applyCredit("cus_northwind", 1500);
+    const credit = applyCredit("pied_piper", 1500);
     return `credited ${credit.amount} cents, balance ${credit.balance}`;
 }
 ```
 ````
+
+## Show each reader what it can call
+
+The model reads the Package's documentation as its blueprint allows. An
+operation the blueprint can't allow is left out of the declarations,
+together with the types only that operation uses. A function with several
+`@capability` tags is shown only when the blueprint could allow every one
+of them. An operation allowed only under a filter, or only after a person
+approves, is shown with a line that says so.
+
+The readme is yours to mark. Wrap a section about one operation in a region
+naming its capability, and a blueprint that can't allow it doesn't show the
+section:
+
+````markdown title="packages/billing/docs/readme.md"
+<!-- submilli:if capability="pied-piper.example/credits.apply" -->
+
+## applyCredit(customerId, amount)
+
+Adds a goodwill credit of `amount` cents to the customer's account.
+
+```ts
+import { applyCredit } from "@pied-piper/billing";
+
+function main(): string {
+    return `balance ${applyCredit("pied_piper", 1500).balance}`;
+}
+```
+
+<!-- submilli:endif -->
+````
+
+Use `all="<name> <name>"` for an example that calls several operations,
+and `any="<name> <name>"` for guidance shared by several. Text outside a
+region is shown to every blueprint, so keep it true for a reader who can
+call only some operations. The build checks every directive, and an
+example inside a region is compiled like any other:
+
+```text
+error: package `@pied-piper/billing` has malformed documentation directives:
+  …/packages/billing/docs/readme.md:1: `pied-piper.example/credit.apply` is not a capability the standard library, this package, or its dependencies provide
+```
 
 ## The examples are compiled
 
@@ -123,7 +167,7 @@ against the Package by `submilli build test` and counted as a test, so
 an example can't drift from the API it shows:
 
 ```sh
-submilli build test -p @acme/billing
+submilli build test -p @pied-piper/billing
 ```
 
 ```text
@@ -137,10 +181,10 @@ An example that names a function the Package doesn't have fails the run,
 with the line in the readme:
 
 ```text
-error: package `@acme/billing` does not export `refund`
+error: package `@pied-piper/billing` does not export `refund`
   --> packages/billing/docs/readme.md:28:10
    |
-28 | import { refund } from "@acme/billing";
+28 | import { refund } from "@pied-piper/billing";
    |          ^^^^^^
 help: exports: `Credit`, `applyCredit`
 FAIL packages/billing/docs/readme.md :: example 2 (compile)
@@ -161,9 +205,9 @@ service's side, which operations to grant and the fields their filters
 can test, and give the install and grant commands:
 
 ````markdown title="packages/billing/README.md"
-# @acme/billing
+# @pied-piper/billing
 
-Goodwill credits for Acme's customers, on Stripe. Programs call
+Goodwill credits for Pied Piper's customers, on Stripe. Programs call
 `applyCredit(customerId, amount)`; the package reads the customer's class
 from the account and asks the blueprint before it credits anything.
 
@@ -183,12 +227,16 @@ submilli secret put billing_api_key
 
 | Capability | Fields | Grant it for |
 | --- | --- | --- |
-| `acme.com/credits.apply` | `customerId`, `customerClass`, `amount` | Credits to the session's customer |
+| `pied-piper.example/credits.apply` | `customerId`, `customerClass`, `amount` | Credits to the session's customer |
+
+Replace `OWNER/REPOSITORY` and `@OWNER/billing` with this Package's published
+repository and name. Its scope must match the GitHub owner; use the same name
+in the commands below.
 
 ```sh
-submilli install acme/billing-package @acme/billing
-submilli blueprint add-package @acme/billing --no-capabilities
-submilli blueprint capability add acme.com/credits.apply \
+submilli install OWNER/REPOSITORY @OWNER/billing
+submilli blueprint add-package @OWNER/billing --no-capabilities
+submilli blueprint capability add pied-piper.example/credits.apply \
   --filter 'customerId == ${vars.customerId} and amount <= 5000'
 ```
 ````

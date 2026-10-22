@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "2bf9d007262790a2ca1413ed8de0831bc6ade87eb3608f1f5dcc421805774ae9"
+  contentHash: "97a4d1f9d41d2549d630362894b492bbc479e4a22dca9ac9774c3886f43207e5"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -25,7 +25,7 @@ A project is a directory that holds a `submilli.toml`. `submilli build check`,
 current directory or a parent of it. `init` and `new` use the one in the
 current directory.
 
-`submilli build init @acme/billing packages/billing` creates:
+`submilli build init @pied-piper/billing packages/billing` creates:
 
 ```text
 created …/submilli.toml
@@ -45,6 +45,7 @@ files.
 | --- | --- | --- |
 | `submilli.toml` | `init`, and `new` appends | The [manifest](#submillitoml) |
 | `<path>/src/lib.ts` | `init`, `new` | The entry point, whose exports are the Package's API |
+| `<path>/src/config.ts` | You | Optional [build configuration](/docs/reference/package-configuration), with defaults and required parameters |
 | `<path>/src/**/*.ts` | You | Other modules, imported by relative path |
 | `<path>/docs/readme.md` | `init`, `new` | [The readme the model reads](#docsreadmemd). Required |
 | `<path>/README.md` | `init`, `new` | The readme for the person who installs and grants the Package. Not read by the build |
@@ -70,18 +71,18 @@ top-level `[dependencies]` table. Keys the build doesn't know are ignored.
 "@submilli/jina" = { github = "github.com/submilli/submilli-runtime", rev = "b3e33dfd1f7d7cdbb63bcd3843c2b7902ecffdf1" }
 
 [[package]]
-name = "@acme/billing"
+name = "@pied-piper/billing"
 version = "0.1.0"
-description = "Credits and invoices for one customer of Acme's billing service."
+description = "Credits and invoices for one customer of Pied Piper's billing service."
 keywords = ["billing", "credits", "invoices"]
 path = "packages/billing"
 
 [[package]]
-name = "@acme/support"
+name = "@pied-piper/support"
 version = "0.1.0"
 description = "Support replies that cite the status page and apply goodwill credits."
 path = "packages/support"
-dependencies = ["@acme/billing", "@submilli/jina"]
+dependencies = ["@pied-piper/billing", "@submilli/jina"]
 ```
 
 ### [[Package]]
@@ -129,21 +130,22 @@ Each error stops the build with exit code 1 and points at the manifest line.
 | Cause | Message |
 | --- | --- |
 | No `[[package]]` | `add a [[package]] table to submilli.toml` |
-| `name` not scoped | ``package `acme/demo` must use scoped form `@org/name` (GitHub org as the scope)`` |
-| Two Packages with one `name` | `rename duplicate package "@acme/demo"; package names must be unique` |
-| `description` missing | `add description = "..." for package "@acme/demo"` |
+| `name` not scoped | ``package `pied-piper/demo` must use scoped form `@org/name` (GitHub org as the scope)`` |
+| Two Packages with one `name` | `rename duplicate package "@pied-piper/demo"; package names must be unique` |
+| `description` missing | `add description = "..." for package "@pied-piper/demo"` |
 | `description` empty | `replace empty package description with a one-line summary` |
 | Empty keyword | `remove empty package keyword or replace it with a search term` |
-| `path` missing in a multi-Package manifest | `add path = "..." for package "@acme/demo"; path is required in a monorepo` |
+| `path` missing in a multi-Package manifest | `add path = "..." for package "@pied-piper/demo"; path is required in a monorepo` |
 | `path` absolute | `replace path "/x" with a path relative to submilli.toml` |
 | `path` above the manifest | `replace path "../x"; package paths may not escape the manifest directory` |
 | No entry point | `create packages/billing/src/lib.ts; package entrypoints are conventional` |
-| Undeclared dependency | `declare dependency "@acme/missing" as a sibling [[package]] or in top-level [dependencies]` |
+| Undeclared dependency | `declare dependency "@pied-piper/missing" as a sibling [[package]] or in top-level [dependencies]` |
 | `rev` not a commit SHA | `pin rev "main" to a full 40-character commit SHA; branches and tags are not reproducible` |
 | `github` not on github.com | `point github "gitlab.com/x/y" at a github.com repository (e.g. "github.com/org/repo")` |
 | Versioned dependency not in the store | ``failed to load external dependency `@submilli/jina`: package `@submilli/jina` was not found in …`` |
 | Stored version differs | ``external dependency `@submilli/jina` has version 0.2.0 in the store, but submilli.toml requires 0.1.0; …`` |
-| `docs/readme.md` missing | ``package `@acme/demo` is missing documentation at …/docs/readme.md; create docs/readme.md: …`` |
+| `docs/readme.md` missing | ``package `@pied-piper/demo` is missing documentation at …/docs/readme.md; create docs/readme.md: …`` |
+| Malformed directive in `docs/readme.md` | ``package `@pied-piper/demo` has malformed documentation directives:`` and a ``…/docs/readme.md:<line>: …`` line for each |
 
 ## submilli.lock
 
@@ -220,7 +222,9 @@ On a property, `@param` and `@returns` are warned about too.
 fields. `{}` is a capability with no fields. Text after the closing brace is
 the tag's description, with a leading `-` or `—` removed. `submilli docs`
 shows it on the tag's line, and `capabilities.yaml` doesn't contain it. A
-function may carry several `@capability` tags.
+function may carry several `@capability` tags. Documentation scoped to a
+blueprint shows the function only when the blueprint could allow every one
+of them for `main`.
 
 A field is written one of these ways:
 
@@ -245,8 +249,8 @@ The build compares each tag with the `check` calls (from
 | --- | --- | --- |
 | Error | ``payload key `extra` missing from `@capability` binding`` | A `check` payload field the tag doesn't list |
 | Warning | ``` `@capability` binding key `team` is missing from `check()` payload``` | A tag field the `check` payload doesn't contain |
-| Warning | ``missing `@capability acme.com/tickets.reopen` for `check()` call`` | A `check` with no tag of that name |
-| Warning | ``extra `@capability acme.com/tickets.open` has no matching `check()` call`` | A tag with no `check` of that name |
+| Warning | ``missing `@capability pied-piper.example/tickets.reopen` for `check()` call`` | A `check` with no tag of that name |
+| Warning | ``extra `@capability pied-piper.example/tickets.open` has no matching `check()` call`` | A tag with no `check` of that name |
 | Warning | ``unknown parameter binding `$team` in `@capability` `` | A field naming no parameter |
 | Warning | ``unknown field `idd` in `@capability` binding `$ticket` `` | A path naming no property of the parameter's type |
 | Warning | ``dynamic capability string in `check()`; use a string literal`` | A `check` whose capability name isn't a string literal |
@@ -268,9 +272,9 @@ the Package's directory by every `submilli build check`, `test`, and
 `submilli blueprint add-package` reads it.
 
 ```yaml title="packages/billing/capabilities.yaml"
-namespace: acme
+namespace: pied-piper
 provides:
-- name: acme.com/credits.apply
+- name: pied-piper.example/credits.apply
   description: Add a goodwill credit to a customer's account.
   fields:
     amount:
@@ -280,10 +284,10 @@ provides:
       type: string
     customerId:
       type: string
-      description: The customer's id in the billing system, such as `cus_northwind`.
+      description: The customer's id in the billing system, such as `pied_piper`.
     kind:
       type: string
-- name: acme.com/invoices.list
+- name: pied-piper.example/invoices.list
   description: List a customer's invoices from the billing service.
   fields:
     customer:
@@ -291,7 +295,7 @@ provides:
       description: The customer and how many invoices to return.
 requires:
 - capability: http.get
-  filter: host == "billing.acme.com"
+  filter: host == "billing.pied-piper.example"
 - capability: secrets.get
   filter: name == "BILLING_API_KEY"
 ```
@@ -301,10 +305,10 @@ The tags that produced it:
 ```typescript title="packages/billing/src/lib.ts (fragment)"
 /**
  * Add a goodwill credit to a customer's account.
- * @param customerId The customer's id in the billing system, such as `cus_northwind`.
+ * @param customerId The customer's id in the billing system, such as `pied_piper`.
  * @param amount The credit, in cents; must be positive.
  * @returns The credit as recorded.
- * @capability acme.com/credits.apply { customerId, customerClass: string, amount, kind: "goodwill" }
+ * @capability pied-piper.example/credits.apply { customerId, customerClass: string, amount, kind: "goodwill" }
  */
 export function applyCredit(customerId: string, amount: number): Credit {
 
@@ -312,14 +316,14 @@ export function applyCredit(customerId: string, amount: number): Credit {
  * List a customer's invoices from the billing service.
  * @param query The customer and how many invoices to return.
  * @returns The invoices' ids.
- * @capability acme.com/invoices.list { customer: $query.customerId }
+ * @capability pied-piper.example/invoices.list { customer: $query.customerId }
  */
 export function listInvoices(query: InvoiceQuery): string[] {
 ```
 
 | Key | Holds |
 | --- | --- |
-| `namespace` | The Package name's scope, without `@` (`acme` for `@acme/billing`) |
+| `namespace` | The Package name's scope, without `@` (`pied-piper` for `@pied-piper/billing`) |
 | `provides` | One entry per capability name declared by an `@capability` tag, sorted by name |
 | `provides[].name` | The capability's name |
 | `provides[].description` | The summary of the first documented callable that declares it. Omitted when empty |
@@ -363,7 +367,32 @@ depends on the session's working directory. A Package that calls
 `<path>/docs/readme.md` is required, and a Package without it fails to build. It
 is copied into the installed Package. The server's documentation tool and
 HTTP API return it, followed by a `## Declarations` section with
-the Package's declarations. `submilli docs` prints only the declarations.
+the Package's declarations. `submilli docs` prints it before the declarations.
+
+Directives mark a region shown only when the blueprint could allow its
+capabilities for `main`:
+
+| Directive | The region is shown when |
+| --- | --- |
+| `<!-- submilli:if capability="<name>" -->` | The blueprint could allow `<name>` |
+| `<!-- submilli:if all="<name> <name>" -->` | It could allow every name |
+| `<!-- submilli:if any="<name> <name>" -->` | It could allow at least one |
+| `<!-- submilli:endif -->` | Ends the innermost region |
+
+A directive is a line of its own, indented by at most three spaces, outside
+fenced code. Regions nest up to 8 deep, and a nested region is
+shown only when its parents are. The directive lines are removed from what
+readers get. `submilli docs` without `--blueprint` shows every region.
+
+The build fails on a malformed directive, an unmatched `if` or `endif`, an
+attribute other than `capability`, `all`, or `any`, and a name that neither
+the standard library, the Package, nor one of its dependencies provides. It
+also fails on a directive indented four or more spaces, one that shares its
+line with text, one whose `submilli:` is not lowercase, and a code fence left
+open with a directive after it, since each would show a region to every
+reader. A `docs/readme.md` larger than 4 MiB fails too. An
+installed Package whose readme has malformed directives is reported as an
+error rather than shown.
 
 `submilli build test` compiles every fenced block in it whose info string is
 exactly `ts` or `typescript`, against the Package and its dependencies, and
@@ -403,16 +432,16 @@ aren't counted. An error in a Package's or the file's top-level statements
 fails the first segment.
 
 ```text
-[security] caller=main capability=acme.com/credits.apply context={"amount":5,"customerClass":"standard","customerId":"cus_northwind","kind":"goodwill"}
+[security] caller=main capability=pied-piper.example/credits.apply context={"amount":5,"customerClass":"standard","customerId":"pied_piper","kind":"goodwill"}
 ok   packages/billing/tests/fail.test.ts :: credits
 FAIL packages/billing/tests/fail.test.ts :: refuses a negative amount with a TypeError
 error: Error: expectException: expected a TypeError error, but caught RangeError
   at main (packages/billing/tests/fail.test.ts:8:66)  [thrown here]
  7 |     label("refuses a negative amount with a TypeError");
- 8 |     expectException(() => { applyCredit("cus_northwind", -1); }, "TypeError");
+ 8 |     expectException(() => { applyCredit("pied_piper", -1); }, "TypeError");
    |                                                                  ^
  9 |     label("never runs");
-[security] caller=main capability=acme.com/credits.apply context={"amount":1500,"customerClass":"standard","customerId":"cus_northwind","kind":"goodwill"}
+[security] caller=main capability=pied-piper.example/credits.apply context={"amount":1500,"customerClass":"standard","customerId":"pied_piper","kind":"goodwill"}
 ok   packages/billing/tests/lib.test.ts :: credits the customer named
 ok   packages/billing/tests/lib.test.ts :: refuses a zero amount
 skip packages/billing/tests/network.test.ts (--skip-network)

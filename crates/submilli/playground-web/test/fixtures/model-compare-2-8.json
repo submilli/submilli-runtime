@@ -24,7 +24,7 @@
    "before": "2.1",
    "after": "8.1",
    "caller": "main",
-   "capability": "acme.com/charges.list",
+   "capability": "pied-piper.example/charges.list",
    "decided_by": "by `globex-support`",
    "rule": {
     "caller": "main",

@@ -1811,7 +1811,8 @@ fn codegen_inner(
     if let Some((_, func_idx)) = main_output_shim {
         exports.export("__main_output", WasmExportKind::Func, func_idx);
     }
-    for entry in &ta.exports {
+    // A test build also exports what its non-entry modules export, each once.
+    for entry in ta.exports.iter().chain(&ta.test_exports) {
         match entry.kind {
             crate::ExportKind::Function => {
                 let func_idx = symbols
@@ -2828,8 +2829,10 @@ function main(): string {
         });
         let cfg = crate::runtime::RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data =
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         data.install_type_info(lib_type_info);
         data.security_check = recording.clone();
         data.secret_provider = std::sync::Arc::new(FixedSecret);
@@ -2948,8 +2951,10 @@ function main(): string {
         });
         let cfg = crate::runtime::RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data =
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         data.install_type_info(lib_type_info);
         data.security_check = recording.clone();
         data.secret_provider = std::sync::Arc::new(FixedSecret);
@@ -3886,8 +3891,10 @@ function main(): string {
         });
         let cfg = crate::runtime::RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data =
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         data.install_type_info(lib_type_info);
         data.security_check = recording.clone();
         let mut store = cfg.store(&engine, data).expect("store");
@@ -3990,8 +3997,10 @@ function main(): string {
         );
         let cfg = crate::runtime::RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data =
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         data.install_type_info(lib_type_info);
         let mut store = cfg.store_async(&engine, data).expect("store");
         let mut linker = wasmtime::Linker::<crate::runtime::StoreData>::new(&engine);
@@ -4103,8 +4112,10 @@ function main(): string {
             compile_package_modules("test:lib", &[("lib", PACKAGE_WITH_GATED_INITIALIZER)], &[]);
         let cfg = crate::runtime::RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data =
-            crate::runtime::StoreData::with_vfs(crate::runtime::Vfs::tempdir().expect("tempdir"));
+        let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
+            crate::runtime::Vfs::tempdir().expect("tempdir"),
+        );
         data.security_check = recording;
         let mut store = cfg.store(&engine, data).expect("store");
         let mut linker = wasmtime::Linker::<crate::runtime::StoreData>::new(&engine);
@@ -5660,6 +5671,7 @@ function main(): void {
         }
         let buf = Arc::new(Mutex::new(Vec::new()));
         let mut data = crate::runtime::StoreData::with_vfs(
+            "test-run".into(),
             crate::runtime::Vfs::tempdir().expect("tempdir for codegen test VFS"),
         );
         data.console = Box::new(Shared(Arc::clone(&buf)));

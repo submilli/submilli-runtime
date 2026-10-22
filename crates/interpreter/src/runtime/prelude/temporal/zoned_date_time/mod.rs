@@ -145,6 +145,15 @@ pub(super) fn resolve_time_zone(
     // A fuel trap passes through as it is; an unknown zone is the program's
     // `RangeError`.
     fuel::charge_host_fuel(&mut *caller, fuel::TZ)?;
+    lookup_time_zone(time_zone, operation)
+}
+
+/// Resolve against the pinned database without charging a guest call, including
+/// when deserializing an already recorded result.
+pub(super) fn lookup_time_zone(
+    time_zone: &str,
+    operation: &str,
+) -> wasmtime::Result<(TimeZone, String)> {
     let unknown = || crate::runtime::host::range_error(unknown_zone(operation, time_zone));
     if is_offset_identifier(time_zone) {
         let offset = parse_fixed_offset(time_zone).map_err(|_| unknown())?;

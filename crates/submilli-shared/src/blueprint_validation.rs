@@ -113,8 +113,8 @@ pub fn unreported_field_errors(
 }
 
 /// The context fields `capability`'s check reports: from the catalog for the
-/// standard library, a declared MCP server, or an HTTP method only
-/// `http.request` takes; and from `capabilities.yaml` for each loaded package
+/// standard library or a declared MCP server, and from `capabilities.yaml` for
+/// each loaded package
 /// that provides it. A package may check a standard library name itself, with
 /// its own context, so the two sources combine.
 /// `None` when nothing known provides `capability`.
@@ -131,7 +131,7 @@ pub fn reported_fields<'a>(
     } else {
         capability
     };
-    let cataloged = capabilities::find_gating(catalog_name);
+    let cataloged = capabilities::find(catalog_name);
     let providers: Vec<_> = artifacts
         .values()
         .flat_map(|artifact| &artifact.capabilities.provides)

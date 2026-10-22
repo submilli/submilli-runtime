@@ -1020,7 +1020,7 @@ mod tests {
     use crate::runtime::Vfs;
 
     fn log_with(config: DecisionLogConfig) -> (StoreData, Arc<DecisionLog>) {
-        let mut data = StoreData::with_vfs_and_cap(Vfs::none(), 1 << 20);
+        let mut data = StoreData::with_vfs_and_cap("test-run".into(), Vfs::none(), 1 << 20);
         let log = DecisionLog::install(&mut data, config);
         (data, log)
     }

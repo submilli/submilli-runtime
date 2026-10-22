@@ -1,7 +1,13 @@
-// Pure unit tests for the GraphQL variable builders — no network, no secret.
+// Offline unit tests for the variable builders, error renderers and public types — no network, no secret.
 // Object keys serialize in alphabetical order.
 
 import { label } from "submilli:test";
+import {
+    IssueCreateInput,
+    IssueUpdateInput,
+    Page,
+    Issue,
+} from "@submilli/linear";
 import {
     buildIssueFilter,
     buildPageVars,
@@ -9,11 +15,7 @@ import {
     graphqlErrorMessage,
     httpFailureMessage,
     GraphQlResponse,
-    IssueCreateInput,
-    IssueUpdateInput,
-    Page,
-    Issue,
-} from "@submilli/linear";
+} from "../src/internal";
 
 function main(): void {
     label("issue filter: empty cases");

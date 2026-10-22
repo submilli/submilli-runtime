@@ -269,7 +269,7 @@ name: rich
 idle_timeout: 1h
 vfs: per_session
 packages:
-  - \"@acme/tool\"
+  - \"@pied-piper/tool\"
 secrets:
   API_KEY:
     store: api-key
@@ -290,7 +290,7 @@ permissions:
       action: allow
     - capability: http.get
       action: allow
-  \"@acme/tool\":
+  \"@pied-piper/tool\":
     - capability: http.get
       action: allow
 mcp:
@@ -304,7 +304,7 @@ mcp:
     assert_eq!(summary["name"], json!("rich"));
     assert_eq!(summary["vfs_mode"], json!("per_session"));
     assert_eq!(summary["idle_timeout_secs"], json!(3600));
-    assert_eq!(summary["packages"], json!(["@acme/tool"]));
+    assert_eq!(summary["packages"], json!(["@pied-piper/tool"]));
     assert_eq!(
         summary["secrets"],
         json!([
@@ -803,7 +803,7 @@ async fn registration_rejects_missing_packages() {
         &router,
         "/v1/blueprints",
         json!({
-            "yaml": "name: ghost\npackages: [\"@acme/ghost\"]\n"
+            "yaml": "name: ghost\npackages: [\"@pied-piper/ghost\"]\n"
         }),
     )
     .await;
@@ -813,7 +813,7 @@ async fn registration_rejects_missing_packages() {
         body["message"]
             .as_str()
             .expect("message")
-            .contains("submilli server packages install <org/repo> @acme/ghost")
+            .contains("submilli server packages install <org/repo> @pied-piper/ghost")
     );
 }
 
@@ -861,7 +861,12 @@ fn install_validation_package(
 async fn registration_checks_dependency_requirements_and_preserves_existing_blueprint() {
     let owned = tempfile::tempdir().expect("owned");
     let fallback = tempfile::tempdir().expect("fallback");
-    install_validation_package(owned.path(), "@acme/root", &["@acme/dep"], false);
+    install_validation_package(
+        owned.path(),
+        "@pied-piper/root",
+        &["@pied-piper/dep"],
+        false,
+    );
     let router = app(AppState::new(ServerConfig {
         package_store_root: Some(owned.path().to_path_buf()),
         package_fallback_root: Some(fallback.path().to_path_buf()),
@@ -874,7 +879,7 @@ async fn registration_checks_dependency_requirements_and_preserves_existing_blue
         post(&router, "/v1/blueprints", original).await.0,
         StatusCode::OK
     );
-    let package_yaml = "name: demo\npackages: [\"@acme/root\"]\n";
+    let package_yaml = "name: demo\npackages: [\"@pied-piper/root\"]\n";
     let (status, body) = put(
         &router,
         "/v1/blueprints/demo",
@@ -883,8 +888,13 @@ async fn registration_checks_dependency_requirements_and_preserves_existing_blue
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"], "package_missing");
-    assert!(body["message"].as_str().unwrap().contains("@acme/dep"));
-    install_validation_package(fallback.path(), "@acme/dep", &[], true);
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("@pied-piper/dep")
+    );
+    install_validation_package(fallback.path(), "@pied-piper/dep", &[], true);
     let (status, body) = put(
         &router,
         "/v1/blueprints/demo",
@@ -897,21 +907,24 @@ async fn registration_checks_dependency_requirements_and_preserves_existing_blue
         body["message"]
             .as_str()
             .unwrap()
-            .contains("permissions.@acme/dep")
+            .contains("permissions.@pied-piper/dep")
     );
     let (_, stored) = get(&router, "/v1/blueprints/demo").await;
     assert!(
-        !stored["yaml"].as_str().unwrap().contains("@acme/root"),
+        !stored["yaml"]
+            .as_str()
+            .unwrap()
+            .contains("@pied-piper/root"),
         "{stored}"
     );
     // An explicit deny is a valid operator choice, as it is for local lint.
     let valid = format!(
-        "{package_yaml}permissions:\n  '@acme/dep':\n    - capability: http.get\n      action: deny\n"
+        "{package_yaml}permissions:\n  '@pied-piper/dep':\n    - capability: http.get\n      action: deny\n"
     );
     let (status, body) = put(&router, "/v1/blueprints/demo", json!({"yaml": valid})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     // A broken owned copy shadows an otherwise valid fallback package.
-    std::fs::create_dir_all(owned.path().join("@acme/dep")).unwrap();
+    std::fs::create_dir_all(owned.path().join("@pied-piper/dep")).unwrap();
     let (status, body) = put(&router, "/v1/blueprints/demo", json!({"yaml": valid})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"], "invalid_packages");

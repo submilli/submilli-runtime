@@ -150,11 +150,11 @@ async fn package_groups_carry_provides_and_requires() {
     let root = tempfile::tempdir().expect("package store root");
     installed_package(
         root.path(),
-        "@acme/tool",
+        "@pied-piper/tool",
         &CapabilitySchema {
-            namespace: "tool.acme.dev".into(),
+            namespace: "tool.pied-piper.dev".into(),
             provides: vec![ProvidedCapability {
-                name: "tool.acme.dev/run".into(),
+                name: "tool.pied-piper.dev/run".into(),
                 description: Some("Run a tool".into()),
                 fields: BTreeMap::from([(
                     "id".into(),
@@ -166,7 +166,7 @@ async fn package_groups_carry_provides_and_requires() {
             }],
             requires: vec![RequiredCapability {
                 capability: "http.post".into(),
-                filter: Some("url.host == \"api.acme.dev\"".into()),
+                filter: Some("url.host == \"api.pied-piper.dev\"".into()),
             }],
         },
     );
@@ -179,12 +179,12 @@ async fn package_groups_carry_provides_and_requires() {
 
     let (status, body) = get_with_state(state, "/v1/capabilities").await;
     assert_eq!(status, StatusCode::OK);
-    let group = package_group(&body, "@acme/tool");
-    assert_eq!(group["capabilities"][0]["name"], "tool.acme.dev/run");
+    let group = package_group(&body, "@pied-piper/tool");
+    assert_eq!(group["capabilities"][0]["name"], "tool.pied-piper.dev/run");
     assert_eq!(group["capabilities"][0]["fields"]["id"]["type"], "string");
     assert_eq!(
         group["requires"],
-        json!([{ "capability": "http.post", "filter": "url.host == \"api.acme.dev\"" }])
+        json!([{ "capability": "http.post", "filter": "url.host == \"api.pied-piper.dev\"" }])
     );
 }
 
@@ -193,9 +193,9 @@ async fn requires_only_package_is_listed() {
     let root = tempfile::tempdir().expect("package store root");
     installed_package(
         root.path(),
-        "@acme/quiet",
+        "@pied-piper/quiet",
         &CapabilitySchema {
-            namespace: "quiet.acme.dev".into(),
+            namespace: "quiet.pied-piper.dev".into(),
             provides: Vec::new(),
             requires: vec![RequiredCapability {
                 capability: "http.get".into(),
@@ -211,7 +211,7 @@ async fn requires_only_package_is_listed() {
     .expect("AppState");
 
     let (_, body) = get_with_state(state, "/v1/capabilities").await;
-    let group = package_group(&body, "@acme/quiet");
+    let group = package_group(&body, "@pied-piper/quiet");
     assert_eq!(group["capabilities"], json!([]));
     assert_eq!(
         group["requires"],
@@ -222,7 +222,11 @@ async fn requires_only_package_is_listed() {
 #[tokio::test]
 async fn installed_packages_are_listed() {
     let root = tempfile::tempdir().expect("package store root");
-    installed_package(root.path(), "@acme/tool", &CapabilitySchema::default());
+    installed_package(
+        root.path(),
+        "@pied-piper/tool",
+        &CapabilitySchema::default(),
+    );
     let state = AppState::new(ServerConfig {
         package_store_root: Some(root.path().to_path_buf()),
         ..in_memory_config::config()
@@ -236,11 +240,12 @@ async fn installed_packages_are_listed() {
     assert_eq!(
         body["packages"],
         json!([{
-            "name": "@acme/tool",
+            "name": "@pied-piper/tool",
             "version": "0.1.0",
             "description": "test package",
             "root": root.path().display().to_string(),
             "managed": true,
+            "config": { "overrides": {}, "values": {} },
         }])
     );
 }
@@ -249,7 +254,11 @@ async fn installed_packages_are_listed() {
 async fn fallback_packages_are_listed_as_unmanaged() {
     let owned = tempfile::tempdir().expect("owned root");
     let fallback = tempfile::tempdir().expect("fallback root");
-    installed_package(fallback.path(), "@acme/tool", &CapabilitySchema::default());
+    installed_package(
+        fallback.path(),
+        "@pied-piper/tool",
+        &CapabilitySchema::default(),
+    );
     let state = AppState::new(ServerConfig {
         package_store_root: Some(owned.path().to_path_buf()),
         package_fallback_root: Some(fallback.path().to_path_buf()),
@@ -267,7 +276,7 @@ async fn fallback_packages_are_listed_as_unmanaged() {
             fallback.path().display().to_string()
         ])
     );
-    assert_eq!(body["packages"][0]["name"], json!("@acme/tool"));
+    assert_eq!(body["packages"][0]["name"], json!("@pied-piper/tool"));
     assert_eq!(
         body["packages"][0]["root"],
         json!(fallback.path().display().to_string())
@@ -279,7 +288,11 @@ async fn fallback_packages_are_listed_as_unmanaged() {
 async fn uninstall_refuses_a_package_that_only_the_fallback_holds() {
     let owned = tempfile::tempdir().expect("owned root");
     let fallback = tempfile::tempdir().expect("fallback root");
-    installed_package(fallback.path(), "@acme/tool", &CapabilitySchema::default());
+    installed_package(
+        fallback.path(),
+        "@pied-piper/tool",
+        &CapabilitySchema::default(),
+    );
     let state = AppState::new(ServerConfig {
         package_store_root: Some(owned.path().to_path_buf()),
         package_fallback_root: Some(fallback.path().to_path_buf()),
@@ -291,7 +304,7 @@ async fn uninstall_refuses_a_package_that_only_the_fallback_holds() {
 
     let req = Request::builder()
         .method("DELETE")
-        .uri("/v1/packages/@acme/tool")
+        .uri("/v1/packages/@pied-piper/tool")
         .body(Body::empty())
         .unwrap();
     let resp = router.oneshot(req).await.unwrap();
@@ -301,17 +314,21 @@ async fn uninstall_refuses_a_package_that_only_the_fallback_holds() {
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["error"], json!("not_managed"));
     assert!(
-        fallback.path().join("@acme").join("tool").is_dir(),
+        fallback.path().join("@pied-piper").join("tool").is_dir(),
         "the fallback copy is left in place"
     );
     let (_, listing) = get_with_state(state, "/v1/packages").await;
-    assert_eq!(listing["packages"][0]["name"], json!("@acme/tool"));
+    assert_eq!(listing["packages"][0]["name"], json!("@pied-piper/tool"));
 }
 
 #[tokio::test]
 async fn uninstall_removes_a_package() {
     let root = tempfile::tempdir().expect("package store root");
-    installed_package(root.path(), "@acme/tool", &CapabilitySchema::default());
+    installed_package(
+        root.path(),
+        "@pied-piper/tool",
+        &CapabilitySchema::default(),
+    );
     let state = AppState::new(ServerConfig {
         package_store_root: Some(root.path().to_path_buf()),
         ..in_memory_config::config()
@@ -322,7 +339,7 @@ async fn uninstall_removes_a_package() {
 
     let req = Request::builder()
         .method("DELETE")
-        .uri("/v1/packages/@acme/tool")
+        .uri("/v1/packages/@pied-piper/tool")
         .body(Body::empty())
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
@@ -333,7 +350,7 @@ async fn uninstall_removes_a_package() {
 
     let req = Request::builder()
         .method("DELETE")
-        .uri("/v1/packages/@acme/tool")
+        .uri("/v1/packages/@pied-piper/tool")
         .body(Body::empty())
         .unwrap();
     let resp = router.oneshot(req).await.unwrap();

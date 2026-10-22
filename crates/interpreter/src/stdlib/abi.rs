@@ -116,7 +116,6 @@ pub(crate) fn install_field_getters(
             module,
             crate::mangle::extend(&iface_key, prop),
             FuncType::new(engine, [receiver.clone()], [result.clone()]),
-            /* deterministic = */ true,
             move |caller, params, results| {
                 let st = backing_receiver(caller, abi_arg(params, 0)?)?;
                 *abi_result(results, 0)? = st.field(&mut *caller, field)?;

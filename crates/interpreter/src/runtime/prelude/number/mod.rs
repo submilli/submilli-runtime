@@ -154,7 +154,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         method_key("toJson"),
         FuncType::new(&engine, [ValType::F64], [s]),
-        true,
         |caller, params, results| {
             let n = read_f64(abi_arg(params, 0)?, "Number#toJson")?;
             let out = if n.is_finite() {
@@ -174,7 +173,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("parseInt"),
         FuncType::new(&engine, [s, ValType::F64], [ValType::F64]),
-        true,
         |caller, params, results| {
             let input = read_string_arg(caller, abi_arg(params, 0)?, "Number.parseInt")?;
             let radix = read_f64(abi_arg(params, 1)?, "Number.parseInt")?;
@@ -190,7 +188,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("parseFloat"),
         FuncType::new(&engine, [s], [ValType::F64]),
-        true,
         |caller, params, results| {
             let input = read_string_arg(caller, abi_arg(params, 0)?, "Number.parseFloat")?;
             *abi_result(results, 0)? = Val::F64(parse_float_js(&input).to_bits());
@@ -214,7 +211,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         ctor_key("@call"),
         FuncType::new(&engine, [obj_param], [ValType::F64]),
-        true,
         |caller, params, results| {
             *abi_result(results, 0)? =
                 Val::F64(number_ctor_call(caller, abi_arg(params, 0)?)?.to_bits());
@@ -383,7 +379,6 @@ fn reg_format(
         MODULE_NAME,
         key,
         FuncType::new(engine, [ValType::F64, ValType::F64], [string_ref.clone()]),
-        true,
         move |caller, params, results| {
             let x = read_f64(abi_arg(params, 0)?, "Number formatter")?;
             let arg = read_f64(abi_arg(params, 1)?, "Number formatter")?;
@@ -416,7 +411,6 @@ fn reg_number_predicate(
             ))],
             [ValType::I32],
         ),
-        true,
         move |caller, params, results| {
             *abi_result(results, 0)? = Val::I32(
                 super::value::number_value(caller, abi_arg(params, 0)?)?.is_some_and(op) as i32,
@@ -438,7 +432,6 @@ fn reg_predicate(
         MODULE_NAME,
         key,
         FuncType::new(engine, [ValType::F64], [ValType::I32]),
-        true,
         move |_caller, params, results| {
             let n = read_f64(abi_arg(params, 0)?, "Number predicate")?;
             *abi_result(results, 0)? = Val::I32(op(n) as i32);

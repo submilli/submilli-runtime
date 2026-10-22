@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "537129c09a319698511c9c6b3a42103ae69154500a7093eb2181781278b853c0"
+  contentHash: "31ddc238a2e1ce0646b7073f052b7c927e3aef680b9340ec00b8fdda58a4683a"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -168,11 +168,11 @@ beside `submilli.toml`. A lock that already pins every dependency, with
 the store holding them, skips the fetch. A compile error exits 1.
 
 ```text
-checked @acme/billing v0.1.0
+checked @pied-piper/billing v0.1.0
 ```
 
 ```text
-installed @acme/billing v0.1.0 -> …/packages/@acme/billing
+installed @pied-piper/billing v0.1.0 -> …/packages/@pied-piper/billing
 ```
 
 Tests receive no credentials unless `build test` is given them:
@@ -197,55 +197,59 @@ at one commit, resolve its GitHub dependencies, compile the Packages its
 repository is `org/repo`, `github.com/org/repo`, or a full URL. A second
 argument, `@org/name`, installs only that Package. Without it, every
 Package the repository declares is installed. A Package must be scoped to
-the repository's owner. For example, `submilli/acme` can hold only
+the repository's owner. For example, `submilli/pied-piper` can hold only
 `@submilli/…` Packages.
 
 | | `submilli install` | `submilli server packages install` |
 | --- | --- | --- |
 | Pin to a branch, tag, or commit | `org/repo@<ref>` | `--sha <ref>` |
+| Configuration | `--config NAME=VALUE` (selected Package only) | `--config NAME=VALUE` (selected Package only) |
+| Clear a saved override | `--reset-config NAME` | `--reset-config NAME` |
+| Configuration contract | [Package configuration](/docs/reference/package-configuration) | [Package configuration](/docs/reference/package-configuration) |
 | Without a pin | The default branch's head | The default branch's head |
 | GitHub token | Yours (see [GitHub token](#github-token)) | The server's `github_token_file`. The CLI sends none |
-| Replace a Package installed at another commit | `--upgrade` | `--upgrade` |
+| Replace a Package with changed source or configuration | `--upgrade` | `--upgrade` |
 
 The first install reports the commit and the Package's location:
 
 ```sh
-submilli install submilli/acme @submilli/acme-billing
+submilli install submilli/pied-piper@v0.1.1 @submilli/pied-piper-billing
 ```
 
 ```text
-fetched github.com/submilli/acme at 88656b81c537
-installed @submilli/acme-billing v0.1.0 -> …/packages/@submilli/acme-billing
+fetched github.com/submilli/pied-piper at c18d9a602bbb
+installed @submilli/pied-piper-billing v0.1.0 -> …/packages/@submilli/pied-piper-billing
 ```
 
 The same command again, with the Package already installed at that
 commit, changes nothing and exits 0:
 
 ```text
-fetched github.com/submilli/acme at 88656b81c537
-up to date @submilli/acme-billing
+fetched github.com/submilli/pied-piper at c18d9a602bbb
+up to date @submilli/pied-piper-billing
 ```
 
 A Package installed at another commit is refused, exit 1, until
-`--upgrade` is given:
+`--upgrade` is given. In this output template, `<installed-commit>` is the
+commit already in the store:
 
 ```text
-fetched github.com/submilli/acme at 88656b81c537
-error: `@submilli/acme-billing` is already installed from github.com/submilli/acme@d7d9fa44e3dc; pass --upgrade to replace it with 88656b81c537
+fetched github.com/submilli/pied-piper at c18d9a602bbb
+error: `@submilli/pied-piper-billing` is already installed from github.com/submilli/pied-piper@<installed-commit>; pass --upgrade to replace it with c18d9a602bbb
 ```
 
 On a server the three outcomes are:
 
 ```text
-installed @submilli/acme-billing @ 88656b81c537
+installed @submilli/pied-piper-billing @ c18d9a602bbb
 ```
 
 ```text
-up to date @submilli/acme-billing
+up to date @submilli/pied-piper-billing
 ```
 
 ```text
-error: @submilli/acme-billing already installed at a different commit; retry with --upgrade to replace with 88656b81c537
+error: @submilli/pied-piper-billing already installed at a different commit; retry with --upgrade to replace with c18d9a602bbb
 ```
 
 `submilli install` writes only to the store. It changes no Blueprint and
@@ -503,9 +507,10 @@ Compile the project's packages in dependency order without installing
 Usage: submilli build check [OPTIONS]
 
 Options:
-  -p, --package <PACKAGE>  Compile only this package and its sibling dependencies
-      --deny-warnings      Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
-  -h, --help               Print help
+      --config <NAME=VALUE>  Set a src/config.ts parameter of the explicitly selected package
+  -p, --package <PACKAGE>    Compile only this package and its sibling dependencies
+      --deny-warnings        Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
+  -h, --help                 Print help
 ```
 
 ### `submilli build publish-local`
@@ -516,9 +521,10 @@ Compile the project's packages and install them into the local store
 Usage: submilli build publish-local [OPTIONS]
 
 Options:
-  -p, --package <PACKAGE>  Compile only this package and its sibling dependencies
-      --deny-warnings      Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
-  -h, --help               Print help
+      --config <NAME=VALUE>  Set a src/config.ts parameter of the explicitly selected package
+  -p, --package <PACKAGE>    Compile only this package and its sibling dependencies
+      --deny-warnings        Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
+  -h, --help                 Print help
 ```
 
 ### `submilli build test`
@@ -529,13 +535,14 @@ Compile and run the project's `tests/**/*.test.{ts,subm}` files
 Usage: submilli build test [OPTIONS]
 
 Options:
-  -p, --package <PACKAGE>  Compile only this package and its sibling dependencies
-      --deny-warnings      Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
-      --all-env            Supply all Unicode process environment variables as test credentials
-      --env-var <NAME>     Supply a process variable (repeatable or comma-separated); fail if unset or non-Unicode
-      --env-file <PATH>    Read credentials from a file; relative paths use the current directory. Fail if unreadable
-      --skip-network       Skip network.test.{ts,subm} and network_*.test.{ts,subm} anywhere under tests/
-  -h, --help               Print help
+      --config <NAME=VALUE>  Set a src/config.ts parameter of the explicitly selected package
+  -p, --package <PACKAGE>    Compile only this package and its sibling dependencies
+      --deny-warnings        Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
+      --all-env              Supply all Unicode process environment variables as test credentials
+      --env-var <NAME>       Supply a process variable (repeatable or comma-separated); fail if unset or non-Unicode
+      --env-file <PATH>      Read credentials from a file; relative paths use the current directory. Fail if unreadable
+      --skip-network         Skip network.test.{ts,subm} and network_*.test.{ts,subm} anywhere under tests/
+  -h, --help                 Print help
 
 Tests receive no credentials by default. Credential precedence (highest first): --env-var > --env-file > --all-env, regardless of argument order.
 ```
@@ -548,9 +555,10 @@ Compile packages and print their full authority call graph as JSON
 Usage: submilli build authority-map [OPTIONS]
 
 Options:
-  -p, --package <PACKAGE>  Compile only this package and its sibling dependencies
-      --deny-warnings      Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
-  -h, --help               Print help
+      --config <NAME=VALUE>  Set a src/config.ts parameter of the explicitly selected package
+  -p, --package <PACKAGE>    Compile only this package and its sibling dependencies
+      --deny-warnings        Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
+  -h, --help                 Print help
 ```
 
 ### `submilli build security-review`
@@ -561,14 +569,15 @@ Review package authorization with Codex, Claude Code, or Copilot CLI
 Usage: submilli build security-review [OPTIONS] --agent <AGENT> --model <MODEL>
 
 Options:
-  -a, --agent <AGENT>      Installed coding agent to invoke; uses its existing authentication [possible values: codex, claude, copilot]
-  -m, --model <MODEL>      Provider model ID; "astra" resolves to gpt-6-astra for Codex/Copilot
-  -e, --effort <EFFORT>    Reasoning effort; the selected CLI/model must support it [possible values: low, medium, high]
-  -p, --package <PACKAGE>  Review this package and its local dependency closure; default: all packages
-      --fail-on <FAIL_ON>  Fail on findings at this severity or higher. Incomplete reviews always fail [default: high] [possible values: low, medium, high, critical]
-      --output <FILE>      Write a JSON report, including failures. Refuses to replace an existing file
-      --timeout <TIMEOUT>  Maximum time for the agent, in seconds (1–3600) [default: 600]
-  -h, --help               Print help
+      --config <NAME=VALUE>  Set a src/config.ts parameter of the explicitly selected package
+  -a, --agent <AGENT>        Installed coding agent to invoke; uses its existing authentication [possible values: codex, claude, copilot]
+  -m, --model <MODEL>        Provider model ID; "astra" resolves to gpt-6-astra for Codex/Copilot
+  -e, --effort <EFFORT>      Reasoning effort; the selected CLI/model must support it [possible values: low, medium, high]
+  -p, --package <PACKAGE>    Review this package and its local dependency closure; default: all packages
+      --fail-on <FAIL_ON>    Fail on findings at this severity or higher. Incomplete reviews always fail [default: high] [possible values: low, medium, high, critical]
+      --output <FILE>        Write a JSON report, including failures. Refuses to replace an existing file
+      --timeout <TIMEOUT>    Maximum time for the agent, in seconds (1–3600) [default: 600]
+  -h, --help                 Print help
 ```
 
 ## `submilli install`
@@ -583,9 +592,11 @@ Arguments:
   [PACKAGE]  Install only this package (`@org/name`). Omit to install every package the repo declares
 
 Options:
-      --upgrade        Re-install over a package already in the store at a different commit
-      --deny-warnings  Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
-  -h, --help           Print help
+      --config <NAME=VALUE>  Set a src/config.ts parameter of the selected package
+      --reset-config <NAME>  Remove a saved override and use the source default
+      --upgrade              Replace an installed package when its source or configuration changes
+      --deny-warnings        Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
+  -h, --help                 Print help
 ```
 
 ## `submilli docs`
@@ -1207,6 +1218,7 @@ Commands:
   authenticate    Run the OAuth flow for a blueprint's MCP server and store its credential locally. Re-run to re-authenticate (e.g. after changing scopes) — it overwrites the existing credential
   deauthenticate  Remove an MCP server's stored credential (blueprint returns to PENDING)
   auth-status     Show each declared MCP server's authentication state
+  grants          List the MCP OAuth grants stored locally, one per blueprint and server
   provider        Manage local OAuth provider apps (`~/.submilli/mcp_oauth.yaml`) — the client id / secret used to authenticate confidential OAuth servers
   help            Print this message or the help of the given subcommand(s)
 
@@ -1253,6 +1265,18 @@ Usage: submilli mcp auth-status --blueprint <BLUEPRINT>
 
 Options:
       --blueprint <BLUEPRINT>  Blueprint file to report on
+  -h, --help                   Print help
+```
+
+### `submilli mcp grants`
+
+```text
+List the MCP OAuth grants stored locally, one per blueprint and server
+
+Usage: submilli mcp grants [OPTIONS]
+
+Options:
+      --blueprint <BLUEPRINT>  Only list this blueprint's grants
   -h, --help                   Print help
 ```
 
@@ -1520,12 +1544,14 @@ Arguments:
   [PACKAGE]  Install only this package (`@org/name`). Omit to install every package the repo declares
 
 Options:
-      --sha <SHA>          Pin to this commit SHA (or ref). Resolved from the default branch when omitted
-      --upgrade            Re-install over a package already present at a different commit
-      --deny-warnings      Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
-  -h, --help               Print help
+      --config <NAME=VALUE>  Set a src/config.ts parameter of the selected package
+      --reset-config <NAME>  Remove a saved override and use the source default
+      --sha <SHA>            Pin to this commit SHA (or ref). Resolved from the default branch when omitted
+      --upgrade              Replace an installed package when its source or configuration changes
+      --deny-warnings        Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
+      --server <URL>         Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
+      --token-file <PATH>    File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help                 Print help
 ```
 
 #### `submilli server packages list`
@@ -1800,6 +1826,7 @@ Commands:
   authenticate    Run the OAuth flow for a blueprint's MCP server and store its refresh token. Re-run to re-authenticate (e.g. after changing scopes) — it overwrites the existing credential
   deauthenticate  Remove an MCP server's stored refresh token (blueprint returns to PENDING)
   auth-status     Show each declared MCP server's authentication state
+  grants          List the MCP OAuth grants the server holds, or delete one
   help            Print this message or the help of the given subcommand(s)
 
 Options:
@@ -1849,6 +1876,53 @@ Usage: submilli server mcp auth-status [OPTIONS] <BLUEPRINT>
 
 Arguments:
   <BLUEPRINT>  Blueprint to report on
+
+Options:
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help               Print help
+```
+
+#### `submilli server mcp grants`
+
+```text
+List the MCP OAuth grants the server holds, or delete one
+
+Usage: submilli server mcp grants <COMMAND>
+
+Commands:
+  list    List the grants, one per blueprint and MCP server
+  delete  Delete a grant, even one whose blueprint no longer declares the server
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+```
+
+#### `submilli server mcp grants list`
+
+```text
+List the grants, one per blueprint and MCP server
+
+Usage: submilli server mcp grants list [OPTIONS]
+
+Options:
+      --blueprint <BLUEPRINT>  Only list this blueprint's grants
+      --server <URL>           Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
+      --token-file <PATH>      File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help                   Print help
+```
+
+#### `submilli server mcp grants delete`
+
+```text
+Delete a grant, even one whose blueprint no longer declares the server
+
+Usage: submilli server mcp grants delete [OPTIONS] <BLUEPRINT> <SERVER>
+
+Arguments:
+  <BLUEPRINT>  Blueprint the grant belongs to
+  <SERVER>     The MCP server's local name (its key in the `mcp:` block)
 
 Options:
       --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]

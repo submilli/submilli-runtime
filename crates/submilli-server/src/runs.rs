@@ -13,6 +13,7 @@
 //!
 //! A suspended run is lost on restart: nothing here is durable.
 
+use interpreter::runtime::durable::RunId;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
@@ -145,7 +146,7 @@ impl RunInner {
 
 /// One run that may suspend.
 pub struct RunEntry {
-    pub id: String,
+    pub id: RunId,
     pub session_id: String,
     state: watch::Sender<RunView>,
     inner: Mutex<RunInner>,
@@ -383,7 +384,7 @@ impl RunEntry {
 
 /// Every run that may suspend, server-wide.
 pub struct RunRegistry {
-    runs: Mutex<HashMap<String, Arc<RunEntry>>>,
+    runs: Mutex<HashMap<RunId, Arc<RunEntry>>>,
     slots: Arc<Slots>,
 }
 
@@ -405,7 +406,12 @@ impl RunRegistry {
     }
 
     /// Register run `id` of `session_id`. `cancel` stops it.
-    pub fn insert(&self, id: &str, session_id: &str, cancel: oneshot::Sender<()>) -> Arc<RunEntry> {
+    pub fn insert(
+        &self,
+        id: &RunId,
+        session_id: &str,
+        cancel: oneshot::Sender<()>,
+    ) -> Arc<RunEntry> {
         let (state, _) = watch::channel(RunView {
             generation: 0,
             state: RunState::Running,
@@ -493,7 +499,7 @@ impl RunRegistry {
     }
 
     /// Poisoning means a panic while the map was half updated, so it propagates.
-    fn lock(&self) -> MutexGuard<'_, HashMap<String, Arc<RunEntry>>> {
+    fn lock(&self) -> MutexGuard<'_, HashMap<RunId, Arc<RunEntry>>> {
         self.runs.lock().expect("run registry lock poisoned")
     }
 }
@@ -574,7 +580,7 @@ mod tests {
     fn provider(registry: &Arc<RunRegistry>, timeout: Duration) -> Arc<SuspendingToolProvider> {
         let (cancel, _) = oneshot::channel();
         Arc::new(SuspendingToolProvider {
-            entry: registry.insert("run", "session", cancel),
+            entry: registry.insert(&"run".into(), "session", cancel),
             timeout,
             touch: Arc::new(|| Box::pin(async {})),
         })
@@ -732,7 +738,7 @@ mod tests {
         let touches = Arc::new(AtomicUsize::new(0));
         let (cancel, _) = oneshot::channel();
         let provider = SuspendingToolProvider {
-            entry: registry.insert("run", "session", cancel),
+            entry: registry.insert(&"run".into(), "session", cancel),
             timeout: Duration::from_millis(20),
             touch: Arc::new({
                 let touches = Arc::clone(&touches);

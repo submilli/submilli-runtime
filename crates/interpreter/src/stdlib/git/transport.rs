@@ -856,7 +856,7 @@ mod tests {
     }
 
     fn client(providers: Arc<Providers>) -> Client {
-        let data = StoreData::with_vfs(crate::runtime::Vfs::none());
+        let data = StoreData::with_vfs("test-run".into(), crate::runtime::Vfs::none());
         let spool = tempfile::tempdir().unwrap().keep();
         let spool_dir =
             cap_std::fs::Dir::open_ambient_dir(&spool, cap_std::ambient_authority()).unwrap();

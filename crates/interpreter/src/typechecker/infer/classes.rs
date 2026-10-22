@@ -592,27 +592,45 @@ impl<'a> Inferer<'a> {
             // Peeled to agree with `resolve_implements_targets`, which admits an
             // aliased interface. An unpeeled match reads `type N = Named` as a
             // non-interface and skips conformance with no diagnostic at all.
-            let Type::InterfaceRef {
-                mangled: iface_mangled,
-                name: iface_name,
-                args: iface_args,
-                ..
-            } = iface_ty.peel()
-            else {
-                continue;
+            let failures = match iface_ty.peel() {
+                Type::InterfaceRef {
+                    mangled: iface_mangled,
+                    name: iface_name,
+                    args: iface_args,
+                    ..
+                } => {
+                    let iface_args: Vec<Type> = iface_args
+                        .iter()
+                        .map(|a| substitute_typevars(a, &opaque, &self.type_limits))
+                        .collect::<Result<_, _>>()
+                        .map_err(type_limit_at(*span))?;
+                    self.resolver().implements_failures(
+                        &pending.mangled,
+                        &class_args,
+                        iface_mangled,
+                        iface_name,
+                        &iface_args,
+                    )
+                }
+                Type::Object { fields, .. } => {
+                    let fields = fields
+                        .iter()
+                        .map(|(name, field)| {
+                            Ok((
+                                name.clone(),
+                                crate::ObjectField {
+                                    ty: substitute_typevars(&field.ty, &opaque, &self.type_limits)?,
+                                    ..field.clone()
+                                },
+                            ))
+                        })
+                        .collect::<Result<BTreeMap<_, _>, _>>()
+                        .map_err(type_limit_at(*span))?;
+                    self.resolver()
+                        .implements_form_failures(&pending.mangled, &class_args, &fields)
+                }
+                _ => continue,
             };
-            let iface_args: Vec<Type> = iface_args
-                .iter()
-                .map(|a| substitute_typevars(a, &opaque, &self.type_limits))
-                .collect::<Result<_, _>>()
-                .map_err(type_limit_at(*span))?;
-            let failures = self.resolver().implements_failures(
-                &pending.mangled,
-                &class_args,
-                iface_mangled,
-                iface_name,
-                &iface_args,
-            );
             if !failures.is_empty() {
                 self.report_implements_failures(*span, &pending.class_name, iface_ty, &failures);
             }
@@ -853,9 +871,10 @@ impl<'a> Inferer<'a> {
         })
     }
 
-    /// Resolve each `implements` target to its `Type`. Non-interface targets are
-    /// diagnosed and resolved to `Type::Error` so positions line up with the
-    /// annotation list (the caller derives mangled names and conformance from these).
+    /// Resolve each `implements` target to its `Type`. Targets other than an
+    /// interface or an object type (named by an alias) are diagnosed and resolved
+    /// to `Type::Error` so positions line up with the annotation list (the caller
+    /// derives mangled names and conformance from these).
     fn resolve_implements_targets(
         &mut self,
         implements: &[TypeAnnotation],
@@ -864,13 +883,13 @@ impl<'a> Inferer<'a> {
         for annot in implements {
             let ty = self.resolve_type(annot)?;
             match ty.peel() {
-                Type::InterfaceRef { .. } | Type::Error => out.push(ty),
+                Type::InterfaceRef { .. } | Type::Object { .. } | Type::Error => out.push(ty),
                 other => {
                     let other = other.clone();
                     self.error_with_help(
                         annot.span,
-                        format!("a class can only `implements` an interface, but `{other}` is not an interface"),
-                        vec!["`extends` a class for inheritance; `implements` lists interfaces".to_string()],
+                        format!("a class can only `implements` an interface or object type, but `{other}` is neither"),
+                        vec!["`extends` a class for inheritance; `implements` lists interfaces and object types".to_string()],
                     );
                     out.push(Type::Error);
                 }

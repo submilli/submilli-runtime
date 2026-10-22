@@ -7,7 +7,11 @@
 //! embedder-facing transport traits live in [`transport`], the SSRF policy in
 //! [`policy`].
 
-use crate::runtime::host::{abi_arg, abi_result};
+use crate::runtime::effects;
+use crate::runtime::host::{
+    abi_arg, abi_result, read_boxed_number, read_string_arg, read_uint8_array_arg,
+    register_host_fn, register_host_value_async, write_submilli_string_struct,
+};
 mod declaration;
 pub mod policy;
 mod redirect_guard;
@@ -23,10 +27,6 @@ use wasmtime::{
 use crate::runtime::call_log::{Payload, Side, mask_headers, mask_url, record_payload};
 use crate::runtime::fs::{ContainError, ContentPath};
 use crate::runtime::fuel;
-use crate::runtime::host::{
-    read_boxed_number, read_string_arg, read_uint8_array_arg, register_host_fn,
-    register_host_fn_async, write_submilli_string_struct,
-};
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types, intrinsic_types};
 use crate::runtime::metrics::{HttpMetric, MetricsSink};
 use crate::runtime::prelude::collection::{is_a, object_field, unbox_bool};
@@ -43,7 +43,7 @@ use crate::stdlib::shared::{
     resolve_content_or_trap,
 };
 use redirect_guard::{
-    CapabilityGuard, DownloadTarget, GuardedRequest, host_and_path, verb_context,
+    CapabilityGuard, DownloadTarget, GuardedRequest, RequestForm, host_and_path, request_check,
 };
 use transport::{DownloadMeta, DownloadProgress, http_failure_outcome};
 
@@ -118,6 +118,13 @@ fn download_result_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result
     )
 }
 
+#[derive(serde::Serialize)]
+struct DownloadRequest {
+    url: String,
+    path: String,
+    options: DownloadOptions,
+}
+
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
@@ -137,7 +144,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     // Body-less verbs: (url, headers?) → Response.
     for verb in ["get", "delete", "head", "options"] {
         let method = verb.to_ascii_uppercase();
-        register_host_fn_async(
+        register_host_value_async(
             linker,
             MODULE_NAME,
             crate::mangle::package_symbol(MODULE_NAME, verb),
@@ -146,15 +153,20 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 [string.clone(), nullable_object.clone()],
                 [nullable_object.clone()],
             ),
-            /* deterministic = */ false,
-            move |caller, params, results| {
+            move |caller, params| {
                 let method = method.clone();
                 Box::pin(async move {
                     let url = read_string_arg(&mut *caller, abi_arg(params, 0)?, "http (url)")?;
                     let body = crate::runtime::prelude::undefined::value(caller)?;
-                    *abi_result(results, 0)? =
-                        perform_request(caller, &method, &url, &body, abi_arg(params, 1)?).await?;
-                    Ok(())
+                    perform_request(
+                        caller,
+                        RequestForm::Verb,
+                        &method,
+                        &url,
+                        &body,
+                        abi_arg(params, 1)?,
+                    )
+                    .await
                 })
             },
         )?;
@@ -163,7 +175,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     // Body-carrying verbs: (url, body?, headers?) → Response.
     for verb in ["post", "put", "patch"] {
         let method = verb.to_ascii_uppercase();
-        register_host_fn_async(
+        register_host_value_async(
             linker,
             MODULE_NAME,
             crate::mangle::package_symbol(MODULE_NAME, verb),
@@ -176,27 +188,26 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 ],
                 [nullable_object.clone()],
             ),
-            /* deterministic = */ false,
-            move |caller, params, results| {
+            move |caller, params| {
                 let method = method.clone();
                 Box::pin(async move {
                     let url = read_string_arg(&mut *caller, abi_arg(params, 0)?, "http (url)")?;
-                    *abi_result(results, 0)? = perform_request(
+                    perform_request(
                         caller,
+                        RequestForm::Verb,
                         &method,
                         &url,
                         abi_arg(params, 1)?,
                         abi_arg(params, 2)?,
                     )
-                    .await?;
-                    Ok(())
+                    .await
                 })
             },
         )?;
     }
 
     // Runtime-verb form: (method, url, body?, headers?) → Response.
-    register_host_fn_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "request"),
@@ -210,26 +221,25 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ],
             [nullable_object.clone()],
         ),
-        /* deterministic = */ false,
-        |caller, params, results| {
+        |caller, params| {
             Box::pin(async move {
                 let method =
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "http.request (method)")?;
                 let url = read_string_arg(&mut *caller, abi_arg(params, 1)?, "http.request (url)")?;
-                *abi_result(results, 0)? = perform_request(
+                perform_request(
                     caller,
+                    RequestForm::Request,
                     &method,
                     &url,
                     abi_arg(params, 2)?,
                     abi_arg(params, 3)?,
                 )
-                .await?;
-                Ok(())
+                .await
             })
         },
     )?;
 
-    register_host_fn_async(
+    register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "download"),
@@ -238,13 +248,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             [string.clone(), string, nullable_object.clone()],
             [nullable_object],
         ),
-        /* deterministic = */ false,
-        |caller, params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = perform_download(caller, params).await?;
-                Ok(())
-            })
-        },
+        |caller, params| Box::pin(async move { perform_download(caller, params).await }),
     )?;
 
     install_response_members(linker, &engine, &intr, object.clone())?;
@@ -359,6 +363,7 @@ fn record_http_metric(
 /// `$ResponseBacking` the guest sees.
 async fn perform_request(
     caller: &mut Caller<'_, StoreData>,
+    form: RequestForm,
     method: &str,
     url: &str,
     body_val: &Val,
@@ -380,14 +385,16 @@ async fn perform_request(
     }
     let body = body.bytes();
 
-    // Capability is verb-shaped: http.get, http.post, etc.
-    let capability = format!("http.{}", method.to_ascii_lowercase());
     let (host_str, path_str) = url_host_and_path(url);
-    let ticket = check_security_call(
-        &mut *caller,
-        &capability,
-        verb_context(&host_str, &path_str, body.len() as u64, DEFAULT_TIMEOUT_MS),
-    )?;
+    let (capability, context) = request_check(
+        form,
+        method,
+        &host_str,
+        &path_str,
+        body.len() as u64,
+        DEFAULT_TIMEOUT_MS,
+    );
+    let ticket = check_security_call(&mut *caller, &capability, context)?;
     // The program's own request, before the auth proxy adds credentials.
     record_payload(&*caller, ticket, Side::Request, || {
         request_payload(method, url, &headers, &body)
@@ -396,7 +403,8 @@ async fn perform_request(
 
     let (who, guard) = request_principal(
         caller,
-        GuardedRequest::Verb {
+        GuardedRequest::Send {
+            form,
             timeout_ms: DEFAULT_TIMEOUT_MS,
         },
         ticket,
@@ -413,35 +421,42 @@ async fn perform_request(
         redirect_guard: None,
         recorded_as,
     };
-    let auth_proxy = std::sync::Arc::clone(&caller.data().auth_proxy);
-    let http_client = std::sync::Arc::clone(&caller.data().http_client);
-    let mut req = auth_proxy
-        .transform(req, &who)
-        .await
-        .map_err(|e| wasmtime::Error::msg(format!("http {method}: auth proxy: {e}")))?;
-    // Attached after the proxy, so no proxy can drop it and leave hops unchecked.
-    req.redirect_guard = Some(guard);
+    let response = effects::execute(caller, "http.request", req, move |caller, _, req| {
+        Box::pin(async move {
+            let method = req.method.clone();
+            let auth_proxy = std::sync::Arc::clone(&caller.data().auth_proxy);
+            let http_client = std::sync::Arc::clone(&caller.data().http_client);
+            let mut req = auth_proxy
+                .transform(req, &who)
+                .await
+                .map_err(|e| wasmtime::Error::msg(format!("http {method}: auth proxy: {e}")))?;
+            // Attached after the proxy, so no proxy can drop it and leave hops unchecked.
+            req.redirect_guard = Some(guard);
 
-    // The request's bytes are the work before any effect; the response's are
-    // charged once it is here, since a stop in between would lose it.
-    fuel::charge(&mut *caller, fuel::IO, request_bytes(&req))?;
-    let metrics = std::sync::Arc::clone(&caller.data().metrics);
-    let start = std::time::Instant::now();
-    let send_result = http_client.send(&req).await;
-    let duration_ms = start.elapsed().as_millis() as u64;
-    record_http_metric(
-        metrics.as_ref(),
-        capability,
-        host_str,
-        duration_ms,
-        send_result
-            .as_ref()
-            .map(|resp| (resp.status, resp.body.len() as u64)),
-    );
-    record_payload(&*caller, ticket, Side::Response, || {
-        response_payload(&send_result)
-    });
-    settle_response(caller, send_result, method)
+            // The request's bytes are the work before any effect; the response's are
+            // charged once it is here, since a stop in between would lose it.
+            fuel::charge(&mut *caller, fuel::IO, request_bytes(&req))?;
+            let metrics = std::sync::Arc::clone(&caller.data().metrics);
+            let start = std::time::Instant::now();
+            let send_result = http_client.send(&req).await;
+            let duration_ms = start.elapsed().as_millis() as u64;
+            record_http_metric(
+                metrics.as_ref(),
+                capability,
+                host_str,
+                duration_ms,
+                send_result
+                    .as_ref()
+                    .map(|resp| (resp.status, resp.body.len() as u64)),
+            );
+            record_payload(&*caller, ticket, Side::Response, || {
+                response_payload(&send_result)
+            });
+            settle_native_response(caller, send_result, &method)
+        })
+    })
+    .await?;
+    write_response(caller, response)
 }
 
 /// The request's key and digest as the call log records them, when the transport reads
@@ -501,33 +516,24 @@ fn failure_meta(error: &HttpError) -> serde_json::Value {
     serde_json::json!({ "kind": error.kind(), "error": error.to_string() })
 }
 
-fn settle_response(
+fn settle_native_response(
     caller: &mut Caller<'_, StoreData>,
     send_result: std::result::Result<HttpResponse, HttpError>,
     method: &str,
-) -> wasmtime::Result<Val> {
-    fuel::settle_result(caller, |caller| {
-        let result = (|| {
-            let resp = send_result.map_err(|e| {
-                let msg = format!("http {method}: {e}");
-                // An over-limit response body is a spec `RangeError` (out-of-range
-                // size) and a bad verb a `TypeError`; other transport failures stay
-                // base `Error`s.
-                match e {
-                    HttpError::TooLarge { .. } => crate::runtime::host::range_error(msg),
-                    HttpError::UnsupportedMethod(_) => crate::runtime::host::type_error(msg),
-                    HttpError::Internal(_) => crate::runtime::host::fatal_host_error(msg),
-                    HttpError::PermissionDenied(denied) => denied.into_error(),
-                    _ => wasmtime::Error::msg(msg),
-                }
-            })?;
-
-            fuel::settle(&mut *caller, fuel::IO, response_bytes(&resp))?;
-            fuel::settle(&mut *caller, fuel::SCAN, resp.body.len() as u64)?;
-            write_response(caller, resp)
-        })();
-        result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
-    })
+) -> wasmtime::Result<HttpResponse> {
+    let response = send_result.map_err(|error| {
+        let message = format!("http {method}: {error}");
+        match error {
+            HttpError::TooLarge { .. } => crate::runtime::host::range_error(message),
+            HttpError::UnsupportedMethod(_) => crate::runtime::host::type_error(message),
+            HttpError::Internal(_) => crate::runtime::host::fatal_host_error(message),
+            HttpError::PermissionDenied(denied) => denied.into_error(),
+            _ => wasmtime::Error::msg(message),
+        }
+    })?;
+    fuel::settle(&mut *caller, fuel::IO, response_bytes(&response))?;
+    fuel::settle(&mut *caller, fuel::SCAN, response.body.len() as u64)?;
+    Ok(response)
 }
 
 /// The bytes a request sends: method, URL, headers and body.
@@ -595,6 +601,7 @@ fn write_response(caller: &mut Caller<'_, StoreData>, resp: HttpResponse) -> was
 // ---------------------------------------------------------------------------
 
 /// The `DownloadOptions` bag with every default filled in.
+#[derive(serde::Serialize)]
 struct DownloadOptions {
     overwrite: bool,
     max_bytes: u64,
@@ -699,6 +706,15 @@ async fn perform_download(
         }),
     )?;
 
+    let request = DownloadRequest {
+        url,
+        path: guest_path.clone(),
+        options,
+    };
+    let downloaded = effects::execute(caller, "http.download", request, move |caller, _, request| Box::pin(async move {
+        let url = request.url;
+        let guest_path = request.path;
+        let options = request.options;
     // Resolution follows the policy checks, matching every `fs` module's ordering: no
     // filesystem work happens until the call is authorized.
     let resolved = resolve_content_or_trap(caller.data(), &guest_path, "http.download")?;
@@ -807,19 +823,23 @@ async fn perform_download(
         ),
         Err(DownloadFailure::Fs(_) | DownloadFailure::Full(..)) => {}
     }
-    fuel::settle_result(caller, |caller| {
-        let result = (|| {
-            let Streamed {
-                meta,
-                file,
-                disk_charge,
-            } = streamed.map_err(DownloadFailure::into_error)?;
-            commit_temp(file, disk_charge, &tmp, &resolved, &guest_path)?;
-            let duration_ms = start.elapsed().as_millis() as f64;
-            write_download_result(caller, &meta, &guest_path, duration_ms)
-        })();
-        result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
-    })
+        let Streamed { meta, file, disk_charge } = streamed.map_err(DownloadFailure::into_error)?;
+        commit_temp(file, disk_charge, &tmp, &resolved, &guest_path)?;
+        Ok(Downloaded { meta, duration_ms: start.elapsed().as_millis() as f64 })
+    })).await?;
+    write_download_result(
+        caller,
+        &downloaded.meta,
+        &guest_path,
+        downloaded.duration_ms,
+    )
+}
+
+/// Only metadata enters history. The downloaded body remains in the mounted file.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Downloaded {
+    meta: DownloadMeta,
+    duration_ms: f64,
 }
 
 /// Why a download attempt failed before commit. Transport failures carry the
@@ -1070,7 +1090,6 @@ fn install_response_members(
         MODULE_NAME,
         crate::mangle::extend(&response_key, "throwForStatus"),
         FuncType::new(engine, [receiver.clone()], []),
-        /* deterministic = */ true,
         |caller, params, _results| {
             let st = backing_receiver(caller, abi_arg(params, 0)?)?;
             if matches!(st.field(&mut *caller, R_OK)?, Val::I32(ok) if ok != 0) {
@@ -1090,7 +1109,6 @@ fn install_response_members(
         MODULE_NAME,
         crate::mangle::extend(&response_key, "toString"),
         FuncType::new(engine, [receiver], [string]),
-        /* deterministic = */ true,
         |caller, params, results| {
             let st = backing_receiver(caller, abi_arg(params, 0)?)?;
             let (status, status_text, url) = read_response_status_line(caller, &st)?;
@@ -1155,7 +1173,6 @@ fn install_download_result_members(
         MODULE_NAME,
         crate::mangle::extend(&result_key, "toString"),
         FuncType::new(engine, [receiver], [string]),
-        /* deterministic = */ true,
         |caller, params, results| {
             let st = backing_receiver(caller, abi_arg(params, 0)?)?;
             let Val::F64(status_bits) = st.field(&mut *caller, D_STATUS)? else {
@@ -1269,7 +1286,7 @@ mod tests {
             .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.install_type_info(compiled.type_info.clone());
         let mock = Arc::new(MockHttpClient::new(scripted));
         data.http_client = mock.clone();
@@ -1290,34 +1307,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn response_marshalling_settles_after_short_fuel_and_preserves_errors() {
+    async fn response_marshalling_checks_fuel_and_uses_normal_error_handling() {
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut store = config
-            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .store_async(&engine, StoreData::with_vfs("test-run".into(), Vfs::none()))
             .unwrap();
         let mut linker = wasmtime::Linker::new(&engine);
         install_runtime_async(&mut linker, &mut store)
             .await
             .unwrap();
-        let probe = wasmtime::Func::new(
+        let probe = crate::runtime::host::host_value_async(
             &mut store,
-            wasmtime::FuncType::new(&engine, [wasmtime::ValType::I32], []),
-            |mut caller, params, _| {
-                let invalid = params[0].i32().unwrap() != 0;
-                caller.set_fuel(1)?;
-                super::fuel::settle(&mut caller, super::fuel::IO, 128)?;
-                let mut response = ok_response(200, "café");
-                response.headers = vec![
-                    ("a".into(), "first".into()),
-                    ("a".into(), "last".into()),
-                    ("b".into(), "second".into()),
-                ];
-                if invalid {
-                    response.body = vec![0xFF];
-                }
-                let response = super::settle_response(&mut caller, Ok(response), "GET")?;
-                super::fuel::settle_result(&mut caller, |caller| {
+            wasmtime::FuncType::new(
+                &engine,
+                [wasmtime::ValType::I32, wasmtime::ValType::I32],
+                [wasmtime::ValType::I32],
+            ),
+            |caller, params| {
+                Box::new(async move {
+                    let depleted = params[0].i32().unwrap() != 0;
+                    let invalid = params[1].i32().unwrap() != 0;
+                    if depleted {
+                        caller.set_fuel(0)?;
+                    }
+                    let mut response = ok_response(200, "café");
+                    response.headers = vec![
+                        ("a".into(), "first".into()),
+                        ("a".into(), "last".into()),
+                        ("b".into(), "second".into()),
+                    ];
+                    if invalid {
+                        response.body = vec![0xFF];
+                    }
+                    let response = super::settle_native_response(caller, Ok(response), "GET")?;
+                    let response = super::write_response(caller, response)?;
                     let response = crate::runtime::prelude::iterator::as_struct(
                         caller, &response, "response",
                     )?;
@@ -1331,16 +1355,25 @@ mod tests {
                         super::map::string_entries(caller, &headers)?,
                         vec![("a".into(), "last".into()), ("b".into(), "second".into())]
                     );
-                    Ok(())
+                    Ok(wasmtime::Val::I32(1))
                 })
             },
         );
-        for invalid in [0, 1, 0] {
+        for (depleted, invalid) in [(1, 0), (0, 1), (0, 0)] {
             store.set_fuel(1_000_000).unwrap();
             let result = probe
-                .call_async(&mut store, &[wasmtime::Val::I32(invalid)], &mut [])
+                .call_async(
+                    &mut store,
+                    &[wasmtime::Val::I32(depleted), wasmtime::Val::I32(invalid)],
+                    &mut [wasmtime::Val::I32(0)],
+                )
                 .await;
-            if invalid != 0 {
+            if depleted != 0 {
+                assert_eq!(
+                    result.unwrap_err().downcast_ref::<wasmtime::Trap>(),
+                    Some(&wasmtime::Trap::OutOfFuel)
+                );
+            } else if invalid != 0 {
                 let error = result.unwrap_err();
                 assert!(error.is::<wasmtime::ThrownException>());
                 let original = crate::runtime::exec::uncaught_error(&mut store, error);
@@ -1348,7 +1381,6 @@ mod tests {
             } else {
                 result.unwrap();
             }
-            assert_eq!(store.get_fuel().unwrap(), 0);
             assert!(!store.data().settling_host_result);
         }
     }
@@ -1452,7 +1484,7 @@ function main(): void {
         .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         let mock = Arc::new(MockHttpClient::new(vec![ok_response(200, "hi")]));
         let proxy = Arc::new(RecordingAuthProxy {
             callers: Mutex::new(Vec::new()),
@@ -1499,10 +1531,11 @@ function main(): void {
     /// would be handed the operator's credentials.
     #[tokio::test]
     async fn a_package_making_a_request_is_never_attributed_to_main() {
-        let (callers, _injected) = auth_proxy_callers_for(Some("@acme/sdk"), REQUESTS_A_URL).await;
+        let (callers, _injected) =
+            auth_proxy_callers_for(Some("@pied-piper/sdk"), REQUESTS_A_URL).await;
         assert_eq!(
             callers,
-            vec!["@acme/sdk".to_string()],
+            vec!["@pied-piper/sdk".to_string()],
             "package code must not borrow main's identity at the auth proxy",
         );
     }
@@ -1543,7 +1576,7 @@ function main(): void {
         );
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.install_type_info(lib_type_info);
         let mock = Arc::new(MockHttpClient::new(vec![ok_response(200, "hi")]));
         let proxy = Arc::new(RecordingAuthProxy {
@@ -1631,7 +1664,7 @@ function main(): void {
             compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         let mock = Arc::new(MockHttpClient::new(vec![ok_response(200, "hi")]));
         let proxy = Arc::new(RecordingAuthProxy {
             callers: Mutex::new(Vec::new()),
@@ -1691,7 +1724,7 @@ function main(): void {
             compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.security_check = Arc::new(DenyAllHttp);
         // Mock client never invoked — the security check denies first.
         data.http_client = Arc::new(MockHttpClient::new(vec![ok_response(200, "")]));
@@ -1766,6 +1799,7 @@ function main(): void {
 
     struct VerbContextCheck {
         capability: String,
+        method: Option<String>,
     }
 
     impl SecurityCheck for VerbContextCheck {
@@ -1777,26 +1811,40 @@ function main(): void {
         ) -> CheckOutcome {
             assert_eq!(caller, "main");
             assert_eq!(capability, self.capability);
-            assert_eq!(
-                context,
-                &serde_json::json!({
-                    "host": "example.test",
-                    "path": "/resource",
-                    "body_size": 0,
-                    "timeout_ms": super::DEFAULT_TIMEOUT_MS,
-                })
-            );
+            let mut expected = serde_json::json!({
+                "host": "example.test",
+                "path": "/resource",
+                "body_size": 0,
+                "timeout_ms": super::DEFAULT_TIMEOUT_MS,
+            });
+            if let Some(method) = &self.method {
+                expected["method"] = method.as_str().into();
+            }
+            assert_eq!(context, &expected);
             CheckOutcome::Allow { rule: None }
         }
     }
 
     #[tokio::test]
-    async fn direct_and_generic_requests_use_verb_capabilities_without_method_field() {
+    async fn verb_functions_check_their_verb_and_request_checks_its_method() {
         let tmp = tempfile::tempdir().expect("tempdir");
         for verb in ["get", "post", "put", "patch", "delete", "head", "options"] {
-            for call in [
-                format!("{verb}(\"https://example.test/resource\")"),
-                format!("request(\"{verb}\", \"https://example.test/resource\")"),
+            let upper = verb.to_ascii_uppercase();
+            for (call, check) in [
+                (
+                    format!("{verb}(\"https://example.test/resource\")"),
+                    VerbContextCheck {
+                        capability: format!("http.{verb}"),
+                        method: None,
+                    },
+                ),
+                (
+                    format!("request(\"{verb}\", \"https://example.test/resource\")"),
+                    VerbContextCheck {
+                        capability: "http.request".to_string(),
+                        method: Some(upper.clone()),
+                    },
+                ),
             ] {
                 let source = format!(
                     "import {{ {verb}, request }} from \"submilli:http\";\n\
@@ -1805,22 +1853,20 @@ function main(): void {
                 let (mock, result) = run_download_with_mock(
                     &source,
                     vec![ok_response(200, "")],
-                    Some(Arc::new(VerbContextCheck {
-                        capability: format!("http.{verb}"),
-                    })),
+                    Some(Arc::new(check)),
                     tmp.path(),
                 )
                 .await;
                 result.expect("request allowed");
                 let seen = mock.seen.lock().unwrap();
                 assert_eq!(seen.len(), 1);
-                assert_eq!(seen[0].method, verb.to_ascii_uppercase());
+                assert_eq!(seen[0].method, upper);
             }
         }
     }
 
     #[tokio::test]
-    async fn generic_request_checks_normalized_verb_before_transport() {
+    async fn generic_request_checks_its_capability_before_transport() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let source = r#"
             import { request } from "submilli:http";
@@ -1831,7 +1877,7 @@ function main(): void {
         let (mock, result) =
             run_download_with_mock(source, vec![], Some(Arc::new(DenyAllHttp)), tmp.path()).await;
         let error = result.expect_err("request denied");
-        assert!(error.contains("http.post"), "{error}");
+        assert!(error.contains("http.request"), "{error}");
         assert!(mock.seen.lock().unwrap().is_empty());
     }
 
@@ -1868,7 +1914,7 @@ function main(): void {
             .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.security_check = recording.clone();
         data.http_client = Arc::new(MockHttpClient::new(vec![ok_response(200, "")]));
         let mut store = cfg.store(&engine, data).expect("store");
@@ -1922,7 +1968,7 @@ function main(): void {
         .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.security_check = recording.clone();
         data.http_client = Arc::new(MockHttpClient::new(vec![ok_response(200, "")]));
         let mut store = cfg.store(&engine, data).expect("store");
@@ -2035,7 +2081,7 @@ function main(): void {
             .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         let response_404 = HttpResponse {
             status: 404,
             status_text: "Not Found".to_string(),
@@ -2112,7 +2158,7 @@ function main(): void {
             let compiled = compile_script(&source, "test.ts", crate::FileId(0), &[], &[]).unwrap();
             let cfg = RuntimeConfig::default();
             let engine = cfg.engine().unwrap();
-            let mut data = StoreData::with_vfs(Vfs::tempdir().unwrap());
+            let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().unwrap());
             data.http_client = Arc::new(BrokenSetup);
             let mut store = cfg.store(&engine, data).unwrap();
             let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
@@ -2188,7 +2234,7 @@ function main(): void {
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().unwrap();
         let client = Arc::new(CountingClient(std::sync::atomic::AtomicUsize::new(0)));
-        let mut data = StoreData::with_vfs(vfs);
+        let mut data = StoreData::with_vfs("test-run".into(), vfs);
         data.http_client = client.clone();
         let mut store = cfg.store(&engine, data).unwrap();
         let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
@@ -2233,7 +2279,7 @@ function main(): void {
             compile_script(source, "test.subm", crate::FileId(0), &[], &[]).expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         data.http_client = Arc::new(FailingClient);
         let mut store = cfg.store(&engine, data).expect("store");
         let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
@@ -2579,7 +2625,7 @@ function main(): void {
             .expect("external vfs")
             .with_cwd(cwd)
             .expect("cwd");
-        let mut data = StoreData::with_vfs(vfs);
+        let mut data = StoreData::with_vfs("test-run".into(), vfs);
         data.http_client = client;
         if let Some(sec) = security {
             data.security_check = sec;
@@ -2718,7 +2764,7 @@ function main(): void {
         let engine = cfg.engine().expect("engine");
         let vfs = Vfs::tempdir().expect("tempdir");
         std::fs::write(vfs.root().join("exists.bin"), b"old").expect("seed");
-        let mut data = StoreData::with_vfs(vfs);
+        let mut data = StoreData::with_vfs("test-run".into(), vfs);
         let mock = Arc::new(MockHttpClient::new(vec![ok_response(200, "hello")]));
         data.http_client = mock;
         let compiled =
@@ -2765,7 +2811,7 @@ function main(): void {
         let vfs = Vfs::tempdir().expect("tempdir");
         std::fs::write(vfs.root().join("exists.bin"), b"old").expect("seed");
         let vfs_root = vfs.root().to_path_buf();
-        let mut data = StoreData::with_vfs(vfs);
+        let mut data = StoreData::with_vfs("test-run".into(), vfs);
         let mock = Arc::new(MockHttpClient::new(vec![ok_response(200, "new")]));
         data.http_client = mock;
         let compiled =
@@ -3331,7 +3377,7 @@ function main(): void {
         let engine = cfg.engine().expect("engine");
         let tmp = tempfile::tempdir().expect("tempdir");
         let vfs = Vfs::external(tmp.path().to_path_buf()).expect("external vfs");
-        let mut data = StoreData::with_vfs(vfs);
+        let mut data = StoreData::with_vfs("test-run".into(), vfs);
         data.http_client = Arc::new(StreamingClient);
         let mut store = cfg.store(&engine, data).expect("store");
         let module = wasmtime::Module::new(&engine, &compiled.wasm).expect("module");
@@ -3747,7 +3793,7 @@ function main(): void {
             .expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
-        let mut data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
         let client = Arc::new(RedirectingClient {
             hop_method: "GET",
             hop_url: "https://evil.test/collect",

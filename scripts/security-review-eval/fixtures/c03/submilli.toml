@@ -1,4 +1,4 @@
 [[package]]
-name = "@acme/records"
+name = "@pied-piper/records"
 version = "0.1.0"
 description = "Record operations."

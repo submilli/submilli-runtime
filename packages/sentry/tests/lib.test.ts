@@ -1,15 +1,14 @@
+// The query and body builders, issue-ID parsing and response normalizers live in
+// the package's internal modules, so these tests import them from `../src/`.
+// The operations section checks that each operation runs that validation before
+// any request: invalid input fails with a local SentryError (status 0), and valid
+// input stops at the token read with `missing_token`. That last segment is
+// skipped when SENTRY_AUTH_TOKEN is bound, so this offline file never sends a request.
 import { label } from "submilli:test";
-import {
-    SentryError,
-    buildIssueQuery,
-    listOrganizations,
-    buildUpdateIssueBody,
-    isShortIssueId,
-    normalizeEventJson,
-    parseNextCursor,
-    sentryErrorCode,
-    sentryFailureMessage,
-} from "@submilli/sentry";
+import secrets from "submilli:secrets";
+import { SentryError, getIssue, listIssues, listOrganizations, updateIssue } from "@submilli/sentry";
+import { buildIssueQuery, buildUpdateIssueBody, isShortIssueId } from "../src/request";
+import { normalizeEventJson, parseNextCursor, sentryErrorCode, sentryFailureMessage } from "../src/response";
 
 function expectCode(code: string, action: () => void): void {
     let matched = false;
@@ -61,9 +60,9 @@ function main(): void {
     assert(!isShortIssueId("BACKEND-"), "empty suffix is not a short ID");
 
     label("Link pagination honors the results flag");
-    const next = "<https://sentry.io/api/0/organizations/acme/issues/?cursor=0%3A100%3A0>; rel=\"next\"; results=\"true\"; cursor=\"0:100:0\"";
+    const next = "<https://sentry.io/api/0/organizations/pied-piper/issues/?cursor=0%3A100%3A0>; rel=\"next\"; results=\"true\"; cursor=\"0:100:0\"";
     assert(parseNextCursor(next) === "0:100:0", "next cursor parsed from metadata");
-    const last = "<https://sentry.io/api/0/organizations/acme/issues/?cursor=0%3A100%3A0>; rel=\"next\"; results=\"false\"; cursor=\"0:100:0\"";
+    const last = "<https://sentry.io/api/0/organizations/pied-piper/issues/?cursor=0%3A100%3A0>; rel=\"next\"; results=\"false\"; cursor=\"0:100:0\"";
     assert(parseNextCursor(last) === "", "false results marks final page");
     assert(parseNextCursor("") === "", "missing header marks final page");
 
@@ -127,6 +126,22 @@ function main(): void {
         "malformed JSON body falls back",
     );
 
+    label("operations validate input before any request");
+    expectCode("invalid_page_size", () => { listOrganizations({ limit: 101 }); });
+    expectCode("invalid_time_range", () => { listIssues("pied-piper", { start: "2026-01-01T00:00:00Z" }); });
+    expectCode("invalid_issue_id", () => { getIssue("pied-piper", "backend", "not-an-id"); });
+    expectCode("invalid_issue_id", () => { getIssue("pied-piper", "backend", "BACKEND-"); });
+    expectCode("empty_update", () => { updateIssue("pied-piper", "backend", "1", {}); });
+
+    if (secrets.get("SENTRY_AUTH_TOKEN") !== undefined) {
+        label("skip: valid input reaches the token read only when SENTRY_AUTH_TOKEN is not bound");
+        return;
+    }
     label("an unbound auth token is reported before any request");
     expectCode("missing_token", () => { listOrganizations(); });
+    expectCode("missing_token", () => { listIssues("pied-piper", { projects: ["1"], query: "" }); });
+    for (const issueId of ["123456789", "RUST-7E"]) {
+        expectCode("missing_token", () => { getIssue("pied-piper", "backend", issueId); });
+    }
+    expectCode("missing_token", () => { updateIssue("pied-piper", "backend", "1", { clearAssignee: true }); });
 }

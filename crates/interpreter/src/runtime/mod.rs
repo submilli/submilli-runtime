@@ -1,5 +1,6 @@
 //! Wasmtime engine configuration for Submilli.
 
+use crate::runtime::durable::RunId;
 pub mod agents;
 pub(crate) mod array_storage;
 pub mod blocking;
@@ -8,6 +9,8 @@ pub mod decision;
 pub mod default_filesystem;
 pub mod disk_quota;
 pub mod durable;
+pub mod effects;
+mod effects_memory;
 pub mod embedding;
 pub mod exec;
 pub mod filesystem;
@@ -79,7 +82,7 @@ pub use mcp::{
 pub use metrics::{HttpMetric, MetricsSink, NoopMetricsSink};
 pub use prelude::bigint::ops::BIGINT_MODULE_NAME;
 pub use prelude::temporal::shared::TEMPORAL_MODULE_NAME;
-pub use secrets::{NoopSecretProvider, SecretProvider};
+pub use secrets::{EncryptedSecret, NoopSecretProvider, SecretKeyId, SecretProvider};
 pub use security::{AllowAllCheck, AuditDecision, CheckOutcome, SecurityCheck};
 pub use session_kv::{
     CURSOR_KEY_ID_LEN, CursorKey, CursorKeys, InMemorySessionKv, SessionKvEntry, SessionKvError,
@@ -135,6 +138,8 @@ pub struct StoreData {
     pub console: Box<dyn Write + Send>,
     pub vfs: Vfs,
     pub filesystem: Arc<dyn filesystem::Filesystem>,
+    /// Native outcome history, installed before any guest initializer runs.
+    pub effects: Option<Arc<dyn effects::EffectHistory>>,
     pub vfs_info: VfsInfo,
     pub security_check: Arc<dyn SecurityCheck>,
     pub fs_max_read_size: u64,
@@ -282,11 +287,11 @@ pub struct LinkedPackageModule<'a> {
 }
 
 impl StoreData {
-    pub fn with_vfs(vfs: Vfs) -> Self {
-        Self::with_vfs_and_cap(vfs, DEFAULT_MAX_STORE_BYTES)
+    pub fn with_vfs(run_id: RunId, vfs: Vfs) -> Self {
+        Self::with_vfs_and_cap(run_id, vfs, DEFAULT_MAX_STORE_BYTES)
     }
 
-    pub fn with_vfs_and_cap(vfs: Vfs, max_store_bytes: u64) -> Self {
+    pub fn with_vfs_and_cap(run_id: RunId, vfs: Vfs, max_store_bytes: u64) -> Self {
         let vfs_info = VfsInfo {
             mode: vfs.mode(),
             size_limit: None,
@@ -295,7 +300,11 @@ impl StoreData {
             #[cfg(test)]
             array_growth: array_storage::GrowthStats::default(),
             console: Box::new(std::io::stderr()),
-            filesystem: Arc::new(default_filesystem::DefaultFilesystem::new(vfs.clone())),
+            filesystem: Arc::new(default_filesystem::DefaultFilesystem::new(
+                vfs.clone(),
+                run_id,
+            )),
+            effects: None,
             vfs,
             vfs_info,
             security_check: security::default_check(),
@@ -356,7 +365,7 @@ impl StoreData {
     }
 
     pub fn with_tempdir() -> std::io::Result<Self> {
-        Ok(Self::with_vfs(Vfs::tempdir()?))
+        Ok(Self::with_vfs(RunId::generate()?, Vfs::tempdir()?))
     }
 }
 
@@ -630,7 +639,8 @@ impl RuntimeConfig {
         type_info: Option<TypeInfoTable>,
     ) -> wasmtime::Result<RunResult> {
         let buf = Arc::new(Mutex::new(Vec::new()));
-        let mut data = StoreData::with_vfs_and_cap(Vfs::tempdir()?, self.max_store_bytes);
+        let mut data =
+            StoreData::with_vfs_and_cap(RunId::generate()?, Vfs::tempdir()?, self.max_store_bytes);
         data.console = Box::new(ConsoleSink(Arc::clone(&buf)));
         if let Some(type_info) = type_info {
             data.install_type_info(type_info);

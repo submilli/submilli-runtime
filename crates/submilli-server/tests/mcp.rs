@@ -1845,9 +1845,10 @@ async fn packages_docs_host_module() {
     assert_eq!(out["source"], json!("host"));
     assert!(!out["description"].as_str().unwrap().is_empty());
     let decls = out["declarations"].as_str().unwrap_or("");
+    // Only what the blueprint could allow: GET, not the other verbs.
     assert!(
-        decls.contains("get") && decls.contains("post"),
-        "declarations missing http verbs: {decls}"
+        decls.contains("function get(") && !decls.contains("function post("),
+        "declarations should show only the granted verb: {decls}"
     );
 }
 
@@ -1904,7 +1905,7 @@ async fn packages_search_by_symbol_and_list_all() {
     // Empty query lists every module the blueprint permits (security excluded).
     let (_, _, all) = h.post(EPH, search(2, ""), Some(&session)).await;
     let count = output(&all)["results"].as_array().unwrap().len();
-    assert_eq!(count, 7, "expected 7 permitted stdlib modules: {all}");
+    assert_eq!(count, 5, "expected 5 permitted stdlib modules: {all}");
     let listed = |name: &str| {
         output(&all)["results"]
             .as_array()
@@ -1913,9 +1914,9 @@ async fn packages_search_by_symbol_and_list_all() {
             .any(|entry| entry["name"] == name)
     };
     assert!(listed("submilli:code"));
-    // Package-only modules remain discoverable; reads still enforce caller grants.
-    assert!(listed("submilli:secrets"));
-    assert!(listed("submilli:variables"));
+    // Package-only modules: the runtime refuses their reads to programs.
+    assert!(!listed("submilli:secrets"));
+    assert!(!listed("submilli:variables"));
     // The blueprint grants FS only, so session state is hidden.
     assert!(!listed("submilli:session"));
     let (_, _, code) = h.post(EPH, search(3, "applyPatch"), Some(&session)).await;

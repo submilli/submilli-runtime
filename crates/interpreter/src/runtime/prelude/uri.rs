@@ -148,7 +148,6 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::prelude("encodeURIComponent"),
         FuncType::new(&engine, [obj_param], [string_struct.clone()]),
-        /* deterministic = */ true,
         |caller, params, results| {
             Box::pin(async move {
                 let text = string_ctor_call(&mut *caller, abi_arg(params, 0)?).await?;
@@ -166,7 +165,6 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         crate::mangle::prelude("encodeURI"),
         ty.clone(),
-        /* deterministic = */ true,
         |caller, params, results| -> wasmtime::Result<()> {
             let units = read_string_units(&mut *caller, abi_arg(params, 0)?, "encodeURI")?;
             fuel::charge(&mut *caller, fuel::SCAN, units.len() as u64)?;
@@ -186,7 +184,6 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             crate::mangle::prelude(name),
             ty.clone(),
-            /* deterministic = */ true,
             move |caller, params, results| -> wasmtime::Result<()> {
                 let units = read_string_units(&mut *caller, abi_arg(params, 0)?, name)?;
                 fuel::charge(&mut *caller, fuel::SCAN, units.len() as u64)?;

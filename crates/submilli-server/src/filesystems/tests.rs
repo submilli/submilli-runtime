@@ -1,5 +1,6 @@
 use super::*;
 use interpreter::runtime::durable::{EffectId, RunId};
+use interpreter::runtime::filesystem::Filesystem;
 
 use submilli_durable::unit_of_work::Outcome;
 use submilli_shared::secret_store::SecretCipher;
@@ -385,7 +386,7 @@ fn read_bytes(output: interpreter::runtime::filesystem::ReadOutput) -> Option<Ve
 
 #[tokio::test]
 async fn reader_reopen_refuses_a_replaced_path() {
-    use interpreter::runtime::filesystem::{FileReader, Filesystem};
+    use interpreter::runtime::filesystem::Filesystem;
     let fixture = Fixture::new().await;
     let root = fixture.filesystem.vfs().root();
     std::fs::write(root.join("file"), b"original").unwrap();
@@ -399,14 +400,19 @@ async fn reader_reopen_refuses_a_replaced_path() {
         )
         .await
         .unwrap();
-    let descriptor = reader.descriptor().unwrap();
+    let descriptor = recorded_resource(&reader);
     let limits = interpreter::runtime::limits::TenantLimits::new(1 << 20);
     assert_eq!(
         read_bytes(
-            reader
-                .next(&resource_effect_id(), None, &limits)
-                .await
-                .unwrap()
+            Filesystem::next_reader(
+                &fixture.filesystem,
+                &resource_effect_id(),
+                None,
+                &mut reader,
+                &limits
+            )
+            .await
+            .unwrap()
         )
         .unwrap(),
         b"ori"
@@ -414,12 +420,17 @@ async fn reader_reopen_refuses_a_replaced_path() {
     drop(reader);
     std::fs::rename(root.join("file"), root.join("old")).unwrap();
     std::fs::write(root.join("file"), b"replacement").unwrap();
-    let mut restored = Filesystem::restore_reader(&fixture.filesystem, descriptor).unwrap();
+    let mut restored = descriptor;
     assert!(
-        restored
-            .next(&resource_effect_id(), None, &limits)
-            .await
-            .is_err()
+        Filesystem::next_reader(
+            &fixture.filesystem,
+            &resource_effect_id(),
+            None,
+            &mut restored,
+            &limits
+        )
+        .await
+        .is_err()
     );
 }
 
@@ -437,12 +448,17 @@ async fn directory_snapshot_restores_order_after_directory_changes() {
         .unwrap();
     let limits = interpreter::runtime::limits::TenantLimits::new(64 << 20);
     assert_eq!(
-        listing
-            .next_entry(&resource_effect_id(), None, &limits)
-            .await
-            .unwrap()
-            .unwrap()
-            .path,
+        Filesystem::next_directory(
+            &fixture.filesystem,
+            &resource_effect_id(),
+            None,
+            &mut listing,
+            &limits
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .path,
         "/tree/a"
     );
     drop(listing);
@@ -459,8 +475,7 @@ async fn directory_snapshot_restores_order_after_directory_changes() {
         .unwrap();
     let mut listing = resumed.listing(&resource, "/tree", true).await.unwrap();
     assert_eq!(
-        listing
-            .next_entry(&resource_effect_id(), None, &limits)
+        Filesystem::next_directory(&resumed, &resource_effect_id(), None, &mut listing, &limits)
             .await
             .unwrap()
             .unwrap()
@@ -468,8 +483,7 @@ async fn directory_snapshot_restores_order_after_directory_changes() {
         "/tree/b"
     );
     assert!(
-        listing
-            .next_entry(&resource_effect_id(), None, &limits)
+        Filesystem::next_directory(&resumed, &resource_effect_id(), None, &mut listing, &limits)
             .await
             .unwrap()
             .is_none()
@@ -582,7 +596,11 @@ async fn run_backend_fueled(
             .unwrap();
     let config = RuntimeConfig::default();
     let engine = config.engine().unwrap();
-    let mut data = StoreData::with_vfs_and_cap(fixture.filesystem.vfs().clone(), 64 << 20);
+    let mut data = StoreData::with_vfs_and_cap(
+        fixture.filesystem.run_id().clone(),
+        fixture.filesystem.vfs().clone(),
+        64 << 20,
+    );
     data.filesystem = Arc::new(fixture.filesystem.clone());
     let mut store = config.store(&engine, data).unwrap();
     let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
@@ -765,14 +783,15 @@ async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
     )
     .await
     .unwrap();
-    while let Some(entry) = listing
-        .next_entry(
-            &resource_effect_id(),
-            None,
-            &interpreter::runtime::limits::TenantLimits::new(64 << 20),
-        )
-        .await
-        .unwrap()
+    while let Some(entry) = Filesystem::next_directory(
+        backend,
+        &resource_effect_id(),
+        None,
+        &mut listing,
+        &interpreter::runtime::limits::TenantLimits::new(64 << 20),
+    )
+    .await
+    .unwrap()
     {
         assert!(!entry.path.contains(private));
     }
@@ -806,7 +825,7 @@ async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
 
     // Backend policy must not leak into the interpreter's ordinary implementation.
     // Production callers must keep retained volumes assigned to their durable backend.
-    let native = DefaultFilesystem::new(Vfs::external(root.to_owned()).unwrap());
+    let native = DefaultFilesystem::new(Vfs::external(root.to_owned()).unwrap(), "run".into());
     assert_eq!(
         Filesystem::read(
             &native,
@@ -831,14 +850,15 @@ async fn durable_backend_protects_artifacts_at_every_guest_access_boundary() {
     .await
     .unwrap();
     let mut found = false;
-    while let Some(entry) = listing
-        .next_entry(
-            &resource_effect_id(),
-            None,
-            &interpreter::runtime::limits::TenantLimits::new(64 << 20),
-        )
-        .await
-        .unwrap()
+    while let Some(entry) = Filesystem::next_directory(
+        &native,
+        &resource_effect_id(),
+        None,
+        &mut listing,
+        &interpreter::runtime::limits::TenantLimits::new(64 << 20),
+    )
+    .await
+    .unwrap()
     {
         found |= entry.name == private;
     }
@@ -862,7 +882,7 @@ trait CallTestCase {
         path: &str,
         recursive: bool,
     ) -> Result<
-        Box<dyn interpreter::runtime::filesystem::DirectoryReader>,
+        interpreter::runtime::filesystem::DirectoryReader,
         interpreter::runtime::filesystem::FilesystemError,
     >;
 }
@@ -874,7 +894,7 @@ impl CallTestCase for DurableFilesystem {
         path: &str,
         recursive: bool,
     ) -> Result<
-        Box<dyn interpreter::runtime::filesystem::DirectoryReader>,
+        interpreter::runtime::filesystem::DirectoryReader,
         interpreter::runtime::filesystem::FilesystemError,
     > {
         let effect_id: EffectId = id.clone();
@@ -1416,10 +1436,12 @@ async fn empty_writer_close_records_read_only_refusal_without_staging() {
     let mut writer = Filesystem::open_writer(&filesystem, &opening, None, "/read-only/file")
         .await
         .unwrap();
-    let descriptor = writer.descriptor().unwrap();
-    let first = writer.close(&closing, None).await.unwrap_err();
+    let descriptor = recorded_resource(&writer);
+    let first = Filesystem::close_writer(&filesystem, &closing, None, &mut writer)
+        .await
+        .unwrap_err();
     assert!(matches!(first, PortError::Rejected(_)), "{first}");
-    assert!(writer.is_closed());
+    assert!(writer.closed);
     drop(writer);
     drop(filesystem);
     let reopened = fixture
@@ -1427,10 +1449,12 @@ async fn empty_writer_close_records_read_only_refusal_without_staging() {
         .reopen(vfs, &fixture.run, fixture.units())
         .await
         .unwrap();
-    let mut writer = Filesystem::restore_writer(&reopened, descriptor.clone()).unwrap();
-    let replay = writer.close(&closing, None).await.unwrap_err();
+    let mut writer = recorded_resource(&descriptor);
+    let replay = Filesystem::close_writer(&reopened, &closing, None, &mut writer)
+        .await
+        .unwrap_err();
     assert_eq!(first.to_string(), replay.to_string());
-    assert!(writer.is_closed());
+    assert!(writer.closed);
     assert!(!read_only.join("file").exists());
     let staging = fixture
         .filesystem
@@ -1444,8 +1468,10 @@ async fn empty_writer_close_records_read_only_refusal_without_staging() {
     let mut writer = Filesystem::open_writer(&reopened, &empty, None, "/empty")
         .await
         .unwrap();
-    writer.close(&resource_effect_id(), None).await.unwrap();
-    assert!(writer.is_closed());
+    Filesystem::close_writer(&reopened, &resource_effect_id(), None, &mut writer)
+        .await
+        .unwrap();
+    assert!(writer.closed);
     assert_eq!(
         std::fs::read(reopened.vfs().root().join("empty")).unwrap(),
         b""
@@ -1495,4 +1521,8 @@ async fn byte_writes_and_retries_do_not_use_the_filesystem_journal() {
             .unwrap()
             .is_none()
     );
+}
+
+fn recorded_resource<T: serde::Serialize + serde::de::DeserializeOwned>(resource: &T) -> T {
+    serde_json::from_slice(&serde_json::to_vec(resource).unwrap()).unwrap()
 }

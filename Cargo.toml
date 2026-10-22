@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/submilli/submilli-runtime"
@@ -23,8 +23,8 @@ publish = false
 # Published crates depend on each other at exactly the workspace version: the
 # package artifact format and the host ABI change together. Bump these with
 # `[workspace.package].version`.
-interpreter = { package = "submilli-engine", path = "crates/interpreter", version = "=0.4.1" }
-submilli-policy = { path = "crates/submilli-policy", version = "=0.4.1" }
+interpreter = { package = "submilli-engine", path = "crates/interpreter", version = "=0.4.2" }
+submilli-policy = { path = "crates/submilli-policy", version = "=0.4.2" }
 wasmtime = { package = "submilli-wasm", version = "0.1.12", features = ["async"] }
 wasm-encoder = "0.248"
 wasmparser = "0.248"

@@ -1,10 +1,10 @@
 import { check } from "submilli:security";
 import { writeText } from "submilli:fs";
 /** Persist a record.
- * @capability acme.write { path: string }
+ * @capability pied-piper.write { path: string }
  */
 export function persist(path: string): void {
     if (path !== "/restricted") throw new Error("unsupported destination");
-    check("acme.write", { path: path });
+    check("pied-piper.write", { path: path });
     writeText(path, "record");
 }

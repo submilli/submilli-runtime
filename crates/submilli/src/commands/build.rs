@@ -15,9 +15,9 @@ use interpreter::{Severity, Sources, Span, diagnostics};
 use submilli_build::{
     BuildDiagnostic, BuildSeverity, BuiltPackage, DependencyKind, DriverError, InstallPreparation,
     Lockfile, PackageName, PackageStore, ProjectManifest, ResolveError, ScaffoldError, add_package,
-    build_packages, find_manifest_upwards, init_project, install_packages, is_valid_package_name,
-    parse_manifest, refresh_dependency_types, refresh_editor_files, resolve_github_closure,
-    write_capabilities_file,
+    build_packages_with_inputs, find_manifest_upwards, init_project, install_packages,
+    is_valid_package_name, parse_manifest, refresh_dependency_types, refresh_editor_files,
+    resolve_github_closure, write_capabilities_file,
 };
 
 use crate::commands::github::retry;
@@ -50,6 +50,9 @@ enum BuildCmd {
 
 #[derive(clap::Args)]
 struct CompileArgs {
+    /// Set a src/config.ts parameter of the explicitly selected package.
+    #[arg(long, value_name = "NAME=VALUE")]
+    config: Vec<String>,
     /// Compile only this package and its sibling dependencies.
     #[arg(short = 'p', long = "package")]
     package: Option<String>,
@@ -399,8 +402,15 @@ fn compile_project(args: CompileArgs) -> anyhow::Result<Result<CompiledProject, 
     {
         return Ok(Err(code));
     }
+    let inputs = submilli_build::ConfigInputs::parse(&args.config, &[], args.package.is_some())?;
     let only = args.package.map(PackageName::new);
-    match build_packages(&manifest, &manifest_dir, preparation.store(), only.as_ref()) {
+    match build_packages_with_inputs(
+        &manifest,
+        &manifest_dir,
+        preparation.store(),
+        only.as_ref(),
+        &inputs,
+    ) {
         Ok(built) => {
             if let Err(code) = publish_dependencies(preparation, &built, deny_warnings) {
                 return Ok(Err(code));
@@ -600,6 +610,7 @@ pub(super) fn render_manifest_diagnostics(
 /// error/trap fails the open one. A file with no `label()` calls is one
 /// anonymous test that passes iff `main()` returns cleanly.
 mod test_runner {
+    use interpreter::runtime::durable::RunId;
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::Path;
     use std::process::ExitCode;
@@ -610,12 +621,12 @@ mod test_runner {
         install_runtime_async, install_tenant_limits,
     };
     use interpreter::{
-        BacktraceMode, PackageDeclaration, Sources, compile_script_owned_by, dispatch_main_async,
-        failure_message, instantiate_program_async,
+        BacktraceMode, ModulePath, PackageDeclaration, PackageTestSurface, Sources,
+        compile_package_test, dispatch_main_async, failure_message, instantiate_program_async,
     };
     use submilli_build::{
         Artifact, ArtifactSource, BuiltPackage, DriverError, PackageName, PackageStore,
-        build_packages, find_manifest_upwards, parse_manifest,
+        build_packages_for_tests, find_manifest_upwards, parse_manifest,
     };
     use wasmtime::{Engine, Linker, Module};
 
@@ -652,19 +663,29 @@ mod test_runner {
             Ok(preparation) => preparation,
             Err(code) => return Ok(code),
         };
+        let inputs = submilli_build::ConfigInputs::parse(
+            &args.compile.config,
+            &[],
+            args.compile.package.is_some(),
+        )?;
         let only = args.compile.package.map(PackageName::new);
-        let built =
-            match build_packages(&manifest, &manifest_dir, preparation.store(), only.as_ref()) {
-                Ok(built) => built,
-                Err(DriverError::Compile { rendered, .. }) => {
-                    eprint!("{rendered}");
-                    return Ok(ExitCode::from(1));
-                }
-                Err(err) => {
-                    eprintln!("error: {err}");
-                    return Ok(ExitCode::from(1));
-                }
-            };
+        let built = match build_packages_for_tests(
+            &manifest,
+            &manifest_dir,
+            preparation.store(),
+            only.as_ref(),
+            &inputs,
+        ) {
+            Ok(built) => built,
+            Err(DriverError::Compile { rendered, .. }) => {
+                eprint!("{rendered}");
+                return Ok(ExitCode::from(1));
+            }
+            Err(err) => {
+                eprintln!("error: {err}");
+                return Ok(ExitCode::from(1));
+            }
+        };
         if let Err(code) = super::check_package_warnings(&preparation, &built, deny_warnings) {
             return Ok(code);
         }
@@ -748,7 +769,8 @@ mod test_runner {
             let Some(pkg_path) = path_by_name.get(pkg.name.as_str()) else {
                 continue;
             };
-            let tests_dir = manifest_dir.join(pkg_path).join("tests");
+            let pkg_dir = manifest_dir.join(pkg_path);
+            let tests_dir = pkg_dir.join("tests");
             let test_files = discover_test_files(&tests_dir)
                 .with_context(|| format!("scanning {}", tests_dir.display()))?;
             for test_file in test_files {
@@ -761,7 +783,8 @@ mod test_runner {
                 files += 1;
                 let (p, f) = run_test_file(
                     &ctx,
-                    pkg.name.as_str(),
+                    pkg,
+                    &pkg_dir,
                     &test_file,
                     deny_warnings,
                     &mut warning_count,
@@ -1012,7 +1035,8 @@ mod test_runner {
 
     fn run_test_file(
         ctx: &TestContext<'_>,
-        package_name: &str,
+        pkg: &BuiltPackage,
+        pkg_dir: &Path,
         test_file: &Path,
         deny_warnings: bool,
         warning_count: &mut usize,
@@ -1035,14 +1059,25 @@ mod test_runner {
             .to_string_lossy()
             .into_owned();
         let (mut sources, file) = Sources::single(filename.clone(), source.clone())?;
+        let importer = match test_importer(pkg_dir, test_file) {
+            Ok(importer) => importer,
+            Err(reason) => {
+                println!("FAIL {filename} ({reason})");
+                return Ok((0, 1));
+            }
+        };
+        // A package built without its test surface has no modules to import.
+        let no_modules = PackageTestSurface::default();
+        let surface = pkg.test_surface.as_ref().unwrap_or(&no_modules);
 
-        let (bytes, type_info) = match compile_script_owned_by(
-            package_name,
+        let (bytes, type_info) = match compile_package_test(
+            &pkg.declaration,
+            surface,
+            &importer,
             &source,
             &filename,
             file,
             declarations,
-            &[],
         ) {
             Ok(compiled) => {
                 crate::commands::check::render(&compiled.warnings, &sources)?;
@@ -1071,7 +1106,11 @@ mod test_runner {
             .map_err(|err| anyhow::anyhow!("compiling {filename}: {err}"))?;
 
         let outcome = rt.block_on(async {
-            let mut data = StoreData::with_vfs_and_cap(Vfs::tempdir()?, cfg.max_store_bytes);
+            let mut data = StoreData::with_vfs_and_cap(
+                RunId::generate()?,
+                Vfs::tempdir()?,
+                cfg.max_store_bytes,
+            );
             data.secret_provider = secret_provider.clone();
             let mut store = cfg.store_async(engine, data)?;
             install_tenant_limits(&mut store);
@@ -1105,6 +1144,25 @@ mod test_runner {
         };
 
         Ok(report_outcome(&filename, result, &labels, &sources, file))
+    }
+
+    /// The test file's path in its package directory, `/`-separated and without
+    /// its extension (`tests/paths.test`): what its relative imports resolve against.
+    fn test_importer(pkg_dir: &Path, test_file: &Path) -> Result<ModulePath, &'static str> {
+        let relative = test_file
+            .strip_prefix(pkg_dir)
+            .map_err(|_| "test file is outside its package directory")?;
+        let segments = relative
+            .components()
+            .map(|component| component.as_os_str().to_str())
+            .collect::<Option<Vec<_>>>()
+            .ok_or("test path is not valid UTF-8")?;
+        let path = segments.join("/");
+        let path = path
+            .strip_suffix(".ts")
+            .or_else(|| path.strip_suffix(".subm"))
+            .unwrap_or(&path);
+        Ok(ModulePath::from(path))
     }
 
     /// Map a finished run to (passed, failed) segment counts and print a line

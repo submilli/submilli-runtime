@@ -19,6 +19,7 @@
 //! `SUBMILLI_TEST_NIGHTLY_ONLY=1` in nightly/release checks. `CONFORMANCE_FILTER`
 //! narrows an opted-in run; it does not enable conformance on its own.
 
+use interpreter::runtime::durable::RunId;
 #[path = "support/conformance_gate.rs"]
 mod conformance_gate;
 
@@ -130,7 +131,11 @@ impl PreparedRuntime {
         }
 
         let buf = Arc::new(Mutex::new(Vec::new()));
-        let mut data = StoreData::with_vfs_and_cap(Vfs::tempdir()?, self.config.max_store_bytes);
+        let mut data = StoreData::with_vfs_and_cap(
+            RunId::generate()?,
+            Vfs::tempdir()?,
+            self.config.max_store_bytes,
+        );
         data.console = Box::new(Sink(Arc::clone(&buf)));
         data.install_type_info(compiled.type_info.clone());
         let mut store = self.config.store_async(&self.engine, data)?;

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "066c88b7f950d53f57f7e94068f05e830095441e94d574273dac03c72625b97f"
+  contentHash: "643d6744f80b6b4505721312d94eb2884012a6c087b054fce71d4185f4b0c633"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -53,7 +53,7 @@ secrets:
     store: crm_api_key
 mcp:
   crm:
-    url: https://mcp.acme.example/mcp
+    url: https://mcp.pied-piper.example/mcp
     headers:
       Authorization: Bearer ${secrets.CRM_API_KEY}
   linear:

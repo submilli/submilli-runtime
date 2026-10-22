@@ -5,8 +5,6 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use interpreter::packages;
-
 use super::discovery::{self, Scope};
 
 #[derive(clap::Args)]
@@ -30,15 +28,12 @@ impl Args {
 pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
     let scope = Scope::load(args.blueprint)?;
     let query = args.query.unwrap_or_default();
-    let hits: Vec<_> = packages::search(&query)
-        .into_iter()
-        .filter(|module| scope.allows(&module.name))
-        .collect();
+    let hits = scope.stdlib_search(&query);
     let needle = query.trim().to_lowercase();
     let installed: Vec<String> = scope
         .installed_packages()
         .iter()
-        .filter(|artifact| installed_matches(artifact, &needle))
+        .filter(|package| package.matches(&needle))
         .map(discovery::installed_summary)
         .collect();
     if hits.is_empty() && installed.is_empty() {
@@ -53,21 +48,4 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         println!("{line}");
     }
     Ok(ExitCode::SUCCESS)
-}
-
-/// The same three fields the stdlib search matches: name, description, and an
-/// exported symbol.
-fn installed_matches(artifact: &submilli_build::Artifact, needle: &str) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-    let metadata = &artifact.metadata;
-    metadata.package_name.to_lowercase().contains(needle)
-        || metadata.description.to_lowercase().contains(needle)
-        || artifact
-            .package_declaration
-            .values
-            .keys()
-            .chain(artifact.package_declaration.types.keys())
-            .any(|symbol| symbol.to_lowercase().contains(needle))
 }

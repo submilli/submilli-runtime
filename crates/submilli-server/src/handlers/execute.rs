@@ -1,3 +1,4 @@
+use interpreter::runtime::durable::RunId;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -477,7 +478,7 @@ async fn execute_core_with(
 fn run_start(inputs: &ExecuteInputs<'_>, test: Option<&TestWorld>) -> crate::record::RunStart {
     let audit = inputs.audit.as_deref();
     crate::record::RunStart {
-        execution_id: execution_id_of(audit),
+        execution_id: execution_id_of(audit).to_string(),
         label: audit.map_or_else(
             || "unauthenticated".to_owned(),
             |audit| audit.principal.clone(),
@@ -693,6 +694,8 @@ async fn prepare_and_run(
             Err(err) => return fail(ErrorKind::PackageResolution, err.to_string()),
         };
     let services = runner::HostServices {
+        effects: None,
+        filesystem: None,
         // Keyed completion updates activity with its recorded outcome in one transaction.
         session_manager: idempotency_key.is_none().then(|| manager.clone()),
         audit: execution_audit.clone(),
@@ -703,11 +706,14 @@ async fn prepare_and_run(
             state.secret_store().cloned(),
             Arc::clone(&harness_secrets),
         )),
-        secret_provider: Arc::new(BlueprintSecretProvider::with_harness(
-            Arc::clone(&blueprint),
-            state.secret_store().cloned(),
-            Arc::clone(&harness_secrets),
-        )),
+        secret_provider: Arc::new(
+            BlueprintSecretProvider::with_harness(
+                Arc::clone(&blueprint),
+                state.secret_store().cloned(),
+                Arc::clone(&harness_secrets),
+            )
+            .with_cipher(state.secret_cipher()),
+        ),
         variables: Arc::clone(&variables),
         security_check,
         http_client,
@@ -741,6 +747,7 @@ async fn prepare_and_run(
         code,
         parsed,
         runner::RunnerRuntime {
+            run_id: &execution_id_of(audit),
             blueprint: blueprint_name,
             session: session_id,
             engine: state.engine(),
@@ -969,7 +976,7 @@ fn response_for_error(
     message: String,
 ) -> ExecuteResponse {
     ExecuteResponse {
-        execution_id: execution_id_of(audit),
+        execution_id: execution_id_of(audit).to_string(),
         session_id: session_id.to_string(),
         result: None,
         console: Vec::new(),
@@ -1005,7 +1012,7 @@ pub(crate) fn internal_failure(
     }
 }
 
-fn execution_id_of(audit: Option<&crate::audit::ExecutionAudit>) -> String {
+fn execution_id_of(audit: Option<&crate::audit::ExecutionAudit>) -> RunId {
     audit.map_or_else(crate::audit::execution_id, |audit| audit.id.clone())
 }
 
@@ -1017,7 +1024,7 @@ fn into_response(
 ) -> ExecuteResponse {
     let (result, console, error) = outcome_to_parts(outcome, console_lines);
     ExecuteResponse {
-        execution_id: execution_id_of(audit),
+        execution_id: execution_id_of(audit).to_string(),
         session_id: session_id.to_string(),
         result,
         console,

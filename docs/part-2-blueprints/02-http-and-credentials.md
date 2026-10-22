@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "6b24574ac5506c694f6a5e8b6331655274c54230b265c91cbe6a2b4879e6f8ea"
+  contentHash: "c6605a4104600cd7d24064ba48faa24fb3c970d35f8fa493f4221d72d3bed64a"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -27,8 +27,8 @@ sees the response, but never the header.
 
 ## Allow the request
 
-`submilli:http` has one capability per verb, plus one for downloads, and
-`http.<method>` for any other method `http.request` sends. List
+`submilli:http` has one capability per verb, one for `http.request`, which
+takes the method as an argument, and one for downloads. List
 them, with the fields a filter can test and the rules the Blueprint already
 has for each:
 
@@ -59,12 +59,12 @@ submilli:http
   http.options — HTTP OPTIONS
       fields: host: string, path: string, body_size: number, timeout_ms: number
       example filter: host == "api.example.com"
+  http.request — HTTP request with a method chosen at the call, through `http.request`. The per-method functions (`http.get`, …) check their own capability instead
+      fields: method: string, host: string, path: string, body_size: number, timeout_ms: number
+      example filter: method == "GET" and host == "api.example.com"
   http.download — Download a URL straight to the VFS
       fields: host: string, url_path: string, vfs_path: string, max_bytes: number, overwrite: boolean, decompress: boolean
       example filter: host == "cdn.example.com" and overwrite == false
-  http.<method> — Any other HTTP method, through `http.request`: `http.trace` gates TRACE
-      fields: host: string, path: string, body_size: number, timeout_ms: number
-      example filter: host == "api.example.com"
 ```
 
 Grant the verb the program needs, narrowed to the host:
@@ -203,22 +203,22 @@ host and at the top level of the file. The top-level flag has no command:
 
 ```sh
 submilli blueprint secret add LEGACY_TOKEN --store legacy_token
-submilli blueprint capability add http.get --filter 'host == "legacy.internal.acme.com"'
-submilli blueprint auth-proxy add --host legacy.internal.acme.com --bearer LEGACY_TOKEN --allow-insecure-http
+submilli blueprint capability add http.get --filter 'host == "legacy.internal.pied-piper.example"'
+submilli blueprint auth-proxy add --host legacy.internal.pied-piper.example --bearer LEGACY_TOKEN --allow-insecure-http
 ```
 
 ```text
 ✓ declared secret 'LEGACY_TOKEN' (store: legacy_token) in blueprint.yaml
-✓ added allow http.get (filter: host == "legacy.internal.acme.com") to caller 'main' in blueprint.yaml
+✓ added allow http.get (filter: host == "legacy.internal.pied-piper.example") to caller 'main' in blueprint.yaml
   HTTP GET
   filter fields: host: string, path: string, body_size: number, timeout_ms: number
-✓ added auth_proxy rule for host 'legacy.internal.acme.com' (bearer auth) in blueprint.yaml
+✓ added auth_proxy rule for host 'legacy.internal.pied-piper.example' (bearer auth) in blueprint.yaml
 ```
 
 ```yaml title="blueprint.yaml (fragment)"
 allow_insecure_http: true
 auth_proxy:
-- host: legacy.internal.acme.com
+- host: legacy.internal.pied-piper.example
   allow_insecure_http: true
   auth:
     bearer: LEGACY_TOKEN

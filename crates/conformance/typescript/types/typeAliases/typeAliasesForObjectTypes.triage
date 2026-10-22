@@ -1,2 +1,1 @@
-line 6 extra: bug SUB-1721 a class can't `implements` a type alias of an object type, where tsc accepts it
 line 11 missed: artifact tsc reports a duplicate declaration at each one; we report it at the later one, on the next line

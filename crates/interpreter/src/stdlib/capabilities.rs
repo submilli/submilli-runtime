@@ -35,6 +35,8 @@ pub enum FieldNormalization {
     /// The serialized form of the parsed HTTPS repository URL: lowercase host,
     /// no default port, `/` for an empty path, percent-encoded.
     RepositoryUrl,
+    /// ASCII letters uppercased, as an HTTP method is checked.
+    AsciiUppercase,
 }
 
 impl FieldNormalization {
@@ -48,6 +50,7 @@ impl FieldNormalization {
             Self::RepositoryUrl => {
                 crate::stdlib::git::canonical_url(value).map_err(|error| error.to_string())
             }
+            Self::AsciiUppercase => Ok(value.to_ascii_uppercase()),
         }
     }
 }
@@ -250,14 +253,14 @@ const GIT: &[Capability] = &[
         main_denial: None,
         summary: "Clone an HTTPS repository into a VFS directory",
         filter_fields: &[PATH, REMOTE_NAME, REMOTE, BRANCH],
-        example_filter: "path == \"/repo\" and remote == \"https://github.com/acme/project.git\"",
+        example_filter: "path == \"/repo\" and remote == \"https://github.com/pied-piper/project.git\"",
     },
     Capability {
         name: "git.fetch",
         main_denial: None,
         summary: "Fetch or pull HTTPS remote branches into an existing repository",
         filter_fields: &[PATH, REMOTE_NAME, REMOTE, BRANCH],
-        example_filter: "path == \"/repo\" and remote == \"https://github.com/acme/project.git\"",
+        example_filter: "path == \"/repo\" and remote == \"https://github.com/pied-piper/project.git\"",
     },
     Capability {
         name: "git.commit",
@@ -326,6 +329,24 @@ const HTTP: &[Capability] = &[
         example_filter: "host == \"api.example.com\"",
     },
     Capability {
+        name: "http.request",
+        main_denial: None,
+        summary: "HTTP request with a method chosen at the call, through `http.request`. \
+                  The per-method functions (`http.get`, …) check their own capability instead",
+        filter_fields: &[
+            normalized_string_field(
+                "method",
+                "HTTP method, uppercased (`GET`, `TRACE`, …)",
+                FieldNormalization::AsciiUppercase,
+            ),
+            field("host", "string", "Destination host, without port"),
+            field("path", "string", "URL path component"),
+            field("body_size", "number", "Request body size in bytes"),
+            field("timeout_ms", "number", "Request timeout in milliseconds"),
+        ],
+        example_filter: "method == \"GET\" and host == \"api.example.com\"",
+    },
+    Capability {
         name: "http.download",
         main_denial: None,
         summary: "Download a URL straight to the VFS",
@@ -355,19 +376,6 @@ const HTTP: &[Capability] = &[
         example_filter: "host == \"cdn.example.com\" and overwrite == false",
     },
 ];
-
-/// Every other method `http.request` takes, gated as `http.<method>` with the
-/// method lowercased: `http.request("TRACE", …)` checks `http.trace`. Kept
-/// out of [`CORE_CATALOG`], whose consumers read a templated name as
-/// `mcp.<server>` and concretize it per declared server; see
-/// [`uncataloged_http_method`].
-pub const HTTP_OTHER_METHOD: Capability = Capability {
-    name: "http.<method>",
-    main_denial: None,
-    summary: "Any other HTTP method, through `http.request`: `http.trace` gates TRACE",
-    filter_fields: HTTP_VERB_FIELDS,
-    example_filter: "host == \"api.example.com\"",
-};
 
 /// Outbound MCP calls — one capability per declared server, `mcp.<server>` (the
 /// `<server>` placeholder is filled in per blueprint, whose `mcp:` block names its
@@ -657,37 +665,10 @@ pub fn find_for(stdlib: Stdlib, name: &str) -> Option<&'static Capability> {
 }
 
 /// [`find`] among every group the runtime can gate.
-pub(crate) fn find_any(name: &str) -> Option<&'static Capability> {
+pub fn find_any(name: &str) -> Option<&'static Capability> {
     all_groups()
         .flat_map(|group| group.capabilities)
         .find(|cap| cap.name == name)
-}
-
-/// The method of a name that fills [`HTTP_OTHER_METHOD`]: `http.` and a method
-/// token in the lowercase form the runtime checks, which the catalog has no
-/// entry for.
-pub fn uncataloged_http_method(name: &str) -> Option<&str> {
-    let method = name.strip_prefix("http.")?;
-    (is_lowercase_http_token(method) && find(name).is_none()).then_some(method)
-}
-
-/// The entry describing `name`: its catalog entry, or [`HTTP_OTHER_METHOD`]
-/// for a name that fills it.
-pub fn find_gating(name: &str) -> Option<&'static Capability> {
-    find_gating_for(Stdlib::core(), name)
-}
-
-/// [`find_gating`] among the capabilities of `stdlib`.
-pub fn find_gating_for(stdlib: Stdlib, name: &str) -> Option<&'static Capability> {
-    find_for(stdlib, name).or_else(|| uncataloged_http_method(name).map(|_| &HTTP_OTHER_METHOD))
-}
-
-/// An RFC 9110 method token, the set `http.request` accepts, in lowercase.
-fn is_lowercase_http_token(method: &str) -> bool {
-    !method.is_empty()
-        && method.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"!#$%&'*+-.^_`|~".contains(&byte)
-        })
 }
 
 #[cfg(test)]
@@ -829,30 +810,6 @@ mod tests {
             summary.contains("models()"),
             "the summary must say narrowing `model` narrows discovery: {summary}"
         );
-    }
-
-    #[test]
-    fn uncataloged_http_methods_fill_the_template() {
-        assert_eq!(uncataloged_http_method("http.trace"), Some("trace"));
-        assert_eq!(uncataloged_http_method("http.propfind"), Some("propfind"));
-        // Cataloged, the template itself, uppercase (the runtime lowercases),
-        // empty, or not a token.
-        for name in [
-            "http.get",
-            "http.<method>",
-            "http.TRACE",
-            "http.",
-            "http.a b",
-            "fs.trace",
-        ] {
-            assert!(uncataloged_http_method(name).is_none(), "{name}");
-        }
-        assert!(HTTP_OTHER_METHOD.is_template());
-        assert_eq!(
-            find_gating("http.trace").map(|c| c.name),
-            Some("http.<method>")
-        );
-        assert_eq!(find_gating("http.get").map(|c| c.name), Some("http.get"));
     }
 
     #[test]

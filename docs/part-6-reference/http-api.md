@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a8109bc4b51727ce359eca45fa034e3d1fcfdd354fc5ddb8d4c905979bd20136"
+  contentHash: "227c6434d0d358a692bcf614ebdc2dd253aeadfd1176c5f8593ac090e022b799"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -450,6 +450,12 @@ cut short.
 
 Role: `user`. Query parameter `name` (required) is a Package name.
 
+The answer shows what the Blueprint lets programs use: a function it can't
+allow is left out, with the types only that function uses and the
+documentation regions about it, and a function it allows only under a
+filter or a person's approval says so in its doc comment. Search finds
+only what docs would show.
+
 A standard-library module answers `200` with JSON `name`, `source`,
 `description`, and `declarations` (TypeScript declarations):
 
@@ -467,7 +473,9 @@ with `source` `builtin`. An unknown name answers `404`:
 ```
 
 `did_you_mean` is present only when there is a suggestion. An unknown
-`@mcp/<server>` answers `404` with `error` `unknown_mcp_server`.
+`@mcp/<server>` answers `404` with `error` `unknown_mcp_server`. An installed
+Package whose documentation has malformed directives answers `422` with
+`error` `invalid_documentation`.
 
 ### GET /v1/blueprints/{name}/builtins
 
@@ -525,3 +533,10 @@ or secrets (`error.kind` `invalid_request`):
 ```json
 {"status":"finished","execution_id":"06c8d2b3-bd65-4ec5-95c6-92426962ead9","session_id":"de5c829e-6520-4563-86be-9acfa84e900d","result":null,"console":[],"error":{"kind":"invalid_request","message":"invalid variables: required variable 'userId' was not supplied"}}
 ```
+
+## Package installation configuration
+
+| Surface | Contract |
+| --- | --- |
+| `POST /v1/packages/install` | [Configuration inputs and dependency errors](/docs/reference/package-configuration/#administrative-http-api) |
+| `GET /v1/packages` | Installed Package metadata, including saved overrides and resolved configuration |

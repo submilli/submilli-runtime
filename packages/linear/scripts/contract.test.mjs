@@ -39,8 +39,12 @@ globalThis.__linearHost = {
         return { ok: true, json: () => envelope ?? { data } };
     },
 };
-const source = (await readFile(new URL('../src/lib.ts', import.meta.url), 'utf8'))
+// lib.ts imports its helpers from internal.ts; inline that module ahead of it,
+// since a data: URL module cannot resolve the relative import.
+const internal = await readFile(new URL('../src/internal.ts', import.meta.url), 'utf8');
+const source = internal + (await readFile(new URL('../src/lib.ts', import.meta.url), 'utf8'))
     .replace(/^import .*from "submilli:.*";\n/gm, '')
+    .replace(/^(import|export) \{[^}]*\} from "\.\/internal";\n/gm, '')
     .replace('const ENDPOINT', 'const { post, secrets, check } = globalThis.__linearHost;\nconst ENDPOINT');
 const linear = await import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(source)).toString('base64')}`);
 const session = { id: 'session', status: 'active', issue: { id: 'issue' }, comment: null,

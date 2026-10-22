@@ -179,7 +179,7 @@ impl SourceFile {
     }
 }
 
-/// The path a backtrace frame in a package module carries, e.g. `@acme/util/lib`.
+/// The path a backtrace frame in a package module carries, e.g. `@pied-piper/util/lib`.
 /// Module paths such as `lib` repeat across packages and a frame finds its
 /// source by path, so codegen qualifies a package's debug paths with its name
 /// and embedders register the package's sources under the same paths

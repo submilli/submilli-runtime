@@ -1,8 +1,17 @@
+// Request builders, URL validation, pagination and response normalizers live in
+// the package's internal module, so these tests import them from `../src/internal`.
+// The operation sections check that each operation validates before any check,
+// credential read or HTTP: invalid input fails with `invalid_argument`, and valid
+// input stops at the credential read with `missing_credentials`. That last segment
+// is skipped when FIRECRAWL_API_KEY is bound, so this offline file never sends a request.
 import { label } from "submilli:test";
-import { FirecrawlError, buildScrapeBody, buildMapBody, buildBatchBody, buildCrawlBody,
+import secrets from "submilli:secrets";
+import { FirecrawlError, scrape, map, startBatch, startCrawl, getJob, getJobErrors, downloadJobPage, cancelJob } from "@submilli/firecrawl";
+import { buildScrapeBody, buildMapBody, buildBatchBody, buildCrawlBody,
     jobPagePath, urlHost, normalizeScrapeJson, normalizeMapJson, normalizeJobJson,
-    normalizeJobPageJson, normalizeJobErrorsJson, normalizeCancellationJson, firecrawlHttpError,
-    getJob, downloadJobPage, cancelJob } from "@submilli/firecrawl";
+    normalizeJobPageJson, normalizeJobErrorsJson, normalizeCancellationJson, firecrawlHttpError } from "../src/internal";
+
+const JOB_ID = "11111111-1111-4111-8111-111111111111";
 
 function rejects(code: string, action: () => void): void {
     let caught = false;
@@ -93,6 +102,13 @@ function main(): void {
     rejects("invalid_argument", () => { downloadJobPage("crawl", "11111111-1111-4111-8111-111111111111", "/page.json", null, { maxBytes: 0 }); });
     rejects("invalid_argument", () => { downloadJobPage("crawl", "11111111-1111-4111-8111-111111111111", "/page.json", undefined, { maxBytes: 0 }); });
     rejects("invalid_argument", () => { cancelJob("batch", "../crawl/11111111-1111-4111-8111-111111111111"); });
+    rejects("invalid_argument", () => { getJobErrors("crawl", "../scrape"); });
+    rejects("invalid_argument", () => { scrape("relative"); });
+    rejects("invalid_argument", () => { map("https://user:pass@example.com"); });
+    rejects("invalid_argument", () => { map("https://example.com", { limit: 100001 }); });
+    rejects("invalid_argument", () => { startCrawl("file:///tmp/a", { limit: 1 }); });
+    rejects("invalid_argument", () => { startBatch(["https://example.com", "bad"]); });
+    rejects("invalid_argument", () => { startBatch(["https://example.com"], { formats: [] }); });
 
     label("large content is preserved rather than silently shortened");
     const text = "whole page text ".repeat(10000);
@@ -112,4 +128,18 @@ function main(): void {
     rejects("invalid_response", () => { normalizeCancellationJson('{"success":true}'); });
     assert(firecrawlHttpError(429, "10").retryAfter === "10" && firecrawlHttpError(429).code === "rate_limited", "rate limit hints");
     assert(firecrawlHttpError(404).code === "not_found" && firecrawlHttpError(402).code === "quota_exceeded", "job expiry and credits");
+
+    const key = secrets.get("FIRECRAWL_API_KEY");
+    if (key !== undefined && key.trim().length > 0) {
+        label("skip: valid input reaches the credential read only when FIRECRAWL_API_KEY is not bound");
+        return;
+    }
+    label("valid input passes local validation and stops at the credential read");
+    rejects("missing_credentials", () => { scrape("https://example.com./a"); });
+    rejects("missing_credentials", () => { map("https://example.com"); });
+    rejects("missing_credentials", () => { startBatch(["https://example.com/a", "https://other.example/b"]); });
+    rejects("missing_credentials", () => { startCrawl("https://example.com/docs", { limit: 5, scrapeOptions: { formats: ["markdown", "html"] } }); });
+    rejects("missing_credentials", () => { getJob("crawl", JOB_ID, "https://api.firecrawl.dev/v2/crawl/11111111-1111-4111-8111-111111111111?skip=2&limit=5"); });
+    rejects("missing_credentials", () => { getJobErrors("crawl", JOB_ID); });
+    rejects("missing_credentials", () => { cancelJob("batch", JOB_ID); });
 }

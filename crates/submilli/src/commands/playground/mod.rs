@@ -963,9 +963,9 @@ impl Egress {
 
     /// The deployed server's policy with these grants.
     #[cfg(unix)]
-    fn policy(&self) -> submilli_server::NetworkPolicy {
+    fn policy(&self) -> interpreter::runtime::NetworkPolicy {
         self.allow_ip.iter().fold(
-            submilli_server::NetworkPolicy::deny_private()
+            interpreter::runtime::NetworkPolicy::deny_private()
                 .allow_localhost(self.allow_localhost)
                 .allow_private(self.allow_private),
             |policy, net| policy.allow_cidr(*net),
@@ -1122,8 +1122,9 @@ impl<'a> ReadyRecord<'a> {
                     );
                 }
                 println!(
-                    "Point an app at the server with the token in the app token file. Stop it with \
-                     `submilli playground stop`."
+                    "Apps connect over MCP at the server's /mcp/{} with the token in the app \
+                     token file. Stop it with `submilli playground stop`.",
+                    self.description.blueprint.name
                 );
             }
         }
@@ -1491,7 +1492,7 @@ mod unix {
     }
 
     /// The variable the starter's example runs under, and a customer in its data.
-    const STARTER_VARIABLE: (&str, &str) = ("customerId", "cus_northwind");
+    const STARTER_VARIABLE: (&str, &str) = ("customerId", "pied_piper");
 
     pub(super) fn claude_code(args: &super::ClaudeCodeArgs) -> Result<ExitCode> {
         use super::claude_code::{Outcome, set_up};
@@ -1627,7 +1628,7 @@ mod unix {
                     "blueprint": scaffold::BLUEPRINT_NAME,
                     "package": scaffold::PACKAGE_NAME,
                     "example": scaffolded.root.join(scaffold::FOLDER).join(scaffold::EXAMPLE),
-                    "variables": { "customerId": "cus_northwind" },
+                    "variables": { "customerId": "pied_piper" },
                 })
             ),
             Output::Text => {
@@ -1637,7 +1638,7 @@ mod unix {
                 eprintln!(
                     "Start the playground with `submilli playground`; it builds {} and serves \
                      blueprint `{}`. Then run the example: `submilli playground bind \
-                     customerId=cus_northwind`, then `submilli playground exec --example`.",
+                     customerId=pied_piper`, then `submilli playground exec --example`.",
                     scaffold::PACKAGE_NAME,
                     scaffold::BLUEPRINT_NAME,
                 );

@@ -81,7 +81,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         enc_key("encode"),
         ft(vec![obj_null.clone(), string.clone()], vec![uint8.clone()]),
-        true,
         |caller, params, results| {
             let s = read_string_arg(caller, abi_arg(params, 1)?, "TextEncoder#encode")?;
             let st = write_submilli_uint8array_struct(caller, s.as_bytes())?;
@@ -94,7 +93,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         MODULE_NAME,
         dec_key("decode"),
         ft(vec![obj_null.clone(), uint8.clone()], vec![string.clone()]),
-        true,
         |caller, params, results| {
             let bytes = read_uint8_array_arg(caller, abi_arg(params, 1)?, "TextDecoder#decode")?;
             fuel::charge(&mut *caller, fuel::SCAN, bytes.len() as u64)?;
@@ -115,7 +113,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             MODULE_NAME,
             key,
             ft(Vec::new(), vec![obj_null.clone()]),
-            true,
             |caller, _params, results| {
                 *abi_result(results, 0)? = new_instance(caller)?;
                 Ok(())

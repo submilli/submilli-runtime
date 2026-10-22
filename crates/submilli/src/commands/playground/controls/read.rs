@@ -4,11 +4,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::commands::playground::host::run::ErrorKind;
 use interpreter::runtime::{DecisionAction, DecisionCause, DecisionRecord, FailureReasonRecord};
 use serde::Serialize;
 use serde_json::Value;
 use submilli_blueprint::{Blueprint, Citation};
-use submilli_server::error::ErrorKind;
 
 use crate::commands::playground::labels;
 use crate::commands::playground::packages::{ClosureEntry, Origin};

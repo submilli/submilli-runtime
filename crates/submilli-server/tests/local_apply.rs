@@ -666,12 +666,12 @@ async fn a_volume_name_differing_only_in_case_from_a_stored_one_is_refused() {
 }
 
 const PING: &str =
-    r#"import { ping } from "@acme/tools"; function main(): number { return ping(); }"#;
+    r#"import { ping } from "@pied-piper/tools"; function main(): number { return ping(); }"#;
 
 fn write_package(store_root: &Path, value: u32) {
     let source = format!("export function ping(): number {{ return {value}; }}");
     let package = compile_package(
-        "@acme/tools",
+        "@pied-piper/tools",
         ModulePath::from("lib"),
         &[PackageSourceModule {
             path: ModulePath::from("lib"),
@@ -681,7 +681,7 @@ fn write_package(store_root: &Path, value: u32) {
     )
     .expect("compile synthetic package");
     write_package_artifact_with_docs_and_sources(
-        store_root.join("@acme").join("tools"),
+        store_root.join("@pied-piper").join("tools"),
         &package.wasm,
         &package.type_info,
         &submilli_build::derive_capability_schema(
@@ -690,8 +690,8 @@ fn write_package(store_root: &Path, value: u32) {
             &package.required_capabilities,
         ),
         &package.declaration,
-        &ArtifactMetadata::new("@acme/tools", "0.0.0-test", Vec::new()),
-        "Acme tooling for tests.",
+        &ArtifactMetadata::new("@pied-piper/tools", "0.0.0-test", Vec::new()),
+        "Pied Piper tooling for tests.",
         &[ArtifactSource {
             path: ModulePath::from("lib"),
             text: source.clone(),
@@ -704,7 +704,7 @@ fn write_package(store_root: &Path, value: u32) {
 async fn after_an_edit_the_next_run_prepares_its_packages_afresh() {
     let server = Server::new();
     write_package(&server.packages(), 1);
-    let with_package = format!("{V1}packages:\n  - '@acme/tools'\n");
+    let with_package = format!("{V1}packages:\n  - '@pied-piper/tools'\n");
     server.apply(&with_package, "v1").await;
 
     assert_eq!(server.execute(PING).await["result"], "1");

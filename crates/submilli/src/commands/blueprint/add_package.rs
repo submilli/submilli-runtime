@@ -100,7 +100,10 @@ fn run(args: &Args) -> Result<Vec<String>> {
     let Some(named) = closure.last() else {
         bail!("loading package '{}' returned no artifact", args.package);
     };
-    let selection = resolve_selection(args, &named.capabilities.provides)?;
+    let offered = package_owned(&named.capabilities.provides)
+        .cloned()
+        .collect::<Vec<_>>();
+    let selection = resolve_selection(args, &offered)?;
 
     if !blueprint.has_permission_policy() {
         blueprint.default_action = Some(DefaultAction::Deny);
@@ -414,6 +417,16 @@ fn reject_versioned_spec(package: &str) -> Result<()> {
     Ok(())
 }
 
+/// The provided capabilities the package itself defines. A standard-library
+/// capability a package reports extra fields for is listed in `provides` too,
+/// but granting it is the operator's call, with a filter of their own: an
+/// unfiltered `fs.write` for `main` would reach every file.
+fn package_owned(provides: &[ProvidedCapability]) -> impl Iterator<Item = &ProvidedCapability> {
+    provides
+        .iter()
+        .filter(|provided| interpreter::stdlib::capabilities::find_any(&provided.name).is_none())
+}
+
 /// The `main` rules the selection produces: selected → `allow`. Unselected
 /// capabilities normally need no rule (the `default:` covers them), but when
 /// the blueprint's effective default is `allow`, leaving them ruleless would
@@ -430,7 +443,7 @@ fn selected_provided_rules(
     main_decides: impl Fn(&str) -> bool,
 ) -> RuleChanges {
     let mut changes = RuleChanges::default();
-    for provided in &capabilities.provides {
+    for provided in package_owned(&capabilities.provides) {
         let selected = match selection {
             Selection::All => true,
             Selection::None => false,
@@ -469,9 +482,7 @@ fn count_left_to_default(
     main_rules: &[PermissionRule],
     main_has_rule: impl Fn(&str) -> bool,
 ) -> usize {
-    capabilities
-        .provides
-        .iter()
+    package_owned(&capabilities.provides)
         .filter(|provided| {
             !main_has_rule(&provided.name)
                 && !main_rules
@@ -693,7 +704,7 @@ mod tests {
 
     #[test]
     fn rejects_versioned_package_specs() {
-        let err = reject_versioned_spec("@acme/sdk@1.2.3").expect_err("version rejected");
+        let err = reject_versioned_spec("@pied-piper/sdk@1.2.3").expect_err("version rejected");
 
         assert!(
             err.to_string()
@@ -703,7 +714,7 @@ mod tests {
 
     #[test]
     fn accepts_unversioned_scoped_package_names() {
-        reject_versioned_spec("@acme/sdk").expect("package name accepted");
+        reject_versioned_spec("@pied-piper/sdk").expect("package name accepted");
     }
 
     fn provided(name: &str) -> ProvidedCapability {
@@ -716,7 +727,7 @@ mod tests {
 
     fn schema(provides: Vec<ProvidedCapability>) -> CapabilitySchema {
         CapabilitySchema {
-            namespace: "acme.com".to_string(),
+            namespace: "pied-piper.example".to_string(),
             provides,
             requires: Vec::new(),
         }
@@ -725,8 +736,8 @@ mod tests {
     #[test]
     fn selection_maps_to_rules() {
         let schema = schema(vec![
-            provided("acme.com/charge"),
-            provided("acme.com/refund"),
+            provided("pied-piper.example/charge"),
+            provided("pied-piper.example/refund"),
         ]);
 
         let all = selected_provided_rules(&schema, &Selection::All, false, |_| false).appended;
@@ -738,48 +749,64 @@ mod tests {
 
         let some = selected_provided_rules(
             &schema,
-            &Selection::Some(vec!["acme.com/charge".to_string()]),
+            &Selection::Some(vec!["pied-piper.example/charge".to_string()]),
             false,
             |_| false,
         )
         .appended;
         assert_eq!(some.len(), 1);
-        assert_eq!(some[0].capability, "acme.com/charge");
+        assert_eq!(some[0].capability, "pied-piper.example/charge");
         assert_eq!(some[0].action, Action::Allow);
+    }
+
+    #[test]
+    fn standard_library_capabilities_are_never_granted() {
+        let schema = schema(vec![
+            provided("fs.write"),
+            provided("pied-piper.example/charge"),
+        ]);
+
+        let all = selected_provided_rules(&schema, &Selection::All, false, |_| false).appended;
+        let granted = all
+            .iter()
+            .map(|rule| rule.capability.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(granted, ["pied-piper.example/charge"]);
+        assert_eq!(count_left_to_default(&schema, &[], |_| false), 1);
     }
 
     #[test]
     fn unselected_get_explicit_deny_under_default_allow() {
         let schema = schema(vec![
-            provided("acme.com/charge"),
-            provided("acme.com/refund"),
+            provided("pied-piper.example/charge"),
+            provided("pied-piper.example/refund"),
         ]);
         let rules = selected_provided_rules(
             &schema,
-            &Selection::Some(vec!["acme.com/charge".to_string()]),
+            &Selection::Some(vec!["pied-piper.example/charge".to_string()]),
             true,
             |_| false,
         )
         .appended;
         assert_eq!(rules.len(), 2);
         assert_eq!(rules[0].action, Action::Allow);
-        assert_eq!(rules[1].capability, "acme.com/refund");
+        assert_eq!(rules[1].capability, "pied-piper.example/refund");
         assert_eq!(rules[1].action, Action::Deny);
     }
 
     #[test]
     fn unselected_with_an_existing_main_rule_get_no_shadowed_deny() {
         let schema = schema(vec![
-            provided("acme.com/charge"),
-            provided("acme.com/refund"),
+            provided("pied-piper.example/charge"),
+            provided("pied-piper.example/refund"),
         ]);
         let rules = selected_provided_rules(&schema, &Selection::None, true, |name| {
-            name == "acme.com/refund"
+            name == "pied-piper.example/refund"
         });
         assert!(rules.kept.is_empty(), "unselected rules are not reported");
         let rules = rules.appended;
         assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].capability, "acme.com/charge");
+        assert_eq!(rules[0].capability, "pied-piper.example/charge");
         assert_eq!(rules[0].action, Action::Deny);
     }
 
@@ -789,10 +816,10 @@ mod tests {
     fn unselected_with_only_a_filtered_main_rule_still_get_a_deny() {
         let blueprint: submilli_blueprint::Blueprint =
             submilli_blueprint::parse(
-                "name: x\ndefault: allow\npermissions:\n  main:\n    - capability: acme.com/refund\n      filter: customer == \"vip\"\n      action: deny\n",
+                "name: x\ndefault: allow\npermissions:\n  main:\n    - capability: pied-piper.example/refund\n      filter: customer == \"vip\"\n      action: deny\n",
             )
             .expect("parses");
-        let schema = schema(vec![provided("acme.com/refund")]);
+        let schema = schema(vec![provided("pied-piper.example/refund")]);
         let main_decides = |name: &str| {
             has_unfiltered_capability_rule(&blueprint, interpreter::mangle::USER_PACKAGE, name)
         };
@@ -800,7 +827,7 @@ mod tests {
         let rules = selected_provided_rules(&schema, &Selection::None, true, main_decides).appended;
 
         assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].capability, "acme.com/refund");
+        assert_eq!(rules[0].capability, "pied-piper.example/refund");
         assert_eq!(rules[0].action, Action::Deny);
     }
 
@@ -809,17 +836,17 @@ mod tests {
     #[test]
     fn selected_with_an_existing_main_rule_keeps_it() {
         let schema = schema(vec![
-            provided("acme.com/charge"),
-            provided("acme.com/refund"),
+            provided("pied-piper.example/charge"),
+            provided("pied-piper.example/refund"),
         ]);
         for default_allows in [false, true] {
             let rules = selected_provided_rules(&schema, &Selection::All, default_allows, |name| {
-                name == "acme.com/charge"
+                name == "pied-piper.example/charge"
             });
 
-            assert_eq!(rules.kept, vec!["acme.com/charge".to_string()]);
+            assert_eq!(rules.kept, vec!["pied-piper.example/charge".to_string()]);
             assert_eq!(rules.appended.len(), 1);
-            assert_eq!(rules.appended[0].capability, "acme.com/refund");
+            assert_eq!(rules.appended[0].capability, "pied-piper.example/refund");
             assert_eq!(rules.appended[0].action, Action::Allow);
         }
     }
@@ -854,26 +881,29 @@ mod tests {
     #[test]
     fn capabilities_flag_rejects_unknown_names() {
         let args = Args {
-            package: "@acme/sdk".to_string(),
-            capabilities: vec!["acme.com/nope".to_string()],
+            package: "@pied-piper/sdk".to_string(),
+            capabilities: vec!["pied-piper.example/nope".to_string()],
             all_capabilities: false,
             no_capabilities: false,
             blueprint: None,
         };
-        let err = resolve_selection(&args, &[provided("acme.com/charge")]).unwrap_err();
+        let err = resolve_selection(&args, &[provided("pied-piper.example/charge")]).unwrap_err();
         assert!(err.to_string().contains("does not provide"), "{err}");
-        assert!(err.to_string().contains("acme.com/charge"), "{err}");
+        assert!(
+            err.to_string().contains("pied-piper.example/charge"),
+            "{err}"
+        );
     }
 
     #[test]
     fn annotates_main_rules_by_index() {
-        let yaml = "name: x\npermissions:\n  '@acme/sdk':\n  - capability: acme.com/charge\n    action: allow\n  main:\n  - capability: acme.com/charge\n    action: deny\n  - capability: acme.com/charge\n    action: allow\n";
+        let yaml = "name: x\npermissions:\n  '@pied-piper/sdk':\n  - capability: pied-piper.example/charge\n    action: allow\n  main:\n  - capability: pied-piper.example/charge\n    action: deny\n  - capability: pied-piper.example/charge\n    action: allow\n";
         let comments = BTreeMap::from([(1, "    # added\n".to_string())]);
 
         let annotated = annotate_main_rules(yaml, &comments);
 
         assert!(
-            annotated.contains("    action: deny\n    # added\n  - capability: acme.com/charge\n    action: allow\n"),
+            annotated.contains("    action: deny\n    # added\n  - capability: pied-piper.example/charge\n    action: allow\n"),
             "{annotated}"
         );
         assert_eq!(annotated.matches("# added").count(), 1, "{annotated}");
@@ -883,7 +913,7 @@ mod tests {
     #[test]
     fn provided_comment_lists_description_and_fields() {
         let provided = ProvidedCapability {
-            name: "acme.com/charge".to_string(),
+            name: "pied-piper.example/charge".to_string(),
             description: Some("Charge a customer.".to_string()),
             fields: BTreeMap::from([(
                 "customer".to_string(),
@@ -896,7 +926,7 @@ mod tests {
 
         assert_eq!(
             provided_comment(&provided),
-            "    # acme.com/charge - Charge a customer.\n    #   { customer: string }\n"
+            "    # pied-piper.example/charge - Charge a customer.\n    #   { customer: string }\n"
         );
     }
 }

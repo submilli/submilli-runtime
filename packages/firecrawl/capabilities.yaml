@@ -31,7 +31,7 @@ provides:
     kind:
       type: string
 - name: firecrawl.dev/jobs.read
-  description: Save one raw status/results envelope to VFS. Inspect status and JSON next explicitly.
+  description: Read status and exactly one results page, including partial results. No polling or pagination loop.
   fields:
     jobId:
       type: string
@@ -52,20 +52,10 @@ provides:
     host:
       type: string
 - name: firecrawl.dev/search
-  description: Search web sources. Native result scraping authorizes unknown hosts via an explicit separate grant.
+  description: Search web sources. With `scrapeOptions`, the provider also fetches each result page, whatever its host.
   fields:
     limit:
       type: number
-- name: firecrawl.dev/search.scrape
-  description: Search web sources. Native result scraping authorizes unknown hosts via an explicit separate grant.
-  fields: {}
-- name: fs.write
-  description: Save one raw status/results envelope to VFS. Inspect status and JSON next explicitly.
-  fields:
-    max_bytes:
-      type: number
-    path:
-      type: string
 requires:
 - capability: fs.write
 - capability: http.delete

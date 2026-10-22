@@ -8,8 +8,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use interpreter::{
-    Diagnostic, ModulePath, PackageDeclaration, PackageSourceModule, Sources,
-    compile_package_with_transitive, diagnostics,
+    Diagnostic, ModulePath, PackageDeclaration, PackageSourceModule, Sources, diagnostics,
 };
 
 use crate::artifact::{ArtifactReadBudget, ArtifactReadLimits};
@@ -23,6 +22,7 @@ use crate::{
 
 #[derive(Clone, Debug)]
 pub struct BuiltPackage {
+    pub config: crate::PackageConfig,
     pub name: PackageName,
     pub version: PackageVersion,
     pub description: String,
@@ -42,6 +42,9 @@ pub struct BuiltPackage {
     /// for a plain `build_packages` run (local compile); `submilli install` sets
     /// it to the resolved GitHub repo + SHA before calling `install_packages`.
     pub source: Option<PackageSource>,
+    /// The non-entry modules this package's tests may import. `Some` only from
+    /// [`build_packages_for_tests`], whose `wasm` also exports them.
+    pub test_surface: Option<interpreter::PackageTestSurface>,
 }
 
 /// Compile every package in the manifest (or the sibling-dependency closure of
@@ -54,10 +57,127 @@ pub fn build_packages(
     externals: &PackageStore,
     only: Option<&PackageName>,
 ) -> Result<Vec<BuiltPackage>, DriverError> {
-    let scoped = scope_packages(manifest, only)?;
+    build_packages_with_inputs(
+        manifest,
+        manifest_dir,
+        externals,
+        only,
+        &crate::ConfigInputs::default(),
+    )
+}
+
+/// Local builds use explicit inputs for the selected package and installed
+/// overrides for sibling dependencies, never for the selected package itself.
+pub fn build_packages_with_inputs(
+    manifest: &ProjectManifest,
+    manifest_dir: &Path,
+    externals: &PackageStore,
+    only: Option<&PackageName>,
+    inputs: &crate::ConfigInputs,
+) -> Result<Vec<BuiltPackage>, DriverError> {
+    build_with_inputs(
+        manifest,
+        manifest_dir,
+        externals,
+        only,
+        inputs,
+        interpreter::PackageSurface::Public,
+    )
+}
+
+/// [`build_packages_with_inputs`] for `submilli build test`: each package's Wasm
+/// also exports its non-entry modules, so its tests can import them by relative
+/// path. Never install or publish these builds.
+pub fn build_packages_for_tests(
+    manifest: &ProjectManifest,
+    manifest_dir: &Path,
+    externals: &PackageStore,
+    only: Option<&PackageName>,
+    inputs: &crate::ConfigInputs,
+) -> Result<Vec<BuiltPackage>, DriverError> {
+    build_with_inputs(
+        manifest,
+        manifest_dir,
+        externals,
+        only,
+        inputs,
+        interpreter::PackageSurface::WithTestModules,
+    )
+}
+
+fn build_with_inputs(
+    manifest: &ProjectManifest,
+    manifest_dir: &Path,
+    externals: &PackageStore,
+    only: Option<&PackageName>,
+    inputs: &crate::ConfigInputs,
+    surface: interpreter::PackageSurface,
+) -> Result<Vec<BuiltPackage>, DriverError> {
+    inputs
+        .validate(only.is_some())
+        .map_err(|error| DriverError::ConfigurationInput(error.to_string()))?;
+    let mut configuration = BTreeMap::new();
+    for package in package_build_scope(manifest, only)? {
+        let overrides = if only == Some(&package.name) {
+            inputs.values.clone()
+        } else if only.is_some() {
+            match externals.load(package.name.as_str()) {
+                Ok(artifact) => artifact.metadata.config.overrides,
+                Err(PackageStoreError::MissingPackage { .. }) => BTreeMap::new(),
+                Err(error) => {
+                    return Err(DriverError::MissingExternal {
+                        package: package.name.clone(),
+                        source: Box::new(error),
+                    });
+                }
+            }
+        } else {
+            BTreeMap::new()
+        };
+        configuration.insert(package.name.clone(), overrides);
+    }
+    build_configured(
+        manifest,
+        manifest_dir,
+        externals,
+        only,
+        &configuration,
+        surface,
+    )
+}
+
+/// Build with package-scoped explicit overrides. Callers must keep user inputs
+/// scoped to the selected package; dependency entries come from installed metadata.
+pub fn build_packages_configured(
+    manifest: &ProjectManifest,
+    manifest_dir: &Path,
+    externals: &PackageStore,
+    only: Option<&PackageName>,
+    config: &BTreeMap<PackageName, BTreeMap<String, String>>,
+) -> Result<Vec<BuiltPackage>, DriverError> {
+    build_configured(
+        manifest,
+        manifest_dir,
+        externals,
+        only,
+        config,
+        interpreter::PackageSurface::Public,
+    )
+}
+
+fn build_configured(
+    manifest: &ProjectManifest,
+    manifest_dir: &Path,
+    externals: &PackageStore,
+    only: Option<&PackageName>,
+    config: &BTreeMap<PackageName, BTreeMap<String, String>>,
+    surface: interpreter::PackageSurface,
+) -> Result<Vec<BuiltPackage>, DriverError> {
+    let scoped = package_build_scope(manifest, only)?;
     let order = topo_order(&scoped)?;
 
     let mut built: BTreeMap<PackageName, PackageDeclaration> = BTreeMap::new();
+    let mut built_provides: BTreeMap<PackageName, Vec<String>> = BTreeMap::new();
     let mut external_cache: BTreeMap<PackageName, ExternalArtifact> = BTreeMap::new();
     let mut external_budget = ArtifactReadBudget::new(ArtifactReadLimits::default());
     let mut results = Vec::with_capacity(order.len());
@@ -88,6 +208,12 @@ pub fn build_packages(
         let src_dir = manifest_dir.join(package.path.as_path()).join("src");
         let documentation = read_package_docs(manifest_dir, package)?;
         let modules = discover_modules(&src_dir, manifest_dir)?;
+        let package_config = resolve_package_config(
+            package,
+            &modules,
+            config.get(&package.name).cloned().unwrap_or_default(),
+        )?;
+        let overrides = &package_config.overrides;
         let module_refs: Vec<PackageSourceModule<'_>> = modules
             .iter()
             .map(|module| PackageSourceModule {
@@ -97,16 +223,19 @@ pub fn build_packages(
             .collect();
         let transitive_refs =
             transitive_dependency_decls(package, &scoped, &built, &external_cache);
-        let compiled = compile_package_with_transitive(
+        let compiled = interpreter::compile::compile_package_configured(
+            interpreter::Stdlib::core(),
             package.name.as_str(),
             ModulePath::from("lib"),
             &module_refs,
             &dependency_refs,
             &transitive_refs,
+            overrides,
+            surface,
         )
-        .map_err(|diags| DriverError::Compile {
+        .map_err(|error| DriverError::Compile {
             package: package.name.clone(),
-            rendered: render_diagnostics(&modules, &diags),
+            rendered: render_diagnostics(&modules, &error.into_diagnostics(interpreter::FileId(0))),
         })?;
 
         let schema_dependencies: Vec<&PackageDeclaration> = dependency_refs
@@ -122,8 +251,39 @@ pub fn build_packages(
             &schema_dependencies,
             &compiled.required_capabilities,
         );
+        let dependency_names: Vec<PackageName> = package
+            .dependencies
+            .iter()
+            .map(|dep| dep.name.clone())
+            .chain(transitive_dependencies(package, &scoped, &external_cache))
+            .collect();
+        let provided_by_dependency = |name: &str| {
+            dependency_names.iter().any(|dependency| {
+                built_provides
+                    .get(dependency)
+                    .or_else(|| external_cache.get(dependency).map(|a| &a.provides))
+                    .is_some_and(|provides| provides.iter().any(|provided| provided == name))
+            })
+        };
+        check_documentation_directives(manifest_dir, package, &documentation, &|name| {
+            interpreter::stdlib::capabilities::find_any(name).is_some()
+                || capabilities
+                    .provides
+                    .iter()
+                    .any(|provided| provided.name == name)
+                || provided_by_dependency(name)
+        })?;
+        built_provides.insert(
+            package.name.clone(),
+            capabilities
+                .provides
+                .iter()
+                .map(|provided| provided.name.clone())
+                .collect(),
+        );
         built.insert(package.name.clone(), compiled.declaration.clone());
         results.push(BuiltPackage {
+            config: package_config,
             name: package.name.clone(),
             version: package.version.clone(),
             description: package.description.clone(),
@@ -159,9 +319,50 @@ pub fn build_packages(
             })?,
             type_info: compiled.type_info,
             source: None,
+            test_surface: compiled.test_surface,
         });
     }
     Ok(results)
+}
+
+fn resolve_package_config(
+    package: &PackageManifest,
+    modules: &[DiscoveredModule],
+    overrides: BTreeMap<String, String>,
+) -> Result<crate::PackageConfig, DriverError> {
+    let (file, text) = modules
+        .iter()
+        .enumerate()
+        .find(|(_, module)| module.path.as_str() == "config")
+        .map_or((interpreter::FileId(0), ""), |(index, module)| {
+            (interpreter::FileId(index as u32), module.text.as_str())
+        });
+    let compile_error = |error: interpreter::compiler_error::CompileError| DriverError::Compile {
+        package: package.name.clone(),
+        rendered: render_diagnostics(modules, &error.into_diagnostics(file)),
+    };
+    let parameters = interpreter::package_config::parameters(text, file).map_err(compile_error)?;
+    interpreter::package_config::validate_inputs(&parameters, &overrides, file)
+        .map_err(compile_error)?;
+    let values =
+        interpreter::package_config::resolve(&parameters, &overrides, file).map_err(|error| {
+            let missing: Vec<_> = parameters
+                .iter()
+                .filter(|parameter| {
+                    parameter.default.is_none() && !overrides.contains_key(&parameter.name)
+                })
+                .map(|parameter| (parameter.name.clone(), parameter.type_name.to_string()))
+                .collect();
+            if missing.is_empty() {
+                return compile_error(error);
+            }
+            DriverError::MissingConfiguration {
+                package: package.name.clone(),
+                parameters: missing,
+                rendered: render_diagnostics(modules, &error.into_diagnostics(file)),
+            }
+        })?;
+    Ok(crate::PackageConfig { overrides, values })
 }
 
 /// The inputs of one manifest package as [`build_packages`] would read them now: its
@@ -208,6 +409,7 @@ pub fn install_packages(
             package.dependencies.clone(),
         );
         metadata.source = package.source.clone();
+        metadata.config = package.config.clone();
         write_package_artifact_with_docs_and_sources(
             &dir,
             &package.wasm,
@@ -229,6 +431,12 @@ pub fn install_packages(
 
 #[derive(Debug)]
 pub enum DriverError {
+    ConfigurationInput(String),
+    MissingConfiguration {
+        package: PackageName,
+        parameters: Vec<(String, String)>,
+        rendered: String,
+    },
     Diagnostic {
         package: PackageName,
         source: interpreter::rendering::RenderError,
@@ -265,6 +473,11 @@ pub enum DriverError {
         path: PathBuf,
         source: io::Error,
     },
+    DocumentationDirectives {
+        package: PackageName,
+        path: PathBuf,
+        errors: Vec<interpreter::doc_directives::DirectiveError>,
+    },
     NonUtf8ModulePath {
         path: PathBuf,
     },
@@ -297,6 +510,24 @@ pub enum DriverError {
 impl fmt::Display for DriverError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            DriverError::ConfigurationInput(message) => f.write_str(message),
+            DriverError::MissingConfiguration {
+                package,
+                parameters,
+                rendered,
+            } => {
+                write!(
+                    f,
+                    "{rendered}\npackage `{}` needs configuration; install it first, then retry: submilli build publish-local -p {}",
+                    package.as_str(),
+                    package.as_str()
+                )?;
+                for (name, kind) in parameters {
+                    write!(f, " --config '{name}=<{kind}>'")?;
+                }
+                Ok(())
+            }
+
             DriverError::Diagnostic { package, source } => write!(
                 f,
                 "package `{}` diagnostic failed: {source}",
@@ -376,6 +607,27 @@ impl fmt::Display for DriverError {
                 package.as_str(),
                 path.display()
             ),
+            DriverError::DocumentationDirectives {
+                package,
+                path,
+                errors,
+            } => {
+                write!(
+                    f,
+                    "package `{}` has malformed documentation directives:",
+                    package.as_str()
+                )?;
+                for error in errors {
+                    write!(
+                        f,
+                        "\n  {}:{}: {}",
+                        path.display(),
+                        error.line,
+                        error.message
+                    )?;
+                }
+                Ok(())
+            }
             DriverError::NonUtf8ModulePath { path } => write!(
                 f,
                 "package source path {} is not valid UTF-8; rename the file",
@@ -442,10 +694,7 @@ fn read_package_docs(
     manifest_dir: &Path,
     package: &PackageManifest,
 ) -> Result<String, DriverError> {
-    let path = manifest_dir
-        .join(package.path.as_path())
-        .join("docs")
-        .join("readme.md");
+    let path = package_docs_path(manifest_dir, package);
     fs::read_to_string(&path).map_err(|source| DriverError::DocumentationRead {
         package: package.name.clone(),
         path,
@@ -453,7 +702,15 @@ fn read_package_docs(
     })
 }
 
-fn scope_packages<'a>(
+fn package_docs_path(manifest_dir: &Path, package: &PackageManifest) -> PathBuf {
+    manifest_dir
+        .join(package.path.as_path())
+        .join("docs")
+        .join("readme.md")
+}
+
+/// The selected package and its sibling dependency closure.
+pub fn package_build_scope<'a>(
     manifest: &'a ProjectManifest,
     only: Option<&PackageName>,
 ) -> Result<Vec<&'a PackageManifest>, DriverError> {
@@ -571,6 +828,9 @@ fn visit(
 struct ExternalArtifact {
     declaration: PackageDeclaration,
     version: String,
+    /// The capabilities it provides, which its dependents' documentation may
+    /// name.
+    provides: Vec<String>,
     /// The artifact's own dependencies, for walking the closure. An installed
     /// artifact records them in its metadata; they are all in the store too,
     /// since `install` loads a closure.
@@ -627,6 +887,12 @@ fn load_external_dependencies(
             ExternalArtifact {
                 declaration: artifact.package_declaration,
                 version: artifact.metadata.package_version,
+                provides: artifact
+                    .capabilities
+                    .provides
+                    .into_iter()
+                    .map(|provided| provided.name)
+                    .collect(),
                 dependencies,
             },
         );
@@ -644,6 +910,25 @@ fn transitive_dependency_decls<'a>(
     built: &'a BTreeMap<PackageName, PackageDeclaration>,
     external_cache: &'a BTreeMap<PackageName, ExternalArtifact>,
 ) -> Vec<&'a PackageDeclaration> {
+    transitive_dependencies(package, scoped, external_cache)
+        .iter()
+        // A sibling is compiled before its dependents (topological order), so
+        // `built` holds it; anything else came from the store.
+        .filter_map(|name| {
+            built
+                .get(name)
+                .or_else(|| external_cache.get(name).map(|a| &a.declaration))
+        })
+        .collect()
+}
+
+/// The names in the rest of `package`'s dependency closure, as
+/// [`transitive_dependency_decls`] describes it.
+fn transitive_dependencies(
+    package: &PackageManifest,
+    scoped: &[&PackageManifest],
+    external_cache: &BTreeMap<PackageName, ExternalArtifact>,
+) -> Vec<PackageName> {
     let direct: BTreeSet<&PackageName> = package.dependencies.iter().map(|d| &d.name).collect();
     let deps_of = |name: &PackageName| -> Vec<PackageName> {
         if let Some(manifest) = scoped.iter().find(|p| &p.name == name) {
@@ -660,22 +945,53 @@ fn transitive_dependency_decls<'a>(
     };
     let mut queue: Vec<PackageName> = direct.iter().flat_map(|name| deps_of(name)).collect();
     let mut seen: BTreeSet<PackageName> = BTreeSet::new();
-    let mut decls = Vec::new();
+    let mut names = Vec::new();
     while let Some(name) = queue.pop() {
         if direct.contains(&name) || !seen.insert(name.clone()) {
             continue;
         }
         queue.extend(deps_of(&name));
-        // A sibling is compiled before its dependents (topological order), so
-        // `built` holds it; anything else came from the store.
-        if let Some(decl) = built
-            .get(&name)
-            .or_else(|| external_cache.get(&name).map(|a| &a.declaration))
-        {
-            decls.push(decl);
-        }
+        names.push(name);
     }
-    decls
+    names
+}
+
+/// Check the directives in `package`'s documentation: well formed, and naming
+/// only capabilities the standard library, the package, or its dependencies
+/// provide.
+fn check_documentation_directives(
+    manifest_dir: &Path,
+    package: &PackageManifest,
+    documentation: &str,
+    known: &dyn Fn(&str) -> bool,
+) -> Result<(), DriverError> {
+    let errors = match interpreter::doc_directives::parse_doc_directives(documentation) {
+        Ok(document) => document
+            .regions()
+            .into_iter()
+            .flat_map(|(line, condition)| {
+                condition
+                    .capabilities()
+                    .iter()
+                    .filter(|name| !known(name))
+                    .map(move |name| interpreter::doc_directives::DirectiveError {
+                        line,
+                        message: format!(
+                            "`{name}` is not a capability the standard library, this package, or its dependencies provide"
+                        ),
+                    })
+            })
+            .collect(),
+        Err(errors) => errors,
+    };
+    if errors.is_empty() {
+        return Ok(());
+    }
+    Err(DriverError::DocumentationDirectives {
+        package: package.name.clone(),
+        path: package_docs_path(manifest_dir, package),
+        errors,
+    })
 }
 
 /// A package source file: its import-facing module path (`lib`,

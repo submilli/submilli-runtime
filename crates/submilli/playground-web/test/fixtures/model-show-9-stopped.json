@@ -18,7 +18,7 @@
  "denied": [],
  "session": "5e550000-0000-4000-8000-000000000007",
  "variables": {
-  "customerId": "cus_northwind"
+  "customerId": "pied_piper"
  },
  "test": {
   "source_run": 1,
@@ -48,7 +48,7 @@
    ],
    "outcome": "allow",
    "caller": "main",
-   "capability": "acme.com/charges.list",
+   "capability": "pied-piper.example/charges.list",
    "decided_by": "by `charges-for-signed-in-customer`",
    "filtered": false
   }
@@ -71,7 +71,7 @@
  "untrusted": {
   "contexts": {
    "9.1": {
-    "customerId": "cus_northwind"
+    "customerId": "pied_piper"
    }
   },
   "error": "internal: execution cancelled",
@@ -81,6 +81,6 @@
    "stop_detail": "the recorded run never made this call",
    "went_live_keys": []
   },
-  "program": "import { listCharges } from \"@acme/billing\";\n\nfunction main(): string {\n    const charges = listCharges(\"cus_northwind\");\n    let total = 0;\n    for (const charge of charges) {\n        total += charge.amount;\n    }\n    return `${charges.length} charges, ${total} cents`;\n}\n"
+  "program": "import { listCharges } from \"@pied-piper/billing\";\n\nfunction main(): string {\n    const charges = listCharges(\"pied_piper\");\n    let total = 0;\n    for (const charge of charges) {\n        total += charge.amount;\n    }\n    return `${charges.length} charges, ${total} cents`;\n}\n"
  }
 }

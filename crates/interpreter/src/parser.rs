@@ -1,10 +1,10 @@
 use crate::compiler_error::{CompileError, CompilerFailure, CompilerStage};
 use crate::{
-    ArrayLiteralElement, ArrowBody, Ast, BinOp, Binding, CatchClause, Diagnostic, EnumInitializer,
-    EnumMember, ExportedDecl, Expr, ExprId, ExprKind, FileId, Ident, ImportKind, ImportSpecifier,
-    ObjectLiteralField, ObjectLiteralMember, ObjectPatternField, ParamDecl, PostfixOp, Severity,
-    Span, Stmt, StmtId, StmtKind, SwitchCase, SwitchDefault, Token, TokenKind, TypeAnnotation,
-    TypeAnnotationField, TypeAnnotationKind, UnOp,
+    ArrayLiteralElement, ArrowBody, Ast, BinOp, Binding, CatchClause, ClassMember, Diagnostic,
+    EnumInitializer, EnumMember, ExportedDecl, Expr, ExprId, ExprKind, FileId, Ident, ImportKind,
+    ImportSpecifier, ObjectLiteralField, ObjectLiteralMember, ObjectPatternField, ParamDecl,
+    PostfixOp, Severity, Span, Stmt, StmtId, StmtKind, SwitchCase, SwitchDefault, Token, TokenKind,
+    TypeAnnotation, TypeAnnotationField, TypeAnnotationKind, UnOp,
 };
 
 const MAX_ERRORS: usize = 20;
@@ -74,11 +74,15 @@ pub fn parse_checked(
         function_expression_body_depth: 0,
         recursion_depth: 0,
         recursion_limit_span: None,
+        resume_at_next_member: false,
         last_as_type_end: None,
         eof,
         fatal: None,
     };
     p.parse_program();
+    if p.fatal.is_none() {
+        p.reject_use_strict_with_non_simple_params();
+    }
     if let Some(span) = p.recursion_limit_span {
         p.fatal = Some(CompilerFailure::Limit {
             stage: CompilerStage::Parse,
@@ -154,6 +158,10 @@ pub(crate) struct Parser<'a> {
     function_expression_body_depth: u32,
     recursion_depth: usize,
     recursion_limit_span: Option<Span>,
+    /// Set by a class member that reported its error after reading its whole
+    /// body (a method missing its return type): the class loop takes it and
+    /// continues at the next member instead of abandoning the class.
+    resume_at_next_member: bool,
     /// End offset of the type in the most recent `x as T`. A statement ending there
     /// may end at a line break, since the type stops at one (see
     /// [`Parser::at_statement_end`]).
@@ -200,6 +208,13 @@ impl<'a> Parser<'a> {
                 if self.fatal.is_some() {
                     break;
                 }
+                // A failed statement that moved and stopped at the start of a
+                // top-level item leaves that item to be parsed, for example after a
+                // class whose last method body took its `}`. Recovering would skip
+                // `class`, `type`, `interface`, `enum` or `import`.
+                if self.pos != pos_before && self.peek_starts_top_level_item() {
+                    continue;
+                }
                 self.recover();
                 if self.pos != pos_before && matches!(self.peek().kind, TokenKind::RightBrace) {
                     self.advance();
@@ -218,6 +233,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement_inner(&mut self) -> Option<StmtId> {
+        self.reject_async_modifier();
         match self.peek().kind {
             TokenKind::Let => self.parse_let_or_const(false),
             TokenKind::Const => self.parse_let_or_const(true),
@@ -392,7 +408,23 @@ impl<'a> Parser<'a> {
         };
 
         if !self.at_statement_end() {
-            self.error_at_peek("expected `;` after declaration");
+            if matches!(self.peek().kind, TokenKind::Comma) {
+                let keyword = if is_const { "const" } else { "let" };
+                let first = name.as_ref().map_or("a", |name| name.name.as_str());
+                let next = self.peek_at(1);
+                let second = if matches!(next.kind, TokenKind::Identifier) {
+                    &self.source[next.span.start as usize..next.span.end as usize]
+                } else {
+                    "b"
+                };
+                let help = format!(
+                    "declare one variable per statement: `{keyword} {first} = …; {keyword} {second} = …;`; \
+                     in a `for (…)` header, declare `{second}` before the loop"
+                );
+                self.error_at_peek_with_help("one declaration declares one variable", vec![help]);
+            } else {
+                self.error_at_peek("expected `;` after declaration");
+            }
             return None;
         }
         let end = self.finish_statement();
@@ -687,8 +719,16 @@ impl<'a> Parser<'a> {
         if !matches!(self.peek().kind, TokenKind::Colon) {
             self.error_at_peek_with_help(
                 "expected `:` and return type",
-                vec!["function name(): T { … }".to_string()],
+                vec![format!(
+                    "write the return type: `function {}(…): T {{ … }}`, with `void` when it returns nothing",
+                    name.name
+                )],
             );
+            // Read the body anyway, so its own errors are reported and recovery
+            // does not resume inside it and misread its closing `}`.
+            if matches!(self.peek().kind, TokenKind::LeftBrace) {
+                let _ = self.parse_outer_this_boundary(Self::parse_block);
+            }
             return None;
         }
         self.advance();
@@ -766,13 +806,23 @@ impl<'a> Parser<'a> {
         self.advance();
 
         let mut members: Vec<crate::ClassMember> = Vec::new();
-        while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof) {
+        let mut member_failed = false;
+        // After a failed member, a body missing its own `}` may have taken the
+        // class's: a declaration or import there is the next top-level item, not a
+        // member, so the class stops and reports the missing `}`.
+        while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof)
+            && !(member_failed && self.peek_starts_top_level_item())
+        {
             // Stray `;` between members is accepted (TS allows it).
             if matches!(self.peek().kind, TokenKind::Semicolon) {
                 self.advance();
                 continue;
             }
-            members.push(self.parse_class_member()?);
+            match self.parse_class_member() {
+                Some(member) => members.push(member),
+                None if std::mem::take(&mut self.resume_at_next_member) => member_failed = true,
+                None => return None,
+            }
         }
 
         if !matches!(self.peek().kind, TokenKind::RightBrace) {
@@ -780,6 +830,9 @@ impl<'a> Parser<'a> {
             return None;
         }
         let close = self.advance();
+        if member_failed {
+            return None;
+        }
 
         parse_arena_result(
             self.ast.try_push_stmt(Stmt {
@@ -822,6 +875,7 @@ impl<'a> Parser<'a> {
         }
 
         let modifiers = self.parse_class_modifiers();
+        self.reject_async_modifier();
 
         // Getter/setter: `get`/`set` <name> ( … ). A member literally named `get`/`set`
         // (followed directly by `(`) is an ordinary method and stays accepted.
@@ -903,8 +957,17 @@ impl<'a> Parser<'a> {
             if !matches!(self.peek().kind, TokenKind::Colon) {
                 self.error_at_peek_with_help(
                     "expected `:` and return type",
-                    vec!["method name(): T { … }".to_string()],
+                    vec![format!(
+                        "write the return type: `{}(…): T {{ … }}`, with `void` when it returns nothing",
+                        name.name
+                    )],
                 );
+                // As for a function: read the body so recovery resumes after it.
+                if matches!(self.peek().kind, TokenKind::LeftBrace)
+                    && self.parse_class_member_body().is_some()
+                {
+                    self.resume_at_next_member = true;
+                }
                 return None;
             }
             self.advance();
@@ -1076,7 +1139,20 @@ impl<'a> Parser<'a> {
                     self.error_at(name.span, "a setter must declare exactly one parameter");
                     return None;
                 }
-                Some(Box::new(params.remove(0)))
+                let param = params.remove(0);
+                // An assignment always passes the value, so a setter's parameter
+                // can't be omitted or collect several.
+                if param.rest {
+                    self.error_at(
+                        param.name.span,
+                        "a setter's parameter can't be a rest parameter",
+                    );
+                } else if param.default.is_some() {
+                    self.error_at(name.span, "a setter's parameter can't have a default value");
+                } else if param.optional {
+                    self.error_at(param.name.span, "a setter's parameter can't be optional");
+                }
+                Some(Box::new(param))
             }
         };
         let return_type = if matches!(self.peek().kind, TokenKind::Colon) {
@@ -1246,7 +1322,7 @@ impl<'a> Parser<'a> {
 
         let mut members: Vec<crate::InterfaceMember> = Vec::new();
         while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof)
-            && !self.peek_starts_declaration()
+            && !self.peek_starts_top_level_item()
         {
             // Call signatures `(params): ret;` are stored under the sentinel name `@call`.
             // The `@` prefix is not a valid identifier start, so collisions with user methods
@@ -1618,6 +1694,7 @@ impl<'a> Parser<'a> {
             self.advance();
         }
 
+        self.reject_async_modifier();
         let declares = matches!(
             self.peek().kind,
             TokenKind::Function
@@ -3830,7 +3907,7 @@ impl<'a> Parser<'a> {
         let mut fields: Vec<TypeAnnotationField> = Vec::new();
         let mut index = None;
         while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof)
-            && !self.peek_starts_declaration()
+            && !self.peek_starts_top_level_item()
         {
             let member_start = self.peek().span.start;
             let readonly = self.eat_readonly_property_modifier();
@@ -3874,11 +3951,26 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// A declaration or an `import` statement: what a top-level item starts with.
+    /// `import(…)` and `import.meta` are expressions, not statements.
+    fn peek_starts_top_level_item(&self) -> bool {
+        let import_statement = matches!(self.peek().kind, TokenKind::Import)
+            && matches!(
+                self.peek_at(1).kind,
+                TokenKind::LeftBrace
+                    | TokenKind::Star
+                    | TokenKind::Identifier
+                    | TokenKind::StringLiteral(_)
+            );
+        import_statement || self.peek_starts_declaration()
+    }
+
     /// Whether the next tokens start a declaration (`function f`, `class C`, `type T`,
     /// …, optionally after `export`, `declare`, `async` or `abstract`) or an export
-    /// statement (`export {`, `export *`, `export default`), which no type member can:
-    /// a keyword is a member name only before `:`, `?` or `(`. A member list that reaches one was left unclosed, so it stops there
-    /// and leaves the declaration to be parsed.
+    /// statement (`export {`, `export *`, `export default`), which no type or class
+    /// member can: a keyword is a member name only before `:`, `?` or `(`. A member
+    /// list that reaches one was left unclosed, so it stops there and leaves the
+    /// declaration to be parsed.
     fn peek_starts_declaration(&self) -> bool {
         if matches!(self.peek().kind, TokenKind::Export)
             && matches!(
@@ -4160,6 +4252,11 @@ impl<'a> Parser<'a> {
                 || matches!(after_name, TokenKind::Question) && starts_member_type(after_optional))
     }
 
+    /// `as` and `satisfies`, which lex as identifiers but continue an expression.
+    fn peek_at_is_binary_word(&self, offset: usize) -> bool {
+        self.peek_at_is_word(offset, "as") || self.peek_at_is_word(offset, "satisfies")
+    }
+
     fn peek_identifier_text_is(&self, expected: &str) -> bool {
         self.token_is_word(self.peek(), expected)
     }
@@ -4269,6 +4366,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_conditional(&mut self) -> Option<ExprId> {
+        self.reject_async_modifier();
         if self.is_arrow_start() {
             return self.parse_arrow();
         }
@@ -4302,9 +4400,87 @@ impl<'a> Parser<'a> {
     fn is_arrow_start(&self) -> bool {
         match self.peek().kind {
             TokenKind::Identifier => matches!(self.peek_at(1).kind, TokenKind::Arrow),
-            TokenKind::LeftParen => self.find_arrow_after_matching_paren(),
+            TokenKind::LeftParen => self.find_arrow_after_matching_paren(self.pos),
             _ => false,
         }
+    }
+
+    /// `async` before a function, arrow or method. There are no promises here,
+    /// so name the rewrite, then parse on as if the modifier were absent: the
+    /// body's `await`s are reported in the same run.
+    fn reject_async_modifier(&mut self) {
+        if !self.peek_identifier_text_is("async") {
+            return;
+        }
+        let modifies = match self.peek_at(1).kind {
+            TokenKind::Function => true,
+            // `async (x) => …`, not a call of a function named `async`.
+            TokenKind::LeftParen => self.find_arrow_after_matching_paren(self.pos + 1),
+            // `async x => …`, or a method `async run(…)` / `async run<T>(…)`.
+            // `async in (o)` and `async as (T)` are operators on a binding named
+            // `async`.
+            ref name
+                if is_property_name(name)
+                    && !matches!(name, TokenKind::In)
+                    && !self.peek_at_is_binary_word(1) =>
+            {
+                matches!(
+                    self.peek_at(2).kind,
+                    TokenKind::Arrow | TokenKind::LeftParen | TokenKind::LessThan
+                )
+            }
+            _ => false,
+        };
+        if !modifies {
+            return;
+        }
+        let tok = self.advance();
+        self.error_at_with_help(
+            tok.span,
+            "`async` functions are not supported",
+            vec![
+                "calls return their value directly: remove `async`, write the return type \
+                 `T` instead of `Promise<T>`, and drop `await`"
+                    .to_string(),
+            ],
+        );
+    }
+
+    /// `await` followed on the same line by an operand that cannot continue a
+    /// binding named `await`: an identifier, a keyword, a literal or a template. `await(x)`
+    /// and `await[i]` stay a call and an index; the typechecker names the fix if
+    /// `await` then does not resolve. Calls are synchronous, so report it and
+    /// parse on: the operand stays, and one run names every `await` in the program.
+    fn reject_await_operator(&mut self) -> bool {
+        if !self.peek_identifier_text_is("await") {
+            return false;
+        }
+        let operand_starts = matches!(
+            self.peek_at(1).kind,
+            TokenKind::Identifier
+                | TokenKind::This
+                | TokenKind::Super
+                | TokenKind::New
+                | TokenKind::Function
+                | TokenKind::StringLiteral(_)
+                | TokenKind::NumberLiteral(_)
+                | TokenKind::NullLiteral
+                | TokenKind::BooleanLiteral(_)
+                // A tagged template is not supported, so a template after `await`
+                // can only be its operand.
+                | TokenKind::TemplateHead(_)
+                | TokenKind::TemplateNoSubstitution(_)
+        ) && !self.peek_at_is_binary_word(1);
+        if !operand_starts || self.line_break_after_peek() {
+            return false;
+        }
+        let tok = self.advance();
+        self.error_at_with_help(
+            tok.span,
+            "`await` is not supported",
+            vec!["calls return their value directly: remove `await`".to_string()],
+        );
+        true
     }
 
     /// Index just past the `)` matching the `(` at `index`; `None` when the parens
@@ -4323,8 +4499,8 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn find_arrow_after_matching_paren(&self) -> bool {
-        let Some(i) = self.index_after_matching_paren(self.pos) else {
+    fn find_arrow_after_matching_paren(&self, open: usize) -> bool {
+        let Some(i) = self.index_after_matching_paren(open) else {
             return false;
         };
         let after_type = if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Colon)) {
@@ -4553,6 +4729,11 @@ impl<'a> Parser<'a> {
         if !matches!(self.peek().kind, TokenKind::Arrow) {
             self.error_at_peek("expected `=>` in arrow function");
             return None;
+        }
+        // Like TypeScript, the arrow still parses, so later errors keep their spans.
+        if self.line_break_before_peek() {
+            let arrow_span = self.peek().span;
+            self.error_at(arrow_span, "a line break is not allowed before `=>`");
         }
         self.advance();
 
@@ -4940,6 +5121,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_unary_inner(&mut self) -> Option<ExprId> {
+        if self.reject_await_operator() {
+            return self.parse_unary();
+        }
         // `typeof` is parsed as a unary prefix so `typeof x === "T"` works without a new layer;
         // the typechecker rejects `Typeof` outside the recognized equality fold position.
         if matches!(self.peek().kind, TokenKind::Typeof) {
@@ -5935,6 +6119,100 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// JavaScript forbids a `"use strict"` directive in a function whose parameters
+    /// aren't all plain names: one with a default, a pattern, or `...`. As TypeScript
+    /// does, each such parameter and the directive are reported.
+    fn reject_use_strict_with_non_simple_params(&mut self) {
+        let mut functions: Vec<(Vec<Span>, StmtId)> = Vec::new();
+        let non_simple = |param: &ParamDecl| {
+            (param.default.is_some() || param.pattern.is_some() || param.rest).then(|| {
+                param
+                    .pattern
+                    .as_ref()
+                    .map_or(param.name.span, Binding::span)
+            })
+        };
+        for expr in self.ast.source_expressions() {
+            if let ExprKind::Arrow {
+                params,
+                body: ArrowBody::Block(body),
+                ..
+            } = &expr.kind
+            {
+                functions.push((params.iter().filter_map(non_simple).collect(), *body));
+            }
+        }
+        for stmt in self.ast.source_statements() {
+            match &stmt.kind {
+                StmtKind::Function { params, body, .. } => {
+                    functions.push((params.iter().filter_map(non_simple).collect(), *body));
+                }
+                StmtKind::ClassDecl { members, .. } => {
+                    for member in members {
+                        match member {
+                            ClassMember::Method { params, body, .. }
+                            | ClassMember::Constructor { params, body, .. } => {
+                                functions
+                                    .push((params.iter().filter_map(non_simple).collect(), *body));
+                            }
+                            ClassMember::Accessor { param, body, .. } => {
+                                let params = param.as_deref().and_then(non_simple);
+                                functions.push((params.into_iter().collect(), *body));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (params, body) in functions {
+            if params.is_empty() {
+                continue;
+            }
+            let Some(directive) = self.use_strict_directive(body) else {
+                continue;
+            };
+            for span in params {
+                self.error_at(
+                    span,
+                    "this parameter is not allowed with a `\"use strict\"` directive",
+                );
+            }
+            self.error_at_with_help(
+                directive,
+                "a `\"use strict\"` directive can't be used with a parameter list that has defaults, patterns, or a rest parameter",
+                vec!["remove the directive; Submilli code is always strict".into()],
+            );
+        }
+    }
+
+    /// The span of a `"use strict"` directive in the prologue of a function body:
+    /// the string-literal statements it starts with. As in TypeScript, the string's
+    /// value decides, so an escape spelling it counts too; a template doesn't.
+    fn use_strict_directive(&self, body: StmtId) -> Option<Span> {
+        let StmtKind::Block(stmts) = &self.ast.try_stmt(body).ok()?.kind else {
+            return None;
+        };
+        for stmt in stmts {
+            let stmt = self.ast.try_stmt(*stmt).ok()?;
+            let StmtKind::Expr(expr) = stmt.kind else {
+                return None;
+            };
+            let expr = self.ast.try_expr(expr).ok()?;
+            let ExprKind::String(value) = &expr.kind else {
+                return None;
+            };
+            if self.source.as_bytes().get(expr.span.start as usize) == Some(&b'`') {
+                return None;
+            }
+            if value == "use strict" {
+                return Some(stmt.span);
+            }
+        }
+        None
+    }
+
     fn error_at(&mut self, span: Span, message: impl Into<String>) {
         self.diagnostics.push(Diagnostic {
             severity: Severity::Error,
@@ -6217,7 +6495,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-fn is_property_name(kind: &TokenKind) -> bool {
+pub(crate) fn is_property_name(kind: &TokenKind) -> bool {
     matches!(
         kind,
         TokenKind::Identifier
@@ -6752,6 +7030,7 @@ mod tests {
             function_expression_body_depth: 0,
             recursion_depth: 0,
             recursion_limit_span: None,
+            resume_at_next_member: false,
             last_as_type_end: None,
             eof: Token::new(
                 TokenKind::Eof,
@@ -9041,6 +9320,170 @@ mod tests {
         assert!(!diags.is_empty());
         assert_eq!(diags[0].message, "expected `:` and return type");
         assert!(ast.top_level.is_empty());
+    }
+
+    #[test]
+    fn method_missing_return_type_still_reads_the_body() {
+        let (_ast, diags) = parse_str(
+            "class Box {\n  async run() {\n    const x = await f();\n    return x;\n  }\n  ok(): void {}\n}",
+        );
+        let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "`async` functions are not supported",
+                "expected `:` and return type",
+                "`await` is not supported"
+            ],
+            "{diags:?}"
+        );
+        assert_eq!(
+            diags[1].help,
+            ["write the return type: `run(…): T { … }`, with `void` when it returns nothing"]
+        );
+    }
+
+    #[test]
+    fn an_unclosed_method_body_leaves_the_next_declaration_alone() {
+        let (ast, diags) =
+            parse_str("class Box {\n  a() { return 1;\n}\nfunction main(): number { return 0; }");
+        let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "expected `:` and return type",
+                "expected `}` to close class"
+            ],
+            "{diags:?}"
+        );
+        assert_eq!(ast.top_level.len(), 1, "`main` is still declared");
+    }
+
+    #[test]
+    fn every_declaration_after_an_unclosed_method_body_is_kept() {
+        for next in [
+            "class B { ok(): number { return 2; } }",
+            "interface I { a: number; }",
+            "enum E { A }",
+            "type X = number;",
+            "import * as fs from \"submilli:fs\";",
+            "async function g(): number { return 1; }",
+        ] {
+            let source = format!(
+                "class A {{\n  bad() {{\n    return 1;\n}}\n{next}\nfunction main(): void {{}}"
+            );
+            let (ast, diags) = parse_str(&source);
+            let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+            let expected_async = next.starts_with("async");
+            let mut expected = vec![
+                "expected `:` and return type",
+                "expected `}` to close class",
+            ];
+            if expected_async {
+                expected.push("`async` functions are not supported");
+            }
+            assert_eq!(messages, expected, "{next}: {diags:?}");
+            assert_eq!(
+                ast.top_level.len(),
+                2,
+                "{next} and `main` are kept: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_statement_leaves_the_next_declaration_to_be_parsed() {
+        for (source, kept) in [
+            ("let x = 1 +\nimport { exists } from \"submilli:fs\";", 1),
+            ("const y =\nclass C {}\nfunction main(): void {}", 2),
+            (
+                "interface I {\n  a: number;\nimport * as fs from \"submilli:fs\";",
+                1,
+            ),
+        ] {
+            let (ast, diags) = parse_str(source);
+            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
+            assert_eq!(ast.top_level.len(), kept, "{source}: {diags:?}");
+        }
+    }
+
+    #[test]
+    fn a_dynamic_import_after_a_failed_statement_reports_once() {
+        for source in [
+            "const m = import(\"submilli:fs\");\nclass C {}",
+            "const d = import.meta.dirname;\nclass C {}",
+        ] {
+            let (_ast, diags) = parse_str(source);
+            assert_eq!(diags.len(), 1, "{source}: {diags:?}");
+        }
+    }
+
+    #[test]
+    fn members_named_like_declarations_after_a_bad_method_stay_members() {
+        let (_ast, diags) = parse_str(
+            "class A {\n  bad() {}\n  type: number = 1;\n  function(): void {}\n  declare(): void {}\n  async(): void {}\n}",
+        );
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn every_member_after_a_bad_method_is_still_read() {
+        let (_ast, diags) = parse_str(
+            "class A {\n  a() { return 1; }\n  x: number = 1;\n  get g(): number { return 1; }\n  constructor() {}\n  b() {}\n  ok(): void {}\n}\nclass B {\n  c() {}\n}",
+        );
+        let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(messages, ["expected `:` and return type"; 3], "{diags:?}");
+    }
+
+    #[test]
+    fn a_member_failing_after_a_type_literal_reports_once() {
+        let (_ast, diags) = parse_str("class A {\n  x: { a: number } 5\n}");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn multiple_declarators_name_the_split() {
+        let (_ast, diags) = parse_str("let a = 0, b = 0;");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].message, "one declaration declares one variable");
+        assert_eq!(
+            diags[0].help,
+            [
+                "declare one variable per statement: `let a = …; let b = …;`; in a `for (…)` header, declare `b` before the loop"
+            ]
+        );
+        let (_ast, diags) = parse_str("for (let i = 0, j = 10; i < j; i++) {}");
+        assert_eq!(
+            diags[0].message, "one declaration declares one variable",
+            "{diags:?}"
+        );
+        assert!(
+            diags[0].help[0].ends_with("declare `j` before the loop"),
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn missing_return_type_still_reads_the_body() {
+        let (_ast, diags) = parse_str(
+            "async function main() {\n  const x = await f();\n  if (x) { return 1; }\n  return 2;\n}\nfunction g(): void {}",
+        );
+        let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "`async` functions are not supported",
+                "expected `:` and return type",
+                "`await` is not supported"
+            ],
+            "{diags:?}"
+        );
+        assert_eq!(
+            diags[1].help,
+            [
+                "write the return type: `function main(…): T { … }`, with `void` when it returns nothing"
+            ]
+        );
     }
 
     #[test]
@@ -12472,6 +12915,84 @@ class Dog extends Animal {
                 .any(|d| d.message.contains("a static field cannot be optional")),
             "got: {diags:?}",
         );
+    }
+
+    #[test]
+    fn async_function_names_the_synchronous_rewrite() {
+        let (_ast, diags) = parse_str(
+            "async function main(): Promise<string> {\n  const x = await f();\n  return x;\n}",
+        );
+        let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "`async` functions are not supported",
+                "`await` is not supported"
+            ],
+            "{diags:?}"
+        );
+        assert_eq!(
+            diags[0].help,
+            [
+                "calls return their value directly: remove `async`, write the return type `T` \
+              instead of `Promise<T>`, and drop `await`"
+            ]
+        );
+        assert_eq!(
+            diags[1].help,
+            ["calls return their value directly: remove `await`"]
+        );
+    }
+
+    #[test]
+    fn async_is_rejected_on_every_function_form() {
+        for source in [
+            "export async function f(): void {}",
+            "const f = async (): void => {};",
+            "const f = async x => x;",
+            "const f = async function (): void {};",
+            "class C { async run(): void {} }",
+            "class C { static async run(): void {} }",
+        ] {
+            let (_ast, diags) = parse_str(source);
+            assert_eq!(
+                diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>(),
+                ["`async` functions are not supported"],
+                "{source}: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn await_before_a_template_is_reported() {
+        for source in ["const a = await `hi`;", "const a = await `a${1}b`;"] {
+            let (_ast, diags) = parse_str(source);
+            let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+            assert_eq!(
+                messages,
+                ["`await` is not supported"],
+                "{source}: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn async_and_await_stay_ordinary_names() {
+        for source in [
+            "const async = 1; const y = async + 1;",
+            "function async(n: number): number { return n; } async(1);",
+            "const await = 2; const z = await * 2;",
+            "const await = (n: number): number => n; const a = await(1);",
+            "const await = [1, 2]; const b = await[0];",
+            "const async = { k: 1 }; const c = \"k\" in async; const d = async in ({ o: 1 });",
+            "const async: unknown = 1; const n = async as (number);",
+            "const await: unknown = 1; const m = await as number;",
+            "const await = 1; const t = `${await}`;",
+            "class C { async(): void {} async: number = 1; }",
+        ] {
+            let (_ast, diags) = parse_str(source);
+            assert!(diags.is_empty(), "{source}: {diags:?}");
+        }
     }
 
     #[test]

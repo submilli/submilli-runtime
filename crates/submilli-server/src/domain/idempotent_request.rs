@@ -169,6 +169,8 @@ mod tests {
                 },
                 0,
                 0,
+                0,
+                None,
             )
         };
         assert!(restore(RequestState::Expired, Some(at(1))).is_ok());

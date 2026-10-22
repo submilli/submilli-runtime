@@ -10,7 +10,7 @@
  "decision": "5.1",
  "outcome": "allow",
  "caller": "main",
- "capability": "acme.com/charges.list",
+ "capability": "pied-piper.example/charges.list",
  "decided_by": {
   "kind": "rule",
   "rule": {
@@ -56,7 +56,7 @@
    [
     {
      "actual": "cus_globex",
-     "expected": "cus_northwind"
+     "expected": "pied_piper"
     }
    ]
   ]

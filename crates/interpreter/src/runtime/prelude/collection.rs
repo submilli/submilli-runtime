@@ -319,7 +319,7 @@ mod work_tests {
         .unwrap();
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
-        let mut data = StoreData::with_vfs(Vfs::none());
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::none());
         data.install_type_info(compiled.type_info.clone());
         let mut store = config.store_async(&engine, data).unwrap();
         let mut linker = Linker::new(&engine);

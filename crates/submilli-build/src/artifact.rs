@@ -133,6 +133,9 @@ impl ArtifactReadBudget {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArtifactMetadata {
     pub schema_version: u32,
+    /// Additive metadata: existing artifacts have no deployment overrides.
+    #[serde(default)]
+    pub config: crate::PackageConfig,
     pub package_name: String,
     pub package_version: String,
     #[serde(default)]
@@ -177,6 +180,7 @@ impl ArtifactMetadata {
     ) -> Self {
         let mut metadata = Self {
             schema_version: ARTIFACT_SCHEMA_VERSION,
+            config: crate::PackageConfig::default(),
             package_name: package_name.into(),
             package_version: package_version.into(),
             description: String::new(),
@@ -197,6 +201,7 @@ impl ArtifactMetadata {
     ) -> Self {
         let mut metadata = Self {
             schema_version: ARTIFACT_SCHEMA_VERSION,
+            config: crate::PackageConfig::default(),
             package_name: package_name.into(),
             package_version: package_version.into(),
             description: description.into(),
@@ -247,6 +252,11 @@ pub struct Artifact {
     pub metadata: ArtifactMetadata,
     pub documentation: String,
     pub sources: Vec<ArtifactSource>,
+    /// SHA-256 over the files documentation is made from: metadata,
+    /// capabilities, declaration and readme. Two loads of the same files give
+    /// the same fingerprint, so a cache of rendered documentation can key on it
+    /// even when a rebuild keeps the version. Not stored; computed on read.
+    pub fingerprint: [u8; 32],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -485,7 +495,8 @@ pub(crate) fn read_package_artifact_with_budget(
     // The version gate comes first: a schema bump can change the shape of the
     // other files, and decoding them against the current types would surface a
     // serde error about some interior field instead of "rebuild this package".
-    let metadata: ArtifactMetadata = read_json(&metadata_path, budget)?;
+    let metadata_bytes = read_bytes(metadata_path.clone(), budget)?;
+    let metadata: ArtifactMetadata = parse_json(&metadata_path, &metadata_bytes)?;
     if metadata.schema_version != ARTIFACT_SCHEMA_VERSION {
         return Err(ArtifactError::UnsupportedSchema {
             path: metadata_path,
@@ -494,10 +505,24 @@ pub(crate) fn read_package_artifact_with_budget(
     }
     let wasm = read_bytes(dir.join(WASM_FILE), budget)?;
     let type_info = read_json(dir.join(TYPE_INFO_FILE), budget)?;
-    let capabilities = read_yaml(dir.join(CAPABILITIES_FILE), budget)?;
-    let package_declaration = read_json(dir.join(PACKAGE_DECLARATION_FILE), budget)?;
+    let capabilities_path = dir.join(CAPABILITIES_FILE);
+    let capabilities_bytes = read_bytes(capabilities_path.clone(), budget)?;
+    let capabilities =
+        serde_yml::from_slice(&capabilities_bytes).map_err(|source| ArtifactError::Yaml {
+            path: capabilities_path,
+            source,
+        })?;
+    let declaration_path = dir.join(PACKAGE_DECLARATION_FILE);
+    let declaration_bytes = read_bytes(declaration_path.clone(), budget)?;
+    let package_declaration = parse_json(&declaration_path, &declaration_bytes)?;
     let documentation = read_optional_text(dir.join(DOCS_README_FILE), budget)?;
     let sources = read_optional_json(dir.join(SOURCES_FILE), budget)?.unwrap_or_default();
+    let fingerprint = fingerprint(&[
+        &metadata_bytes,
+        &capabilities_bytes,
+        &declaration_bytes,
+        documentation.as_bytes(),
+    ]);
 
     Ok(Artifact {
         wasm,
@@ -507,7 +532,20 @@ pub(crate) fn read_package_artifact_with_budget(
         metadata,
         documentation,
         sources,
+        fingerprint,
     })
+}
+
+/// SHA-256 over `parts`, each prefixed with its length so no two splits of the
+/// same bytes collide.
+fn fingerprint(parts: &[&[u8]]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update((part.len() as u64).to_le_bytes());
+        hasher.update(part);
+    }
+    hasher.finalize().into()
 }
 
 fn create_dir_all(path: &Path) -> Result<(), ArtifactError> {
@@ -654,7 +692,14 @@ where
 {
     let path = path.as_ref();
     let bytes = read_bytes(path.to_path_buf(), budget)?;
-    serde_json::from_slice(&bytes).map_err(|source| ArtifactError::Json {
+    parse_json(path, &bytes)
+}
+
+fn parse_json<T>(path: &Path, bytes: &[u8]) -> Result<T, ArtifactError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    serde_json::from_slice(bytes).map_err(|source| ArtifactError::Json {
         path: path.to_path_buf(),
         source,
     })
@@ -669,14 +714,6 @@ where
         source,
     })?;
     fs::write(&path, bytes).map_err(|source| ArtifactError::Io { path, source })
-}
-
-fn read_yaml<T>(path: PathBuf, budget: &mut ArtifactReadBudget) -> Result<T, ArtifactError>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let bytes = read_bytes(path.clone(), budget)?;
-    serde_yml::from_slice(&bytes).map_err(|source| ArtifactError::Yaml { path, source })
 }
 
 fn write_yaml<T>(path: PathBuf, value: &T) -> Result<(), ArtifactError>
@@ -705,12 +742,12 @@ mod tests {
 
     fn sample_declaration() -> PackageDeclaration {
         let file = FileId(7);
-        let mut defs = PackageDeclaration::with_package("@acme/util");
+        let mut defs = PackageDeclaration::with_package("@pied-piper/util");
         defs.values.insert(
             "greet".to_string(),
             ValueSymbol {
                 name: "greet".to_string(),
-                mangled_name: mangle::package_symbol("@acme/util", "greet"),
+                mangled_name: mangle::package_symbol("@pied-piper/util", "greet"),
                 declaration_span: Span::new(file, 0, 12).unwrap(),
                 kind: ValueKind::Function {
                     generics: vec!["T".to_string()],
@@ -759,7 +796,7 @@ mod tests {
             "Thing".to_string(),
             TypeSymbol {
                 name: "Thing".to_string(),
-                mangled_name: mangle::package_symbol("@acme/util", "Thing"),
+                mangled_name: mangle::package_symbol("@pied-piper/util", "Thing"),
                 declaration_span: Span::new(file, 20, 40).unwrap(),
                 kind: TypeKind::Interface {
                     index: None,
@@ -777,7 +814,7 @@ mod tests {
             "version".to_string(),
             ValueSymbol {
                 name: "version".to_string(),
-                mangled_name: mangle::package_symbol("@acme/util", "Meta#version"),
+                mangled_name: mangle::package_symbol("@pied-piper/util", "Meta#version"),
                 declaration_span: Span::new(file, 45, 60).unwrap(),
                 kind: ValueKind::Const {
                     ty: Type::StringLiteral("1.0.0".to_string()),
@@ -789,7 +826,7 @@ mod tests {
             "Meta".to_string(),
             NamespaceSymbol {
                 name: "Meta".to_string(),
-                mangled_prefix: mangle::package_symbol("@acme/util", "Meta"),
+                mangled_prefix: mangle::package_symbol("@pied-piper/util", "Meta"),
                 declaration_span: Span::new(file, 40, 44).unwrap(),
                 values: ns_values,
                 types: BTreeMap::new(),
@@ -810,7 +847,7 @@ mod tests {
 
     fn sample_capabilities() -> CapabilitySchema {
         CapabilitySchema {
-            namespace: "acme".to_string(),
+            namespace: "pied-piper".to_string(),
             provides: Vec::new(),
             requires: Vec::new(),
         }
@@ -818,7 +855,7 @@ mod tests {
 
     fn sample_type_info() -> TypeInfoTable {
         TypeInfoTable {
-            package_name: "@acme/util".to_string(),
+            package_name: "@pied-piper/util".to_string(),
             types: Vec::new(),
         }
     }
@@ -837,7 +874,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let defs = sample_declaration();
         let metadata = ArtifactMetadata::with_description(
-            "@acme/util",
+            "@pied-piper/util",
             "1.2.3",
             "Utility helpers.",
             vec!["zeta".to_string(), "alpha".to_string(), "alpha".to_string()],
@@ -885,6 +922,37 @@ mod tests {
     }
 
     #[test]
+    fn fingerprint_follows_what_documentation_is_made_from() {
+        let write = |dir: &Path, docs: &str| {
+            write_package_artifact_with_docs_and_sources(
+                dir,
+                b"\0asm\x01\0\0\0",
+                &sample_type_info(),
+                &sample_capabilities(),
+                &sample_declaration(),
+                &ArtifactMetadata::with_description(
+                    "@pied-piper/util",
+                    "1.2.3",
+                    "Utility helpers.",
+                    Vec::new(),
+                    Vec::new(),
+                ),
+                docs,
+                &[],
+            )
+            .expect("write artifact");
+            read_package_artifact(dir)
+                .expect("read artifact")
+                .fingerprint
+        };
+        let dir = tempdir().expect("tempdir");
+        let first = write(dir.path(), "# Utility\n");
+        assert_eq!(write(dir.path(), "# Utility\n"), first);
+        // A rebuild under the same version with other docs is another artifact.
+        assert_ne!(write(dir.path(), "# Utility, revised\n"), first);
+    }
+
+    #[test]
     fn artifact_reports_missing_files() {
         let dir = tempdir().expect("tempdir");
         // Metadata is read first so the schema gate can run before anything is
@@ -919,7 +987,7 @@ mod tests {
             &sample_type_info(),
             &sample_capabilities(),
             &defs,
-            &ArtifactMetadata::new("@acme/util", "1.0.0", Vec::new()),
+            &ArtifactMetadata::new("@pied-piper/util", "1.0.0", Vec::new()),
         )
         .expect("write artifact");
         fs::write(dir.path().join(WASM_FILE), vec![0_u8; 1_025]).expect("replace wasm");
@@ -985,7 +1053,7 @@ mod tests {
     fn artifact_rejects_unsupported_schema() {
         let dir = tempdir().expect("tempdir");
         let defs = sample_declaration();
-        let mut metadata = ArtifactMetadata::new("@acme/util", "1.2.3", Vec::new());
+        let mut metadata = ArtifactMetadata::new("@pied-piper/util", "1.2.3", Vec::new());
         metadata.schema_version = ARTIFACT_SCHEMA_VERSION + 1;
 
         let capabilities = sample_capabilities();
@@ -1009,7 +1077,7 @@ mod tests {
         let reloaded: PackageDeclaration =
             serde_json::from_slice(&bytes).expect("deserialize package declaration");
         let source = r#"
-            import { greet } from "@acme/util";
+            import { greet } from "@pied-piper/util";
 
             function main(): string {
                 return greet<string>("Ada");

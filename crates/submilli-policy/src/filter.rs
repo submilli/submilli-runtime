@@ -62,6 +62,31 @@ pub struct FilterEvaluation {
     pub failures: Vec<ComparisonFailure>,
 }
 
+/// The outcome of [`FilterExpr::evaluate_partial`]: whether a filter holds,
+/// does not hold, or depends on context not known yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Truth {
+    True,
+    False,
+    Unknown,
+}
+
+impl Truth {
+    fn not(self) -> Self {
+        match self {
+            Truth::True => Truth::False,
+            Truth::False => Truth::True,
+            Truth::Unknown => Truth::Unknown,
+        }
+    }
+}
+
+impl From<bool> for Truth {
+    fn from(value: bool) -> Self {
+        if value { Truth::True } else { Truth::False }
+    }
+}
+
 /// A parsed filter expression. The grammar is `or` over `and` over `not` over
 /// comparisons and parenthesized groups; a bare comparison is a valid expression.
 #[derive(Debug, Clone, PartialEq)]
@@ -200,6 +225,36 @@ impl FilterExpr {
             failures.clear();
         }
         FilterEvaluation { matched, failures }
+    }
+
+    /// Evaluate before the call happens, when only some of its context is
+    /// known: documentation asks whether a call could match, not whether one
+    /// does. A comparison whose top-level field is absent from `known` is
+    /// [`Truth::Unknown`], and so is one naming a variable, since no session
+    /// binds variables yet. Fields `known` holds evaluate exactly as
+    /// [`Self::matches_with`] would. The boolean operators follow three-valued
+    /// (Kleene) logic.
+    pub fn evaluate_partial(&self, known: &serde_json::Value) -> Truth {
+        match &self.0 {
+            Expr::Compare(c) => c.eval_partial(known),
+            Expr::Not(inner) => inner.evaluate_partial(known).not(),
+            Expr::And(left, right) => match left.evaluate_partial(known) {
+                Truth::False => Truth::False,
+                Truth::True => right.evaluate_partial(known),
+                Truth::Unknown => match right.evaluate_partial(known) {
+                    Truth::False => Truth::False,
+                    Truth::True | Truth::Unknown => Truth::Unknown,
+                },
+            },
+            Expr::Or(left, right) => match left.evaluate_partial(known) {
+                Truth::True => Truth::True,
+                Truth::False => right.evaluate_partial(known),
+                Truth::Unknown => match right.evaluate_partial(known) {
+                    Truth::True => Truth::True,
+                    Truth::False | Truth::Unknown => Truth::Unknown,
+                },
+            },
+        }
     }
 
     /// `wanted` is the outcome this subtree needs for the whole filter to
@@ -354,6 +409,20 @@ impl FilterExpr {
         }
     }
 
+    /// The string when this expression is exactly `field == "value"`.
+    pub fn equals_literal(&self, field: &str) -> Option<&str> {
+        match &self.0 {
+            Expr::Compare(Comparison {
+                path,
+                op: CompareOp::Eq,
+                operand: Operand::Str(value),
+            }) if path.len() == 1 && path.first().is_some_and(|name| name == field) => {
+                Some(value.as_str())
+            }
+            _ => None,
+        }
+    }
+
     /// Binding tightness, used only to parenthesize `Display` minimally.
     fn precedence(&self) -> u8 {
         match &self.0 {
@@ -377,6 +446,25 @@ impl Comparison {
                 out.push(FieldMatch::Regex(re.source.clone()));
             }
             _ => {}
+        }
+    }
+
+    fn eval_partial(&self, known: &serde_json::Value) -> Truth {
+        let field_known = self
+            .path
+            .first()
+            .is_some_and(|field| known.get(field).is_some());
+        if !field_known || self.references_variable() {
+            return Truth::Unknown;
+        }
+        Truth::from(self.eval(known, &VarBindings::new()))
+    }
+
+    fn references_variable(&self) -> bool {
+        match &self.operand {
+            Operand::Var(_) => true,
+            Operand::Interp(segs) => segs.iter().any(|seg| matches!(seg, StrSegment::Var(_))),
+            _ => false,
         }
     }
 
@@ -1291,6 +1379,22 @@ pub(crate) fn parse(raw: &str) -> Result<FilterExpr, String> {
     Ok(expression)
 }
 
+impl FilterExpr {
+    /// Count regex operators without compiling them, for aggregate configuration
+    /// admission. Quoted occurrences of `matches` are ordinary string content.
+    /// This is a resource preflight; full parsing still validates the expression.
+    pub fn regex_count(raw: &str) -> Result<usize, String> {
+        if raw.len() > MAX_FILTER_BYTES {
+            return Err("filter exceeds byte limit".into());
+        }
+        Ok(tokenize(raw)
+            .map_err(|error| error.render(raw))?
+            .iter()
+            .filter(|token| matches!(token.token, Token::Op(CompareOp::Matches)))
+            .count())
+    }
+}
+
 impl std::str::FromStr for FilterExpr {
     /// The caret-annotated parse error, same as a YAML `filter:` would report.
     type Err = String;
@@ -1479,14 +1583,14 @@ mod tests {
 
     #[test]
     fn string_interpolation_in_equality() {
-        let f = filter("host == \"api.${vars.tenant}.com\"");
+        let f = filter("host == \"api.${vars.tenant}.example\"");
         assert!(f.matches_with(
-            &json!({ "host": "api.acme.com" }),
-            &vars(&[("tenant", "acme")])
+            &json!({ "host": "api.pied-piper.example" }),
+            &vars(&[("tenant", "pied-piper")])
         ));
         assert!(!f.matches_with(
-            &json!({ "host": "api.evil.com" }),
-            &vars(&[("tenant", "acme")])
+            &json!({ "host": "api.evil.example" }),
+            &vars(&[("tenant", "pied-piper")])
         ));
     }
 
@@ -1830,12 +1934,12 @@ mod tests {
     fn explain_reports_bound_variable_value_and_negation() {
         let f = filter("customerId == ${vars.customerId}");
         let explained = f.explain_with(
-            &json!({ "customerId": "cus_initech" }),
-            &vars(&[("customerId", "cus_northwind")]),
+            &json!({ "customerId": "hooli" }),
+            &vars(&[("customerId", "pied_piper")]),
         );
         assert_eq!(
             explained.failures[0].expected.as_deref(),
-            Some("cus_northwind")
+            Some("pied_piper")
         );
         assert!(!explained.failures[0].negated);
 
@@ -1843,5 +1947,67 @@ mod tests {
         let explained = negated.explain_with(&json!({ "host": "evil.com" }), &VarBindings::new());
         assert!(!explained.matched);
         assert!(explained.failures[0].negated);
+    }
+
+    #[test]
+    fn equals_literal_names_only_a_plain_equality() {
+        assert_eq!(
+            filter("method == \"GET\"").equals_literal("method"),
+            Some("GET")
+        );
+        assert_eq!(filter("method == \"GET\"").equals_literal("host"), None);
+        assert_eq!(
+            filter("not method == \"GET\"").equals_literal("method"),
+            None
+        );
+        assert_eq!(filter("method glob \"G*\"").equals_literal("method"), None);
+        assert_eq!(filter("method.x == \"GET\"").equals_literal("method"), None);
+        assert_eq!(
+            filter("method == \"${vars.m}\"").equals_literal("method"),
+            None
+        );
+        let terms = filter("host == \"a\" and method == \"POST\"");
+        assert_eq!(
+            terms
+                .conjuncts()
+                .into_iter()
+                .find_map(|term| term.equals_literal("method")),
+            Some("POST")
+        );
+    }
+
+    #[test]
+    fn partial_evaluation_is_unknown_without_the_field() {
+        let f = filter("method == \"GET\"");
+        assert_eq!(f.evaluate_partial(&json!({})), Truth::Unknown);
+        assert_eq!(f.evaluate_partial(&json!({ "method": "GET" })), Truth::True);
+        assert_eq!(
+            f.evaluate_partial(&json!({ "method": "POST" })),
+            Truth::False
+        );
+    }
+
+    #[test]
+    fn partial_evaluation_follows_three_valued_logic() {
+        let known = json!({ "host": "api.example.com" });
+        let and_false = filter("host == \"other.com\" and path glob \"/v1/*\"");
+        assert_eq!(and_false.evaluate_partial(&known), Truth::False);
+        let and_unknown = filter("host == \"api.example.com\" and path glob \"/v1/*\"");
+        assert_eq!(and_unknown.evaluate_partial(&known), Truth::Unknown);
+        let or_true = filter("path glob \"/v1/*\" or host == \"api.example.com\"");
+        assert_eq!(or_true.evaluate_partial(&known), Truth::True);
+        let or_unknown = filter("path glob \"/v1/*\" or host == \"other.com\"");
+        assert_eq!(or_unknown.evaluate_partial(&known), Truth::Unknown);
+        let not_unknown = filter("not path glob \"/v1/*\"");
+        assert_eq!(not_unknown.evaluate_partial(&known), Truth::Unknown);
+        let not_false = filter("not host == \"api.example.com\"");
+        assert_eq!(not_false.evaluate_partial(&known), Truth::False);
+    }
+
+    #[test]
+    fn partial_evaluation_of_a_variable_is_unknown() {
+        let f = filter("customerId == ${vars.customerId}");
+        let known = json!({ "customerId": "hooli" });
+        assert_eq!(f.evaluate_partial(&known), Truth::Unknown);
     }
 }

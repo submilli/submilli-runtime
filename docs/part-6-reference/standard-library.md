@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1b64aea0f6b4014066c678e0dada2ecd41a554cf9c4e2c70c6dda65e46cf4ccb"
+  contentHash: "051084375d56856c2ad70f7add9cf6676b5db20f93053cfdf5208ff76d31d931"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -21,7 +21,7 @@ and `Temporal`, are on [Built-ins](/docs/reference/built-ins).
 | Module | What it does | Gated by |
 | --- | --- | --- |
 | `submilli:fs` | The program's filesystem: read, write, list, stat, move, copy, remove | `fs.*` |
-| `submilli:http` | HTTP requests, and downloads into the filesystem | `http.<method>`, `http.download` |
+| `submilli:http` | HTTP requests, and downloads into the filesystem | `http.<verb>`, `http.request`, `http.download` |
 | `submilli:llm` | Model calls: `call`, `batch`, `models` | `llm.call` |
 | `submilli:embedding` | Text embeddings: `embed`, `models` | `embedding.embed` |
 | `submilli:session` | Key-value state that lasts for the session | `session.*` |
@@ -380,7 +380,7 @@ The sealed result of `embed`: vectors held by the runtime at 4 bytes per number,
 
 ## `submilli:fs`
 
-Sandbox filesystem: read/write/list/stat/remove/exists/info.
+Sandbox filesystem: files and directories under the VFS root.
 
 | Function | Capability | Description |
 | --- | --- | --- |
@@ -391,6 +391,7 @@ Sandbox filesystem: read/write/list/stat/remove/exists/info.
 | `cwd(): string` |  | The absolute guest working directory used by relative paths. |
 | `exists(path: string): boolean` | `fs.stat { path }` | Returns `true` iff `path` resolves to a filesystem entry under the VFS root. |
 | `info(): Info` |  | The active VFS configuration: the root's `mode` (`"none"` / `"ephemeral"` / `"per_session"` / `"named"`), `access`, `volume` and `sizeLimit` (the cap on the bytes its files may hold, or `-1` when none applies), plus `mounts`, the named volumes grafted below the root. |
+| `isEmpty(path: string): boolean` | `fs.list { path, recursive }` | Returns `true` when the directory at `path` has no entries, or the file at `path` has zero bytes. |
 | `lines(path: string): Iterator<string>` | `fs.read { path }` | Stream the file at `path` as a constant-memory line iterator. |
 | `list(path: string, recursive: boolean): Iterator<DirEntry>` | `fs.list { path, recursive }` | List the children of the directory at `path` as a constant-memory iterator of `DirEntry`. |
 | `maxReadSize(): number` |  | Maximum number of bytes `read` / `readText` will load whole; past this they return `undefined`. |
@@ -403,6 +404,7 @@ Sandbox filesystem: read/write/list/stat/remove/exists/info.
 | `remove(path: string, recursive: boolean): void` | `fs.remove { path, recursive }` | Remove the entry at `path`. |
 | `size(path: string): number` | `fs.stat { path }` | File size in bytes. |
 | `stat(path: string): Stat \| undefined` | `fs.stat { path }` | Metadata about an entry under the VFS root. |
+| `summary(path: string): string` | `fs.list { path, recursive }` | Describe `path` in a few lines of text, for a program that needs to see what is there before deciding what to read. |
 | `write(path: string, content: Uint8Array): void` | `fs.write { path, length: number }` | Write `content` to `path` atomically (temp-file + rename). |
 | `writeText(path: string, content: string): void` | `fs.write { path, length: number }` | UTF-8 atomic write. |
 | `writer(path: string): FileWriter` | `fs.write { path }` | Open `path` as an append-only `FileWriter`. |
@@ -475,7 +477,7 @@ Filesystem metadata returned by `stat(path)`.
 
 ## `submilli:git`
 
-Capability-controlled VFS repositories: history, staging, commits, branches and HTTPS fetch.
+Capability-controlled Git repositories in the VFS, with HTTPS remotes.
 
 ### `Repository`
 
@@ -504,7 +506,7 @@ A repository under the VFS root.
 
 ## `submilli:http`
 
-Outbound HTTP: get/post/put/patch/delete/head.
+Outbound HTTP requests, and downloads into the filesystem.
 
 | Function | Capability | Description |
 | --- | --- | --- |
@@ -516,7 +518,7 @@ Outbound HTTP: get/post/put/patch/delete/head.
 | `patch(url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.patch { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP PATCH. |
 | `post(url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.post { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP POST. |
 | `put(url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.put { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP PUT. |
-| `request(method: string, url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.get { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.post { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.put { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.patch { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.delete { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.head { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.options { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue an HTTP request with a runtime-chosen verb. |
+| `request(method: string, url: string, body?: string \| Uint8Array \| { [key: string]: unknown } \| unknown[] \| null, headers?: Headers): Response` | `http.request { method: $method, host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue an HTTP request with a runtime-chosen verb. |
 
 ### `DownloadOptions`
 
@@ -621,10 +623,10 @@ Session-scoped key-value state and durable package-owned resource cleanup.
 | `get<T>(key: string): T \| undefined` | `session.read { key }` | Read a session value, checked against `T`. |
 | `has(key: string): boolean` | `session.read { key }` | Whether the session holds an entry for `key`. |
 | `list(prefix: string, limit: number, cursor?: string): Page` | `session.list { prefix }`<br>`session.read { key } - per candidate key` | Enumerate session keys starting with `prefix`, in UTF-16 code-unit order. |
-| `registerFinalizer(key: string, value: unknown): void` | `session.finalize { key }` | Register package-owned resource cleanup. |
+| `registerFinalizer(key: string, value: unknown): void` | `session.finalize { key }` | Register durable cleanup using this package's finalizer(key, value). |
 | `remove(key: string): boolean` | `session.remove { key }` | Delete `key`. |
 | `set(key: string, value: unknown): void` | `session.write { key }` | Store `value` under `key`, replacing any previous entry. |
-| `unregisterFinalizer(key: string): void` | `session.finalize { key }` | Forget cleanup after explicitly releasing the resource. |
+| `unregisterFinalizer(key: string): void` | `session.finalize { key }` | Forget cleanup after releasing the resource. |
 
 ### `Entry`
 
@@ -643,7 +645,6 @@ One page of a `list` call: the `entries` it discloses and the `nextCursor` that 
 | --- | --- |
 | `readonly entries: Entry[]` | The keys this page discloses, in UTF-16 code-unit order. |
 | `readonly nextCursor: string \| undefined` | Opaque cursor for the next page, or `undefined` when no further matching key remains. |
-
 
 ## `submilli:url`
 
@@ -673,7 +674,7 @@ Parsed URL parts — the return type of `parse`.
 | Member | Description |
 | --- | --- |
 | `readonly fragment: string \| undefined` | Fragment string (without the `#` prefix), or `undefined` when the URL has no `#` segment. |
-| `readonly host: string` | Host name, e.g. `"api.acme.com"`. |
+| `readonly host: string` | Host name, e.g. `"api.pied-piper.example"`. |
 | `readonly path: string` | Path component, including the leading `/`. |
 | `readonly port: number \| undefined` | Port number, or `undefined` when the URL omits one. |
 | `readonly protocol: string` | Scheme, e.g. `"https"`. |

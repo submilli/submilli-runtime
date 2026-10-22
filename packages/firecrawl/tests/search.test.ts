@@ -1,5 +1,11 @@
+// The search request builder and response normalizer live in the package's
+// internal module, so these tests import them from `../src/internal`. The last
+// sections check that `search` validates before its check, credential read or HTTP;
+// the credential segment is skipped when FIRECRAWL_API_KEY is bound, so no request is sent.
 import { label, expectException } from "submilli:test";
-import { buildSearchBody, normalizeSearchJson, FirecrawlError } from "@submilli/firecrawl";
+import secrets from "submilli:secrets";
+import { search, FirecrawlError } from "@submilli/firecrawl";
+import { buildSearchBody, normalizeSearchJson } from "../src/internal";
 
 function rejects(code: string, action: () => void): void {
     const error = expectException(action, "FirecrawlError");
@@ -32,6 +38,7 @@ function main(): void {
     }
     rejects("invalid_argument", () => { buildSearchBody("q", { country: "USA" }); });
     rejects("invalid_argument", () => { buildSearchBody("q", { scrapeOptions: { formats: [] } }); });
+    rejects("invalid_argument", () => { buildSearchBody("q", { scrapeOptions: { json: { schema: "bad" } } }); });
 
     label("discovery and optional content preserve attribution and partial failures");
     const bare = normalizeSearchJson('{"success":true,"data":{"web":[{"url":"https://example.com","title":"Example","description":"Snippet"}]},"creditsUsed":2}');
@@ -54,4 +61,18 @@ function main(): void {
     for (const body of ["null", "not json", "{}", '{"success":false,"data":{"web":[]}}', '{"success":true,"data":[]}', '{"success":true,"data":{}}', '{"success":true,"data":{"web":[{"url":3}]}}', '{"success":true,"data":{"web":[{"url":"u","markdown":4}]}}']) {
         rejects("invalid_response", () => { normalizeSearchJson(body); });
     }
+
+    label("search validates its input before any request");
+    rejects("invalid_argument", () => { search(" "); });
+    rejects("invalid_argument", () => { search("q", { includeDomains: ["example.com/path"] }); });
+    rejects("invalid_argument", () => { search("q", { scrapeOptions: { json: { schema: "bad" } } }); });
+
+    const key = secrets.get("FIRECRAWL_API_KEY");
+    if (key !== undefined && key.trim().length > 0) {
+        label("skip: valid search reaches the credential read only when FIRECRAWL_API_KEY is not bound");
+        return;
+    }
+    label("valid search, with or without result scraping, stops at the credential read");
+    rejects("missing_credentials", () => { search("test"); });
+    rejects("missing_credentials", () => { search("q", { scrapeOptions: { formats: ["markdown", "html"], maxAge: 0 } }); });
 }

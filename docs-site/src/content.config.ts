@@ -17,6 +17,7 @@ export const collections = {
       // The home page's "Next steps" cards, as slugs in the order shown.
       extend: z.object({
         nextSteps: z.array(z.string()).optional(),
+        docType: z.enum(["tutorial", "how-to", "explanation", "reference"]).optional(),
         authorship: authorshipSchema.optional(),
       }),
     }),

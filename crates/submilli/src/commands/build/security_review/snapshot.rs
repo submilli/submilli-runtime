@@ -15,6 +15,7 @@ const MAX_ENTRIES: usize = 20_000;
 #[derive(Serialize)]
 pub(super) struct Snapshot {
     pub packages: Vec<String>,
+    pub configuration: BTreeMap<String, BTreeMap<String, String>>,
     pub authority: Option<super::authority::Evidence>,
     pub files: BTreeMap<String, Source>,
     pub coverage_gaps: Vec<String>,
@@ -53,6 +54,18 @@ pub(super) fn collect_from(
     directory: &Path,
     only_package: Option<&str>,
 ) -> anyhow::Result<(Snapshot, ProjectManifest)> {
+    collect_from_with_store(
+        directory,
+        only_package,
+        &submilli_build::PackageStore::default(),
+    )
+}
+
+pub(super) fn collect_from_with_store(
+    directory: &Path,
+    only_package: Option<&str>,
+    store: &submilli_build::PackageStore,
+) -> anyhow::Result<(Snapshot, ProjectManifest)> {
     let manifest_path = find_manifest_upwards(directory)
         .context("no submilli.toml found; run security-review from a package project")?;
     let root = manifest_path
@@ -61,6 +74,7 @@ pub(super) fn collect_from(
         .canonicalize()?;
     let mut snapshot = Snapshot {
         packages: Vec::new(),
+        configuration: BTreeMap::new(),
         authority: None,
         files: BTreeMap::new(),
         coverage_gaps: Vec::new(),
@@ -114,6 +128,34 @@ pub(super) fn collect_from(
             &mut remaining,
             &mut visited_entries,
         )?;
+        if only_package.is_some() && only_package != Some(name) {
+            let config_path: PathBuf = package
+                .path
+                .as_path()
+                .join("src/config.ts")
+                .components()
+                .filter(|component| !matches!(component, Component::CurDir))
+                .collect();
+            let legacy_path = config_path.with_extension("subm");
+            if snapshot
+                .files
+                .keys()
+                .any(|path| Path::new(path) == config_path || Path::new(path) == legacy_path)
+            {
+                match store.load(name) {
+                    Ok(artifact) => {
+                        let overrides = artifact.metadata.config.overrides;
+                        let size = serde_json::to_vec(&overrides)?.len();
+                        remaining = remaining
+                            .checked_sub(size)
+                            .context("captured configuration exceeds review size limit")?;
+                        snapshot.configuration.insert(name.to_owned(), overrides);
+                    }
+                    Err(submilli_build::PackageStoreError::MissingPackage { .. }) => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
         for dependency in &package.dependencies {
             match dependency.kind {
                 DependencyKind::Sibling => pending.push(dependency.name.as_str()),
@@ -257,4 +299,73 @@ fn add_file(
     let sha256 = format!("{:x}", Sha256::digest(content.as_bytes()));
     snapshot.files.insert(name, Source { sha256, content });
     Ok(())
+}
+
+#[cfg(test)]
+mod configuration_tests {
+    use super::*;
+
+    #[test]
+    fn configuration_is_captured_for_siblings_before_isolated_review() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path();
+        fs::write(root.join("submilli.toml"), "[[package]]\nname = '@pied-piper/app'\nversion = '1.0.0'\ndescription = 'App.'\npath = 'app'\ndependencies = ['@pied-piper/service']\n[[package]]\nname = '@pied-piper/service'\nversion = '1.0.0'\ndescription = 'Service.'\npath = 'service'\n").unwrap();
+        for name in ["app", "service"] {
+            fs::create_dir_all(root.join(name).join("src")).unwrap();
+            fs::create_dir_all(root.join(name).join("docs")).unwrap();
+            fs::write(root.join(name).join("docs/readme.md"), "# Package\n").unwrap();
+        }
+        fs::write(
+            root.join("service/src/config.ts"),
+            "export declare const baseUrl: string;",
+        )
+        .unwrap();
+        fs::write(root.join("service/src/lib.ts"), "import { baseUrl } from './config';\n/** Endpoint.\n * @returns Endpoint.\n */\nexport function endpoint(): string { return baseUrl; }").unwrap();
+        fs::write(root.join("app/src/lib.ts"), "import { endpoint } from '@pied-piper/service';\n/** Read.\n * @returns Endpoint.\n */\nexport function read(): string { return endpoint(); }").unwrap();
+        let manifest = submilli_build::load_manifest(&root.join("submilli.toml")).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let store = submilli_build::PackageStore::new(home.path());
+        let selected = submilli_build::PackageName::new("@pied-piper/service");
+        let inputs = submilli_build::ConfigInputs::parse(
+            &["baseUrl=https://captured.test".into()],
+            &[],
+            true,
+        )
+        .unwrap();
+        let built = submilli_build::build_packages_with_inputs(
+            &manifest,
+            root,
+            &store,
+            Some(&selected),
+            &inputs,
+        )
+        .unwrap();
+        submilli_build::install_packages(&store, &built).unwrap();
+        let (snapshot, manifest) =
+            collect_from_with_store(root, Some("@pied-piper/app"), &store).unwrap();
+        assert_eq!(
+            snapshot.configuration["@pied-piper/service"]["baseUrl"],
+            "https://captured.test"
+        );
+        assert!(!snapshot.configuration.contains_key("@pied-piper/app"));
+        fs::remove_dir_all(home.path().join("@pied-piper/service")).unwrap();
+        let evidence = super::super::authority::collect(
+            &snapshot,
+            &manifest,
+            Some("@pied-piper/app"),
+            &submilli_build::ConfigInputs::default(),
+        )
+        .unwrap();
+        let evidence = serde_json::to_value(evidence).unwrap();
+        let service = evidence["packages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|package| package["name"] == "@pied-piper/service")
+            .unwrap();
+        assert_eq!(
+            service["config"]["values"]["baseUrl"],
+            "https://captured.test"
+        );
+    }
 }

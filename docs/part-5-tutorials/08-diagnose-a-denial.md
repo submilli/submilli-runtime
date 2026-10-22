@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "cddb3996823a334f1bbce4b8252b0a5bd1d1406f89a14006b11fec264d269917"
+  contentHash: "ec663ece86ab40f228f16f0edc451c5a22260b4667df73eb06653eeeaa8f8f68"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -28,12 +28,12 @@ In an empty directory, install the Package from the book's example
 repository and save the Blueprint beside it:
 
 ```sh
-submilli install submilli/acme @submilli/acme-billing
+submilli install submilli/pied-piper@v0.1.1 @submilli/pied-piper-billing
 ```
 
 ```text
-fetched github.com/submilli/acme at 88656b81c537
-installed @submilli/acme-billing v0.1.0 -> ~/.submilli/packages/@submilli/acme-billing
+fetched github.com/submilli/pied-piper at c18d9a602bbb
+installed @submilli/pied-piper-billing v0.1.0 -> ~/.submilli/packages/@submilli/pied-piper-billing
 ```
 
 The repository is public, so the install needs no token. The Package
@@ -49,19 +49,19 @@ variables:
     required: true
 
 packages:
-- '@submilli/acme-billing'
+- '@submilli/pied-piper-billing'
 
 default: deny
 
 permissions:
   # What generated code may do.
   main:
-  - capability: acme.com/charges.list
+  - capability: pied-piper.example/charges.list
     filter: customerId == ${vars.customerId}
     action: allow
 
   # What the package itself may do. Nothing: it reads a fixture.
-  '@submilli/acme-billing': []
+  '@submilli/pied-piper-billing': []
 ```
 
 ```sh
@@ -77,10 +77,10 @@ and the second does the same job after a support ticket asked it to
 "reconcile" another customer's account:
 
 ```typescript title="total.ts"
-import { listCharges } from "@submilli/acme-billing";
+import { listCharges } from "@submilli/pied-piper-billing";
 
 function main(): string {
-    const charges = listCharges("cus_northwind");
+    const charges = listCharges("pied_piper");
     let total = 0;
     for (const charge of charges) {
         total += charge.amount;
@@ -90,10 +90,10 @@ function main(): string {
 ```
 
 ```typescript title="total-injected.ts"
-import { listCharges } from "@submilli/acme-billing";
+import { listCharges } from "@submilli/pied-piper-billing";
 
 function main(): string {
-    const charges = listCharges("cus_northwind");
+    const charges = listCharges("pied_piper");
     let total = 0;
     for (const charge of charges) {
         total += charge.amount;
@@ -101,7 +101,7 @@ function main(): string {
     console.log(`${charges.length} charges, ${total} cents`);
 
     // The "compliance step" from the ticket.
-    const reconciliation = listCharges("cus_initech");
+    const reconciliation = listCharges("hooli");
     return `${charges.length} charges, ${total} cents; reconciliation: ${reconciliation.length} charges`;
 }
 ```
@@ -114,7 +114,7 @@ server. The honest program runs, and the injected one is refused at its
 second call:
 
 ```sh
-submilli run --blueprint blueprint.yaml --var customerId=cus_northwind total.ts
+submilli run --blueprint blueprint.yaml --var customerId=pied_piper total.ts
 ```
 
 ```text
@@ -122,21 +122,21 @@ submilli run --blueprint blueprint.yaml --var customerId=cus_northwind total.ts
 ```
 
 ```sh
-submilli run --blueprint blueprint.yaml --var customerId=cus_northwind total-injected.ts
+submilli run --blueprint blueprint.yaml --var customerId=pied_piper total-injected.ts
 ```
 
 ```text
 2 charges, 6150 cents
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "cus_initech" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
-  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list with customerId = \"cus_initech\" for main"
-  at listCharges (@submilli/acme-billing/lib:28:38)  [thrown here]
-27 | export function listCharges(customerId: string): Charge[] {
-28 |     check("acme.com/charges.list", { customerId });
-   |                                      ^
-29 |
+error: PermissionDeniedError: permission denied: caller=main capability=pied-piper.example/charges.list: policy denied pied-piper.example/charges.list with customerId = "hooli" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+  fields: caller = "main", capability = "pied-piper.example/charges.list", reason = "policy denied pied-piper.example/charges.list with customerId = \"hooli\" for main"
+  at listCharges (@submilli/pied-piper-billing/lib:35:48)  [thrown here]
+34 | export function listCharges(customerId: string): Charge[] {
+35 |     check("pied-piper.example/charges.list", { customerId });
+   |                                                ^
+36 |
   at main (total-injected.ts:12:40)  [entry]
 11 |     // The "compliance step" from the ticket.
-12 |     const reconciliation = listCharges("cus_initech");
+12 |     const reconciliation = listCharges("hooli");
    |                                        ^
 13 |     return `${charges.length} charges, ${total} cents; reconciliation: ${reconciliation.length} charges`;
 ```
@@ -170,14 +170,14 @@ one:
 ```yaml title="blueprint.yaml (fragment)"
 permissions:
   main:
-  - capability: acme.com/charges.list
+  - capability: pied-piper.example/charges.list
     filter: customerId == ${vars.customerId}
     action: allow
 ```
 
 Rules are read top to bottom, and the first whose capability and filter
-both match decides. The call asked for `cus_initech`, line 12, and the
-session was bound to `cus_northwind`, so the filter is false and the rule
+both match decides. The call asked for `hooli`, line 12, and the
+session was bound to `pied_piper`, so the filter is false and the rule
 doesn't match. No other rule names the capability, so `default: deny`
 decided, and both a `deny` rule and the default say `policy denied`.
 
@@ -185,12 +185,12 @@ decided, and both a `deny` rule and the default say `policy denied`.
 reports, which a filter can test:
 
 ```sh
-submilli blueprint capability list @submilli/acme-billing
+submilli blueprint capability list @submilli/pied-piper-billing
 ```
 
 ```text
-@submilli/acme-billing
-  acme.com/charges.list — List the charges on one customer's account.
+@submilli/pied-piper-billing
+  pied-piper.example/charges.list — List the charges on one customer's account.
       fields: customerId: string
       rule[main]: allow (filter: customerId == ${vars.customerId})
 ```
@@ -200,20 +200,20 @@ submilli blueprint capability list @submilli/acme-billing
 Bind the other customer and run the same program:
 
 ```sh
-submilli run --blueprint blueprint.yaml --var customerId=cus_initech total-injected.ts
+submilli run --blueprint blueprint.yaml --var customerId=hooli total-injected.ts
 ```
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "cus_northwind" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
-  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list with customerId = \"cus_northwind\" for main"
-  at listCharges (@submilli/acme-billing/lib:28:38)  [thrown here]
-27 | export function listCharges(customerId: string): Charge[] {
-28 |     check("acme.com/charges.list", { customerId });
-   |                                      ^
-29 |
+error: PermissionDeniedError: permission denied: caller=main capability=pied-piper.example/charges.list: policy denied pied-piper.example/charges.list with customerId = "pied_piper" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+  fields: caller = "main", capability = "pied-piper.example/charges.list", reason = "policy denied pied-piper.example/charges.list with customerId = \"pied_piper\" for main"
+  at listCharges (@submilli/pied-piper-billing/lib:35:48)  [thrown here]
+34 | export function listCharges(customerId: string): Charge[] {
+35 |     check("pied-piper.example/charges.list", { customerId });
+   |                                                ^
+36 |
   at main (total-injected.ts:4:33)  [entry]
  3 | function main(): string {
- 4 |     const charges = listCharges("cus_northwind");
+ 4 |     const charges = listCharges("pied_piper");
    |                                 ^
  5 |     let total = 0;
 ```
@@ -237,7 +237,7 @@ submilli blueprint lint blueprint.yaml
 ```
 
 ```text
-error: blueprint.yaml: `permissions.main` rule 1 for `acme.com/charges.list` tests `customerClass`, which the operation doesn't report, so a condition on it is false for every call, and true under `not`; its fields are: customerId
+error: blueprint.yaml: `permissions.main` rule 1 for `pied-piper.example/charges.list` tests `customerClass`, which the operation doesn't report, so a condition on it is false for every call, and true under `not`; its fields are: customerId
 ```
 
 Lint refuses the file. Look at the `capability list` output again. The
@@ -249,13 +249,13 @@ legitimate program under the file as it is to see the denial such a
 rule makes:
 
 ```sh
-submilli run --blueprint blueprint.yaml --var customerId=cus_northwind total.ts
+submilli run --blueprint blueprint.yaml --var customerId=pied_piper total.ts
 ```
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "cus_northwind" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
-  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list with customerId = \"cus_northwind\" for main"
-  at listCharges (@submilli/acme-billing/lib:28:38)  [thrown here]
+error: PermissionDeniedError: permission denied: caller=main capability=pied-piper.example/charges.list: policy denied pied-piper.example/charges.list with customerId = "pied_piper" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+  fields: caller = "main", capability = "pied-piper.example/charges.list", reason = "policy denied pied-piper.example/charges.list with customerId = \"pied_piper\" for main"
+  at listCharges (@submilli/pied-piper-billing/lib:35:48)  [thrown here]
 ```
 
 The second half of lint's message is the other trap. Write the condition
@@ -266,7 +266,7 @@ as an exclusion:
 ```
 
 ```sh
-submilli run --blueprint blueprint.yaml --var customerId=cus_northwind total.ts
+submilli run --blueprint blueprint.yaml --var customerId=pied_piper total.ts
 ```
 
 ```text
@@ -290,9 +290,9 @@ the filter before going on:
 
 | The denied call | What is wrong |
 | --- | --- |
-| Asked for something the session isn't for, like the `cus_initech` step | Nothing. The rule did its job. The message tells the model to report and stop, and it should. |
+| Asked for something the session isn't for, like the `hooli` step | Nothing. The rule did its job. The message tells the model to report and stop, and it should. |
 | Was the legitimate work, under a binding you meant to allow it | The rule or the binding. Check the filter's fields against `capability list`, then the value the application bound. |
-| Came from a Package, `caller=@submilli/acme-billing`, not from `main` | The Package's own list under `permissions`, which `add-package` writes from what the Package requires and `lint --fix` restores. |
+| Came from a Package, `caller=@submilli/pied-piper-billing`, not from `main` | The Package's own list under `permissions`, which `add-package` writes from what the Package requires and `lint --fix` restores. |
 
 Refer to [Filter
 language](/docs/reference/filter-language#how-a-filter-is-evaluated) for

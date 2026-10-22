@@ -411,7 +411,7 @@ mod tests {
                     let caller = if cap.grantable_to_main() {
                         "main"
                     } else {
-                        "\"@acme/pkg\""
+                        "\"@pied-piper/pkg\""
                     };
                     format!(
                         "name: f\npermissions:\n  {caller}:\n    - capability: {}\n      filter: {}\n      action: allow\n",

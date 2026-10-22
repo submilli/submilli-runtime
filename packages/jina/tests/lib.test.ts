@@ -3,12 +3,8 @@
 // the `read`/`search` network calls) is not exercised by these unit tests.
 
 import { label } from "submilli:test";
-import {
-    readerHeaders,
-    searchHeaders,
-    normalizeReaderJson,
-    normalizeSearchJson,
-} from "@submilli/jina";
+import { readerHeaders, searchHeaders } from "../src/request";
+import { normalizeReaderJson, normalizeSearchJson } from "../src/response";
 
 function throwsInvalid(action: () => void): boolean {
     try { action(); } catch (cause) {

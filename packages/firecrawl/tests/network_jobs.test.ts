@@ -1,7 +1,8 @@
 import { label } from "submilli:test";
 import secrets from "submilli:secrets";
 import { readText } from "submilli:fs";
-import { startBatch, startCrawl, getJob, getJobErrors, cancelJob, downloadJobPage, normalizeJobPageJson, JobKind } from "@submilli/firecrawl";
+import { startBatch, startCrawl, getJob, getJobErrors, cancelJob, downloadJobPage, JobKind } from "@submilli/firecrawl";
+import { normalizeJobPageJson } from "../src/internal";
 
 function inspectAndCancel(kind: JobKind, id: string): void {
     try {
