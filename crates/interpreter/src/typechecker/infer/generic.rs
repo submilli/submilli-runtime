@@ -951,7 +951,7 @@ impl Inferer<'_> {
     fn bind_from_expected_result(&self, sub: &mut TypeParamSubstitution, ret: &Type, want: &Type) {
         let before = sub.clone();
         self.bind_from_expected_type(sub, ret, want);
-        sub.mark_from_expected_result(&before);
+        sub.mark_from_expected_result(&before, &top_level_type_params(ret));
         sub.forget_close_matches_after(before.close_match_count());
     }
 

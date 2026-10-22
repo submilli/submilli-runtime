@@ -13,9 +13,8 @@ use submilli_blueprint::{
 };
 use submilli_shared::{BlueprintAuthProxy, BlueprintSecretProvider, PolicyCheck};
 
-use crate::app::{AppState, BlueprintForRun};
+use crate::app::AppState;
 use crate::error::{ErrorKind, ExecuteError};
-use crate::record::{RunEntry, TestWorld};
 use interpreter::runtime::{Vfs, VfsInfo};
 
 use crate::runner::{self, RunOutcome};
@@ -90,32 +89,18 @@ pub async fn handle(
                 .into_response();
         }
     };
-    let (session_id, response) =
-        one_shot(&state, req, crate::audit::execution(), RunEntry::Http).await;
+    let (session_id, response) = one_shot(&state, req, crate::audit::execution(), "http").await;
     with_session_header(&session_id, response).into_response()
 }
 
 /// Runs one program in a fresh session that is torn down once it returns, the
-/// `POST /v1/execute` shape. Returns the session id and the response. `run_entry` is how the
-/// run is recorded: [`RunEntry::Http`] for the endpoint, [`RunEntry::Program`] for an
-/// in-process caller.
+/// `POST /v1/execute` shape. Returns the session id and the response. `run_entry` is how
+/// the run's idempotency ledger entry names where it came from.
 pub(crate) async fn one_shot(
     state: &AppState,
     req: ExecuteRequest,
     audit: Option<Arc<crate::audit::ExecutionAudit>>,
-    run_entry: RunEntry,
-) -> (String, ExecuteResponse) {
-    one_shot_with(state, req, audit, run_entry, None).await
-}
-
-/// [`one_shot`] as a test run when `test` is given: the run's outside connectors and local
-/// state come from it, and it is recorded as a test of its source.
-pub(crate) async fn one_shot_with(
-    state: &AppState,
-    req: ExecuteRequest,
-    audit: Option<Arc<crate::audit::ExecutionAudit>>,
-    run_entry: RunEntry,
-    test: Option<TestWorld>,
+    run_entry: &'static str,
 ) -> (String, ExecuteResponse) {
     // Stateless one-shot: every call gets a fresh transient session, torn down
     // once the run returns. A caller that wants state across executes (a
@@ -141,13 +126,7 @@ pub(crate) async fn one_shot_with(
 
     // Blueprint and variables are supplied inline and validated here, before the
     // shared core runs them.
-    // A test run was prepared under a blueprint it already looked up; it runs under
-    // that one.
-    let found = match test.as_ref().map(TestWorld::blueprint) {
-        Some(found) => Ok(Some(found.clone())),
-        None => state.blueprint_for_run(&req.blueprint).await,
-    };
-    let found = match found {
+    let found = match state.blueprints().get(&req.blueprint).await {
         Ok(found) => found,
         Err(error) => {
             return failed(
@@ -156,11 +135,7 @@ pub(crate) async fn one_shot_with(
             );
         }
     };
-    let Some(BlueprintForRun {
-        blueprint,
-        version_tag,
-    }) = found
-    else {
+    let Some(blueprint) = found else {
         return match blueprint_miss_message(state, &req.blueprint).await {
             Ok(message) => failed(ErrorKind::BlueprintNotFound, message),
             Err(error) => failed(
@@ -234,18 +209,14 @@ pub(crate) async fn one_shot_with(
             code: &req.code,
             blueprint_name: &req.blueprint,
             blueprint,
-            version_tag,
             variables,
             harness_secrets,
             audit,
             vfs_source: VfsSource::Rest,
             run_entry,
-            client: None,
-            tool_call_id: None,
             idempotency_key: None,
             tools: None,
         },
-        test,
         records_last_run,
     )
     .await;
@@ -276,9 +247,6 @@ pub(crate) struct ExecuteInputs<'a> {
     pub blueprint_name: &'a str,
     /// The blueprint the run is decided under.
     pub blueprint: Arc<Blueprint>,
-    /// The version tag read with `blueprint`, in the same lookup; `None` when it was
-    /// registered without one.
-    pub version_tag: Option<String>,
     /// The validated `${vars.NAME}` bindings.
     pub variables: Arc<VarBindings>,
     /// Trusted harness credentials for this run alone.
@@ -288,16 +256,13 @@ pub(crate) struct ExecuteInputs<'a> {
     pub audit: Option<Arc<crate::audit::ExecutionAudit>>,
     /// Who opens the run's VFS.
     pub vfs_source: VfsSource,
-    /// How the run is recorded, when it is.
-    pub run_entry: RunEntry,
-    /// The MCP client's name, for the run's record.
-    pub client: Option<String>,
-    /// The MCP client's id for the tool call, for the run's record.
-    pub tool_call_id: Option<String>,
-    /// The session API's `Idempotency-Key`, for the run's record.
+    /// Where the run came from, as its idempotency ledger entry names it: `http`,
+    /// `session` or `mcp`.
+    pub run_entry: &'static str,
+    /// The session API's `Idempotency-Key`; `None` for an unkeyed run.
     pub idempotency_key: Option<&'a str>,
     /// The session's application tools, for a session run that may suspend at a
-    /// tool call. MCP, one-shot and embedder runs have none.
+    /// tool call. MCP and one-shot runs have none.
     pub tools: Option<RunTools>,
 }
 
@@ -350,21 +315,19 @@ impl ExecuteOutcome {
     }
 }
 
-/// Runs one program: starts its recording (when the server records runs), registers it
-/// to be cancelled, prepares and runs it, and reports to its recorder what the caller
-/// got. See [`prepare_and_run`] for the work itself.
+/// Runs one program: reserves its place in the idempotency ledger when it is unkeyed,
+/// prepares and runs it, and records the outcome there. See [`prepare_and_run`] for the
+/// work itself.
 pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) -> ExecuteOutcome {
     let records_last_run = true;
-    execute_core_with(state, inputs, None, records_last_run).await
+    execute_core_with(state, inputs, records_last_run).await
 }
 
-/// [`execute_core`] as a test run when `test` is given. An unkeyed run's
-/// outcome becomes its session's last run when `records_last_run` is set; a
-/// keyed one leaves that to its caller's guard.
+/// [`execute_core`], where an unkeyed run's outcome becomes its session's last run when
+/// `records_last_run` is set; a keyed one leaves that to its caller's guard.
 async fn execute_core_with(
     state: &AppState,
     mut inputs: ExecuteInputs<'_>,
-    test: Option<TestWorld>,
     records_last_run: bool,
 ) -> ExecuteOutcome {
     let audit = inputs
@@ -379,14 +342,6 @@ async fn execute_core_with(
         })
         .clone();
     let unkeyed = if inputs.idempotency_key.is_none() {
-        let entry = match &inputs.run_entry {
-            RunEntry::Mcp => "mcp",
-            RunEntry::Http => "http",
-            RunEntry::Session => "session",
-            RunEntry::Program => "program",
-            RunEntry::Test => "test",
-            RunEntry::McpFileTool { .. } => "mcp_file_tool",
-        };
         match state
             .idempotency()
             .prepare(
@@ -395,7 +350,7 @@ async fn execute_core_with(
                 inputs.code,
                 &audit.id,
                 Some(&audit.principal),
-                entry,
+                inputs.run_entry,
             )
             .await
         {
@@ -412,47 +367,11 @@ async fn execute_core_with(
     } else {
         None
     };
-    let run_cancel = inputs.tools.as_mut().and_then(|tools| tools.cancel.take());
-    let recording = crate::record::Recording::start_tapped(
-        state,
-        || run_start(&inputs, test.as_ref()),
-        test.as_ref().map(TestWorld::tap),
-    );
-    // A test run is reported from its own record, so one the recorder declined is refused
-    // before it can have any effect.
-    if let Some(test) = &test
-        && recording.is_none()
-    {
-        test.tap().declined();
-        if let Some(guard) = unkeyed {
-            guard.release().await;
-        }
-        return ExecuteOutcome::undispatched(failure_response(
-            inputs.audit.as_deref(),
-            inputs.session_id,
-            ErrorKind::RuntimeError,
-            crate::record::TestError::NoRecorder.to_string(),
-        ));
-    }
-    // Only a recorded run can be cancelled from outside (the registry exists for a stop
-    // control over recorded runs), so an unrecorded run pays for no registration. The
-    // guard keeps the entry until this function returns, which is after the run has
-    // ended, so `cancel_run` finds the run for exactly as long as it is in flight. The id
-    // it is registered by is its audit's, the one its recorder and response carry: every
-    // entry point builds an audit whether or not the audit log is enabled, so every
-    // recorded run registers.
     // A run that may suspend is cancelled through its own registry entry.
-    let (_registered, cancel_requested) = match (run_cancel, &recording, &inputs.audit) {
-        (Some(cancel), _, _) => (None, Some(cancel)),
-        (None, Some(_), Some(audit)) => {
-            let (registered, cancel_requested) = state.register_run(&audit.id);
-            (Some(registered), Some(cancel_requested))
-        }
-        _ => (None, None),
-    };
+    let cancel_requested = inputs.tools.as_mut().and_then(|tools| tools.cancel.take());
     // An MCP request with no session has nowhere to keep a last run.
     let records_last_run = records_last_run && !inputs.session_id.is_empty();
-    let outcome = prepare_and_run(state, inputs, recording.clone(), cancel_requested, test).await;
+    let outcome = prepare_and_run(state, inputs, cancel_requested).await;
     if let Some(mut guard) = unkeyed {
         if outcome.dispatched {
             if records_last_run && let Some(last_run) = &outcome.last_run {
@@ -463,60 +382,7 @@ async fn execute_core_with(
             guard.release().await;
         }
     }
-    if let Some(recording) = &recording {
-        match (&outcome.response.error, outcome.dispatched) {
-            // The runner finishes a dispatched run itself; one that never got there is
-            // finished here.
-            (Some(error), false) => recording.undispatched(error),
-            _ => recording.returned(returned_bytes(&outcome.response)),
-        }
-    }
     outcome
-}
-
-/// The run as its recorder first sees it.
-fn run_start(inputs: &ExecuteInputs<'_>, test: Option<&TestWorld>) -> crate::record::RunStart {
-    let audit = inputs.audit.as_deref();
-    crate::record::RunStart {
-        execution_id: execution_id_of(audit).to_string(),
-        label: audit.map_or_else(
-            || "unauthenticated".to_owned(),
-            |audit| audit.principal.clone(),
-        ),
-        entry: inputs.run_entry.clone(),
-        test_of: test.map(|test| test.source_run().to_owned()),
-        client: inputs.client.clone(),
-        tool_call_id: inputs.tool_call_id.clone(),
-        session_id: (!inputs.session_id.is_empty()).then(|| inputs.session_id.to_owned()),
-        idempotency_key: inputs.idempotency_key.map(str::to_owned),
-        blueprint_name: inputs.blueprint_name.to_owned(),
-        blueprint: Arc::clone(&inputs.blueprint),
-        blueprint_hash: crate::audit::blueprint_hash(&inputs.blueprint),
-        blueprint_version: inputs
-            .version_tag
-            .clone()
-            .or_else(|| crate::audit::blueprint_hash(&inputs.blueprint)),
-        variables: Arc::clone(&inputs.variables),
-        harness_secrets: Arc::clone(&inputs.harness_secrets),
-        code: Some(Arc::from(inputs.code)),
-    }
-}
-
-/// The size, as JSON, of what the caller received: the result, error, and console
-/// output both transports return.
-fn returned_bytes(response: &ExecuteResponse) -> u64 {
-    #[derive(Serialize)]
-    struct Returned<'a> {
-        result: &'a Option<String>,
-        console: &'a [String],
-        error: &'a Option<ExecuteError>,
-    }
-    serde_json::to_vec(&Returned {
-        result: &response.result,
-        console: &response.console,
-        error: &response.error,
-    })
-    .map_or(0, |bytes| bytes.len() as u64)
 }
 
 /// Runs one program against a session and records its last-run. Registers the session id
@@ -525,23 +391,18 @@ fn returned_bytes(response: &ExecuteResponse) -> u64 {
 async fn prepare_and_run(
     state: &AppState,
     inputs: ExecuteInputs<'_>,
-    recording: Option<crate::record::Recording>,
     cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
-    test: Option<TestWorld>,
 ) -> ExecuteOutcome {
     let ExecuteInputs {
         session_id,
         code,
         blueprint_name,
         blueprint,
-        version_tag: _,
         variables,
         harness_secrets,
         audit: execution_audit,
         vfs_source,
         run_entry: _,
-        client: _,
-        tool_call_id: _,
         idempotency_key,
         tools,
     } = inputs;
@@ -576,28 +437,6 @@ async fn prepare_and_run(
         Ok(imports) => imports,
         Err(message) => return fail_to_parse(message),
     };
-    // Every entry point reaches here before anything is compiled, so the embedder's
-    // check runs for every run, whoever sent it.
-    if let Some(hook) = state.pre_execute() {
-        let packages: BTreeSet<String> = script_imports
-            .registry_packages
-            .iter()
-            .filter(|package| blueprint.packages.contains(*package))
-            .cloned()
-            .collect();
-        let checked = hook
-            .before_execute(crate::config::PreExecute {
-                state,
-                blueprint_name,
-                blueprint: &blueprint,
-                packages: &packages,
-            })
-            .await;
-        if let Err(refusal) = checked {
-            return fail(ErrorKind::PackageResolution, refusal.message);
-        }
-    }
-
     let network_policy = execution_audit.as_ref().map_or_else(
         || state.network_policy().clone(),
         |audit| audit.network_policy(state.network_policy()),
@@ -619,23 +458,18 @@ async fn prepare_and_run(
             }
         };
 
-    if test.is_none()
-        && matches!(&vfs_source, VfsSource::Rest)
+    if matches!(&vfs_source, VfsSource::Rest)
         && let Err(message) = open_session(state, session_id, &blueprint).await
     {
         return fail(ErrorKind::RuntimeError, message);
     }
-    let resource_use = if test.is_none() {
-        match state
-            .session_manager()
-            .admit_resource_work(session_id)
-            .await
-        {
-            Ok(scope) => Some(scope),
-            Err(error) => return fail(ErrorKind::RuntimeError, error.to_string()),
-        }
-    } else {
-        None
+    let resource_use = match state
+        .session_manager()
+        .admit_resource_work(session_id)
+        .await
+    {
+        Ok(scope) => scope,
+        Err(error) => return fail(ErrorKind::RuntimeError, error.to_string()),
     };
     let context = WorldContext {
         state,
@@ -649,12 +483,6 @@ async fn prepare_and_run(
         embedding_provider,
         cancel_requested,
     };
-    // The one place a test run's world replaces the run's own.
-    let simulating = test.is_some();
-    let world = match test {
-        Some(test) => test.into_world(context).await,
-        None => live_world(context, vfs_source, &script_imports.mcp_servers).await,
-    };
     let RunWorld {
         mcp_catalog,
         vfs,
@@ -667,8 +495,7 @@ async fn prepare_and_run(
         embedding_provider,
         embedding_budget,
         cancel_requested,
-        throwaway,
-    } = match world {
+    } = match live_world(context, vfs_source, &script_imports.mcp_servers).await {
         Ok(world) => world,
         Err(message) => return fail(ErrorKind::RuntimeError, message),
     };
@@ -720,23 +547,17 @@ async fn prepare_and_run(
         mcp_transport,
         tool_provider: run_tools.as_ref().map(|tools| Arc::clone(&tools.provider)),
         session_kv,
-        session_finalizers: if simulating {
-            Some(manager.replay_finalizers())
-        } else {
-            match manager.finalizer_provider(session_id, &packages) {
-                Ok(provider) => Some(provider),
-                Err(message) => return fail(ErrorKind::RuntimeError, message),
-            }
+        session_finalizers: match manager.finalizer_provider(session_id, &packages) {
+            Ok(provider) => Some(provider),
+            Err(message) => return fail(ErrorKind::RuntimeError, message),
         },
-        resource_use,
+        resource_use: Some(resource_use),
         cursor_keys: manager.cursor_keys(),
         llm_provider,
         llm_budget: Some(llm_budget),
         embedding_provider,
         embedding_budget: Some(embedding_budget),
-        recording,
         cancel_requested,
-        throwaway,
     };
     // This commit is the admission barrier. A failure before it permits only a
     // proven preparation release; after it, a lost run remains indeterminate.
@@ -753,7 +574,6 @@ async fn prepare_and_run(
             engine: state.engine(),
             base_linker: state.base_linker(),
             config: state.runtime(),
-            telemetry: state.run_telemetry(),
         },
         vfs,
         vfs_info,
@@ -800,7 +620,7 @@ pub(crate) struct WorldContext<'a> {
 /// What a run executes in and reaches outside through: its compile-time MCP catalog, its
 /// files and data, its connectors, and its token budgets.
 pub(crate) struct RunWorld {
-    pub mcp_catalog: Arc<crate::record::McpCatalog>,
+    pub mcp_catalog: Arc<submilli_shared::mcp::McpCatalog>,
     pub vfs: Vfs,
     pub vfs_info: VfsInfo,
     pub session_kv: Arc<dyn interpreter::runtime::SessionKvStore>,
@@ -811,8 +631,6 @@ pub(crate) struct RunWorld {
     pub embedding_provider: Option<Arc<dyn interpreter::runtime::EmbeddingProvider>>,
     pub embedding_budget: Arc<interpreter::runtime::EmbeddingTokenBudget>,
     pub cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
-    /// A test run's throwaway copies, kept until the run's owner task is done with them.
-    pub throwaway: Option<Arc<crate::record::Throwaway>>,
 }
 
 /// A normal run's world: discovery against its MCP servers, its session's files and data,
@@ -861,7 +679,6 @@ async fn live_world(
         embedding_provider: context.embedding_provider,
         embedding_budget: manager.embedding_budget_for_execute(),
         cancel_requested: context.cancel_requested,
-        throwaway: None,
     })
 }
 

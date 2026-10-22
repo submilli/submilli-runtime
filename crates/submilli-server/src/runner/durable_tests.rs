@@ -48,9 +48,7 @@ fn services() -> HostServices {
         llm_budget: None,
         embedding_provider: None,
         embedding_budget: None,
-        recording: None,
         cancel_requested: None,
-        throwaway: None,
     }
 }
 async fn execute(
@@ -79,7 +77,6 @@ async fn execute(
             engine: &engine,
             base_linker: &linker,
             config: &config,
-            telemetry: crate::config::RunTelemetry::Off,
         },
         Vfs::external(root.to_owned()).unwrap(),
         StoreData::with_tempdir().unwrap().vfs_info,

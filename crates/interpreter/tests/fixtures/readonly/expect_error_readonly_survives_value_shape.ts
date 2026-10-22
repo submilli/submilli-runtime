@@ -21,6 +21,10 @@
 // expect-error: no field `y`
 // expect-error: field `s` does not exist on all members
 
+class Shelf<T> {
+  constructor(public readonly item: T) {}
+}
+
 interface Record1 {
   readonly id: number;
   xs: number[];
@@ -105,11 +109,9 @@ function main(): void {
   o = r2;
   o.xs = [5];
 
-  let s: Set<readonly number[]> = new Set<readonly number[]>();
-  s = new Set<number[]>([[1]]);
-  s.forEach((x) => {
-    x.push(1);
-  });
+  let s: Shelf<readonly number[]> = new Shelf<readonly number[]>([]);
+  s = new Shelf<number[]>([1]);
+  s.item.push(1);
 
   const shared: number[] = [1];
   let g: Getter | null = null;

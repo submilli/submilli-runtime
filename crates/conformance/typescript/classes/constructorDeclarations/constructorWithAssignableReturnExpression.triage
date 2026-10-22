@@ -1,2 +1,2 @@
-line 6, 20 extra: bug SUB-1728 a constructor can't return a value, where tsc accepts one assignable to the instance type
+line 6, 20 extra: by-design spec §2.2 a constructor's `return` takes no value, so `new` always yields the instance it built
 line 34 extra: by-design spec §2.11 a cast's source and target must be related by assignability in one direction, where tsc's comparable relation also relates them (`null` and `T`)

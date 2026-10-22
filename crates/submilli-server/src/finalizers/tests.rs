@@ -1,9 +1,51 @@
 use super::*;
 use crate::blueprint::StoredBlueprint;
 use crate::config::ServerConfig;
-use crate::record::{
-    SessionProgram, SessionStart, end_session, run_in_session, session_finalizers, start_session,
-};
+use crate::handlers::sessions::{self, end_session_with_finalizers, session_finalizers};
+
+/// Starts a `finalizers` session as `POST /v1/sessions` would, with no variables
+/// or application tools.
+async fn start_session(
+    state: &crate::AppState,
+    secrets: submilli_blueprint::HarnessSecretBindings,
+) -> Result<String, sessions::SessionStartError> {
+    sessions::start(
+        state,
+        "finalizers",
+        &Default::default(),
+        &secrets,
+        Vec::new(),
+    )
+    .await
+    .map(|started| started.session_id)
+}
+
+/// Runs `code` in a started session, as `POST /v1/sessions/{id}/execute` without
+/// an `Idempotency-Key` runs it.
+async fn run_in_session(
+    state: &crate::AppState,
+    session_id: &str,
+    code: &str,
+) -> Result<crate::handlers::execute::ExecuteResponse, sessions::SessionRunError> {
+    let audit = crate::audit::ExecutionAudit::new(
+        state.audit().clone(),
+        "test",
+        "session",
+        Some(session_id),
+    );
+    let bound = sessions::bound_for_run(state, session_id, code, Some(&audit)).await?;
+    let outcome = sessions::run(state, session_id, bound, code, None, audit.clone(), None).await;
+    audit.finish(outcome.response.error.is_none());
+    Ok(outcome.response)
+}
+
+/// Ends a session as `DELETE /v1/sessions/{id}` does.
+async fn end_session(
+    state: &crate::AppState,
+    session_id: &str,
+) -> Result<bool, crate::session_manager::SessionError> {
+    state.session_manager().close_owned(session_id).await
+}
 
 const SOURCE: &str = r#"
 import * as session from "submilli:session";
@@ -32,28 +74,12 @@ impl Server {
         Self { state, root }
     }
     async fn start(&self) -> String {
-        start_session(
-            &self.state,
-            SessionStart {
-                blueprint: "finalizers".into(),
-                variables: Default::default(),
-                secrets: Default::default(),
-            },
-        )
-        .await
-        .unwrap()
+        start_session(&self.state, Default::default())
+            .await
+            .unwrap()
     }
     async fn run(&self, id: &str, code: &str) -> crate::handlers::execute::ExecuteResponse {
-        run_in_session(
-            &self.state,
-            SessionProgram {
-                label: "test".into(),
-                session_id: id.into(),
-                code: code.into(),
-            },
-        )
-        .await
-        .unwrap()
+        run_in_session(&self.state, id, code).await.unwrap()
     }
 }
 
@@ -372,7 +398,7 @@ vfs: per_session
         ))
         .await
         .unwrap();
-    let report = crate::record::end_session_with_finalizers(&server.state, &id)
+    let report = end_session_with_finalizers(&server.state, &id)
         .await
         .unwrap();
     assert!(report.closed);
@@ -766,11 +792,7 @@ secrets:
     assert_eq!(canary.len(), 32);
     let id = start_session(
         &state,
-        SessionStart {
-            blueprint: "finalizers".into(),
-            variables: Default::default(),
-            secrets: std::collections::BTreeMap::from([("TOKEN".into(), canary.into())]),
-        },
+        std::collections::BTreeMap::from([("TOKEN".into(), canary.into())]),
     )
     .await
     .unwrap();
@@ -806,8 +828,8 @@ async fn concurrent_close_callers_wait_for_the_same_finalization() {
         .await;
     assert!(response.error.is_none(), "{:?}", response.error);
     let (first, second) = tokio::join!(
-        crate::record::end_session_with_finalizers(&server.state, &id),
-        crate::record::end_session_with_finalizers(&server.state, &id),
+        end_session_with_finalizers(&server.state, &id),
+        end_session_with_finalizers(&server.state, &id),
     );
     let first = first.unwrap();
     let second = second.unwrap();

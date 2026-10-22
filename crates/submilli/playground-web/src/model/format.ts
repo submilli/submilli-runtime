@@ -93,7 +93,11 @@ export interface ValuesNote {
 /** The values that differ between `before` and `after`, a name unset on one side shown as "not set". */
 export function differing(before: Record<string, string>, after: Record<string, string>): ValueChange[] {
   const names = [...new Set([...Object.keys(before), ...Object.keys(after)])];
-  return names.filter((name) => before[name] !== after[name]).map((name) => ({ name, was: before[name] ?? "not set", now: after[name] ?? "not set" }));
+  // Own keys only: a variable may be named `constructor`, which every object has.
+  const value = (values: Record<string, string>, name: string) => (Object.hasOwn(values, name) ? values[name] : undefined);
+  return names
+    .filter((name) => value(before, name) !== value(after, name))
+    .map((name) => ({ name, was: value(before, name) ?? "not set", now: value(after, name) ?? "not set" }));
 }
 
 // Fields whose value reads on its own; any other is named, as `customerId = cus_globex`.

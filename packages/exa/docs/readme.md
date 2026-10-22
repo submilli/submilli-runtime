@@ -19,8 +19,8 @@ host. All hosts are checked before sending a batch.
 
 Keep source URLs with all extracted text for attribution.
 
-Credentials come from `EXA_API_KEY` internally. Never request or pass a key in
-package calls.
+Credentials are supplied internally. Never request or pass a key in package
+calls.
 
 <!-- submilli:if capability="exa.ai/search" -->
 

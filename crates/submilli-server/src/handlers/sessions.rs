@@ -22,12 +22,65 @@ use submilli_blueprint::{
     HarnessSecretBindings, required_harness_secrets, resolve_harness_secrets, resolve_variables,
 };
 
-use crate::app::{AppState, BlueprintForRun};
+use crate::adapters::session::finalizers::FinalizerDiagnostic;
+use crate::app::AppState;
+use crate::blueprint::StoreError;
 use crate::domain::idempotent_request::RecordedOutcome;
 use crate::domain::tools::{DeclaredTool, SessionTools};
 use crate::handlers::execute::{self, ExecuteInputs, SESSION_HEADER, blueprint_miss_message};
 use crate::idempotency::{Refusal, Reservation, ReservationGuard};
-use crate::record::{SessionRunError, SessionStartError};
+use crate::session_manager::SessionError;
+
+/// Why a session was not started.
+#[derive(Debug)]
+pub(crate) enum SessionStartError {
+    /// No runnable blueprint has that name; `message` says whether it was never
+    /// registered or is registered in a form this binary can no longer parse.
+    UnknownBlueprint { name: String, message: String },
+    /// The variables do not satisfy the blueprint's declarations.
+    InvalidVariables(String),
+    /// The blueprint's files or git checkout cannot be resolved with these variables.
+    InvalidFilesystem(String),
+    /// The harness secrets do not satisfy the blueprint's declarations.
+    InvalidSecrets(String),
+    /// The declared application tools are refused (too many, or too large).
+    InvalidTools(String),
+    /// The blueprint could not be read.
+    Store(StoreError),
+    /// The session could not be created.
+    Session(SessionError),
+}
+
+impl std::fmt::Display for SessionStartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownBlueprint { message, .. } => f.write_str(message),
+            Self::InvalidVariables(message) => write!(f, "invalid variables: {message}"),
+            Self::InvalidFilesystem(message) => f.write_str(message),
+            Self::InvalidSecrets(message) => write!(f, "invalid secrets: {message}"),
+            Self::InvalidTools(message) => write!(f, "invalid tools: {message}"),
+            Self::Store(_) => f.write_str("blueprint store unavailable"),
+            Self::Session(error) => error.fmt(f),
+        }
+    }
+}
+
+/// Why a session could not run a program. A refused run never started.
+#[derive(Debug)]
+pub(crate) enum SessionRunError {
+    /// No session has that id, or it has ended or expired.
+    UnknownSession,
+    /// The session's blueprint is no longer runnable; `message` says whether it was
+    /// removed or is held in a form this binary can no longer parse.
+    BlueprintMissing { name: String, message: String },
+    /// The blueprint requires harness secrets the session no longer holds, as after a
+    /// restart that could not recover them; rebind them to run again.
+    SecretsRequired { required: Vec<String> },
+    /// The blueprint could not be read.
+    Store(StoreError),
+    /// The session's state could not be read.
+    Session(SessionError),
+}
 
 /// Opt-in replay guard on the session execute endpoint. Named to match the
 /// harness, which already sends it.
@@ -276,7 +329,7 @@ pub async fn execute(
         bound,
         &req.code,
         key.as_deref(),
-        Some(audit),
+        audit,
         None,
     )
     .await;
@@ -352,7 +405,7 @@ async fn reserve(
                 return Reserved::Answered(refusal_response(session_id, &refusal));
             }
             Reservation::Replay(outcome) => {
-                return Reserved::Answered(replay_response(state, session_id, key, &outcome).await);
+                return Reserved::Answered(replay_response(state, session_id, &outcome).await);
             }
             Reservation::Attached(run_id) => {
                 let Some(entry) = state.session_manager().runs().get(&run_id) else {
@@ -372,18 +425,8 @@ async fn reserve(
 async fn replay_response(
     state: &AppState,
     session_id: &str,
-    key: &str,
     outcome: &RecordedOutcome,
 ) -> axum::response::Response {
-    if let Some(recorder) = state.run_recorder() {
-        recorder.retried(crate::record::RetryLink {
-            session_id: session_id.to_owned(),
-            idempotency_key: key.to_owned(),
-            original_execution_id: serde_json::from_str::<serde_json::Value>(&outcome.body)
-                .ok()
-                .and_then(|body| body.get("execution_id")?.as_str().map(str::to_owned)),
-        });
-    }
     if let Some(refused) = note_duplicate(state, session_id).await {
         return refused;
     }
@@ -414,7 +457,7 @@ async fn session_tools(
     session_id: &str,
     bound: &BoundSession,
 ) -> Result<Option<SessionTools>, crate::session_manager::SessionError> {
-    if !exposes_tools(&bound.found.blueprint) {
+    if !exposes_tools(&bound.blueprint) {
         return Ok(None);
     }
     state.session_manager().tools(session_id).await
@@ -518,7 +561,7 @@ impl Supervised {
             self.bound,
             &self.code,
             self.key.as_deref(),
-            Some(Arc::clone(&self.audit)),
+            Arc::clone(&self.audit),
             Some(self.tools),
         )
         .await;
@@ -554,7 +597,7 @@ fn run_tools(
         }),
         provider: Arc::new(crate::runs::SuspendingToolProvider {
             entry: Arc::clone(entry),
-            timeout: bound.found.blueprint.tool_call_timeout,
+            timeout: bound.blueprint.tool_call_timeout,
             touch: session_touch(state, session_id),
         }),
         cancel: Some(cancelled),
@@ -599,7 +642,7 @@ fn exposes_tools(blueprint: &submilli_blueprint::Blueprint) -> bool {
 /// variables and harness secrets fixed when it was created.
 pub(crate) struct BoundSession {
     blueprint_name: String,
-    found: BlueprintForRun,
+    blueprint: submilli_blueprint::Blueprint,
     variables: Arc<submilli_blueprint::VarBindings>,
     harness_secrets: Arc<HarnessSecretBindings>,
 }
@@ -619,12 +662,11 @@ pub(crate) async fn bound_for_run(
         .await
         .map_err(SessionRunError::Session)?
     else {
-        return Err(SessionRunError::UnknownSession {
-            session_id: session_id.to_owned(),
-        });
+        return Err(SessionRunError::UnknownSession);
     };
-    let Some(found) = state
-        .blueprint_for_run(&blueprint_name)
+    let Some(blueprint) = state
+        .blueprints()
+        .get(&blueprint_name)
         .await
         .map_err(SessionRunError::Store)?
     else {
@@ -639,7 +681,6 @@ pub(crate) async fn bound_for_run(
         });
     };
 
-    let blueprint = &found.blueprint;
     let (binding, secrets) = state
         .session_manager()
         .execution_bindings(session_id)
@@ -647,7 +688,7 @@ pub(crate) async fn bound_for_run(
         .map_err(SessionRunError::Session)?;
     let variables = Arc::new(binding.variables().clone());
     if let Some(audit) = audit {
-        audit.annotate(code, &blueprint_name, Some(blueprint), &variables);
+        audit.annotate(code, &blueprint_name, Some(&blueprint), &variables);
     }
     let harness_secrets = secrets.or_else(|| {
         required_harness_secrets(&blueprint.secrets)
@@ -656,13 +697,12 @@ pub(crate) async fn bound_for_run(
     });
     let Some(harness_secrets) = harness_secrets else {
         return Err(SessionRunError::SecretsRequired {
-            session_id: session_id.to_owned(),
             required: required_harness_secrets(&blueprint.secrets),
         });
     };
     Ok(BoundSession {
         blueprint_name,
-        found,
+        blueprint,
         variables,
         harness_secrets,
     })
@@ -671,7 +711,7 @@ pub(crate) async fn bound_for_run(
 /// The `POST /v1/sessions/{id}/execute` response for a session that cannot run.
 fn run_refusal_response(session_id: &str, error: SessionRunError) -> axum::response::Response {
     match error {
-        SessionRunError::UnknownSession { .. } => (
+        SessionRunError::UnknownSession => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "execution_id": crate::audit::execution_id(), "error": "unknown session", "session_id": session_id })),
         )
@@ -687,7 +727,7 @@ fn run_refusal_response(session_id: &str, error: SessionRunError) -> axum::respo
             ),
         )
             .into_response(),
-        SessionRunError::SecretsRequired { required, .. } => (
+        SessionRunError::SecretsRequired { required } => (
             StatusCode::CONFLICT,
             Json(
                 serde_json::json!({ "execution_id": crate::audit::execution_id(),
@@ -703,7 +743,7 @@ fn run_refusal_response(session_id: &str, error: SessionRunError) -> axum::respo
     }
 }
 
-/// Runs `code` in `session_id` under what it is bound to, recorded as a session run.
+/// Runs `code` in `session_id` under what it is bound to.
 /// `tools` are the session's application tools, for a run that may suspend.
 pub(crate) async fn run(
     state: &AppState,
@@ -711,12 +751,12 @@ pub(crate) async fn run(
     bound: BoundSession,
     code: &str,
     idempotency_key: Option<&str>,
-    audit: Option<Arc<crate::audit::ExecutionAudit>>,
+    audit: Arc<crate::audit::ExecutionAudit>,
     tools: Option<execute::RunTools>,
 ) -> execute::ExecuteOutcome {
     let BoundSession {
         blueprint_name,
-        found,
+        blueprint,
         variables,
         harness_secrets,
     } = bound;
@@ -726,15 +766,12 @@ pub(crate) async fn run(
             session_id,
             code,
             blueprint_name: &blueprint_name,
-            blueprint: Arc::new(found.blueprint),
-            version_tag: found.version_tag,
+            blueprint: Arc::new(blueprint),
             variables,
             harness_secrets,
-            audit,
+            audit: Some(audit),
             vfs_source: execute::VfsSource::Rest,
-            run_entry: crate::record::RunEntry::Session,
-            client: None,
-            tool_call_id: None,
+            run_entry: "session",
             idempotency_key,
             tools,
         },
@@ -869,7 +906,7 @@ pub async fn disconnect(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> axum::response::Response {
-    match crate::record::end_session_with_finalizers(&state, &session_id).await {
+    match end_session_with_finalizers(&state, &session_id).await {
         Ok(report) if !report.closed => StatusCode::NOT_FOUND.into_response(),
         Ok(report) if report.finalizers.is_empty() => StatusCode::NO_CONTENT.into_response(),
         Ok(report) => Json(report).into_response(),
@@ -944,8 +981,38 @@ pub async fn finalizers(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> axum::response::Response {
-    match crate::record::session_finalizers(&state, &id).await {
+    match session_finalizers(&state, &id).await {
         Ok(records) => Json(records).into_response(),
         Err(error) => session_state_response(error),
     }
+}
+
+/// Cleanup status remains inspectable after session termination. Arguments and
+/// credentials are never included.
+pub(crate) async fn session_finalizers(
+    state: &AppState,
+    session_id: &str,
+) -> Result<Vec<FinalizerDiagnostic>, SessionError> {
+    state
+        .session_manager()
+        .finalizer_store()
+        .diagnostics(session_id)
+        .await
+        .map_err(Into::into)
+}
+
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct SessionCloseReport {
+    pub(crate) closed: bool,
+    pub(crate) finalizers: Vec<FinalizerDiagnostic>,
+}
+
+/// Close and wait for cleanup, returning every sanitized finalizer outcome.
+pub(crate) async fn end_session_with_finalizers(
+    state: &AppState,
+    session_id: &str,
+) -> Result<SessionCloseReport, SessionError> {
+    let closed = state.session_manager().close_owned(session_id).await?;
+    let finalizers = session_finalizers(state, session_id).await?;
+    Ok(SessionCloseReport { closed, finalizers })
 }
