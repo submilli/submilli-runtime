@@ -34,6 +34,6 @@ function main(): void {
   assert(f({}) === 0);
   assert(f({ kind: null }) === 2);
   assert(g(new Map()) === 3);
-  assert(g(new Map([["x", null]])) === 2);
+  assert(g(new Map<string, number | null>([["x", null]])) === 2);
   assert(h([]) === 9);
 }
