@@ -700,7 +700,20 @@ impl<'a> Parser<'a> {
 
         let name_tok = self.expect_binding_identifier("expected function name")?;
         let name = self.ident_from_token(&name_tok);
+        let is_main = self.block_depth == 0 && name.name == "main";
+        let decl = self.parse_function_decl_after_name(doc, kw, name);
+        if decl.is_none() && is_main {
+            self.ast.unparsed_main = true;
+        }
+        decl
+    }
 
+    fn parse_function_decl_after_name(
+        &mut self,
+        doc: Option<crate::DocComment>,
+        kw: Token,
+        name: Ident,
+    ) -> Option<StmtId> {
         let generics = if matches!(self.peek().kind, TokenKind::LessThan) {
             self.parse_generic_param_list()?
         } else {
@@ -875,7 +888,7 @@ impl<'a> Parser<'a> {
         }
 
         let modifiers = self.parse_class_modifiers();
-        self.reject_async_modifier();
+        self.reject_async_member_modifier();
 
         // Getter/setter: `get`/`set` <name> ( … ). A member literally named `get`/`set`
         // (followed directly by `(`) is an ordinary method and stays accepted.
@@ -2598,6 +2611,22 @@ impl<'a> Parser<'a> {
     // Disambiguates C-style for and for-of via non-consuming lookahead for `of`.
     fn parse_for(&mut self) -> Option<StmtId> {
         let kw = self.advance();
+        // `for await (…)`: there are no promises to wait for, so name the
+        // rewrite and read the loop as a plain `for`.
+        if self.peek_identifier_text_is("await")
+            && matches!(self.peek_at(1).kind, TokenKind::LeftParen)
+        {
+            let tok = self.advance();
+            self.error_at_with_help(
+                tok.span,
+                "`for await` is not supported",
+                vec![
+                    "calls return their values directly: remove `await` and write \
+                     `for (const e of …)`"
+                        .to_string(),
+                ],
+            );
+        }
         if !matches!(self.peek().kind, TokenKind::LeftParen) {
             self.error_at_peek("expected `(` after `for`");
             return None;
@@ -4405,9 +4434,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `async` before a function, arrow or method. There are no promises here,
-    /// so name the rewrite, then parse on as if the modifier were absent: the
-    /// body's `await`s are reported in the same run.
+    /// Reject an `async` that modifies a function, arrow or method, and keep a
+    /// binding named `async` as it is.
     fn reject_async_modifier(&mut self) {
         if !self.peek_identifier_text_is("async") {
             return;
@@ -4431,9 +4459,41 @@ impl<'a> Parser<'a> {
             }
             _ => false,
         };
-        if !modifies {
+        if modifies {
+            self.report_async_modifier();
+        }
+    }
+
+    /// Reject an `async` that starts a class or object-literal method. A member's
+    /// `async` is never a value an operator applies to, so `async *run`,
+    /// `async in()` and `async "s"()` are methods too. After a line break,
+    /// `async` is a member of its own, as in TypeScript.
+    fn reject_async_member_modifier(&mut self) {
+        if !self.peek_identifier_text_is("async") || self.line_break_after_peek() {
             return;
         }
+        let modifies = match self.peek_at(1).kind {
+            TokenKind::Star
+            | TokenKind::LeftBracket
+            | TokenKind::StringLiteral(_)
+            | TokenKind::NumberLiteral(_) => true,
+            ref name if is_property_name(name) => {
+                matches!(
+                    self.peek_at(2).kind,
+                    TokenKind::LeftParen | TokenKind::LessThan
+                )
+            }
+            _ => false,
+        };
+        if modifies {
+            self.report_async_modifier();
+        }
+    }
+
+    /// There are no promises here, so name the rewrite, then consume `async`
+    /// and parse on as if it were absent: the body's `await`s are reported in
+    /// the same run.
+    fn report_async_modifier(&mut self) {
         let tok = self.advance();
         self.error_at_with_help(
             tok.span,
@@ -5808,6 +5868,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_object_literal_field(&mut self) -> Option<ObjectLiteralField> {
+        self.reject_async_member_modifier();
         let (name, shorthandable) = match self.peek().kind.clone() {
             TokenKind::Identifier => {
                 let tok = self.advance();
@@ -12993,6 +13054,111 @@ class Dog extends Animal {
             let (_ast, diags) = parse_str(source);
             assert!(diags.is_empty(), "{source}: {diags:?}");
         }
+    }
+
+    #[test]
+    fn an_async_object_literal_method_names_the_rewrite_once() {
+        assert_eq!(
+            crate::typechecker::rules::test_util::compile_messages(
+                "function main(): string {\n  const o = { async run(): string { return \"a\"; } };\n  return o.run();\n}\n"
+            ),
+            ["`async` functions are not supported"]
+        );
+        let (_ast, diags) = parse_str("const o = { async run(): string { return \"a\"; } };");
+        assert_eq!(
+            diags[0].help,
+            [
+                "calls return their value directly: remove `async`, write the return type `T` \
+              instead of `Promise<T>`, and drop `await`"
+            ]
+        );
+    }
+
+    #[test]
+    fn await_in_an_async_object_literal_method_is_reported_too() {
+        let (_ast, diags) =
+            parse_str("const o = { async run(): string { const x = await f(); return x; } };");
+        let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                "`async` functions are not supported",
+                "`await` is not supported"
+            ],
+            "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn every_async_member_form_reports_async() {
+        for source in [
+            "const o = { async *run(): void {} };",
+            "class C { async *run(): void {} }",
+            "const o = { async [k](): void {} };",
+            "const o = { async in(): void {} };",
+            "class C { async as(): void {} }",
+        ] {
+            let (_ast, diags) = parse_str(source);
+            assert_eq!(
+                diags[0].message, "`async` functions are not supported",
+                "{source}: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn async_string_key_methods_report_only_async() {
+        for source in [
+            "const o = { async \"s\"(): string { return \"a\"; } };",
+            "class C { async \"s\"(): string { return \"a\"; } }",
+        ] {
+            let (_ast, diags) = parse_str(source);
+            assert_eq!(
+                diags.iter().map(|d| d.message.as_str()).collect::<Vec<_>>(),
+                ["`async` functions are not supported"],
+                "{source}: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn async_before_a_line_break_is_a_member_of_its_own() {
+        for source in [
+            "class C {\n  async\n  run(): void {}\n}",
+            "const o = { async\n run(): void {} };",
+        ] {
+            let (_ast, diags) = parse_str(source);
+            assert!(
+                diags
+                    .iter()
+                    .all(|d| d.message != "`async` functions are not supported"),
+                "{source}: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn async_stays_an_object_literal_key() {
+        let messages = crate::typechecker::rules::test_util::compile_messages(
+            "function main(): number {\n  const async = 2;\n  const a = { async: 1 };\n  const b = { async };\n  const c = { async(): number { return 3; } };\n  const d = { async, e: async * 2 };\n  return a.async + b.async + c.async() + d.e;\n}\n",
+        );
+        assert!(messages.is_empty(), "{messages:?}");
+    }
+
+    #[test]
+    fn for_await_names_the_rewrite_once() {
+        assert_eq!(
+            crate::typechecker::rules::test_util::compile_messages(
+                "import * as fs from \"submilli:fs\";\nfunction main(): string {\n  for await (const e of fs.list(\".\", false)) { }\n  return \"x\";\n}\n"
+            ),
+            ["`for await` is not supported"]
+        );
+        let (ast, diags) = parse_str("for await (const e of [1]) { }");
+        assert_eq!(
+            diags[0].help,
+            ["calls return their values directly: remove `await` and write `for (const e of …)`"]
+        );
+        assert_eq!(ast.top_level.len(), 1, "the loop is still read");
     }
 
     #[test]

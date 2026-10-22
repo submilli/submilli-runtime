@@ -477,6 +477,7 @@ TypedAst {
             },
         },
     ],
+    unparsed_main: false,
     top_level_statements: [
         StmtId(
             0,

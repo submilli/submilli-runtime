@@ -145,4 +145,5 @@ Ast {
     implicit_initializers: {},
     synthetic_undefined: {},
     binding_defaults: {},
+    unparsed_main: false,
 }
