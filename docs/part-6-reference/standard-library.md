@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1209337fe8a428d24f6ef1b7d2f1da9ab64f4acd35406980cf7018a8e1c5fe73"
+  contentHash: "051084375d56856c2ad70f7add9cf6676b5db20f93053cfdf5208ff76d31d931"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -391,6 +391,7 @@ Sandbox filesystem: files and directories under the VFS root.
 | `cwd(): string` |  | The absolute guest working directory used by relative paths. |
 | `exists(path: string): boolean` | `fs.stat { path }` | Returns `true` iff `path` resolves to a filesystem entry under the VFS root. |
 | `info(): Info` |  | The active VFS configuration: the root's `mode` (`"none"` / `"ephemeral"` / `"per_session"` / `"named"`), `access`, `volume` and `sizeLimit` (the cap on the bytes its files may hold, or `-1` when none applies), plus `mounts`, the named volumes grafted below the root. |
+| `isEmpty(path: string): boolean` | `fs.list { path, recursive }` | Returns `true` when the directory at `path` has no entries, or the file at `path` has zero bytes. |
 | `lines(path: string): Iterator<string>` | `fs.read { path }` | Stream the file at `path` as a constant-memory line iterator. |
 | `list(path: string, recursive: boolean): Iterator<DirEntry>` | `fs.list { path, recursive }` | List the children of the directory at `path` as a constant-memory iterator of `DirEntry`. |
 | `maxReadSize(): number` |  | Maximum number of bytes `read` / `readText` will load whole; past this they return `undefined`. |
@@ -403,6 +404,7 @@ Sandbox filesystem: files and directories under the VFS root.
 | `remove(path: string, recursive: boolean): void` | `fs.remove { path, recursive }` | Remove the entry at `path`. |
 | `size(path: string): number` | `fs.stat { path }` | File size in bytes. |
 | `stat(path: string): Stat \| undefined` | `fs.stat { path }` | Metadata about an entry under the VFS root. |
+| `summary(path: string): string` | `fs.list { path, recursive }` | Describe `path` in a few lines of text, for a program that needs to see what is there before deciding what to read. |
 | `write(path: string, content: Uint8Array): void` | `fs.write { path, length: number }` | Write `content` to `path` atomically (temp-file + rename). |
 | `writeText(path: string, content: string): void` | `fs.write { path, length: number }` | UTF-8 atomic write. |
 | `writer(path: string): FileWriter` | `fs.write { path }` | Open `path` as an append-only `FileWriter`. |
