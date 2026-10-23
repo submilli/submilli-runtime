@@ -65,6 +65,7 @@ async fn download_progress_survives_body_timeout() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    let (release, released) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         let mut request = [0_u8; 4096];
@@ -73,17 +74,24 @@ async fn download_progress_survives_body_timeout() {
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 16\r\n\r\n12345678")
             .await
             .unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // Hold the body open until the client gives up.
+        let _ = released.await;
     });
     let client = ReqwestHttpClient::default();
     let mut req = request(format!("http://{address}/slow"), None);
-    req.timeout_ms = 100;
+    req.timeout_ms = 500;
     let progress = DownloadProgress::default();
     let mut output = Vec::new();
     let result = client
         .download_with_progress(&req, &mut output, &progress)
         .await;
-    server.await.unwrap();
+    let _ = release.send(());
+    // A client that times out before it connects leaves the server waiting
+    // in `accept`, so bound the wait to fail instead of hanging the suite.
+    tokio::time::timeout(std::time::Duration::from_secs(5), server)
+        .await
+        .expect("the client never reached the server")
+        .unwrap();
     assert!(matches!(result, Err(HttpError::Timeout)), "{result:?}");
     assert_eq!(progress.bytes_received(), 8);
     assert_eq!(output, b"12345678");
