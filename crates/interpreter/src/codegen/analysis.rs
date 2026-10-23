@@ -419,7 +419,7 @@ impl CodegenAnalysis {
     }
 
     fn note_record_helpers(&mut self) {
-        for helper in ["#getField", "#setField", "#recordValues", "#hasField"] {
+        for helper in crate::codegen::dependency_usage::RECORD_HELPERS {
             self.dependency_usage.note_member(crate::mangle::extend(
                 &crate::mangle::prelude("ObjectConstructor"),
                 helper,

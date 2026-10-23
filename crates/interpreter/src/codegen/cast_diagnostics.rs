@@ -107,6 +107,21 @@ enum Segment {
         member_tier: i32,
     },
     Index(u32),
+    /// A record's entry, by its position among the record's values.
+    RecordKey {
+        keys: RecordKeys,
+        position: u32,
+    },
+}
+
+/// Where a record check finds the keys that name its entries: the record, its
+/// values array, and a cache the first failure fills with the quoted keys, so
+/// later failures in the same record do not walk it again.
+#[derive(Clone, Copy)]
+pub(super) struct RecordKeys {
+    object: u32,
+    values: u32,
+    cache: u32,
 }
 
 /// A field of an object in the order its check tests them.
@@ -680,6 +695,40 @@ pub(super) fn index(emitter: &mut FunctionEmitter, _ctx: &CodegenCtx, index: u32
     Some(mark)
 }
 
+/// Starts the key cache of the record in `object`, whose values are in
+/// `values`. Each check of a record starts empty.
+pub(super) fn record_keys(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    object: u32,
+    values: u32,
+) -> Option<RecordKeys> {
+    emitter.cast_diagnostic.as_ref()?;
+    let array = ctx.require(ctx.symbols.array_type_idx(), "$Array intrinsic registered")?;
+    let cache = ctx.latch(emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: true,
+        heap_type: HeapType::Concrete(array),
+    })))?;
+    emitter.instruction(Instruction::RefNull(HeapType::Concrete(array)));
+    emitter.instruction(Instruction::LocalSet(cache));
+    Some(RecordKeys {
+        object,
+        values,
+        cache,
+    })
+}
+
+pub(super) fn record_key(
+    emitter: &mut FunctionEmitter,
+    keys: RecordKeys,
+    position: u32,
+) -> Option<usize> {
+    let state = emitter.cast_diagnostic.as_mut()?;
+    let mark = state.path.len();
+    state.path.push(Segment::RecordKey { keys, position });
+    Some(mark)
+}
+
 pub(super) fn pop(emitter: &mut FunctionEmitter, mark: Option<usize>) {
     if let (Some(state), Some(mark)) = (emitter.cast_diagnostic.as_mut(), mark) {
         state.path.truncate(mark);
@@ -731,8 +780,65 @@ fn emit_path(
                 super::cast_check::emit_inline_string(emitter, ctx, "]");
                 concat(emitter, ctx);
             }
+            Segment::RecordKey { keys, position } => {
+                ctx.charge_validator_step(emitter)?;
+                super::cast_check::emit_inline_string(emitter, ctx, "[");
+                concat(emitter, ctx);
+                emit_record_key(emitter, ctx, *keys, *position)?;
+                concat(emitter, ctx);
+                super::cast_check::emit_inline_string(emitter, ctx, "]");
+                concat(emitter, ctx);
+            }
         }
     }
+    Ok(())
+}
+
+/// Pushes the quoted key at `position`, filling the record's key cache first
+/// if this is the record's first failure.
+fn emit_record_key(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    keys: RecordKeys,
+    position: u32,
+) -> Result<(), CompilerFailure> {
+    let symbols = &ctx.symbols;
+    let array = symbols
+        .array_type_idx()
+        .ok_or_else(|| super::internal_failure("$Array intrinsic registered"))?;
+    let raw_array = symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| super::internal_failure("intrinsic types are not declared"))?
+        .raw_array;
+    let quoted_keys = symbols
+        .prelude_func_idx("ObjectConstructor##quotedRecordKeys")
+        .ok_or_else(|| super::internal_failure("the record keys helper is not imported"))?;
+    emitter.instruction(Instruction::LocalGet(keys.cache));
+    emitter.instruction(Instruction::RefIsNull);
+    emitter.emit_if(BlockType::Empty);
+    emitter.instruction(Instruction::LocalGet(keys.object));
+    emitter.instruction(Instruction::LocalGet(keys.values));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(array)));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: array,
+        field_index: 2,
+    });
+    emitter.instruction(Instruction::F64ConvertI32U);
+    emitter.instruction(Instruction::Call(quoted_keys));
+    emitter.instruction(Instruction::RefCastNullable(HeapType::Concrete(array)));
+    emitter.instruction(Instruction::LocalSet(keys.cache));
+    emitter.emit_end();
+    emitter.instruction(Instruction::LocalGet(keys.cache));
+    emitter.instruction(Instruction::RefAsNonNull);
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: array,
+        field_index: 1,
+    });
+    emitter.instruction(Instruction::LocalGet(position));
+    emitter.instruction(Instruction::ArrayGet(raw_array));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+        string_index(ctx)?,
+    )));
     Ok(())
 }
 
