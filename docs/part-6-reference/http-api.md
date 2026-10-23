@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "7bc84f94d3d04864c90a943ee174bd42a056d8042634d5395c3508986c0c31ab"
+  contentHash: "7bebfd4426a01c0aa615c9b455a5ffc36a0a032a87837126d50adea044c3329e"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -405,10 +405,13 @@ Refusals answer `{error, execution_id, message}`.
 
 Role: `user`. Answers the run's state now, or `404` `unknown_run`.
 
-For a durable run, returns `execution_id`, `session_id`, `status`, `reason`,
+When no live application-tool entry remains, a persisted run returns
+`execution_id`, `session_id`, `status`, `reason`,
 `durable`, `revision`, `attempt`, `admission_order`, `created_at_unix_ms`, and
 `completed_at_unix_ms`. When retained, `response` contains the execution result.
 Metadata remains observable when the retained program cannot be opened.
+Non-durable runs have `durable: false`. Their stored metadata does not retain
+a waiting tool call or allow it to resume.
 
 ### GET /v1/runs
 

@@ -360,7 +360,7 @@ async fn the_waiting_run_cap_is_server_wide_and_a_resume_frees_its_slot() {
 }
 
 #[tokio::test]
-async fn a_run_that_never_waits_is_answered_whole_and_not_kept() {
+async fn a_run_that_never_waits_keeps_metadata_but_cannot_resume() {
     let router = router();
     let session = open(&router, "orders").await;
     let (status, body) = execute(
@@ -372,8 +372,19 @@ async fn a_run_that_never_waits_is_answered_whole_and_not_kept() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], "finished", "{body}");
     assert_eq!(body["result"], "plain");
-    let (status, _) = get(&router, &format!("/v1/runs/{}", run_id(&body))).await;
+    let run = run_id(&body);
+    let (status, metadata) = get(&router, &format!("/v1/runs/{run}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(metadata["status"], "completed");
+    assert_eq!(metadata["durable"], false);
+    let (status, body) = resume(
+        &router,
+        &run,
+        json!([{ "call_id": "unused", "ok": true, "value": null }]),
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "unknown_run");
 }
 
 #[tokio::test]
@@ -455,6 +466,7 @@ async fn deleting_the_session_ends_its_waiting_run() {
     let session = open(&router, "orders").await;
     let (_, suspended) = execute(&router, &session, COUNT_ORDERS).await;
     let run = run_id(&suspended);
+    let (call_id, _, _) = only_call(&suspended);
     let req = Request::builder()
         .method("DELETE")
         .uri(format!("/v1/sessions/{session}"))
@@ -462,8 +474,18 @@ async fn deleting_the_session_ends_its_waiting_run() {
         .unwrap();
     let (status, _) = send(&router, req).await;
     assert!(status.is_success(), "{status}");
-    let (status, _) = get(&router, &format!("/v1/runs/{run}")).await;
+    let (status, metadata) = get(&router, &format!("/v1/runs/{run}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(metadata["status"], "cancelled");
+    assert_eq!(metadata["durable"], false);
+    let (status, body) = resume(
+        &router,
+        &run,
+        json!([{ "call_id": call_id, "ok": true, "value": { "count": 1 } }]),
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "unknown_run");
 }
 
 #[tokio::test]
