@@ -104,6 +104,8 @@ fn every_route_declares_the_access_it_requires() {
         ("/v1/sessions/{session_id}", User),
         ("/v1/sessions/{session_id}/packages/search", User),
         ("/v1/sessions/{session_id}/packages/docs", User),
+        ("/v1/runs", User),
+        ("/v1/runs/{run_id}/recover", User),
         ("/v1/runs/{run_id}", User),
         ("/v1/runs/{run_id}/resume", User),
         ("/v1/blueprints", Admin),
