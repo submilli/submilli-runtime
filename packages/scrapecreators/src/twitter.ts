@@ -1,7 +1,7 @@
 import { get, post } from "submilli:http";
 import { ProviderIssue, Result, TwitterSearchPostsOptions, TwitterSearchPostsData, TwitterGetProfileOptions, TwitterGetProfileData, TwitterListUserTweetsOptions, TwitterListUserTweetsData, TwitterGetTweetOptions, TwitterGetTweetData, TwitterGetTranscriptOptions, TwitterGetTranscriptData, TwitterGetCommunityOptions, TwitterGetCommunityData, TwitterListCommunityTweetsOptions, TwitterListCommunityTweetsData } from "./types";
 export { ProviderIssue, Result, TwitterSearchPostsOptions, TwitterSearchPostsData, TwitterGetProfileOptions, TwitterGetProfileData, TwitterListUserTweetsOptions, TwitterListUserTweetsData, TwitterGetTweetOptions, TwitterGetTweetData, TwitterGetTranscriptOptions, TwitterGetTranscriptData, TwitterGetCommunityOptions, TwitterGetCommunityData, TwitterListCommunityTweetsOptions, TwitterListCommunityTweetsData } from "./types";
-import { responseIssues, stringParam, booleanParam, integerParam, queryString, requireIdentity, authHeaders, readResponse, invalidArgument, invalidResponse, validateDates, validateSearchCursor, redditCommentsBody } from "./transport";
+import { responseIssues, stringParam, booleanParam, integerParam, queryString, requireIdentity, authHeaders, readResponse, invalidArgument, invalidResponse, invalidResponseFrom, validateDates, validateSearchCursor, redditCommentsBody } from "./transport";
 /** Twitter public-data operations through ScrapeCreators. */
 export class TwitterTransport {
     /** Search Posts.
@@ -18,11 +18,11 @@ export class TwitterTransport {
         try {
             const data = raw as TwitterSearchPostsData;
             if (!Array.isArray(data.posts))
-                throw invalidResponse();
+                throw invalidResponse("posts is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Profile.
@@ -38,11 +38,11 @@ export class TwitterTransport {
         try {
             const data = raw as TwitterGetProfileData;
             if (typeof data.rest_id !== "string" || data.rest_id.trim().length === 0)
-                throw invalidResponse();
+                throw invalidResponse("rest_id is missing or blank");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** User Tweets.
@@ -58,11 +58,11 @@ export class TwitterTransport {
         try {
             const data = raw as TwitterListUserTweetsData;
             if (!Array.isArray(data.tweets))
-                throw invalidResponse();
+                throw invalidResponse("tweets is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Tweet Details.
@@ -79,11 +79,11 @@ export class TwitterTransport {
         try {
             const data = raw as TwitterGetTweetData;
             if (typeof data.rest_id !== "string" || data.rest_id.trim().length === 0)
-                throw invalidResponse();
+                throw invalidResponse("rest_id is missing or blank");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Transcript.
@@ -100,11 +100,11 @@ export class TwitterTransport {
         try {
             const data = raw as TwitterGetTranscriptData;
             if (data.transcript === undefined)
-                throw invalidResponse();
+                throw invalidResponse("transcript is missing");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Community.
@@ -119,11 +119,11 @@ export class TwitterTransport {
         try {
             const data = raw as TwitterGetCommunityData;
             if (typeof data.rest_id !== "string" || data.rest_id.trim().length === 0)
-                throw invalidResponse();
+                throw invalidResponse("rest_id is missing or blank");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
     /** Community Tweets.
@@ -138,11 +138,11 @@ export class TwitterTransport {
         try {
             const data = raw as TwitterListCommunityTweetsData;
             if (!Array.isArray(data.tweets))
-                throw invalidResponse();
+                throw invalidResponse("tweets is not an array");
             return { data: data, raw: raw, issues: responseIssues(raw) };
         }
         catch (cause) {
-            throw invalidResponse();
+            throw invalidResponseFrom(cause);
         }
     }
 }
