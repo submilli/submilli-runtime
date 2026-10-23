@@ -65,6 +65,58 @@ interface Tagged {
   kind: "a-discriminator-literal-longer-than-forty-eight-characters";
 }
 
+// Each member has a literal besides the tag the members share.
+type Tl = { kind: "t"; v: "x" | "y" } | { kind: "u"; w: number };
+
+type Short = { type: "a"; v: 1; x: number } | { type: "bbbbbbbb"; y: string };
+
+// `a` sorts before the shared tag `kind`, which is still checked first.
+type Sorted = { kind: "t"; a: "x" | "y" } | { kind: "u"; w: number };
+
+type Untagged = { a: number } | { t: "m"; q: string };
+
+// The members share two tags, and the second one tells them apart.
+type Event = { cat: "event"; type: "click"; x: number } | { cat: "event"; type: "key"; key: string };
+
+// The first member's own literal `sub` is missing; the second member matched.
+type Sub = { k: "a"; sub: "1"; x: number } | { k: "a"; y: string };
+
+// An absent optional literal matches no tag.
+type Outcome = { ok?: true; data: number } | { error: string };
+
+interface AnInterfaceNameLongerThanFortyEightCharactersInAll {
+  a: string;
+}
+
+// The shared tag matched, so the member's own literal explains the failure
+// whether the value has it wrong or lacks it.
+type Missing = { kind: "t"; v: "x" | "y"; n: number } | { kind: "u"; w: number };
+
+// Neither member shares a tag, so which of `a` and `kind` sorts first doesn't
+// decide the member named.
+type Unshared = { a: "x"; kind: "k1"; v: number } | { w: number };
+
+type Kids = { v: number; kids: Kids[] };
+
+// The recursive member's failure comes back from its validator at the union.
+type Linked = { k: "a"; v: number; next?: Linked };
+type Deep = { deep: { x: { y: number } } };
+
+type Node = { kind: "lit"; value: number } | { kind: "add"; left: Node; right: Node } | { a: number };
+
+interface Issue {
+  id: string;
+}
+
+interface Box<T> {
+  value: T;
+}
+
+enum Color {
+  Red = "red",
+  Blue = "blue",
+}
+
 function expectMessage(thunk: () => void): string {
   try {
     thunk();
@@ -80,7 +132,7 @@ function main(): void {
     const state = JSON.parse("{\"total\":1,\"sel\":[]}") as State;
   });
   assert(
-    missing === "type mismatch: expected State, got object at $[\"pool\"] (expected { id: string }[], got undefined)",
+    missing === "type mismatch: expected State, got object at $[\"pool\"] (expected Item[], got undefined)",
     missing
   );
 
@@ -213,7 +265,7 @@ function main(): void {
     const g = JSON.parse("{\"shapes\":null,\"tree\":5}") as Gallery;
   });
   assert(
-    whole === "type mismatch: expected Gallery, got object at $[\"tree\"] (expected { children: Tree[]; value: number } | null, got number)",
+    whole === "type mismatch: expected Gallery, got object at $[\"tree\"] (expected Tree | null, got number)",
     whole
   );
 
@@ -238,7 +290,7 @@ function main(): void {
     const holder = JSON.parse("{\"item\":[1]}") as Holder;
   });
   assert(
-    array === "type mismatch: expected Holder, got object at $[\"item\"] (expected { id: string }, got array)",
+    array === "type mismatch: expected Holder, got object at $[\"item\"] (expected Item, got array)",
     array
   );
 
@@ -248,6 +300,208 @@ function main(): void {
   assert(
     longLiteral === "type mismatch: expected Tagged, got object at $[\"kind\"] (expected a literal, got string)",
     longLiteral
+  );
+
+  // A member whose tag matched explains a failure on another of its literals,
+  // not the member whose tag missed.
+  const afterTag = expectMessage((): void => {
+    const t = JSON.parse("{\"kind\":\"t\",\"v\":\"z\"}") as Tl;
+  });
+  assert(
+    afterTag === "type mismatch: expected Tl, got object at $[\"v\"] (expected \"x\" | \"y\", got string)",
+    afterTag
+  );
+
+  const shortTag = expectMessage((): void => {
+    const s = JSON.parse("{\"type\":\"a\",\"v\":2,\"x\":1}") as Short;
+  });
+  assert(
+    shortTag === "type mismatch: expected Short, got object at $[\"v\"] (expected 1, got number)",
+    shortTag
+  );
+
+  const sorted = expectMessage((): void => {
+    const s = JSON.parse("{\"kind\":\"t\",\"a\":\"z\"}") as Sorted;
+  });
+  assert(
+    sorted === "type mismatch: expected Sorted, got object at $[\"a\"] (expected \"x\" | \"y\", got string)",
+    sorted
+  );
+
+  // A member whose tag matched outranks one with no tag.
+  const tagless = expectMessage((): void => {
+    const u = JSON.parse("{\"t\":\"m\",\"q\":1}") as Untagged;
+  });
+  assert(
+    tagless === "type mismatch: expected Untagged, got object at $[\"q\"] (expected string, got number)",
+    tagless
+  );
+
+  const node = expectMessage((): void => {
+    const n = JSON.parse("{\"kind\":\"lit\",\"value\":\"s\"}") as Node;
+  });
+  assert(
+    node === "type mismatch: expected Node, got object at $[\"value\"] (expected number, got string)",
+    node
+  );
+
+  const event = expectMessage((): void => {
+    const e = JSON.parse("{\"cat\":\"event\",\"type\":\"key\",\"key\":5}") as Event;
+  });
+  assert(
+    event === "type mismatch: expected Event, got object at $[\"key\"] (expected string, got number)",
+    event
+  );
+
+  const sub = expectMessage((): void => {
+    const s = JSON.parse("{\"k\":\"a\",\"y\":1}") as Sub;
+  });
+  assert(
+    sub === "type mismatch: expected Sub, got object at $[\"y\"] (expected string, got number)",
+    sub
+  );
+
+  const outcome = expectMessage((): void => {
+    const o = JSON.parse("{\"error\":5}") as Outcome;
+  });
+  assert(
+    outcome === "type mismatch: expected Outcome, got object at $[\"error\"] (expected string, got number)",
+    outcome
+  );
+
+  // A member's tier survives the recursive validator's call.
+  const acrossCall = expectMessage((): void => {
+    const n = JSON.parse(
+      "{\"kind\":\"add\",\"left\":{\"kind\":\"lit\",\"value\":1},\"right\":{\"kind\":\"lit\",\"value\":\"x\"}}"
+    ) as Node;
+  });
+  assert(
+    acrossCall === "type mismatch: expected Node, got object at $[\"right\"][\"value\"] (expected number, got string)",
+    acrossCall
+  );
+
+  const absentLiteral = expectMessage((): void => {
+    const m = JSON.parse("{\"kind\":\"t\",\"n\":1}") as Missing;
+  });
+  assert(
+    absentLiteral === "type mismatch: expected Missing, got object at $[\"v\"] (expected \"x\" | \"y\", got undefined)",
+    absentLiteral
+  );
+
+  // A recursive union alias's own reference names the alias, not "a union".
+  const exprSelf = expectMessage((): void => {
+    const e = JSON.parse("{\"op\":\"add\",\"l\":{\"op\":\"lit\",\"v\":1},\"r\":5}") as Expr;
+  });
+  assert(
+    exprSelf === "type mismatch: expected Expr, got object at $[\"r\"] (expected Expr, got number)",
+    exprSelf
+  );
+
+  const unshared = expectMessage((): void => {
+    const u = JSON.parse("{\"a\":\"x\",\"kind\":\"zz\",\"w\":\"s\"}") as Unshared;
+  });
+  assert(
+    unshared === "type mismatch: expected Unshared, got object at $[\"w\"] (expected number, got string)",
+    unshared
+  );
+
+  const linked = expectMessage((): void => {
+    const l = JSON.parse("{\"k\":\"a\",\"v\":\"s\",\"deep\":{\"x\":{\"y\":\"s\"}}}") as Linked | Deep;
+  });
+  assert(
+    linked === "type mismatch: expected Deep | Linked, got object at $[\"v\"] (expected number, got string)",
+    linked
+  );
+
+  // The expected type is named as the program wrote it, not as its shape.
+  const issue = expectMessage((): void => {
+    const w = JSON.parse("{\"issue\":5}") as { issue: Issue | null };
+  });
+  assert(
+    issue === "type mismatch: expected { issue: Issue | null }, got object at $[\"issue\"] (expected Issue | null, got number)",
+    issue
+  );
+
+  const tree = expectMessage((): void => {
+    const w = JSON.parse("{\"tree\":5}") as { tree: Tree };
+  });
+  assert(
+    tree === "type mismatch: expected { tree: Tree }, got object at $[\"tree\"] (expected Tree, got number)",
+    tree
+  );
+
+  const color = expectMessage((): void => {
+    const w = JSON.parse("{\"color\":\"green\"}") as { color: Color };
+  });
+  assert(
+    color === "type mismatch: expected { color: Color }, got object at $[\"color\"] (expected Color, got string)",
+    color
+  );
+
+  const box = expectMessage((): void => {
+    const w = JSON.parse("{\"box\":1}") as { box: Box<number> };
+  });
+  assert(
+    box === "type mismatch: expected { box: Box<number> }, got object at $[\"box\"] (expected Box<number>, got number)",
+    box
+  );
+
+  // A written name is kept however long; only an inline type is named by kind.
+  const long = expectMessage((): void => {
+    const l = JSON.parse("{\"p\":1}") as { p: AnInterfaceNameLongerThanFortyEightCharactersInAll };
+  });
+  assert(
+    long === "type mismatch: expected { p: AnInterfaceNameLongerThanFortyEightCharactersInAll }, got object at $[\"p\"] (expected AnInterfaceNameLongerThanFortyEightCharactersInAll, got number)",
+    long
+  );
+
+  const longArray = expectMessage((): void => {
+    const l = JSON.parse("{\"p\":1}") as { p: AnInterfaceNameLongerThanFortyEightCharactersInAll[] };
+  });
+  assert(
+    longArray === "type mismatch: expected { p: AnInterfaceNameLongerThanFortyEightCharactersInAll[] }, got object at $[\"p\"] (expected AnInterfaceNameLongerThanFortyEightCharactersInAll[], got number)",
+    longArray
+  );
+
+  const longUnion = expectMessage((): void => {
+    const l = JSON.parse("{\"p\":1}") as { p: AnInterfaceNameLongerThanFortyEightCharactersInAll | null };
+  });
+  assert(
+    longUnion === "type mismatch: expected { p: AnInterfaceNameLongerThanFortyEightCharactersInAll | null }, got object at $[\"p\"] (expected AnInterfaceNameLongerThanFortyEightCharactersInAll | null, got number)",
+    longUnion
+  );
+
+  const longMixed = expectMessage((): void => {
+    const l = JSON.parse("{\"p\":\"s\"}") as { p: AnInterfaceNameLongerThanFortyEightCharactersInAll | number };
+  });
+  assert(
+    longMixed === "type mismatch: expected { p: number | AnInterfaceNameLongerThanFortyEightCharactersInAll }, got object at $[\"p\"] (expected number | AnInterfaceNameLongerThanFortyEightCharactersInAll, got string)",
+    longMixed
+  );
+
+  const longTuple = expectMessage((): void => {
+    const l = JSON.parse("{\"p\":1}") as { p: [AnInterfaceNameLongerThanFortyEightCharactersInAll, number] };
+  });
+  assert(
+    longTuple === "type mismatch: expected { p: [AnInterfaceNameLongerThanFortyEightCharactersInAll, number] }, got object at $[\"p\"] (expected [AnInterfaceNameLongerThanFortyEightCharactersInAll, number], got number)",
+    longTuple
+  );
+
+  const longIndex = expectMessage((): void => {
+    const l = JSON.parse("{\"p\":1}") as { p: { [k: string]: AnInterfaceNameLongerThanFortyEightCharactersInAll } };
+  });
+  assert(
+    longIndex === "type mismatch: expected { p: { [key: string]: AnInterfaceNameLongerThanFortyEightCharactersInAll } }, got object at $[\"p\"] (expected { [key: string]: AnInterfaceNameLongerThanFortyEightCharactersInAll }, got number)",
+    longIndex
+  );
+
+  // A recursive alias's own reference names the alias too.
+  const kids = expectMessage((): void => {
+    const k = JSON.parse("{\"v\":1,\"kids\":[5]}") as Kids;
+  });
+  assert(
+    kids === "type mismatch: expected Kids, got object at $[\"kids\"][0] (expected Kids, got number)",
+    kids
   );
 
   // A union that passes keeps no failure from its earlier members.

@@ -283,7 +283,7 @@ fn emit_structural_test_inner(
     let i32_block = BlockType::Result(ValType::I32);
     match ty.lowered() {
         Type::Union(members) => {
-            let union = diagnostic::union_start(emitter, ctx);
+            let union = diagnostic::union_start(emitter, ctx, members);
             let mut first = true;
             for m in members {
                 diagnostic::union_next(emitter, ctx);
@@ -454,7 +454,7 @@ fn emit_structural_test_inner(
             let field_local =
                 emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
             emitter.instruction(Instruction::I32Const(1)); // accumulator
-            for (fname, f) in diagnostic::discriminants_first(fields) {
+            for ordered in diagnostic::check_order(emitter, fields) {
                 emit_field_conformance(
                     emitter,
                     ctx,
@@ -462,8 +462,7 @@ fn emit_structural_test_inner(
                         object: obj_local,
                         field: field_local,
                     },
-                    fname,
-                    f,
+                    ordered,
                     interface_stack,
                     validator_state,
                 )?;
@@ -1038,13 +1037,13 @@ fn emit_field_conformance(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     locals: FieldConformanceLocals,
-    fname: &str,
-    field: &crate::ObjectField,
+    ordered: diagnostic::OrderedField<'_>,
     interface_stack: &mut std::collections::BTreeSet<Type>,
     validator_state: Option<ValidatorState>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let (fname, field) = (ordered.name, ordered.field);
     let checkpoint = diagnostic::checkpoint(emitter, ctx);
-    let parent_path = diagnostic::field(emitter, ctx, fname);
+    let parent_path = diagnostic::field(emitter, ctx, ordered);
     let i32_block = BlockType::Result(ValType::I32);
     let intrinsics = ctx
         .symbols
@@ -1308,9 +1307,10 @@ fn emit_interface_test_inner(
     emitter.instruction(Instruction::LocalSet(object_local));
     let field_local = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
     emitter.instruction(Instruction::I32Const(1));
-    for (name, field) in diagnostic::discriminants_first(&test.members) {
+    for ordered in diagnostic::check_order(emitter, &test.members) {
+        let (name, field) = (ordered.name, ordered.field);
         if test.methods.contains(name) {
-            let parent_path = diagnostic::field(emitter, ctx, name);
+            let parent_path = diagnostic::field(emitter, ctx, ordered);
             let name_global = ctx
                 .symbols
                 .field_name_string_global_idx(name)
@@ -1341,8 +1341,7 @@ fn emit_interface_test_inner(
                     object: object_local,
                     field: field_local,
                 },
-                name,
-                field,
+                ordered,
                 interface_stack,
                 validator_state,
             )?;
@@ -1660,7 +1659,7 @@ fn emit_ordered_collection_members_test(
     emitter.emit_if(BlockType::Empty);
     for (position, (payload, ty)) in payloads.iter().enumerate() {
         let parent_path = diagnostic::index(emitter, ctx, cursor);
-        let member_path = diagnostic::field(
+        let member_path = diagnostic::entry_part(
             emitter,
             ctx,
             if payloads.len() == 1 || position == 1 {
@@ -1878,11 +1877,28 @@ pub(crate) fn emit_runtime_validator_body(
             }),
         )?;
     } else {
+        // A recursive alias's body is checked under the alias's name, so a
+        // failure at its value names `Tree`, not the expanded shape.
+        let named_body = match key {
+            Type::AliasRef {
+                mangled,
+                package,
+                name,
+                args,
+            } => Some(Type::alias_ty(
+                package.clone(),
+                name.clone(),
+                mangled.clone(),
+                args.clone(),
+                Box::new(body.clone()),
+            )),
+            _ => None,
+        };
         emit_structural_test_inner(
             &mut emitter,
             ctx,
             0,
-            body,
+            named_body.as_ref().unwrap_or(body),
             &mut interface_stack,
             Some(ValidatorState {
                 visited: 1,

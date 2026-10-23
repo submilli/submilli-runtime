@@ -1053,6 +1053,9 @@ fn assignable_rec(
                 ..
             },
         ) => {
+            if is_host_backed_interface(expected) {
+                return false;
+            }
             let (Some(class_form), Some(iface_form)) = (
                 types.class_full_form(ma, aa),
                 types.interface_full_form(me, ne, ae),
@@ -1245,6 +1248,9 @@ fn assignable_rec(
         // coinductively (mirrors the `AliasRef` arm above).
         (Type::Object { .. }, Type::InterfaceRef { .. })
         | (Type::InterfaceRef { .. }, Type::Object { .. }) => {
+            if is_host_backed_interface(expected) {
+                return false;
+            }
             let expanded_pair = if matches!(expected, Type::InterfaceRef { .. }) {
                 expand_interface_data_shape(expected, types).map(|o| (actual.clone(), o))
             } else {
@@ -1498,6 +1504,9 @@ fn satisfies_structurally(
     types: TypeResolver,
     seen: &mut Vec<(Type, Type)>,
 ) -> bool {
+    if is_host_backed_interface(expected) {
+        return false;
+    }
     let key = (actual.clone(), expected.clone());
     if seen.contains(&key) {
         // Coinductive: an in-progress pair counts as satisfied.
@@ -1673,6 +1682,21 @@ pub(crate) fn expand_interface_data_shape(ty: &Type, types: TypeResolver) -> Opt
     Some(Type::Object {
         index: types.index_signature(ty),
         fields: types.interface_data_shape(mangled, name, args)?,
+    })
+}
+
+/// Whether `ty` is an interface whose values only the host builds, such as
+/// `fs.Stat`. Its properties read the host's backing struct, so an object or
+/// class of the same shape can't stand in for one: it is nominal. As a target
+/// it refuses every structural source, in the `(Object, InterfaceRef)` and
+/// `(ClassRef, InterfaceRef)` arms of `assignable_rec` and in
+/// `satisfies_structurally`.
+pub(crate) fn is_host_backed_interface(ty: &Type) -> bool {
+    let Type::InterfaceRef { mangled, .. } = ty.peel() else {
+        return false;
+    };
+    crate::stdlib::host_views().any(|view| {
+        mangled.as_str().split_once(crate::mangle::SEP) == Some((view.module, view.interface))
     })
 }
 
