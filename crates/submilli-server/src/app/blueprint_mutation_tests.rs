@@ -43,6 +43,7 @@ impl BlueprintStore for GatedStore {
 }
 
 struct GatedUnits {
+    pause_next: Arc<AtomicBool>,
     inner: Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory>,
     admitted: Arc<tokio::sync::Notify>,
     release: Arc<tokio::sync::Notify>,
@@ -52,8 +53,11 @@ impl crate::application::unit_of_work::UnitOfWorkFactory for GatedUnits {
     async fn begin(
         &self,
     ) -> Result<Box<dyn crate::application::unit_of_work::UnitOfWork>, StoreError> {
-        self.admitted.notify_one();
-        self.release.notified().await;
+        if crate::audit::mutation_owner().is_some() && self.pause_next.swap(false, Ordering::AcqRel)
+        {
+            self.admitted.notify_one();
+            self.release.notified().await;
+        }
         self.inner.begin().await
     }
 }
@@ -117,14 +121,19 @@ async fn check_mutations(cancel: bool) {
                 .await
                 .unwrap();
         }
+        let pause_next = Arc::new(AtomicBool::new(false));
         if deleting {
             let inner = Arc::get_mut(&mut state.inner).unwrap();
             inner.unit_of_work = Arc::new(GatedUnits {
+                pause_next: pause_next.clone(),
                 inner: inner.unit_of_work.clone(),
                 admitted: admitted.clone(),
                 release: release.clone(),
             });
         }
+        // Startup and background recovery also open units; only pause the mutation.
+        state.boot().await.unwrap();
+        pause_next.store(true, Ordering::Release);
         let generation = state.inner.mcp_catalog_generation.load(Ordering::Acquire);
         let router = app(state.clone());
         let request = tokio::spawn(async move {
@@ -164,7 +173,11 @@ async fn check_mutations(cancel: bool) {
             release.notify_one();
         } else {
             release.notify_one();
-            let response = request.await.unwrap().unwrap();
+            let response = tokio::time::timeout(Duration::from_secs(5), request)
+                .await
+                .expect("blueprint mutation should finish after releasing its gate")
+                .unwrap()
+                .unwrap();
             assert_eq!(response.status(), axum::http::StatusCode::OK);
         }
         let tasks = state.graceful_shutdown();
